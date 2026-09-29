@@ -1543,8 +1543,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         end
         # LAZY: a pre-passed long literal reads its global, initializing on
         # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
-        local _lz = ctx.type_registry.lazy_string_globals === nothing ? nothing :
-                    get(ctx.type_registry.lazy_string_globals, val, nothing)
+        local _lz = get(ctx.type_registry.lazy_string_globals, val, nothing)
         if _lz !== nothing
             # parity(constants.dart:1937 _readDefinedConstant): `block [T]`, T non-null
             local _lzs = ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false)

@@ -55,23 +55,23 @@ parity(translator.dart:96 Translator): the translator's per-compile type state �
 (:186), the array type caches (:231), and the constant map (constants.dart:154 constantInfo).
 """
 mutable struct TypeRegistry
-    structs::Union{Nothing, Dict{Type, StructInfo}}  # DataType or UnionAll for parametric types
-    arrays::Union{Nothing, Dict{Type, UInt32}}  # Element type -> array type index
+    structs::Dict{Type, StructInfo}  # DataType or UnionAll for parametric types
+    arrays::Dict{Type, UInt32}  # Element type -> array type index
     string_array_idx::Union{Nothing, UInt32}  # Index of i8 array type for strings
     string_struct_idx::Union{Nothing, UInt32} # parity(class_info.dart:31 FieldIndex.stringArray): the CLASSED string {classId, data} <: $JlBase
     # (B4/U2: the `unions` tagged-union-wrapper registry is DELETED — a Union value is a boxed
     # AnyRef classId box, no {typeId,tag,value} wrapper, so no per-union registry is needed.)
-    numeric_boxes::Union{Nothing, Dict{WasmValType, UInt32}}  # box types for numeric→externref returns
+    numeric_boxes::Dict{WasmValType, UInt32}  # box types for numeric→externref returns
     # Type constant globals — each type object (by ===, Julia's identity: `==` on types is
     # mutual subtyping, which calls `Vector` equal to its body `Array{T,1}`) gets its own Wasm
     # global, so ref.eq distinguishes different Types (e.g., Int64 !== String)
-    type_constant_globals::Union{Nothing, IdDict{Type, UInt32}}  # Type value -> Wasm global index
+    type_constant_globals::IdDict{Type, UInt32}  # Type value -> Wasm global index
     # TypeName constant globals — each unique TypeName gets a unique Wasm global
     # so that t.name === s.name identity comparison works via ref.eq
-    typename_constant_globals::Union{Nothing, Dict{Core.TypeName, UInt32}}  # TypeName -> Wasm global index
+    typename_constant_globals::Dict{Core.TypeName, UInt32}  # TypeName -> Wasm global index
     # DFS type ID assignment for runtime dispatch
-    type_ids::Union{Nothing, Dict{Type, Int32}}  # Concrete type -> unique DFS integer ID
-    type_ranges::Union{Nothing, Dict{Type, Tuple{Int32, Int32}}}  # Abstract/concrete type -> [low, high] DFS range
+    type_ids::Dict{Type, Int32}  # Concrete type -> unique DFS integer ID
+    type_ranges::Dict{Type, Tuple{Int32, Int32}}  # Abstract/concrete type -> [low, high] DFS range
     # dart class_info.dart: Top carries classId; Object extends it with the
     # lazily-assigned mutable identity-hash slot. Primitive value boxes remain
     # direct Top descendants and therefore do not carry identity state.
@@ -102,46 +102,46 @@ mutable struct TypeRegistry
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
-    box_types::Union{Nothing, Dict{WasmValType, UInt32}}
+    box_types::Dict{WasmValType, UInt32}
     # (closure type, captured field) → the captured variable's type (Any: erased), recorded over
     # every body before any compiles (record_capture_contents; CaptureType.tla); the box reads
     # of a closure body or a closure value are typed from it (capture_read_types).
-    box_contents_types::Union{Nothing, Dict{Tuple{Type,Symbol}, Type}}
+    box_contents_types::Dict{Tuple{Type,Symbol}, Type}
     # THE ensureConstant funnel's registry (dart constants.dart:154 constantInfo — ONE
     # constantInfo map for ALL constant kinds). Keyed by the VALUE (isequal/hash);
     # IMMUTABLE constants only — a mutable constant (Vector/Dict) has per-object
     # identity that structural keying would wrongly merge.
-    constant_globals::Union{Nothing, Dict{Any, UInt32}}
+    constant_globals::Dict{Any, UInt32}
     # Closed-world mutable bindings retain object identity too, but must never be
     # structurally deduplicated. IdDict keys by host identity; nullable mutable
     # storage is published once by module start, then all reads share the object.
-    mutable_constant_globals::Union{Nothing, IdDict{Any, Tuple{UInt32, UInt32}}}
-    module_init_functions::Union{Nothing, Vector{UInt32}}
+    mutable_constant_globals::IdDict{Any, Tuple{UInt32, UInt32}}
+    module_init_functions::Vector{UInt32}
     # census F3 (dart constants.dart:872 visitStringConstant): interned string-constant globals —
     # every use of an equal short string literal reads ONE deduplicated global
     # (code size + `===` identity like dart). Keyed by the String or Symbol value, so
     # `"a"` and `:a` are two constants of two classes.
-    string_constant_globals::Union{Nothing, Dict{Union{String,Symbol}, UInt32}}
+    string_constant_globals::Dict{Union{String,Symbol}, UInt32}
     # LAZY constants (dart constants.dart:2108 _createLazyConstant): long strings get an
     # uninitialized global + a pre-created init function; use = global.get + br_on_non_null
     # + call init. Keyed by value → (global_idx, init_fn_idx).
-    lazy_string_globals::Union{Nothing, Dict{String, Tuple{UInt32, UInt32}}}
+    lazy_string_globals::Dict{String, Tuple{UInt32, UInt32}}
     # (dart ClosureLayouter, closures.dart:209): the closure-base struct idx
     # {classId, identityHash, context anyref, vtable, functionType}, per-max-arity vtable struct
     # idxs, and per-
     # closure-body vtable GLOBAL idxs (immutable, one per compiled closure function).
     closure_base_idx::Union{Nothing, UInt32}
-    closure_vtable_struct_idxs::Union{Nothing, Dict{Int, UInt32}}      # max_arity -> vtable struct
-    closure_vtable_globals::Union{Nothing, Dict{Type, UInt32}}         # closure type -> vtable global
+    closure_vtable_struct_idxs::Dict{Int, UInt32}      # max_arity -> vtable struct
+    closure_vtable_globals::Dict{Type, UInt32}         # closure type -> vtable global
     # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
-    abstract_struct_idxs::Union{Nothing, Dict{Type, UInt32}}
+    abstract_struct_idxs::Dict{Type, UInt32}
     # MemoryRef{T} -> its single-value struct {classId, identityHash, mem, off0}
     # (register_memoryref_box!, structs.jl)
-    memoryref_box_idxs::Union{Nothing, Dict{Type, UInt32}}
+    memoryref_box_idxs::Dict{Type, UInt32}
     # TypeVar -> its constant global, one per TypeVar object (get_typevar_constant_global!)
-    typevar_constant_globals::Union{Nothing, IdDict{TypeVar, UInt32}}
+    typevar_constant_globals::IdDict{TypeVar, UInt32}
     # the runtime jl_has_typevar (get_has_typevar_function!)
     has_typevar_func_idx::Union{Nothing, UInt32}
     # 128-bit unsigned division over two i64 limbs (get_u128_divrem_function!, int128.jl)
@@ -173,34 +173,6 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
     nothing,                                            # has_typevar_func_idx
     nothing                                             # u128_divrem_func_idx
-)
-
-# TRUE-INT-002: Dict-free constructor for WASM self-hosting.
-# All Dict fields are nothing — safe for MVP Int64 arithmetic where
-# no struct/array/union type registration is needed.
-TypeRegistry(::Val{:minimal})::TypeRegistry = TypeRegistry(
-    nothing, nothing, nothing, nothing,  # structs, arrays, string_array_idx, string_struct_idx
-    nothing, nothing,            # unions, numeric_boxes
-    nothing, nothing,            # type_constant_globals, typename_constant_globals
-    nothing, nothing,            # type_ids, type_ranges
-    nothing, nothing, nothing, nothing, nothing,
-    nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,  # unicode_property_func_idx
-    nothing,  # egal_func_idx
-    nothing,  # unicode_case_func_idx
-    nothing,  # box_types (F3)
-    nothing,  # box_contents_types (F3 L2)
-    nothing,  # constant_globals
-    nothing,  # mutable_constant_globals
-    nothing,  # module_init_functions
-    nothing,  # string_constant_globals (census F3)
-    nothing,  # lazy_string_globals
-    nothing, nothing, nothing,  # closure layouter
-    nothing,                    # step5 class-DAG synthetics
-    nothing,                    # MemoryRef single-value structs
-    nothing,                    # TypeVar constants
-    nothing,                    # has_typevar_func_idx
-    nothing                     # u128_divrem_func_idx
 )
 
 """
@@ -253,7 +225,6 @@ formal(dev/formal/Constants.tla): two structurally-equal immutable constants int
 parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global per constant value.
 """
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
-    registry.constant_globals === nothing && return nothing
     haskey(registry.constant_globals, val) && return registry.constant_globals[val]
     init = UInt8[]
     info = _const_init_bytes!(init, mod, registry, val)
@@ -373,7 +344,6 @@ parity(constants.dart:872 ConstantCreator.visitStringConstant): the interned str
 """
 function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry,
                                      s::Union{String,Symbol}; eager::Bool=false)::Union{UInt32, Nothing}
-    registry.string_constant_globals === nothing && return nothing
     !eager && ncodeunits(String(s)) > 64 && return nothing   # eager threshold (dart lazies large constants)
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
     struct_idx, init = _string_constant_initializer!(mod, registry, s)
@@ -651,7 +621,6 @@ parity(quarantine: Julia Dict iteration follows address-based hashes of type obj
 vary per process and architecture; dart Maps iterate in insertion order.)
 """
 function registered_structs(registry::TypeRegistry)::Vector{Pair{Type,StructInfo}}
-    registry.structs === nothing && return Pair{Type,StructInfo}[]
     pairs = sort!(collect(Pair{Type,StructInfo}, registry.structs); by = p -> p.second.wasm_type_idx)
     i = 1
     while i <= length(pairs)
@@ -769,7 +738,6 @@ range window (class_info.dart:831 getConcreteClassIdRange).
 parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): the concrete ids below T.
 """
 function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
-    registry.type_ids === nothing && return Int32[]
     ids = Int32[id for (C, id) in ordered_pairs(registry.type_ids, type_order_key) if C isa Type && C <: T]
     return sort!(ids)
 end
@@ -1784,14 +1752,14 @@ variable that is reassigned; dart keeps such a variable in its context struct,
 closures.dart:1533.)
 """
 function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_type::WasmValType)::UInt32
-    if registry.box_types !== nothing && haskey(registry.box_types, contents_wasm_type)
+    if haskey(registry.box_types, contents_wasm_type)
         return registry.box_types[contents_wasm_type]
     end
     # typeId (i32, immutable) + contents (T, MUTABLE)
     fields = [FieldType(I32, false), FieldType(contents_wasm_type, true)]
     base = get_base_struct_type!(mod, registry)
     type_idx = UInt32(add_type!(mod, StructType(fields, base)))
-    registry.box_types === nothing || (registry.box_types[contents_wasm_type] = type_idx)
+    registry.box_types[contents_wasm_type] = type_idx
     return type_idx
 end
 
@@ -1956,8 +1924,7 @@ And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and bin
 
 """
 function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,WasmModule}
-    # TRUE-INT-002: Guard for Dict-free TypeRegistry (minimal constructor)
-    (registry.type_constant_globals === nothing || isempty(registry.type_constant_globals)) && return
+    isempty(registry.type_constant_globals) && return
 
     registry.jl_datatype_idx === nothing &&
         error("type constant population requires the canonical JlType hierarchy")
@@ -2910,7 +2877,7 @@ parity(class_info.dart:451 superInfo): bool/num sit under Top, every other class
 """
 function dag_supertype_idx!(mod::WasmModule, registry::TypeRegistry, T::Type)::Union{UInt32, Nothing}
     registry.base_struct_idx === nothing && return nothing   # bare registries (probes)
-    (T isa DataType && registry.abstract_struct_idxs !== nothing) || return registry.base_struct_idx
+    T isa DataType || return registry.base_struct_idx
     local P = supertype(T)
     # Primitive/value boxes are Top descendants. Ordinary Julia structs are
     # identity-bearing Object descendants even when Julia reports `Any` as their

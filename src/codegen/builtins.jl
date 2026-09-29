@@ -1544,7 +1544,6 @@ numbered classes, so their class is read off the array type.)
 """
 function _bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Tuple{Type, UInt32}}
     local all = Tuple{Type, UInt32}[]
-    reg.type_ids === nothing && return all
     for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
         if C isa DataType && C <: GenericMemory
             local arr = get(reg.arrays, eltype(C), nothing)

@@ -543,13 +543,11 @@ function _compile_closed_world_plan(functions::Vector;
 
     # Captured variables' types, from the functions that declare them, recorded for every body
     # before any compiles, so no body's box reads depend on which compiled first
-    # (record_capture_contents!; CaptureType.tla).
-    if type_registry.box_contents_types !== nothing
-        local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
-                                     isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
-                                    for fd in function_data if fd[8] !== nothing]
-        merge!(type_registry.box_contents_types, record_capture_contents(_capture_bodies))
-    end
+    # (record_capture_contents; CaptureType.tla).
+    local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
+                                 isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
+                                for fd in function_data if fd[8] !== nothing]
+    merge!(type_registry.box_contents_types, record_capture_contents(_capture_bodies))
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1

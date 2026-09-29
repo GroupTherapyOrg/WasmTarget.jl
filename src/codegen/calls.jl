@@ -1574,7 +1574,7 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.egal_func_idx !== nothing && return registry.egal_func_idx
     local top = registry.base_struct_idx
     local jt = registry.jl_type_idx
-    (top === nothing || jt === nothing || registry.type_ids === nothing) &&
+    (top === nothing || jt === nothing) &&
         error("the runtime egal function needs the class hierarchy and the JlType hierarchy")
     local params = WasmValType[AnyRef, AnyRef]
     local results = WasmValType[I32]
@@ -2219,22 +2219,20 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
                                       local_idx::Integer, @nospecialize(check_type))::Nothing
     reg = ctx.type_registry
     kinds = UInt32[]   # the bare-array representations (Memory, SimpleVector) under check_type
-    if reg.type_ids !== nothing
-        outside = UInt32[]
-        for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
-            (C isa DataType && C <: GenericMemory) || continue
-            arr = get(reg.arrays, eltype(C), nothing)   # no array type: no such value exists
-            arr === nothing && continue
-            C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
-        end
-        # a SimpleVector is a bare (array anyref) too, when the closed world has one
-        (reg.jl_svec_idx !== nothing && haskey(reg.type_ids, Core.SimpleVector)) &&
-            (Core.SimpleVector <: check_type ?
-                (reg.jl_svec_idx in kinds || push!(kinds, reg.jl_svec_idx)) : push!(outside, reg.jl_svec_idx))
-        if any(in(outside), kinds)
-            _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
-            return nothing
-        end
+    outside = UInt32[]
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key)
+        (C isa DataType && C <: GenericMemory) || continue
+        arr = get(reg.arrays, eltype(C), nothing)   # no array type: no such value exists
+        arr === nothing && continue
+        C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
+    end
+    # a SimpleVector is a bare (array anyref) too, when the closed world has one
+    (reg.jl_svec_idx !== nothing && haskey(reg.type_ids, Core.SimpleVector)) &&
+        (Core.SimpleVector <: check_type ?
+            (reg.jl_svec_idx in kinds || push!(kinds, reg.jl_svec_idx)) : push!(outside, reg.jl_svec_idx))
+    if any(in(outside), kinds)
+        _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
+        return nothing
     end
     # a type object: a TypeVar is its own struct; a DataType, Union, UnionAll or Union{} is a
     # $JlType whose $kind names it (Union and UnionAll share one wasm struct)
