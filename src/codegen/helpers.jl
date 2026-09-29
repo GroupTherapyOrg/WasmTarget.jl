@@ -14,6 +14,7 @@ end
 
 """
 Check if a resolved callee is a comparison operation: a comparison intrinsic, `===`, or `!==`.
+parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)
 """
 function is_comparison(func)::Bool
     (func === (===) || func === (!==)) && return true
@@ -25,6 +26,7 @@ end
 """
 Check if a value is known to be boolean (0 or 1).
 This is true for comparison results, Bool literals, and phi nodes with Bool type.
+parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)
 """
 function is_boolean_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
     if val isa NirSSA

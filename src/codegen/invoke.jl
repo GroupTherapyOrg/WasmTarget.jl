@@ -8,6 +8,7 @@ normalizes (UnitRange's last, OneTo's max(0, n), Rational's gcd, a user's `new(a
 or converts its arguments is not direct, and is called as the function it is. The body
 read is the one the invoke calls, keyed by its MethodInstance's specTypes as the
 collection enrolled it.
+parity(pkg/dart2wasm/lib/code_generator.dart:1637 CodeGenerator.visitConstructorInvocation)
 """
 function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodInstance)::Bool
     target isa DataType && isconcretetype(target) && isstructtype(target) || return false
@@ -32,10 +33,12 @@ function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodIns
     return !isva || _is_arg(alloc.operands[end], fixed_count + 2)
 end
 
+# parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
     nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : infer_value_type(arg, ctx)
 
-"""Return the unique singleton represented by `T`, or `nothing` when none exists."""
+"""Return the unique singleton represented by `T`, or `nothing` when none exists.
+parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)"""
 _invoke_singleton_instance(@nospecialize(T))::Any =
     T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
 
@@ -99,6 +102,7 @@ Compile an invoke expression (method invocation) — dart visitor shape:
 emits the invoke INTO the caller's builder.
 The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
 same discard semantics: arms that replace it re-init; exits merge typed).
+parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)
 """
 function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_invoke.frag")
@@ -335,8 +339,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # 453393ca4ba4: capturing-closure callees — the function position is a VALUE
     # (SSA/argument/local); identity-keyed registry lookup can never match the
     # runtime-constructed instance, so the invoke silently fell through to an
-    # `unreachable` (Snapshot.jl newton C-W3). Resolve by TYPE against the
-    # self-prepended signature and push the closure object as wasm param 1.
+    # `unreachable` (Snapshot.jl newton C-W3). The callee is the invoke's MethodInstance's
+    # function (mi_target, above), and the closure object is pushed as wasm param 1.
     tracing(:closure) &&
         println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
                 " ti_early=", target_info_early !== nothing)
@@ -345,7 +349,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         ft_early = infer_value_type(early_operand, ctx)
         if ft_early isa DataType && is_closure_type(ft_early)
             cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
-            ti = get_function_by_argtypes(ctx.func_registry, (ft_early, cat_early...))
+            ti = mi_target
             tracing(:closure) &&
                 println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
             if ti !== nothing

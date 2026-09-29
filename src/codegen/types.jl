@@ -67,6 +67,7 @@ mutable struct PendingTypes
     slots::Dict{UInt32, Vector{Tuple{Symbol, Type}}}   # (registry field, key) holding the id
     next::UInt32
 end
+# parity(quarantine: see PendingTypes)
 const PENDING_BASE = 0xC0000000
 # parity(quarantine: see PendingTypes)
 PendingTypes()::PendingTypes = PendingTypes(UInt32[], Dict{UInt32, Type}(), Dict{UInt32, CompositeType}(),
@@ -448,6 +449,7 @@ end
 Add a global initialized with WT's canonical classed Julia `String`
 representation. This is the public framework boundary for stateful string
 globals; it shares the exact initializer used by interned string constants.
+parity(constants.dart:872 visitStringConstant)
 """
 function add_string_global!(mod::WasmModule, registry::TypeRegistry, s::String;
                             mutable::Bool=true)::UInt32
@@ -459,6 +461,7 @@ end
     get_datatype_type_idx(registry::TypeRegistry) → UInt32
 
 The WasmGC type index of a DataType value: \$JlDataType.
+parity(pkg/dart2wasm/lib/types.dart:349 Types.makeType)
 """
 function get_datatype_type_idx(registry::TypeRegistry)::UInt32
     registry.jl_datatype_idx === nothing &&
@@ -731,6 +734,7 @@ Check if another Julia type in the registry shares the same WasmGC type index.
 When types share an index, ref.test can't distinguish them and typeId-based
 dispatch is needed. The classed string layout is always shared (String and Symbol own
 it), and a struct whose layout equals it field for field gets its index from `add_type!`.
+parity(quarantine: Julia types share a wasm struct when their layouts coincide (add_type! deduplicates); dart gives every class its own struct.)
 """
 function is_shared_wasm_type(registry::TypeRegistry, wasm_type_idx::UInt32, T::Type)::Bool
     registry.string_struct_idx == wasm_type_idx && return true
@@ -792,6 +796,7 @@ end
     serialize_type_ids(registry::TypeRegistry) -> Dict{String, Any}
 
 Serialize the type ID table to a Dict suitable for JSON output.
+parity(quarantine: a JSON dump of the registries for WT's tooling (a host framework's island linker); dart2wasm has none.)
 """
 function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
     result = Dict{String, Any}()
@@ -814,6 +819,7 @@ end
 
 Serialize the full type registry to a Dict suitable for JSON output.
 Includes type_ids, type_ranges, structs, and arrays.
+parity(quarantine: a JSON dump of the registries for WT's tooling (a host framework's island linker); dart2wasm has none.)
 """
 function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     result = serialize_type_ids(registry)
@@ -950,6 +956,8 @@ function emit_typeof!(b::InstrBuilder, base_idx::UInt32)::InstrBuilder
 end
 
 # Kind constants for $JlType.$kind field
+# parity(quarantine: the $kind of a type object — a Union and a UnionAll are one wasm struct
+# (identical layouts canonicalize), so a field names the kind dart gives each its own class.)
 const JL_TYPE_KIND_DATATYPE  = Int32(0)
 # parity(quarantine: the $kind of a type object — a Union and a UnionAll are one wasm struct
 # (identical layouts canonicalize), so a field names the kind dart gives each its own class.)
@@ -1067,6 +1075,7 @@ Hierarchy (from §3.2.5):
   \$JlSVec         = (array (mut anyref))
 
 Must be called early, before type constant globals are created.
+parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect)
 """
 function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,StructInfo}
     registry.jl_type_idx !== nothing && return  # Already created
@@ -1286,8 +1295,7 @@ parity(functions.dart:25 FunctionCollector._functions / translator.dart:196
 staticParamInfo): `by_ref` is the dart-shaped core — callee identity (a Julia
 function object, standing in for dart's `Reference`) keyed to its compiled
 `FunctionInfo` (dart's `w.BaseFunction` + param ABI). `functions` (name-keyed)
-exists only to serve `serialize_function_table` and the Julia-only fallback
-`get_function_by_export_name` below — never the identity-keyed lookup path.
+exists only to serve `serialize_function_table` — never a callee lookup.
 """
 mutable struct FunctionRegistry
     functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
@@ -1305,6 +1313,7 @@ FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionIn
 
 Serialize the function table to a list of Dicts suitable for JSON output.
 Each entry has: name, arg_types, return_type, wasm_idx.
+parity(quarantine: a JSON dump of the registries for WT's tooling (a host framework's island linker); dart2wasm has none.)
 """
 function serialize_function_table(registry::FunctionRegistry)::Vector{Dict{String, Any}}
     entries = Dict{String, Any}[]
@@ -1362,52 +1371,6 @@ function register_function!(registry::FunctionRegistry, name::String, func_ref, 
     end
 
     return info
-end
-
-"""
-Look up a function by name — the sole caller has already lost the func_ref
-(a GlobalRef from an anonymous/re-exported module whose `getfield` failed) and
-a name string is all that remains to key on.
-
-No dart counterpart and no Julia necessity: dart resolves every callee by `Reference`
-identity (functions.dart:25 `FunctionCollector._functions`), and the one case this serves —
-`isdefined(func.mod, func.name)` false — is where native Julia throws UndefVarError, so the
-name fallback answers a question Julia answers with an error. An invention (dev/CHARTER.md
-C2): it stays counted by R32 until it is deleted.
-"""
-function get_function_by_export_name(registry::FunctionRegistry, name::String)::Union{FunctionInfo, Nothing}
-    for (n, info) in registry.functions
-        (n == name && !info.is_candidate) && return info   # candidates are dispatch-only
-    end
-    return nothing
-end
-
-"""
-Registry lookup by FULL signature only (no function identity). Needed for
-capturing-closure callees (453393ca4ba4): the call site's closure VALUE is a
-different instance than the one registration stored, so identity (`ref ===`)
-can never match — but the self-prepended arg_types tuple identifies the entry.
-"""
-function get_function_by_argtypes(registry::FunctionRegistry, arg_types::Tuple)::Union{FunctionInfo, Nothing}
-    for (ref, infos) in registry.by_ref, info in infos
-        (info.is_candidate || info.invoke_only) && continue  # candidates are dispatch-only
-        info.arg_types == arg_types && return info
-    end
-    # subtype-tolerant pass (mirrors get_function's compatible-signature pass)
-    for (ref, infos) in registry.by_ref, info in infos
-        info.is_candidate && continue
-        if length(info.arg_types) == length(arg_types)
-            ok = true
-            for (expected, actual) in zip(info.arg_types, arg_types)
-                if !(actual <: expected)
-                    ok = false
-                    break
-                end
-            end
-            ok && return info
-        end
-    end
-    return nothing
 end
 
 """
@@ -1811,6 +1774,7 @@ end
 """
 Get or create the BoxedNothing struct type.
 BoxedNothing has only typeId:i32 (no value field) — a singleton type.
+parity(quarantine: Julia's nothing boxed as a classed value where an Any slot needs a class; dart's null is ref.null (dev/MARCH.md 13.4, one representation of nothing).)
 """
 function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.nothing_box_idx !== nothing
@@ -1827,6 +1791,7 @@ end
 """
 Get or create a singleton global holding the BoxedNothing instance.
 Returns the global index. The global is initialized with struct.new \$BoxedNothing(typeId).
+parity(quarantine: Julia's nothing boxed as a classed value where an Any slot needs a class; dart's null is ref.null (dev/MARCH.md 13.4, one representation of nothing).)
 """
 function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     if registry.nothing_global_idx !== nothing
@@ -1853,6 +1818,7 @@ distinguishes different Type objects at runtime.
 
 Globals use the one \$JlDataType representation established by
 `create_jl_type_hierarchy!` before closed-world type collection.
+parity(pkg/dart2wasm/lib/constants.dart:1551 visitTypeLiteralConstant)
 """
 function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(type_val::Type))::UInt32
     # Return cached global if this Type was already seen
@@ -1967,6 +1933,7 @@ When \$JlType hierarchy is available, populates \$JlDataType fields:
   kind=0, name→\$JlTypeName, super→\$JlType, parameters→\$JlSVec, hash, abstract, dfs_low, dfs_high
 And \$JlTypeName fields: interned name Symbol, Module identity, wrapper, and binding metadata
 
+parity(quarantine: WT materializes a runtime type object for every numbered type when the module starts (dev/MARCH.md 13.7); dart builds a type object on demand, types.dart:349 makeType.)
 """
 function populate_type_constant_globals!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,WasmModule}
     isempty(registry.type_constant_globals) && return
@@ -2001,6 +1968,7 @@ end
 
 """
 Populate \$JlDataType and \$JlTypeName fields using the JlType hierarchy.
+parity(quarantine: WT materializes a runtime type object for every numbered type when the module starts (dev/MARCH.md 13.7); dart builds a type object on demand, types.dart:349 makeType.)
 """
 function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,WasmModule}
     dt_type_idx = registry.jl_datatype_idx
@@ -2337,6 +2305,7 @@ This ensures every type (concrete and abstract) has a materialized \$JlDataType
 struct that can be returned by typeof(x).
 
 Must be called AFTER assign_type_ids!.
+parity(quarantine: WT materializes a runtime type object for every numbered type when the module starts (dev/MARCH.md 13.7); dart builds a type object on demand, types.dart:349 makeType.)
 """
 function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)::Nothing
     # Collect all types that need globals: those with DFS IDs or DFS ranges

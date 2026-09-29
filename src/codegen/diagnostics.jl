@@ -139,15 +139,19 @@ Thrown when the opt-in independent `wasm-tools validate` cross-check rejects the
 emitted module. `details` carries the validator's stderr when available; `bytes`
 carries the rejected module itself (dart2wasm always writes its output — this is
 the equivalent: the error carries what would have been written).
+parity(quarantine: the error a failed wasm-tools validation raises (WT_VALIDATE); dart's builder asserts while it builds.)
 """
 struct WasmValidationError <: Exception
     msg::String
     details::String
     bytes::Vector{UInt8}
 end
+# parity(quarantine: the error a failed wasm-tools validation raises (WT_VALIDATE); dart's builder asserts while it builds.)
 WasmValidationError(msg::AbstractString, details::AbstractString)::WasmValidationError =
     WasmValidationError(String(msg), String(details), UInt8[])
+# parity(quarantine: the error a failed wasm-tools validation raises (WT_VALIDATE); dart's builder asserts while it builds.)
 WasmValidationError(msg::AbstractString)::WasmValidationError = WasmValidationError(String(msg), "", UInt8[])
+# parity(quarantine: the error a failed wasm-tools validation raises (WT_VALIDATE); dart's builder asserts while it builds.)
 Base.showerror(io::IO, e::WasmValidationError) =
     print(io, "WasmValidationError: ", e.msg, isempty(e.details) ? "" : "\n" * e.details,
           isempty(e.bytes) ? "" : "\n($(length(e.bytes)) bytes of rejected module in `.bytes`)")
@@ -263,6 +267,7 @@ function located_internal_error(ctx, idx::Int, cause)::WasmInternalError
                              stmt_frames(_ctx_debuginfo(ctx), idx), cause)
 end
 
+# parity(pkg/dart2wasm/lib/target.dart:719 DiagnosticReporter.report)
 function _ctx_func_name(ctx)::String
     f = ctx.func_ref
     # A callable that is neither a Function nor a Type (a functor instance) has no `nameof`.
@@ -279,6 +284,7 @@ When set (see `compile(...; diagnostics_sink=...)`), every `WasmDiagnostic` reco
 compilation context is mirrored here.
 This is the caller-facing ledger: tools like Snapshot.jl read it to explain *why* a
 compilation degraded, with source attribution per diagnostic.
+parity(pkg/dart2wasm/lib/target.dart:719 DiagnosticReporter.report)
 """
 const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(nothing)
 
@@ -335,10 +341,9 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
 end
 
 """
-    emit_unsupported_stub!(ctx, bytes, kind, construct; idx=0, detail=nothing, soundness_fatal=true) -> Nothing
+    emit_unsupported_stub!(ctx, b, kind, construct; idx=0, detail=nothing, soundness_fatal=true) -> Nothing
 
-Category-C funnel. Use this — instead of a bare
-`push!(bytes, Opcode.UNREACHABLE)` — whenever the stub replaces a construct that would
+Category-C funnel. Use this — never a bare `unreachable!` — whenever the stub replaces a construct that would
 **return a value natively** but WT cannot lower (Int128 ops, externref-as-numeric/boxing,
 `Core.svec`, `:new` of an unresolved type, the typeId dispatch-ladder miss, deferred parse
 intrinsics, …). Routes through [`record_unsupported!`], which rejects wrong-value
@@ -363,14 +368,3 @@ function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
     return nothing
 end
 
-function emit_unsupported_stub!(ctx, bytes::Vector{UInt8}, kind::Symbol,
-                                construct::AbstractString; idx::Int=0, detail=nothing,
-                                soundness_fatal::Bool=true)::Nothing
-    # A trap is retained only for a block the Julia CFG proves unreachable.
-    local _dead = stmt_is_proven_unreachable(_ctx_nir(ctx), idx)
-    record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
-                        soundness_fatal=(soundness_fatal && !_dead))
-    push!(bytes, Opcode.UNREACHABLE)
-    ctx.last_stmt_was_stub = true
-    return nothing
-end

@@ -98,6 +98,7 @@ end
 # ladder (`_compile_call_checked!` in calls.jl tests the Dict key `op` directly — a
 # data test, R19 — instead of re-deriving identity via `is_func`; all six keys forward
 # to the one dispatcher).
+# parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 const _checked_dispatch = (fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx) ->
     _compile_call_checked!(fbref, ctx, op, args, is_128bit, is_32bit, arg_type, idx)
 # parity(quarantine: no dart equivalent — dart's `int` wraps silently on overflow,
@@ -387,7 +388,8 @@ end
 
 """Resolve `bitcast`'s target-type argument (GlobalRef/DataType/unresolved) — a pure
 move of the arm's resolution logic. `record_unsupported!`'s reject stays the
-registry's loud path for an unresolvable GlobalRef (Design item C)."""
+registry's loud path for an unresolvable GlobalRef (Design item C).
+parity(quarantine: Julia's bitcast intrinsic takes its target type as an argument; dart has no bitcast.)"""
 function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)::Union{Nothing, Type}
     if target_type_ref isa NirGlobalRef
         if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")

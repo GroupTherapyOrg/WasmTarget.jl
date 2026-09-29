@@ -3,6 +3,7 @@
 
 export get_typed_ir
 
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const TRIM_IR_CACHE = Ref{Union{Nothing, IdDict{Any, Tuple{Core.CodeInfo, Any}}}}(nothing)
 
 # ONE inference path. Every typed IR WasmTarget consumes comes from the

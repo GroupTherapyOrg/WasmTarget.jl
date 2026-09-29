@@ -26,11 +26,13 @@
 # though a closed-world call-site value of that type has exactly one possible
 # runtime identity: `T`. Treat these singleton type-object slots as exact for
 # specialization alongside ordinary concrete value types.
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 @inline _closed_world_exact_type(@nospecialize(T))::Bool =
     T isa Type && (isconcretetype(T) ||
         (T isa DataType && T <: Type && length(T.parameters) == 1 &&
          !(T.parameters[1] isa TypeVar)))
 
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 @inline function _canonical_type_object_arg(@nospecialize(T), @nospecialize(formal))::Union{Type, Core.TypeofVararg}
     if T isa DataType && T <: Type && length(T.parameters) == 1 &&
        !(T.parameters[1] isa TypeVar)
@@ -86,7 +88,8 @@ function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type}
     return CC.specialize_method(matches[1])
 end
 
-"""Return explicit `:invoke` MethodInstances missing from a collected world."""
+"""Return explicit `:invoke` MethodInstances missing from a collected world.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                       superseded::Set{Any}, protected::Set{Any}=Set{Any}())::Vector{Any}
     out = Any[]
@@ -255,22 +258,12 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
 end
 
 """
-    collect_closed_world(entries::Vector{Any}; verify::Bool=false)
-        -> Vector{Any}   # alternating CodeInstance, CodeInfo pairs
-
-Collect the closed transitive callgraph for the given entry
-`MethodInstance`s under the WASM overlay interpreter. With `verify=true`,
-run the upstream trim verifier (throws `Core.TrimFailure` with
-source-located diagnostics when dynamic dispatch remains — the same
-"abstract inference unsupported" boundary WasmTarget's diagnostics guard,
-but reported far better).
-WASMTARGET dynamic dispatch: trim/inference drops `dynamic` calls (open-world) —
-the applicable method specializations are never collected, so func_registry has
-nothing for the call site to dispatch over. Scan the collected IR for dynamic
-calls `g(…, x::abstract, …)` and return the MethodInstances of the applicable
-CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
-(then `_try_inline_typeid_dispatch` builds a runtime typeId switch over them).
-Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
+The MethodInstances the program's dynamic dispatch sites can reach: for each site, the methods
+of its function applicable to its argument types whose dispatch classes the collected program
+instantiates (in its signatures or allocations), as dart builds dispatch rows only for the
+classes of its closed component.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
+its front end's whole-program type flow analysis.)
 """
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[])::Vector{Any}
@@ -602,11 +595,13 @@ end
 
 # Dynamic-dispatch selector roots, distinct from the ordinary dependencies that
 # their candidate compilation discovers transitively.
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
 
 # The conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
 # lifecycle as TRIM_IR_CACHE; reset at each collect).
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const _ENROLLED_CALLABLE_TYPES = Base.RefValue{Set{DataType}}(Set{DataType}())
 
 """Keep only code reachable from roots over the invoke edges as they stand, never the body of
@@ -672,12 +667,33 @@ end
 # image to link against; every reachable method must enter the closed world, so
 # the value is `false` — the ClosedWorld.tla Completeness invariant, stated as a
 # keyword. Keyed on the method's actual signature, not on a version number.
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compile!))) ?
     (; external_linkage = false) : (;)
 
 # formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
 # below always collects exactly the methods reachable from the roots, never stops
 # early, and never silently drops a reachable method whose specialization fails.
+"""
+    collect_closed_world(entries::Vector{Any}; verify::Bool=false)
+        -> Vector{Any}   # alternating CodeInstance, CodeInfo pairs
+
+Collect the closed transitive callgraph for the given entry
+`MethodInstance`s under the WASM overlay interpreter. With `verify=true`,
+run the upstream trim verifier (throws `Core.TrimFailure` with
+source-located diagnostics when dynamic dispatch remains — the same
+"abstract inference unsupported" boundary WasmTarget's diagnostics guard,
+but reported far better).
+WASMTARGET dynamic dispatch: trim/inference drops `dynamic` calls (open-world) —
+the applicable method specializations are never collected, so func_registry has
+nothing for the call site to dispatch over. Scan the collected IR for dynamic
+calls `g(…, x::abstract, …)` and return the MethodInstances of the applicable
+CONCRETE-STRUCT specializations, so a follow-up collection round compiles them
+(then `_try_inline_typeid_dispatch` builds a runtime typeId switch over them).
+Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
+its front end's whole-program type flow analysis.)
+"""
 function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())::Vector{Any}
     _ENROLLED_CALLABLE_TYPES[] = Set{DataType}()
@@ -850,6 +866,7 @@ end
 
 Resolve the `MethodInstance` for `f(::arg_types...)` — the entry handle
 `collect_closed_world` consumes.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function entry_method_instance(f, arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
@@ -871,6 +888,7 @@ Skipped (with a debug note): non-singleton callables (stateful closures —
 their call sites inline or carry the closure value; no module-level
 function entry to register) and Core/internal entries without a usable
 function object.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::Tuple{Vector{Any}, IdDict{Any, Tuple{Core.CodeInfo, Any}}}
     entry_mis = Any[]
@@ -1064,6 +1082,7 @@ end
 const _TRIM_INVOKE_ONLY = Ref{Set{Any}}(Set{Any}())
 
 # (f, arg_types) keys discovered solely as dynamic-dispatch candidates.
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const _TRIM_DISPATCH_CANDIDATES = Ref{Set{Any}}(Set{Any}())
 
 # ============================================================================

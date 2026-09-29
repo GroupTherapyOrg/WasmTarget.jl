@@ -27,7 +27,9 @@
 # M8.2 — route single-axis dispatch through the ONE dart table
 # ============================================================================
 
+# parity(pkg/dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable)
 const _ST_BASE_IDX = Base.RefValue{UInt32}(0)
+# parity(pkg/dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable)
 _st_base_idx(_)::UInt32 = _ST_BASE_IDX[]
 
 """
@@ -278,6 +280,7 @@ dart's virtual call site (code_generator.dart:2103-2110), as the dispatcher body
 
 A classId with no row hits a null funcref → trap: the honest MethodError analog
 (loud, dart-legit) — same posture the FNV probe's miss already had.
+parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
 function generate_selector_caller_body(dt::DispatchTable, dt_registry,
                                        n_params::Int, base_struct_idx::UInt32;

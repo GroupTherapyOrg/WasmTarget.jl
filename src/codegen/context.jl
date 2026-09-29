@@ -5,11 +5,13 @@
 """
 Abstract supertype for compilation contexts.
 CompilationContext is the sole function-compilation context.
+parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
 """
 abstract type AbstractCompilationContext end
 
 """
 Tracks state during compilation of a single function.
+parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
 """
 mutable struct CompilationContext <: AbstractCompilationContext
     arg_types::Tuple
@@ -87,6 +89,7 @@ mutable struct CompilationContext <: AbstractCompilationContext
     debuginfo::Union{Core.DebugInfo, Nothing}
 end
 
+# parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
 function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
                            func_idx::UInt32=UInt32(0), func_ref=nothing,
@@ -167,6 +170,7 @@ For CompilableSignal/CompilableSetter pattern:
 - getfield(CompilableSignal, :signal) -> Signal SSA
 - getfield(Signal, :value) -> actual value read (substitutes to global.get)
 - setfield!(Signal, :value, x) -> value write (substitutes to global.set)
+parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 """
 function analyze_signal_captures!(ctx::AbstractCompilationContext)::Nothing
     isempty(ctx.captured_signal_fields) && return
@@ -302,6 +306,7 @@ end
 Allocate scratch locals for complex operations like string concatenation.
 These are extra locals beyond what SSA analysis requires.
 Stores the indices in ctx.scratch_locals for later use.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 """
 function allocate_scratch_locals!(ctx::AbstractCompilationContext)::Nothing
     # Check if any SSA type is String or Symbol - if so, we need scratch locals
@@ -334,6 +339,7 @@ end
 
 Allocate a new local variable of the given Julia type and return its index.
 The index is relative to the function's locals, accounting for parameters.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 """
 function allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int
     wasm_type = get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true)
@@ -342,12 +348,14 @@ function allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int
     return local_idx
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int
     local_idx = ctx.n_params + length(ctx.locals)
     push!(ctx.locals, wasm_type)
     return local_idx
 end
 
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 function boxing_scratch_local!(ctx::AbstractCompilationContext,
                                wasm_type::WasmValType)::Int
     get!(ctx.boxing_scratch_locals, wasm_type) do
@@ -358,6 +366,7 @@ end
 """
 Convert a numeric value on the stack to f64 (no-op when already f64) — builder-native
 (THE implementation). Used for DOM bindings where numerics pass as f64 for JS.
+parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 """
 function emit_convert_to_f64!(b::InstrBuilder, valtype::WasmValType)::InstrBuilder
     if valtype == I32
@@ -377,9 +386,11 @@ Returns a vector of bytes to append to the instruction stream.
 MULTI-VALUE blocktype — a function-type INDEX encoded as s33
 (wasm spec). Used by the typed-catch landing block (results = the tag payload).
 Int specifically (not Integer): UInt8 0x40/void keeps its raw single-byte path.
+parity(pkg/wasm_builder/lib/src/ir/instruction.dart:667 BeginOneOutputBlock)
 """
 encode_block_type(type_idx::Int)::Vector{UInt8} = encode_leb128_signed(Int64(type_idx))
 
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:667 BeginOneOutputBlock)
 function encode_block_type(result_type::WasmValType)::Vector{UInt8}
     bytes = UInt8[]
     if result_type isa NumType
@@ -494,6 +505,7 @@ end
 
 """
 Analyze control flow to find loops and handle phi nodes.
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its loops and phis, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
 function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     nir = ctx.nir
@@ -666,6 +678,7 @@ We need locals when:
 2. An SSA value is not used immediately (intervening stack operations)
 3. An SSA value is used in a multi-arg call where a sibling arg has a local
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
+parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                              _numeric_joins::Dict{Int,Type})::Nothing
@@ -1204,6 +1217,7 @@ Slots > n_params+1 are local variables that need dedicated WASM locals.
 
 This function scans for slot assignments, determines their types from the SSA types,
 and allocates WASM locals. The slot_locals dict maps SlotNumber.id → WASM local index.
+parity(quarantine: Julia's slots and flattened vararg packs, read from the IR's slot table; dart's parameters and variables are declared.)
 """
 function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
     n_arg_slots = length(ctx.arg_types) + 1  # slot 1 = self, slot 2..n+1 = args
@@ -1240,6 +1254,7 @@ end
 
 """
 Check if an SSA value needs a local (e.g., not used immediately or used after other stack-producing operations).
+parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function needs_local(ctx::AbstractCompilationContext, ssa_id::Int,
                      first_goto_to::Dict{Int,Int})::Bool
@@ -1319,6 +1334,7 @@ end
 Check if a statement produces a value on the stack: a call, invoke, `%new`, boundscheck,
 exception read, phi or pi, or a statement that is itself a value. An assignment into a
 slot stores its value instead.
+parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function produces_stack_value(rec::NirStmt)::Bool
     rec.slot > 0 && return false
@@ -1337,6 +1353,7 @@ Examples:
 - memoryrefnew(memory) - just passes through the array reference
 - Core.memoryref(memory) via :invoke - also a passthrough
 Note: Vector{T} is NO LONGER a passthrough - it's now a struct with (ref, size) fields.
+parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function is_passthrough_statement(node::NirNode, ctx::AbstractCompilationContext)::Bool
     # Check for memoryrefnew with single arg (passthrough pattern) via :call
@@ -1367,6 +1384,7 @@ end
 Count the SSA uses one statement makes: every SSA operand an expression reads (its dynamic
 callee included), a return's value, a branch condition, a phi's incoming values and a pi's
 source. A statement that is itself an SSA value (or a slot assigned from one) is a use.
+parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})::Nothing
     _count(x) = (x isa NirSSA && (uses[x.id] = get(uses, x.id, 0) + 1); nothing)
@@ -1392,6 +1410,7 @@ end
 """
 The inferred source type of IR slot `slot` (slot 1 = `#self#`, then the parameters, then the
 locals), as the NIR boundary widened it — `nothing` when the IR carries no slot table.
+parity(quarantine: Julia's slots and flattened vararg packs, read from the IR's slot table; dart's parameters and variables are declared.)
 """
 function source_slot_type(ctx::AbstractCompilationContext, slot::Integer)::Union{Type, Nothing}
     1 <= slot <= length(ctx.slot_types) || return nothing
@@ -1404,6 +1423,7 @@ end
 the Wasm function signature contains each concrete vararg as a separate physical
 parameter. An ordinary tuple argument has one matching physical tuple parameter
 and is deliberately not classified as a pack.
+parity(quarantine: Julia's slots and flattened vararg packs, read from the IR's slot table; dart's parameters and variables are declared.)
 """
 function packed_vararg_source_type(ctx::AbstractCompilationContext,
                                    source_slot::Integer,
@@ -1423,6 +1443,7 @@ function packed_vararg_source_type(ctx::AbstractCompilationContext,
     return T
 end
 
+# parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
 function get_ssa_type(ctx::AbstractCompilationContext, val::NirNode)::Type
     if val isa NirSSA
         return get(ctx.ssa_types, val.id, Any)
@@ -1458,6 +1479,7 @@ end
 """
 Analyze the IR to determine types of SSA values.
 Uses Julia inference's own SSA types (the NIR boundary's widened answer).
+parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
 """
 function analyze_ssa_types!(ctx::AbstractCompilationContext)::Nothing
     # Use Julia's type inference results when available. Store all concrete types
@@ -1587,6 +1609,7 @@ function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall
     return rt
 end
 
+# parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
 function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg}
     if val isa NirArgument
         # Source IR semantics are authoritative. The physical signature can be
@@ -1697,6 +1720,7 @@ end
 Resolve the DECLARED wasm slot type of `val`'s source (SSA/phi local or parameter) —
 feeds emit_ref_cast_if_structref!: when the source slot is abstract (structref/anyref)
 or a mismatched concrete ref, a `ref.cast null \$target` narrows it for struct_get.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, WasmValType}
     if val isa NirSSA
@@ -1728,13 +1752,15 @@ function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)::U
     return nothing
 end
 
-"""builder-native form: resolve the source's declared wasm type and narrow on `b`."""
+"""builder-native form: resolve the source's declared wasm type and narrow on `b`.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)"""
 function emit_ref_cast_if_structref!(b::InstrBuilder, val, target_type_idx::Integer, ctx::AbstractCompilationContext)::InstrBuilder
     _emit_ref_cast_arm!(b, _ref_cast_source_type(val, ctx), target_type_idx)
     return b
 end
 
-"""builder-native core: with the source ref on `b`'s stack, narrow per the arm table."""
+"""builder-native core: with the source ref on `b`'s stack, narrow per the arm table.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)"""
 function _emit_ref_cast_arm!(b::InstrBuilder, local_wasm_type::Union{Nothing, WasmValType},
                             target_type_idx::Integer)::InstrBuilder
     if local_wasm_type === StructRef || local_wasm_type === AnyRef
@@ -1801,6 +1827,7 @@ builder-native — THE implementation): when a local has generic type
 type (narrowed_local_type), narrow the value on `b`'s stack (`ref.cast null` for refs — a
 no-op at runtime when correct, a trap on a real codegen bug — and THE funnel-unbox for
 join-refined numerics). Returns false when no narrowing applies.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Integer, ctx::AbstractCompilationContext)::Bool
     local narrowed = narrowed_local_type(ctx, local_idx, ssa_id)
@@ -1821,6 +1848,7 @@ end
 """
 Extract the global index from a WasmGlobal type.
 The index is stored as a type parameter, so we extract it from the type.
+parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 """
 function get_wasm_global_idx(val, ctx::AbstractCompilationContext)::Union{Int, Nothing}
     val_type = infer_value_type(val, ctx)

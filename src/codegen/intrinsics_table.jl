@@ -224,6 +224,7 @@ end
 # was actually written for — same 13 ops `is_numeric_intrinsic` named one-by-one
 # before this table existed; kept as a Set (not an `is_func(func, :key)` chain)
 # so the gate reads as ONE membership check instead of a ladder R22 must track.
+# parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)
 const NUMERIC_INTRINSIC_ARG_OPS = Set{Symbol}((
     :eq_int, :ne_int, :slt_int, :sle_int, :ult_int, :ule_int,
     :add_int, :sub_int, :mul_int,
@@ -232,7 +233,8 @@ const NUMERIC_INTRINSIC_ARG_OPS = Set{Symbol}((
 
 """True when `func` names one of `NUMERIC_INTRINSIC_ARG_OPS` — same name-extraction
 rule `_it_name` uses (GlobalRef / Core.IntrinsicFunction), so this is a drop-in for
-a chain of individual per-op `is_func` name checks, ORed together, that it replaces."""
+a chain of individual per-op `is_func` name checks, ORed together, that it replaces.
+parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)"""
 function is_numeric_intrinsic_arg(func)::Bool
     f = nir_const(func)   # the callee object, a literal callee unwrapped
     return f isa Core.IntrinsicFunction && nameof(f) in NUMERIC_INTRINSIC_ARG_OPS

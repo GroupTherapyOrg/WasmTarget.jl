@@ -23,6 +23,7 @@ end
 """
 Check if a type is a reference type (struct or Union containing struct).
 Used to determine if ref.eq should be used for comparison.
+parity(quarantine: a Julia Union of unrelated types has one wasm representation; dart's types are classes and their nullable forms.)
 """
 function is_ref_type_or_union(T::Type)::Bool
     # Any maps to externref (reference type)

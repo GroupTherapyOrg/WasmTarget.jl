@@ -8,6 +8,7 @@
 
 Get the Wasm type of a local variable by its index. Parameters come first,
 then additional locals from ctx.locals.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 """
 function _get_local_type(ctx::AbstractCompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
     if local_idx < ctx.n_params
@@ -56,6 +57,7 @@ end
 
 """
 Represents a basic block in the IR.
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
 struct BasicBlock
     start_idx::Int
@@ -165,6 +167,7 @@ end
 """
 Analyze the IR to find basic block boundaries.
 A new block starts after each terminator AND at each jump target.
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
 function analyze_blocks(nir::Vector{NirStmt})::Vector{BasicBlock}
     # First, collect all jump targets
@@ -242,6 +245,7 @@ end
 Ensure module has the \$current_exn global for exception value stashing.
 This is a (mut anyref) global initialized to ref.null any.
 Returns the global index. Idempotent — scans existing globals to avoid duplicates.
+parity(quarantine: WT stashes the thrown Julia value in a global beside the tag's payload, where `catch` and jl_current_exception read it; dart's tag carries its exception and stack trace.)
 """
 function ensure_exception_global!(mod::WasmModule)::UInt32
     # Check if we already have an anyref mutable global (our exception stash)

@@ -26,6 +26,7 @@ end
 """
 Determine the Wasm type that a phi edge value will produce on the stack.
 Used to check compatibility before storing to a phi local.
+parity(quarantine: Julia's IR carries phi nodes, whose incoming values WT stores at each edge; dart's kernel tree has none.)
 """
 function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
     # Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
@@ -123,6 +124,7 @@ end
 
 """
 Check if two Wasm types are compatible for local.set (value can be stored in local).
+parity(quarantine: Julia's IR carries phi nodes, whose incoming values WT stores at each edge; dart's kernel tree has none.)
 """
 function wasm_types_compatible(local_type::WasmValType, value_type::WasmValType)::Bool
     if local_type == value_type

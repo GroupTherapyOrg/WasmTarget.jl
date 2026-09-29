@@ -458,6 +458,7 @@ end
 """
 Check if a body (its NIR boundary) calls a function with a (selector-routed) dispatch table.
 Returns the dispatch table if found, nothing otherwise.
+parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
 function find_dispatch_call(nir::Vector{NirStmt},
                              dt_registry::DispatchTableRegistry)::Union{Nothing,DispatchTable}

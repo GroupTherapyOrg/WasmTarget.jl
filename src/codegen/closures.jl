@@ -32,6 +32,7 @@ struct ClosureBody
     return_type::Type
     julia_params::Union{Nothing, Vector{Type}}   # the specialization's Julia parameter types (self included for capturing closures)
 end
+# parity(pkg/dart2wasm/lib/closures.dart:23 ClosureImplementation)
 ClosureBody(body_idx, params, results, return_type)::ClosureBody = ClosureBody(body_idx, params, results, return_type, nothing)
 
 """
@@ -382,6 +383,7 @@ end
 
 The compiled body whose SELF param is `closure_type` (WT closures take the
 captured struct as arg 1). Reads the wasm signature from the module.
+parity(pkg/dart2wasm/lib/closures.dart:23 ClosureImplementation)
 """
 function _closure_body_for(ctx, closure_type::Type)::Union{Nothing, Tuple{UInt32, Vector{WasmValType}, Vector{WasmValType}, Bool}}
     fr = ctx.func_registry

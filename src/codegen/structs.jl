@@ -132,8 +132,11 @@ end
 # The string/IO/RNG lazy caches below are PER-COMPILE state: each compile task gets its own
 # copy, so concurrent compiles (the test suite spawns one task per Phase) can't corrupt each
 # other. Struct registration keeps its state on the TypeRegistry (PendingTypes).
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 mutable struct TaskLocalRef{T}; key::Symbol; default::T; end
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 Base.getindex(r::TaskLocalRef{T}) where {T} = get(task_local_storage(), r.key, r.default)::T
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 Base.setindex!(r::TaskLocalRef, v) = (task_local_storage()[r.key] = v)
 
 """
@@ -176,6 +179,7 @@ function pending_alias!(registry::TypeRegistry, idx::UInt32, field::Symbol, @nos
 end
 
 # the type with every pending reference resolved through `real`
+# parity(quarantine: see PendingTypes (dev/formal/RecGroup.tla).)
 function _resolve_pending(ct::CompositeType, real::Dict{UInt32, UInt32})::CompositeType
     local r(vt) = vt isa ConcreteRef && vt.type_idx >= PENDING_BASE ?
         ConcreteRef(real[vt.type_idx], vt.nullable) : vt
@@ -243,6 +247,7 @@ function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataT
     return _register_struct_type_inner!(mod, registry, T)
 end
 
+# parity(pkg/dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass)
 function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Union{Nothing, StructInfo}
 
     # MemoryRef/Memory should NOT be registered as struct types.
@@ -946,6 +951,7 @@ end
 Pre-register Core IR node types as WasmGC structs for self-hosting dispatch.
 These types are used in compile_statement's isa chain (ReturnNode, GotoNode, etc.).
 Registration order: dependencies first (SlotNumber before NewvarNode).
+parity(quarantine: the Julia compiler's own IR types a reflecting program reads; dart has no runtime IR.)
 """
 function register_core_ir_types!(mod::WasmModule, registry::TypeRegistry)::Nothing
     for T in (Core.SlotNumber, Core.SSAValue, Core.Argument, Core.GotoNode,

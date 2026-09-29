@@ -217,6 +217,7 @@ end
 # Compile with base.wasm merge
 # ============================================================================
 
+# parity(quarantine: WT links a prebuilt base module into a host framework's module with Binaryen's module merger; dart2wasm emits one module.)
 const WASM_MERGE_GC_FLAGS = [
     "--enable-gc", "--enable-reference-types", "--enable-multivalue",
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
@@ -239,6 +240,7 @@ can call base functions directly.
 
 # Returns
 Merged `Vector{UInt8}` containing both base and user functions.
+parity(quarantine: WT links a prebuilt base module into a host framework's module with Binaryen's module merger; dart2wasm emits one module.)
 """
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
@@ -309,6 +311,7 @@ const WASM_OPT_PRODUCTION_FLAGS = [
 # invocation is deterministic and completes when constrained to one worker.
 # Keep the artifact executable and the exact production pass pipeline; only its
 # host-side scheduling differs on Windows.
+# parity(quarantine: the worker count of WT's optional Binaryen pass; dart's wasm-opt runs from its SDK driver.)
 _binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
 
 """
@@ -377,7 +380,9 @@ end
 # Independent validation cross-check — opt-in; the typed builder is the gate
 # ============================================================================
 
+# parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 const _WARNED_NO_WASM_TOOLS = Ref(false)
+# parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 function _warn_no_wasm_tools_once()
     if !_WARNED_NO_WASM_TOOLS[]
         @warn "wasm-tools not found — skipping the wasm validation gate (install: `cargo install wasm-tools`)"
@@ -390,6 +395,7 @@ Disassemble ±12 instructions around the first `(at offset 0x…)` in a validato
 message, "" when the message names no offset or the printer prints nothing (a module
 `wasm-tools print` rejects): the validation error it accompanies is never masked by
 its own diagnostic.
+parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 """
 function _disassembly_context(wasm_tools, wasm_path::AbstractString, validator_msg::AbstractString)::String
     m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
@@ -418,6 +424,7 @@ Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError
 if the validator rejects the module. If `wasm-tools` is not installed, this is a no-op
 (with a one-time warning) so the package stays usable without the tool. Returns `bytes`
 unchanged so it can be used inline.
+parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 """
 function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module")
     wasm_tools = Sys.which("wasm-tools")

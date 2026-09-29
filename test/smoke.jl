@@ -1424,6 +1424,18 @@ function _sm_ptr_stride(v, n::Int64, elsz::Int64)::Int64
     end
 end
 const _SM_CONST_VEC = [1, 2]
+# Core.sizeof is Julia's answer (jl_f_sizeof): a String's bytes; a Memory's length × its element
+# size, plus a selector byte per element for an isbits union. The lowering once cast every
+# AbstractVector or Any operand to the String byte array: a Memory{Int64} trapped at the cast
+# where Julia answers 24.
+_g("sizeof_values", Any[
+    ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),
+    ("sizeof_memory_float32", (n::Int64) -> sizeof(Memory{Float32}(undef, n)), Int64(3)),
+    ("sizeof_memory_uint8", (n::Int64) -> Core.sizeof(Memory{UInt8}(undef, n)), Int64(3)),
+    ("sizeof_memory_union", (n::Int64) -> Core.sizeof(Memory{Union{Int64,Nothing}}(undef, n)), Int64(3)),
+    ("sizeof_memory_any", (n::Int64) -> Core.sizeof(Memory{Any}(undef, n)), Int64(3)),
+    ("sizeof_string", (n::Int64) -> sizeof("hé" * string(n)), Int64(3)),
+])
 _g("memoryref_storage", Any[
     ("union_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(Union{Int64,Nothing}[1, nothing, 3, 4, 5], n, 8), Int64(3)),
     ("tuple_ref_ptr_stride", (n::Int64) -> _sm_ptr_stride(Tuple{Int64,String}[(1, "a"), (2, "b"), (3, "c"), (4, "d")], n, 16), Int64(3)),

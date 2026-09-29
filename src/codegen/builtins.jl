@@ -182,25 +182,34 @@ function _lower_getglobal!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, 
     return nothing
 end
 
-# Special case for Core.sizeof - returns byte size
-# For strings/arrays, this is the array length
+# Core.sizeof is Julia's answer (jl_f_sizeof, builtins.c): a String's or Symbol's byte count; a
+# Memory's length times its element size (Base.elsize), plus one selector byte per element for
+# an isbits-union element. Any other operand is not this lowering's: the call falls through to
+# the dynamic dispatch a value of unknown type takes, or to a located rejection — never a byte
+# count read from an array the value is not (the String cast once trapped on every Memory).
+# parity(quarantine: Julia's Core.sizeof builtin; dart has no sizeof.)
 function _lower_sizeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
     arg = args[1]
     arg_type = infer_value_type(arg, ctx)
-
-    if arg_type === String || arg_type <: AbstractVector || arg_type === Any
-        # For strings and arrays, sizeof is the array length
-        local _szb = _ctx_builder(ctx, "compile_call")
-        # ONE 4-arg wrap replaces the sniff+cast ladder
+    local _szb = _ctx_builder(ctx, "compile_call")
+    if arg_type === String || arg_type === Symbol
         emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         array_len!(_szb)
         widen_length_to_i64!(_szb)
-        append_builder!(fb, _szb)
-        return append_builder!(b, fb)
+    elseif arg_type isa DataType && arg_type <: Core.GenericMemory && isconcretetype(arg_type)
+        local E = eltype(arg_type)
+        local arr = get_array_type!(ctx.mod, ctx.type_registry, E)
+        emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(arr), true))
+        array_len!(_szb)
+        widen_length_to_i64!(_szb)
+        i64_const!(_szb, Int64(Base.elsize(arg_type) + (Base.isbitsunion(E) ? 1 : 0)))
+        num!(_szb, Opcode.I64_MUL)
+    else
+        return nothing
     end
-    # For other types, fall through to error
-    return nothing
+    append_builder!(fb, _szb)
+    return append_builder!(b, fb)
 end
 
 # ncodeunits(s) → array.len of a String's (or a Symbol's) byte array. Any other
@@ -228,28 +237,18 @@ function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)::Union{Nothing,
     return nothing
 end
 
-# Special case for length - returns character count for strings, element count for arrays
+# Base.length of a Vector: its logical size, the one element of its size tuple. Any other operand
+# is not this lowering's — a String's length counts characters, not bytes (the byte count was
+# once answered); a Matrix has two sizes; a range or view has its own method — and falls through.
+# parity(quarantine: Julia's Vector length is its size tuple's element; dart's List.length is its
+# runtime's.)
 function _lower_length!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
     arg = args[1]
     arg_type = infer_value_type(arg, ctx)
 
-    if arg_type === String
-        # For strings, length is the array length (each char is one element)
-        local _lnb = _ctx_builder(ctx, "compile_call")
-        # (Wrap tail): ONE 4-arg wrap — the tracked type replaces the
-        # ssa-local externref sniff; the funnel's string arm lands the DATA array
-        emit_value!(_lnb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-        array_len!(_lnb)
-        widen_length_to_i64!(_lnb)
-        append_builder!(fb, _lnb)
-        return append_builder!(b, fb)
-    elseif arg_type <: Array
-        # For Vector/Array, length is v.size[1] (logical size from struct field 2)
-        # Vector is now a struct with (typeId, ref, size) where size is Tuple{Int64}
-        # NOTE: Only matches Array{T,N} (Vector, Matrix), NOT other AbstractVector
-        # subtypes like StepRange, SubArray, ReinterpretArray — those fall through
-        # to cross-function call handling so their specific length() methods compile.
+    if arg_type isa DataType && arg_type <: Vector
+        # Vector is a struct with (typeId, ref, size) where size is Tuple{Int64}
         if haskey(ctx.type_registry.structs, arg_type)
             info = ctx.type_registry.structs[arg_type]
             local _lnb2 = _ctx_builder(ctx, "compile_call")
@@ -1908,6 +1907,7 @@ function _lower_getfield_layout!(b, fb, ctx, call, idx, args)::Union{InstrBuilde
 end
 
 
+# parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 function _lower_getfield_signal_read!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for signal read: getfield(Signal, :value) -> global.get
     # This is detected by analyze_signal_captures! and stored in signal_ssa_getters
@@ -1928,6 +1928,7 @@ function _lower_getfield_signal_read!(b, fb, ctx, call, idx, args)::Union{InstrB
 end
 
 
+# parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for signal write: setfield!(Signal, :value, x) -> global.set
     # This is detected by analyze_signal_captures! and stored in signal_ssa_setters
@@ -1970,6 +1971,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{Instr
 end
 
 
+# parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 function _lower_getfield_closure_capture!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Special case for getfield on closure (_1) accessing captured signal fields
     # These produce intermediate SSA values (getter/setter functions)
@@ -2002,6 +2004,7 @@ function _lower_getfield_closure_capture!(b, fb, ctx, call, idx, args)::Union{In
 end
 
 
+# parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 function _lower_getfield_signal_skip!(b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     # Skip getfield(CompilableSignal/Setter, :signal) - intermediate step
     # We track this in analyze_signal_captures! but don't need to emit anything
@@ -2789,7 +2792,8 @@ end
 
 """Run `guards` in order on one callee, dart's nullable-return funnel one level
 down: the first guard that returns a builder owns the call; `nothing` from all
-of them falls through to `compile_call!`'s remaining ladder."""
+of them falls through to `compile_call!`'s remaining ladder.
+parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic)"""
 function _run_guards!(guards, b, fb, ctx, call, idx, args)::Union{InstrBuilder,Nothing}
     for g in guards
         r = g(b, fb, ctx, call, idx, args)
@@ -2808,6 +2812,7 @@ _lower_getfield!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothin
 
 # `Base.getproperty` / `Core.getproperty` (DIFFERENT objects, measured): the
 # raw-identity guards never matched `getproperty`, so they are absent here.
+# parity(pkg/dart2wasm/lib/code_generator.dart:2258 CodeGenerator.visitInstanceGet)
 _lower_getproperty!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing} =
     _run_guards!((_lower_getfield_layout!, _lower_getfield_signal_read!,
                   _lower_getfield_general!), b, fb, ctx, call, idx, args)
@@ -2833,6 +2838,7 @@ Julia type BEFORE any operand is emitted (dart's `node.getStaticType`, the
 pre-emit query that picks which `_binaryOperatorMap` row applies). One
 definition, shared by `compile_call!`'s own ladder and by the self-contained
 operator entries here, so the two can never disagree about a call's width.
+parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic)
 """
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
@@ -2875,6 +2881,7 @@ const _OPERATOR_OPCODES = IdDict{Any,NamedTuple{(:f32, :f64, :i32, :i64),NTuple{
     (*) => (f32=Opcode.F32_MUL, f64=Opcode.F64_MUL, i32=Opcode.I32_MUL, i64=Opcode.I64_MUL),
 )
 
+# parity(pkg/dart2wasm/lib/intrinsics.dart:995 _binaryOperatorMap)
 function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     local ops = _OPERATOR_OPCODES[callee]
     # Each value operand's Julia type, read from its node (Julia's answer or a proven join).

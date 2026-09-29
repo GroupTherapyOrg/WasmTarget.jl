@@ -150,6 +150,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - A type definition carries dart's subtyping prefix: a type nothing extends is final.
 - titlecase is Julia's rule over utf8proc's grapheme breaks, ported and checked against the C
   library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
+- Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed);
+  Core.sizeof answers Julia's size of a Memory, and two lookups that matched by name went.
 
 ## Why the archive was consolidated
 

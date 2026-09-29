@@ -56,6 +56,7 @@ end
 
 Extract source file/line information from Julia functions.
 Uses Method metadata (file, line) for function-level mapping.
+parity(pkg/wasm_builder/lib/source_map.dart:78 SourceMapSerializer)
 """
 function collect_source_info(functions::Vector)::SourceMapInfo
     smi = SourceMapInfo()
@@ -191,6 +192,7 @@ function generate_source_map(smi::SourceMapInfo; file::String="module.wasm")::St
     return json
 end
 
+# parity(quarantine: the JSON text of a source map, written by hand; dart writes it with dart:convert.)
 function escape_json(s::String)::String
     s = replace(s, "\\" => "\\\\")
     s = replace(s, "\"" => "\\\"")
@@ -237,6 +239,7 @@ end
 
 Compile a function and generate both the Wasm binary and a Source Map V3 JSON.
 The Wasm binary includes a `sourceMappingURL` custom section.
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
 """
 function compile_with_sourcemap(f, arg_types::Tuple;
                                 optimize=false,
@@ -275,6 +278,7 @@ end
         -> (wasm_bytes, sourcemap_json)
 
 Compile multiple functions and generate both Wasm binary and Source Map V3 JSON.
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
 """
 function compile_multi_with_sourcemap(functions::Vector;
                                        optimize=false,
@@ -308,6 +312,7 @@ end
 
 Scan the Wasm binary to find the code section and assign approximate
 byte offsets to each function mapping.
+parity(pkg/wasm_builder/lib/source_map.dart:81 SourceMapSerializer.addMapping)
 """
 function update_function_offsets!(smi::SourceMapInfo, wasm_bytes::Vector{UInt8})::Nothing
     isempty(smi.mappings) && return
@@ -351,6 +356,7 @@ end
 
 Find the byte offset of a section's content (after the section id byte)
 in a Wasm binary. Returns the position right after the section id byte.
+parity(quarantine: WT locates the code section in the finished bytes to offset its mappings; dart records offsets while it serializes.)
 """
 function find_section_offset(wasm_bytes::Vector{UInt8}, section_id::UInt8)::Union{Nothing, Int}
     length(wasm_bytes) < 8 && return nothing
@@ -376,6 +382,7 @@ end
     read_leb128(bytes::Vector{UInt8}, pos::Int) -> (value, new_pos)
 
 Read an unsigned LEB128 value starting at position `pos` (1-indexed).
+parity(quarantine: WT locates the code section in the finished bytes to offset its mappings; dart records offsets while it serializes.)
 """
 function read_leb128(bytes::Vector{UInt8}, pos::Int)::Tuple{Int, Int}
     result = UInt64(0)
@@ -392,6 +399,7 @@ function read_leb128(bytes::Vector{UInt8}, pos::Int)::Tuple{Int, Int}
     return (Int(result), pos)
 end
 
+# parity(quarantine: the file name a source map entry names; dart takes it from the kernel Uri.)
 function basename_or_default(path::String)::String
     parts = split(path, '/')
     return isempty(parts) ? "module.wasm" : string(last(parts))

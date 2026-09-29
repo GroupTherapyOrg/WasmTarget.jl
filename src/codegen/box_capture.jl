@@ -21,6 +21,7 @@
 # for `Core.setfield!` (the L124 rule). `build_nir` is a pure function of a CodeInfo, so the closure
 # bodies this file walks (retrieved through `get_typed_ir`) go through the same boundary.
 
+# parity(quarantine: the Core.Compiler alias of the capture-typing pass (dev/formal/CaptureType.tla).)
 const _F3_CC = Core.Compiler
 
 """The caller's type answer for one SSA id, widened once. `sst` is whatever the caller holds:

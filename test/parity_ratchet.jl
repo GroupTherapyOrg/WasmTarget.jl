@@ -918,7 +918,7 @@ const METRICS = [
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
-        () -> count_sites(r"bytes shell|\(bytes::Vector\{UInt8\}|target_bytes::Vector\{UInt8\}";
+        () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
                           roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
     "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
         () -> begin
@@ -1757,10 +1757,11 @@ const LOCKS = [
         () -> begin
             diag_src = read(joinpath(CODEGEN, "diagnostics.jl"), String)
             gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            # (the byte-vector emit_unsupported_stub! method, which carried `!_dead`, is deleted:
+            # every stub goes through the builder method)
             required = ["function stmt_is_proven_unreachable",
                         "!stmt_is_proven_unreachable",
-                        "soundness_fatal=(soundness_fatal && !_dead2)",
-                        "soundness_fatal=(soundness_fatal && !_dead)"]
+                        "soundness_fatal=(soundness_fatal && !_dead2)"]
             forbidden = ["soundness_fatal && _me", "soundness_fatal && _me2",
                          "sound *silent* trap", "A non-must-execute"]
             count(p -> !occursin(p, diag_src * gen_src), required) +

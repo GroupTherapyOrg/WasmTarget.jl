@@ -29,7 +29,8 @@ function _value_julia_type(val::NirNode, ctx::AbstractCompilationContext)::Union
 end
 
 """builder-native (THE implementation): value → classId box → externref.
-`nothing` values become ref.null extern (dart: null, not a boxed zero)."""
+`nothing` values become ref.null extern (dart: null, not a boxed zero).
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)"""
 function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
     if is_nothing_value(val, ctx)
         ref_null!(b, ExternRef)
@@ -55,6 +56,7 @@ end
 Like emit_numeric_to_externref! but produces anyref (no extern_convert_any) —
 builder-native (THE implementation): value → real-classId box (already anyref).
 `nothing` values become ref.null any (dart: null, not a boxed zero).
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
     if is_nothing_value(val, ctx)

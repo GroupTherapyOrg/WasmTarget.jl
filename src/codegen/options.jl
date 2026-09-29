@@ -50,6 +50,7 @@ end
 
 # The active options, set once per public compile call (see compile/compile_multi/
 # compile_with_base in WasmTarget.jl) — never read piecemeal.
+# parity(pkg/dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions)
 const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
 
 """
@@ -57,5 +58,6 @@ const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
 
 Is trace point `s` active in the current [`OPTIONS`](@ref)? dart's `watchPoints`
 analogue.
+parity(pkg/dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions)
 """
 tracing(s::Symbol)::Bool = s in OPTIONS[].trace

@@ -2,7 +2,8 @@
 # Main Compilation Entry Point
 # ============================================================================
 
-"""Declarative, typed substitutions for one closed-world compilation root."""
+"""Declarative, typed substitutions for one closed-world compilation root.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 struct RootBindings
     captured_globals::Dict{Symbol,Tuple{Bool,UInt32}}
     captured_constants::Dict{Symbol,Any}
@@ -17,6 +18,7 @@ struct RootBindings
     void_return::Bool
 end
 
+# parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)
 function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       captured_constants=Dict{Symbol,Any}(),
                       dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
@@ -37,7 +39,8 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                  elide_closure_context, void_return)
 end
 
-"""Add a nullable mutable reference global for initialization by a linked root."""
+"""Add a nullable mutable reference global for initialization by a linked root.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
     b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
     ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
@@ -51,6 +54,7 @@ Create a module initializer that stores the result of a typed zero-argument
 compilation root into a previously declared mutable reference global. Frameworks
 use this for exact mutable initial values that cannot appear in a Wasm constant
 expression. The initializer joins WT's canonical module-start composition.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)
 """
 function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
                                       global_idx::Integer, root_idx::Integer)::UInt32
@@ -75,7 +79,8 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
     return init_idx
 end
 
-"""The one Julia-signature → physical Wasm-signature derivation."""
+"""The one Julia-signature → physical Wasm-signature derivation.
+parity(pkg/dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall)"""
 function function_wasm_signature(arg_types, return_type, global_args,
                                  mod::WasmModule, type_registry::TypeRegistry)::Tuple{Vector{WasmValType}, Vector{WasmValType}}
     pts = WasmValType[]
@@ -109,6 +114,7 @@ end
     compile_function(f, arg_types, func_name) -> WasmModule
 
 Compile a Julia function to a WebAssembly module.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile)
 """
 function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
@@ -135,9 +141,11 @@ end
 # exact, not an approximation, for the only valid call shape (`rethrow()`/
 # `rethrow(e)` from inside the handler that caught `e`).
 # ============================================================================
+# parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
 const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
 
-"""Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use."""
+"""Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use.
+parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
 function _build_standalone_intrinsic_bodies!()::Nothing
     isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
     for m in methods(Base.rethrow)
@@ -166,7 +174,8 @@ function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, ty
 end
 
 """Look up whether (f, arg_types) resolves to a Method registered in
-STANDALONE_INTRINSIC_BODIES, and if so return its compiled body."""
+STANDALONE_INTRINSIC_BODIES, and if so return its compiled body.
+parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
 function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
                                     return_type::Union{Type,Nothing}=nothing)::Union{Tuple{Vector{UInt8},Vector{WasmValType}},Nothing}
     f isa Function || return nothing
@@ -227,23 +236,10 @@ function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegis
 end
 
 """
-    compile_module(functions::Vector) -> WasmModule
-
-Compile multiple Julia functions into a single WebAssembly module.
-
-Each element of `functions` should be a tuple of (function, arg_types) or
-(function, arg_types, name). If name is omitted, the function's name is used.
-
-# Example
-```julia
-mod = compile_module([
-    (add, (Int32, Int32)),
-    (sub, (Int32, Int32)),
-    (mul, (Int32, Int32), "multiply"),
-])
-```
-
-Functions can call each other within the module.
+Compile a complete closed-world plan (from trim_compile_plan) into one module: register every
+function, number the closed world's classes, then emit every body. It never discovers or
+silently adds a function.
+parity(pkg/dart2wasm/lib/translator.dart:524 Translator.translate)
 """
 function _compile_closed_world_plan(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
@@ -742,6 +738,7 @@ end
 # The sole module pipeline: collect one closed world, install its paired typed-IR
 # cache for the duration of codegen, then compile that immutable plan. Public
 # entry points may normalize inputs, but none may bypass this collector.
+# parity(pkg/dart2wasm/lib/compile.dart:216 compile)
 function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     normalized = Any[]
     for entry in functions
@@ -769,6 +766,26 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     end
 end
 
+"""
+    compile_module(functions::Vector) -> WasmModule
+
+Compile multiple Julia functions into a single WebAssembly module.
+
+Each element of `functions` should be a tuple of (function, arg_types) or
+(function, arg_types, name). If name is omitted, the function's name is used.
+
+# Example
+```julia
+mod = compile_module([
+    (add, (Int32, Int32)),
+    (sub, (Int32, Int32)),
+    (mul, (Int32, Int32), "multiply"),
+])
+```
+
+Functions can call each other within the module.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+"""
 function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
@@ -791,6 +808,7 @@ end
 # Julia may discover several specialized functions with the same source-level name.
 # Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
 # ExportsBuilder, rejects duplicate names instead of silently repairing the request.
+# parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
     final = name
     if any(e -> e.name == final, mod.exports)

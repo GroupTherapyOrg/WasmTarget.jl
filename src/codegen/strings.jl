@@ -2,6 +2,7 @@
 # Performance Timer — jl_hrtime via performance.now()
 # ============================================================================
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
 
 """
@@ -22,6 +23,7 @@ function ensure_perf_now_import!(mod::WasmModule)::UInt32
     return idx
 end
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 function clear_perf_now!()::Nothing
     _PERF_NOW_IDX[] = nothing
 end
@@ -47,16 +49,20 @@ struct RNGGlobals
     seed_import_idx::UInt32  # import index for env.random_i64
 end
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 function get_rng_globals()::Union{Nothing, RNGGlobals}
     return _RNG_GLOBALS[]
 end
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 function set_rng_globals!(rng::RNGGlobals)::RNGGlobals
     _RNG_GLOBALS[] = rng
 end
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 function clear_rng_globals!()::Nothing
     _RNG_GLOBALS[] = nothing
 end
@@ -139,6 +145,7 @@ call site, or via raw `local.get`/`struct.get` for a standalone intrinsic body).
 `ctx` involved — pure InstrBuilder local-index manipulation, so both call shapes
 (argument-emitting and raw-param) can share this one array.new_default + array.copy
 sequence instead of each re-deriving it.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)
 """
 function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_locals::Vector{Int},
                                    offset_local::Int, total_len_local::Int, result_local::Int)::InstrBuilder
@@ -164,7 +171,8 @@ function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_l
 end
 
 """Concatenate every proven String/Symbol argument through one N-way builder.
-Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`."""
+Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)"""
 function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
     isempty(args) && error("N-way string concatenation requires at least one argument")
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
@@ -189,6 +197,7 @@ end
 The element-wise char-array equality LOGIC only: `str1_local`/`str2_local` already
 hold the DATA array refs to compare. No `ctx` involved — shared by the ctx+args call
 site and any raw-param intrinsic body.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
 """
 function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
                                   str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)::InstrBuilder
@@ -232,6 +241,7 @@ end
 Compile string equality comparison (str1 == str2).
 Returns i32 (0 or 1). Uses scratch locals allocated by allocate_scratch_locals!.
 builder-returning core (): callers merge via append_builder!.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
 """
 function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx

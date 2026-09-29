@@ -173,6 +173,7 @@ _wt_is_ref(t::WasmValType)::Bool =
     t isa RefType || t isa ConcreteRef || t isa NonNullAbstractRef
 
 # Is `t` an abstract GC-hierarchy RefType (rooted at `any`)?
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 _wt_gc_refkind(t::RefType)::Bool =
     t === AnyRef || t === EqRef || t === StructRef || t === ArrayRef || t === I31Ref
 
@@ -388,6 +389,7 @@ dart2wasm stance (replacing the old special-case pile). Compatible iff:
   * a numeric value flowing into a ref return (boxed for externref / dummied for
     a dead Union arm — matches dart2wasm's instantiateDummyValue).
 Otherwise false.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function return_type_compatible(value_type::WasmValType, return_type::WasmValType)::Bool
     value_type === return_type && return true
@@ -652,7 +654,9 @@ end
 # Unknown source/target type (e.g. get_phi_edge_wasm_type returned `nothing`): the
 # inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
 # branch matches), so a no-op preserves byte-identity.
+# parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
 convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext)::InstrBuilder = b
+# parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
 convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext)::InstrBuilder = b
 
 # ============================================================================
@@ -798,7 +802,8 @@ end
 """The OR-chain form of `emit_classid_membership!`: a non-contiguous id set with no
 single dart-style range window, so each id gets its own equality test. typeId is on the
 stack; result i32. An empty set is constant false (no concrete class of the closed
-world is a subtype)."""
+world is a subtype).
+parity(pkg/dart2wasm/lib/code_generator.dart:5684 emitClassIdRangeCheck)"""
 function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
     if isempty(ids)
         drop!(b)
@@ -823,6 +828,7 @@ end
 classId (field 0) == `check_type`'s DFS id? Guarded by `ref.test` so a non-box value yields
 0 (no trap). Same-wasm-rep types SHARE `box_idx`, so this classId read — NOT `ref.test` of
 the struct — is what distinguishes Bool/Int8/Int16/Int32/Char. THE single discriminator.
+parity(pkg/dart2wasm/lib/types.dart:434 Types.emitIsTest)
 """
 function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
                            box_idx::Integer, check_type::Type)::InstrBuilder
@@ -911,6 +917,7 @@ end
 THE condition visitor: emit a GotoIfNot condition as an i32 directly into the target builder.
 When the condition SSA value has an anyref/externref local (Julia typed it Any), the value
 would push a reference where i32.eqz needs an i32, so it is unboxed (ref.cast + struct.get).
+parity(pkg/dart2wasm/lib/code_generator.dart:1277 CodeGenerator.visitIfStatement)
 """
 function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
     if tracing(:condstub) && ctx.last_stmt_was_stub
@@ -1041,6 +1048,7 @@ operand shape a numeric operation must unbox before consuming (P4-stdlib:
 live in AnyRef locals). An SSA whose REFINED type is already numeric is NOT
 included: as in dart's translator.dart:2099 translateTypeOfLocalVariable, the load
 is THE single unbox source there, and a second unbox double-converted.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function _is_boxed_numeric_operand(arg::NirNode, ctx::AbstractCompilationContext)::Bool
     arg isa NirSSA || return false
@@ -1149,6 +1157,7 @@ widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_
 fullstrict: THE codegen builder constructor — mod + seeded params + the LIVE locals
 provider, so the tracker always reads ctx truth (bare builders guessed AnyRef for
 locals allocated after creation — the largest residual mismatch class).
+parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
 """
 function _ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder
     local b = InstrBuilder(; func_name=name, mod=ctx.mod)
@@ -1165,6 +1174,7 @@ instead of the AnyRef unknown-local fallback. This makes the typed channel's ret
 (`b.v.stack[end]`) truthful for the most common emission — `local.get` — and therefore safe
 to DRIVE `convert_type!` coercions from (dart: `local.type` is authoritative because dart's
 builder always knows its locals).
+parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
 """
 function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
     for i in 1:ctx.n_params
