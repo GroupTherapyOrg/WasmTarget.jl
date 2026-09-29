@@ -119,6 +119,9 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - Thirty bit-level overlays deleted (primitive reinterpret, `_reinterpret_padding`,
   `unsigned`, the Int-amount shifts, `isless`): Julia's own bodies compile and match native
   (smoke julia_bit_bodies).
+- A MemoryRef or Memory held erased dispatches: each dispatch reads the callee's declared
+  signature and tells a Memory by its array type, and the collector counts memoryrefnew and
+  Memory allocation as instantiations (smoke memoryref_erased).
 
 ## Why the archive was consolidated
 

@@ -919,20 +919,28 @@ _wt_le_word(b::NTuple{4, UInt8})::UInt32 =
 _wt_le_word(b::NTuple{8, UInt8})::UInt64 =
     UInt64(b[1]) | (UInt64(b[2]) << 8) | (UInt64(b[3]) << 16) | (UInt64(b[4]) << 24) |
     (UInt64(b[5]) << 32) | (UInt64(b[6]) << 40) | (UInt64(b[7]) << 48) | (UInt64(b[8]) << 56)
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{1, UInt8}}, x::_WT_BITS8) =
     _wt_le_bytes(Core.bitcast(UInt8, x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{2, UInt8}}, x::_WT_BITS16) =
     _wt_le_bytes(Core.bitcast(UInt16, x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{4, UInt8}}, x::_WT_BITS32) =
     _wt_le_bytes(Core.bitcast(UInt32, x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{NTuple{8, UInt8}}, x::_WT_BITS64) =
     _wt_le_bytes(Core.bitcast(UInt64, x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{1, UInt8}) where {T<:_WT_BITS8} =
     Core.bitcast(T, _wt_le_word(x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{2, UInt8}) where {T<:_WT_BITS16} =
     Core.bitcast(T, _wt_le_word(x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{4, UInt8}) where {T<:_WT_BITS32} =
     Core.bitcast(T, _wt_le_word(x))
+# parity(quarantine: Julia's _reinterpret to or from a byte tuple reads the host layout (jl_get_field_offset); see _wt_le_bytes.)
 @overlay WASM_METHOD_TABLE Base._reinterpret(::Type{T}, x::NTuple{8, UInt8}) where {T<:_WT_BITS64} =
     Core.bitcast(T, _wt_le_word(x))
 

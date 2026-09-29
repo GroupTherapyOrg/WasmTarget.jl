@@ -1557,6 +1557,32 @@ function _bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Tuple{
         if count(p -> p[2] == arr, all) == 1 && (T === nothing || typeintersect(T, C) !== Union{})]
 end
 
+"""
+    emit_class_id!(b, ctx, T) -> InstrBuilder
+
+The classId of the erased value on the stack, whose static type is `T`: a classed value's
+header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
+header), the id of the one closed-world class whose array type it is (_bare_array_classes).
+parity(code_generator.dart:6076 loadClassId)
+"""
+function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
+    local reg = ctx.type_registry
+    local base_idx = reg.base_struct_idx
+    local bare = _bare_array_classes(reg, T)
+    isempty(bare) && return emit_typeof!(b, base_idx)
+    local v = allocate_local!(ctx, AnyRef)
+    local_set!(b, v)
+    local done = block!(b, I32)
+    for (C, arr) in bare
+        local_get!(b, v); ref_test!(b, Int64(arr), false)
+        if_!(b); i32_const!(b, Int64(ensure_type_id!(reg, C))); br!(b, done); end_block!(b)
+    end
+    local_get!(b, v)
+    emit_typeof!(b, base_idx)
+    end_block!(b)
+    return b
+end
+
 # `typeassert` is NOT registered here: `_emit_typeerror_throw!(fb, args[1],
 # _ta_target, idx, ctx)` — its runtime-check call site — is pinned VERBATIM in
 # `calls.jl` by ratchet lock L57_exact_typeassert_exception, which reads only

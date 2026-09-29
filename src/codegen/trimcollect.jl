@@ -334,6 +334,14 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         for s0 in nir_for(codeinfos[j + 1])
             local node0 = s0.node
             node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)
+            # the builtins that allocate a class without a %new instantiate it as surely:
+            # a MemoryRef (memoryrefnew) and a Memory (jl_alloc_genericmemory)
+            if s0.slot == 0 && ((node0 isa NirCall &&
+                                 _nir_callee_object(node0.callee) === Core.memoryrefnew) ||
+                                (node0 isa NirForeignCall &&
+                                 node0.c_symbol === :jl_alloc_genericmemory))
+                observe_type!(CC.widenconst(s0.julia_type))
+            end
             foreach(observe_runtime_operand!, statement_operands(node0))
         end
     end

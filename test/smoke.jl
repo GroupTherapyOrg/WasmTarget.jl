@@ -833,6 +833,23 @@ _g("julia_bit_bodies", Any[
                                           Int64(reinterpret(Int64, -x) % 1000) +
                                           Int64(reinterpret(Float64, reinterpret(UInt64, x) + 1) > x), -0.1),
 ])
+# A MemoryRef or Memory held erased. Each dispatch reads the callee's declared signature, where
+# a MemoryRef crosses as its single-value struct (the closure layouter and the inline typeId
+# dispatch each re-derived it as the bare Memory: a StackImbalanceError, a codegen error), and
+# the collector counts memoryrefnew and jl_alloc_genericmemory as instantiations (without them
+# the dispatch had no MemoryRef row and trapped where Julia answers). A Memory carries no class
+# header, so both dispatches tell it by its array type (emit_class_id!); they read the header and
+# trapped.
+_g("memoryref_erased", Any[
+    ("erased_closure_memoryref", (n::Int64) -> (v = [n, 2n]; h = r -> (r[]::Int64) + n; fs = Any[h];
+                                                (fs[1](v.ref)::Int64) + (fs[1](Ref(5n))::Int64)), Int64(3)),
+    ("any_memoryref_dispatch", (n::Int64) -> (v = [n, 2n]; xs = Any[v.ref, Ref(5n)];
+                                              (xs[1][]::Int64) + (xs[2][]::Int64)), Int64(3)),
+    ("any_memory_dispatch", (n::Int64) -> (xs = Any[Memory{Int64}(undef, n), [1, 2]];
+                                           (length(xs[1])::Int64) * 10 + (length(xs[2])::Int64)), Int64(3)),
+    ("erased_closure_memory", (n::Int64) -> (h = m -> (length(m)::Int64) + n; fs = Any[h];
+                                             (fs[1](Memory{Int64}(undef, n))::Int64) * 10 + (fs[1]([1, 2])::Int64)), Int64(3)),
+])
 # Loads and stores through a storage pointer: one offset for every arm, `ptr - base + (i - 1) *
 # sizeof(T)`, with a String's or Symbol's pointer carrying base 1 and a Memory's base 0
 # (_emit_storage_pointer_offset!, calls.jl). The byte store ignored `i` (every store landed on

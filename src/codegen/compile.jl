@@ -585,15 +585,16 @@ function _compile_closed_world_plan(functions::Vector;
         local _cv_ctx = Dict{DataType, Bool}()
         for (_i, _T, _takes_context) in _cvp
             local _entry = function_data[_i]
-            local _ats, _rt = _entry[2], _entry[5]
+            local _ats, _rt, _gas = _entry[2], _entry[5], _entry[6]
             # fullstrict reorder: the placeholders occupy the body indices ALREADY —
             # the standard formula reads them; trampolines append after.
             local _body_idx = UInt32(n_imports + n_existing + _i - 1)
-            local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
-            local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
-                         WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
+            # the body's own signature, the one its placeholder was declared with: a
+            # MemoryRef parameter crosses as its single-value struct, never its bare Memory
+            local _bps, _brs = function_wasm_signature(_ats, _rt, _gas, mod, type_registry)
             haskey(_cv_bodies, _T) || (push!(_cv_types, _T); _cv_bodies[_T] = ClosureBody[]; _cv_ctx[_T] = _takes_context)
-            push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt, Type[T2 for T2 in _ats]))
+            push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt,
+                                              Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)]))
         end
         for _T in _cv_types
             build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T])

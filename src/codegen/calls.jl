@@ -2287,7 +2287,6 @@ end
 function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
                                      args, call_arg_types, idx::Int)::Union{Nothing, InstrBuilder}
     (ctx.func_registry === nothing || ctx.type_registry.base_struct_idx === nothing) && return nothing
-    base_idx = ctx.type_registry.base_struct_idx
     n = length(args)
     # Dispatch position = the single abstract/Any arg in the call's inferred types.
     absp = Int[p for p in 1:n if !(call_arg_types[p] isa DataType && isconcretetype(call_arg_types[p]))]
@@ -2310,18 +2309,28 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     # numeric, the classed String/Symbol — every $JlTop subtype; emit_typeof! reads the
     # header) and have a concrete wasm representation for the callee's parameter: a
     # ConcreteRef the branch casts to, or a numeric the branch unboxes through the funnel.
+    # Every wasm type here is read off the callee's declared signature (dart
+    # BaseFunction.type), which is how its arguments and result cross: a MemoryRef
+    # parameter is its single-value struct, not its bare Memory.
     branches = Tuple{Int32, WasmValType, FunctionInfo}[]
     for c in cands
         Tc = c.arg_types[dpos]
         (Tc isa DataType && isconcretetype(Tc) && !(Tc <: Tuple) &&
          (isstructtype(Tc) || isprimitivetype(Tc))) || return nothing
-        cw = get_concrete_wasm_type(Tc, ctx.mod, ctx.type_registry)
+        length(_function_type(ctx.mod, c.wasm_idx).params) == n || return nothing
+        # a bare-array class (a Memory, a SimpleVector) is told apart only by an array type
+        # no other class shares (emit_class_id!); one that shares it gets no row, and a call
+        # that reaches it traps with the unmatched ones
+        (Tc <: GenericMemory || Tc === Core.SimpleVector) &&
+            !any(p -> p[1] === Tc, _bare_array_classes(ctx.type_registry, Tc)) && continue
+        cw = _function_type(ctx.mod, c.wasm_idx).params[dpos]
         (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing
         tid = ensure_type_id!(ctx.type_registry, Tc)
         tid > 0 || return nothing
         push!(branches, (tid, cw, c))
     end
 
+    isempty(branches) && return nothing
     result_julia = get(ctx.ssa_types, idx, Any)
     result_wasm = (result_julia isa Type && result_julia !== Nothing && result_julia !== Union{}) ?
         get_concrete_wasm_type(result_julia, ctx.mod, ctx.type_registry) : nothing
@@ -2350,7 +2359,8 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
             aw = AnyRef
         else
-            aw = get_concrete_wasm_type(call_arg_types[j], ctx.mod, ctx.type_registry; for_local=true)
+            # the candidates agree on this argument's type, so on its wasm type
+            aw = _function_type(ctx.mod, cands[1].wasm_idx).params[j]
             emit_value!(bld, arg, ctx, aw;
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
         end
@@ -2360,7 +2370,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     end
     # Read dispatch typeId into a local.
     local_get!(bld, arg_locals[dpos])
-    emit_typeof!(bld, base_idx)
+    emit_class_id!(bld, ctx, call_arg_types[dpos])
     tid_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I32)
     local_set!(bld, tid_local)
 
@@ -2375,7 +2385,8 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         end
         call!(eb, c.wasm_idx, WasmValType[], WasmValType[])
         rj = c.return_type
-        rw = (rj === Nothing || rj === Union{}) ? nothing : get_concrete_wasm_type(rj, ctx.mod, ctx.type_registry)
+        local _c_results = _function_type(ctx.mod, c.wasm_idx).results
+        rw = isempty(_c_results) ? nothing : _c_results[1]
         if result_wasm === nothing
             rw !== nothing && drop!(eb)
         elseif rw === nothing

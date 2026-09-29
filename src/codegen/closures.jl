@@ -244,6 +244,14 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
         end
     end
     for c in cands
+        # a bare-array parameter (a Memory, a SimpleVector) is told only by an array type no
+        # other class shares; a candidate that has one that is shared gets no row, and a call
+        # that reaches it traps with the unmatched ones
+        any(1:arity) do j
+            local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
+            Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector) &&
+                !any(p -> p[1] === Tj, _bare_array_classes(registry, Tj))
+        end && continue
         local lbl = block!(tb)
         for j in 1:arity
             local pj = c.params[j + (takes_context ? 1 : 0)]
@@ -263,6 +271,17 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
             end
             (Tj isa DataType && isconcretetype(Tj)) || throw(_closure_layout_error(closure_type, cands,
                 "a dispatching arity-$arity entry needs a concrete Julia parameter type at position $j, got $Tj"))
+            if Tj <: GenericMemory || Tj === Core.SimpleVector
+                # a bare wasm array carries no classId: its class is the one whose array type
+                # it is (_bare_array_classes; emit_class_id!), unshared here (checked above)
+                local _bare = _bare_array_classes(registry, Tj)
+                local _k = findfirst(p -> p[1] === Tj, _bare)
+                local_get!(tb, UInt32(j))
+                ref_test!(tb, Int64(_bare[_k][2]), false)
+                num!(tb, Opcode.I32_EQZ)
+                br_if!(tb, lbl)
+                continue
+            end
             # arg j is a $JlTop subtype whose classId is Tj's
             local_get!(tb, UInt32(j))
             local_tee!(tb, tmp)
