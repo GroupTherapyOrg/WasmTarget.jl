@@ -258,11 +258,8 @@ function xfail_outcome(f, args)::Symbol
     status === :trap && return startswith(val, "unserializable result") ? :unreadable : :trap
     error("xfail lane: the runner answered $status: $val")
 end
-# M6 progress (2026-07-02): the closure body now compiles VALID wasm (the self-box numeric
-# join types the capture cycle — f3_self_box_joins, dart Capture.type). The remaining gap is
-# SHARED-CONTEXT semantics: the parent scalar-replaces the escaping Box while the closure
-# mutates the real one (two copies). Fix = dart Context structs (closures.dart:970): the
-# parent materializes ONE shared cell; no scalar replacement across an escaping closure.
+# a captured variable's reads carry the join of every write into its box across the closed
+# world (record_capture_contents, dev/formal/CaptureType.tla; dart Capture.type).
 # parity(M10a) PROMOTED: the scalar-replaced accumulator cycle computes correctly — the
 # numeric join is the variable's REAL type for EVERY consumer (dart
 # translateTypeOfLocalVariable), so the dynamic-+ default-zero arm never fires.

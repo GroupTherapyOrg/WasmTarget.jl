@@ -1823,6 +1823,8 @@ THE `===` lowering: push `x === y` (i32). Disjoint static types are never egal (
 pair boxes both operands and calls the runtime egal function. A value whose static type has
 several members but sits in a numeric register no longer records which member it is, so a
 compare involving one rejects at its statement.
+formal(dev/formal/EgalDispatch.tla): the arm the static types pick answers Julia's `===` for
+every pair of values they admit.
 parity(intrinsics.dart:1409 StaticIntrinsic.identical): the static arms, else the call to
 `identical` over the boxed operands.
 """

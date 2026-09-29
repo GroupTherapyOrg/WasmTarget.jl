@@ -52,7 +52,7 @@ anchor in `src/` has a row.)
 | Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
 | External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_closure_dispatch_trampoline!` (closures.jl) | ClassIdSwitch |
-| `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | — none yet: MARCH 13.4 replaces it with dart's `identical`; model it with that change |
+| `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | EgalDispatch |
 | Recursive type groups | `register_struct_type!` (structs.jl), `add_rec_group!` (instructions.jl) | — none yet: MARCH 13.4 replaces placeholder-and-patch with dart's define-then-fill; model it with that change |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
