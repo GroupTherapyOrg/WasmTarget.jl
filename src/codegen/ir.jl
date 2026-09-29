@@ -52,6 +52,22 @@ function get_typed_ir(f, arg_types::Tuple; optimize::Bool=true,
 end
 
 """
+    get_typed_ir(mi::MethodInstance) -> (CodeInfo, return type)
+
+The collected closed world's typed IR of one MethodInstance: the function a plan entry names
+(two methods can share a specialization's argument types, so (f, arg_types) does not).
+parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm
+receives Kernel already built by the CFE.)
+"""
+function get_typed_ir(mi::Core.MethodInstance)::Tuple{Core.CodeInfo, Any}
+    cache = TRIM_IR_CACHE[]
+    cache === nothing && error("get_typed_ir: $(mi) asked outside a collected closed world")
+    hit = get(cache, mi, nothing)
+    hit === nothing && error("get_typed_ir: $(mi) is outside the collected closed world")
+    return hit[1], hit[2]
+end
+
+"""
     get_typed_ir(sig::Type{<:Tuple}) -> Vector{Pair{CodeInfo, Any}}
 
 The same one path for a full signature (function type first), as a closure body reached

@@ -256,6 +256,15 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             end
     end
 
+    # An :invoke names its callee exactly: the function its MethodInstance compiles to. When
+    # that function exists it decides self-recursion — two methods can share a
+    # specialization's argument types (Base's `invoke(f, Tuple{Super}, x)`), which the
+    # function-and-type comparison above takes for recursion.
+    # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
+    local mi_target = (ctx.func_registry !== nothing && mi isa Core.MethodInstance) ?
+                      get_function_by_mi(ctx.func_registry, mi) : nothing
+    mi_target === nothing || (is_self_call_early = mi_target.wasm_idx == ctx.func_idx)
+
     # Get parameter types - for self-calls, use ctx.arg_types (the function's compiled signature)
     # For other calls, use mi.specTypes (the call site's specialized types)
     param_types = nothing
@@ -339,6 +348,12 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 closure_self_to_push = early_operand
             end
         end
+    end
+    # the MethodInstance's own function, where the lookup by function and types found another
+    # method's function under the same argument types
+    if mi_target !== nothing && !is_self_call_early && target_info_early !== nothing &&
+       target_info_early !== mi_target && target_info_early.arg_types == mi_target.arg_types
+        target_info_early = mi_target
     end
     # self-prepended entries: arg_types are shifted +1 relative to `args`
     early_argtypes_offset = closure_self_to_push === nothing ? 0 : 1
@@ -619,6 +634,9 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 end
             end
 
+            # the MethodInstance's function decides self-recursion (as above)
+            mi_target === nothing || (is_self_call = mi_target.wasm_idx == ctx.func_idx)
+
             # Check for cross-function call within the module first
             cross_call_handled = false
             if ctx.func_registry !== nothing && !is_self_call
@@ -659,6 +677,11 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     end
                     if target_info === nothing && closure_self_to_push !== nothing
                         target_info = target_info_early
+                    end
+                    # the MethodInstance's own function over another method's (as above)
+                    if mi_target !== nothing && target_info !== nothing && target_info !== mi_target &&
+                       target_info.arg_types == mi_target.arg_types
+                        target_info = mi_target
                     end
 
                     # Closure/kwarg functions are registered with self-type prepended

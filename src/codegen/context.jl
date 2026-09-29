@@ -445,7 +445,7 @@ const _NUMERIC_OP_INTRINSICS = (:add_int, :sub_int, :mul_int, :sdiv_int, :udiv_i
                                 :trunc_int, :sext_int, :zext_int, :fpext, :fptrunc,
                                 :ctpop_int, :ctlz_int, :cttz_int, :bswap_int,
                                 :flipsign_int, :copysign_float,
-                                :eq_float, :ne_float, :lt_float, :le_float)
+                                :eq_float, :ne_float, :lt_float, :le_float, :fpiseq)
 
 # A field read: `getfield` itself, or a `getproperty` (Base's, or the Compiler's own), which
 # Julia lowers a field read through.

@@ -196,6 +196,29 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
 end
 
 """
+    _emit_fpiseq!(b, ctx, t)
+
+Julia's `fpiseq` (`isequal` of two floats of wasm type `t`, runtime_intrinsics.c): the two
+values' bits are equal, or both are NaN — so 0.0 and -0.0 differ and any NaN equals any NaN.
+parity(intrinsics.dart:1409 StaticIntrinsic.identical): dart's `identical` of two doubles
+compares their bits (i64.reinterpret_f64, i64.eq); Julia's rule adds the NaN clause.
+"""
+function _emit_fpiseq!(b::InstrBuilder, ctx::AbstractCompilationContext, t::WasmValType)::Nothing
+    local wide = t === F64
+    local la = UInt32(allocate_local!(ctx, t))
+    local lb = UInt32(allocate_local!(ctx, t))
+    local_set!(b, lb); local_set!(b, la)
+    local_get!(b, la); local_get!(b, la); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(a)
+    local_get!(b, lb); local_get!(b, lb); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(b)
+    num!(b, Opcode.I32_AND)
+    local_get!(b, la); num!(b, wide ? Opcode.I64_REINTERPRET_F64 : Opcode.I32_REINTERPRET_F32)
+    local_get!(b, lb); num!(b, wide ? Opcode.I64_REINTERPRET_F64 : Opcode.I32_REINTERPRET_F32)
+    num!(b, wide ? Opcode.I64_EQ : Opcode.I32_EQ)
+    num!(b, Opcode.I32_OR)
+    return nothing
+end
+
+"""
     _emit_storage_pointer_offset!(b, ctx, ptr, index, source, step) -> Nothing
 
 The byte offset, as an i32, that `pointerref(ptr, index, align)` / `pointerset(ptr, x, index,

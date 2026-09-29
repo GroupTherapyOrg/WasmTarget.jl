@@ -1254,10 +1254,10 @@ struct FunctionInfo
                             # by_ref, but get_function cross-call resolution SKIPS it — so
                             # registering candidates can't perturb how base functions
                             # compile. Default false (base function).
+    mi::Union{Nothing, Core.MethodInstance}   # the MethodInstance this function compiles
+    invoke_only::Bool       # reached only through `invoke` of a method dispatch does not
+                            # select for arg_types: never found by (func_ref, arg_types)
 end
-# Back-compat: 5-arg construction is a non-candidate (base) function.
-FunctionInfo(name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type)::FunctionInfo =
-    FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, false)
 
 """Finish the canonical source-vararg tuple projection (a runtime ABI value, not a constant).
 
@@ -1279,11 +1279,13 @@ exists only to serve `serialize_function_table` and the Julia-only fallback
 mutable struct FunctionRegistry
     functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
     by_ref::Vector{Tuple{Any, Vector{FunctionInfo}}}     # func_ref -> infos (linear scan)
+    by_mi::IdDict{Core.MethodInstance, FunctionInfo}     # the function each MethodInstance compiles to
 end
 
 # parity(functions.dart:25 FunctionCollector._functions): the collector starts with an empty
 # callee-to-function map.
-FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[])
+FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[],
+                                                       IdDict{Core.MethodInstance, FunctionInfo}())
 
 """
     serialize_function_table(registry::FunctionRegistry) -> Vector{Dict{String, Any}}
@@ -1310,12 +1312,15 @@ Register a function in the registry.
 
 parity(functions.dart:90 FunctionCollector.getFunction): the callee's entry in _functions.
 """
-function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any; is_candidate::Bool=false)::FunctionInfo
+function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any;
+                            is_candidate::Bool=false, mi::Union{Nothing, Core.MethodInstance}=nothing,
+                            invoke_only::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
     # arg types, index) — for hunting call-site/callee signature divergence
     OPTIONS[].log_registry &&
         println(stderr, "WTREG\t", name, "\t", wasm_idx, "\t", arg_types)
-    info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, is_candidate)
+    info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, is_candidate, mi, invoke_only)
+    mi === nothing || (registry.by_mi[mi] = info)
 
     # Update or add in functions list (linear scan)
     found = false
@@ -1372,7 +1377,7 @@ can never match — but the self-prepended arg_types tuple identifies the entry.
 """
 function get_function_by_argtypes(registry::FunctionRegistry, arg_types::Tuple)::Union{FunctionInfo, Nothing}
     for (ref, infos) in registry.by_ref, info in infos
-        info.is_candidate && continue                       # candidates are dispatch-only
+        (info.is_candidate || info.invoke_only) && continue  # candidates are dispatch-only
         info.arg_types == arg_types && return info
     end
     # subtype-tolerant pass (mirrors get_function's compatible-signature pass)
@@ -1391,6 +1396,16 @@ function get_function_by_argtypes(registry::FunctionRegistry, arg_types::Tuple):
     end
     return nothing
 end
+
+"""
+    get_function_by_mi(registry, mi) -> Union{FunctionInfo, Nothing}
+
+The function a MethodInstance compiles to: an `:invoke` names its callee exactly.
+parity(functions.dart:25 FunctionCollector._functions): a function keyed by its member's
+Reference.
+"""
+get_function_by_mi(registry::FunctionRegistry, mi::Core.MethodInstance)::Union{FunctionInfo, Nothing} =
+    get(registry.by_mi, mi, nothing)
 
 """
 Look up a function by reference and argument types (for dispatch).
@@ -1424,7 +1439,7 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
     # typeId switch (which reads by_ref directly) — never via normal cross-call
     # resolution. Filtering them here keeps base function codegen byte-identical
     # whether or not discovery added candidates (the layer-2 perturbation fix).
-    infos = FunctionInfo[i for i in infos if !i.is_candidate]
+    infos = FunctionInfo[i for i in infos if !i.is_candidate && !i.invoke_only]
     isempty(infos) && return nothing
 
     # The exact signature, gated on return compatibility.

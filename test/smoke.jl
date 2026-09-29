@@ -1196,6 +1196,43 @@ _g("memoryref_array_offset", Any[
     ("deletebeg_splat_sum", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); +(v...)), Int64(5)),
     ("iobuffer_grow_take", (n::Int64) -> (io = IOBuffer(); for i in 1:n; write(io, UInt8(i % 256)); end; b = take!(io); length(b) * 1000 + Int64(b[end])), Int64(2000)),
 ])
+# Julia's own collection bodies, compiled instead of bespoke overlays (dev/CHARTER.md C3), at
+# the inputs where a re-implementation drifts: signed zeros, NaN, ties, negative integers, an
+# empty generator's element type.
+_g("julia_collection_bodies", Any[
+    ("splice_index", (n::Int64) -> (v = collect(1:n); x = splice!(v, 2); x * 100 + length(v)), Int64(5)),
+    ("unique_int", (n::Int64) -> (u = unique([3, 1, 3, n, 1]); sum(u) * 10 + length(u)), Int64(7)),
+    ("unique_f64_zero_nan", (n::Int64) -> (u = unique([0.0, -0.0, NaN, NaN, Float64(n)]); length(u) * 10 + (signbit(u[2]) ? 1 : 0)), Int64(2)),
+    ("unique_f32_zero_nan", (n::Int64) -> (u = unique(Float32[0.0, -0.0, NaN, NaN, n]); length(u) * 10 + (signbit(u[2]) ? 1 : 0)), Int64(2)),
+    ("unique_string", (n::Int64) -> length(unique(["a", "b", "a", string(n)])), Int64(3)),
+    ("copy_vector", (n::Int64) -> (v = collect(1:n); w = copy(v); w[1] = 99; v[1] * 1000 + w[1] + length(w)), Int64(4)),
+    ("copy_matrix", (n::Int64) -> (m = reshape(collect(1.0:6.0), 2, 3); c = copy(m); c[2, 3] * 10 + m[1, 2] + n), Int64(3)),
+    ("copyto_matrix", (n::Int64) -> (d = zeros(2, 2); copyto!(d, [1.0 2.0; 3.0 Float64(n)]); d[2, 2] * 10 + d[1, 2]), Int64(5)),
+    ("matrix_add", (n::Int64) -> (c = [1.0 2.0; 3.0 4.0] + fill(Float64(n), 2, 2); c[2, 1] * 10 + c[1, 2]), Int64(2)),
+    ("filter_odd", (n::Int64) -> (f = filter(isodd, collect(1:n)); sum(f) * 100 + length(f)), Int64(9)),
+    ("generator_collect", (n::Int64) -> sum([x * 0.5 for x in 1:n]), Int64(9)),
+    ("generator_empty_eltype", (n::Int64) -> (eltype([x * 0.5 for x in 1:n]) === Float64 ? 1 : 0), Int64(0)),
+    ("dict_delete", (n::Int64) -> (d = Dict(1 => 2, 3 => 4, n => 6); delete!(d, 3); length(d) * 100 + get(d, 3, 0) * 10 + get(d, n, 0)), Int64(8)),
+    ("count_even", (n::Int64) -> count(iseven, collect(1:n)), Int64(9)),
+    ("maximum_signed_zero", (n::Int64) -> (signbit(maximum([-0.0, 0.0, -Float64(n)])) ? 1 : 0), Int64(1)),
+    ("minimum_signed_zero", (n::Int64) -> (signbit(minimum([0.0, -0.0, Float64(n)])) ? 1 : 0), Int64(1)),
+    ("maximum_negative_ints", (n::Int64) -> maximum([-3, -1, -n]) * 10 + minimum([-3, -1, -n]), Int64(5)),
+    ("maximum_nan", (n::Int64) -> (isnan(maximum([1.0, NaN, Float64(n)])) ? 1 : 0), Int64(2)),
+    ("argmax_ties", (n::Int64) -> argmax([1, n, 3, n]) * 10 + argmin([n, 1, 1, n]), Int64(5)),
+    ("argmin_nan", (n::Int64) -> argmin([2.0, NaN, -Float64(n)]) * 10 + argmax([2.0, NaN, Float64(n)]), Int64(3)),
+    ("foreach_sum", (n::Int64) -> (s = Ref(0); foreach(x -> (s[] += x), collect(1:n)); s[]), Int64(6)),
+    ("repeat_string", (n::Int64) -> length(repeat("ab", n)) * 100 + ncodeunits(repeat('é', n)), Int64(3)),
+    ("string_int", (n::Int64) -> length(string(-n * 1000)) * 100 + length(string(typemin(Int64))), Int64(7)),
+    ("first_last", (n::Int64) -> (v = collect(10:10+n); first(v) * 100 + last(v)), Int64(4)),
+    ("union_set", (n::Int64) -> (s = Set([1, 2]); union!(s, [2, 3, n]); length(s)), Int64(9)),
+    ("collect_vector", (n::Int64) -> (w = collect(collect(1:n)); w[end] * 10 + length(w)), Int64(5)),
+    # isequal of two floats is Julia's fpiseq: bits equal, or both NaN
+    ("isequal_f64", (n::Int64) -> (isequal(0.0, -0.0) ? 1 : 0) + (isequal(NaN, -NaN) ? 10 : 0) + (isequal(Float64(n), Float64(n)) ? 100 : 0), Int64(3)),
+    ("isequal_f32", (n::Int64) -> (isequal(0.0f0, -0.0f0) ? 1 : 0) + (isequal(NaN32, -NaN32) ? 10 : 0) + (isequal(Float32(n), Float32(n)) ? 100 : 0), Int64(3)),
+    ("set_f64", (n::Int64) -> length(Set([0.0, -0.0, NaN, NaN, Float64(n)])), Int64(2)),
+    ("lpad_rpad", (n::Int64) -> ncodeunits(lpad(string(n), 6, "ab")) * 100 + ncodeunits(rpad("x", n, 'é')), Int64(4)),
+    ("lpad_negative_int", (n::Int64) -> length(lpad(-n * 7, 5)) + (lpad(-n, 4)[1] == ' ' ? 10 : 0), Int64(3)),
+])
 # Types whose fields reach back to themselves register with their strongly connected component
 # (finish_pending!, dev/formal/RecGroup.tla): a two-type cycle through a type parameter, a
 # three-type cycle, a cycle through a tuple and through an abstract field — each field keeps its

@@ -147,8 +147,31 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                         # Base's abstract Vararg MI even though the concrete
                         # call must dispatch to a Wasm overlay specialization.
                         matches = CC.findall(ftype, lookup_table; limit=-1)
-                        if matches !== nothing && !isempty(matches)
-                            match = matches[1]
+                        # The invoked method itself (or the overlay sharing its signature),
+                        # specialized at the concrete types. An explicit
+                        # `invoke(f, Tuple{Super}, x)` names a method that dispatch on x's
+                        # type does not select — CC.findall leaves a method the selected
+                        # one fully covers out of its matches — and Julia calls that method.
+                        local invoked_match = nothing
+                        if matches !== nothing && mi.def isa Method
+                            for m in matches
+                                if m.method.sig == mi.def.sig
+                                    invoked_match = m
+                                    break
+                                end
+                            end
+                        end
+                        if invoked_match === nothing && mi.def isa Method && matches !== nothing &&
+                           !isempty(matches) && matches[1].method.sig != mi.def.sig &&
+                           ftype <: mi.def.sig
+                            # shadowed at these types: keep the invoked method
+                            if mi.specTypes != ftype
+                                local ti_env = ccall(:jl_type_intersection_with_env, Any, (Any, Any),
+                                                     ftype, mi.def.sig)::Core.SimpleVector
+                                mi = CC.specialize_method(mi.def, ti_env[1], ti_env[2])
+                            end
+                        elseif matches !== nothing && !isempty(matches)
+                            match = invoked_match === nothing ? matches[1] : invoked_match
                             # A Type{T} call-site value sometimes selects a method
                             # declared on its representation class (DataType,
                             # UnionAll, ...). Preserve singleton precision when it
@@ -714,7 +737,23 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                 CC.method_table(fresh_interp); limit=-1)
             (matches === nothing || isempty(matches)) &&
                 error("no Wasm overlay match for closed-world root $(root_mi.specTypes)")
-            resolved_mi = CC.specialize_method(matches[1])
+            # the root's own method (or the overlay that shares its signature): an explicit
+            # `invoke` of a less specific method names that method, which dispatch on its
+            # argument types alone would not select
+            local pick = 0
+            if root_mi.def isa Method
+                for (k, m) in enumerate(matches)
+                    if m.method.sig == root_mi.def.sig
+                        pick = k
+                        break
+                    end
+                end
+            end
+            resolved_mi = pick > 0 ? CC.specialize_method(matches[pick]) :
+                (root_mi.def isa Method && matches[1].method.sig != root_mi.def.sig &&
+                 root_mi.specTypes <: root_mi.def.sig) ?
+                    CC.specialize_method(root_mi.def, root_mi.specTypes, root_mi.sparam_vals) :
+                    CC.specialize_method(matches[1])
             # Candidate discovery initially selects with Julia dispatch, then
             # collection canonicalizes through the Wasm overlay table. Preserve
             # the canonical MI as a selector root too: identity-only reachability
@@ -883,7 +922,11 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     # same-named entry must not claim the entry's export name (duplicate-export
     # validation failure in multi-function modules).
     used_names = Set{String}(values(entry_keys))
-    seen_sigs = Set{Tuple{Any, Any}}()   # T1.1 step 3: dedup the function list by (f, arg_types)
+    # One function per MethodInstance (dart keys a function by its member's Reference). Two
+    # methods can share one specialization's argument types — Base calls a less specific
+    # method with `invoke(f, Tuple{Super}, x)` — so (f, arg_types) does not name a function.
+    seen_mis = Set{Tuple{Any, Any}}()          # (mi.def, mi.specTypes)
+    mis_by_sig = Dict{Tuple{Any, Any}, Vector{Any}}()
     i = 1
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
@@ -966,12 +1009,11 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
          arg_types == (Core.TypeName,)) && continue
         ((f === Base.isvisible || f === _closed_world_isvisible) &&
          arg_types == (Symbol, Module, Module)) && continue
-        # T1.1 step 3: a discovery candidate can duplicate an explicitly-listed
-        # specialization (e.g. compile_multi entries + a megamorphic dynamic call's
-        # candidates) → duplicate wasm export. Dedup by (f, arg_types); the first
-        # occurrence wins (entries/base pairs are processed first).
-        (f, arg_types) in seen_sigs && continue
-        push!(seen_sigs, (f, arg_types))
+        # a discovery candidate can repeat an explicitly listed specialization (the first
+        # occurrence wins: entries are processed first)
+        ((mi.def, mi.specTypes) in seen_mis) && continue
+        push!(seen_mis, (mi.def, mi.specTypes))
+        push!(get!(() -> Any[], mis_by_sig, (f, arg_types)), mi)
         # name: requested for entries, deduped method name otherwise
         name = get(entry_keys, mi, nothing)
         if name === nothing
@@ -984,17 +1026,42 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             end
         end
         push!(used_names, name)
-        push!(functions, (f, arg_types, name))
-        ir_cache[(f, arg_types)] = (src, ci.rettype)
+        push!(functions, (f, arg_types, name, mi))
+        ir_cache[mi] = (src, ci.rettype)
         # Only discovery ROOTS are selector candidates. Dependencies compiled
         # transitively with a root remain ordinary cross-call-visible functions.
         if mi in _DYNAMIC_ROOT_MIS[] && !haskey(entry_keys, mi)
             push!(dispatch_candidates, (f, arg_types))
         end
     end
+    # (f, arg_types) names the function Julia's dispatch selects for those types: where two
+    # collected methods share them, the other one is reached only by its `invoke`
+    # (FunctionInfo.invoke_only) and never by a call that names (f, arg_types).
+    invoke_only = Set{Any}()
+    local mt = CC.method_table(get_wasm_interpreter())
+    for (key, mis) in mis_by_sig
+        local winner = if length(mis) == 1
+            only(mis)
+        else
+            local match = CC.findsup(first(mis).specTypes, mt)[1]
+            local w = match === nothing ? nothing : findfirst(m -> m.def === match.method, mis)
+            w === nothing ? nothing : mis[w]
+        end
+        winner === nothing || (ir_cache[key] = ir_cache[winner])
+        for m in mis
+            m === winner || push!(invoke_only, m)
+        end
+    end
     _TRIM_DISPATCH_CANDIDATES[] = dispatch_candidates
+    _TRIM_INVOKE_ONLY[] = invoke_only
     return functions, ir_cache
 end
+
+# MethodInstances reached only through an `invoke` of a method dispatch does not select for
+# their argument types (reset at each plan).
+# parity(quarantine: Julia's `invoke` calls a method dispatch would not select; a dart call
+# names its member's Reference, functions.dart:25 FunctionCollector._functions.)
+const _TRIM_INVOKE_ONLY = Ref{Set{Any}}(Set{Any}())
 
 # (f, arg_types) keys discovered solely as dynamic-dispatch candidates.
 const _TRIM_DISPATCH_CANDIDATES = Ref{Set{Any}}(Set{Any}())

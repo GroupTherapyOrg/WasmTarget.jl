@@ -19,7 +19,7 @@ function is_comparison(func)::Bool
     (func === (===) || func === (!==)) && return true
     return func isa Core.IntrinsicFunction &&
            nameof(func) in (:slt_int, :sle_int, :ult_int, :ule_int, :eq_int, :ne_int,
-                            :lt_float, :le_float, :eq_float, :ne_float)
+                            :lt_float, :le_float, :eq_float, :ne_float, :fpiseq)
 end
 
 """

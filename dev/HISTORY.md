@@ -116,9 +116,7 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 
 ## Phase 13 — Julia's own bodies (2026-09-28 …)
 
-- Thirty bit-level overlays deleted (primitive reinterpret, `_reinterpret_padding`,
-  `unsigned`, the Int-amount shifts, `isless`): Julia's own bodies compile and match native
-  (smoke julia_bit_bodies).
+- Thirty bit-level overlays deleted: Julia's own bodies match native (julia_bit_bodies).
 - A MemoryRef or Memory held erased dispatches: each dispatch reads the callee's declared
   signature and tells a Memory by its array type, and the collector counts memoryrefnew and
   Memory allocation as instantiations (smoke memoryref_erased).
@@ -130,11 +128,12 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   EgalDispatch, RecGroup. A recursive type registers with its strongly connected component
   (Tarjan over the translators' references) and the section's recursion groups are computed,
   so a two-type cycle keeps both field types (placeholder-and-patch erased one to structref).
-- The self-hosting leftovers went: a second serializer, a minimal registry, a test that
-  loaded a deleted directory.
-- The `$JlType` hierarchy is created right after Top, so `Any` is anyref everywhere (L137):
-  the externref fallbacks, a stale second DataType struct and the pass that rewrote finished
-  types are gone.
+- Self-hosting leftovers deleted. The `$JlType` hierarchy is created right after Top, so
+  `Any` is anyref everywhere (L137); the pass that rewrote finished types is gone.
+- The oracle is bit-exact (L138): a tolerance only where native calls a named BLAS/LAPACK
+  routine. 22 collection overlays gave way to Julia's bodies (two answered the wrong sign for
+  maximum/minimum over signed zeros); isequal of floats is Julia's fpiseq. An :invoke calls
+  the method it names (L139): unique(::Vector{Float64}) had compiled to infinite recursion.
 
 ## Why the archive was consolidated
 

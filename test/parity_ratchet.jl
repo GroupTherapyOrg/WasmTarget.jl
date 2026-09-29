@@ -1328,7 +1328,7 @@ const LOCKS = [
                         "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
                         "info.is_candidate && info.arg_types == arg_types",
-                        "infos = FunctionInfo[i for i in infos if !i.is_candidate]",
+                        "infos = FunctionInfo[i for i in infos if !i.is_candidate && !i.invoke_only]",
                         "_target = get_exact_candidate", "target_info = get_exact_candidate",
                         "boxed_vector_capture", "vmod isa Vector{UInt8}"]
             count(p -> !occursin(p, box_src * trim_src * types_src * calls_src * test_src), required)
@@ -2397,6 +2397,22 @@ const LOCKS = [
                                !occursin(r"^\s*info\.return_type <: expected_return", l),
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
+        end),
+    "L139_invoke_names_its_method" => ("an :invoke calls the method its MethodInstance names: the closed-world plan keeps one function per MethodInstance (never one per (f, arg_types): two methods share a specialization's argument types when Base calls a less specific one with `invoke(f, Tuple{Super}, x)`), marks the one dispatch does not select invoke-only, the collector's re-specialization keeps the invoked method (or its same-signature overlay) even where a more specific method fully covers it, and codegen decides self-recursion and the callee by the MethodInstance's function. Until 2026-09-28 the rebuild took dispatch's choice and the plan deduplicated by (f, arg_types): unique(::Vector{Float64}) compiled to a function that called itself forever (dev/CHARTER.md C6)",
+        () -> begin
+            trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            types = read(joinpath(CODEGEN, "types.jl"), String)
+            required = ["((mi.def, mi.specTypes) in seen_mis) && continue",
+                        "push!(functions, (f, arg_types, name, mi))",
+                        "if m.method.sig == mi.def.sig",
+                        "if m.method.sig == root_mi.def.sig",
+                        "CC.specialize_method(root_mi.def, root_mi.specTypes, root_mi.sparam_vals)",
+                        "mi_target === nothing || (is_self_call_early = mi_target.wasm_idx == ctx.func_idx)",
+                        "mi_target === nothing || (is_self_call = mi_target.wasm_idx == ctx.func_idx)",
+                        "get_function_by_mi(registry::FunctionRegistry, mi::Core.MethodInstance)"]
+            count(p -> !occursin(p, trim * inv * types), required) +
+                count(p -> occursin(p, trim), ["seen_sigs", "(f, arg_types) in seen_sigs"])
         end),
     "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===`. The one tolerance (a relative 1e-9) applies only where tree_matches is given the C routine the native value came from, and only linalg_diff's _LA_C_LIBRARY names one, each a BLAS or LAPACK routine. Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which would pass a last-bit error in Julia's own math (dev/CHARTER.md C3)",
         () -> begin

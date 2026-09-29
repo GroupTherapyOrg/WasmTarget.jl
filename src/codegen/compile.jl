@@ -371,7 +371,9 @@ function _compile_closed_world_plan(functions::Vector;
     # the NIR body, built once here
     function_data = []
 
-    for (f, arg_types, name) in normalized
+    for entry in normalized
+        f, arg_types, name = entry[1], entry[2], entry[3]
+        local entry_mi = length(entry) >= 4 ? entry[4] : nothing
         # Check if this is a closure (function with captured variables)
         # A TYPE-KEYED entry (f IS the closure DataType — capturing
         # closures have no instance) resolves IR by ftype, and the closure type
@@ -384,7 +386,10 @@ function _compile_closed_world_plan(functions::Vector;
         # Base.code_typed already knows the first slot is typeof(f) for closures.
         # (type-keyed closures resolve via the TRIM_IR_CACHE hit — trimcollect
         # cached their pair under (T, arg_types); a miss errors loudly.)
-        typed, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
+        (entry_mi isa Core.MethodInstance && !optimize_ir) &&
+            error("unoptimized IR for $f$(arg_types) requested inside a collected closed world, whose IR is optimized")
+        typed, return_type = entry_mi isa Core.MethodInstance ? get_typed_ir(entry_mi) :
+                             get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
 
         bindings = get(root_bindings, name, nothing)
         elide_closure_context = bindings !== nothing && bindings.elide_closure_context
@@ -426,7 +431,7 @@ function _compile_closed_world_plan(functions::Vector;
         register_reachable_type!(mod, type_registry, return_type)
 
         push!(function_data, (f, arg_types, name, typed, return_type, global_args, is_closure,
-                              typed === nothing ? nothing : nir_body(typed)))
+                              typed === nothing ? nothing : nir_body(typed), entry_mi))
     end
 
     # Add all required globals to the module
@@ -557,8 +562,11 @@ function _compile_closed_world_plan(functions::Vector;
     _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
+        local fd_mi = function_data[i][9]
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
-                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
+                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
+                           mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
+                           invoke_only = fd_mi in _TRIM_INVOKE_ONLY[])
         # fullstrict: the PLACEHOLDER carries the true signature from birth
         local _pp, _rr = function_wasm_signature(arg_types, return_type, global_args,
                                                   mod, type_registry)

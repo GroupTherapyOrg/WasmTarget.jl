@@ -386,17 +386,6 @@ end
     return "nothing"
 end
 
-# Why: `collect(::Vector{T})` for a REFERENCE element type (String, …) routes through
-#      similar + copyto!, whose Memory allocation null-derefs in WT (the String-array
-#      null-Memory class); isbits eltypes (Int, Float) are fine. `collect` of a Vector
-#      is just a shallow copy, and WT's element-by-element `copy` overlay works for ALL
-#      eltypes. (PI convolution_1d `collect([emoji…])`.)
-# How: route to copy. Only matches an explicit collect of a concrete Vector — generator
-#      comprehensions lower to collect(::Generator), unaffected.
-@overlay WASM_METHOD_TABLE function Base.collect(v::Vector{T}) where {T}
-    return copy(v)
-end
-
 # Why: `v[a:b]` on a Vector{String} (and other ref-element vectors) routes through
 #      similar + copyto!, hitting the same null-Memory bug → null-deref trap. (PI
 #      convolution_1d `(collect([…]))[1:len]`.) isbits-eltype slices use the working
@@ -945,376 +934,26 @@ _wt_le_word(b::NTuple{8, UInt8})::UInt64 =
     Core.bitcast(T, _wt_le_word(x))
 
 
-# Base.resize! with only the grow branch replaced. Base grows through _growend!'s capturing
-# closure, which the closed-world collector does not enroll (Base-internal closures are
-# skipped, trimcollect.jl trim_compile_plan) and which invoke.jl's name-keyed `#_growend!`
-# arm replaces with a max(2c, c + 4) reallocation that ignores the requested length (an
-# out-of-bounds trap on resize!(zeros(10), 100)). Growing reallocates to exactly `nl`;
-# the shrink branch, the n >= 0 check and its ArgumentError are Base's own.
-# parity(quarantine: Base.resize!'s grow branch needs the Base-internal _growend! closure, which WT does not compile yet)
-
-
-
-
-
+# Julia's splice!(v, i) compiles its default `ins` branch `only(::Vector{Any})`, which builds
+# `(x, 2)` from an `Any` value: Julia gives that tuple the runtime type of its elements
+# (jl_f_tuple), and WT classes a tuple by its static type, so it has no numbered class
+# (dev/MARCH.md 13.10). This is Julia's splice!(v, i): the element, then deleteat!.
+# parity(quarantine: Julia's splice!(v, i) compiles a tuple of an Any value whose runtime type
+# is its element's, jl_f_tuple; WT classes a tuple by its static type.)
 @overlay WASM_METHOD_TABLE function Base.splice!(v::Vector{T}, i::Integer) where T
     val = v[Int(i)]
     deleteat!(v, i)
     return val
 end
 
-# ─── Collection Overlays ──────────────────────────────────────────────────
-
-@overlay WASM_METHOD_TABLE function Base.unique(A::AbstractVector)
-    n = length(A)
-    result = similar(A, 0)
-    i = 1
-    while i <= n
-        val = A[i]
-        found = false
-        j = 1
-        while j <= length(result)
-            rj = result[j]
-            # NaN-aware equality: `==` misses NaN (NaN==NaN is false) so unique kept
-            # duplicate NaNs. `x != x` detects NaN (no-op for non-float T). (isequal
-            # itself doesn't compile cleanly for Float here.)
-            if rj == val || (rj != rj && val != val)
-                found = true
-                break
-            end
-            j += 1
-        end
-        if !found
-            push!(result, val)
-        end
-        i += 1
-    end
-    return result
-end
-
-# Float-specialized `unique`: the generic overlay above compares with `==`, which
-# treats -0.0 and 0.0 as equal, but Julia's `unique` uses `isequal` and keeps both.
-# These more-specific overlays win dispatch for float vectors and add a signbit
-# check (safe here: only floats, so `signbit` always compiles, unlike the generic
-# AbstractVector path that can see Strings). NaN handled as before (`x != x`).
-@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float64})
-    n = length(A)
-    result = similar(A, 0)
-    i = 1
-    while i <= n
-        val = A[i]
-        found = false
-        j = 1
-        while j <= length(result)
-            rj = result[j]
-            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
-                found = true
-                break
-            end
-            j += 1
-        end
-        if !found
-            push!(result, val)
-        end
-        i += 1
-    end
-    return result
-end
-
-@overlay WASM_METHOD_TABLE function Base.unique(A::Vector{Float32})
-    n = length(A)
-    result = similar(A, 0)
-    i = 1
-    while i <= n
-        val = A[i]
-        found = false
-        j = 1
-        while j <= length(result)
-            rj = result[j]
-            if (rj != rj && val != val) || (rj == val && signbit(rj) == signbit(val))
-                found = true
-                break
-            end
-            j += 1
-        end
-        if !found
-            push!(result, val)
-        end
-        i += 1
-    end
-    return result
-end
-
-# ─── copy(Vector) Overlay ─────────────────────────────────────────────────
-# Why: Base.copy(::Vector) uses foreigncall(:memmove) and foreigncall(:jl_genericmemory_copyto)
-#      for bulk memory copying. WASM has no memmove — use element-by-element copy instead.
-# Remove when: codegen handles foreigncall(:memmove) or provides a WASM bulk-copy intrinsic
-@overlay WASM_METHOD_TABLE function Base.copy(v::Vector{T}) where T
-    n = length(v)
-    result = similar(v, n)
-    i = 1
-    while i <= n
-        result[i] = v[i]
-        i += 1
-    end
-    return result
-end
-
-# ─── copy/copyto!(Matrix) Overlay ─────────────────────────────────────────
-# Why: like copy(::Vector) above, Base.copy(::Matrix) and
-#      copyto!(::Matrix, ::Matrix) bulk-copy via foreigncall(:memmove). WASM has
-#      none, and (unlike the 1-D path) the 2-D memmove silently produced a ZERO
-#      matrix — a wrong-value miscompile that blocked triu/tril/copy and any
-#      matrix op routing through copy. Element-wise LINEAR-index copy is
-#      bit-identical to memmove (dense column-major), verified vs native.
-# Remove when: codegen lowers the 2-D memmove foreigncall.
-@overlay WASM_METHOD_TABLE function Base.copy(m::Matrix{T}) where T
-    result = similar(m)
-    @inbounds for i in eachindex(m)
-        result[i] = m[i]
-    end
-    return result
-end
-
-@overlay WASM_METHOD_TABLE function Base.copyto!(dest::Matrix{T}, src::Matrix{T}) where T
-    @inbounds for i in eachindex(src)
-        dest[i] = src[i]
-    end
-    return dest
-end
-
-# ─── (+)(Matrix, Matrix) Overlay ──────────────────────────────────────────
-# Why: Base.:+(A::Array, Bs::Array...) is VARARGS — the splat routes 2-D
-#      addition through a broadcast/`afoldl` instantiation that silently
-#      produced a ZERO matrix (the 2-arg `-(A,B)` and scalar `*` take a clean
-#      path and already work). Element-wise add is bit-identical and unblocks
-#      matrix `+`. (Only the Matrix+Matrix case; vectors already work.)
-# Remove when: codegen handles the varargs (+) broadcast instantiation for 2-D.
-@overlay WASM_METHOD_TABLE function Base.:+(a::Matrix{T}, b::Matrix{T}) where T
-    size(a) == size(b) || throw(DimensionMismatch("matrix add"))
-    r = similar(a)
-    @inbounds for i in eachindex(a)
-        r[i] = a[i] + b[i]
-    end
-    return r
-end
-
-# ─── filter Overlay ───────────────────────────────────────────────────────
-# Why: Base.filter creates new vectors using internal copy/resize machinery with foreigncalls.
-#      Pure Julia loop with push! overlay handles this cleanly.
-# Remove when: codegen handles the internal Vector creation machinery
-@overlay WASM_METHOD_TABLE function Base.filter(f, v::Vector{T}) where T
-    result = similar(v, 0)
-    i = 1
-    n = length(v)
-    while i <= n
-        if f(v[i])
-            push!(result, v[i])
-        end
-        i += 1
-    end
-    return result
-end
-
-# ─── _collect(EltypeUnknown) Overlay ──────────────────────────────────────
-# Why: Base's _collect for EltypeUnknown generators peeks the first element and
-#      widens via setindex_widen_up_to / dynamic _similar_for — machinery codegen
-#      can't translate. Whenever the map kernel's body can't be concrete-evaled
-#      under the overlay table (string-literal constants like y->length(""), or
-#      calls to overlayed methods like y->asin(1.0)), inlining bails and the
-#      raw `invoke _collect` became an unsupported-method stub → runtime trap
-#      (gap 3b005c4957f7 family). The empty-iterator branch of Base's version
-#      also materialised Vector{Any} where native returns a typed empty vector.
-#      In the closed-world wasm compile the kernel's return type IS statically
-#      known — promote_op folds to a Const — so collect straight into Vector{T}
-#      with a plain loop, no widening, and the n==0 branch is correctly typed.
-# Remove when: codegen handles setindex_widen_up_to + dynamically-typed similar.
-@overlay WASM_METHOD_TABLE function Base._collect(c::AbstractVector, itr::Base.Generator{<:AbstractVector},
-                                                  ::Base.EltypeUnknown,
-                                                  isz::Union{Base.HasLength, Base.HasShape{1}})
-    f = itr.f
-    A = itr.iter
-    T = Base.promote_op(f, eltype(A))
-    n = length(A)
-    dest = Vector{T}(undef, n)
-    i = 1
-    while i <= n
-        @inbounds dest[i] = f(A[i])
-        i += 1
-    end
-    return dest
-end
-
-# ─── Dict delete! Overlay ─────────────────────────────────────────────────
-# Why: Base._delete! uses atomic_pointerset(ptr, C_NULL, :monotonic) to null out
-#      key/val references for GC. WASM codegen doesn't support atomic_pointerset.
-#      WasmGC handles reference cleanup automatically, so we just clear the slot.
-# Remove when: codegen handles atomic_pointerset as a regular store
-@overlay WASM_METHOD_TABLE function Base.delete!(h::Dict{K,V}, key) where {K,V}
-    index = Base.ht_keyindex(h, key)
-    if index > 0
-        h.slots[index] = 0x00
-        h.count = h.count - 1
-        h.age = h.age + 1
-    end
-    return h
-end
-
-# ─── count Overlay ────────────────────────────────────────────────────────
-# Why: Base.count uses kwarg dispatch (init=0) that triggers sym_in/kwerr stubs,
-#      plus mapreduce infrastructure with 135+ IR stmts and codegen type mismatches.
-# Remove when: codegen handles kwarg dispatch patterns cleanly
-@overlay WASM_METHOD_TABLE function Base.count(f, v::Vector{T}) where T
-    n = length(v)
-    c = 0
-    i = 1
-    while i <= n
-        if f(v[i])
-            c += 1
-        end
-        i += 1
-    end
-    return c
-end
-
-# ─── maximum/minimum Overlays ────────────────────────────────────────────
-# Why: Base maximum/minimum compile from mapreduce/`max`,`min` whose comparison
-#      signedness flips to UNSIGNED in some compositions (e.g.
-#      `sum([...]) + maximum(sort([0,x,x]))` returned the min: `0 >ᵤ -1` is false).
-#      A simple explicit-loop overlay keeps the comparison correctly signed.
-#      NaN poisons (matches Base: maximum/minimum return NaN if present).
-# Remove when: native maximum/minimum codegen picks signed comparison in compositions.
-@overlay WASM_METHOD_TABLE function Base.maximum(v::Vector{T}) where T
-    n = length(v)
-    n == 0 && throw(ArgumentError("collection must be non-empty"))
-    i = 1
-    while i <= n
-        x = v[i]
-        x != x && return x   # NaN
-        i += 1
-    end
-    best = v[1]
-    i = 2
-    while i <= n
-        v[i] > best && (best = v[i])
-        i += 1
-    end
-    return best
-end
-@overlay WASM_METHOD_TABLE function Base.minimum(v::Vector{T}) where T
-    n = length(v)
-    n == 0 && throw(ArgumentError("collection must be non-empty"))
-    i = 1
-    while i <= n
-        x = v[i]
-        x != x && return x   # NaN
-        i += 1
-    end
-    best = v[1]
-    i = 2
-    while i <= n
-        v[i] < best && (best = v[i])
-        i += 1
-    end
-    return best
-end
-
-# ─── argmax/argmin Overlays ──────────────────────────────────────────────
-# Why: Base implementations use complex dispatch through _findmax/_findmin
-#      with Pairs iterators and kwarg patterns that produce codegen errors.
-# Remove when: codegen handles Pairs iterators and kwarg dispatch
-@overlay WASM_METHOD_TABLE function Base.argmax(v::Vector{T}) where T
-    n = length(v)
-    n == 0 && throw(ArgumentError("collection must be non-empty"))
-    # NaN poisons: Julia's findmax/argmax returns the FIRST NaN's index if any NaN.
-    # (`x != x` is true only for NaN; a no-op for integer T.)
-    i = 1
-    while i <= n
-        x = v[i]
-        x != x && return i
-        i += 1
-    end
-    best_idx = 1
-    best_val = v[1]
-    i = 2
-    while i <= n
-        # `>` plus a signed-zero tiebreak: +0.0 ranks above -0.0 (Julia's isless).
-        # For non-zero/integer T the tiebreak is false (equal ⇒ same signbit).
-        if v[i] > best_val || (v[i] == best_val && signbit(best_val) && !signbit(v[i]))
-            best_val = v[i]
-            best_idx = i
-        end
-        i += 1
-    end
-    return best_idx
-end
-
-@overlay WASM_METHOD_TABLE function Base.argmin(v::Vector{T}) where T
-    n = length(v)
-    n == 0 && throw(ArgumentError("collection must be non-empty"))
-    i = 1   # NaN poisons (see argmax) — first NaN index wins
-    while i <= n
-        x = v[i]
-        x != x && return i
-        i += 1
-    end
-    best_idx = 1
-    best_val = v[1]
-    i = 2
-    while i <= n
-        if v[i] < best_val || (v[i] == best_val && !signbit(best_val) && signbit(v[i]))  # -0.0 ranks below +0.0
-            best_val = v[i]
-            best_idx = i
-        end
-        i += 1
-    end
-    return best_idx
-end
-
-# ─── foreach Overlay ─────────────────────────────────────────────────────
-# Why: Base.foreach uses Generator/iterate patterns with complex dispatch.
-# Remove when: codegen handles Generator iteration cleanly
-@overlay WASM_METHOD_TABLE function Base.foreach(f, v::Vector{T}) where T
-    n = length(v)
-    i = 1
-    while i <= n
-        f(v[i])
-        i += 1
-    end
-    return nothing
-end
-
-# ─── repeat(String) Overlay ─────────────────────────────────────────────
-# Why: Base.repeat(::String, ::Int) uses unsafe_copyto! with foreigncall(:memmove)
-#      for efficient string repetition. Pure Julia loop with codeunit works in WASM.
-# Remove when: codegen handles foreigncall(:memmove)
-@overlay WASM_METHOD_TABLE function Base.repeat(s::String, n::Int)
-    slen = ncodeunits(s)
-    slen == 0 && return ""
-    n <= 0 && return ""
-    bytes = UInt8[]
-    rep = 1
-    while rep <= n
-        i = 1
-        while i <= slen
-            push!(bytes, codeunit(s, i))
-            i += 1
-        end
-        rep += 1
-    end
-    return String(bytes)
-end
-
-# ─── repeat(Char,Int) Overlay ───────────────────────────────────────────
-# Why: WT's repeat(::Char, n) codegen (invoke.jl) assumes a SINGLE-byte char —
-#      it array.new-fills n copies of just the char's FIRST UTF-8 byte
-#      (char >> 24). That silently CORRUPTS any multibyte char: repeat('💊', 3)
-#      gave [240,240,240] instead of the full 4-byte 'pill' three times (PI
-#      convolution_1d `repeat('💊', i)`). Emit the char's full UTF-8 bytes n times.
-# How: go through string(c) (1-char String) and replicate its codeunits — same
-#      byte-assembly as the repeat(::String) overlay; correct for any char width.
+# Julia's repeat(::AbstractChar, r) writes the String's UTF-8 bytes through raw pointers
+# (`unsafe_store!` into `pointer(s)`, strings/string.jl:573); a WT String is a GC byte array.
+# This writes the same bytes: the char's UTF-8 encoding r times, ArgumentError for r < 0.
+# parity(quarantine: Julia's repeat(::Char) stores into a String through raw pointers; a WT
+# String is a GC byte array with no address.)
 @overlay WASM_METHOD_TABLE function Base.repeat(c::Char, n::Int)
-    n <= 0 && return ""
+    n < 0 && throw(ArgumentError("can't repeat a character $n times"))
+    n == 0 && return ""
     s = string(c)
     slen = ncodeunits(s)
     bytes = UInt8[]
@@ -1329,56 +968,6 @@ end
     end
     return String(bytes)
 end
-
-# ─── string(Int64) Overlay ──────────────────────────────────────────────
-# Why: Base.string(::Int64) uses Ryu.writeshortest / dec() with complex dispatch
-#      (hundreds of IR stmts, multiple autodiscover targets). Pure Julia digit
-#      extraction works for all Int64 values.
-# Remove when: codegen handles the Ryu string conversion pipeline
-@overlay WASM_METHOD_TABLE function Base.string(x::Int64)
-    x == Int64(0) && return "0"
-    neg = x < 0
-    # Extract digits WITHOUT negating x: `v = -x` overflows for typemin(Int64)
-    # (-typemin == typemin, still negative) → the old loop produced "" → "-".
-    # Process the value in place (digit magnitude via |q % 10|, ≤9 so -d is safe).
-    digits = UInt8[]
-    q = x
-    while q != Int64(0)
-        d = q - (q ÷ Int64(10)) * Int64(10)   # q % 10 (carries sign of q)
-        d = d < Int64(0) ? -d : d             # magnitude 0..9
-        push!(digits, UInt8(48 + d))          # '0' + d
-        q = q ÷ Int64(10)                     # truncates toward zero
-    end
-    bytes = UInt8[]
-    neg && push!(bytes, UInt8(45))            # '-'
-    i = length(digits)
-    while i >= 1
-        push!(bytes, digits[i])
-        i -= 1
-    end
-    return String(bytes)
-end
-
-# ─── first/last(Vector) Overlays ─────────────────────────────────────────
-# Why: first(v)/last(v) compile to an unchecked array.get; on an empty vector that
-#      reads the (capacity-allocated) backing array → returns garbage instead of
-#      throwing BoundsError like native. Guard emptiness so wasm errors too (the
-#      differential then matches: both error). Non-empty path is unchanged.
-# Remove when: getindex bounds-checks the Vector size on OOB.
-@overlay WASM_METHOD_TABLE function Base.first(v::Vector{T}) where T
-    length(v) == 0 && throw(BoundsError())
-    return v[1]
-end
-@overlay WASM_METHOD_TABLE function Base.last(v::Vector{T}) where T
-    n = length(v)
-    n == 0 && throw(BoundsError())
-    return v[n]
-end
-
-# ─── empty!(Vector) Overlay ─────────────────────────────────────────────
-# Why: Base.empty! uses internal _deleteend! with foreigncall(:memmove) for
-#      clearing vector contents. Simple resize to 0 works in WASM.
-# Remove when: codegen handles _deleteend! foreigncalls
 
 # Base._unsetindex!(::MemoryRef{T}) clears a freed slot: a bits element keeps its bits, an
 # isbits-union slot keeps its value, and any other slot is nulled (`atomic_pointerset(p,
@@ -1410,18 +999,6 @@ const _WASM_J_TABLE_VEC = UInt64[Base.Math.J_TABLE[i] for i in 1:256]
     return (jU, jL)
 end
 
-# ─── Set union! Overlay ────────────────────────────────────────────────────
-# Why: Base.union!(::AbstractSet, itr) calls sizehint!(s, n; shrink=false) which
-#      expands kwargs to 608 IR stmts with kwerr stubs that trap at runtime.
-# Fix: Skip sizehint! (no-op in WasmGC) and just iterate+push!.
-# Remove when: kwargs compilation handles kwerr stubs correctly (dead code elim)
-
-@overlay WASM_METHOD_TABLE function Base.union!(s::AbstractSet{T}, itr) where T
-    for x in itr
-        push!(s, x)
-    end
-    return s
-end
 
 # ─── String hash Overlay — bit-exact with native Julia ─────────────────────
 # Why: Base's hash(::String,::UInt)/hash(::SubString{String},::UInt) reach
@@ -2106,7 +1683,6 @@ end
     end
     return String(out)
 end
-
 
 
 # ─── Byte-vector membership Overlay ─────────────────────────────────────────
