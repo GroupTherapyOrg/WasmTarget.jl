@@ -13,8 +13,9 @@
 #
 # `gradient`/`jacobian`/`hessian` do NOT compile natively: for a length-N input
 # they build a `Partials{N}` seed matrix through ForwardDiff's chunk/`Config`/
-# `@generated` seeding machinery, which embeds a cyclic `Method` constant WT
-# can't emit ("cannot compile `Method` … object graph references itself").
+# `@generated` seeding machinery, which embeds a `Method` object as a constant
+# ("constant of type Method has undefined fields …; WT never fabricates field
+# values").
 #
 # The elegant fix — reuse the path that already works. Forward-mode partials
 # never cross slots (each output partial k depends only on input slot k, via the
@@ -45,7 +46,7 @@ const WMT = WasmTarget.WASM_METHOD_TABLE
 end
 
 # ∇f : Rⁿ → Rⁿ.  N single-partial passes; gᵢ = ∂f/∂xᵢ.
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.gradient(f::F, x::Vector{Float64}) where {F}
     T = typeof(Tag(f, Float64))
     n = length(x)
@@ -59,7 +60,7 @@ end
 
 # J f : Rⁿ → Rᵐˣⁿ.  Column i is the directional derivative along eᵢ; the first
 # pass also fixes the output length m (= length of f's vector result).
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.jacobian(f::F, x::Vector{Float64}) where {F}
     T = typeof(Tag(f, Float64))
     n = length(x)
@@ -86,7 +87,7 @@ end
 # confusion. Each entry seeds the j-direction in the inner value and the
 # i-direction in the outer partial; the result's outer-partial's inner-partial is
 # ∂²f/∂xᵢ∂xⱼ. O(n²) evaluations — bit-identical to native ForwardDiff.hessian.
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.hessian(f::F, x::Vector{Float64}) where {F}
     n = length(x)
     T1 = typeof(Tag(f, Float64))
@@ -114,7 +115,7 @@ end
 # derivative! — derivative of a VECTOR-valued f: R → Rᵐ into a preallocated
 # buffer. One single-partial seed (the working `derivative` path); partial k of
 # the result is df_k/dx. (Scalar derivative needs no `!`; it already compiles.)
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.derivative!(out::Vector{Float64}, f::F, x::Float64) where {F}
     T = typeof(Tag(f, Float64))
     yd = f(Dual{T}(x, 1.0))                # Vector{Dual{T,Float64,1}}
@@ -124,19 +125,19 @@ end
     return out
 end
 
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.gradient!(out::Vector{Float64}, f::F, x::Vector{Float64}) where {F}
     copyto!(out, ForwardDiff.gradient(f, x))
     return out
 end
 
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.jacobian!(out::Matrix{Float64}, f::F, x::Vector{Float64}) where {F}
     copyto!(out, ForwardDiff.jacobian(f, x))
     return out
 end
 
-# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a cyclic Method constant WT cannot emit; single-partial passes compute the same partials.)
+# parity(quarantine: ForwardDiff's chunked seeding (Chunk{N}, Config, @generated seeds) embeds a Method object as a constant, whose undefined fields WT does not fabricate (measured 2026-09-29: 21 of 27 lane cases reject); single-partial passes compute the same partials.)
 @overlay WMT function ForwardDiff.hessian!(out::Matrix{Float64}, f::F, x::Vector{Float64}) where {F}
     copyto!(out, ForwardDiff.hessian(f, x))
     return out

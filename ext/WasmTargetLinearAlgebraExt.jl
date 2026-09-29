@@ -449,6 +449,20 @@ end
 end
 
 
+# On 1.13 Julia's Matrix(::Diagonal) is Array(D), which reads the wrapper's :diag field
+# directly (Base_compiler.jl:57); on 1.12 Julia's body compiles and runs bit-exact, so the
+# overlay is 1.13's only.
+@static if VERSION >= v"1.13-"
+    # parity(quarantine: on 1.13 Julia's body reads the wrapper's :diag field, and WT's
+    # is_struct_type does not register a struct that subtypes AbstractArray (getfield of the
+    # wrapper is not lowerable; dev/MARCH.md 13.4).)
+    @overlay WasmTarget.WASM_METHOD_TABLE function Base.Matrix(D::LinearAlgebra.Diagonal{Float64,Vector{Float64}})
+        d = D.diag; n = length(d); M = zeros(Float64, n, n)
+        @inbounds for i in 1:n; M[i, i] = d[i]; end
+        M
+    end
+end
+
 # Julia's Matrix of a Symmetric/UpperTriangular/LowerTriangular/Hermitian wrapper and
 # hermitianpart! copy through copyto_axcheck!, whose axes(::Wrapper) reads the wrapper's :data
 # field; WT's is_struct_type does not register a struct that subtypes AbstractArray, so that

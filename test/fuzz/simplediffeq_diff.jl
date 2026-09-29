@@ -88,12 +88,15 @@ for S in _SDE_SOLVERS
                              (sig, 28.0, 2.6666666666666665)), $S(); dt = 0.01).u[end])
 end
 
-# The cases whose native value's last bits are not Julia's portable answer: SimpleEuler's
-# step is `@muladd`, and StaticArrays' muladd over an SVector is a per-element muladd_float,
-# which Julia leaves free to round once or twice (native rounded twice in this solve; the
-# module rounds once, as Base.fma_emulated). Every other case is compared bit-exact.
+# The cases whose native value's last bits are not Julia's portable answer: SimpleEuler's and
+# SimpleTsit5's out-of-place steps are `@muladd` (euler.jl:173, tsit5.jl:303), and StaticArrays'
+# muladd over an SVector is a per-element muladd_float, which Julia leaves free to round once
+# or twice. The module rounds once, as Base.fma_emulated; native's last bits differ from it in
+# these solves (the Euler one on arm64, the Tsit5 one on x86_64). Every other case is compared
+# bit-exact.
 const _SDE_NONPORTABLE = Dict{Function,String}(
     getfield(@__MODULE__, Symbol("_sde_oscS_", :SimpleEuler)) => "muladd SimpleDiffEq SimpleEuler step!",
+    getfield(@__MODULE__, Symbol("_sde_oscS_", :SimpleTsit5)) => "muladd SimpleDiffEq SimpleTsit5 step!",
 )
 
 function run_simplediffeq_tests(; reps::Int = 30)
