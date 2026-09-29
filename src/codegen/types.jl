@@ -49,6 +49,30 @@ wasm_world_bound(host_bound::Integer, host_world::Integer, lower::Bool)::Int64 =
             (host_bound >= host_world ? typemax(Int64) : Int64(0))
 
 """
+    PendingTypes
+
+The types being registered right now: Tarjan's search over the types the field translators
+reach (begin_pending!, finish_pending!; dev/formal/RecGroup.tla). A pending type is known by
+an id at or above PENDING_BASE, which its registry entry holds until its recursion group is
+added; `slots` names those entries so they take the real index.
+parity(quarantine: dart2wasm defines every type first and numbers the section when the module
+is written; a WT function body is bytes when it is finished, so a type's index is fixed when
+the type is added, and a recursion group is found while its types register.)
+"""
+mutable struct PendingTypes
+    stack::Vector{UInt32}                              # pending ids, in the order registered
+    keys::Dict{UInt32, Type}                           # the Julia type each id registers
+    types::Dict{UInt32, CompositeType}                 # a translated type awaiting its group
+    low::Dict{UInt32, UInt32}                          # Tarjan's lowlink per pending id
+    slots::Dict{UInt32, Vector{Tuple{Symbol, Type}}}   # (registry field, key) holding the id
+    next::UInt32
+end
+const PENDING_BASE = 0xC0000000
+# parity(quarantine: see PendingTypes)
+PendingTypes()::PendingTypes = PendingTypes(UInt32[], Dict{UInt32, Type}(), Dict{UInt32, CompositeType}(),
+    Dict{UInt32, UInt32}(), Dict{UInt32, Vector{Tuple{Symbol, Type}}}(), PENDING_BASE)
+
+"""
 Registry for struct and array type mappings within a module.
 
 parity(translator.dart:96 Translator): the translator's per-compile type state — classInfo
@@ -146,6 +170,8 @@ mutable struct TypeRegistry
     has_typevar_func_idx::Union{Nothing, UInt32}
     # 128-bit unsigned division over two i64 limbs (get_u128_divrem_function!, int128.jl)
     u128_divrem_func_idx::Union{Nothing, UInt32}
+    # the types being registered right now (PendingTypes)
+    pending::PendingTypes
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -172,7 +198,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
     nothing,                                            # has_typevar_func_idx
-    nothing                                             # u128_divrem_func_idx
+    nothing,                                            # u128_divrem_func_idx
+    PendingTypes()                                      # types being registered
 )
 
 """
@@ -1508,17 +1535,12 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
         return type_idx
     end
 
-    # The element's storage type: a self-referential element type being registered right now
-    # contributes its reserved recursion-group index; every other element type is the one
-    # translator's answer.
-    local wasm_elem_type = if haskey(_registering_types, elem_type) && _registering_types[elem_type] >= 0
-        ConcreteRef(UInt32(_registering_types[elem_type]), true)
-    else
-        get_concrete_wasm_type(elem_type, mod, registry)
-    end
-    type_idx = add_array_type!(mod, wasm_elem_type, true)  # mutable arrays
-    registry.arrays[elem_type] = type_idx
-    return type_idx
+    # The element's storage type is the one translator's answer; an element type that reaches
+    # this array again finds it pending (finish_pending!).
+    local id = begin_pending!(registry, :arrays, elem_type)
+    registry.arrays[elem_type] = id
+    local wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
+    return finish_pending!(mod, registry, id, ArrayType(FieldType(wasm_elem_type, true)))  # mutable arrays
 end
 
 """

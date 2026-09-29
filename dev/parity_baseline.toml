@@ -139,7 +139,7 @@ R29a_raw_codeinfo_reads = 0
 R29b_code_info_identifier = 0
 
 [metrics]
-L131_every_algorithm_has_its_model = 1
+L131_every_algorithm_has_its_model = 0
 R14_fresh_constant_structs = 10
 R15_constant_data_segments = 0
 R17_unwrapped_value_emissions = 0
@@ -148,7 +148,7 @@ R21_foreigncall_arms = 0
 R27_coercion_bypass = 18
 R30_untyped_returns = 0
 R31_any_typed_fields = 0
-R32_unanchored_definitions = 506
+R32_unanchored_definitions = 498
 R33_unexercised_registry_entries = 12
 R34_silent_catches = 0
 R35_detached_docstrings = 0

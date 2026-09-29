@@ -126,6 +126,12 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   (R30 = 0; C4 closed). The reduce/foldl overlays gave way to Julia's own bodies.
 - A captured variable is typed by every write into its box across the closed world, never by
   a closure body's guess (CaptureType; the guess trapped where Julia answers).
+- Every algorithm has its model (C8 closed): ClassIdSwitch, OperandStack, CaptureType,
+  EgalDispatch, RecGroup. A recursive type registers with its strongly connected component
+  (Tarjan over the translators' references) and the section's recursion groups are computed,
+  so a two-type cycle keeps both field types (placeholder-and-patch erased one to structref).
+- The self-hosting leftovers went: a second serializer, a minimal registry, a test that
+  loaded a deleted directory.
 
 ## Why the archive was consolidated
 

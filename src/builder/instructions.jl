@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_rec_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_type_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -432,8 +432,7 @@ A WebAssembly module builder. Use this to construct modules programmatically.
 parity(pkg/wasm_builder/lib/src/builder/module.dart:24 ModuleBuilder)
 """
 mutable struct WasmModule
-    types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType
-    rec_groups::Vector{Vector{UInt32}}  # Recursive type groups (indices into types)
+    types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType; recursion groups are computed (recursion_groups)
     imports::Vector{WasmImport}   # Imported functions/tables/etc
     functions::Vector{WasmFunction}
     tables::Vector{WasmTable}     # Tables for funcref/externref
@@ -447,7 +446,7 @@ mutable struct WasmModule
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], Vector{UInt32}[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing)
 
 # ============================================================================
 # Module Building API
@@ -508,6 +507,7 @@ end
 Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index.
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
+    _check_refs_defined(mod, ct, length(mod.types))
     ct isa StructType && _validate_struct_subtype!(mod, ct)
     # Check if type already exists (structural deduplication)
     for (i, existing) in enumerate(mod.types)
@@ -566,27 +566,125 @@ function add_array_type!(mod::WasmModule, elem_type::WasmValType, mutable_::Bool
 end
 
 """
-    add_rec_group!(mod, type_indices)
+    type_refs(ct) -> Vector{UInt32}
 
-Mark the given type indices as belonging to the same recursive type group.
-Types in a rec group can reference each other (forward references allowed).
+The type indices a composite type refers to: its concrete reference types and its supertype
+(dart's edges of the type graph).
+parity(pkg/wasm_builder/lib/src/builder/types.dart:85 _RecGroupBuilder._edgesforType)
 """
-function add_rec_group!(mod::WasmModule, type_indices::Vector{UInt32})::Union{Nothing, Vector{Vector{UInt32}}}
-    # Only add if not empty and not already a rec group
-    if !isempty(type_indices)
-        length(unique(type_indices)) == length(type_indices) ||
-            _module_invalid(:add_rec_group, "a type may occur only once in a recursive group")
-        all(i -> Int(i) < length(mod.types), type_indices) ||
-            _module_invalid(:add_rec_group, "recursive group contains an unknown type index")
-        issorted(type_indices) ||
-            _module_invalid(:add_rec_group, "recursive group indices must be in type-section order")
-        all(type_indices[i] + UInt32(1) == type_indices[i + 1] for i in 1:length(type_indices)-1) ||
-            _module_invalid(:add_rec_group, "recursive groups must be contiguous type-section intervals")
-        existing = Set(Iterators.flatten(mod.rec_groups))
-        any(i -> i in existing, type_indices) &&
-            _module_invalid(:add_rec_group, "a type may belong to only one recursive group")
-        push!(mod.rec_groups, type_indices)
+function type_refs(ct::CompositeType)::Vector{UInt32}
+    local refs = UInt32[]
+    local add(vt) = vt isa ConcreteRef && push!(refs, vt.type_idx)
+    if ct isa FuncType
+        foreach(add, ct.params); foreach(add, ct.results)
+    elseif ct isa StructType
+        foreach(f -> add(f.valtype), ct.fields)
+        ct.supertype_idx === nothing || push!(refs, ct.supertype_idx)
+    else
+        add(ct.elem.valtype)
     end
+    return refs
+end
+
+# every type index `ct` refers to is below `limit`: a type is added after what it refers to,
+# or with it in one group (add_type_group!)
+function _check_refs_defined(mod::WasmModule, ct::CompositeType, limit::Integer)::Nothing
+    for r in type_refs(ct)
+        Int(r) < limit ||
+            _module_invalid(:add_type, "type refers to type $r, which is not defined before it or in its recursion group")
+    end
+end
+
+"""
+    add_type_group!(mod, types) -> first index
+
+Add types that refer to one another (a strongly connected component of the type graph) at
+consecutive indices, without structural deduplication: each may refer to any of them and to
+every type defined before them.
+parity(pkg/wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct): the types
+are defined, and their recursion group follows from the graph (recursion_groups).
+"""
+function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
+    local base = length(mod.types)
+    for ct in types
+        _check_refs_defined(mod, ct, base + length(types))
+    end
+    append!(mod.types, types)
+    for ct in types
+        ct isa StructType && _validate_struct_subtype!(mod, ct)
+    end
+    return UInt32(base)
+end
+
+"""
+    recursion_groups(mod) -> Vector{UnitRange{Int}}
+
+The type section's recursion groups, 0-based index ranges in section order: the strongly
+connected components of the type graph. Each must be a contiguous run of indices, and every
+reference out of a group must point to an earlier one; otherwise the section is invalid and
+this refuses it.
+parity(pkg/wasm_builder/lib/src/builder/types.dart:240 _RecGroupBuilder._createAllRecursiveGroups)
+"""
+function recursion_groups(mod::WasmModule)::Vector{UnitRange{Int}}
+    local n = length(mod.types)
+    local refs = [Int[Int(r) for r in type_refs(ct)] for ct in mod.types]
+    for (i, rs) in enumerate(refs), r in rs
+        0 <= r < n || _module_invalid(:type_section, "type $(i - 1) refers to undefined type $r")
+    end
+    # Tarjan's strongly connected components, iterative (a type section can be deep)
+    local num = zeros(Int, n); local low = zeros(Int, n); local onstack = falses(n)
+    local stack = Int[]; local counter = 0
+    local comp = zeros(Int, n)   # component root (0-based) per type
+    for root in 0:n-1
+        num[root + 1] == 0 || continue
+        local work = Tuple{Int,Int}[(root, 1)]
+        while !isempty(work)
+            v, k = work[end]
+            if k == 1
+                counter += 1; num[v + 1] = low[v + 1] = counter
+                push!(stack, v); onstack[v + 1] = true
+            end
+            if k <= length(refs[v + 1])
+                work[end] = (v, k + 1)
+                local w = refs[v + 1][k]
+                if num[w + 1] == 0
+                    push!(work, (w, 1))
+                elseif onstack[w + 1]
+                    low[v + 1] = min(low[v + 1], num[w + 1])
+                end
+                continue
+            end
+            pop!(work)
+            if low[v + 1] == num[v + 1]
+                while true
+                    local w = pop!(stack); onstack[w + 1] = false; comp[w + 1] = v
+                    w == v && break
+                end
+            end
+            isempty(work) || (low[work[end][1] + 1] = min(low[work[end][1] + 1], low[v + 1]))
+        end
+    end
+    local size = Dict{Int,Int}()
+    for c in comp
+        size[c] = get(size, c, 0) + 1
+    end
+    local groups = UnitRange{Int}[]
+    local i = 0
+    while i < n
+        local j = i
+        while j + 1 < n && comp[j + 2] == comp[i + 1]
+            j += 1
+        end
+        size[comp[i + 1]] == j - i + 1 ||
+            _module_invalid(:type_section, "the recursion group of type $i is not a contiguous run of indices")
+        for t in i:j, r in refs[t + 1]
+            (r < i || r <= j) ||
+                _module_invalid(:type_section, "type $t refers forward to type $r outside its recursion group")
+        end
+        push!(groups, i:j)
+        i = j + 1
+    end
+    return groups
 end
 
 """
@@ -954,47 +1052,15 @@ function to_bytes(mod::WasmModule)::Vector{UInt8}
     # Type section
     if !isempty(mod.types)
         write_section!(w, SECTION_TYPE) do section
-            # Build mapping from type index to rec group
-            type_to_group = Dict{UInt32, Int}()
-            for (gi, group) in enumerate(mod.rec_groups)
-                for ti in group
-                    type_to_group[ti] = gi
-                end
-            end
-
-            # Count effective entries: each rec group counts as 1, plus ungrouped types
-            written_groups = Set{Int}()
-            ungrouped_count = 0
-            for (i, _) in enumerate(mod.types)
-                ti = UInt32(i - 1)
-                if haskey(type_to_group, ti)
-                    push!(written_groups, type_to_group[ti])
-                else
-                    ungrouped_count += 1
-                end
-            end
-            entry_count = length(written_groups) + ungrouped_count
-            write_u32!(section, entry_count)
-
-            # Write types, grouping rec groups together
-            written = Set{UInt32}()
-            for (i, ct) in enumerate(mod.types)
-                ti = UInt32(i - 1)
-                ti in written && continue
-
-                if haskey(type_to_group, ti)
-                    # Write the rec group
-                    group = mod.rec_groups[type_to_group[ti]]
+            local groups = recursion_groups(mod)
+            write_u32!(section, length(groups))
+            for g in groups
+                if length(g) > 1
                     write_byte!(section, REC_BYTE)  # 0x4E = rec
-                    write_u32!(section, length(group))
-                    for gti in group
-                        write_composite_type!(section, mod.types[gti + 1])
-                        push!(written, gti)
-                    end
-                else
-                    # Write single type (implicit rec group of 1)
-                    write_composite_type!(section, ct)
-                    push!(written, ti)
+                    write_u32!(section, length(g))
+                end
+                for ti in g
+                    write_composite_type!(section, mod.types[ti + 1])
                 end
             end
         end

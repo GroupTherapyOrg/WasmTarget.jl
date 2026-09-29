@@ -1176,8 +1176,8 @@ _xf("memoryref_unbox", Any[
 # An Array keeps its :ref's element offset (the Array struct's off0 field): Julia's own
 # `_deletebeg!` (not an overlay) and `Base.wrap` store an offset ref, and every reader —
 # indexing, reshape, push!, copy, splatting, `take!` — honours it.
-# A self-referential struct's Vector field is registered in its recursion group, a second
-# Vector layout builder that must carry the offset field too.
+# A self-referential struct's Vector field registers with its recursion group through the one
+# Vector layout builder, which carries the offset field.
 mutable struct _SmMRRec
     value::Int64
     children::Vector{_SmMRRec}
@@ -1195,6 +1195,32 @@ _g("memoryref_array_offset", Any[
     ("deletebeg_vect_copy", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); w = Base.vect(v...)::Vector{Int64}; w[1] * 100 + length(w)), Int64(5)),
     ("deletebeg_splat_sum", (n::Int64) -> (v = collect(1:n); Base._deletebeg!(v, 2); +(v...)), Int64(5)),
     ("iobuffer_grow_take", (n::Int64) -> (io = IOBuffer(); for i in 1:n; write(io, UInt8(i % 256)); end; b = take!(io); length(b) * 1000 + Int64(b[end])), Int64(2000)),
+])
+# Types whose fields reach back to themselves register with their strongly connected component
+# (finish_pending!, dev/formal/RecGroup.tla): a two-type cycle through a type parameter, a
+# three-type cycle, a cycle through a tuple and through an abstract field — each field keeps its
+# exact type (placeholder-and-patch erased one field of a two-type cycle to structref).
+mutable struct _SmRA{T}; b::Union{Nothing,T}; x::Int64; end
+mutable struct _SmRB; a::_SmRA{_SmRB}; y::Int64; end
+mutable struct _SmR3A{T}; next::Union{Nothing,T}; v::Int64; end
+mutable struct _SmR3B{T}; next::Union{Nothing,T}; v::Int64; end
+mutable struct _SmR3C; next::_SmR3A{_SmR3B{_SmR3C}}; v::Int64; end
+mutable struct _SmRT; t::Union{Nothing,Tuple{_SmRT,Int64}}; v::Int64; end
+abstract type _SmRAbs end
+mutable struct _SmRN1 <: _SmRAbs; next::Union{Nothing,_SmRAbs}; v::Int64; end
+mutable struct _SmRN2 <: _SmRAbs; other::_SmRN1; w::Int64; end
+function _sm_rec3(n::Int64)::Int64
+    c = _SmR3C(_SmR3A{_SmR3B{_SmR3C}}(nothing, n), 1)
+    b = _SmR3B{_SmR3C}(c, n + 1)
+    c.next.next = b
+    return c.next.next.next.v * 100 + c.next.v * 10 + b.v
+end
+_g("recursive_types", Any[
+    ("mutual_pair", (n::Int64) -> (a = _SmRA{_SmRB}(nothing, n); b = _SmRB(a, n + 1); a.b = b; a.b.a.x * 10 + a.b.y), Int64(5)),
+    ("three_cycle", _sm_rec3, Int64(4)),
+    ("tuple_cycle", (n::Int64) -> (l = _SmRT(nothing, n); r = _SmRT((l, 2n), 1); t = r.t::Tuple{_SmRT,Int64}; r.v + t[1].v * 10 + t[2] * 100), Int64(3)),
+    ("abstract_cycle", (n::Int64) -> (a = _SmRN1(nothing, n); b = _SmRN2(a, 3); a.next = b; (a.next::_SmRN2).other.v * 10 + (a.next::_SmRN2).w), Int64(7)),
+    ("vector_tree", (n::Int64) -> (t = _SmMRRec(1, [_SmMRRec(n, _SmMRRec[]), _SmMRRec(2n, _SmMRRec[])]); s = t.value; for k in t.children; s += k.value; end; s), Int64(4)),
 ])
 # The storage algebra (dev/formal/StorageRef.tla): a MemoryRef's ptr_or_offset counts in
 # Julia's stride — an element index for an isbits-union element, the inline struct's size

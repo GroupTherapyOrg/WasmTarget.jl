@@ -65,11 +65,29 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.ModuleValidationError MBV.add_tag!(m, structidx)
         @test_throws MBV.ModuleValidationError MBV.add_tag!(m, result_ft)
         @test MBV.add_tag!(m, tag_ft) == 0
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, structidx])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[99])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[tag_ft, result_ft])
-        late = MBV.add_struct_type!(m, MBV.FieldType[])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, late])
+        # a type refers only to types defined before it, or to its own group
+        nxt = UInt32(length(m.types))
+        @test_throws MBV.ModuleValidationError MBV.add_type!(m,
+            MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt, true), true)]))
+        @test_throws MBV.ModuleValidationError MBV.add_type!(m, MBV.ArrayType(MBV.ConcreteRef(UInt32(99), true)))
+        # two types that refer to each other are one group, at consecutive indices
+        a = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt + UInt32(1), true), true)])
+        b = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt, true), true)])
+        @test MBV.add_type_group!(m, MBV.CompositeType[a, b]) == nxt
+        @test (Int(nxt):Int(nxt) + 1) in MBV.recursion_groups(m)
+        @test_throws MBV.ModuleValidationError MBV.add_type_group!(m,
+            MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(99), true), true)])])
+        # a section whose cycle is split by another type, or that refers forward outside a
+        # cycle, has no valid recursion groups
+        split = MBV.WasmModule()
+        push!(split.types, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(2), true), true)]),
+              MBV.StructType(MBV.FieldType[]),
+              MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(0), true), true)]))
+        @test_throws MBV.ModuleValidationError MBV.recursion_groups(split)
+        fwd = MBV.WasmModule()
+        push!(fwd.types, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(1), true), true)]),
+              MBV.StructType(MBV.FieldType[]))
+        @test_throws MBV.ModuleValidationError MBV.recursion_groups(fwd)
     end
 
     @testset "GC struct subtype prefix" begin

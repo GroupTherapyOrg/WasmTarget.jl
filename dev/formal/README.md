@@ -53,7 +53,7 @@ anchor in `src/` has a row.)
 | External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_closure_dispatch_trampoline!` (closures.jl) | ClassIdSwitch |
 | `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | EgalDispatch |
-| Recursive type groups | `register_struct_type!` (structs.jl), `add_rec_group!` (instructions.jl) | — none yet: MARCH 13.4 replaces placeholder-and-patch with dart's define-then-fill; model it with that change |
+| Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
 | SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |

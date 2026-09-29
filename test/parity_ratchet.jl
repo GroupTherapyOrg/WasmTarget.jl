@@ -1868,25 +1868,30 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
+    "L29_recursive_type_groups" => ("the type section's recursion groups are its strongly connected components, computed when it is written and never declared: each a contiguous run of indices, every reference out of a group backward, and a type refers only to types defined before it or in its group; a struct, tuple, Vector wrapper, array or MemoryRef box whose fields reach it again registers pending and is added with its component (finish_pending!, dev/formal/RecGroup.tla), never erased to an abstract ref, patched after a placeholder, or tracked in process-global or task-local registration state (restated 2026-09-28 from the declared, placeholder-and-patch groups)",
         () -> begin
             builder_src = read(joinpath(SRC, "builder", "instructions.jl"), String)
-            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            codegen_src = read(joinpath(CODEGEN, "structs.jl"), String) * read(joinpath(CODEGEN, "types.jl"), String)
             required = [
-                "recursive groups must be contiguous type-section intervals",
-                "recursive group indices must be in type-section order",
-                "sort!(rec_group_types)",
-                "_struct_reg_stack()::Vector{DataType} = get!",
-                "ft === T && return true",
-                "The wrapper's size tuple must precede the contiguous recursive group",
-                "The recursive struct's own superclass must also precede its reserved",
+                "function recursion_groups(mod::WasmModule)::Vector{UnitRange{Int}}",
+                "is not a contiguous run of indices",
+                "refers forward to type",
+                "function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32",
+                "_check_refs_defined(mod, ct, length(mod.types))",
+                "local groups = recursion_groups(mod)",
+                "function finish_pending!(mod::WasmModule, registry::TypeRegistry, id::UInt32, ct::CompositeType)::UInt32",
+                "local id = begin_pending!(registry, :arrays, elem_type)",
+                "local id = begin_pending!(registry, :memoryref_box_idxs, T)",
             ]
-            all_src = builder_src * structs_src
+            forbidden = ["add_rec_group!", "rec_groups", "_registering_types", "is_self_referential_type",
+                         "mod.types[reserved_idx", "_struct_reg_stack", "TaskLocalDict",
+                         "ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"]
+            all_src = builder_src * codegen_src
             count(p -> !occursin(p, all_src), required) +
-                count(p -> occursin(p, all_src),
-                      ["ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"])
+                count(p -> occursin(p, all_src), forbidden) +
+                abs(count("begin_pending!(registry, :structs, T)", codegen_src) - 3)
         end),
-    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel",
+    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel (each registrar records field offset 2 when it records its type pending, finish_pending!; restated 2026-09-28)",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
@@ -1900,8 +1905,9 @@ const LOCKS = [
                 "wasm_fields = object_prefix_fields()",
                 "if T === Core.Box",
                 "StructInfo(T, idx, [:contents], Type[Any], UInt32(1))",
-                "StructInfo(T, type_idx, field_names, field_types, UInt32(2))",
-                "StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))",
+                "Type[fieldtype(T, i) for i in 1:fieldcount(T)], UInt32(2))",
+                "Type[ft isa DataType ? ft : Any for (_, ft) in fixed], UInt32(2))",
+                "Type[Array{elem_type, 1}, size_tuple_type], UInt32(2))",
                 "emit_struct_prefix!(b, ctx.type_registry, struct_type, info)",
                 "ctx.type_registry.structs[object_type].field_offset == 2",
             ]
