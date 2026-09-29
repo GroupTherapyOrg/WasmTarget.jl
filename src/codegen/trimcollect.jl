@@ -175,7 +175,8 @@ end
 """Return explicit `:invoke` MethodInstances missing from a collected world.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}())::Vector{Any}
+                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}();
+                                      reasons::IdDict{Any,String}=IdDict{Any,String}())::Vector{Any}
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
@@ -294,9 +295,69 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
             mi in seen && continue
             push!(seen, mi)
             push!(out, mi)
+            reasons[mi] = _enrollment_text("the call", codeinfos[i - 1], src, k, node)
         end
     end
     return out
+end
+
+"""
+    throw_located_collection_failure(batch, err, bt, compile_one)
+
+Throw a closed-world collection failure, located: the batch's roots are inferred again one at a
+time (`compile_one(mi)`, the failure path only — the success path keeps one batch, so the
+collected order and every module's bytes are unchanged), and the first that fails alone is
+named with why it was enrolled (`batch`'s reasons: the call, dispatch candidate or closure
+body that brought it in, with its statement and source line), its own error and the frames
+it was raised through. When no root fails alone, the batch's roots and the original error
+are reported. L78: a specialization failure aborts the collection, loudly.
+formal(dev/formal/ClosedWorld.tla): a reachable specialization failure ends the run Rejected
+parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+"""
+function throw_located_collection_failure(batch::Vector{Tuple{Any,String}}, err, bt,
+                                          compile_one::Function)::Union{}
+    _named(mi, why) = "inferring $(replace(sprint(show, mi), "MethodInstance for " => "")), enrolled as $why"
+    for (mi, why) in batch
+        try
+            compile_one(mi)
+        catch e
+            throw(WasmInternalError("closed-world collection", 0, "", String[_named(mi, why)], e,
+                                    _raised_frames(catch_backtrace(), :throw_located_collection_failure)))
+        end
+    end
+    throw(WasmInternalError("closed-world collection", 0, "",
+                            String[_named(mi, why) for (mi, why) in batch],
+                            err, _raised_frames(bt, :collect_closed_world)))
+end
+
+# infer one root in a fresh partition, as collect_new_pairs! would (the failure path only)
+# parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+function _compile_root_alone(mi)::Nothing
+    local interp = WasmInterpreter(Base.RefValue(0))
+    local ci = Any[]
+    local wq = CC.CompilationQueue(; interp)
+    local ilq = CC.CompilationQueue(; interp)
+    push!(wq, mi)
+    CC.compile!(ci, wq; invokelatest_queue=ilq, _COMPILE_KW...)
+    CC.compile!(ci, ilq; invokelatest_queue=ilq, _COMPILE_KW...)
+    return nothing
+end
+
+"""
+    _enrollment_text(what, ci, src, idx, node) -> String
+
+Why a MethodInstance entered the closed world: `what` (the call, a dispatch candidate of a
+call, …) of statement `idx` of the host whose CodeInstance is `ci`, with the statement's text
+and innermost source line — the provenance a collection failure prints.
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+"""
+function _enrollment_text(what::String, ci, src::Core.CodeInfo, idx::Int, node::NirNode)::String
+    local host = ci isa Core.CodeInstance ? ci.def : ci
+    host isa Core.MethodInstance || (host = getfield(host, :def))   # an ABIOverride's instance
+    local frames = stmt_frames(src.debuginfo, idx)
+    local loc = isempty(frames) ? "" : " @ " * last(split(first(frames), " @ "))
+    local hosttext = replace(sprint(show, host), "MethodInstance for " => "")
+    return string(what, " `", first(_nir_text(node), 100), "` in ", hosttext, " (statement %", idx, loc, ")")
 end
 
 """
@@ -308,7 +369,8 @@ parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; 
 its front end's whole-program type flow analysis.)
 """
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                         entry_mis::Vector{Any}=Any[])::Vector{Any}
+                                         entry_mis::Vector{Any}=Any[];
+                                         reasons::IdDict{Any,String}=IdDict{Any,String}())::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -479,7 +541,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # tuple followed by getfield. The concrete closure types still inhabit SSA
         # types, so collect from that semantic source as well as explicit :new.
         foreach(s -> observe_callable!(s.julia_type), nir)
-        for s in nir
+        for (sidx, s) in enumerate(nir)
             local node = s.node
             # (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
@@ -542,6 +604,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 if !(cmi in seen)
                     push!(seen, cmi)
                     push!(out, cmi)
+                    reasons[cmi] = _enrollment_text("the dynamic call", ci, src, sidx, node)
                 end
                 continue
             end
@@ -574,6 +637,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 cmi in seen && continue
                 push!(seen, cmi)
                 push!(out, cmi)
+                reasons[cmi] = _enrollment_text("the dispatch candidate for runtime class $(target_type) of",
+                                                ci, src, sidx, node)
             end
         end
     end
@@ -602,6 +667,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             cmi in seen && continue
             push!(seen, cmi)
             push!(out, cmi)
+            reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))"
         end
     end
     return out
@@ -639,6 +705,10 @@ end
 # their candidate compilation discovers transitively.
 # parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 const _DYNAMIC_ROOT_MIS = Base.RefValue{Set{Any}}(Set{Any}())
+# why each MethodInstance of the current collection entered the closed world (collect_closed_world's
+# enrollment reasons), for a failure after collection — declaring a function's signature — to name
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+const _ENROLLMENT_REASONS = Ref(IdDict{Any,String}())
 
 # The conversion-arm allowlist — callable types whose bodies the candidate
 # fixpoint enrolled (threaded collect_closed_world → trim_compile_plan, the same
@@ -776,14 +846,19 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     superseded_invokes = Set{Any}()
     pruned_superseded = 0
     seen_disp = Set{Any}()
+    # why each MethodInstance entered the closed world, for a collection failure to name
+    enrolled_by = IdDict{Any,String}()
+    _ENROLLMENT_REASONS[] = enrolled_by
 
     # Explicit invokes and dynamic-dispatch candidates form ONE reachability
     # problem. Either class can add IR containing edges of the other class, so
     # sequential fixpoints are insufficient. Iterate both collectors together
     # until neither can add a MethodInstance; every collection uses a fresh
     # interpreter/cache partition and only new pairs are merged.
-    function collect_new_pairs!(mis; roots::Union{Nothing,Set{Any}}=nothing)
+    function collect_new_pairs!(mis; roots::Union{Nothing,Set{Any}}=nothing,
+                                why::String="a compilation entry")
         isempty(mis) && return false
+        local batch = Tuple{Any,String}[]   # (resolved root, why it was enrolled)
         fresh_interp = WasmInterpreter(Base.RefValue(0))
         fresh_ci = Any[]
         fresh_wq = CC.CompilationQueue(; interp=fresh_interp)
@@ -823,9 +898,16 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)
             roots === nothing || push!(roots, resolved_mi)
             push!(fresh_wq, resolved_mi)
+            push!(batch, (resolved_mi, get(enrolled_by, root_mi, why)))
+            haskey(enrolled_by, resolved_mi) || (enrolled_by[resolved_mi] = batch[end][2])
         end
-        CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
-        CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
+        try
+            CC.compile!(fresh_ci, fresh_wq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
+            CC.compile!(fresh_ci, fresh_ilq; invokelatest_queue=fresh_ilq, _COMPILE_KW...)
+        catch err
+            err isa WasmInternalError && rethrow()
+            throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)
+        end
         for k in 1:2:length(fresh_ci)
             (fresh_ci[k] isa Core.CodeInstance &&
              fresh_ci[k + 1] isa Core.CodeInfo) || continue
@@ -844,7 +926,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     fma_scanned = Base.IdSet{Any}()
     while true
         changed = collect_new_pairs!(_missing_explicit_invoke_mis(
-            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries)))
+            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by))
 
         if length(superseded_invokes) != pruned_superseded
             # Selector candidates are genuine runtime roots even though their
@@ -868,7 +950,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             pruned_superseded = length(superseded_invokes)
         end
 
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries)
+        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by)
         extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
         union!(_DYNAMIC_ROOT_MIS[], extra)
         for mi in extra
@@ -881,7 +963,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         changed |= collect_new_pairs!(extra)
         fma_mis = Any[mi for mi in _fused_multiply_add_mis(codeinfos, fma_scanned)
                    if !(mi_key(mi) in base_mi_keys)]
-        changed |= collect_new_pairs!(fma_mis; roots=intrinsic_body_roots)
+        changed |= collect_new_pairs!(fma_mis; roots=intrinsic_body_roots,
+                                      why="the Julia body of the fma/muladd intrinsic lowering")
         changed || break
     end
 

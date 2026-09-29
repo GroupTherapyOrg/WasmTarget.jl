@@ -197,3 +197,33 @@ end
     @test err isa WasmTarget.WasmCompileError
     @test err !== nothing && occursin("has no single opcode", sprint(showerror, err))
 end
+
+module DiagCollect
+dyn_eq(x::Int64) = (v = Any[x, 1.5]; v[x > 0 ? 1 : 2] == 1 ? 1 : 0)   # line 3: a dynamic `==`
+end
+
+@testset "diagnostics: a closed-world collection failure names the root and why it was enrolled" begin
+    # the failed batch's roots are inferred again one at a time; the one that fails alone is
+    # named with its enrollment reason, its own error and the frames it was raised through
+    mi_sin = WasmTarget.entry_method_instance(sin, (Float64,))
+    mi_cos = WasmTarget.entry_method_instance(cos, (Float64,))
+    batch = Tuple{Any,String}[(mi_sin, "the call `sin(x)` in f(::Float64) (statement %2 @ a.jl:3)"),
+                              (mi_cos, "the dispatch candidate for runtime class Float64 of `cos(%4)` in g(::Any) (statement %5 @ b.jl:9)")]
+    planted(mi) = mi === mi_cos ? error("planted inference failure") : nothing
+    err = try WasmTarget.throw_located_collection_failure(batch, ErrorException("the batch failed"), Base.backtrace(), planted) catch e; e end
+    @test err isa WasmTarget.WasmInternalError
+    msg = sprint(showerror, err)
+    @test occursin("inferring cos(::Float64), enrolled as the dispatch candidate for runtime class Float64", msg)
+    @test occursin("b.jl:9", msg) && occursin("planted inference failure", msg)
+    @test !isempty(err.stacktrace)
+    # no root fails alone: every root of the batch and the original error
+    err2 = try WasmTarget.throw_located_collection_failure(batch, ErrorException("the batch failed"), Base.backtrace(), mi -> nothing) catch e; e end
+    @test length(err2.frames) == 2 && occursin("the batch failed", sprint(showerror, err2))
+    # real discovery records why: the dynamic `==` enrolls its candidates with its statement's line
+    entry = WasmTarget.entry_method_instance(DiagCollect.dyn_eq, (Int64,))
+    cis = WasmTarget.collect_closed_world(Any[entry])
+    reasons = IdDict{Any,String}()
+    WasmTarget._dynamic_dispatch_candidate_mis(cis, Set{Any}(), Any[entry]; reasons)
+    @test any(r -> occursin("dispatch candidate for runtime class", r) &&
+                   occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(reasons))
+end

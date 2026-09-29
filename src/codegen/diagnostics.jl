@@ -137,6 +137,11 @@ function Base.showerror(io::IO, e::WasmInternalError)
         for (i, f) in enumerate(e.frames)
             print(io, "\n  ", i == 1 ? "in " : " ← ", f)
         end
+    else
+        # no statement (a collection failure): each frame is a located reason
+        for f in e.frames
+            print(io, "\n  ", f)
+        end
     end
     print(io, "\n  cause: ")
     showerror(io, e.cause)

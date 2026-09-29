@@ -569,8 +569,17 @@ function _compile_closed_world_plan(functions::Vector;
                            mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
                            invoke_only = fd_mi in _TRIM_INVOKE_ONLY[])
         # fullstrict: the PLACEHOLDER carries the true signature from birth
-        local _pp, _rr = function_wasm_signature(arg_types, return_type, global_args,
-                                                  mod, type_registry)
+        local _pp, _rr = try
+            function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
+        catch err
+            # located at the function whose signature this is, and why it is in the module
+            (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
+            throw(WasmInternalError(name, 0, "",
+                String["declaring the wasm signature of $(name)($(join(("::" * string(T) for T in arg_types), ", "))) -> $(return_type)",
+                       "enrolled as " * get(_ENROLLMENT_REASONS[], fd_mi,
+                           "a callee Julia's inference reached from an enrolled method (an :invoke edge)")],
+                err, _raised_frames(catch_backtrace(), :_compile_closed_world_plan)))
+        end
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
@@ -763,16 +772,34 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     for bindings in values(root_bindings), (f, arg_types) in bindings.bound_leaves
         push!(external_entries, (f, arg_types))
     end
-    return with_layout_read_memo() do
-        plan, ir_cache = trim_compile_plan(normalized; external_entries)
-        TRIM_IR_CACHE[] = ir_cache
-        try
-            return _compile_closed_world_plan(plan; kwargs...)
-        finally
-            TRIM_IR_CACHE[] = nothing
+    try
+        return with_layout_read_memo() do
+            plan, ir_cache = trim_compile_plan(normalized; external_entries)
+            TRIM_IR_CACHE[] = ir_cache
+            try
+                return _compile_closed_world_plan(plan; kwargs...)
+            finally
+                TRIM_IR_CACHE[] = nothing
+            end
         end
+    catch err
+        # a failure outside any statement — collecting the closed world, registering its
+        # types, building its dispatch tables, declaring its functions — located at the
+        # module's entries and the compiler frames it was raised through. The caller-facing
+        # errors (a rejection, an already-located bug, an invalid module, a misused API)
+        # pass through as they are.
+        (err isa WasmCompileError || err isa WasmInternalError ||
+         err isa ModuleValidationError || err isa ArgumentError) && rethrow()
+        throw(WasmInternalError(_module_entries_label(normalized), 0, "",
+                                String["while planning the module (no statement was being compiled)"],
+                                err, _raised_frames(catch_backtrace(), :_compile_module_trim)))
     end
 end
+
+# the entries a module compiles, for a failure outside any statement to name
+# parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+_module_entries_label(entries::Vector)::String =
+    "module of " * join((string(e[3], "(", join(("::" * string(T) for T in e[2]), ", "), ")") for e in entries), ", ")
 
 """
     compile_module(functions::Vector) -> WasmModule

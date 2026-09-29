@@ -2437,6 +2437,23 @@ const LOCKS = [
                         (runner, "stack_trace: () => new Error()")]
             throws + count(((text, needle),) -> !occursin(needle, text), required)
         end),
+    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: the call, the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
+        () -> begin
+            trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["reasons[mi] = _enrollment_text(\"the call\", codeinfos[i - 1], src, k, node)",
+                        "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
+                        "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
+                        "reasons[cmi] = \"the body of the closure",
+                        "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
+                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by)",
+                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by)"]
+            comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            # a failure outside any statement (planning the module, declaring a signature) is
+            # located too: at the module's entries, or at the function and why it is there
+            required_comp = ["String[\"while planning the module (no statement was being compiled)\"],",
+                             "\"enrolled as \" * get(_ENROLLMENT_REASONS[], fd_mi,"]
+            count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp)
+        end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
     "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
