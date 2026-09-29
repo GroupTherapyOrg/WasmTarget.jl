@@ -3,16 +3,13 @@
 # ============================================================================
 
 """
-    _trace_memmove_ptr(arg, ctx) -> (vector_value, [(is_add, offset_value)...]) | nothing
+    _emit_backing_array!(b, vec, ctx, arr_t) -> b
 
-Walk a pointer SSA chain (bitcast/add_ptr/sub_ptr over
-getfield(vec,:ref)→:ptr_or_offset) back to its backing Vector. Returns
-nothing unless the base is a Vector with 1-byte elements (memmove counts
-bytes; element index == byte offset only for elsize 1).
 Emit the backing wasm ARRAY ref for a walk result: Vector{T} structs read
 field 1 (.ref); Memory{T} values ARE the array. Always cast to `arr_t`.
 Emits typed struct.get/ref.cast directly onto the caller's builder `b`
 (struct.get field 1 = 0xFB 0x02 leb_u(t) leb_u(1); ref.cast null = 0xFB REF_CAST_NULL leb_s(arr_t)).
+parity(quarantine: Julia's Vector is a struct over a Memory; the owner a storage pointer traces to is read as its wasm array.)
 """
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)::InstrBuilder
     vt = infer_value_type(vec, ctx)
@@ -71,6 +68,7 @@ storage-relative offsets) or against NULL or an objectid (`_is_never_a_storage_p
 and a still-`Ptr` value may be returned or passed to a callee. Any other return, aggregate
 store, comparison, or unknown consumer rejects the compilation.
 formal(dev/formal/StoragePointer.tla): a storage pointer this accepts reaches no escaping consumer
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                                              root_ssa::Int; storage_pointer::Bool=false)::Bool
@@ -125,6 +123,7 @@ end
 
 # parity(quarantine: a storage identity comparison reads no element, so the pointer trace admits every element type.)
 struct _EveryEltype end
+# parity(quarantine: as _EveryEltype, above.)
 Base.in(@nospecialize(_), ::_EveryEltype)::Bool = true
 
 # parity(quarantine: Julia stores an isbits struct inline in its Memory; WT stores a reference to
@@ -229,6 +228,7 @@ function _emit_storage_element_index!(b::InstrBuilder, ptr_or_count, backing,
 end
 
 # formal(dev/formal/StoragePointer.tla): the object this names is the only one the pointer can point into
+# parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             eltypes = (UInt8, Int8), allow_ref::Bool = false,
                             through_value_ptr::Bool = true,
@@ -398,6 +398,7 @@ The one per-statement entry: every failure raised below it is located here — a
 diagnostic through record_unsupported! (already attributed), and any OTHER
 exception (the internal tier: a codegen bug) wrapped as WasmInternalError with
 the same statement and inline chain, so nothing surfaces without a site.
+parity(pkg/dart2wasm/lib/code_generator.dart:714 CodeGenerator.translateStatement)
 """
 function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
@@ -409,6 +410,7 @@ function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationC
     end
 end
 
+# parity(pkg/dart2wasm/lib/code_generator.dart:717 Statement.accept)
 function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     rec = ctx.nir[idx]     # THE statement's node — the visitor never re-reads the raw IR
     node = rec.node
@@ -792,7 +794,8 @@ end
 """The field index `setfield!(subject, :name, v)` writes, or `nothing` when this node is
 not such a write. `setfield!` is a Core builtin, so it is always a `:call`; an `:invoke`
 of it cannot exist, and a shape this does not recognize makes the proof FAIL, never
-silently succeed."""
+silently succeed.
+parity(quarantine: Julia's %new may leave a primitive field for its caller to assign; dart's constructor initializes every field, so WT proves each such field assigned before the object is observed, dev/formal/DefiniteInit.tla.)"""
 function _setfield_of_value(node::NirNode, subject::NirNode, T::DataType)::Union{Int,Nothing}
     node isa NirCall || return nothing
     node.callee === Core.setfield! || return nothing
@@ -847,7 +850,8 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
 end
 
 """The collected IR of an `:invoke` target, from the trim collector's cache, keyed by the
-callee FUNCTION OBJECT the node carries and the MethodInstance's argument types."""
+callee FUNCTION OBJECT the node carries and the MethodInstance's argument types.
+parity(quarantine: the callee IR the definite-initialization proof reads, from the closed world's collection; see _setfield_of_value.)"""
 function _cached_invoke_ir(node::NirInvoke)::Union{Nothing, Core.CodeInfo}
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
@@ -872,6 +876,7 @@ have exactly one caller use, as one argument of an explicit invoke whose collect
 is available. A forward must-analysis follows every CFG edge. Reads, calls, returns,
 or escapes of the object are accepted only after all missing fields are definitely set;
 throwing/unreachable paths may terminate before initialization.
+parity(quarantine: the definite-initialization proof for a %new with unassigned primitive fields; see _setfield_of_value.)
 """
 function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
                                                  missing::Set{Int},
@@ -899,7 +904,8 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
 end
 
 """dart visitConstructorInvocation shape (): emits the struct construction
-INTO the caller's builder and returns it — THE implementation."""
+INTO the caller's builder and returns it — THE implementation.
+parity(pkg/dart2wasm/lib/code_generator.dart:1637 CodeGenerator.visitConstructorInvocation)"""
 function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The constructed type was resolved ONCE at the boundary, from whichever operand shape
     # named it (a type literal, a Core.apply_type result's Type{T}, or the constructor's
@@ -1262,6 +1268,7 @@ emit a value that was never produced — a silent absent-value gap, not a wrong
 value, but the same "correct-or-loud" violation. Scan every statement for a
 reference to `ssa_id` and reject unless it is exactly the safe getfield/setfield!
 pattern.
+parity(quarantine: jl_get_current_task answers a phantom value WasmGC has no task for; this proves nothing observes it.)
 """
 function _task_ssa_used_unsafely(ctx::AbstractCompilationContext, ssa_id::Int)::Bool
     _is_safe_rng_access(n) =
@@ -1290,6 +1297,7 @@ end
 # registration text as a structural invariant.
 # ============================================================================
 
+# parity(quarantine: the jl_alloc_genericmemory foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # Extract element type from return type
             # args[2] is like Ref{Memory{Int32}}
@@ -1362,6 +1370,7 @@ function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     return b
 end
 
+# parity(quarantine: the jl_types_equal foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # jl_types_equal(T1, T2) → Int32. Base.Math's pow uses `T === Float16`
             # style checks that lower to this foreigncall. When both args are
@@ -1379,6 +1388,7 @@ function _fc_jl_types_equal!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
     return nothing
 end
 
+# parity(quarantine: the jl_object_id foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
             # assign a non-zero module-local identity on first observation.
@@ -1432,6 +1442,7 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
             return b
 end
 
+# parity(quarantine: the jl_string_to_genericmemory foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # Convert String to Memory{UInt8}
             # In WasmGC, String and Memory{UInt8} both use the same byte array representation
@@ -1448,6 +1459,7 @@ function _fc_jl_string_to_genericmemory!(b::InstrBuilder, node::NirForeignCall, 
             return b
 end
 
+# parity(quarantine: the jl_alloc_string foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_alloc_string(n::UInt64) -> String
             # Allocates a new String of n bytes. In WasmGC, String is array<i32>.
@@ -1466,6 +1478,7 @@ function _fc_jl_alloc_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, c
             return b
 end
 
+# parity(quarantine: the jl_string_ptr foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
@@ -1515,6 +1528,7 @@ function _emit_cstring_extent!(b::InstrBuilder, ptr_arg::NirNode, source::NirNod
     return (arr_local, off_local, len_local)
 end
 
+# parity(quarantine: the strlen foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
@@ -1528,6 +1542,7 @@ function _fc_strlen!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     return nothing
 end
 
+# parity(quarantine: the jl_genericmemory_to_string foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_genericmemory_to_string(memory, n) -> String
             # Creates a String of exactly n bytes from a Memory{UInt8}.
@@ -1572,6 +1587,7 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, 
             return b
 end
 
+# parity(quarantine: the jl_cstr_to_string foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
             traced = _trace_string_ptr(node.operands[1], ctx)
@@ -1602,6 +1618,7 @@ function _fc_jl_cstr_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int,
             return b
 end
 
+# parity(quarantine: the jl_pchar_to_string foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             # jl_pchar_to_string(ptr, n) -> String
             # Creates a String from a char pointer and length. In WasmGC, we trace
@@ -1664,6 +1681,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
             return b
 end
 
+# parity(quarantine: the jl_ptr_to_array_1d foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
             # jl_ptr_to_array_1d(type, ptr, len, own) -> Vector{T}
             # Creates a Vector from a raw pointer. In WasmGC, raw pointers don't exist.
@@ -1714,6 +1732,7 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int
     return nothing
 end
 
+# parity(quarantine: the memchr foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 3 || return nothing
         ptr_arg = node.operands[1]   # Ptr{UInt8} — traces back to string + offset
@@ -1916,6 +1935,7 @@ function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
     return b
 end
 
+# parity(quarantine: the jl_get_current_task foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The Task value is phantom (no bytecode): sound ONLY for rand()'s
     # rngState field pattern — any other consumer rejects loudly.
@@ -1929,6 +1949,7 @@ function _fc_jl_get_current_task!(b::InstrBuilder, node::NirForeignCall, idx::In
     return b
 end
 
+# parity(quarantine: the jl_hrtime foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
         perf_now_idx = ensure_perf_now_import!(ctx.mod)
         call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
@@ -1942,6 +1963,7 @@ function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Ab
 end
 
 
+# parity(quarantine: the jl_genericmemory_copyto foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 5 || return nothing
         local _gmc_mt = infer_value_type(node.operands[1], ctx)
@@ -1969,6 +1991,7 @@ function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx
     return nothing
 end
 
+# parity(quarantine: the jl_type_intersection foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         # P4-stdlib (Random hash_seed): dispatch guards compare
@@ -1987,6 +2010,7 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
     return nothing
 end
 
+# parity(quarantine: the jl_value_ptr foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
         # Internal pointer_from_objref is representable only when its entire use
         # graph stays inside the storage-relative pointer algebra proved above.
@@ -2003,11 +2027,13 @@ function _fc_jl_value_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
         return b
 end
 
+# parity(quarantine: the jl_get_tls_world_age foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     i64_const!(b, Int64(WASM_WORLD_AGE))
     return b
 end
 
+# parity(quarantine: the jl_is_const foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         module_owner = _trace_field_owner(node.operands[1], :module, ctx)
@@ -2021,6 +2047,7 @@ function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
     return nothing
 end
 
+# parity(quarantine: the jl_is_binding_deprecated foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 2 || return nothing
         module_owner = _trace_field_owner(node.operands[1], :module, ctx)
@@ -2033,6 +2060,7 @@ function _fc_jl_is_binding_deprecated!(b::InstrBuilder, node::NirForeignCall, id
     return nothing
 end
 
+# parity(quarantine: the jl_genericmemory_owner foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         # Julia's GenericMemory owner is the memory allocation itself. Memory is
@@ -2042,6 +2070,7 @@ function _fc_jl_genericmemory_owner!(b::InstrBuilder, node::NirForeignCall, idx:
         return b
 end
 
+# parity(quarantine: the jl_stored_inline foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         # datatype_storedinline(T) — pure layout predicate; fold when the
@@ -2054,6 +2083,7 @@ function _fc_jl_stored_inline!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return nothing
 end
 
+# parity(quarantine: the jl_id_start_char foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_start_char missing codepoint"; idx=idx, detail=node)
@@ -2066,6 +2096,7 @@ function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
             return b
 end
 
+# parity(quarantine: the jl_id_char foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
             length(node.operands) >= 1 || record_unsupported!(ctx, :value_stub,
                 "jl_id_char missing codepoint"; idx=idx, detail=node)
@@ -2078,6 +2109,7 @@ function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::A
             return b
 end
 
+# parity(quarantine: the memmove foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     # memmove(dest_ptr, src_ptr, n_bytes) — copy between Memory arrays.
     # Used by take!(IOBuffer) to copy data from IOBuffer's backing Memory to a new String.
@@ -2237,6 +2269,7 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
     return nothing
 end
 
+# parity(quarantine: the jl_module_parent foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
@@ -2246,6 +2279,7 @@ function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
         return b
 end
 
+# parity(quarantine: the jl_module_name foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
@@ -2299,6 +2333,7 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     return b
 end
 
+# parity(quarantine: the utf8proc_charwidth foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
@@ -2310,6 +2345,7 @@ function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int
         return b
 end
 
+# parity(quarantine: the utf8proc_category foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 1 || return nothing
         emit_value!(b, node.operands[1], ctx, I32)
@@ -2352,6 +2388,7 @@ _fc_utf8proc_isupper!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
 _fc_utf8proc_islower!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing} = _emit_unicode_case_predicate!(b, node, ctx, 4)
 # end parity-region
 
+# parity(quarantine: the one registry of foreigncall lowerings, one entry per C symbol Julia's own bodies reach; dart2wasm calls no C runtime.)
 const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
     :jl_alloc_genericmemory => _fc_jl_alloc_genericmemory!,
     :memset => _fc_memset!,
@@ -2398,6 +2435,7 @@ const FOREIGN_LOWERINGS = Dict{Symbol,Function}(
 """
 Compile a foreign call expression — dart visitor shape (): emits INTO the
 caller's builder. Handles patterns like jl_alloc_genericmemory for Vector allocation.
+parity(quarantine: the lowering of a Julia foreigncall through FOREIGN_LOWERINGS; dart2wasm calls no C runtime.)
 """
 function compile_foreigncall!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     # The C symbol was decoded ONCE at the boundary (NirForeignCall.c_symbol) and
@@ -2448,6 +2486,7 @@ _nir_field_name(node::NirNode)::Any = node isa NirLiteral ? node.value : nothing
 Trace a pointerref argument back through add_ptr/sub_ptr to find a jl_string_ptr foreigncall.
 Returns (string_node, index_node) if found, or nothing if not a string pointer pattern.
 The index node is the offset argument to add_ptr (the 1-based codeunit index).
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _trace_string_ptr(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Tuple{NirNode, Nothing}, Tuple{NirNode, NirNode}}
     ptr = ptr_ssa
@@ -2496,6 +2535,7 @@ The typical IR pattern is:
   %vec  = jl_ptr_to_array_1d(Vector{T}, %ptr2, %len, ...)
 
 We trace from %ptr2 back to %data (the Memory reference).
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _trace_ptr_to_data(ptr_val::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     current = ptr_val
@@ -2545,6 +2585,7 @@ IR pattern:
   %144 = memoryrefnew(%142, 1, ...)   — MemoryRef at offset 1
   %159 = getfield(%144, :ptr_or_offset)  — i64.const 0 in WasmGC
   memmove(%159, ...)
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _trace_memmove_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Tuple{NirNode, Nothing}, Tuple{NirNode, NirNode}}
     ptr = ptr_ssa
@@ -2621,6 +2662,7 @@ In WasmGC:
   - jl_string_to_genericmemory → returns the String which IS the array
   - memoryrefnew(base) → the base IS the array
 Returns the node whose emission produces the array ref, or nothing.
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _resolve_memref_to_array(ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     val = ssa
@@ -2663,6 +2705,7 @@ Ryu pattern:
   %raw = bitcast(Ptr{Nothing}, %ptr)       → passed to memmove
 
 Returns the node that produces the Memory/array ref, or nothing.
+parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 """
 function _trace_ptr_to_memory_array(ptr_ssa::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     current = ptr_ssa

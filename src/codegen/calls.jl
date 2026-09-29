@@ -7,6 +7,7 @@
 
 Check if a value (Argument or SSAValue) produces externref on the Wasm stack.
 Used by numeric intrinsic handlers to detect when unboxing is needed.
+parity(quarantine: a JS value WT carries as externref (JSValue, a WasmGlobal); dart's JS interop values are its own classes.)
 """
 function _is_externref_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
     if val isa NirArgument
@@ -42,6 +43,7 @@ end
 
 Allocate (or return cached) a scratch i32 local for typeof struct lookups.
 The local stores the typeId temporarily while the lookup array ref is pushed.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 """
 function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
     if ctx.typeof_scratch_local !== nothing
@@ -66,6 +68,7 @@ end
 
 A fragment that consumes the parent's top `n` stack values DECLARES them
 (seeded from fb's TRACKED stack; append_builder! settles the contract exactly).
+parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
 """
 function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::String, n::Int;
                       narrow_to::Union{Nothing, WasmValType}=nothing,
@@ -111,6 +114,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
     return b
 end
 
+# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                                       signed::Bool, julia_width::Int)::InstrBuilder
     julia_width < 32 || return fb
@@ -133,7 +137,8 @@ end
 # stash the instance in the $current_exn global, then `throw` tag 0 — the same
 # mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
-"""builder-native (THE implementation): build the error struct, stash, throw."""
+"""builder-native (THE implementation): build the error struct, stash, throw.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))::InstrBuilder
     ensure_exception_tag!(ctx.mod)
     exn_global = ensure_exception_global!(ctx.mod)
@@ -146,7 +151,8 @@ function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationCo
     return bld
 end
 
-"""Emit Julia's exact `FieldError(type, field)` through the typed exception tag."""
+"""Emit Julia's exact `FieldError(type, field)` through the typed exception tag.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                             @nospecialize(owner_type), field::Symbol)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
@@ -167,7 +173,8 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     return bld
 end
 
-"""Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot."""
+"""Throw exact `BoundsError((varargs...), i)` for a specialized vararg slot.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                                     arg_types::Tuple, physical_offset::Integer,
                                     index_local::Integer)::InstrBuilder
@@ -261,6 +268,7 @@ end
 # rem_s(typemin, -1) is defined as 0 in wasm — matches Julia — so `check_overflow`
 # is only set for signed div. Stack: [a, b] → [a, b] (operands re-pushed; values
 # must already be narrow-normalised).
+# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool;
                           check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))::InstrBuilder
     lt     = is32 ? I32 : I64
@@ -307,6 +315,7 @@ end
 # Bit width of the Julia integer operand being shifted (8/16/32/64). Falls back to
 # the wasm register width for non-concrete / non-bitsinteger operand types so the
 # guard is a no-op (behaviour unchanged) unless we positively know it's narrow.
+# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _julia_int_width(@nospecialize(T), is32::Bool)::Int64
     if T isa Type && isconcretetype(T) && T <: Base.BitInteger
         return sizeof(T) * 8
@@ -328,6 +337,7 @@ end
 # that junk would shift down into the result. We zero-mask before lshr and
 # sign-extend from julia_width before ashr; lshr also honours the julia_width
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
+# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
                               julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)::InstrBuilder
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
@@ -397,6 +407,7 @@ end
 # guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
 # shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
+# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)::InstrBuilder
     amt = UInt32(allocate_local!(ctx, I64))
     bld = _sub_builder(fb, ctx, "_emit_wrap_shift_amount_saturating!", 1)
@@ -419,6 +430,7 @@ Julia stores Char as UTF-8 bytes in the high positions of a UInt32:
   3-byte '中' (cp=20013): raw=0xE4B8AD00
   4-byte '😀' (cp=128512): raw=0xF09F9880
 Assumes codepoint i32 is on top of the stack. Leaves raw bits i32 on stack.
+parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dart's strings are UTF-16 code units.)
 """
 function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [codepoint:i32] from the stack, pushes [rawbits:i32].
@@ -548,6 +560,7 @@ end
 """
 Emit WASM instructions to convert Julia's raw UInt32 Char bits (on stack) to a codepoint.
 Reverse of emit_char_codepoint_to_rawbits.
+parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dart's strings are UTF-16 code units.)
 """
 function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [rawbits:i32] from the stack, pushes [codepoint:i32].
@@ -675,6 +688,7 @@ _julia_int_width(...) < 32 && (is_func(...) || ...)`, checked before any of
 checked_sadd/ssub/smul_int's own branches). `op` is the ALREADY-DISPATCHED
 CHECKED_OPS key (R19: a data test against the Symbol the registry looked up
 by, not a re-derivation via `is_func`).
+parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
 function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                                        op::Symbol, arg_type, is_32bit::Bool, _nc_tt::Type)::Nothing
@@ -725,6 +739,7 @@ the builder with a fresh stub-only one — exactly as the original inline `fb =
 _ctx_builder(...)` reassignment did (a plain argument can only be appended
 to, not swapped out from under the caller). `op` is the ALREADY-DISPATCHED
 CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
+parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
 function _compile_call_checked_add!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                     op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _cadd_tt::Type)::Nothing
@@ -795,6 +810,7 @@ checked_ssub_int(a, b) -> Tuple{T, Bool}. Signed overflow: ((a ^ b) & (a ^
 result)) has sign bit set. Same `Ref{InstrBuilder}` reassignment need as
 `_compile_call_checked_add!` — see its docstring. `op` is the ALREADY-
 DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via `is_func`.
+parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
 function _compile_call_checked_sub!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                     op::Symbol, is_128bit::Bool, is_32bit::Bool, idx::Int, _csub_tt::Type)::Nothing
@@ -868,6 +884,7 @@ exactly as the original combined `if` guard did); mul goes through the
 pre-existing `_compile_call_checked_mul` unchanged (its is_128bit branch
 stubs on the EXISTING builder, unlike add/sub's fresh-builder discard — a
 pre-existing asymmetry, preserved as-is, not unified).
+parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
 function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
                                 op::Symbol, args, is_128bit::Bool, is_32bit::Bool, arg_type, idx::Int)::WasmValType
@@ -903,6 +920,7 @@ the value to share a type): shl/lshr saturate an oversized i64 amount down to
 i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
 unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
 `_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
+parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 """
 function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext, args, arg_type,
                               is_32bit::Bool, kind::Symbol)::WasmValType
@@ -1047,6 +1065,7 @@ end
 Extracted handler for checked_smul_int / checked_umul_int. `op` is the
 ALREADY-DISPATCHED CHECKED_OPS key — a data test, not a re-derivation via
 `is_func`. Modifies `bytes` in-place.
+parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
 function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, tuple_type::Type)::Nothing
     if is_128bit
@@ -1142,6 +1161,7 @@ Extracted handler for flipsign_int. Modifies `bytes` in-place; returns the
 pushed result's WasmValType (the structref for is_128bit — `struct_rt` was
 already computed here for the locals below, so the caller reuses it instead
 of a second `get_concrete_wasm_type` call; a plain I32/I64 otherwise).
+parity(quarantine: Julia's flipsign_int intrinsic; dart has no counterpart.)
 """
 function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilationContext, is_128bit::Bool, is_32bit::Bool, arg_type)::WasmValType
     # flipsign_int(x, y) returns -x if y < 0, otherwise x
@@ -1261,6 +1281,7 @@ function _getfield_parts(node)::Union{Tuple{NirNode,Any},Nothing}
     return (node.operands[1], nir_const(node.operands[2]))
 end
 
+# parity(quarantine: Julia's reflection over a TypeName's bindings, answered from the closed world's metadata; a dart library is never reflected over at run time.)
 function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     def = _ssa_def(value, ctx)
     if def isa NirPi
@@ -1271,6 +1292,7 @@ function _trace_field_owner(value::NirNode, field::Symbol, ctx::AbstractCompilat
     return nothing
 end
 
+# parity(quarantine: Julia's reflection over a TypeName's bindings, answered from the closed world's metadata; a dart library is never reflected over at run time.)
 function _trace_typename_symbol_owner(value::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, NirNode}
     def = _ssa_def(value, ctx)
     parts = _getfield_parts(def)
@@ -1288,6 +1310,7 @@ function _trace_typename_symbol_owner(value::NirNode, ctx::AbstractCompilationCo
     return nothing
 end
 
+# parity(quarantine: Julia's reflection over a TypeName's bindings, answered from the closed world's metadata; a dart library is never reflected over at run time.)
 function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
                                         name_field::UInt32, singleton_field::UInt32,
                                         ctx::AbstractCompilationContext)::InstrBuilder
@@ -1579,6 +1602,7 @@ function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer):
 end
 
 # abstract heap type `eq` as a ref.test immediate (the s33 encoding of 0x6D)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:501 EqHeapType.serialize)
 const _HEAP_EQ = Int64(-19)
 
 """
@@ -1911,6 +1935,7 @@ end
 
 Extracted handler for isa() type checking.
 Modifies `bytes` in-place.
+parity(pkg/dart2wasm/lib/code_generator.dart:3159 CodeGenerator.visitIsExpression)
 """
 function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
     # isa(value, Type) - check if value is of given type
@@ -2309,6 +2334,7 @@ end
 # call doesn't qualify (caller then falls back to the `unreachable` stub).
 # formal(dev/formal/ClassIdSwitch.tla): the call runs the specialization Julia selects, or
 # traps where Julia has none or the class cannot be told apart.
+# parity(quarantine: WT dispatches a dynamic call inline over the classes that reach it; dart's dynamic dispatcher reads the classId and calls through its dispatch table, dynamic_dispatchers.dart:178 (dev/MARCH.md 13.7).)
 function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
                                      args, call_arg_types, idx::Int)::Union{Nothing, InstrBuilder}
     (ctx.func_registry === nothing || ctx.type_registry.base_struct_idx === nothing) && return nothing
@@ -2445,9 +2471,10 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
 end
 
 """
-Compile a function call expression — dart visitor shape; emits INTO the caller's builder.
-The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
-same discard semantics: arms that clear/replace it re-init; exits merge typed).
+The closed world's answer to Julia's check_world_bounded for a TypeName: its bound range from
+the TypeName's compile-time metadata, or nothing.
+parity(quarantine: Julia's reflection over a TypeName's bindings, answered from the closed
+world's metadata; a dart library is never reflected over at run time.)
 """
 function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompilationContext)::InstrBuilder
     tn_idx = ctx.type_registry.jl_typename_idx
@@ -2470,6 +2497,7 @@ function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompil
     return b
 end
 
+# parity(quarantine: Julia's reflection over a TypeName's bindings, answered from the closed world's metadata; a dart library is never reflected over at run time.)
 function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, owner,
                                       ctx::AbstractCompilationContext)::InstrBuilder
     module_info = ctx.type_registry.structs[Module]
@@ -2497,6 +2525,7 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     return b
 end
 
+# parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
                                 ctx::AbstractCompilationContext; func::Symbol=:typeassert)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
@@ -2519,7 +2548,6 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
     return b
 end
 
-# formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
 """
 The callee's module-qualified name for a diagnostic — the object's own home, so the name
 is the same whichever module the IR reached it through (`getglobal` is `Core.getglobal`
@@ -2529,6 +2557,14 @@ parity(target.dart:719 DiagnosticReporter.report): a located diagnostic names it
 _callee_label(f)::String = f isa GlobalRef ? string(f.mod, ".", f.name) :
     (f isa Function || f isa Core.Builtin) ? string(parentmodule(f), ".", nameof(f)) : string(f)
 
+# formal(dev/formal/ConsultChain.tla): every call key reaches exactly one funnel or a loud reject; a declining funnel emits nothing
+"""
+Compile a function call expression — dart visitor shape; emits INTO the caller's builder.
+The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
+same discard semantics: arms that clear/replace it re-init; exits merge typed). A Julia
+`:call` names a builtin or an intrinsic, lowered as dart lowers its intrinsics.
+parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic)
+"""
 function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_call.frag")
     set_context!(fb, first(_nir_text(node), 80))   # errors name the call
@@ -4182,7 +4218,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     return append_builder!(b, fb)
 end
 
-"""Prove emptiness from Julia IR without inventing a runtime value."""
+"""Prove emptiness from Julia IR without inventing a runtime value.
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)"""
 function _iterable_proven_empty(arg::NirNode, ctx)::Bool
     arg isa NirLiteral && return arg.value isa Tuple && isempty(arg.value)
     arg isa NirSSA || return false
@@ -4205,7 +4242,8 @@ function _iterable_proven_empty(arg::NirNode, ctx)::Bool
     return false
 end
 
-"""Allocate the valid-Julia `_RuntimeComposition{V}` captured context."""
+"""Allocate the valid-Julia `_RuntimeComposition{V}` captured context.
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)"""
 function _emit_runtime_composition_context!(fb::InstrBuilder, container_arg,
                                             container_type::DataType, ctx)::InstrBuilder
     local CT = _RuntimeComposition{container_type}
@@ -4275,7 +4313,8 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
     return nothing
 end
 
-"""Recover the literal values captured in Core.svec for `_apply_iterate` prefixes."""
+"""Recover the literal values captured in Core.svec for `_apply_iterate` prefixes.
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)"""
 function _apply_iterate_svec_values(arg::NirNode, ctx)::Union{Nothing, Vector{Any}}
     def = _ssa_def(arg, ctx)
     def isa NirCall || return nothing
@@ -4283,7 +4322,8 @@ function _apply_iterate_svec_values(arg::NirNode, ctx)::Union{Nothing, Vector{An
     return Any[def.operands...]
 end
 
-"""Lower `Base.vect(prefix..., tail...)` where `tail` is one `Vector{T}`."""
+"""Lower `Base.vect(prefix..., tail...)` where `tail` is one `Vector{T}`.
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)"""
 function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
                                            container_arg, container_type::DataType, ctx)::Union{Nothing, InstrBuilder}
     vec_info = get(ctx.type_registry.structs, container_type, nothing)
@@ -4368,6 +4408,7 @@ end
 """
 Map a resolved known binary function object to its WASM reduce opcode for the given element type.
 Returns nothing if the function is not a known binary reduce operation.
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
 """
 function _get_binary_reduce_opcode(func, elem_type::Type)::Union{UInt8, Nothing}
     local is_add = func === (+) || func === Core.Intrinsics.add_int ||
@@ -4395,6 +4436,7 @@ Emit one reduction over the concatenation of one or more homogeneous vectors.
 The first observed element initializes the accumulator; later elements use the
 operator. An all-empty input throws a real MethodError with Julia's `(f, (), world)`
 payload instead of fabricating an identity value.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 """
 function _emit_apply_method_error!(bld::InstrBuilder, target_value,
                                    ctx::AbstractCompilationContext)::InstrBuilder
@@ -4421,6 +4463,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     return bld
 end
 
+# parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
 function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
                                       container_types::Vector{DataType}, elem_type::Type,
                                       reduce_op::UInt8, target_value, ctx)::Union{Nothing, InstrBuilder}
@@ -4531,6 +4574,7 @@ Builds the result Object struct from `vec`:
     result has no offset field)
 
 Allocates 5 temporary locals: vec_ref, src_arr, len (i32), new_arr, src_off (i32).
+parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
 """
 function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_type::DataType, ctx;
                                    result_type::DataType=container_type)::Union{Nothing, InstrBuilder}
@@ -4605,6 +4649,7 @@ end
 
 
 # Emit a SimpleVector as its actual WasmGC array representation.
+# parity(quarantine: Julia's SimpleVector, a runtime-internal array of values; dart has none.)
 function _emit_svec_values!(b::InstrBuilder, values::AbstractVector{<:NirNode},
                             ctx::AbstractCompilationContext)::InstrBuilder
     info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
@@ -4621,6 +4666,7 @@ end
 
 # Resolve an IR value to a HOST SimpleVector constant when its definition is
 # compile-time evaluable. Consumers may fold length/index operations directly.
+# parity(quarantine: Julia's SimpleVector, a runtime-internal array of values; dart has none.)
 function _try_host_svec(arg::NirNode, ctx::AbstractCompilationContext)::Union{Nothing, Core.SimpleVector}
     st = _ssa_def(arg, ctx)
     if st isa NirCall || st isa NirInvoke
