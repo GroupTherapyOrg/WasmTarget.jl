@@ -941,6 +941,12 @@ _g("immutable_objectid", Any[
     ("vector_from_string", (n::Int64) -> length(Vector{UInt8}(n > 0 ? "hello" : "ab")), Int64(1)),
 ])
 # FOREIGN_LOWERINGS rejects: every program measured to reach these stops at a loud reject.
+# Julia's sort with `lt` over a vector of tuples takes ScratchQuickSort, whose scratch
+# copy is a memmove through cmem.jl:28 that WT rejects (it rejected under the old
+# insertion-sort overlay too).
+_xf("sort_scratch_memmove", Any[
+    ("sort_stable_lt", (n::Int64) -> (v = sort([(2, 1), (1, 2), (2, 3), (1, n)]; lt=(a, b) -> a[1] < b[1]); v[2][2] * 10 + v[4][2]), Int64(4)),
+])
 _xf("pointer_foreigncalls", Any[
     # jl_value_ptr: pointer_from_objref of a Ref rejects "jl_value_ptr escapes
     # storage-relative WasmGC operations" (also the first reject in isgraphemebreak!,
@@ -1232,6 +1238,29 @@ _g("julia_collection_bodies", Any[
     ("set_f64", (n::Int64) -> length(Set([0.0, -0.0, NaN, NaN, Float64(n)])), Int64(2)),
     ("lpad_rpad", (n::Int64) -> ncodeunits(lpad(string(n), 6, "ab")) * 100 + ncodeunits(rpad("x", n, 'é')), Int64(4)),
     ("lpad_negative_int", (n::Int64) -> length(lpad(-n * 7, 5)) + (lpad(-n, 4)[1] == ' ' ? 10 : 0), Int64(3)),
+])
+# Julia's own string and ordering bodies (dev/CHARTER.md C3), at the inputs a re-implementation
+# drifts on: multibyte characters, empty pieces, limits, kwargs, stability, signed zeros.
+_g("julia_string_bodies", Any[
+    ("reverse_unicode", (n::Int64) -> ncodeunits(reverse("aé" * string(n) * "∀")) * 10 + Int64(codepoint(first(reverse("xé")))), Int64(3)),
+    ("titlecase_words", (n::Int64) -> Int64(codepoint(titlecase("hello wörld " * string(n))[7])), Int64(2)),
+    ("replace_pair", (n::Int64) -> ncodeunits(replace("abcabc" * string(n), "b" => "xyz")), Int64(4)),
+    ("split_keepempty", (n::Int64) -> length(split("a,,b," * string(n), ",")) * 10 + length(split("a,,b", ","; keepempty=false)), Int64(5)),
+    ("split_limit", (n::Int64) -> length(split("a b c d", " "; limit=n)), Int64(2)),
+    ("join_delim", (n::Int64) -> ncodeunits(join(["ab", "c", string(n)], ", ")) * 10 + ncodeunits(join(["x", "yz"])), Int64(7)),
+    ("join_ints", (n::Int64) -> ncodeunits(join([1, n, -3], "-")), Int64(12)),
+    ("repr_vector", (n::Int64) -> ncodeunits(repr([1, n, 3])), Int64(20)),
+    ("string_nothing", (n::Int64) -> ncodeunits(string(nothing)) + n, Int64(1)),
+    ("strvec_range", (n::Int64) -> (v = ["a", "bb", "ccc", "d"]; w = v[2:n]; length(w) * 10 + ncodeunits(w[end])), Int64(3)),
+    ("string_substring", (n::Int64) -> (s = "hello, world"; ncodeunits(String(SubString(s, 1, n)))), Int64(5)),
+    ("concat_mixed", (n::Int64) -> ncodeunits("a" * string(n) * 'é' * SubString("xyz", 2)), Int64(4)),
+    ("string_of_type", (n::Int64) -> ncodeunits(string(n > 0 ? Vector{Int64} : Dict{String,Int64})), Int64(1)),
+    ("byte_in_codeunits", (n::Int64) -> (UInt8(n) in codeunits("abc") ? 1 : 0) + (Int8(98) in Int8[97, 98] ? 10 : 0), Int64(99)),
+    ("dict_from_tuple", (n::Int64) -> (d = Dict((1 => 2, n => 4)); length(d) * 10 + d[n]), Int64(3)),
+    ("sort_by_rev", (n::Int64) -> (v = sort([3, -1, n, 2]; by=abs, rev=true); v[1] * 10 + v[end]), Int64(5)),
+    ("sort_signed_zero", (n::Int64) -> (v = sort([0.0, -0.0, Float64(n), -1.0]); (signbit(v[2]) ? 1 : 0) + (signbit(v[3]) ? 10 : 0)), Int64(2)),
+    ("sortperm_rev", (n::Int64) -> (p = sortperm([3, 1, n, 2]; rev=true); p[1] * 10 + p[end]), Int64(4)),
+    ("partialsort_k", (n::Int64) -> partialsort([5, 3, n, 1, 4], 2), Int64(2)),
 ])
 # Types whose fields reach back to themselves register with their strongly connected component
 # (finish_pending!, dev/formal/RecGroup.tla): a two-type cycle through a type parameter, a

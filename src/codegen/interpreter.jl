@@ -37,25 +37,6 @@ end
     return _runtime_composition_apply(c.fs, length(c.fs), x)
 end
 
-# ─── Dict literal-constructor Overlay ───────────────────────────────────────
-# Why: Dict{K,V}(::Tuple{Pair...}) (the `Dict(k=>v, …)` literal) is mis-compiled as
-#      a fieldwise struct.new from the tuple argument (Dict is a hash table, not a
-#      simple struct) → emits invalid wasm (ref where i64 expected). Empty
-#      Dict{K,V}() + setindex! IS supported, so build the Dict via that path.
-# Remove when: codegen compiles the real Dict tuple-constructor body.
-@inline _wasm_dict_insert_pairs!(d::Dict, ::Tuple{})::Dict = d
-@inline function _wasm_dict_insert_pairs!(d::Dict{K,V}, kv::Tuple)::Dict where {K,V}
-    p = first(kv)
-    d[p.first] = p.second
-    return _wasm_dict_insert_pairs!(d, Base.tail(kv))
-end
-
-@overlay WASM_METHOD_TABLE function (::Type{Dict{K,V}})(kv::Tuple) where {K,V}
-    d = Dict{K,V}()
-    _wasm_dict_insert_pairs!(d, kv)
-    return d
-end
-
 # ─── hvcat Overlay (Tuple-element matrices) ─────────────────────────────────
 # A 2-D matrix literal of TUPLE elements — e.g. WasmMakie's RGBA image data
 # `[(r,g,b,a) (r,g,b,a); …]` — lowers to `Base.hvcat((nc,nc,…), tup, tup, …)`,
@@ -85,84 +66,6 @@ end
     return m
 end
 
-# ─── Sort Overlay ──────────────────────────────────────────────────────────
-# Base.sort! dispatches through InsertionSort/MergeSort/By/Lt/Order —
-# deep dispatch chains that produce hundreds of IR statements.
-# Simple insertion sort with full kwarg support.
-
-@overlay WASM_METHOD_TABLE function Base.sort!(v::AbstractVector;
-        lt=isless, by=identity, rev::Bool=false,
-        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
-        order::Base.Order.Ordering=Base.Order.Forward)
-    n = length(v)
-    for i in 2:n
-        key = v[i]
-        j = i - 1
-        while j >= 1
-            should_shift = rev ? lt(by(v[j]), by(key)) : lt(by(key), by(v[j]))
-            !should_shift && break
-            v[j + 1] = v[j]
-            j -= 1
-        end
-        v[j + 1] = key
-    end
-    return v
-end
-
-# `partialsort!` permits arbitrary permutation of its input outside the selected
-# indices. A full stable sort is therefore an exact (if less asymptotically
-# selective) implementation and stays on the same pure-Julia array path.
-@overlay WASM_METHOD_TABLE function Base.partialsort!(v::AbstractVector, k;
-        lt=isless, by=identity, rev::Bool=false,
-        order::Base.Order.Ordering=Base.Order.Forward)
-    sort!(v; lt=lt, by=by, rev=rev, order=order)
-    return v[k]
-end
-
-# ─── sort Overlay (non-mutating) ──────────────────────────────────────────
-# Why: Base.sort uses internal copyto!/getindex with foreigncall(:memmove).
-#      Use our copy overlay + sort! overlay for a clean path.
-#      Kwargs forwarded to sort! — the kwarg dispatch machinery
-#      (_apply_iterate(iterate, Core.tuple, vec) + isa(result, Tuple{}))
-#      is handled by the compiler's _apply_iterate handler (Core.tuple case).
-# Remove when: codegen handles foreigncall(:memmove) or Base.sort IR is simpler
-@overlay WASM_METHOD_TABLE function Base.sort(v::AbstractVector;
-        lt=isless, by=identity, rev::Bool=false,
-        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
-        order::Base.Order.Ordering=Base.Order.Forward)
-    result = copy(v)
-    # SILENT-WRONG FIX: forward ALL comparator kwargs to sort!, not just `rev` — the
-    # previous `sort!(result, rev=rev)` silently dropped `by`/`lt`/`order`, so
-    # `sort(v, by=f)` / `sort(v, lt=cmp)` returned the DEFAULT-`isless` order (the
-    # sort! overlay's body already honors lt/by/rev correctly).
-    sort!(result; lt=lt, by=by, rev=rev, alg=alg, order=order)
-    return result
-end
-
-# ─── sortperm Overlay ──────────────────────────────────────────────────────
-# Why: generic Base.sortperm dispatches through deep Ordering/algorithm chains that WT
-#      mis-compiled to a no-op → it returned the IDENTITY permutation (silent-wrong),
-#      and loud-rejected with kwargs. Stable insertion sort on the index vector, comparing
-#      by v[index], mirroring the sort! overlay. Strict `lt` only → stable (ties keep order).
-@overlay WASM_METHOD_TABLE function Base.sortperm(v::AbstractVector;
-        lt=isless, by=identity, rev::Bool=false,
-        alg::Base.Sort.Algorithm=Base.Sort.InsertionSort,
-        order::Base.Order.Ordering=Base.Order.Forward)
-    n = length(v)
-    p = collect(1:n)
-    for i in 2:n
-        key = p[i]
-        j = i - 1
-        while j >= 1
-            should_shift = rev ? lt(by(v[p[j]]), by(v[key])) : lt(by(v[key]), by(v[p[j]]))
-            !should_shift && break
-            p[j + 1] = p[j]
-            j -= 1
-        end
-        p[j + 1] = key
-    end
-    return p
-end
 
 # ─── String Concatenation Overlays ────────────────────────────────────────
 # Why: Base.*(::String, ::String) calls string() which uses print_to_string/IOBuffer
@@ -323,13 +226,6 @@ end
     return String(bytes)
 end
 
-# Julia's ordinary one-line `repr(::AbstractVector)` is the same rendering as
-# `string(v)`. Keep that relationship as one container-level overlay; concrete
-# supported element types then select their exact pure-Julia `string` renderer,
-# while an unsupported element type continues into normal collection and fails
-# loudly rather than acquiring a hand-picked representation.
-@overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
-
 # Why: `string(::Vector{String})` (PI dither island shows its colour palette via
 #      `_plain_body(colorscheme)`) hits the same array-show trap.
 # How: byte-assemble `["e1", "e2", …]`, quoting each element as show(io, ::String)
@@ -379,59 +275,33 @@ end
     return String(bytes)
 end
 
-# Why: `string(nothing)` / `_plain_body(nothing)` routes through Base's `print`/
-#      `show(::Nothing)` → IOBuffer, trapping (null deref) in WT. (PI PlutoUI island.)
-# How: it's the constant "nothing"; return it directly.
-@overlay WASM_METHOD_TABLE function Base.string(::Nothing)
-    return "nothing"
+# Julia's titlecase writes through an IOBuffer, which takes pointer_from_objref
+# (jl_value_ptr, pointer.jl:302); WT rejects a pointer into an object. This is titlecase's
+# rule over the String's characters (_wasm_titlecase_impl).
+# parity(quarantine: Julia's titlecase writes through an IOBuffer that takes
+# pointer_from_objref, jl_value_ptr; a WT object has no address.)
+@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
+    return _wasm_titlecase_impl(s, strict)
 end
 
-# Why: `v[a:b]` on a Vector{String} (and other ref-element vectors) routes through
-#      similar + copyto!, hitting the same null-Memory bug → null-deref trap. (PI
-#      convolution_1d `(collect([…]))[1:len]`.) isbits-eltype slices use the working
-#      array path and are left untouched (this overlay is String-scoped).
-# How: build the slice element-by-element via push! (a verified-working path for
-#      String vectors). An out-of-range index traps on the element read, matching
-#      Base's BoundsError (the differential oracle treats a native throw as a trap).
-@overlay WASM_METHOD_TABLE function Base.getindex(v::Vector{String}, r::UnitRange{Int})
-    out = String[]
-    i = first(r)
-    stop = last(r)
-    while i <= stop
-        push!(out, v[i])
-        i += 1
-    end
-    return out
+# Julia's repr of a vector runs show_vector, which asks Base.invoke_in_world for
+# _typeinfo_implicit (arrayshow.jl:553); WT does not lower invoke_in_world (R33).
+# parity(quarantine: Julia's show_vector calls Base.invoke_in_world, which WT does not lower.)
+@overlay WASM_METHOD_TABLE Base.repr(v::AbstractVector) = string(v)
+
+# Julia's string(nothing) is print_to_string(nothing), which WT's print_to_string overlay
+# answers with string(first(xs)) — itself — so the call has no end (dev/MARCH.md 13.10). This
+# is Julia's answer; it goes with that overlay.
+# parity(quarantine: WT's print_to_string overlay answers print_to_string(x) with string(x),
+# which is print_to_string(x) for a value with no string method of its own.)
+@overlay WASM_METHOD_TABLE function Base.string(::Nothing)
+    return "nothing"
 end
 
 # ─── String Manipulation Overlays ──────────────────────────────────────────
 # Base versions use SubString, IOBuffer, or deep dispatch chains.
 # All overlays use only: ncodeunits, codeunit, String(UInt8[...]) construction.
 # This is pure Julia that WasmTarget's codegen can handle.
-
-@overlay WASM_METHOD_TABLE function Base.reverse(s::String)
-    # Reverse by CHARACTER, not byte: a naive byte-reverse splits multi-byte UTF-8
-    # codepoints (e.g. the 2-byte 'é'), producing invalid strings whose char count
-    # then differs from the input. Walk from the end; for each char, skip its
-    # continuation bytes (0b10xxxxxx) back to the start byte, then emit that char's
-    # bytes in FORWARD order.
-    n = ncodeunits(s)
-    bytes = UInt8[]
-    i = n
-    while i >= 1
-        j = i
-        while j >= 1 && (codeunit(s, j) & 0xc0) == 0x80
-            j -= 1
-        end
-        k = j
-        while k <= i
-            push!(bytes, codeunit(s, k))
-            k += 1
-        end
-        i = j - 1
-    end
-    return String(bytes)
-end
 
 # NOTE: `uppercase`/`lowercase`(::SubString) is NOT overlaid. The natural overlay
 # (byte-loop reading codeunit(s,i) from the SubString into a fresh String) compiles
@@ -465,10 +335,6 @@ end
         i += 1
     end
     return String(bytes)
-end
-
-@overlay WASM_METHOD_TABLE function Base.titlecase(s::String; wordsep=nothing, strict::Bool=true)
-    return _wasm_titlecase_impl(s, strict)
 end
 
 
@@ -744,139 +610,6 @@ end
 # Remove when: runtime type-subtraction (nonnothingtype/nonmissingtype) compiles,
 #      or the dead-value-across-block-boundary stackifier defect is fixed.
 @overlay WASM_METHOD_TABLE Base.nonnothing_nonmissing_typeinfo(io::IO) = Any
-
-@overlay WASM_METHOD_TABLE function Base.replace(s::String, pair::Pair{String,String})
-    pattern = pair.first
-    replacement = pair.second
-    slen = ncodeunits(s)
-    plen = ncodeunits(pattern)
-    rlen = ncodeunits(replacement)
-    plen == 0 && return s
-
-    bytes = UInt8[]
-    i = 1
-    while i <= slen
-        # Check for pattern match at position i
-        matched = i + plen - 1 <= slen
-        j = 1
-        while j <= plen && matched
-            if codeunit(s, i + j - 1) != codeunit(pattern, j)
-                matched = false
-            end
-            j += 1
-        end
-        if matched
-            # Copy replacement bytes
-            k = 1
-            while k <= rlen
-                push!(bytes, codeunit(replacement, k))
-                k += 1
-            end
-            i += plen
-        else
-            push!(bytes, codeunit(s, i))
-            i += 1
-        end
-    end
-    return String(bytes)
-end
-
-@overlay WASM_METHOD_TABLE function Base.split(s::String, delim::String;
-        limit::Int=0, keepempty::Bool=true)
-    result = String[]
-    slen = ncodeunits(s)
-    dlen = ncodeunits(delim)
-    count = 0
-    start = 1
-
-    while start <= slen
-        if limit > 0 && count >= limit - 1
-            # Last piece: take everything remaining
-            bytes = UInt8[]
-            i = start
-            while i <= slen
-                push!(bytes, codeunit(s, i))
-                i += 1
-            end
-            push!(result, String(bytes))
-            count += 1
-            start = slen + 1
-            break
-        end
-
-        # Search for delimiter starting at `start`
-        pos = 0
-        i = start
-        while i + dlen - 1 <= slen
-            found = true
-            j = 1
-            while j <= dlen
-                if codeunit(s, i + j - 1) != codeunit(delim, j)
-                    found = false
-                    break
-                end
-                j += 1
-            end
-            if found
-                pos = i
-                break
-            end
-            i += 1
-        end
-
-        if pos == 0
-            break  # No more delimiters
-        end
-
-        piece_len = pos - start
-        if piece_len > 0 || keepempty
-            bytes = UInt8[]
-            i = start
-            while i < pos
-                push!(bytes, codeunit(s, i))
-                i += 1
-            end
-            push!(result, String(bytes))
-            count += 1
-        end
-        start = pos + dlen
-    end
-
-    # Remaining piece
-    if start <= slen
-        bytes = UInt8[]
-        i = start
-        while i <= slen
-            push!(bytes, codeunit(s, i))
-            i += 1
-        end
-        push!(result, String(bytes))
-    elseif length(result) == 0 && keepempty
-        push!(result, "")
-    end
-    return result
-end
-
-@overlay WASM_METHOD_TABLE function Base.join(strings, delim::String)
-    result = ""
-    first = true
-    for s in strings
-        if !first
-            result = result * delim
-        end
-        result = result * String(s)
-        first = false
-    end
-    return result
-end
-
-@overlay WASM_METHOD_TABLE function Base.join(strings)
-    result = ""
-    for s in strings
-        result = result * String(s)
-    end
-    return result
-end
 
 # A primitive word reinterpreted as its byte tuple, and back: the word's little-endian
 # byte lanes. Base's generic `_reinterpret` first proves the two packed sizes equal by
@@ -1575,41 +1308,6 @@ end
 @overlay WASM_METHOD_TABLE Base.is_syntactic_operator(s::Symbol) =
     _wt_parser_is_syntactic_operator(String(s))
 
-# ─── String concatenation Overlay ───────────────────────────────────────────
-# Why: Base._string (the Vararg backend of string(...) and String * SubString)
-#      copies bytes through pointer arithmetic over the parts; the compiled
-#      form null-derefs or traps for every multi-part call (gap 284d3e7059cd,
-#      WASMMAKIE W-005 — even string("ab","cd") failed; only the dedicated
-#      String*String path worked). Build bytes via codeunit reads instead.
-
-@overlay WASM_METHOD_TABLE function Base._string(parts::Union{Char, SubString{String}, String, Symbol}...)
-    out = UInt8[]
-    for p in parts
-        if p isa Char
-            u = reinterpret(UInt32, p)
-            nb = u == 0x00000000 ? 1 : (4 - (trailing_zeros(u) >> 3))
-            i = 1
-            while i <= nb
-                push!(out, UInt8((u >> (8 * (4 - i))) & 0xFF))
-                i += 1
-            end
-        elseif p isa String
-            for i in 1:ncodeunits(p)
-                push!(out, codeunit(p, i))
-            end
-        elseif p isa SubString{String}
-            for i in 1:ncodeunits(p)
-                push!(out, codeunit(p, i))
-            end
-        else  # Symbol — represented as a string in WasmGC
-            s = String(p)
-            for i in 1:ncodeunits(s)
-                push!(out, codeunit(s, i))
-            end
-        end
-    end
-    return String(out)
-end
 
 # ─── Type-name rendering Overlays ─────────────────────────────────────────────
 # Why: `string(typeof(x))`, `"$(typeof(x))"`, `show(io, T)` etc. all route through
@@ -1661,53 +1359,7 @@ end
     end
     return out
 end
-@overlay WASM_METHOD_TABLE function Base._string(a::String, b::SubString{String})
-    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
-end
-@overlay WASM_METHOD_TABLE function Base._string(a::SubString{String}, b::String)
-    return String(_wasm_append_str!(_wasm_append_str!(UInt8[], a), b))
-end
-@overlay WASM_METHOD_TABLE function Base._string(a::String, b::Char)
-    return String(_wasm_append_char!(_wasm_append_str!(UInt8[], a), b))
-end
-@overlay WASM_METHOD_TABLE function Base._string(a::Char, b::String)
-    return String(_wasm_append_str!(_wasm_append_char!(UInt8[], a), b))
-end
 
-# String(::SubString) inlines an unsafe_string pointer conversion ("cannot
-# convert NULL to string" guard) that null-derefs in WasmGC — copy bytes.
-@overlay WASM_METHOD_TABLE function Base.String(s::SubString{String})
-    out = UInt8[]
-    for i in 1:ncodeunits(s)
-        push!(out, codeunit(s, i))
-    end
-    return String(out)
-end
-
-
-# ─── Byte-vector membership Overlay ─────────────────────────────────────────
-# Why: in(::Int8/UInt8, ::DenseInt8/DenseUInt8) goes through findfirst whose
-#      fast path is a C memchr foreigncall over the vector's memory; Julia
-#      1.13 inlines it into callers (gap fc7454877290 family). WasmGC has no
-#      raw pointers, so the memchr stubbed to unreachable.
-# Fix: plain loop — same semantics, no pointers. Applies on 1.12 too (the
-#      memchr is present there as well; 1.12's IR shape just didn't surface
-#      it in the fuzz catalogue).
-# Remove when: codegen traces memchr's ptr arg back to the source array.
-
-@overlay WASM_METHOD_TABLE function Base.in(a::UInt8, b::Base.DenseUInt8)
-    for x in b
-        x == a && return true
-    end
-    return false
-end
-
-@overlay WASM_METHOD_TABLE function Base.in(a::Int8, b::Base.DenseInt8)
-    for x in b
-        x == a && return true
-    end
-    return false
-end
 
 # ─── WasmInterpreter ───────────────────────────────────────────────────────
 
