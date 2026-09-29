@@ -139,6 +139,11 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - A constant is interned by `===` (L141): an isequal key gave `(0x01,)` the `(1,)` global and
   Random's hash_seed trapped. The Random and Statistics extensions are gone (L54).
 
+## Phase 13 — layouts by structure (2026-09-29 …)
+
+- A concrete struct is laid out by its fields whatever it subtypes (L142): a Diagonal took the
+  Matrix layout, and a struct's Matrix field the Vector one. Six LinearAlgebra overlays went.
+
 ## Why the archive was consolidated
 
 The original files were valuable while their campaigns were active, but later searches

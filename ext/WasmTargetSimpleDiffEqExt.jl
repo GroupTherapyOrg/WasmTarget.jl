@@ -28,11 +28,8 @@
 #     kwargs NamedTuple (unfoldable). Call `DiffEqBase.__solve` directly — the clean
 #     integrator (time grid + step! loop + build_solution).
 #
-# Plus the `_ARRAY_STRUCT_CARVEOUT` registration: `ODESolution` is `<:AbstractArray`
-# (an AbstractVectorOfArray), so WT's is_struct_type would give it the 2-field array
-# layout and its `.u`/`.t` fields would be unreachable (dynamic getfield). Register
-# the SciML solution/interpolation types to use their REAL fields (SparseArrays
-# pattern).
+# `ODESolution` is `<:AbstractArray` (an AbstractVectorOfArray) and a struct of its
+# fields (.u/.t/.interp/…), laid out by them like every concrete struct.
 module WasmTargetSimpleDiffEqExt
 
 using WasmTarget
@@ -48,13 +45,6 @@ const SB = SciMLBase
 # Fixed-step explicit solvers supported (adaptive SimpleATsit5 diverges — its
 # error-control + interpolation are out of scope, like the LAPACK packed forms).
 const _WT_SOLVERS = Union{SimpleEuler, SimpleRK4, SimpleTsit5, LoopEuler, LoopRK4}
-
-function __init__()
-    # SciML solution/interpolation types are <:AbstractArray but real structs —
-    # register them so their fields (.u/.t/.interp/…) are reachable, not dynamic.
-    push!(WasmTarget._ARRAY_STRUCT_CARVEOUT,
-          :ODESolution, :LinearInterpolation, :DiffEqArray, :VectorOfArray)
-end
 
 # Concrete ODEFunction (out-of-place, AutoSpecialize) — bypass the reflection.
 @inline function _wt_odefunc(f::F) where {F}

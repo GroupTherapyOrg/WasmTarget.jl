@@ -2396,6 +2396,22 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
+    "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
+        () -> begin
+            structs = read(joinpath(CODEGEN, "structs.jl"), String)
+            inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            m = match(r"(?s)\nfunction is_struct_type\(.*?\nend\n", structs)
+            body = m === nothing ? "" : m.match
+            n = m === nothing ? 1 : 0
+            n += count(p -> occursin(p, body), ["name.name", "<: Number", "<: AbstractArray", "CARVEOUT"])
+            n += count_sites(r"_ARRAY_STRUCT_CARVEOUT"; roots=[SRC, joinpath(ROOT, "ext")])
+            # the four routes that register a field's or a signature's Array
+            n += (count(r"register_array_wrapper!\(mod, registry, ft\)", structs) >= 3 ? 0 : 1)
+            n += occursin("register_array_wrapper!(mod, registry, T)", structs) ? 0 : 1
+            n += occursin("_sc_ok = _is_direct_struct_constructor(_sc_tt, mi)", inv) ? 0 : 1
+            n += occursin("fieldcount(_sc_tt) == length(args)", inv) ? 1 : 0
+            n
+        end),
     "L141_constants_intern_by_egal" => ("a constant is interned by `===`, Julia's egal and dart's Constant equality (a dart Constant equals only one of its own class with equal fields, constants.dart:154 constantInfo): every `*constant_globals` map of the TypeRegistry is an IdDict, or a Dict whose key type is one where isequal is `===` (String, Symbol, Core.TypeName). Until 2026-09-29 constant_globals was a Dict{Any} keyed by isequal: the constant `(0x01,)` read the `(1,)` global randperm had made, and Random's own hash_seed trapped on the cast for a negative seed; a same-layout pair such as `(true,)` and `(0x01,)` passed the cast carrying the wrong type (dev/formal/Constants.tla SharedOnlyIfEgal; dev/CHARTER.md C3)",
         () -> begin
             types = read(joinpath(CODEGEN, "types.jl"), String)

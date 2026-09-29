@@ -2,8 +2,8 @@
 # Differential fuzz of StaticArrays — the SVector surface (ext: WasmTargetStaticArraysExt).
 # ============================================================================
 # SVector{N,T} === SArray{Tuple{N},T,1,N} is an NTuple-backed struct, not a heap
-# array. The ext makes WT (a) lay it out as the concrete struct it is (`:SArray`
-# in _ARRAY_STRUCT_CARVEOUT) and (b) infer its construction concretely (overlay
+# array, laid out by its field like every concrete struct. The ext makes WT infer
+# its construction concretely (overlay
 # `construct_type` for already-parameterized SArray → identity, since WT's
 # concrete-eval is off and can't fold the type-level adapt_size/adapt_eltype/
 # typeintersect machinery the way native does).

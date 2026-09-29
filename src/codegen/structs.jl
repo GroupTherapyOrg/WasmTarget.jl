@@ -1,66 +1,57 @@
 """
-Check if a type is a user-defined struct (not a primitive or special type).
-Extensible carve-out: type-NAMES of `<:AbstractArray` (or `<:Number`) structs
-that are REAL multi-field structs and must register with their actual fields
-(not WT's 2-field wasm-array layout). Package extensions populate this — e.g.
-the SciML ext registers `:ODESolution`/interpolation types (an ODESolution
-`<:AbstractArray` whose `.u`/`.t`/… fields would otherwise be unreachable →
-dynamic getfield). Same mechanism as the hardcoded SparseMatrixCSC/Dual
-carve-outs below, but ext-extensible so core stays library-agnostic.
+    is_struct_type(T) -> Bool
+
+Whether `T` is laid out as a struct of its own fields: every concrete struct type is,
+whatever it subtypes — a Diagonal, a UnitRange, a SubArray, a Complex, a Dual — as every dart
+class is a struct of its fields. The exceptions are the types with a dedicated
+representation (`has_dedicated_representation`). Until 2026-09-29 every `AbstractArray` and
+`Number` subtype was excluded by name and a few re-admitted by name (SparseMatrixCSC, Dual,
+and an extension-filled set), so a Diagonal took the Matrix layout `[:ref, :size]` and
+`D.diag` was not lowerable, and a Complex was an erased structref in locals.
+
+parity(class_info.dart:539 _generateFields): a class's struct is its fields.
 """
-const _ARRAY_STRUCT_CARVEOUT = Set{Symbol}()
-
-function is_struct_type(T::Type)::Bool
-    # Ext-registered AbstractArray/Number struct carve-outs (SciML solutions, …).
-    if T isa DataType && T.name.name in _ARRAY_STRUCT_CARVEOUT
-        return isconcretetype(T) && isstructtype(T)
-    end
-    # ForwardDiff.Dual / Partials are real multi-field structs that merely happen
-    # to be `<: Number` / `<: AbstractVector`. Like the SparseMatrixCSC carve-out
-    # below, they must register with their REAL fields (concrete struct refs).
-    # Without this they fall to the `<:Number` / `<:AbstractArray` exclusions and
-    # get the `structref` treatment, which leaves intermediate Dual values typed
-    # `structref` in locals — so building a `Dual[a, b]` array literal (or any
-    # struct.new whose field is a Dual) fails wasm validation
-    # ("expected (ref null T), found structref"). Concrete registration makes the
-    # whole forward-mode AD value path (gradient/Jacobian) type-consistent. Narrow
-    # (two named types) + full-regression-gated — see WasmTargetForwardDiffExt.
-    if T isa DataType && T.name.name in (:Dual, :Partials)
-        return isconcretetype(T) && isstructtype(T)
-    end
-    # Primitive types are not structs
-    T <: Number && return false
-    T === Bool && return false
-    T === Nothing && return false
-    T === Char && return false
-
-    # Struct-backed AbstractArray implementations (SparseMatrixCSC/SparseVector are
-    # real multi-field structs that merely IMPLEMENT the array interface) must
-    # register with their REAL fields, not WT's 2-field wasm-array layout. Carve
-    # them out BEFORE the blanket AbstractArray exclusion below (which is for the
-    # dense Array/Vector types WT maps to wasm arrays). Without this, the 5-field
-    # `:new` that builds a sparse RESULT (sparse*sparse / copy / transpose / …)
-    # mismatches a 2-field registration → compile_new crash. Narrow + verified safe
-    # (field access, nnz, densify, matvec and SparseArrays' own builders compile from its source).
-    if T isa DataType && T.name.name in (:SparseMatrixCSC, :SparseVector, :FixedSparseCSC)
-        return isconcretetype(T) && isstructtype(T)
-    end
-    # Arrays, strings, and symbols have special handling - not user structs
-    T <: AbstractArray && return false
-    T === String && return false
-    T === Symbol && return false
-
-    # Internal Julia types that have pointer fields - not user structs
-    # MemoryRef and GenericMemoryRef are used for array element access
-    if T isa DataType && T.name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
-        return false
-    end
-
-    # Check if it's a concrete struct type
-    return isconcretetype(T) && isstructtype(T) && !(T <: Tuple)
+function is_struct_type(@nospecialize(T))::Bool
+    T isa DataType || return false
+    (isconcretetype(T) && isstructtype(T)) || return false
+    return !has_dedicated_representation(T)
 end
 
-is_struct_type(::Any)::Bool = false
+"""
+    has_dedicated_representation(T::DataType) -> Bool
+
+The concrete struct types WT does not lay out by their fields: a Tuple (register_tuple_type!),
+an Array (the Vector and Matrix wrappers, register_vector_type! / register_matrix_type!), a
+Memory and a MemoryRef (a raw wasm array, and its single-value ref struct), `nothing` (the
+null of its type), and `CodeUnits{UInt8,String}` (the String's byte array itself).
+
+parity(quarantine: Julia's Array, Memory and MemoryRef are structs over runtime-managed
+storage, and CodeUnits of a String is that String's bytes; dart's List and typed-data classes
+are dart classes whose storage its runtime supplies.)
+"""
+function has_dedicated_representation(T::DataType)::Bool
+    return T <: Tuple || T <: Array || T <: Core.GenericMemory || T <: Core.GenericMemoryRef ||
+           T === Nothing ||
+           (T <: Base.CodeUnits && T.parameters[1] === UInt8 && T.parameters[2] === String)
+end
+
+"""
+    register_array_wrapper!(mod, registry, A::DataType) -> StructInfo
+
+The wrapper struct of a concrete Array type: the Vector layout (register_vector_type!) for a
+one-dimensional Array, the Matrix layout (register_matrix_type!, an N-tuple of sizes) for any
+other. Every route that meets an Array — a value, a signature, a struct, tuple or closure
+field — registers it here, so its layout does not depend on which route met it first: a
+struct's Matrix field once registered the Matrix with the Vector layout, and a later
+`%new(Matrix{Float64}, ref, (2, 2))` pushed a size tuple the field did not hold.
+
+parity(quarantine: Julia's Array is a struct over runtime-managed storage whose size tuple's
+length is its rank; dart's List is one-dimensional.)
+"""
+function register_array_wrapper!(mod::WasmModule, registry::TypeRegistry, A::DataType)::StructInfo
+    (A <: Array && isconcretetype(A)) || error("register_array_wrapper!: $A is not a concrete Array type")
+    return A <: Vector ? register_vector_type!(mod, registry, A) : register_matrix_type!(mod, registry, A)
+end
 
 """
 Check if type is a closure (subtype of Function with captured fields).
@@ -101,16 +92,13 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     # Prepend typeId:i32 as field 0 (universal object layout)
     wasm_fields = FieldType[FieldType(I32, false)]  # typeId, immutable
     for ft in field_types
-        if ft <: Vector
-            # Vector{T} is represented as a struct with (array_ref, size_tuple)
-            # Use register_vector_type! to get the struct type
+        if ft <: Array && ft isa DataType && isconcretetype(ft)
+            # an Array is its Vector or Matrix wrapper struct
+            vec_info = register_array_wrapper!(mod, registry, ft)
+            wasm_vt = ConcreteRef(vec_info.wasm_type_idx, true)
+        elseif ft <: Vector
             vec_info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(vec_info.wasm_type_idx, true)
-        elseif ft <: AbstractVector
-            # Other AbstractVector types - use raw array
-            elem_type = eltype(ft)
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
         elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
             # a MemoryRef field holds the ref's single-value struct (mem, off0)
             wasm_vt = memoryref_field_type!(mod, registry, ft)
@@ -387,19 +375,18 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
             # Register as Vector struct type
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
+        elseif ft <: Array && ft isa DataType && isconcretetype(ft)
+            # an Array is its Vector or Matrix wrapper struct, not a raw array
+            info = register_array_wrapper!(mod, registry, ft)
+            wasm_vt = ConcreteRef(info.wasm_type_idx, true)
         elseif ft <: Array && ft isa DataType
-            # Array{T}/Vector{T} is a struct with (ref, size) fields
-            # Register it as a Vector struct type, not a raw array
             info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: AbstractVector && ft isa DataType
-            # Non-Array AbstractVector types (BitVector, etc.) — register as regular struct
+        elseif ft <: AbstractArray && is_struct_type(ft)
+            # an array other than Array is a struct of its fields (BitVector, UnitRange, Diagonal, …)
             info_av = register_struct_type!(mod, registry, ft)
-            if info_av !== nothing
-                wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
-            else
-                wasm_vt = ExternRef  # fallback
-            end
+            info_av === nothing && error("struct field of type $ft has no struct representation")
+            wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
         elseif ft <: AbstractVector && !(ft isa Union)
             # Abstract/UnionAll vector FIELD (e.g. `content::Vector` in
             # Markdown.Admonition). The concrete runtime value is some Vector{T},
@@ -646,9 +633,11 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             # String/Symbol fields need concrete string array type (array<i32>)
             type_idx = get_string_struct_type!(mod, registry)
             ConcreteRef(type_idx, true)
+        elseif ft isa DataType && ft <: Array && isconcretetype(ft)
+            # an Array is its Vector or Matrix wrapper struct, as get_concrete_wasm_type maps it
+            info = register_array_wrapper!(mod, registry, ft)
+            ConcreteRef(info.wasm_type_idx, true)
         elseif ft isa Type && ft <: Array
-            # Vector/Array fields are wrapper structs with (data, size) layout
-            # Use register_vector_type! to match how get_concrete_wasm_type maps Arrays
             info = register_vector_type!(mod, registry, ft)
             ConcreteRef(info.wasm_type_idx, true)
         elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
@@ -776,12 +765,10 @@ function register_reachable_type!(mod::WasmModule, registry::TypeRegistry, @nosp
         get_string_struct_type!(mod, registry)
     elseif is_struct_type(T)
         register_struct_type!(mod, registry, T)
+    elseif T isa DataType && T <: Array && isconcretetype(T)
+        register_array_wrapper!(mod, registry, T)
     elseif T <: Vector
         register_vector_type!(mod, registry, T)
-    elseif T <: AbstractVector && T isa DataType
-        register_struct_type!(mod, registry, T)
-    elseif T <: AbstractArray
-        register_matrix_type!(mod, registry, T)
     end
     return nothing
 end

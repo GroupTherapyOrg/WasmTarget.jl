@@ -2713,31 +2713,15 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 info = register_vector_type!(mod, registry, T)
                 return ConcreteRef(info.wasm_type_idx, true)
             end
-        elseif T <: AbstractVector && T isa DataType && !isconcretetype(T) && !isstructtype(T)
-            # 1.13-rc1: inference widens Memory-backed values to abstract vector supertypes
-            # (DenseVector{UInt8} etc.). Such an SSA can hold EITHER a Vector struct OR a raw
-            # Memory array at runtime — the sound wasm join is AnyRef (both subtype it);
-            # consumers narrow via the existing cast machinery. (register_struct_type! on a
-            # fieldless abstract DataType THROWS "no definite number of fields".)
-            return AnyRef
-        elseif T <: AbstractVector && T isa DataType
-            # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-            if haskey(registry.structs, T)
-                info = registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            else
-                info = register_struct_type!(mod, registry, T)
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
         else
-            # Matrix and higher-dim arrays: register as struct — CONCRETE ones. An
-            # abstract or UnionAll array type (AbstractVector, AbstractArray,
-            # AbstractMatrix{Float64}, …) has no struct of its own; it is the join,
-            # anyref (dart's top type for an unresolved class), narrowed at use by
-            # the cast machinery. (AbstractVector once reached the matrix registrar
-            # here — ndims of the UnionAll is 1 — and every Pi typed by it ref.cast to
-            # a bogus struct: `xs[1]::AbstractVector` trapped "illegal cast".)
-            (T isa DataType && isconcretetype(T)) || return AnyRef
+            # A Matrix or higher-dim Array: the matrix wrapper. Every other concrete array
+            # (SubArray, UnitRange, Diagonal, …) is a struct of its fields, taken by the
+            # is_struct_type arm above. An abstract or UnionAll array type (AbstractVector,
+            # DenseVector{UInt8}, AbstractMatrix{Float64}, …) has no struct of its own: at
+            # run time it holds a Vector struct, a raw Memory array or another array's
+            # struct, so it is the join, anyref (dart's top type for an unresolved class),
+            # narrowed at use by the cast machinery.
+            (T isa DataType && T <: Array && isconcretetype(T)) || return AnyRef
             if haskey(registry.structs, T)
                 info = registry.structs[T]
                 return ConcreteRef(info.wasm_type_idx, true)

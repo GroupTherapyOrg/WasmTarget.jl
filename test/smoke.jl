@@ -13,6 +13,7 @@
 # ============================================================================
 using WasmTarget
 using Random, SHA   # seeded streams, as the full suite loads them
+using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
 include(joinpath(@__DIR__, "utils.jl"))
 
 const FILTER = lowercase.(ARGS)
@@ -1353,6 +1354,35 @@ _g("constant_identity", Any[
     ("tuple_int_byte", _sm_ce_tuples, Int64(-1)),
     ("tuple_int_byte_pos", _sm_ce_tuples, Int64(1)),
     ("tuple_int_float_zero", _sm_ce_floats, Int64(0)),
+])
+# A concrete struct is laid out by its fields whatever it subtypes (dev/MARCH.md 13.4): a
+# Diagonal, a Symmetric, a UnitRange and a Complex are ordinary structs; only the types with a
+# dedicated representation (Array, Memory, MemoryRef, String, Symbol, Tuple, CodeUnits) are
+# not. Until 13.4 an AbstractArray other than a Vector took the Matrix layout
+# ([:ref, :size]) at whichever route registered it first, so `D.diag` was not lowerable, and a
+# Number struct was an erased structref in locals. A constructor call never becomes a bare
+# struct.new that skips a normalizing body (UnitRange's last, a user constructor's abs).
+@noinline _sm_sb_dg(D::Diagonal{Float64,Vector{Float64}})::Float64 = D.diag[end]
+@noinline _sm_sb_sd(S::Symmetric{Float64,Matrix{Float64}})::Float64 = S.data[1, 2] + (S.uplo == 'U' ? 100.0 : 0.0)
+@noinline _sm_sb_cx(n::Int64)::ComplexF64 = ifelse(n > 0, ComplexF64(1, 2), ComplexF64(3, 4))
+@noinline _sm_sb_ceq(a::ComplexF64, b::ComplexF64)::Bool = a === b
+struct _SmSbNorm
+    x::Int64
+    _SmSbNorm(x::Int64) = new(abs(x))
+end
+@noinline _sm_sb_norm(n::Int64)::_SmSbNorm = _SmSbNorm(n)
+_g("struct_by_structure", Any[
+    ("diagonal_field", (n::Int64) -> _sm_sb_dg(Diagonal([1.0, 2.0, Float64(n)])) * 10, Int64(3)),
+    ("symmetric_fields", (n::Int64) -> _sm_sb_sd(Symmetric([1.0 Float64(n); 5.0 4.0])), Int64(7)),
+    ("matrix_of_diagonal", (n::Int64) -> (M = Matrix(Diagonal([1.0, Float64(n)])); M[2, 2] * 10 + M[1, 2] + M[1, 1]), Int64(4)),
+    ("diagonal_size_then_field", (n::Int64) -> (D = Diagonal([1.0, Float64(n)]); size(D, 1) * 100 + Int(_sm_sb_dg(D))), Int64(6)),
+    ("complex_ifelse", (n::Int64) -> (z = _sm_sb_cx(n); Int(real(z)) * 10 + Int(imag(z))), Int64(-1)),
+    ("complex_egal", (n::Int64) -> Int(_sm_sb_ceq(ComplexF64(n, 1), ComplexF64(2, 1))) * 10 + Int(_sm_sb_ceq(ComplexF64(n, 1), ComplexF64(n, 1))), Int64(3)),
+    ("vector_complex", (n::Int64) -> (v = [ComplexF64(i, -2i) for i in 1:n]; s = sum(v); Int(real(s)) * 100 - Int(imag(s))), Int64(4)),
+    ("unitrange_capture", (n::Int64) -> (r = 2:n; f = () -> sum(r) + length(r); f()), Int64(5)),
+    ("diagonal_capture", (n::Int64) -> (D = Diagonal([1.0, Float64(n)]); f = () -> D.diag[2]; Int(f())), Int64(9)),
+    ("unitrange_normalizes", (n::Int64) -> length(UnitRange{Int64}(5, n)) * 10 + last(UnitRange{Int64}(5, n)), Int64(2)),
+    ("constructor_normalizes", (n::Int64) -> _sm_sb_norm(n).x, Int64(-3)),
 ])
 # The storage algebra (dev/formal/StorageRef.tla): a MemoryRef's ptr_or_offset counts in
 # Julia's stride — an element index for an isbits-union element, the inline struct's size

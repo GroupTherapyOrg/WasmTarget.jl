@@ -1,15 +1,20 @@
-"""Prove that a concrete vararg constructor is only `%new(T, fixed..., varargs)`.
+"""Prove that a concrete constructor is only `%new(T, args...)`: its fields are its
+arguments in order (for a vararg constructor, its fixed slots followed by its one
+vararg-tuple slot), so a bare struct.new of the call's operands is its body.
 
 This is deliberately shape-based, not name-based: the optimized Julia body must
-contain exactly one allocation and a return, and its fields must be the method's
-fixed slots followed by its one vararg-tuple slot. The body read is the one the invoke
-calls, keyed by its MethodInstance's specTypes as the collection enrolled it.
+contain exactly one allocation and a return, and nothing else — a constructor that
+normalizes (UnitRange's last, OneTo's max(0, n), Rational's gcd, a user's `new(abs(x))`)
+or converts its arguments is not direct, and is called as the function it is. The body
+read is the one the invoke calls, keyed by its MethodInstance's specTypes as the
+collection enrolled it.
 """
-function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.MethodInstance)::Bool
+function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodInstance)::Bool
     target isa DataType && isconcretetype(target) && isstructtype(target) || return false
-    mi.def isa Method && mi.def.isva || return false
-    fixed_count = mi.def.nargs - 2  # exclude #self# and the vararg tuple slot
-    fieldcount(target) == fixed_count + 1 || return false
+    mi.def isa Method || return false
+    isva = mi.def.isva
+    fixed_count = isva ? mi.def.nargs - 2 : mi.def.nargs - 1  # exclude #self# (and the vararg slot)
+    fieldcount(target) == fixed_count + (isva ? 1 : 0) || return false
     body, _ = get_typed_ir(target, Tuple(mi.specTypes.parameters[2:end]))
     nir = build_nir(body)
     news = NirNew[s.node for s in nir if s.slot == 0 && s.node isa NirNew]
@@ -24,7 +29,7 @@ function _is_direct_vararg_struct_constructor(@nospecialize(target), mi::Core.Me
     for i in 1:fixed_count
         _is_arg(alloc.operands[i], i + 1) || return false
     end
-    return _is_arg(alloc.operands[end], fixed_count + 2)
+    return !isva || _is_arg(alloc.operands[end], fixed_count + 2)
 end
 
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
@@ -824,21 +829,16 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         local _sc_fp = _sc_sig.parameters[1]
                         if _sc_fp isa DataType && _sc_fp <: Type && length(_sc_fp.parameters) >= 1
                             local _sc_tt = _sc_fp.parameters[1]
-                            # Only a FIELD-WISE constructor (one arg per struct field) can be
-                            # lowered to a bare struct.new: it needs exactly `fieldcount` operands.
-                            # A non-field-wise constructor reached via :invoke (e.g.
-                            # `Dict{K,V}(ps::Pair...)`, which allocates keys/vals Memory + hashes)
-                            # has a DIFFERENT arg count, so mapping its args straight onto the
-                            # struct fields emits silently-invalid wasm (`struct.new $Dict` fed 3
-                            # Pairs into 8 fields → "expected i64, found (ref …)"). Guard on
-                            # arg-count == field-count so this branch fires ONLY when it can emit
-                            # valid wasm; the rest loud-reject via the terminal :unsupported_method.
-                            if _sc_tt isa DataType && is_struct_type(_sc_tt) &&
-                               (haskey(ctx.type_registry.structs, _sc_tt) ||
-                                (isconcretetype(_sc_tt) && isstructtype(_sc_tt))) &&
-                               isconcretetype(_sc_tt)
-                                _sc_ok = fieldcount(_sc_tt) == length(args) ||
-                                    _is_direct_vararg_struct_constructor(_sc_tt, mi)
+                            # Only a constructor whose body is proven to be `%new(T, args...)`
+                            # is lowered to a bare struct.new: mapping another constructor's
+                            # arguments onto the fields skips its body — a normalizing
+                            # constructor (UnitRange's last, a user's `new(abs(x))`) would
+                            # answer the unnormalized struct, and a non-field-wise one
+                            # (`Dict{K,V}(ps::Pair...)`) emitted invalid wasm. Any other
+                            # constructor is called as its compiled function, or rejects via
+                            # the terminal :unsupported_method.
+                            if is_struct_type(_sc_tt)
+                                _sc_ok = _is_direct_struct_constructor(_sc_tt, mi)
                             end
                         end
                     end
@@ -855,7 +855,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 local _ctor_sinfo = ctx.type_registry.structs[_ctor_target]
                 if _ctor_sinfo !== nothing
                     emit_struct_prefix!(fb, ctx.type_registry, _ctor_target, _ctor_sinfo)
-                    local _vararg_direct = _is_direct_vararg_struct_constructor(_ctor_target, mi)
+                    local _vararg_direct = (mi.def::Method).isva
                     local _fixed_count = _vararg_direct ? mi.def.nargs - 2 : length(args)
                     # Compile fixed constructor arguments as their exact struct fields.
                     for _fi in 1:_fixed_count

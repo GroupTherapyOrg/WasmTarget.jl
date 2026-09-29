@@ -357,13 +357,14 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
     elseif T <: Tuple
         # Tuples map to WasmGC structs
         return StructRef
-    elseif !(T isa Union) && T <: AbstractArray
-        # Arrays map to WasmGC arrays. P4-stdlib: exclude Unions —
-        # Union{Vector{Float64}, Vector{UInt64}} <: AbstractArray is true and
-        # short-circuited here to ArrayRef, but Vectors are concretely struct
-        # refs; route unions to find_common_wasm_type below (same class as
-        # The exclusion in get_concrete_wasm_type).
+    elseif !(T isa Union) && T <: Core.GenericMemory
+        # a Memory is a raw WasmGC array
         return ArrayRef
+    elseif !(T isa Union) && T <: AbstractArray
+        # An Array is its Vector or Matrix wrapper struct, and any other concrete array its own
+        # struct; an abstract array type holds any of them or a raw Memory array, so it is the
+        # join (get_concrete_wasm_type answers the same). Unions go to resolve_union_type.
+        return (T isa DataType && isconcretetype(T)) ? StructRef : AnyRef
     elseif T <: WasmGlobal
         # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
         return StructRef
