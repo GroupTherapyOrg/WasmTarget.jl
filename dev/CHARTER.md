@@ -43,7 +43,8 @@ with the per-clause status. A clause is never closed by argument.
   `L45` `L47` `L61` `L67` `L68` `L69` `L80` `L91` `L97` `L98` `L100` `L102` `L103` `L104`
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
-  an index) `R20` `R21` `R29a` `R29b` `R37`. Planned: the 2026-09-29 audit's second paths
+  an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
+  `R29b` `R37`. Planned: the 2026-09-29 audit's second paths
   (dev/AUDIT.md B3, P3, E3, E4, E5).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
@@ -81,7 +82,7 @@ with the per-clause status. A clause is never closed by argument.
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `R34` `R39` (no smoke xfail compiles and then answers wrong,
   traps, or returns what the harness cannot read). Planned: dev/MARCH.md 13.1, 13.14, 13.15,
-  and the audit's silent values and unlocated failures (dev/AUDIT.md E1, E7, E8, H1, M7, E9).
+  and the audit's unlocated failures (dev/AUDIT.md M7, E9).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99`.
@@ -106,8 +107,8 @@ with the per-clause status. A clause is never closed by argument.
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
   throw site). Planned: dev/MARCH.md 13.15
-  (an exception's type, every function named); one module shape whose throws carry their
-  stack (dev/AUDIT.md H1, H2); a check that `bash dev/lanes.sh` gives its verdict in minutes.
+  (an exception's type, every function named); a check that `bash dev/lanes.sh` gives its
+  verdict in minutes.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this

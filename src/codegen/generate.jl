@@ -208,34 +208,20 @@ end
 
 
 """
-Generate code for try/catch blocks using WASM exception handling (try_table).
+    ensure_exception_tag!(mod)
 
-Following dart2wasm's approach:
-- Use a single exception tag for all Julia exceptions
-- try_table with catch_all to handle any exception
-- Catch handler gets exception value (if any)
-
-WASM structure:
-  (block \$after_try          ; exit point for try success
-    (block \$catch_handler    ; catch handler block
-      (try_table (catch_all 0) ; branch to \$catch_handler on exception
-        ;; try body code
-        (br 1)                 ; normal exit (skip catch)
-      )
-    )
-    ;; catch handler code
-  )
-  ;; code after try/catch
-Ensure module has exception tag 0 for Julia exceptions (idempotent)
-Also ensures the \$current_exn global exists for exception value stashing.
+The module's one exception tag, index 0 (idempotent), whose payload is the exception and the
+stack trace of its throw, as dart's exception tag carries (exception, stackTrace). A try
+region's `try_table` catches it with `catch 0` (stackified.jl), landing the payload in its
+handler.
 parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 """
 function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
-    # Payload: (anyref exn, externref stackTrace — the throw's JS stack in a module that
-    # records source maps, emit_throw_current!; null otherwise).
+    # Payload: (anyref exn, externref stackTrace — the JS stack at the throw,
+    # emit_throw_current!, or the caught one a rethrow throws again).
     if isempty(mod.tags)
         tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
         add_tag!(mod, add_type!(mod, tag_ft))
@@ -245,30 +231,75 @@ end
 """
     emit_throw_current!(b, mod) -> b
 
-Throw the current exception (the `\$current_exn` global) through the typed tag with its stack
-trace: in a module that records source maps, the JS stack at the throw — the imported
-`wasmtarget.stack_trace` answers `new Error()` (ensure_provenance_imports!) — else null. The
-one throw every raise and rethrow ends in, as dart's throws all capture
-`StackTrace.current` into the tag's stack slot.
+Throw the current exception (the `\$current_exn` global) through the typed tag with the stack
+trace at the throw: the imported `wasmtarget.stack_trace` answers `new Error()`
+(ensure_provenance_imports!, which every module has). The one throw every raise ends in, as
+every dart throw captures `StackTrace.current` into the tag's stack slot
+(`errorThrowWithCurrentStackTrace`).
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 """
 function emit_throw_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     ensure_exception_tag!(mod)
     global_get!(b, ensure_exception_global!(mod), AnyRef)
-    local st = _stack_trace_func_idx(mod)
-    st === nothing ? ref_null!(b, ExternRef) : call!(b, st, WasmValType[], WasmValType[ExternRef])
+    call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])
     throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
     return b
 end
 
 """
+    emit_rethrow_current!(b, mod) -> b
+
+Throw the exception being handled again with the stack its catch received (the
+`\$current_exn` and `\$current_stack` globals), so it still names the site of its first throw,
+as dart's rethrow throws its catch's `stackTraceLocal` and Julia's `rethrow` keeps the
+backtrace.
+parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
+"""
+function emit_rethrow_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    ensure_exception_tag!(mod)
+    global_get!(b, ensure_exception_global!(mod), AnyRef)
+    global_get!(b, ensure_exception_stack_global!(mod), ExternRef)
+    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    return b
+end
+
+"""
+The JavaScript each host import WT's code generator creates is answered with, by
+(module, field): the module's runtime, as dart2wasm generates the JS methods its module imports
+(RuntimeFinalizer.generate). A traced compile's `wasmtarget.trace_*` imports are answered by
+its harness (test/trace_localize.jl), not here. L150 keeps this table and the imports equal.
+parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
+"""
+const HOST_RUNTIME = [
+    ("wasmtarget", "stack_trace", "() => new Error()"),
+    ("env", "perf_now", "() => performance.now()"),
+    ("env", "random_i64", "() => { const a = new BigInt64Array(1); crypto.getRandomValues(a); return a[0]; }"),
+]
+
+"""
+    host_runtime_js() -> String
+
+The import object a host instantiates a WasmTarget module with, as a JavaScript expression:
+every import WT's code generator creates, answered as HOST_RUNTIME says. A host adds its own
+imports beside it (a framework's, or a test's deterministic clock) and may answer one of these
+differently.
+parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
+"""
+function host_runtime_js()::String
+    local mods = unique(first.(HOST_RUNTIME))
+    return "{ " * join(("$(m): { " * join(("$(f): $(js)" for (mm, f, js) in HOST_RUNTIME if mm == m), ", ") * " }"
+                        for m in mods), ", ") * " }"
+end
+
+"""
     ensure_provenance_imports!(mod)
 
-What a module that records source maps adds when it is created, before any definition: the
-import `wasmtarget.stack_trace: () -> externref`, which the host answers with `new Error()`
-(the JS stack at the call: dart2wasm's JavaScriptStack.current), and the export of the
-exception tag as `wasmtarget.exception`, so a host that catches an escaped Julia exception
-can read the stack of its throw from the tag's payload.
+What every module adds when it is created, before any definition: the import
+`wasmtarget.stack_trace: () -> externref`, which the host answers with `new Error()` (the JS
+stack at the call: dart2wasm's JavaScriptStack.current; host_runtime_js), and the export of
+the exception tag as `wasmtarget.exception`, so a host that catches an escaped Julia exception
+can read the stack of its throw from the tag's payload. Recording a source map changes none of
+this: it only maps the code.
 parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
 """
 function ensure_provenance_imports!(mod::WasmModule)::Nothing
@@ -366,27 +397,30 @@ end
 _stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32} = _import_func_idx(mod, "wasmtarget", "stack_trace")
 
 """
-Ensure module has the \$current_exn global for exception value stashing.
-This is a (mut anyref) global initialized to ref.null any.
-Returns the global index. Idempotent — scans existing globals to avoid duplicates.
+    ensure_exception_global!(mod) -> global_idx
+
+The `\$current_exn` global, a (mut anyref) starting null, defined once and found by its name
+(global_named) — never by its type, which another mutable anyref global shares.
 parity(quarantine: WT stashes the thrown Julia value in a global beside the tag's payload, where `catch` and jl_current_exception read it; dart's tag carries its exception and stack trace.)
 """
 function ensure_exception_global!(mod::WasmModule)::UInt32
-    # Check if we already have an anyref mutable global (our exception stash)
-    for (i, g) in enumerate(mod.globals)
-        if g.valtype === AnyRef && g.mutable_
-            return UInt32(i - 1)
-        end
-    end
-    # Create (global (mut anyref) (ref.null any))
-    init = UInt8[0xD0, 0x6E, Opcode.END]  # ref.null any + end
-    push!(mod.globals, WasmGlobalDef(AnyRef, true, init))
-    return UInt32(length(mod.globals) - 1)
+    local g = global_named(mod, "\$current_exn")
+    return g === nothing ? add_global!(mod, AnyRef, true, nothing; name="\$current_exn") : g
 end
 
-# census F7: the dormant stack-trace cluster (ensure_stack_trace_support!/
-# emit_capture_stack!) is DELETED — zero callers since introduction .
-# The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
-# (tags.dart:37 ExceptionTags._defineDartExceptionTag) — census queue item D9.1; the dart
-# source is the reference, not dead scaffolding.
+"""
+    ensure_exception_stack_global!(mod) -> global_idx
+
+The stack trace of the exception being handled, beside `\$current_exn`: a catch stores the
+stack its payload carries, and a rethrow throws it again with the exception, as dart's
+rethrow throws its catch's `stackTraceLocal` (code_generator.dart:2966). A global, not a
+handler local, for the reason `\$current_exn` is one: Julia's `rethrow()` is a call that reads
+the task's exception stack.
+parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C runtime's jl_rethrow, not an expression inside its handler, so the caught exception is read from the \$current_exn global rather than a handler local.)
+"""
+function ensure_exception_stack_global!(mod::WasmModule)::UInt32
+    local g = global_named(mod, "\$current_stack")
+    return g === nothing ? add_global!(mod, ExternRef, true, nothing; name="\$current_stack") : g
+end
+
 

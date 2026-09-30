@@ -1133,8 +1133,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end_block!(b)          # end landing — the catch payload arrives here
                     # Bind the payload to the REGION's OWN local (dart binds each
                     # catch's exception to a named local — nested regions never clobber).
-                    # $current_exn still receives a copy while non-local readers remain.
-                    drop!(b)                                            # stackTrace
+                    # $current_exn still receives a copy while non-local readers remain,
+                    # and $current_stack the stack a rethrow throws again.
+                    global_set!(b, ensure_exception_stack_global!(ctx.mod))   # stackTrace
                     local _rex = get!(ctx.exn_region_locals, Int(r.enter_idx)) do
                         allocate_local!(ctx, AnyRef)
                     end

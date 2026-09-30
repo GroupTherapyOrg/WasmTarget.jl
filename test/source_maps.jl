@@ -13,6 +13,7 @@ _smt_down(x::Int64) = _smt_down(x + 1) + 1          # line 12: the recursive cal
 _smt_entry(x::Int64) = x > 0 ? _smt_down(x) : 0
 _smt_boom(x::Int64) = x > 0 ? error("boom") : x      # line 14: the throw
 _smt_mid(x::Int64) = _smt_boom(x) + 1
+_smt_rethrow(x::Int64) = try; _smt_boom(x) + 1; catch; rethrow(); end
 
 @testset "source maps: the builder records dart's mappings" begin
     m = _SMT.WasmModule()
@@ -95,8 +96,28 @@ end
     @test status === :trap && startswith(msg, "uncaught Julia exception")
     @test occursin(r"_smt_boom @ .*source_maps\.jl:14", msg)
     @test occursin("Base.error @ ", msg)
-    # the import and the tag export exist only in a module compiled with a map
+    # every module has the import and the tag export, source map or not (one module shape)
     plain = _SMT.compile(_smt_mid, (Int64,))
-    @test !occursin("stack_trace", String(copy(plain)))
-    @test occursin("stack_trace", String(copy(bytes))) && occursin("wasmtarget.exception", String(copy(bytes)))
+    @test occursin("stack_trace", String(copy(plain))) && occursin("wasmtarget.exception", String(copy(plain)))
+    # a rethrow throws the stack its catch received, so the escaped exception still names its
+    # first throw (dart's rethrow throws stackTraceLocal; Julia's rethrow keeps the backtrace)
+    rbytes, rjson = _SMT.compile_with_sourcemap(_smt_rethrow, (Int64,))
+    status, msg = WasmRunner.run_wasm_single(rbytes, "_smt_rethrow", "1n"; source_map=rjson)
+    @test status === :trap && startswith(msg, "uncaught Julia exception")
+    @test occursin(r"_smt_boom @ .*source_maps\.jl:14", msg)
+end
+
+# One module shape: recording a source map maps the code and changes none of it. The mapped
+# build is the plain build with the `sourceMappingURL` section after it, so the differential
+# lanes, which run the mapped build to locate a failure, run the module a user gets
+# (dev/AUDIT.md H2; dart's source map option only adds mappings).
+@testset "source maps: the mapped build is the plain build plus its URL section" begin
+    for (f, T) in ((_smt_entry, (Int64,)), (_smt_mid, (Int64,)))
+        plain = WasmTarget.compile(f, T)
+        mapped, _ = WasmTarget.compile_with_sourcemap(f, T; sourcemap_url="m.map")
+        @test length(mapped) > length(plain)
+        @test mapped[1:length(plain)] == plain
+        @test mapped[length(plain) + 1] == 0x00          # a custom section
+        @test occursin("sourceMappingURL", String(mapped[length(plain) + 1:end]))
+    end
 end

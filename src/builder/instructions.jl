@@ -352,6 +352,7 @@ struct WasmGlobalDef
     valtype::WasmValType     # Type of the global
     mutable_::Bool           # Whether the global is mutable
     init::Vector{UInt8}      # Initialization expression (bytecode)
+    name::Union{Nothing,String}   # the name it was defined with (dart GlobalBuilder.globalName)
 end
 
 """
@@ -800,13 +801,17 @@ function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
 end
 
 """
-    add_global!(mod, valtype, mutable, init_value) -> global_idx
+    add_global!(mod, valtype, mutable, init_value; name) -> global_idx
 
-Add a global variable to the module and return its index.
-The init_value should be a constant of the appropriate type.
+Add a global variable to the module and return its index; `name` names it, as dart's
+`define(type, name)` does, so it is found by name (global_named). The init_value should be a
+constant of the appropriate type; a reference global starts null.
 parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
 """
-function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init_value)::UInt32
+function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init_value;
+                     name::Union{Nothing,String}=nothing)::UInt32
+    name === nothing || global_named(mod, name) === nothing ||
+        _module_invalid(:add_global, "a global named $(repr(name)) is already defined")
     # Generate initialization expression
     init = UInt8[]
     if valtype == I32
@@ -825,13 +830,27 @@ function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init
         # externref initialized to null
         push!(init, Opcode.REF_NULL)
         push!(init, 0x6F)  # externref heap type
+    elseif valtype == AnyRef
+        push!(init, Opcode.REF_NULL)
+        push!(init, 0x6E)  # any heap type
     else
         error("Unsupported global type: $valtype")
     end
     push!(init, Opcode.END)
 
-    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init))
+    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init, name))
     return UInt32(length(mod.globals) - 1)
+end
+
+"""
+    global_named(mod, name) -> global_idx | nothing
+
+The global defined with `name`, found by its name and never by its type.
+parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
+"""
+function global_named(mod::WasmModule, name::String)::Union{Nothing,UInt32}
+    local i = findfirst(g -> g.name == name, mod.globals)
+    return i === nothing ? nothing : UInt32(i - 1)
 end
 
 """
@@ -865,7 +884,7 @@ function add_global_ref!(mod::WasmModule, type_idx::Integer, mutable_::Bool, ini
     init = copy(init_expr)
     push!(init, Opcode.END)
 
-    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init))
+    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init, nothing))
     return UInt32(length(mod.globals) - 1)
 end
 

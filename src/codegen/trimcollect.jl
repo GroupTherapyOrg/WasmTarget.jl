@@ -1065,13 +1065,23 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     # `_growend!`/`_growbeg!` closures) is a direct call of a known method: its body is
     # compiled like the invoker's, keyed by the closure type (dart: a closure's target is
     # compiled when the closure is created). Dynamic calls of Base closures stay out.
-    # Each :invoke callee Julia's inference collected is enrolled by its first call site.
+    # Each :invoke callee Julia's inference collected is enrolled by its first call site, and
+    # each atomic modify's operator (`:invoke_modify` names its CodeInstance, which Julia's
+    # queue collects) by its statement.
     invoked_closures = Set{DataType}()
     local enrolled_as = world.enrolled_as
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j + 1] isa Core.CodeInfo) || continue
         for (k, s) in enumerate(build_nir(codeinfos[j + 1]))
             local n = s.node
+            if n isa NirUnsupported && n.kind === :invoke_modify && !isempty(n.operands) &&
+               n.operands[1] isa NirLiteral && n.operands[1].value isa Core.CodeInstance
+                local omi = n.operands[1].value.def
+                (omi isa Core.MethodInstance && !haskey(enrolled_as, omi)) &&
+                    (enrolled_as[omi] = _enrollment_text("the operator of the atomic modify",
+                                                         codeinfos[j], codeinfos[j + 1], k, n))
+                continue
+            end
             (n isa NirInvoke && n.mi isa Core.MethodInstance) || continue
             haskey(enrolled_as, n.mi) ||
                 (enrolled_as[n.mi] = _enrollment_text("the call", codeinfos[j], codeinfos[j + 1], k, n))
@@ -1223,7 +1233,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     for fn in functions
         haskey(enrolled_as, fn[4]) || throw(WasmInternalError(fn[3], 0, "",
             String["planning the closed world: $(fn[3]) was collected with no recorded reason"],
-            ErrorException("no enrollment reason for $(fn[4])"), StackFrame[]))
+            ErrorException("no enrollment reason for $(fn[4])"), Base.StackTraces.StackFrame[]))
     end
     return ClosedWorldPlan(functions, ir_cache, dispatch_candidates, invoke_only,
                            world.callable_types, enrolled_as)

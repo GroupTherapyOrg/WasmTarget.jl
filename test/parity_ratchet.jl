@@ -1397,7 +1397,7 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
-    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import — so host IO imports cannot shift framework-owned function indices: no host-console import exists anywhere in src, and receiver-free println/print/show reject loudly at their statement (no IO bridge exists to configure)",
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import but the runtime's `wasmtarget.stack_trace`, which every module declares before its definitions (L145) — so host IO imports cannot shift framework-owned function indices: no host-console import exists anywhere in src, and receiver-free println/print/show reject loudly at their statement (no IO bridge exists to configure)",
         () -> begin
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
             mbv_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
@@ -1412,7 +1412,7 @@ const LOCKS = [
             forbidden = ["add_io_imports!(", "_invoke_has_explicit_io", "\"io\", \"write_", "fromCharCodeArray"]
             required = ["explicit IO formatting does not activate host-console imports",
                         "compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), \"p\")])",
-                        "@test isempty(compiled.imports)"]
+                        "@test [(i.module_name, i.field_name) for i in compiled.imports] == [(\"wasmtarget\", \"stack_trace\")]"]
             # the receiver-free rejection, pinned where it is exercised (the reject is
             # Julia's own console write, located at its statement)
             diag_src = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
@@ -2463,17 +2463,20 @@ const LOCKS = [
                 count(p -> occursin(p, all_src), forbidden) +
                 isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
-    "L145_a_throw_carries_its_stack" => ("every Julia throw and rethrow ends in the one emitter, emit_throw_current! (generate.jl), as dart's throws all capture StackTrace.current into the exception tag's stack slot (code_generator.dart:2955 visitThrow, js_helper.dart:857 JavaScriptStack.current): no other codegen site emits `throw`; in a module compiled with a source map the slot holds the JS stack at the throw (the imported wasmtarget.stack_trace, ensure_provenance_imports!, which also exports the tag), null otherwise; and the differential runner reads an escaped exception's stack from the tag's payload and names its frames through the map. Until 2026-09-29 twelve sites each pushed a null stack, and an uncaught exception printed `[object WebAssembly.Exception]` (test/source_maps.jl; dev/CHARTER.md C10)",
+    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its catch received, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly two throw sites, emit_throw_current!, which captures the JS stack through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and emit_rethrow_current!, which throws `\$current_stack` beside `\$current_exn`, stored by the catch landing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw. Until 2026-09-29 only a source-mapped module captured a stack, and a rethrow captured a fresh one (dev/AUDIT.md H1; dev/CHARTER.md C10)",
         () -> begin
-            throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN], exclude_files=["generate.jl"])
-            gen = read(joinpath(CODEGEN, "generate.jl"), String)
-            runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
-            required = [(gen, "st === nothing ? ref_null!(b, ExternRef) : call!(b, st, WasmValType[], WasmValType[ExternRef])"),
-                        (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
-                        (read(joinpath(CODEGEN, "compile.jl"), String), "ensure_provenance_imports!(mod)"),
-                        (runner, "const st = e.getArg(tag, 1);"),
-                        (runner, "stack_trace: () => new Error()")]
-            throws + count(((text, needle),) -> !occursin(needle, text), required)
+            local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
+            local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])"),
+                              (gen, "global_get!(b, ensure_exception_stack_global!(mod), ExternRef)"),
+                              (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
+                              (read(joinpath(CODEGEN, "stackified.jl"), String), "global_set!(b, ensure_exception_stack_global!(ctx.mod))"),
+                              (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    source_map_url === nothing"),
+                              (read(joinpath(CODEGEN, "compile.jl"), String), "    emit_rethrow_current!(b, mod)"),
+                              (runner, "const st = e.getArg(tag, 1);"),
+                              (runner, "    \$HOST_RUNTIME_MERGE_JS")]
+            abs(throws - 2) + count(((text, needle),) -> !occursin(needle, text), required)
         end),
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: the call, the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
@@ -2516,6 +2519,20 @@ const LOCKS = [
     "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context: dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl) (dev/CHARTER.md C2)",
         () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b";
                           roots=[joinpath(SRC, "builder")])),
+    "L150_every_host_import_has_its_runtime" => ("every host import WT's code generator creates (a literal `add_import!(mod, \"<module>\", \"<field>\"` in src) is answered by HOST_RUNTIME (generate.jl), and HOST_RUNTIME answers none that no code creates: a module's imports and its runtime are one list, as dart2wasm generates its runtime's JS methods from what it translated (runtime_generator.dart:128); a traced compile's `wasmtarget.trace_*` imports are its harness's (dev/CHARTER.md C1)",
+        () -> begin
+            local created = Set{Tuple{String,String}}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"add_import!\(mod, \"(\w+)\", \"(\w+)\"", read(joinpath(dir, f), String))
+                    startswith(m.captures[2], "trace_") || push!(created, (m.captures[1], m.captures[2]))
+                end
+            end
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local answered = Set{Tuple{String,String}}((m.captures[1], m.captures[2])
+                                 for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", \"", gen))
+            length(symdiff(created, answered))
+        end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")

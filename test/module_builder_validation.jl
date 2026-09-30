@@ -212,11 +212,24 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test MBV._binaryen_worker_count(false) === nothing
     end
 
+    @testset "the exception global is found by its name, never by its type" begin
+        # a framework's own mutable anyref global was once taken for `\$current_exn` (the
+        # first mutable anyref global), so every throw wrote into it (dev/AUDIT.md N1)
+        m = MBV.WasmModule()
+        theirs = MBV.add_global!(m, MBV.AnyRef, true, nothing)
+        exn = MBV.ensure_exception_global!(m)
+        @test exn != theirs && m.globals[Int(exn) + 1].name == "\$current_exn"
+        @test MBV.ensure_exception_global!(m) == exn
+        @test MBV.ensure_exception_stack_global!(m) ∉ (theirs, exn)
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.AnyRef, true, nothing; name="\$current_exn")
+    end
+
     @testset "explicit IO formatting does not activate host-console imports" begin
         # `print(io, ...)` is an ordinary compiled formatting call: Julia's own body
-        # compiles and the module declares no host-console import.
+        # compiles and the module declares no host-console import — only the runtime import
+        # every module has
         compiled = MBV.compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), "p")])
-        @test isempty(compiled.imports)
+        @test [(i.module_name, i.field_name) for i in compiled.imports] == [("wasmtarget", "stack_trace")]
     end
 
     @testset "closure roots use declared global substitutions" begin
@@ -248,7 +261,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         mktempdir() do dir
             wasm = joinpath(dir, "void-root.wasm")
             write(wasm, MBV.to_bytes(void_module))
-            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1])).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
+            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js())).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
             proc = run(ignorestatus(`node -e $probe $wasm`))
             @test proc.exitcode == 0
         end
@@ -298,7 +311,13 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             root_bindings=Dict("caller" => linked))
         @test linked_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 
+        # a framework's module declares WT's runtime imports before its own definitions
+        late = MBV.WasmModule()
+        MBV.add_function!(late, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        @test_throws ArgumentError MBV.compile_multi(Any[(constant_root, (Int64,), "late")];
+            existing_module=late, root_bindings=Dict("late" => constant_bindings))
         entry_module = MBV.WasmModule()
+        MBV.ensure_provenance_imports!(entry_module)
         entry_idx = MBV.add_function!(entry_module, MBV.WasmValType[],
             MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
         with_entry = MBV.RootBindings(

@@ -121,8 +121,20 @@ the original raised a WasmInternalError, not a silent value) or a MemoryRef fiel
 call's result is detected by stack height (not reproduced by a planted Nothing-returning
 callee; the height is the exact test). E8: a runtime tuple or vararg index is taken only when
 its type is an integer (a Symbol on a vararg pack raised a WasmInternalError; it now throws
-FieldError as Julia does). Next, in order: 62 H1, H2, P7, E9 (one module
-shape: the exception tag carries (exception, stack), rethrow keeps the caught stack, a source
-map is output only); 63 B2, B3, B4 (the block type from its label, one branch check, typed
-pops); 64 H3 (the native reference computes muladd as fma: bit-exact); 65 M7, L11; then P3
+FieldError as Julia does). Batch 61b — Therapy.jl's downstream job paused at Dale's
+direction (MARCH 13.16 restores it). Batch 62 — H1, H2, P7: one module shape. Every module
+imports `wasmtarget.stack_trace` and exports its tag; every throw carries the stack at the
+throw, and a rethrow the stack its catch stored in `\$current_stack` (the source-map test
+rethrows and still names the first throw; with the fresh-stack rethrow planted back it fails);
+a source-mapped build is the plain build plus its URL section (a test checks the bytes); every
+host import WT creates is answered by one HOST_RUNTIME (`host_runtime_js()`, L150), which every
+harness and the docs example use; a framework module declares the imports before its own
+definitions or is told how. N1 (found while fixing H1): `\$current_exn` was found by its type,
+the first mutable anyref global; globals now carry dart's names and are found by name. Also
+fixed here, what batch 60's CI found: the fuzz bridges still passed `discovery`, and on Julia
+1.13 the planning check found an enrollment nobody recorded — an atomic modify's operator
+(`:invoke_modify`), now recorded with its statement. E9 (unmapped instructions, borrowed
+locations) is not done: it stays with MARCH 13.15. Next, in order: 63 B2, B3 (the block type
+from its signature, one branch check); then the second audit (L148); 64 B4, B5 (typed pops,
+no fallback types); 65 H3 (the native reference computes muladd as fma: bit-exact); 66 M7, L11; then P3
 with P4 (the model first), E3–E6, B5–B7, P6, S6, M6, L8, E10, E11 and the side notes.

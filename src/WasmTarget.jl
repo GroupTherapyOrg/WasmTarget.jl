@@ -60,7 +60,7 @@ include("bridge.jl")
 # Main API
 export compile, compile_multi, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export compile_with_sourcemap, compile_multi_with_sourcemap
+export compile_with_sourcemap, compile_multi_with_sourcemap, host_runtime_js, ensure_provenance_imports!
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE

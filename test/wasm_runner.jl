@@ -19,6 +19,12 @@
 module WasmRunner
 
 using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
+import WasmTarget
+
+# Every import WT's code generator creates, answered by the module's runtime
+# (WasmTarget.host_runtime_js), beside what a test's own importObject answers — its answers win.
+const HOST_RUNTIME_MERGE_JS = "for (const [m, fs] of Object.entries($(WasmTarget.host_runtime_js()))) " *
+                              "importObject[m] = Object.assign({}, fs, importObject[m] || {});"
 
 export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE
 
@@ -220,9 +226,7 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     $_ENC_JS
     $import_js
     Error.stackTraceLimit = 64;   // a trap's frames, beyond V8's default 10 (located_frames)
-    // a module compiled with a source map captures each throw's JS stack through this import
-    // (WasmTarget.ensure_provenance_imports!); modules without one ignore it
-    importObject.wasmtarget = Object.assign({ stack_trace: () => new Error() }, importObject.wasmtarget || {});
+    $HOST_RUNTIME_MERGE_JS
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];

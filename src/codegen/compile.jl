@@ -158,8 +158,8 @@ end
 
 """The one standalone body every `Base.rethrow` MethodInstance compiles to when
 function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above).
-parity(code_generator.dart:2966 visitRethrow): throw the caught exception (and its stack
-trace, here none) with the exception tag.
+parity(code_generator.dart:2966 visitRethrow): throw the caught exception with the stack trace
+its catch received (emit_rethrow_current!).
 parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C
 runtime's jl_rethrow, not an expression inside its handler, so the caught exception is read
 from the \$current_exn global rather than a handler local.)"""
@@ -167,8 +167,7 @@ function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, ty
                                            return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
     b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
-    ensure_exception_tag!(mod)
-    emit_throw_current!(b, mod)
+    emit_rethrow_current!(b, mod)
     end_block!(b)
     return (builder_code(b), WasmValType[])
 end
@@ -278,10 +277,14 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     else
         mod = WasmModule()
     end
-    if source_map_url !== nothing
-        mod.source_map_url = source_map_url
-        ensure_provenance_imports!(mod)
-    end
+    # one module shape: every module can report where its exceptions were thrown, and a
+    # source map only maps its code (dart: a throw always captures StackTrace.current). A
+    # framework's module declares these imports before its own definitions.
+    (existing_module !== nothing && _stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
+        throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
+                            "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
+    ensure_provenance_imports!(mod)
+    source_map_url === nothing || (mod.source_map_url = source_map_url)
     trace === nothing || ensure_trace_imports!(mod)
     local translator = Translator(trace)
     type_registry = TypeRegistry()

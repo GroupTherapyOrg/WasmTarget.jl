@@ -33,8 +33,7 @@ if `rettype` is outside the bridge universe, or `(:compile_error => e)` for a
 whole-batch failure.
 """
 function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                    timeout::Real = DEFAULT_TIMEOUT, opt = false,
-                    discovery::Symbol = :trim)
+                    timeout::Real = DEFAULT_TIMEOUT, opt = false)
     dp = descriptor(rettype)
     dp === nothing && return :unsupported
     desc, accs = dp
@@ -42,14 +41,13 @@ function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; validate = true, optimize = opt,
-                                 discovery = discovery)
+        WasmTarget.compile_multi(funcs; validate = true, optimize = opt)
     catch e
         return (:compile_error => e)
     end
     driver = """
     const inputs = $(_js_inputs(inputs));
-    const importObject = {};
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

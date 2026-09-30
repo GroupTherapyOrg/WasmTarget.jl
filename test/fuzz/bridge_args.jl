@@ -30,8 +30,7 @@ bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:trap, msg)`, where
 immutable args) — or `:unsupported` / `(:compile_error => e)`.
 """
 function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                         timeout::Real = DEFAULT_TIMEOUT, opt = false,
-                         discovery::Symbol = :trim)
+                         timeout::Real = DEFAULT_TIMEOUT, opt = false)
     rp = Bridge.descriptor(rettype)
     rp === nothing && return :unsupported
     rdesc, raccs = rp
@@ -70,14 +69,13 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; validate = true, optimize = opt,
-                                 discovery = discovery)
+        WasmTarget.compile_multi(funcs; validate = true, optimize = opt)
     catch e
         return (:compile_error => e)
     end
     enc_inputs = [Any[value_to_tree(adescs[j], tup[j]) for j in eachindex(adescs)] for tup in inputs]
     driver = """
-    const importObject = {};
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
