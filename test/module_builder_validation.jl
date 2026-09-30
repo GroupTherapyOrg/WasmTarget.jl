@@ -31,8 +31,7 @@ Base.@noinline _mbv_root_link_leaf(x::Int64) = x + Int64(1)
 _mbv_root_link_caller(x::Int64) = _mbv_root_link_leaf(x)
 _mbv_void_numeric_root(x::Int64) = x + Int64(1)
 _mbv_string_init() = "framework-seed"
-Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = print(io, '\\', c)
-Base.@noinline _mbv_host_print(x::Int64) = print(x)
+Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', c); nothing)
 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
@@ -66,11 +65,29 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         @test_throws MBV.ModuleValidationError MBV.add_tag!(m, structidx)
         @test_throws MBV.ModuleValidationError MBV.add_tag!(m, result_ft)
         @test MBV.add_tag!(m, tag_ft) == 0
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, structidx])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[99])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[tag_ft, result_ft])
-        late = MBV.add_struct_type!(m, MBV.FieldType[])
-        @test_throws MBV.ModuleValidationError MBV.add_rec_group!(m, UInt32[structidx, late])
+        # a type refers only to types defined before it, or to its own group
+        nxt = UInt32(length(m.types))
+        @test_throws MBV.ModuleValidationError MBV.add_type!(m,
+            MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt, true), true)]))
+        @test_throws MBV.ModuleValidationError MBV.add_type!(m, MBV.ArrayType(MBV.ConcreteRef(UInt32(99), true)))
+        # two types that refer to each other are one group, at consecutive indices
+        a = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt + UInt32(1), true), true)])
+        b = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt, true), true)])
+        @test MBV.add_type_group!(m, MBV.CompositeType[a, b]) == nxt
+        @test (Int(nxt):Int(nxt) + 1) in MBV.recursion_groups(m)
+        @test_throws MBV.ModuleValidationError MBV.add_type_group!(m,
+            MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(99), true), true)])])
+        # a section whose cycle is split by another type, or that refers forward outside a
+        # cycle, has no valid recursion groups
+        split = MBV.WasmModule()
+        push!(split.types, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(2), true), true)]),
+              MBV.StructType(MBV.FieldType[]),
+              MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(0), true), true)]))
+        @test_throws MBV.ModuleValidationError MBV.recursion_groups(split)
+        fwd = MBV.WasmModule()
+        push!(fwd.types, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(1), true), true)]),
+              MBV.StructType(MBV.FieldType[]))
+        @test_throws MBV.ModuleValidationError MBV.recursion_groups(fwd)
     end
 
     @testset "GC struct subtype prefix" begin
@@ -84,6 +101,58 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         sub = MBV.add_type!(m, MBV.StructType([
             MBV.FieldType(MBV.I32, false), MBV.FieldType(MBV.I64, true)], base))
         @test sub == 1
+    end
+
+    @testset "type definitions carry dart's subtyping prefix (DefType.serializeDefinition)" begin
+        m = MBV.WasmModule()
+        a = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false), MBV.FieldType(MBV.I64, true)], a))
+        MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        MBV.add_type!(m, MBV.ArrayType(MBV.FieldType(MBV.I32, true)))
+        bytes = MBV.to_bytes(m)
+        entries = UInt8[0x04,                                     # four singleton groups
+                        0x50, 0x00, 0x5F, 0x01, 0x7F, 0x00,       # a parent: `sub`, no supertypes
+                        0x4F, 0x01, 0x00, 0x5F, 0x02, 0x7F, 0x00, 0x7E, 0x01,  # a leaf: `sub final` a
+                        0x5F, 0x01, 0x7E, 0x00,                   # no relatives: no prefix (final)
+                        0x5E, 0x7F, 0x01]                         # an array: no prefix
+        @test any(i -> bytes[i:i + length(entries) - 1] == entries, 1:length(bytes) - length(entries) + 1)
+    end
+
+    @testset "a branch carries its target label's types (dart _verifyBranchTypes)" begin
+        m = MBV.WasmModule()
+        s1 = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        s2 = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        r1, r2 = MBV.ConcreteRef(s1, true), MBV.ConcreteRef(s2, true)
+        mk() = MBV.InstrBuilder(MBV.WasmValType[r1, r2], MBV.WasmValType[]; func_name = "branch", mod = m)
+        # br_on_non_null carries its operand made non-null
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[MBV.ConcreteRef(s1, false)])
+        MBV.local_get!(b, 0)
+        @test MBV.br_on_non_null!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[MBV.ConcreteRef(s1, false)])
+        MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_non_null!(b, l)
+        # br_on_null carries what lies under its operand
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 0); MBV.local_get!(b, 1)
+        @test MBV.br_on_null!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 1); MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_null!(b, l)
+        # br and br_if carry the top of the stack to their target through the same check
+        # (dart br / br_if → _verifyBranchTypes); a wrong-typed value is rejected at the branch
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 0)
+        @test MBV.br!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br!(b, l)
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 1); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_if!(b, l)
+        # the operand is a reference
+        b = mk(); l = MBV.block!(b)
+        MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_on_null!(b, l)
     end
 
     @testset "calls derive imported signatures from the module" begin
@@ -129,11 +198,11 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
     end
 
     @testset "signed-width unsigned overlays stay inside the closed world" begin
-        plan, cache = MBV.trim_compile_plan(
+        plan = MBV.trim_compile_plan(
             Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")])
         @test !any(e -> e[1] === unsigned && e[2] == (Int128,) &&
                        any(stmt -> stmt isa Expr && stmt.head === :foreigncall,
-                           cache[(e[1], e[2])][1].code), plan)
+                           plan.ir_cache[(e[1], e[2])][1].code), plan.functions)
         bytes = MBV.compile_multi(Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")];
                                   validate=false)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -154,20 +223,26 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         @test MBV._binaryen_worker_count(false) === nothing
     end
 
+    @testset "the exception stack's top is found by its name, never by its type" begin
+        # a framework's own mutable anyref global was once taken for WT's exception global
+        # (the first mutable anyref global), so every throw wrote into it (dev/AUDIT.md N1)
+        m = MBV.WasmModule()
+        theirs = MBV.add_global!(m, MBV.AnyRef, true, nothing)
+        top = MBV.ensure_exception_top_global!(m)
+        @test top != theirs && m.globals[Int(top) + 1].name == "\$exc_top"
+        @test MBV.ensure_exception_top_global!(m) == top
+        @test m.globals[Int(top) + 1].valtype == MBV.ConcreteRef(MBV.exc_cell_type!(m), true)
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.AnyRef, true, nothing; name="\$exc_top")
+        # a typed null reference global names a type the module defines
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.ConcreteRef(UInt32(999), true), true, nothing)
+    end
+
     @testset "explicit IO formatting does not activate host-console imports" begin
-        function print_invoke(fn, arg_types)
-            ci = only(Base.code_typed(fn, arg_types; optimize=true))[1]
-            site = findfirst(ci.code) do stmt
-                stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2 &&
-                    stmt.args[2] isa GlobalRef && stmt.args[2].name === :print
-            end
-            site === nothing && error("explicit-IO fixture lost its print invoke")
-            return ci.code[site], ci
-        end
-        io_stmt, io_ci = print_invoke(_mbv_io_receiver_print, (IOBuffer, Char))
-        host_stmt, host_ci = print_invoke(_mbv_host_print, (Int64,))
-        @test MBV._ir_call_has_explicit_io(io_stmt, io_ci)
-        @test !MBV._ir_call_has_explicit_io(host_stmt, host_ci)
+        # `print(io, ...)` is an ordinary compiled formatting call: Julia's own body
+        # compiles and the module declares no host-console import — only the runtime import
+        # every module has
+        compiled = MBV.compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), "p")])
+        @test [(i.module_name, i.field_name) for i in compiled.imports] == [("wasmtarget", "stack_trace")]
     end
 
     @testset "closure roots use declared global substitutions" begin
@@ -199,7 +274,7 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         mktempdir() do dir
             wasm = joinpath(dir, "void-root.wasm")
             write(wasm, MBV.to_bytes(void_module))
-            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1])).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
+            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js())).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
             proc = run(ignorestatus(`node -e $probe $wasm`))
             @test proc.exitcode == 0
         end
@@ -249,7 +324,13 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
             root_bindings=Dict("caller" => linked))
         @test linked_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 
+        # a framework's module declares WT's runtime imports before its own definitions
+        late = MBV.WasmModule()
+        MBV.add_function!(late, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        @test_throws ArgumentError MBV.compile_multi(Any[(constant_root, (Int64,), "late")];
+            existing_module=late, root_bindings=Dict("late" => constant_bindings))
         entry_module = MBV.WasmModule()
+        MBV.ensure_provenance_imports!(entry_module)
         entry_idx = MBV.add_function!(entry_module, MBV.WasmValType[],
             MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
         with_entry = MBV.RootBindings(
@@ -284,7 +365,8 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
                 MBV.add_global_export!(linked_mod, "eager_string", eager)
             end)
         @test init_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
-        @test_throws ArgumentError MBV.compile_multi(
+        # an import from the linker would renumber the defined functions: the builder refuses it
+        @test_throws MBV.ModuleValidationError MBV.compile_multi(
             Any[(leaf, (Int64,), "bad_linker")];
             link_roots=(linked_mod, _, _) -> MBV.add_import!(linked_mod,
                 "late", "forbidden", MBV.WasmValType[], MBV.WasmValType[]))
@@ -337,5 +419,112 @@ Base.@noinline _mbv_host_print(x::Int64) = print(x)
         wrong = MBV.block!(bad_catch; results=MBV.WasmValType[MBV.I32])
         @test_throws MBV.StackImbalanceError MBV.try_table!(
             bad_catch, [MBV.catch_clause(tag, wrong)])
+    end
+
+    @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin
+        # A caller names only the frame's inputs and results and the builder derives the
+        # encoding (instructions.dart:707), so the encoded type and the tracked frame are one
+        # fact. A positional block type once let `try_table!(b, cs, I32)` track a void frame
+        # and encode a result (dev/AUDIT.md B2).
+        m = MBV.WasmModule()
+        mk() = (b = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[]; mod=m);
+                MBV.local_get!(b, 0); b)
+        enc(f) = (b = mk(); f(b); b.instrs[end].blocktype)
+        @test enc(b -> MBV.if_!(b)) === 0x40
+        @test enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32])) === MBV.I32
+        two = enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32, MBV.I64]))
+        @test two isa Int && m.types[two + 1].params == MBV.WasmValType[] &&
+              m.types[two + 1].results == MBV.WasmValType[MBV.I32, MBV.I64]
+        ins = enc(b -> MBV.block!(b; inputs=MBV.WasmValType[MBV.I32]))
+        @test ins isa Int && m.types[ins + 1].params == MBV.WasmValType[MBV.I32] &&
+              isempty(m.types[ins + 1].results)
+        # no positional block type exists to disagree with the frame
+        @test !hasmethod(MBV.if_!, Tuple{MBV.InstrBuilder, Any})
+        @test !hasmethod(MBV.block!, Tuple{MBV.InstrBuilder, Any})
+        @test !hasmethod(MBV.try_table!, Tuple{MBV.InstrBuilder, Vector, Any})
+        ok = mk()
+        MBV.if_!(ok; results=MBV.WasmValType[MBV.I32])
+        MBV.i32_const!(ok, 1)
+        MBV.else_!(ok)
+        MBV.i32_const!(ok, 2)
+        MBV.end_block!(ok)
+        MBV.drop!(ok)
+        MBV.finish_function!(ok)
+        @test true
+    end
+
+    @testset "every operand is typed as dart types it (return, throw, globals, refs, select, else)" begin
+        # each check below once took the operand untyped or the caller's claim (dev/AUDIT.md
+        # A2B1, A2B4, A2B5, A2B7, B4): a wrong program reached the bytes and only the engine
+        # or wasm-tools saw it
+        m = MBV.WasmModule()
+        g_mut = MBV.add_global!(m, MBV.I64, true, 0)
+        g_imm = MBV.add_global!(m, MBV.I64, false, 0)
+        arr = MBV.add_type!(m, MBV.ArrayType(MBV.FieldType(MBV.I32, true)))
+        tag_t = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.I64], MBV.WasmValType[]))
+        tag = MBV.add_tag!(m, tag_t)
+        fn_t = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.I32], MBV.WasmValType[MBV.I32]))
+        mk(ps=MBV.WasmValType[], rs=MBV.WasmValType[]) = MBV.InstrBuilder(ps, rs; mod=m)
+        # return pops the function's results
+        b = mk(MBV.WasmValType[], MBV.WasmValType[MBV.I64]); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.return_!(b)
+        b = mk(MBV.WasmValType[], MBV.WasmValType[MBV.I64]); MBV.i64_const!(b, 1)
+        @test MBV.return_!(b) isa MBV.InstrBuilder
+        # throw takes its tag's inputs
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.throw_!(b, tag)
+        b = mk(); MBV.i64_const!(b, 1)
+        @test MBV.throw_!(b, tag) isa MBV.InstrBuilder
+        # global.set: a mutable global, and its own type
+        b = mk(); MBV.i64_const!(b, 1)
+        @test_throws MBV.ModuleValidationError MBV.global_set!(b, g_imm)
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.global_set!(b, g_mut)
+        # ref.is_null, array.len, select take the operands dart names
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.ref_is_null!(b)
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.array_len!(b)
+        b = mk(); MBV.i64_const!(b, 1); MBV.i64_const!(b, 2); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.select!(b, MBV.I32)
+        b = mk(); MBV.i64_const!(b, 1); MBV.i64_const!(b, 2); MBV.i32_const!(b, 1)
+        @test MBV.select!(b, MBV.I64) isa MBV.InstrBuilder
+        # call_ref's signature is its function type's
+        b = mk(); MBV.i32_const!(b, 1); MBV.ref_null!(b, Int64(fn_t), MBV.ConcreteRef(UInt32(fn_t), true))
+        @test_throws MBV.ModuleValidationError MBV.call_ref!(b, fn_t, MBV.WasmValType[MBV.I64], MBV.WasmValType[MBV.I32])
+        # else gives its arm the if's inputs; an if with results needs an else
+        b = mk(); MBV.i32_const!(b, 7); MBV.i32_const!(b, 1)
+        MBV.if_!(b; inputs=MBV.WasmValType[MBV.I32], results=MBV.WasmValType[MBV.I32])
+        MBV.else_!(b)
+        @test MBV.end_block!(b) isa MBV.InstrBuilder      # both arms pass the input through
+        b = mk(); MBV.i32_const!(b, 1)
+        MBV.if_!(b; results=MBV.WasmValType[MBV.I32]); MBV.i32_const!(b, 2)
+        @test_throws MBV.StackImbalanceError MBV.end_block!(b)
+        # a field's storage type is a value type, never a raw byte standing for one
+        @test_throws ArgumentError MBV.FieldType(0x70, false)
+        @test MBV.FieldType(MBV.FuncRef, false).valtype === MBV.FuncRef
+    end
+
+    @testset "an if's then-branch is typed against the if's results at else" begin
+        # dart else_ → _verifyEndOfBlock → _checkStackTypes(label.outputs): only the height was
+        # checked, and a then-arm leaving a value of an unrelated type reached the module
+        m = MBV.WasmModule()
+        a = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        c = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I64, false)]))
+        ra, rc = MBV.ConcreteRef(UInt32(a), true), MBV.ConcreteRef(UInt32(c), true)
+        ok = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
+        MBV.local_get!(ok, 0)
+        MBV.if_!(ok; results=MBV.WasmValType[ra])
+        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.else_!(ok)
+        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.end_block!(ok)
+        MBV.finish_function!(ok)
+
+        bad = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
+        MBV.local_get!(bad, 0)
+        MBV.if_!(bad; results=MBV.WasmValType[ra])
+        MBV.ref_null!(bad, Int64(c), rc)
+        @test_throws MBV.StackImbalanceError MBV.else_!(bad)
     end
 end

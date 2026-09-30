@@ -13,7 +13,7 @@
 
 module FuzzHarness
 
-export compile_and_run, compile_and_run_vec, NODE_OK
+export compile_and_run, compile_and_run_vec
 
 using WasmTarget
 using JSON
@@ -38,20 +38,6 @@ const _BRIDGE_I64 = [(_bv_i64_new, (Int64,)), (_bv_i64_set!, (Vector{Int64}, Int
 const _BRIDGE_F64 = [(_bv_f64_new, (Int64,)), (_bv_f64_set!, (Vector{Float64}, Int64, Float64)),
                      (_bv_f64_get, (Vector{Float64}, Int64)), (_bv_f64_len, (Vector{Float64},))]
 
-# --- Node detection --------------------------------------------------------
-function _detect_node()
-    node = Sys.which("node")
-    node === nothing && return (nothing, false)
-    try
-        v = read(`$node --version`, String)
-        major = parse(Int, match(r"v(\d+)", v).captures[1])
-        return (node, major < 22)  # older Node needs --experimental-wasm-gc
-    catch
-        return (node, false)
-    end
-end
-const (NODE_CMD, NEEDS_FLAG) = _detect_node()
-const NODE_OK = NODE_CMD !== nothing
 
 # Per-program Node watchdog deadline (seconds). The orchestrator raises it via
 # WT_FUZZ_TIMEOUT when the fuzz pass OVERLAPS the codegen shards: under CPU
@@ -98,6 +84,7 @@ function _unmarshal(v)
         v == "__Inf__" && return Inf
         v == "__-Inf__" && return -Inf
         v == "__NaN__" && return NaN
+        v == "__-0__" && return -0.0
         return v
     elseif v isa AbstractVector
         return [_unmarshal(x) for x in v]
@@ -111,7 +98,7 @@ end
 
 Compile `fn` for `argtypes` and evaluate it over every arg-tuple in `inputs` in a
 single Node process. Returns a vector of `(:ok, value)` / `(:trap, msg)`, one per
-input — or `:compile_error => err` / `:no_node` for whole-batch failures.
+input — or `:compile_error => err` for a whole-batch failure.
 """
 # P2-batch20: Char params are i32 holding Julia's UTF-8-justified bits.
 # Accept Char or Integer (codepoint) inputs and transport the justified bits.
@@ -120,7 +107,6 @@ _norm_inputs(inputs::Vector, argtypes::Tuple) =
     [Tuple(_norm_arg(a, T) for (a, T) in zip(tup, argtypes)) for tup in inputs]
 
 function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFAULT_TIMEOUT, opt=false)
-    NODE_OK || return :no_node
     Char in argtypes && (inputs = _norm_inputs(inputs, argtypes))
     fname = string(nameof(fn))
     bytes = try
@@ -137,10 +123,10 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFA
     const inputs = $(_js_inputs(inputs));
     const enc = (k,v) => {
         if (typeof v === 'bigint') return { __bigint__: v.toString() };
-        if (typeof v === 'number') { if (v===Infinity) return "__Inf__"; if (v===-Infinity) return "__-Inf__"; if (Number.isNaN(v)) return "__NaN__"; }
+        if (typeof v === 'number') { if (v===Infinity) return "__Inf__"; if (v===-Infinity) return "__-Inf__"; if (Number.isNaN(v)) return "__NaN__"; if (Object.is(v, -0)) return "__-0__"; }
         return v;
     };
-    const importObject = { Math: { pow: Math.pow } };
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject);
     const f = instance.exports['$fname'];
     return inputs.map(args => {
@@ -188,7 +174,6 @@ bridge. `inputs` is a Vector of arg-tuples (args may be Vectors). Returns per-in
 `(:ok, value)` / `(:trap, msg)` — a Vector result comes back as a Julia Vector.
 """
 function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFAULT_TIMEOUT, opt=false)
-    NODE_OK || return :no_node
     fname = string(nameof(fn))
     needs_i64 = any(==(Vector{Int64}), argtypes)
     needs_f64 = any(==(Vector{Float64}), argtypes)
@@ -206,14 +191,14 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=
     inarr = "[" * join((("[" * join((_enc_arg(a) for a in tup), ",") * "]") for tup in inputs), ",") * "]"
     retmode = retvec === Int64 ? "vi" : retvec === Float64 ? "vf" : "scalar"
     driver = """
-    const { instance } = await WebAssembly.instantiate(bytes, { Math: { pow: Math.pow } });
+    const { instance } = await WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js()));
     const e = instance.exports; const f = e['$fname'];
     const bvi = a => { const v=e._bv_i64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_i64_set!'](v,BigInt(i+1),BigInt(a[i])); return v; };
     const bvf = a => { const v=e._bv_f64_new(BigInt(a.length)); for(let i=0;i<a.length;i++) e['_bv_f64_set!'](v,BigInt(i+1),a[i]); return v; };
     const marsh = o => o.vi!==undefined ? bvi(o.vi) : o.vf!==undefined ? bvf(o.vf) : o.i!==undefined ? BigInt(o.i) : o.f!==undefined ? o.f : o.s;
     const rdi = v => { const n=Number(e._bv_i64_len(v)); const o=[]; for(let i=0;i<n;i++) o.push({__bigint__: e._bv_i64_get(v,BigInt(i+1)).toString()}); return o; };
-    const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":x);} return o; };
-    const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";} return val; };
+    const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":Object.is(x,-0)?"__-0__":x);} return o; };
+    const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";if(Object.is(val,-0))return"__-0__";} return val; };
     const inputs = $(inarr);
     return inputs.map(args => { try {
         const r = f(...args.map(marsh));
@@ -226,11 +211,10 @@ end
 
 # Run a driver body through the persistent pool and convert its raw {ok|trap}
 # results into the harness's tagged `(:ok,val)` / `(:trap,msg)` tuples. Falls
-# back to the harness-level markers (`:no_node`, `:exec_error => …`) so the
+# back to the harness-level marker (`:exec_error => …`) so the
 # property layer classifies them exactly as the old per-spawn path did.
 function _pool_results(bytes, driver, ninputs; timeout::Real=8)
     status, results = WasmRunner.run_driver_batch(bytes, driver; deadline=timeout, ninputs=ninputs)
-    status === :nonode && return :no_node
     status === :error  && return (:exec_error => results)
     out = Vector{Tuple{Symbol,Any}}(undef, length(results))
     for (i, r) in enumerate(results)

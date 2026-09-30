@@ -33,7 +33,6 @@ include(joinpath(FUZZ_DIR, "generators.jl"));  using .FuzzGen
 include(joinpath(FUZZ_DIR, "statements.jl"));  using .FuzzStatements
 include(joinpath(FUZZ_DIR, "canon.jl"));       using .FuzzCanon
 FuzzStructPool.build_pool!()   # deterministic (seeded) — same pool every process
-include(joinpath(FUZZ_DIR, "oracle_policy.jl")); using .FuzzOraclePolicy
 include(joinpath(FUZZ_DIR, "property.jl"));     using .FuzzProperty
 include(joinpath(FUZZ_DIR, "ledger.jl"));       using .Ledger
 
@@ -128,7 +127,6 @@ function fuzz_type(::Type{T0}; depth, max_examples, seed, run_id, dbdir = CORPUS
 end
 
 function run_fuzz(; types = (Int64, Float64), depth = 3, max_examples = 200, seed = 0xC0FFEE)
-    FuzzHarness.NODE_OK || (@warn "Node.js not available — fuzzer cannot execute wasm"; return)
     run_id = string("run-", seed, "-d", depth)
     println("== WasmTarget differential fuzz ($(run_id)) ==")
     for (i, T0) in enumerate(types)
@@ -180,7 +178,6 @@ end
 
 # Natural-signature sweep: Vector inputs, multiple return types, many seeds (temp DBs).
 function sweep_natural(; k::Int = 6, depth = 4, max_examples = 50)
-    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep
     specs = [(Vector{Int64}, Int64), (Vector{Int64}, Vector{Int64}), (Vector{Int64}, Bool),
              (Vector{Float64}, Float64), (Vector{Float64}, Vector{Float64})]
@@ -211,7 +208,6 @@ end
 # replaying the same known counterexample — this is how we find DISTINCT bugs
 # before fixing any. Records each distinct gap to the real ledger.
 function sweep(; k::Int = 8, types = (Int64, Float64), depth = 4, max_examples = 80)
-    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep
     before = Set(get(g, "id", "") for g in Ledger.load_gaps())
     for s in 1:k
@@ -273,7 +269,6 @@ end
 _hits_known_gap(body, known) = FuzzCanon.hits_canon(body, known)
 
 function ci_fuzz_passes(; types = (Int64, Float64), depth = 2, max_examples = 30, seed = 0xCD)
-    FuzzHarness.NODE_OK || return true   # skip cleanly where Node is unavailable
     rotate_inputs!(0)   # G2b: CI must stay deterministic — never rotate inputs here
     tmp = mktempdir()
     # seed the temp DB with the committed corpus so known counterexamples replay first
@@ -344,7 +339,6 @@ end
 
 # Generate n programs per type, run differential on each, record op coverage.
 function coverage_sweep(; n::Int = 400, depth = 4, types = (Int64, Float64))
-    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     empty!(_COV_SEEN); empty!(_COV_PASS)
     for T in types
         gen = gen_program(T; depth = depth)
@@ -421,7 +415,6 @@ is stochastic re-sampling, so a truncated sweep is still a valid sweep.
 """
 function sweep_full(; shard = nothing, seeds::Int = 4, depth = 3, max_examples = 60,
                     time_budget::Int = 0)
-    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     rotate_inputs!(rand(RandomDevice(), UInt64))   # G2b: vary inputs each sweep (per worker)
     jobs = _sweep_jobs(seeds = seeds)
     mine = [k for k in eachindex(jobs)
@@ -491,7 +484,6 @@ function _body_sigs(x, acc = Set{Tuple{Symbol,Int}}())
 end
 
 function write_coverage!(; per_type::Int = 120, depth = 3)
-    FuzzHarness.NODE_OK || (@warn "Node.js unavailable"; return)
     seen = Set{Tuple{Symbol,Int}}()
     passed = Set{Tuple{Symbol,Int}}()
     for T in SWEEP_TYPES

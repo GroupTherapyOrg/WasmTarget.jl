@@ -15,7 +15,7 @@ using WasmTarget
 using WasmTarget.Bridge
 using WasmTarget.Bridge: WALK_JS, BUILD_JS, _acc!
 using JSON
-using ..FuzzHarness: NODE_OK, DEFAULT_TIMEOUT, run_driver_batch
+using ..FuzzHarness: DEFAULT_TIMEOUT, run_driver_batch
 using ..FuzzBridge
 
 # back-compat alias
@@ -27,12 +27,10 @@ const _BUILD_JS = BUILD_JS
 Full-generality runner: every arg AND the return value cross via the bit-exact
 bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:trap, msg)`, where
 `post_trees[j]` is the post-call re-read of the j-th MUTABLE arg (`nothing` for
-immutable args) — or `:unsupported` / `(:compile_error => e)` / `:no_node`.
+immutable args) — or `:unsupported` / `(:compile_error => e)`.
 """
 function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
-                         timeout::Real = DEFAULT_TIMEOUT, opt = false,
-                         discovery::Symbol = :trim)
-    NODE_OK || return :no_node
+                         timeout::Real = DEFAULT_TIMEOUT, opt = false)
     rp = Bridge.descriptor(rettype)
     rp === nothing && return :unsupported
     rdesc, raccs = rp
@@ -71,15 +69,13 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
     bytes = try
-        WasmTarget.compile_multi(funcs; validate = true, optimize = opt,
-                                 discovery = discovery)
+        WasmTarget.compile_multi(funcs; validate = true, optimize = opt)
     catch e
         return (:compile_error => e)
     end
     enc_inputs = [Any[value_to_tree(adescs[j], tup[j]) for j in eachindex(adescs)] for tup in inputs]
     driver = """
-    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
-    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -99,7 +95,6 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     });
     """
     status, results = run_driver_batch(bytes, driver; deadline = timeout, ninputs = length(inputs))
-    status === :nonode && return :no_node
     status === :error && return (:exec_error => results)
     out = Vector{Any}(undef, length(results))
     for (i, r) in enumerate(results)

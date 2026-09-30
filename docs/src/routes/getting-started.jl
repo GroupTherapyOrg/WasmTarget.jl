@@ -34,12 +34,15 @@ Pkg.add("WasmTarget")  # registered in the General registry""")),
 
 add(a::Int32, b::Int32)::Int32 = a + b
 bytes = compile(add, (Int32, Int32))
-write("add.wasm", bytes)""")),
+write("add.wasm", bytes)
+# the imports every WasmTarget module is instantiated with (its host runtime)
+write("runtime.mjs", "export default " * host_runtime_js() * ";")""")),
         P(:class => "text-warm-600 dark:text-warm-400", "Run it from Node:"),
-        Pre(:class => code_block, Code(:class => "language-bash", """node -e '
-  const fs = require("fs");
-  WebAssembly.instantiate(fs.readFileSync("add.wasm"))
-    .then(m => console.log(m.instance.exports.add(3, 7)));
+        Pre(:class => code_block, Code(:class => "language-bash", """node --input-type=module -e '
+  import fs from "fs";
+  import runtime from "./runtime.mjs";
+  const { instance } = await WebAssembly.instantiate(fs.readFileSync("add.wasm"), runtime);
+  console.log(instance.exports.add(3, 7));
 '
 # => 10""")),
 

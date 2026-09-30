@@ -1,13 +1,9 @@
-# WasmTarget parity history
+# WasmTarget history
 
-This is the single archive for completed WasmTarget parity campaigns. It is not a
-roadmap. Current status and next work live in [`PARITY_MASTER.md`](PARITY_MASTER.md);
-machine truth lives in [`test/parity_ratchet.jl`](../test/parity_ratchet.jl) and
-[`parity_baseline.toml`](parity_baseline.toml).
-
-The original plans, detailed ledgers, intermediate counts, branch names, commands, and
-resume points remain available in Git history before the 2026-07-22 documentation
-consolidation. They are intentionally not reproduced as actionable checklists here.
+The archive of completed work, one short entry per campaign. It is not a plan: what counts
+as done is `dev/CHARTER.md`, the open work is `dev/MARCH.md`, and the measured state is the
+output of `test/parity_ratchet.jl`. Plans, ledgers, intermediate counts and resume notes
+live in Git history, never here.
 
 ## Typed builder and cleanup campaigns
 
@@ -71,12 +67,94 @@ Passing differential tests alone never establishes structural correspondence, wh
 structural similarity never overrides Julia semantics. Old phase order, parity percentages,
 and census counts are obsolete; current locks and reproductions decide current work.
 
+## The finishing march, phases 1–12 (PR #122, 2026-09-01 … 2026-09-22)
+
+From 102 locks at `7897b316` to 127 locks plus the charter. Phase 1 built the inner loop
+(smoke, probes, lanes). Phase 2 deleted dead definitions, 278 narration tags and 454 patch
+markers, and gathered 17 scattered debug reads into one options struct. Phases 3–5 moved
+numeric ops, invoke targets, foreigncalls and builtins onto identity-keyed registries with no
+name-keyed arms (R19, R20, R21 → 0) and deleted the bespoke string builders. Phase 6 added
+two-tier located diagnostics. Phases 7–9 hardened the public surface and the host boundary.
+Phase 10 introduced the NIR boundary and the sidecar prototype. Phase 11 added the TLA+ layer,
+which grew to 11 models and 42 instances in CI. Phase 12 established:
+- one inference path;
+- one closed-world numbering;
+- constant evaluation by rule instead of by list;
+- NIR stages 1–2 (R29a 425 → 161);
+- the first steps of the typed value channel (R3 93 → 75, R7 57 → 32, R27 54 → 29);
+- dart's closure layout with per-arity vtables;
+- runtime-Vararg splats as direct calls.
+
+An audit on 2026-09-22 found the march drifting from its intent. The plan had become judged
+by its own exit checks; targets had been relabeled "floors"; dart parity was assumed where
+it was never measured. That audit produced `dev/CHARTER.md`, the definition of done since.
+
+## Phase 13 — closing the charter (2026-09-23 …)
+
+- R34 → 0: every catch that swallowed a failure became Julia's own non-throwing query or a
+  located reject (the compiled-bytes cache went with its catch). C6 gained R39.
+- L130 (every file outside src consumed), L131 (every algorithm mapped to its model),
+  L132 (every dart anchor resolves at the pin), L133 (the standalone bodies are exact), R38.
+- Host imports precede every defined function; rand() is seeded by the host at startup.
+- Type objects are instances of their kind, keyed by identity and populated in program order.
+- The builder checks an `if`'s then-branch value types at `else`, as dart's else_ does.
+- A MemoryRef keeps its offset in a field and across a call; Vector growth runs Julia's own
+  bodies (ten overlays and the grow stand-in deleted), R37 = 0, C1 closed.
+- R39 = 0, C6 closed: `ncodeunits` and `Symbol` are Julia's methods beyond String and Symbol.
+- A call binds only to the specialization Julia selects (L135); the collector prunes by
+  reachability, so a site that keeps an abstract invoke keeps its body (InvokePrune).
+- The wasm runtime is required: no test passes without running its wasm (L134).
+- Int128 limbs are modeled (Int128Limbs): raw shifts past 128 answered wrong; division and
+  the byte swap compile. One storage-pointer offset serves every load and store (a byte
+  store ignored its index; String loads and stores were off by one).
+- Seeded Random runs on 1.13 (its SHA-512 seeding). objectid of an immutable is Julia's
+  jl_object_id_ (content hash), so an immutable struct is a correct Dict or Set key.
+- Every value emission names its expected type (R17 = 0, counted on the parse tree), and a
+  constant pushes exactly its static type, every reference constant non-null (L136).
+- muladd and fma round once (Julia's fma_emulated), so Julia's own math is bit-exact with
+  native (smoke bit_exact_math); twelve approximating math overlays deleted.
+
+## Phase 13 — Julia's own bodies (2026-09-28 …)
+
+- Thirty bit-level overlays deleted: Julia's own bodies match native (julia_bit_bodies).
+- A MemoryRef or Memory held erased dispatches: each dispatch reads the callee's declared
+  signature and tells a Memory by its array type, and the collector counts memoryrefnew and
+  Memory allocation as instantiations (smoke memoryref_erased).
+- Every definition carries its return type, `::Any` only in R30_ANY_SEAMS's named seams
+  (R30 = 0; C4 closed). The reduce/foldl overlays gave way to Julia's own bodies.
+- A captured variable is typed by every write into its box across the closed world, never by
+  a closure body's guess (CaptureType; the guess trapped where Julia answers).
+- Every algorithm has its model (C8 closed): ClassIdSwitch, OperandStack, CaptureType,
+  EgalDispatch, RecGroup. A recursive type registers with its strongly connected component
+  (Tarjan over the translators' references) and the section's recursion groups are computed,
+  so a two-type cycle keeps both field types (placeholder-and-patch erased one to structref).
+- Self-hosting leftovers deleted. The `$JlType` hierarchy is created right after Top, so
+  `Any` is anyref everywhere (L137); the pass that rewrote finished types is gone.
+- The oracle is bit-exact (L138): a tolerance only where native calls a named BLAS/LAPACK
+  routine. 22 collection overlays gave way to Julia's bodies (two answered the wrong sign for
+  maximum/minimum over signed zeros); isequal of floats is Julia's fpiseq. An :invoke calls
+  the method it names (L139): unique(::Vector{Float64}) had compiled to infinite recursion.
+- A type-structure foreigncall folds, so SparseArrays compiles from its own source (its
+  extension is gone); BLAS/LAPACK overlay reasons are checked against Julia's methods (L140).
+- A constant is interned by `===` (L141): an isequal key gave `(0x01,)` the `(1,)` global and
+  Random's hash_seed trapped. The Random and Statistics extensions are gone (L54).
+
+## Phase 13 — layouts by structure (2026-09-29 …)
+
+- A concrete struct is laid out by its fields whatever it subtypes (L142): a Diagonal took the
+  Matrix layout, and a struct's Matrix field the Vector one. Six LinearAlgebra overlays went.
+- The builder carries what codegen emits, each node anchored to its dart class: 20 unused
+  emitters and emit_raw! (L13) went; br_on_null/br_on_non_null check their target (dart).
+- SimpleDiffEq's oracle allows muladd's rounding in every case, checked against each solver's
+  step; on Julia 1.13.1 the Vector-state RK4/Tsit5 solves compile and run bit-exact.
+- A type definition carries dart's subtyping prefix: a type nothing extends is final.
+- titlecase is Julia's rule over utf8proc's grapheme breaks, ported and checked against the C
+  library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
+- Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed);
+  Core.sizeof answers Julia's size of a Memory, and two lookups that matched by name went.
+
 ## Why the archive was consolidated
 
-The original files were valuable while their campaigns were active, but later searches
-could surface stale `NEXT`, `LIVE`, `RESUME HERE`, and “remaining work” sections as if
-they described the current tree. Consolidating the outcome here makes that impossible:
-
-- completed architecture is stated once in `PARITY_MASTER.md` and locked in code;
-- current boundaries require a present reproducer or source census;
-- exact historical prose is archaeological evidence in Git, not a zombie backlog.
+Searches of the old campaign files surfaced stale `NEXT` and `RESUME HERE` sections as if they
+were current. Here finished architecture is locked in `test/parity_ratchet.jl`, an open boundary
+needs a present reproducer or census, and exact historical prose lives in Git.

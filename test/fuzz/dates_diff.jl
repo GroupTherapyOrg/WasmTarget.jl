@@ -97,7 +97,6 @@ _dt_tofst(d) = tofirst(d, 1); _dt_tolst(d) = tolast(d, 7)
 _dt_tonxt(d) = tonext(d, 7);  _dt_toprv(d) = toprev(d, 1)
 
 function run_dates_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0xDA7E)
     dates = [ (_rdate(rng),) for _ in 1:reps ]
     dts   = [ (_rdt(rng),)   for _ in 1:reps ]

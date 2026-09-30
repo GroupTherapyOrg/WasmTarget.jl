@@ -5,8 +5,8 @@
 # Matrix, and the matrix LA ops need WELL-FORMED structured inputs
 # (square / symmetric / conformable). So the matrix surface is verified HERE by
 # direct `bridge_run_args` differential sweeps — the SAME oracle the fuzzer uses
-# (`WasmTarget.Bridge.tree_matches` → `_float_match`, rtol 1e-9), over
-# deterministic seeded inputs. This file GROWS per LinearAlgebra-campaign
+# (`WasmTarget.Bridge.tree_matches` → `_float_match`, bit-exact unless the case is in
+# _LA_C_LIBRARY), over deterministic seeded inputs. This file GROWS per LinearAlgebra-campaign
 # increment (pure ops → factorizations → structured types).
 #
 # Each op is wrapped in a NAMED function so the operation is a CALLEE (where the
@@ -15,7 +15,7 @@
 #
 # Loaded by fuzz_suite.jl AFTER fuzz/run.jl, so `bridge_run_args`
 # (FuzzBridgeArgs) and `WasmTarget` are already in scope. Entry:
-# `run_linalg_matrix_tests()` (asserts via @test; skips cleanly without Node).
+# `run_linalg_matrix_tests()` (asserts via @test).
 
 using LinearAlgebra
 using Random
@@ -45,7 +45,10 @@ const LINALG_VERIFIED = Set{Symbol}([
 ])
 
 # Run `fn` over `inputs` (vector of arg-tuples), oracle-compare wasm vs native.
-# `true` iff every input matches (native-throw ⇒ wasm-trap parity).
+# `true` iff every input matches (native-throw ⇒ wasm-trap parity). Bit-exact, except a case
+# in _LA_C_LIBRARY: its native value comes from the named BLAS/LAPACK routine while the
+# module runs Julia's generic algorithm (the WasmTargetLinearAlgebraExt overlays), so a
+# relative difference up to 1e-9 matches (Bridge._float_match).
 function _la_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     res = bridge_run_args(fn, argTs, inputs; rettype = rettype)
     if !(res isa Vector)
@@ -58,7 +61,8 @@ function _la_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(a...)) catch; (false, nothing) end
-        ok = r[1] === :ok ? (nat[1] && _LA_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok = r[1] === :ok ? (nat[1] && _LA_B.tree_matches(rdesc, nat[2], r[2];
+                                                          nonportable = get(_LA_C_LIBRARY, fn, nothing))) : !nat[1]
         if !ok
             @error("LinearAlgebra differential mismatch",
                 function_name=string(nameof(fn)), argument_types=argTs,
@@ -181,8 +185,28 @@ _la_ldivb(U, b)   = ldiv!(UpperTriangular(U), b)                  # U x = b
 _la_rdivb(A, U)   = rdiv!(A, UpperTriangular(U))                  # X U = A
 _la_copytritob(d, s) = LinearAlgebra.copytrito!(d, s, 'U')
 
+# The cases whose native value comes from a C library: the routine Julia calls for Float64
+# (Matrix/Vector) arguments. Every other case is compared bit-exact.
+const _LA_C_LIBRARY = Dict{Function,String}(
+    _la_mm => "BLAS dgemm", _la_mulm => "BLAS dgemm",
+    _la_mv => "BLAS dgemv", _la_mulv => "BLAS dgemv",
+    _la_symv => "BLAS dsymv", _la_uptv => "BLAS dtrmv", _la_lotv => "BLAS dtrmv",
+    _la_ldivb => "BLAS dtrsv", _la_rdivb => "BLAS dtrsm",
+    _la_dotop => "BLAS ddot", _la_axpy => "BLAS daxpy", _la_axpby => "BLAS daxpby",
+    _la_normf => "BLAS dnrm2", _la_normb => "BLAS dnrm2",
+    _la_det => "LAPACK dgetrf", _la_logdet => "LAPACK dgetrf", _la_ludet => "LAPACK dgetrf",
+    _la_logabsd => "LAPACK dgetrf", _la_condsk => "LAPACK dgetrf",
+    _la_inv => "LAPACK dgetrf, dgetri", _la_solve => "LAPACK dgesv",
+    _la_lusolve => "LAPACK dgetrf, dgetrs",
+    _la_cholsolve => "LAPACK dpotrf, dpotrs", _la_choldet => "LAPACK dpotrf",
+    _la_svdvals => "LAPACK dgesdd", _la_cond => "LAPACK dgesdd", _la_rank => "LAPACK dgesdd",
+    _la_opn2 => "LAPACK dgesdd", _la_svdrec => "LAPACK dgesdd", _la_svdS => "LAPACK dgesdd",
+    _la_pinv => "LAPACK dgesdd",
+    _la_eigsym => "LAPACK dsyevr", _la_eigmax => "LAPACK dsyevr", _la_eigmin => "LAPACK dsyevr",
+    _la_eigrec => "LAPACK dsyevr", _la_eigvalo => "LAPACK dsyevr",
+)
+
 function run_linalg_matrix_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x1AA0)
     sq   = [ (n = rand(rng, 2:4); (_rmat(rng, n, n),)) for _ in 1:reps ]
     rect = [ (r = rand(rng, 2:4); c = rand(rng, 2:4); (_rmat(rng, r, c),)) for _ in 1:reps ]
@@ -270,11 +294,11 @@ function run_linalg_matrix_tests(; reps::Int = 40)
         @test _la_diff(_la_lotv, (_MF, _VF), smv, _VF)   # LowerTriangular*vec
     end
     @testset "eigen(Symmetric) object" begin
-        @test _la_diff(_la_eigrec,  (_MF,), sq, _MF)   # V·Λ·Vᵀ ≈ A (recon)
+        @test _la_diff(_la_eigrec,  (_MF,), sq, _MF)   # V·Λ·Vᵀ reconstructs A
         @test _la_diff(_la_eigvalo, (_MF,), sq, _VF)   # .values vs LAPACK
     end
     @testset "svd object" begin
-        @test _la_diff(_la_svdrec, (_MF,), rect, _MF)   # U·diag(S)·Vt ≈ A (recon)
+        @test _la_diff(_la_svdrec, (_MF,), rect, _MF)   # U·diag(S)·Vt reconstructs A
         @test _la_diff(_la_svdS,   (_MF,), rect, _VF)   # .S vs LAPACK
     end
     @testset "pinv (via svd)" begin

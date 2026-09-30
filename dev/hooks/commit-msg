@@ -1,0 +1,21 @@
+#!/bin/sh
+# Commit messages describe the change for humans. Transcript links, tool
+# footers and agent-directed text never enter the history of this repo.
+# Install (shared by every worktree): cp dev/hooks/commit-msg "$(git rev-parse --git-common-dir)/hooks/"
+# CI enforces the same rule on the PR range and body (ci.yml, job `message-hygiene`).
+msg="$1"
+tmp="$msg.hygiene"
+grep -v -E '^Claude-Session:|claude\.ai/code/session|Generated with \[?Claude Code' "$msg" > "$tmp"
+# drop trailing blank lines left behind
+awk '{ lines[NR] = $0 } END { n = NR; while (n > 0 && lines[n] ~ /^[[:space:]]*$/) n--; for (i = 1; i <= n; i++) print lines[i] }' "$tmp" > "$msg"
+rm -f "$tmp"
+# dev/CHARTER.md rule 3: every commit names the clause(s) it advances.
+# (Skipped when dev/land.sh uses this file as a message filter on already-landed history.)
+# A lander replaying agent commits states the clause for them: CHARTER="C1" git cherry-pick …
+if [ -n "${CHARTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
+    printf '\nCharter: %s\n' "$CHARTER" >> "$msg"
+fi
+if [ -z "${WT_HOOK_FILTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
+    echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
+    exit 1
+fi

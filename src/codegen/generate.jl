@@ -8,6 +8,7 @@
 
 Get the Wasm type of a local variable by its index. Parameters come first,
 then additional locals from ctx.locals.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 """
 function _get_local_type(ctx::AbstractCompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
     if local_idx < ctx.n_params
@@ -36,13 +37,12 @@ end
 """
 Generate Wasm bytecode from Julia CodeInfo.
 Uses a block-based translation for control flow.
-"""
-function generate_body(ctx::AbstractCompilationContext)::Vector{UInt8}
-    ENV["WT_CUR_FN"] = try first(string(ctx.func_ref), 80) catch; "?" end   # debug context for builder errors
-    code = ctx.code_info.code
 
+parity(code_generator.dart:38 CodeGenerator.generate)
+"""
+function generate_body(ctx::AbstractCompilationContext)::Tuple{Vector{UInt8},Vector{SourceMapping}}
     # Analyze control flow to find basic block structure
-    blocks = analyze_blocks(code)
+    blocks = analyze_blocks(ctx.nir)
 
     # The finalized typed instruction stream is authoritative. In particular,
     # post-return code is already stack-polymorphic in the builder; no serialized
@@ -57,15 +57,18 @@ end
 
 """
 Represents a basic block in the IR.
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
 struct BasicBlock
     start_idx::Int
     end_idx::Int
-    terminator::Any  # GotoIfNot, GotoNode, or ReturnNode
+    terminator::Union{NirGotoIfNot, NirGoto, NirReturn, Nothing}   # nothing: falls through
 end
 
 """
 Represents a try/catch region in the IR.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode with a catch_dest and a later :leave, where Kernel has a structured TryCatch node; the region's three statement indices are what the stackifier nests into try_table)
 """
 struct TryRegion
     enter_idx::Int      # SSA index of Core.EnterNode
@@ -74,36 +77,28 @@ struct TryRegion
 end
 
 """
-Find try/catch regions by scanning for Core.EnterNode statements.
+Find try/catch regions by scanning for try-region entries (`Core.EnterNode`).
 Returns a list of TryRegion structs.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode and a later :leave
+naming it, where Kernel has a structured TryCatch node; this scan pairs them into the
+TryRegion the stackifier nests into try_table.)
 """
-function find_try_regions(code)::Vector{TryRegion}
+function find_try_regions(nir::Vector{NirStmt})::Vector{TryRegion}
     regions = TryRegion[]
 
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.EnterNode
-            catch_dest = stmt.catch_dest
+    for (i, rec) in enumerate(nir)
+        if rec.node isa NirEnter
+            catch_dest = rec.node.catch_target
             # Find the corresponding :leave that references this EnterNode
-            leave_idx = 0
-            for (j, s) in enumerate(code)
-                if s isa Expr && s.head === :leave
-                    # :leave args contain references to EnterNode SSA values
-                    for arg in s.args
-                        if arg isa Core.SSAValue && arg.id == i
-                            leave_idx = j
-                            break
-                        end
-                    end
-                    if leave_idx > 0
-                        break
-                    end
-                end
-            end
+            leave_idx = something(findfirst(nir) do s
+                s.node isa NirLeave && any(a -> a isa NirSSA && a.id == i, s.node.enters)
+            end, 0)
 
             if leave_idx > 0
                 push!(regions, TryRegion(i, catch_dest, leave_idx))
             elseif catch_dest > i
-                # P2-batch4: an always-throwing try body has NO :leave (Julia elides
+                # An always-throwing try body has NO :leave (Julia elides
                 # it when the body can't exit normally — e.g. `try div(0,0) catch`).
                 # Dropping the region here meant no try_table was emitted at all, so
                 # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
@@ -119,29 +114,30 @@ function find_try_regions(code)::Vector{TryRegion}
 end
 
 """
-Check if code contains try/catch regions.
+Check if the IR contains try/catch regions.
+
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode statement, where Kernel has a structured TryCatch node)
 """
-function has_try_catch(code)::Bool
-    for stmt in code
-        if stmt isa Core.EnterNode
-            return true
-        end
-    end
-    return false
-end
+has_try_catch(nir::Vector{NirStmt})::Bool = any(rec -> rec.node isa NirEnter, nir)
 
 """
-    stmt_is_proven_unreachable(code, idx) -> Bool
+    stmt_is_proven_unreachable(nir, idx) -> Bool
 
 Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reached
 from entry.  This is the sole condition under which an unsupported lowering may be
 kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
 (including exception-bearing CFGs) is reachable for soundness purposes.
+
+parity(quarantine: Julia's typed IR is a goto CFG that can keep blocks no edge reaches, and a
+trap is sound only in such a block; dart's TFA removes unreachable members before codegen
+(code_generator.dart:5084 UnreachableCodeGenerator), so Kernel code never needs a statement
+reachability proof.)
+formal(dev/formal/ProvenDead.tla): a statement proven dead has no control-flow path from entry
 """
-function stmt_is_proven_unreachable(code, idx::Int)::Bool
-    (code isa AbstractVector && 1 <= idx <= length(code)) || return false
-    has_try_catch(code) && return false
-    blocks = analyze_blocks(code)
+function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
+    1 <= idx <= length(nir) || return false
+    has_try_catch(nir) && return false
+    blocks = analyze_blocks(nir)
     isempty(blocks) && return false
     bidx = findfirst(b -> b.start_idx <= idx <= b.end_idx, blocks)
     bidx === nothing && return false
@@ -153,12 +149,12 @@ function stmt_is_proven_unreachable(code, idx::Int)::Bool
         bi = pop!(work)
         term = blocks[bi].terminator
         successors = Int[]
-        if term isa Core.GotoNode
-            haskey(start2id, term.label) && push!(successors, start2id[term.label])
-        elseif term isa Core.GotoIfNot
-            haskey(start2id, term.dest) && push!(successors, start2id[term.dest])
+        if term isa NirGoto
+            haskey(start2id, term.target) && push!(successors, start2id[term.target])
+        elseif term isa NirGotoIfNot
+            haskey(start2id, term.target) && push!(successors, start2id[term.target])
             bi < length(blocks) && push!(successors, bi + 1)
-        elseif !(term isa Core.ReturnNode)
+        elseif !(term isa NirReturn)
             bi < length(blocks) && push!(successors, bi + 1)
         end
         for si in successors
@@ -171,30 +167,28 @@ end
 """
 Analyze the IR to find basic block boundaries.
 A new block starts after each terminator AND at each jump target.
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
-function analyze_blocks(code)
+function analyze_blocks(nir::Vector{NirStmt})::Vector{BasicBlock}
     # First, collect all jump targets
     jump_targets = Set{Int}()
-    for stmt in code
-        if stmt isa Core.GotoNode
-            push!(jump_targets, stmt.label)
-        elseif stmt isa Core.GotoIfNot
-            push!(jump_targets, stmt.dest)
+    for rec in nir
+        if rec.node isa NirGoto || rec.node isa NirGotoIfNot
+            push!(jump_targets, rec.node.target)
         end
     end
 
     blocks = BasicBlock[]
     block_start = 1
 
-    for i in 1:length(code)
-        stmt = code[i]
+    for i in 1:length(nir)
+        node = nir[i].node
 
         # Check if NEXT statement is a jump target (start new block after this one)
-        is_terminator = stmt isa Core.GotoIfNot || stmt isa Core.GotoNode || stmt isa Core.ReturnNode
         next_is_jump_target = (i + 1) in jump_targets
 
-        if is_terminator
-            push!(blocks, BasicBlock(block_start, i, stmt))
+        if node isa NirGotoIfNot || node isa NirGoto || node isa NirReturn
+            push!(blocks, BasicBlock(block_start, i, node))
             block_start = i + 1
         elseif next_is_jump_target && i >= block_start
             # Current statement is NOT a terminator but next statement IS a jump target
@@ -205,133 +199,29 @@ function analyze_blocks(code)
     end
 
     # Handle trailing code without explicit terminator
-    if block_start <= length(code)
-        push!(blocks, BasicBlock(block_start, length(code), nothing))
+    if block_start <= length(nir)
+        push!(blocks, BasicBlock(block_start, length(nir), nothing))
     end
 
     return blocks
 end
 
-"""
-Check if this code contains a loop (has backward jumps).
-"""
-function has_loop(ctx::AbstractCompilationContext)
-    return any(ctx.loop_headers)
-end
 
 """
-Check if there's a conditional BEFORE the first loop that jumps PAST the first loop.
-This pattern requires special handling (the stackifier instead of generate_loop_code).
-Example: if/else where each branch has its own loop (like float_to_string).
+    ensure_exception_tag!(mod)
+
+The module's one exception tag, index 0 (idempotent), whose payload is the exception and the
+stack trace of its throw, as dart's exception tag carries (exception, stackTrace). A try
+region's `try_table` catches it with `catch 0` (stackified.jl), landing the payload in its
+handler.
+parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 """
-function has_branch_past_first_loop(ctx::AbstractCompilationContext, code)
-    if !any(ctx.loop_headers)
-        return false
-    end
-
-    # Find first loop header and its back-edge
-    first_header = findfirst(ctx.loop_headers)
-    back_edge_idx = nothing
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode && stmt.label == first_header
-            back_edge_idx = i
-            break
-        end
-    end
-    if back_edge_idx === nothing
-        return false
-    end
-
-    # Check for conditionals BEFORE the first loop that jump PAST its back-edge
-    for i in 1:(first_header - 1)
-        stmt = code[i]
-        if stmt isa Core.GotoIfNot
-            target = stmt.dest
-            if target > back_edge_idx
-                # This conditional jumps past the first loop - complex pattern
-                return true
-            end
-        end
-    end
-
-    return false
-end
-
-"""
-Find merge points - targets of multiple forward jumps.
-These are blocks that need WASM block/br structure for proper control flow.
-Returns a Dict mapping target index to list of source indices.
-"""
-function find_merge_points(code)
-    # Track all forward jump targets
-    forward_targets = Dict{Int, Vector{Int}}()
-
-    for (i, stmt) in enumerate(code)
-        if stmt isa Core.GotoNode
-            target = stmt.label
-            if target > i  # Forward jump
-                if !haskey(forward_targets, target)
-                    forward_targets[target] = Int[]
-                end
-                push!(forward_targets[target], i)
-            end
-        elseif stmt isa Core.GotoIfNot
-            target = stmt.dest
-            if target > i  # Forward jump (the false branch)
-                if !haskey(forward_targets, target)
-                    forward_targets[target] = Int[]
-                end
-                push!(forward_targets[target], i)
-            end
-        end
-    end
-
-    # Merge points are targets with multiple sources
-    merge_points = Dict{Int, Vector{Int}}()
-    for (target, sources) in forward_targets
-        if length(sources) >= 2
-            merge_points[target] = sources
-        end
-    end
-
-    return merge_points
-end
-
-"""
-Check if the control flow has || or && patterns (merge points from short-circuit evaluation).
-"""
-function has_short_circuit_patterns(code)
-    merge_points = find_merge_points(code)
-    return !isempty(merge_points)
-end
-
-"""
-Generate code for try/catch blocks using WASM exception handling (try_table).
-
-Following dart2wasm's approach:
-- Use a single exception tag for all Julia exceptions
-- try_table with catch_all to handle any exception
-- Catch handler gets exception value (if any)
-
-WASM structure:
-  (block \$after_try          ; exit point for try success
-    (block \$catch_handler    ; catch handler block
-      (try_table (catch_all 0) ; branch to \$catch_handler on exception
-        ;; try body code
-        (br 1)                 ; normal exit (skip catch)
-      )
-    )
-    ;; catch handler code
-  )
-  ;; code after try/catch
-"""
-# PURE-1102: Ensure module has exception tag 0 for Julia exceptions (idempotent)
-# PURE-9032: Also ensures the $current_exn global exists for exception value stashing.
-function ensure_exception_tag!(mod::WasmModule)
-    # march6 slice D: THE TYPED TAG — dart's createExceptionTag carries
-    # (exception, stackTrace) as the tag payload (translator.dart:485-491);
+function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
+    # THE TYPED TAG — dart's _defineDartExceptionTag carries
+    # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
-    # Payload: (anyref exn, externref stackTrace — null until traces wire).
+    # Payload: (anyref exn, externref stackTrace — the JS stack its throw captured,
+    # emit_throw_value!, which a rethrow throws again).
     if isempty(mod.tags)
         tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
         add_tag!(mod, add_type!(mod, tag_ft))
@@ -339,60 +229,267 @@ function ensure_exception_tag!(mod::WasmModule)
 end
 
 """
-PURE-9032: Ensure module has the \$current_exn global for exception value stashing.
-This is a (mut anyref) global initialized to ref.null any.
-Returns the global index. Idempotent — scans existing globals to avoid duplicates.
+    emit_throw_value!(b, mod) -> b
+
+Throw the Julia exception on the stack: capture the stack trace at the throw (the imported
+`wasmtarget.stack_trace` answers `new Error()`), push it and the exception as a new entry of
+Julia's exception stack (task.c throw_internal, jl_push_excstack), and throw the tag with the
+entry's exception and stack. The one throw every raise ends in, as every dart throw captures
+`StackTrace.current` into the tag's stack slot (`errorThrowWithCurrentStackTrace`).
+formal(dev/formal/ExceptionStack.tla): a throw pushes, a rethrow does not, an enter's saved top
+is its depth, and every read and raised value is Julia's.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 """
-function ensure_exception_global!(mod::WasmModule)::UInt32
-    # Check if we already have an anyref mutable global (our exception stash)
-    for (i, g) in enumerate(mod.globals)
-        if g.valtype === AnyRef && g.mutable_
-            return UInt32(i - 1)
-        end
-    end
-    # Create (global (mut anyref) (ref.null any))
-    init = UInt8[0xD0, 0x6E, Opcode.END]  # ref.null any + end
-    push!(mod.globals, WasmGlobalDef(AnyRef, true, init))
-    return UInt32(length(mod.globals) - 1)
+function emit_throw_value!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    ensure_exception_tag!(mod)
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])
+    struct_new!(b, cell)
+    global_set!(b, top)
+    _emit_throw_top!(b, mod)
+    return b
 end
 
-# census F7 (march5): the dormant stack-trace cluster (ensure_stack_trace_support!/
-# emit_capture_stack!) is DELETED — zero callers since introduction (PURE-9036).
-# The dart-shaped rebuild carries (exception, stackTrace) as the TYPED TAG PAYLOAD
-# (translator.dart:481-491 createExceptionTag) — census queue item D9.1; the dart
-# source is the reference, not dead scaffolding.
+# throw the tag with the top entry's exception and stack, pushing nothing (jl_rethrow's
+# throw_internal(ct, NULL))
+# parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
+function _emit_throw_top!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 0, AnyRef)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 1, ExternRef)
+    throw_!(b, 0)
+    return b
+end
 
 """
-PURE-6024: Generate try/catch code using generate_stackified_flow for the try body.
-Used when the try body has complex control flow (phi nodes, nested conditionals).
-The simple linear approach in generate_try_catch can't handle phi locals or nested
-GotoIfNot, causing null pointer dereferences from uninitialized phi locals.
+    emit_rethrow!(b, mod, registry; other=nothing) -> b
 
-Structure:
-  block \$catch_landing (void)          ; catch_all jumps here
-    try_table (catch \$exceptionTag)   ; catch clause retains its landing label
-      ; generate_stackified_flow for all blocks before catch handler
-      ; (handles phi nodes, nested control flow, all returns)
+Julia's `rethrow()` (task.c jl_rethrow): throw the top entry of the exception stack again,
+with the stack its throw captured, pushing nothing. With `other`, the local holding `e`,
+Julia's `rethrow(e)` (jl_rethrow_other): `e` overwrites the top entry's exception first. At
+depth 0 either throws Julia's ErrorException instead ("rethrow() not allowed outside a catch
+block", "rethrow(exc) not allowed outside a catch block"), which pushes as every throw does.
+parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
+"""
+function emit_rethrow!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
+                       other::Union{Nothing,Integer}=nothing)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    ref_is_null!(b)
+    if_!(b)
+    local info = register_struct_type!(mod, registry, ErrorException)
+    info === nothing && error("ErrorException layout is unavailable")
+    emit_struct_prefix!(b, registry, ErrorException, info)
+    local msg = other === nothing ? "rethrow() not allowed outside a catch block" :
+                                    "rethrow(exc) not allowed outside a catch block"
+    local g = get_string_constant_global!(mod, registry, msg; eager=true)
+    global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))
+    struct_new!(b, info.wasm_type_idx)
+    emit_throw_value!(b, mod)
+    end_block!(b)
+    if other !== nothing
+        global_get!(b, top, ConcreteRef(cell, true))
+        local_get!(b, UInt32(other))
+        struct_set!(b, cell, 0, AnyRef)
     end
-  end
-  ; catch handler code (pop_exception skipped, returns -1 or similar)
-"""
-# P2-batch17: compile a catch-handler region [from..to] honouring GotoIfNot
-# (conditional catch arms / exception isa dispatch). The linear per-statement
-# loops no-op'd GotoIfNot, so `catch; if x; a; else; b; end` always produced the
-# then arm (gap f80bce91645e). Mirrors the PURE-9032 handling from the simple
-# no-merge generator.
-"""builder-native (THE implementation): compile a catch-region [from..to] into `b`."""
+    return _emit_throw_top!(b, mod)
+end
 
-# P2-batch22 (gap bac7c93c2871): `if cond; try A catch X end else try B catch
-# Y end end` — two INDEPENDENT try/catches, one per branch arm, every arm
-# returning. Neither the chain nor the sequential generator fits (chain glues
-# the else arm into the then arm's catch; sequential leaves the branch
-# condition stranded on the stack). Layout:
-#   <pre-branch code>
-#   block $else
-#     cond eqz br_if 0                ;; !cond → else arm
-#     <then arm: try_table A / catch X>   ;; all paths return
-#   end
-#   <else arm: try_table B / catch Y>     ;; all paths return
-"""builder-native front for the branch-split try generator."""
+"""
+    emit_current_exception!(b, mod) -> b
+
+Julia's `the_exception` (jl_current_exception): the top entry's exception, `nothing` (the
+null reference) when the exception stack is empty.
+parity(quarantine: Julia's per-task exception stack, read by the_exception; dart binds its catch's exception to a local, code_generator.dart:958 visitTryCatch.)
+"""
+function emit_current_exception!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    ref_is_null!(b)
+    if_!(b; results=WasmValType[AnyRef])
+    ref_null!(b, AnyRef)
+    else_!(b)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 0, AnyRef)
+    end_block!(b)
+    return b
+end
+
+"""
+The JavaScript each host import WT's code generator creates is answered with, by
+(module, field): the module's runtime, as dart2wasm generates the JS methods its module imports
+(RuntimeFinalizer.generate). A traced compile's `wasmtarget.trace_*` imports are answered by
+its harness (test/trace_localize.jl), not here. L150 keeps this table and the imports equal.
+parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
+"""
+const HOST_RUNTIME = [
+    ("wasmtarget", "stack_trace", "() => new Error()"),
+    ("env", "perf_now", "() => performance.now()"),
+    ("env", "random_i64", "() => { const a = new BigInt64Array(1); crypto.getRandomValues(a); return a[0]; }"),
+]
+
+"""
+    host_runtime_js() -> String
+
+The import object a host instantiates a WasmTarget module with, as a JavaScript expression:
+every import WT's code generator creates, answered as HOST_RUNTIME says. A host adds its own
+imports beside it (a framework's, or a test's deterministic clock) and may answer one of these
+differently.
+parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
+"""
+function host_runtime_js()::String
+    local mods = unique(first.(HOST_RUNTIME))
+    return "{ " * join(("$(m): { " * join(("$(f): $(js)" for (mm, f, js) in HOST_RUNTIME if mm == m), ", ") * " }"
+                        for m in mods), ", ") * " }"
+end
+
+"""
+    ensure_provenance_imports!(mod)
+
+What every module adds when it is created, before any definition: the import
+`wasmtarget.stack_trace: () -> externref`, which the host answers with `new Error()` (the JS
+stack at the call: dart2wasm's JavaScriptStack.current; host_runtime_js), and the export of
+the exception tag as `wasmtarget.exception`, so a host that catches an escaped Julia exception
+can read the stack of its throw from the tag's payload. Recording a source map changes none of
+this: it only maps the code.
+parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
+"""
+function ensure_provenance_imports!(mod::WasmModule)::Nothing
+    _stack_trace_func_idx(mod) === nothing &&
+        add_import!(mod, "wasmtarget", "stack_trace", WasmValType[], WasmValType[ExternRef])
+    ensure_exception_tag!(mod)
+    any(e -> e.name == "wasmtarget.exception", mod.exports) ||
+        add_export!(mod, "wasmtarget.exception", 4, 0)
+    return nothing
+end
+
+# The Julia types whose statements a traced compile reports, and the wasm local each lives in:
+# exactly Julia's bits, so a traced value compares bit for bit with the native one.
+# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+const TRACED_STATEMENT_TYPES = Dict{Type,WasmValType}(Int64 => I64, UInt64 => I64, Int32 => I32,
+                                                      Bool => I32, Float32 => F32, Float64 => F64)
+
+"""
+    ensure_trace_imports!(mod)
+
+The imports a traced compile's probes call: `wasmtarget.trace_enter(function::i32)` on entry
+to a traced function, and one per traced wasm type,
+`wasmtarget.trace_i32/i64/f32/f64(function::i32, statement::i32, value)`. Added when the
+module is created, before any definition.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function ensure_trace_imports!(mod::WasmModule)::Nothing
+    _import_func_idx(mod, "wasmtarget", "trace_enter") === nothing &&
+        add_import!(mod, "wasmtarget", "trace_enter", WasmValType[I32], WasmValType[])
+    for (name, T) in (("trace_i32", I32), ("trace_i64", I64), ("trace_f32", F32), ("trace_f64", F64))
+        _import_func_idx(mod, "wasmtarget", name) === nothing &&
+            add_import!(mod, "wasmtarget", name, WasmValType[I32, I32, T], WasmValType[])
+    end
+    return nothing
+end
+
+# a traced function's trace id, or nothing
+# parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+_trace_id(ctx::AbstractCompilationContext)::Union{Nothing,Int} =
+    ctx.translator.trace === nothing ? nothing : get(ctx.translator.trace.ids, ctx.func_idx, nothing)
+
+"""
+    emit_trace_enter!(b, ctx) -> b
+
+At the start of a traced function's body, report entering it: `wasmtarget.trace_enter(id)`, so
+the host sees every function's probes in the order the calls ran.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function emit_trace_enter!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
+    local id = _trace_id(ctx)
+    id === nothing && return b
+    i32_const!(b, id)
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", "trace_enter")), WasmValType[I32], WasmValType[])
+    return b
+end
+
+"""
+    emit_statement_trace!(b, ctx, idx, local_idx, local_type) -> b
+
+In a traced function of a traced compile, report statement `idx`'s value (just stored in
+`local_idx`) to the host: `wasmtarget.trace_<type>(id, idx, value)`, for a statement of a
+traced type. Nothing otherwise.
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int,
+                               local_idx::Integer, local_type)::InstrBuilder
+    local id = _trace_id(ctx)
+    id === nothing && return b
+    local T = get(ctx.ssa_types, idx, Any)
+    get(TRACED_STATEMENT_TYPES, T, nothing) === local_type || return b
+    local name = local_type === I64 ? "trace_i64" : local_type === I32 ? "trace_i32" :
+                 local_type === F32 ? "trace_f32" : "trace_f64"
+    i32_const!(b, id)
+    i32_const!(b, idx)
+    local_get!(b, local_idx)
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, I32, local_type], WasmValType[])
+    push!(ctx.translator.trace.probed[id], idx)
+    return b
+end
+
+# the function index of an imported function, or nothing
+# parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
+function _import_func_idx(mod::WasmModule, module_name::String, field_name::String)::Union{Nothing,UInt32}
+    local n = 0
+    for imp in mod.imports
+        imp.kind == 0x00 || continue
+        (imp.module_name == module_name && imp.field_name == field_name) && return UInt32(n)
+        n += 1
+    end
+    return nothing
+end
+
+# the function index of the imported `wasmtarget.stack_trace`, or nothing
+# parity(sdk/lib/_internal/wasm/js_common/js_helper.dart:857 JavaScriptStack.current)
+_stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32} = _import_func_idx(mod, "wasmtarget", "stack_trace")
+
+"""
+    exc_cell_type!(mod) -> type_idx
+
+One entry of Julia's exception stack: its exception, which `rethrow(e)` overwrites, and the
+stack trace its throw captured. Julia's entry also links the one below it; nothing in WT
+reads below the top except through the top an enter saved, so an entry holds no link.
+parity(quarantine: Julia's per-task exception stack (task.c jl_push_excstack) is dynamic state that rethrow() and callees read; dart binds its exception and stack to its catch's locals, code_generator.dart:958 visitTryCatch.)
+"""
+exc_cell_type!(mod::WasmModule)::UInt32 =
+    add_type!(mod, StructType([FieldType(AnyRef, true), FieldType(ExternRef, false)]))
+
+"""
+    ensure_exception_top_global!(mod) -> global_idx
+
+The top of Julia's exception stack, `\$exc_top`, a mutable nullable reference to its entry,
+null while the stack is empty; defined once and found by its name (global_named).
+parity(quarantine: Julia's per-task exception stack, whose top a throw, a pop_exception and rethrow(e) change; dart has none.)
+"""
+function ensure_exception_top_global!(mod::WasmModule)::UInt32
+    local g = global_named(mod, "\$exc_top")
+    g === nothing || return g
+    return add_global!(mod, ConcreteRef(exc_cell_type!(mod), true), true, nothing; name="\$exc_top")
+end
+
+"""
+    exc_saved_local!(ctx, enter_idx) -> local
+
+The local where try region `enter_idx` keeps the top of the exception stack when it is
+entered, its depth: its pop_exception restores it, as Julia's enter records
+jl_excstack_state and pop_exception calls jl_restore_excstack.
+parity(quarantine: Julia's exception stack is task state that a region's enter and pop_exception save and restore; dart binds each catch's exception to its own locals (code_generator.dart:958 visitTryCatch).)
+"""
+function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int)::Int
+    return get!(ctx.exc_saved_locals, enter_idx) do
+        allocate_local!(ctx, ConcreteRef(exc_cell_type!(ctx.mod), true))
+    end
+end
+
+

@@ -17,8 +17,9 @@
 #   `compile_multi((fn, args, name))`. The generic JS walker (`WALK_JS`)
 #   drives those exports and returns a tagged tree whose every leaf is an
 #   EXACT integer (stringified BigInt). `tree_matches(desc, native, tree)`
-#   compares against the native value; all numeric policy (NaN classes equal,
-#   ULP tolerance) lives in `_float_match`.
+#   compares against the native value; all numeric policy (bit-exact floats,
+#   NaN classes equal, a tolerance only where a named C routine or @simd reduction
+#   makes the native bits nonportable) lives in `_float_match`.
 #
 # ARG side (values INTO wasm):
 #   `arg_descriptor(T)` → (desc, accessors): constructor exports (positional
@@ -36,6 +37,11 @@
 # The accessor closures are themselves WasmTarget output: a codegen bug there
 # surfaces as a systematic, classified failure — not a hidden dependency.
 
+"""
+    Bridge
+
+Type-directed, bit-exact value transport across the JS↔wasm boundary.
+"""
 module Bridge
 
 export descriptor, arg_descriptor, bridge_supported, args_supported,
@@ -93,8 +99,7 @@ function _build!(accs, names, T::Type)
         b = _acc!(accs, names, "_bits_f64", _bits_f64, (Float64,))
         return Dict("k" => "bits", "b" => b, "w" => 64)
     elseif T === Float32
-        # reinterpret(Int32, ::Float32) miscompiles today (ledgered), so
-        # transport the EXACTLY-widened Float64 bits — lossless.
+        # transport the exactly-widened Float64 bits — lossless.
         b = _acc!(accs, names, "_bits_f32w", _bits_f32w, (Float32,))
         return Dict("k" => "bits", "b" => b, "w" => 32)
     elseif T === Char
@@ -159,8 +164,7 @@ _field_names(T::Type) = T <: Tuple && !(T <: NamedTuple) ? nothing :
 # ── Leaf accessors (shared) ──────────────────────────────────────────────────
 _bits_f64(x::Float64)::Int64 = reinterpret(Int64, x)
 _bits_f32w(x::Float32)::Int64 = reinterpret(Int64, Float64(x))
-# reinterpret(UInt32, ::Char) miscompiles today (ledgered); codepoint() is
-# exact for valid Chars.
+# a Char leaves as its codepoint, exact for valid Chars.
 _bits_char(c::Char)::Int64 = Int64(codepoint(c))
 _str_len(s::String)::Int64 = Int64(ncodeunits(s))
 _str_cu(s::String, i::Int64)::Int32 = Int32(codeunit(s, Int(i)))
@@ -209,8 +213,7 @@ function _make_fget(::Type{T}, i::Int) where {T}
     get!(_FN_CACHE, (:fget, T, i)) do
         f = Symbol("_fgetfn_", _mangle(T), "_", i)
         FT = fieldtype(T, i)
-        # Integer-index getfield traps when the receiver ref crossed the JS
-        # boundary (ledgered); symbol/getindex forms are solid.
+        # a tuple is read by index, any other struct by field name
         if T <: Tuple
             @eval (function $f(x::$T)::$FT; x[$i]; end)
         else
@@ -437,11 +440,23 @@ ismutable_shape(T::Type) = T <: Array || (isstructtype(T) && ismutabletype(T))
 # Decode + compare (Julia side)
 # ═════════════════════════════════════════════════════════════════════════════
 
-function _float_match(a::AbstractFloat, b::AbstractFloat)
-    (isnan(a) && isnan(b)) && return true            # NaN payloads may differ
-    a === b && return true                           # bit-identical (covers ±0.0)
+"""
+    _float_match(a, b, nonportable) -> Bool
+
+A float leaf matches when its bits are Julia's (`===`: 0.0 and -0.0 differ) or both are NaN
+(wasm leaves a NaN's payload to the engine). Only where the native value's last bits are not
+Julia's portable answer does a relative difference up to 1e-9 match — `nonportable` names
+why: the C routine it came from while the module runs Julia's generic algorithm ("LAPACK
+dgetrf"), or an `@simd` reduction whose order Julia leaves to the target's vector width
+("@simd Statistics.corm").
+parity(quarantine: the differential oracle compares Julia's native result with the module's;
+dart2wasm has no counterpart)
+"""
+function _float_match(a::AbstractFloat, b::AbstractFloat, nonportable::Union{Nothing,String})::Bool
+    (isnan(a) && isnan(b)) && return true
+    a === b && return true
+    nonportable === nothing && return false
     (isinf(a) || isinf(b)) && return a == b
-    # wasm libm ≠ openlibm for transcendentals: tolerate tiny ULP drift.
     return isapprox(Float64(a), Float64(b); rtol = 1e-9, atol = 1e-12)
 end
 
@@ -456,15 +471,23 @@ function _dec_int(w::Int, signed::Bool, s::AbstractString)
     return signed ? sv : reinterpret(unsigned(ST), sv)
 end
 
-"Compare a walked wasm tree against the native value (policy lives here)."
-function tree_matches(d, native, tree)::Bool
+"""
+    tree_matches(d, native, tree; nonportable=nothing) -> Bool
+
+Whether a walked wasm tree is the native value: integers, chars and strings exactly, floats
+by `_float_match` (bit-exact unless `nonportable` names why the native value's last bits are
+not Julia's portable answer).
+parity(quarantine: the differential oracle compares Julia's native result with the module's;
+dart2wasm has no counterpart)
+"""
+function tree_matches(d, native, tree; nonportable::Union{Nothing,String}=nothing)::Bool
     tree isa AbstractDict || return false
     haskey(tree, "err") && return false
     k = d["k"]
     if k == "int"
         return native == _dec_int(d["w"], d["s"], tree["x"])
     elseif k == "bits"
-        return _float_match(native, _dec_bits(Val(d["w"]), tree["x"]))
+        return _float_match(native, _dec_bits(Val(d["w"]), tree["x"]), nonportable)
     elseif k == "char"
         return codepoint(native::Char) == UInt32(parse(Int64, tree["x"]))
     elseif k == "str"
@@ -473,18 +496,18 @@ function tree_matches(d, native, tree)::Bool
         fs = d["fs"]
         tf = tree["f"]
         length(tf) == length(fs) || return false
-        return all(tree_matches(fs[i]["d"], getfield(native, i), tf[i]) for i in eachindex(fs))
+        return all(tree_matches(fs[i]["d"], getfield(native, i), tf[i]; nonportable) for i in eachindex(fs))
     elseif k == "vec"
         ta = tree["a"]
         length(native) == length(ta) || return false
-        return all(tree_matches(d["el"], native[i], ta[i]) for i in eachindex(ta))
+        return all(tree_matches(d["el"], native[i], ta[i]; nonportable) for i in eachindex(ta))
     elseif k == "mat"
         (size(native, 1) == tree["r"] && size(native, 2) == tree["c"]) || return false
         ta = tree["a"]
         length(ta) == length(native) || return false
         p = 1
         for i in 1:tree["r"], j in 1:tree["c"]   # row-major
-            tree_matches(d["el"], native[i, j], ta[p]) || return false
+            tree_matches(d["el"], native[i, j], ta[p]; nonportable) || return false
             p += 1
         end
         return true

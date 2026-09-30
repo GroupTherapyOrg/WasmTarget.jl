@@ -8,43 +8,6 @@ import JSON
 # with long-lived workers (~0.2ms/run). Shared with the differential fuzzer.
 include(joinpath(@__DIR__, "wasm_runner.jl"));  using .WasmRunner
 
-# ============================================================================
-# Node.js Detection
-# ============================================================================
-
-"""
-Check if Node.js is available and get the command.
-Returns a tuple of (command, needs_experimental_flag).
-Requires Node.js v20+ for WasmGC support.
-- v20-22: WasmGC is experimental (needs --experimental-wasm-gc flag)
-- v23+: WasmGC is stable (no flag needed)
-"""
-function detect_node()
-    try
-        version_str = read(`node --version`, String)
-        # Parse version (format: v20.x.x)
-        m = match(r"v(\d+)\.", version_str)
-        if m !== nothing
-            major_version = Base.parse(Int, m.captures[1])
-            if major_version >= 22
-                # WasmGC is stable in v22+ (flag removed)
-                return (`node`, false)
-            elseif major_version >= 20
-                # WasmGC is experimental in v20-21
-                return (`node`, true)
-            else
-                @warn "Node.js version $version_str found, but v20+ required for WasmGC"
-                return (nothing, false)
-            end
-        end
-        return (nothing, false)
-    catch
-        @warn "Node.js not found. Wasm execution tests will be skipped."
-        return (nothing, false)
-    end
-end
-
-const (NODE_CMD, NEEDS_EXPERIMENTAL_FLAG) = detect_node()
 
 # ============================================================================
 # Wasm Execution
@@ -64,14 +27,10 @@ Execute a WebAssembly function in Node.js and return the result.
 The result of the function call, parsed from JSON.
 Returns `nothing` if Node.js is not available.
 """
-function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...)
-    if !WasmRunner.runner_available()
-        @warn "Node.js not available. Skipping Wasm execution."
-        return nothing
-    end
+function run_wasm(wasm_bytes::Vector{UInt8}, func_name::String, args...;
+                  source_map::Union{Nothing,String}=nothing)
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
-    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args)
-    status === :nonode && return nothing
+    status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args; source_map=source_map)
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -127,6 +86,7 @@ function unmarshal_result(result)
         result == "__Inf__" && return Inf
         result == "__-Inf__" && return -Inf
         result == "__NaN__" && return NaN
+        result == "__-0__" && return -0.0   # JSON writes -0 as 0; the sign is part of the value
         # WBUILD-3000: BigInt values are serialized as strings to preserve Int64 precision
         # (JavaScript Number loses precision for values > 2^53)
         return try
@@ -161,15 +121,12 @@ run_wasm_with_imports(bytes, "main", imports, Int32(42))
 ```
 """
 function run_wasm_with_imports(wasm_bytes::Vector{UInt8}, func_name::String,
-                               imports::Dict, args...)
-    if !WasmRunner.runner_available()
-        @warn "Node.js not available. Skipping Wasm execution."
-        return nothing
-    end
+                               imports::Dict, args...;
+                               source_map::Union{Nothing,String}=nothing)
     js_args = join(map(arg -> format_js_arg(arg), args), ", ")
     status, val = WasmRunner.run_wasm_single(wasm_bytes, func_name, js_args;
-                                             import_js = build_imports_js(imports))
-    status === :nonode && return nothing
+                                             import_js = build_imports_js(imports),
+                                             source_map = source_map)
     (status === :trap || status === :error) && error("Wasm execution failed: $(val)")
     return unmarshal_result(val)
 end
@@ -223,12 +180,8 @@ macro test_compile(func_call)
         # 4. Run in Node
         actual = run_wasm(wasm_bytes, string(nameof(f)), args...)
 
-        # 5. Verify
-        if actual !== nothing
-            @test actual == expected
-        else
-            @warn "Skipped Wasm verification (Node.js not available)"
-        end
+        # 5. Verify (bit-exact: 0.0 and -0.0 differ, NaN is NaN)
+        @test isequal(actual, expected)
     end
 end
 
@@ -241,11 +194,7 @@ Useful for testing hand-crafted Wasm binaries.
 macro test_wasm_output(wasm_bytes, func_name, args, expected)
     quote
         actual = run_wasm($(esc(wasm_bytes)), $(esc(func_name)), $(esc(args))...)
-        if actual !== nothing
-            @test actual == $(esc(expected))
-        else
-            @warn "Skipped Wasm verification (Node.js not available)"
-        end
+        @test actual == $(esc(expected))
     end
 end
 
@@ -260,11 +209,6 @@ Validate a WebAssembly module by attempting to instantiate it in Node.js.
 Returns true if the module is valid, false otherwise.
 """
 function validate_wasm(wasm_bytes::Vector{UInt8})
-    if NODE_CMD === nothing
-        @warn "Node.js not available. Skipping Wasm validation."
-        return true  # Assume valid if we can't check
-    end
-
     dir = mktempdir()
     wasm_path = joinpath(dir, "module.wasm")
     js_path = joinpath(dir, "validator.mjs")
@@ -280,7 +224,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };
+        const importObject = $(WasmTarget.host_runtime_js());
         const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
@@ -299,7 +243,7 @@ validate();
 
     # Run Node.js
     try
-        node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+        node_cmd = `$NODE $js_path`
         output = read(pipeline(node_cmd; stderr=stderr), String)
         return strip(output) == "VALID"
     catch e
@@ -330,21 +274,42 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 1. Run natively in Julia to get expected result
     expected = f(args...)
 
-    # 2. Compile to Wasm (with optional binaryen optimization)
+    # 2. Compile to Wasm (with optional binaryen optimization), with its source map: a trap
+    #    names the Julia statement of every wasm frame it unwound through
     arg_types = Tuple(map(typeof, args))
-    bytes = WasmTarget.compile(f, arg_types; optimize=optimize)
+    bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)
 
-    # 3. Run in Node.js to get actual result (with standard Math imports)
+    # 3. Run in Node.js to get actual result (no host imports)
     func_name = string(nameof(f))
-    imports = Dict("Math" => Dict("pow" => "Math.pow"))
-    actual = run_wasm_with_imports(bytes, func_name, imports, args...)
-
-    # 4. Compare (skip if Node.js unavailable)
-    if actual === nothing && NODE_CMD === nothing
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
+    imports = Dict{String,Any}()
+    actual = try
+        run_wasm_with_imports(bytes, func_name, imports, args...; source_map=source_map)
+    catch e
+        # a result the host cannot read (an Any result, a GC reference) is read inside the
+        # module, through a typeassert to the native result's type
+        (e isa ErrorException && occursin("unserializable result", e.msg)) || rethrow()
+        w = typed_result_wrapper(f, typeof(expected))
+        w === nothing && rethrow()
+        wbytes, wmap = WasmTarget.compile_with_sourcemap(w, arg_types; optimize=optimize)
+        run_wasm_with_imports(wbytes, string(nameof(w)), imports, args...; source_map=wmap)
     end
 
-    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+    # 4. Compare, bit-exact: 0.0 and -0.0 differ, NaN is NaN
+
+    return (pass=isequal(expected, actual), expected=expected, actual=actual, wasm_size=length(bytes))
+end
+
+"""
+    typed_result_wrapper(f, T) -> Union{Function, Nothing}
+
+A function computing `f(args...)::T`, for reading a result the host cannot serialize (an Any
+result is a GC reference): the typeassert unboxes it inside the module, to a value the host
+reads. `nothing` when `T` is not a concrete value type the host reads (a number, Bool, Char).
+"""
+function typed_result_wrapper(@nospecialize(f), @nospecialize(T))
+    (T <: Union{Number, Bool, Char} && isconcretetype(T)) || return nothing
+    name = gensym(:typed_result)
+    return Core.eval(@__MODULE__, :($name(args...) = $f(args...)::$T))
 end
 
 """
@@ -482,7 +447,7 @@ function compare_batch(f, test_cases::Vector)
     results = NamedTuple[]
     for args in test_cases
         r = compare_julia_wasm(f, args...)
-        push!(results, (args=args, expected=r.expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=r.expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -514,17 +479,14 @@ function compare_julia_wasm_manual(f, args::Tuple, expected)
     arg_types = Tuple(map(typeof, args))
     bytes = WasmTarget.compile(f, arg_types)
 
-    # 2. Run in Node.js (with standard Math imports)
+    # 2. Run in Node.js (no host imports)
     func_name = string(nameof(f))
-    imports = Dict("Math" => Dict("pow" => "Math.pow"))
+    imports = Dict{String,Any}()
     actual = run_wasm_with_imports(bytes, func_name, imports, args...)
 
     # 3. Compare against pre-computed expected value
-    if actual === nothing && NODE_CMD === nothing
-        return (pass=true, expected=expected, actual=nothing, skipped=true)
-    end
 
-    return (pass=(expected == actual), expected=expected, actual=actual, skipped=false)
+    return (pass=isequal(expected, actual), expected=expected, actual=actual)
 end
 
 """
@@ -549,7 +511,7 @@ function compare_batch_manual(f, test_cases::Vector)
     results = NamedTuple[]
     for (args, expected) in test_cases
         r = compare_julia_wasm_manual(f, args, expected)
-        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -654,7 +616,7 @@ end
     compare_against_ground_truth(name::String, f) -> Vector{NamedTuple}
 
 Compile `f` to Wasm and compare its output against saved ground truth snapshots.
-Returns a vector of `(args, expected, actual, pass, skipped)` named tuples.
+Returns a vector of `(args, expected, actual, pass)` named tuples.
 
 The ground truth must have been generated with `generate_ground_truth` first.
 
@@ -681,7 +643,7 @@ function compare_against_ground_truth(name::String, f; dir::AbstractString=GROUN
         args = Tuple(Int32(a) for a in args_raw)
 
         r = compare_julia_wasm_manual(f, args, expected isa Integer ? Int32(expected) : expected)
-        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass, skipped=r.skipped))
+        push!(results, (args=args, expected=expected, actual=r.actual, pass=r.pass))
     end
     return results
 end
@@ -754,7 +716,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = { Math: { pow: Math.pow }, io: { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} } };")
+    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
@@ -804,6 +766,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
         push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
         push!(lines, "      else if (v === Infinity) out.push('Inf');")
         push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+        push!(lines, "      else if (Object.is(v, -0)) out.push('__-0__');")
         push!(lines, "      else out.push(v);")
         push!(lines, "    }")
         push!(lines, "    return [{ ok: out }];")
@@ -815,6 +778,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
         if (value === Infinity) return "__Inf__";
         if (value === -Infinity) return "__-Inf__";
         if (Number.isNaN(value)) return "__NaN__";
+        if (Object.is(value, -0)) return "__-0__";
       }
       return value;
     };""")
@@ -851,11 +815,6 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # WASM bridge if we don't copy first.
     args_for_wasm = deepcopy(args)
 
-    if !WasmRunner.runner_available()
-        expected = f(args...)
-        return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=0)
-    end
-
     # 1. Run natively in Julia (may mutate args)
     expected = f(args...)
 
@@ -890,14 +849,12 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     # 6. Execute
     let
         status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-        if status === :nonode
-            return (pass=true, expected=expected, actual=nothing, skipped=true, wasm_size=length(bytes))
-        elseif status === :error
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+        if status === :error
+            return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(bytes))
         end
         r = results[1]
         if haskey(r, "trap")
-            return (pass=false, expected=expected, actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+            return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(bytes))
         end
         actual = unmarshal_result(r["ok"])
 
@@ -916,13 +873,121 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
                 actual
             end
             pass = actual_nums isa Vector && length(actual_nums) == length(expected_nums) &&
-                   all(i -> _approx_equal(actual_nums[i], expected_nums[i]), 1:length(expected_nums))
+                   all(i -> isequal(actual_nums[i], expected_nums[i]), 1:length(expected_nums))
         else
-            pass = (expected == actual)
+            pass = isequal(expected, actual)
         end
 
-        return (pass=pass, expected=expected, actual=actual, skipped=false, wasm_size=length(bytes))
+        return (pass=pass, expected=expected, actual=actual, wasm_size=length(bytes))
     end
+end
+
+# ============================================================================
+# Sidecar differential comparison (native linear-memory module,
+# dev/PARITY_MASTER.md, Scope)
+# ============================================================================
+
+"""
+    _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types) -> String
+
+Driver body for the persistent runner pool, sidecar-aware: embeds
+`sidecar_bytes` as a hex literal directly in the generated JS (the pool's
+`bytes` channel — `run_driver_batch(main_bytes, src)` — only carries ONE
+binary, the main GC module; the sidecar rides inline in `src` instead).
+Instantiates the sidecar FIRST with no imports of its own, passes its
+exports as `importObject[sidecar_module_name]`, THEN instantiates `bytes`
+(the main module) against that import object — the two-module HOST-linking
+shape `add_import!`/`import_stubs` target, not `wasm-merge` (L98's road is
+for two WT-compiled GC binaries sharing one object model; the sidecar owns
+its own linear memory and shares no object model with the caller at all).
+
+Only scalar Float64 args and Vector{Float64} args are supported (daxpy's
+signature); Vector{Float64} args/results marshal through the `_bv_f64_*`
+bridge, which must already be compiled into the main module.
+"""
+function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_module_name::AbstractString,
+                                          func_name::AbstractString, args, arg_types)
+    lines = String[]
+    push!(lines, "  try {")
+    push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
+    push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
+    push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
+    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
+    push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
+    push!(lines, "    const e = wasmModule.instance.exports;")
+
+    call_args = String[]
+    for (i, (arg, T)) in enumerate(zip(args, arg_types))
+        if T === Vector{Float64}
+            v = arg::Vector{Float64}
+            push!(lines, "    const v$(i) = e._bv_f64_new($(length(v))n);")
+            for (j, val) in enumerate(v)
+                js_val = isnan(val) ? "NaN" : isinf(val) ? (val > 0 ? "Infinity" : "-Infinity") : string(val)
+                push!(lines, "    e['_bv_f64_set!'](v$(i), $(j)n, $(js_val));")
+            end
+            push!(call_args, "v$(i)")
+        elseif T === Float64
+            js_val = isnan(arg) ? "NaN" : isinf(arg) ? (arg > 0 ? "Infinity" : "-Infinity") : string(arg)
+            push!(call_args, js_val)
+        else
+            error("_generate_sidecar_bridge_driver: unsupported arg type $T")
+        end
+    end
+
+    push!(lines, "    const result = e['$(func_name)']($(join(call_args, ", ")));")
+    push!(lines, "    const len = Number(e._bv_f64_len(result));")
+    push!(lines, "    const out = [];")
+    push!(lines, "    for (let i = 0; i < len; i++) {")
+    push!(lines, "      const v = e._bv_f64_get(result, BigInt(i+1));")
+    push!(lines, "      if (Number.isNaN(v)) out.push('NaN');")
+    push!(lines, "      else if (v === Infinity) out.push('Inf');")
+    push!(lines, "      else if (v === -Infinity) out.push('-Inf');")
+    push!(lines, "      else if (Object.is(v, -0)) out.push('__-0__');")
+    push!(lines, "      else out.push(v);")
+    push!(lines, "    }")
+    push!(lines, "    return [{ ok: out }];")
+    push!(lines, "  } catch (err) {")
+    push!(lines, "    return [{ trap: String(err && err.message || err) }];")
+    push!(lines, "  }")
+    return join(lines, "\n")
+end
+
+"""
+    compare_sidecar_wasm_vec(main_bytes, sidecar_bytes, sidecar_module_name,
+                              func_name, expected, args...) -> NamedTuple
+
+Sidecar-aware variant of [`compare_julia_wasm_vec`](@ref) for the two-module
+host-linking pattern (`parity(functions.dart:90 wasm:import/export;
+translator.dart:213 ffiMemory)`). `expected` is a precomputed oracle — NEVER
+derived by calling `func_name`'s Julia function natively, since its import
+stub calls are `Base.inferencebarrier`/`Base.donotdelete` no-ops off the wasm
+boundary — compared element-wise (bit-exact, `isequal`) against the
+`Vector{Float64}` wasm result of calling `func_name(args...)` in the
+compiled `main_bytes` module, with the `sidecar_bytes` module instantiated
+first and wired in as `importObject[sidecar_module_name]`.
+
+Returns `(pass, expected, actual, wasm_size)`, matching every other
+`compare_julia_wasm_*` helper's shape.
+"""
+function compare_sidecar_wasm_vec(main_bytes::Vector{UInt8}, sidecar_bytes::Vector{UInt8},
+                                   sidecar_module_name::AbstractString, func_name::AbstractString,
+                                   expected::Vector{Float64}, args...)
+    arg_types = map(typeof, args)
+    driver = _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types)
+    status, results = WasmRunner.run_driver_batch(main_bytes, driver; ninputs=1)
+    if status === :error
+        return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(main_bytes))
+    end
+    r = results[1]
+    if haskey(r, "trap")
+        return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(main_bytes))
+    end
+    actual_raw = unmarshal_result(r["ok"])
+    actual = actual_raw isa Vector ? [_parse_f64(x) for x in actual_raw] : actual_raw
+    pass = actual isa Vector && length(actual) == length(expected) &&
+           all(i -> isequal(actual[i], expected[i]), 1:length(expected))
+    return (pass=pass, expected=expected, actual=actual, wasm_size=length(main_bytes))
 end
 
 """
@@ -939,13 +1004,9 @@ exercised directly in WT's own unit suite instead of only in downstream CI: the
 plain harness `JSON.stringify`s a WasmGC array/struct ref to `"undefined"`, while
 the bridge walks it field-by-field.
 
-Returns `(pass, expected, actual, skipped, wasm_size)`. When Node is unavailable,
-`skipped=true, pass=true`. A native throw is matched by a wasm trap.
+Returns `(pass, expected, actual, wasm_size)`. A native throw is matched by a wasm trap.
 """
 function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, optimize::Bool=false)
-    if !WasmRunner.runner_available()
-        return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
-    end
     arg_types = map(typeof, args)
     nat = try (true, f(args...)) catch e; (false, e) end
     rt = rettype === nothing ?
@@ -963,8 +1024,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
-    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
-    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -976,21 +1036,19 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     });
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-    status === :nonode && return (pass=true, expected=(nat[1] ? nat[2] : :throw),
-                                  actual=nothing, skipped=true, wasm_size=length(bytes))
     if status === :error
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+                actual="WASM_ERROR", wasm_size=length(bytes))
     end
     r = results[1]
     if haskey(r, "trap")
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="trap: " * string(get(r, "trap", "?")), skipped=false, wasm_size=length(bytes))
+                actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
     pass = nat[1] && WasmTarget.Bridge.tree_matches(desc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
-            actual=walked, skipped=false, wasm_size=length(bytes))
+            actual=walked, wasm_size=length(bytes))
 end
 
 """
@@ -1002,12 +1060,9 @@ return. This lets island cells whose `@bind` inputs are non-scalar (`String`,
 `Bool`, `Char`, `Symbol`, structs, `Vector`/`Tuple`/`NamedTuple`) be exercised in
 WT's unit suite. (Port of the fuzzer's `bridge_run_args`, return-compare only —
 PI island cells are pure functions of their bonds, so no mutable-arg re-reads.)
-Returns `(pass, expected, actual, skipped, wasm_size)`; native throw ⇒ wasm trap.
+Returns `(pass, expected, actual, wasm_size)`; native throw ⇒ wasm trap.
 """
 function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothing, optimize::Bool=false)
-    if !WasmRunner.runner_available()
-        return (pass=true, expected=nothing, actual=nothing, skipped=true, wasm_size=0)
-    end
     arg_types = map(typeof, args)
     nat = try (true, f(args...)) catch e; (false, e) end
     rt = rettype === nothing ?
@@ -1036,8 +1091,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
-    const _io = { write_string(){}, write_int(){}, write_float(){}, write_bool(){}, write_newline(){}, write_nothing(){} };
-    const importObject = { Math: { pow: Math.pow }, io: _io };
+    const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -1052,21 +1106,19 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     } catch (e) { return [{ trap: String(e && e.message || e) }]; }
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)
-    status === :nonode && return (pass=true, expected=(nat[1] ? nat[2] : :throw),
-                                  actual=nothing, skipped=true, wasm_size=length(bytes))
     if status === :error
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="WASM_ERROR", skipped=false, wasm_size=length(bytes))
+                actual="WASM_ERROR", wasm_size=length(bytes))
     end
     r = results[1]
     if haskey(r, "trap")
         return (pass = !nat[1], expected=(nat[1] ? nat[2] : :throw),
-                actual="trap: " * string(get(r, "trap", "?")), skipped=false, wasm_size=length(bytes))
+                actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
     pass = nat[1] && WasmTarget.Bridge.tree_matches(rdesc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
-            actual=walked, skipped=false, wasm_size=length(bytes))
+            actual=walked, wasm_size=length(bytes))
 end
 
 """
@@ -1079,19 +1131,6 @@ function _parse_f64(x)
     return Float64(x)
 end
 
-"""
-Approximate equality for float comparisons.
-"""
-function _approx_equal(a, b)
-    if a isa AbstractFloat || b isa AbstractFloat
-        fa, fb = Float64(a), Float64(b)
-        if isnan(fa) && isnan(fb)
-            return true
-        end
-        return isapprox(fa, fb; atol=1e-10, rtol=1e-10)
-    end
-    return a == b
-end
 
 # ============================================================================
 # Debug Utilities
@@ -1124,281 +1163,3 @@ function hexdump(bytes::Vector{UInt8}; columns=16)
     end
 end
 
-# ============================================================================
-# Dual-Path Comparison — Self-Hosting Verification (PHASE-1M-T01, PHASE-1-T01)
-# ============================================================================
-
-"""
-    compare_server_vs_mini(f, arg_types; test_args=nothing, func_name=nothing) -> NamedTuple
-
-Compare server-compiled (compile()) vs mini/frozen-compiled path.
-The mini path uses: code_typed → preprocess → serialize → deserialize → compile_module_from_ir.
-
-Compares RESULTS (not bytes) since the mini path may produce different binary layout.
-
-Returns (pass, native, server, transport, server_size, transport_size).
-"""
-function compare_server_vs_mini(f, arg_types::Tuple; test_args=nothing, func_name=nothing)
-    if func_name === nothing
-        func_name = string(nameof(f))
-    end
-    if test_args === nothing
-        # Generate default test args: zeros of the right types
-        test_args = Tuple(zero(T) for T in arg_types)
-    end
-
-    # Native Julia result
-    native = f(test_args...)
-
-    # Server path: compile() directly
-    server_bytes = WasmTarget.compile(f, arg_types)
-    server_result = nothing
-    try
-        server_result = run_wasm(server_bytes, func_name, test_args...)
-    catch e
-        server_result = "ERROR: $e"
-    end
-
-    # Transport/mini path: code_typed → preprocess → serialize → deserialize → compile
-    ci, rt = Base.code_typed(f, arg_types; optimize=true)[1]
-    entries = [(ci, rt, arg_types, func_name)]
-    preprocessed = WasmTarget.preprocess_ir_entries(entries)
-    json_str = WasmTarget.serialize_ir_entries(preprocessed)
-    received = WasmTarget.deserialize_ir_entries(json_str)
-    transport_bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(received))
-    transport_result = nothing
-    try
-        transport_result = run_wasm(transport_bytes, func_name, test_args...)
-    catch e
-        transport_result = "ERROR: $e"
-    end
-
-    # Compare results (not bytes)
-    pass = (server_result == native) && (transport_result == native)
-
-    return (pass=pass, native=native, server=server_result, transport=transport_result,
-            server_size=length(server_bytes), transport_size=length(transport_bytes))
-end
-
-"""
-    compare_server_vs_selfhosted(f, arg_types; test_args=nothing, func_name=nothing) -> NamedTuple
-
-Compare server-compiled (compile()) vs self-hosted transport path.
-The self-hosted path uses: code_typed → preprocess → serialize → deserialize → compile_module_from_ir.
-
-Compares both BYTES (should be identical) and RESULTS.
-
-Returns (pass, bytes_identical, native, server, transport, server_size, transport_size).
-"""
-function compare_server_vs_selfhosted(f, arg_types::Tuple; test_args=nothing, func_name=nothing)
-    if func_name === nothing
-        func_name = string(nameof(f))
-    end
-    if test_args === nothing
-        test_args = Tuple(zero(T) for T in arg_types)
-    end
-
-    native = f(test_args...)
-
-    # Server path
-    server_bytes = WasmTarget.compile(f, arg_types)
-    server_result = nothing
-    try
-        server_result = run_wasm(server_bytes, func_name, test_args...)
-    catch e
-        server_result = "ERROR: $e"
-    end
-
-    # Self-hosted path: code_typed → preprocess → serialize → deserialize → compile_module_from_ir
-    ci, rt = Base.code_typed(f, arg_types; optimize=true)[1]
-    entries = [(ci, rt, arg_types, func_name)]
-    preprocessed = WasmTarget.preprocess_ir_entries(entries)
-    json_str = WasmTarget.serialize_ir_entries(preprocessed)
-    received = WasmTarget.deserialize_ir_entries(json_str)
-    transport_bytes = WasmTarget.to_bytes(WasmTarget.compile_module_from_ir(received))
-    transport_result = nothing
-    try
-        transport_result = run_wasm(transport_bytes, func_name, test_args...)
-    catch e
-        transport_result = "ERROR: $e"
-    end
-
-    bytes_identical = server_bytes == transport_bytes
-    pass = bytes_identical && (server_result == native) && (transport_result == native)
-
-    return (pass=pass, bytes_identical=bytes_identical, native=native,
-            server=server_result, transport=transport_result,
-            server_size=length(server_bytes), transport_size=length(transport_bytes))
-end
-
-# ============================================================================
-# Browser TypeInf Comparison — Phase 2 (PHASE-2-T01)
-# ============================================================================
-
-# Global state: typeinf overrides loaded flag
-const _TYPEINF_OVERRIDES_LOADED = Ref{Bool}(false)
-
-"""
-    compare_server_vs_browser_typeinf(functions::Vector; world=nothing) -> Vector{NamedTuple}
-
-Batch three-way comparison: server typeinf vs browser (WasmInterpreter) typeinf vs native.
-
-Each element of `functions` is a tuple: `(f, arg_types, name, test_args_list)` where
-`test_args_list` is a vector of argument tuples.
-
-For each function, compares:
-1. Server: code_typed → return type
-2. Browser: WasmInterpreter typeinf → return type (must match server)
-3. Execution: compile → run in Node.js → result must match native Julia
-
-IMPORTANT: This function loads typeinf overrides on first call. These overrides are
-IRREVERSIBLE — Base._methods_by_ftype and Base.typeintersect are overridden globally.
-ALL code_typed/code_lowered/methods()/process spawning MUST happen before overrides load.
-Call this ONCE per process with all functions to compare.
-
-Returns a vector of NamedTuples, one per function.
-"""
-function compare_server_vs_browser_typeinf(functions::Vector; world::Union{Nothing,UInt64}=nothing)
-    if world === nothing
-        world = Base.get_world_counter()
-    end
-
-    if _TYPEINF_OVERRIDES_LOADED[]
-        error("Typeinf overrides already loaded. compare_server_vs_browser_typeinf can only be called ONCE per process (before overrides).")
-    end
-
-    native_mt = Core.Compiler.InternalMethodTable(world)
-
-    # Common callee signatures (arithmetic, comparison ops)
-    callee_sigs = [
-        Tuple{typeof(+), Int64, Int64}, Tuple{typeof(-), Int64, Int64},
-        Tuple{typeof(*), Int64, Int64}, Tuple{typeof(+), Float64, Float64},
-        Tuple{typeof(-), Float64, Float64}, Tuple{typeof(*), Float64, Float64},
-        Tuple{typeof(<), Float64, Float64}, Tuple{typeof(>), Float64, Float64},
-        Tuple{typeof(>=), Int64, Int64}, Tuple{typeof(<=), Int64, Int64},
-        Tuple{typeof(>), Int64, Int64}, Tuple{typeof(<), Int64, Int64},
-        Tuple{typeof(÷), Int64, Int64}, Tuple{typeof(%), Int64, Int64},
-        Tuple{typeof(⊻), Int64, Int64},
-    ]
-
-    # ── Phase A: Pre-compute ALL data BEFORE loading overrides ──
-    precomputed = []
-    shared_methods = Dict{Any, Core.Compiler.MethodLookupResult}()
-
-    # Pre-compute callee methods
-    for csig in callee_sigs
-        r = Core.Compiler.findall(csig, native_mt; limit=3)
-        if r !== nothing
-            shared_methods[csig] = r
-        end
-    end
-
-    for (f, arg_types, name, test_args_list) in functions
-        sig = Tuple{typeof(f), arg_types...}
-
-        # Server typeinf
-        server_ci, server_ret = Base.code_typed(f, arg_types)[1]
-
-        # Method table entry
-        r = Core.Compiler.findall(sig, native_mt; limit=3)
-        if r !== nothing
-            shared_methods[sig] = r
-        end
-
-        # MethodInstance + CodeInfo for WasmInterpreter
-        mi = Core.Compiler.specialize_method(
-            first(methods(f, arg_types)),
-            sig, Core.svec()
-        )
-        src = Core.Compiler.retrieve_code_info(mi, world)
-
-        # Compile + execute for each test case
-        exec_results = []
-        try
-            bytes = WasmTarget.compile(f, arg_types)
-            for args in test_args_list
-                native = f(args...)
-                wasm = nothing
-                try
-                    wasm = run_wasm(bytes, name, args...)
-                catch e
-                    wasm = "ERROR: $e"
-                end
-                push!(exec_results, (args=args, native=native, wasm=wasm,
-                    pass=(native isa Float64 ? (wasm isa Number && abs(Float64(wasm) - native) < 1e-10) : wasm == native)))
-            end
-        catch e
-            push!(exec_results, (args=(), native=nothing, wasm="COMPILE ERROR: $e", pass=false))
-        end
-
-        push!(precomputed, (name=name, server_ret=server_ret, mi=mi, src=src,
-                           exec_results=exec_results))
-    end
-
-    # ── Phase B: Load overrides (once, irreversible) ──
-    typeinf_dir = joinpath(@__DIR__, "..", "src", "selfhost", "typeinf")
-    include(joinpath(typeinf_dir, "ccall_stubs.jl"))
-    include(joinpath(typeinf_dir, "subtype.jl"))
-    include(joinpath(typeinf_dir, "matching.jl"))
-    include(joinpath(typeinf_dir, "ccall_replacements.jl"))
-    include(joinpath(typeinf_dir, "dict_method_table.jl"))
-    _TYPEINF_OVERRIDES_LOADED[] = true
-
-    # ── Phase C: Browser typeinf via WasmInterpreter ──
-    results = NamedTuple[]
-    for pc in precomputed
-        browser_ret = nothing
-        try
-            browser_ret = @invokelatest _run_browser_typeinf(pc.mi, pc.src, world, shared_methods)
-        catch e
-            browser_ret = "ERROR: $(sprint(showerror, e))"
-        end
-
-        types_match = pc.server_ret == browser_ret
-        exec_pass = all(r -> r.pass, pc.exec_results)
-        pass = types_match && exec_pass
-
-        push!(results, (name=pc.name, pass=pass,
-            server_type=pc.server_ret, browser_type=browser_ret,
-            types_match=types_match, exec_results=pc.exec_results))
-    end
-
-    return results
-end
-
-# Single-function convenience wrapper
-function compare_server_vs_browser_typeinf(f, arg_types::Tuple;
-                                            test_args=nothing, func_name=nothing)
-    if func_name === nothing
-        func_name = string(nameof(f))
-    end
-    if test_args === nothing
-        test_args = Tuple(zero(T) for T in arg_types)
-    end
-    results = compare_server_vs_browser_typeinf(
-        [(f, arg_types, func_name, [test_args])]
-    )
-    r = first(results)
-    er = first(r.exec_results)
-    return (pass=r.pass, server_type=r.server_type, browser_type=r.browser_type,
-            types_match=r.types_match, native=er.native, server_wasm=er.wasm)
-end
-
-"""
-    _run_browser_typeinf(mi, src, world, method_entries) -> Any
-
-Internal helper. Runs WasmInterpreter typeinf in the new world context.
-Must be called via @invokelatest to see dynamically loaded method definitions.
-"""
-function _run_browser_typeinf(mi::Core.MethodInstance, src::Core.CodeInfo,
-                               world::UInt64, method_entries::Dict)
-    table = DictMethodTable(world)
-    for (k, v) in method_entries
-        table.methods[k] = v
-    end
-    interp = WasmInterpreter(world, table)
-    result = Core.Compiler.InferenceResult(mi)
-    frame = Core.Compiler.InferenceState(result, src, :no, interp)
-    Core.Compiler.typeinf(interp, frame)
-    return result.result
-end

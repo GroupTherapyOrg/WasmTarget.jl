@@ -2,16 +2,56 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # march/** = agent branches of the finishing march: each gets the full
+    # matrix on push, so the authoritative gate runs on GitHub, not on a
+    # memory-bound local box (dev/MARCH.md §5).
+    branches: [main, 'march/**']
   pull_request:
 
+# Only the newest push per branch runs; a superseded run is cancelled.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Commit messages and the PR body describe the change for humans:
+  # transcript links, tool footers and agent-directed text never land
+  # (dev/hooks/commit-msg strips them locally; this is the gate).
+  message-hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: No transcript links or tool footers in commits or the PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          pat='claude\.ai/code/session|^Claude-Session:|Generated with \[?Claude Code'
+          bad=$(git log --format='%H %s%n%b' origin/main..HEAD | grep -nE "$pat" || true)
+          if [ -n "$bad" ]; then echo "forbidden text in commit messages:"; echo "$bad"; exit 1; fi
+          if printf '%s' "$PR_BODY" | grep -qE "$pat"; then echo "forbidden text in the PR body"; exit 1; fi
+          # dev/CHARTER.md rule 3: every commit from the charter's adoption on names its clause(s)
+          c=$(git log --diff-filter=A --format=%H -- dev/CHARTER.md | tail -1)
+          if [ -n "$c" ]; then
+            miss=""
+            for h in $(git rev-list --no-merges "$c^..HEAD"); do
+              git log -1 --format=%B "$h" | grep -qE '^Charter: C[0-9]+' || miss="$miss $(git log -1 --format='%h %s' "$h")"$'\n'
+            done
+            if [ -n "$miss" ]; then echo "commits without a 'Charter: C<n>' trailer:"; printf '%s' "$miss"; exit 1; fi
+          fi
+          echo "clean: $(git rev-list --count origin/main..HEAD) commits"
+
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Direct Windows slices historically finish well below 45 minutes. Keep a
-    # tighter bound there so an external optimizer regression cannot consume a
-    # second blind multi-hour certification run.
-    timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 45 || 75 }}
+    # Every slice is an independently bounded job. The single serial `all` slice (lanes +
+    # every shard + fuzz on one runner) ran 94 min on macOS at 3d67b2aa and passed the
+    # 110-min bound on march/batch-9 as the smoke corpus grew, so ubuntu and macOS are
+    # sliced like Windows: the inner-loop lanes, the codegen shards (four on ubuntu; two
+    # on macOS, whose runners GitHub caps at five concurrent jobs), and the fuzz pass.
+    timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 70 || 110 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
     strategy:
@@ -22,12 +62,19 @@ jobs:
           # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
           - '~1.13.0-0'
         target:
-          # Unix runners have already proven the bounded local orchestrator.
-          - { os: ubuntu-latest, slice: all, shard: '', fuzz: '' }
-          - { os: macos-latest, slice: all, shard: '', fuzz: '' }
-          # On Windows, make each compiler shard and fuzz pass an independently
-          # bounded job. The local orchestrator buffers child logs and blocks on
-          # the first process, which hid the responsible shard until job timeout.
+          - { os: ubuntu-latest, slice: lanes, shard: '', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-0, shard: '0,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-1, shard: '1,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-2, shard: '2,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: shard-3, shard: '3,4', fuzz: '' }
+          - { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: macos-latest, slice: lanes, shard: '', fuzz: '' }
+          - { os: macos-latest, slice: shard-0, shard: '0,2', fuzz: '' }
+          - { os: macos-latest, slice: shard-1, shard: '1,2', fuzz: '' }
+          - { os: macos-latest, slice: fuzz, shard: '', fuzz: '1' }
+          # Each shard and the fuzz pass is its own job: the local orchestrator buffers
+          # child logs and blocks on the first process, which hid the responsible shard
+          # until job timeout.
           - { os: windows-latest, slice: shard-0, shard: '0,4', fuzz: '' }
           - { os: windows-latest, slice: shard-1, shard: '1,4', fuzz: '' }
           - { os: windows-latest, slice: shard-2, shard: '2,4', fuzz: '' }
@@ -35,6 +82,8 @@ jobs:
           - { os: windows-latest, slice: fuzz, shard: '', fuzz: '1' }
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # L148 checks the audit log against the commit history
 
       - uses: julia-actions/setup-julia@v2
         with:
@@ -62,9 +111,32 @@ jobs:
             Pkg.instantiate()
           '
 
+      # The dart-lang/sdk files src/ cites, at the pinned commit, for L132 (every parity
+      # anchor resolves). The ratchet runs in the lanes and in shard 0 of Pkg.test.
+      - name: Pinned dart2wasm sources
+        if: matrix.target.slice == 'lanes' || matrix.target.slice == 'shard-0'
+        shell: bash
+        run: bash dev/fetch_dart_sdk.sh
+
+      # The inner-loop lanes, on both Julia versions: the differential smoke
+      # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
+      # saw it), the structural ratchet, and — on 1.12, whose typed IR the
+      # baseline records — byte identity of the probe corpus.
+      - name: Inner-loop lanes
+        if: matrix.target.slice == 'lanes'
+        run: |
+          julia --project=. test/smoke.jl
+          julia --project=. test/parity_ratchet.jl
+          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; julia --project=. test/registry_coverage.jl; fi
+
       - name: Run tests
+        if: matrix.target.slice != 'lanes'
         env:
           WT_SHARD: ${{ matrix.target.shard }}
           WT_FUZZ: ${{ matrix.target.fuzz }}
+          # wasm-tools validation of every compiled module (module bytes are
+          # platform-independent, so Unix coverage validates the corpus;
+          # Windows stays off to protect its 45-minute shard budget).
+          WT_VALIDATE: ${{ matrix.target.os == 'windows-latest' && '' || '1' }}
         run: |
           julia --project=. -e 'using Pkg; Pkg.test()'

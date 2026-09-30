@@ -3,9 +3,14 @@ module WasmTarget
 using Binaryen_jll: wasmopt
 using PrecompileTools: @setup_workload, @compile_workload
 
+# The debug surface (parity: translator.dart TranslatorOptions) — precedes every
+# file below because builder/instr_builder.jl already reads OPTIONS.
+include("codegen/options.jl")
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")
+include("builder/source_map.jl")
 include("builder/instructions.jl")
 include("builder/validator.jl")
 include("builder/instr_ir.jl")
@@ -14,16 +19,26 @@ include("builder/instr_builder.jl")
 # Codegen - Julia IR to Wasm bytecode
 include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic field)
 include("codegen/interpreter.jl")
-include("codegen/trimcollect.jl")
 include("codegen/ir.jl")
+
+# Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
+# Loads here (before codegen/types.jl and codegen/context.jl exist) by design — see
+# frontend/nir.jl's header comment.
+include("frontend/nir.jl")
+
+# The closed-world collector reads the boundary (its discovery dispatches on NirNode),
+# so it loads after it.
+include("codegen/trimcollect.jl")
+
 include("codegen/int_key_map.jl")
 include("codegen/types.jl")
 include("codegen/dispatch.jl")
-include("codegen/selector_table.jl")   # parity(M8): the dart dispatch table (replaces FNV, M8.4)
-include("codegen/intrinsics_table.jl")  # parity(M11.1): the dart intrinsics table
+include("codegen/selector_table.jl")   # parity(dispatch_table.dart:396 DispatchTable): the dart dispatch table (replaces FNV, M8.4)
+include("codegen/intrinsics_table.jl")  # parity(intrinsics.dart:437 _binaryOperatorMap): the dart intrinsics table
+include("codegen/julia_numeric_tier.jl")  # parity(quarantine: Julia numeric semantics dart2wasm does not have)
 include("codegen/compile.jl")
 include("codegen/structs.jl")
-include("codegen/closures.jl")   # march16: the closure layouter consumers
+include("codegen/closures.jl")   # the closure layouter consumers
 include("codegen/unions.jl")
 include("codegen/int128.jl")
 include("codegen/box_capture.jl")  # F3 mutable-capture analysis (dev/HISTORY.md#closures-and-dynamic-dispatch)
@@ -33,43 +48,38 @@ include("codegen/flow.jl")
 include("codegen/stackified.jl")
 include("codegen/statements.jl")
 include("codegen/values.jl")
+include("codegen/builtins.jl")  # parity(intrinsics.dart:401 KernelNodes._lookup): identity-keyed Core/Base builtin registry
 include("codegen/calls.jl")
 include("codegen/invoke.jl")
 include("codegen/helpers.jl")
 include("codegen/strings.jl")
-include("codegen/sourcemap.jl")
-include("codegen/cache.jl")
 
-# Runtime - Intrinsics and stdlib mapping
-include("runtime/intrinsics.jl")
-include("runtime/stringops.jl")
-include("runtime/arrayops.jl")
 include("bridge.jl")
 
 
 # Main API
-export compile, compile_multi, compile_from_codeinfo, compile_with_base, optimize, WasmModule, to_bytes
+export compile, compile_multi, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export wasm_bytes_length, wasm_bytes_get
-export collect_globalrefs, resolve_globalrefs, substitute_globalrefs, preprocess_ir_entries
-export compile_with_sourcemap, compile_multi_with_sourcemap
-export compile_cached, compile_multi_cached, enable_cache!, disable_cache!, clear_cache!, cache_stats
+export compile_with_sourcemap, compile_multi_with_sourcemap, host_runtime_js, ensure_provenance_imports!
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
-export TypeRegistry, FunctionRegistry, register_function!
+export TypeRegistry, FunctionRegistry
 export add_string_global!, add_uninitialized_ref_global!, add_root_global_initializer!
-export serialize_type_registry, serialize_function_table, serialize_type_ids
 export add_import!, add_global!, add_global_export!, add_function!, add_export!
 export I32, I64, F32, F64, NumType, Opcode, ExternRef
 # Soundness diagnostics + independent validation cross-check
-export WasmDiagnostic, WasmCompileError, WasmValidationError, validate_wasm_bytes
+export WasmDiagnostic, WasmCompileError, WasmValidationError
+# The builder surface framework hosts (Therapy, Snapshot) drive qualified — API, not
+# namespace: the dart2wasm analogue is wasm_builder's public package interface.
+public add_type!, register_vector_type!, FuncRef, Bridge
 
 """
     _wt_default_validate() -> Bool
 
-parity(M4) — the wasm-tools DEMOTION (dart parity: dart2wasm ships no external validator;
-its builder IS the gate). Since 2026-07-01 every InstrBuilder hard-gates each emission
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
+parity: dart2wasm ships no external validator; its builder IS the gate, verifying every emitted
+instruction's stack effect against its declared inputs/outputs). Since 2026-07-01 every InstrBuilder hard-gates each emission
 against the full subtype lattice (strict by default, mod threaded), so the module is valid
 BY CONSTRUCTION and the external `wasm-tools validate` pass is a redundant double-check —
 now OFF by default. Re-enable per-call (`validate=true`) or globally (`WT_VALIDATE=1`,
@@ -85,10 +95,13 @@ Returns a valid WebAssembly binary that can be instantiated and executed.
 
 Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
+
+parity(compile.dart:216 compile)
 """
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
                  validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Get function name for export
     func_name = string(nameof(f))
 
@@ -102,19 +115,74 @@ function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
     finally
         DIAGNOSTICS_SINK[] = _prev_sink
     end
+    return first(_emit_module(mod; optimize=optimize, validate=validate))
+end
 
-    # Serialize to bytes
-    bytes = to_bytes(mod)
+"""
+    compile_with_sourcemap(f, arg_types; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
+
+`compile`, with the module's source map: every statement's instructions map to the Julia
+source they were compiled from (its innermost frame's file and line, named by its inline
+chain), and the module's `sourceMappingURL` section names `sourcemap_url`. An engine reports
+a trap as a module byte offset; the map resolves it to the statement that trapped.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with source maps on.
+"""
+function compile_with_sourcemap(f, arg_types::Tuple; sourcemap_url::String="module.wasm.map",
+                                optimize=false, optimize_ir::Bool=true,
+                                validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
+    OPTIONS[] = options_from_env()
+    mod = compile_function(f, arg_types, string(nameof(f)); optimize_ir=optimize_ir,
+                           source_map_url=sourcemap_url)
+    return _emit_module(mod; optimize=optimize, validate=validate)
+end
+
+"""
+    compile_with_statement_trace(f, arg_types; validate) -> (bytes, trace)
+
+`compile`, with every function compiled from Julia IR traced: on entry it reports
+`wasmtarget.trace_enter(id)`, and each statement whose value has a traced type — Int64, UInt64,
+Int32, Bool, Float32, Float64 — reports that value after it is stored,
+`wasmtarget.trace_i32/i64/f32/f64(id, statement, value)`. `trace` (a StatementTrace) holds each
+function's id, typed CodeInfo, MethodInstance and probed statements. The differential harness
+runs the same IR natively with the same probes, every traced call routed to its callee's IR,
+and the first event where the two runs differ is where a wrong value first appears
+(test/trace_localize.jl `first_divergence`).
+parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
+"""
+function compile_with_statement_trace(f, arg_types::Tuple;
+                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},StatementTrace}
+    OPTIONS[] = options_from_env()
+    local name = string(nameof(f))
+    local trace = StatementTrace(name)
+    local mod = compile_module([(f, arg_types, name)]; trace)
+    trace.entry > 0 || throw(ArgumentError("$(name)$(arg_types) compiled to no traceable body"))
+    return first(_emit_module(mod; optimize=false, validate=validate)), trace
+end
+
+"""
+    _emit_module(mod; optimize, validate) -> (bytes, source_map_json)
+
+The one serialization of a compiled module, shared by every compile entry: its bytes —
+validated, or optimized by wasm-opt — and, for a module that records source maps
+(`mod.source_map_url`), its source map (threaded through wasm-opt as dart threads it,
+io_util.dart:133). `nothing` for the map otherwise.
+parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
+"""
+function _emit_module(mod::WasmModule; optimize, validate::Bool)::Tuple{Vector{UInt8},Union{Nothing,String}}
+    local source_map_url = mod.source_map_url
+    local bytes, json = source_map_url === nothing ? (to_bytes(mod), nothing) :
+                                                     to_bytes_with_source_map(mod)
     if optimize === false
         # Soundness gate: validate the emitted module (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(bytes; label="compiled module")
-        return bytes
+        return bytes, json
     end
     level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level, validate=validate)
+    return _run_wasm_opt(bytes, json, source_map_url; level=level, validate=validate)
 end
 
 # Convenience method for single argument type
+# parity(compile.dart:216 compile): the same entry, one argument type spelled without the tuple.
 compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate()) =
     compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, validate=validate)
 
@@ -153,22 +221,24 @@ Framework runtime adapters that must reference compiled roots may use
 `link_roots(mod, root_indices, type_registry)`. It runs once after every root
 has a typed placeholder and before root bodies are emitted; adding late imports
 is rejected because it would invalidate all function indices.
+
+parity(compile.dart:216 compile)
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false, optimize_ir::Bool=true,
                        register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
-                       discovery::Symbol=:trim,
                        existing_module::Union{WasmModule,Nothing}=nothing,
                        import_stubs::Vector=Any[],
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                        link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
+    OPTIONS[] = options_from_env()
     _prev_sink = DIAGNOSTICS_SINK[]
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     result = try
         compile_module(functions; return_registries=return_registries,
                        optimize_ir=optimize_ir, register_ir_types=register_ir_types,
-                       discovery=discovery, existing_module=existing_module,
+                       existing_module=existing_module,
                        import_stubs=import_stubs, root_bindings=root_bindings,
                        link_roots=link_roots)
     finally
@@ -176,53 +246,32 @@ function compile_multi(functions::Vector; optimize=false,
     end
     if return_registries
         mod, type_registry, func_registry, dispatch_registry = result
-        bytes = to_bytes(mod)
-        if optimize !== false
-            level = optimize === true ? :size : optimize
-            bytes = WasmTarget.optimize(bytes; level=level, validate=validate)
-        else
-            validate && validate_wasm_bytes(bytes; label="compiled module")
-        end
+        bytes = first(_emit_module(mod; optimize=optimize, validate=validate))
         return (bytes, type_registry, func_registry, dispatch_registry)
     else
-        mod = result
-        bytes = to_bytes(mod)
-        if optimize === false
-            validate && validate_wasm_bytes(bytes; label="compiled module")
-            return bytes
-        end
-        level = optimize === true ? :size : optimize
-        return WasmTarget.optimize(bytes; level=level, validate=validate)
+        return first(_emit_module(result; optimize=optimize, validate=validate))
     end
 end
 
 """
-    compile_from_codeinfo(code_info, return_type, func_name, arg_types; optimize=false) -> Vector{UInt8}
+    compile_multi_with_sourcemap(functions; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
 
-Compile a pre-computed typed CodeInfo to WebAssembly bytes, bypassing Base.code_typed().
-This is the entry point for the eval_julia pipeline where type inference has already been run.
-
-# Arguments
-- `code_info::Core.CodeInfo`: Typed CodeInfo (from Base.code_typed or equivalent)
-- `return_type::Type`: The inferred return type
-- `func_name::String`: Export name for the WASM function
-- `arg_types::Tuple`: Argument types for the function
-- `optimize`: Same as compile() — false, true, :speed, or :debug
+`compile_multi`, with the module's source map (see `compile_with_sourcemap`).
+parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with source maps on.
 """
-function compile_from_codeinfo(code_info::Core.CodeInfo, return_type::Type,
-                                func_name::String, arg_types::Tuple;
-                                optimize=false)::Vector{UInt8}
-    mod = compile_module_from_ir([(code_info, return_type, arg_types, func_name)])
-    bytes = to_bytes(mod)
-    optimize === false && return bytes
-    level = optimize === true ? :size : optimize
-    return WasmTarget.optimize(bytes; level=level)
+function compile_multi_with_sourcemap(functions::Vector; sourcemap_url::String="module.wasm.map",
+                                      optimize=false, optimize_ir::Bool=true,
+                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
+    OPTIONS[] = options_from_env()
+    mod = compile_module(functions; optimize_ir=optimize_ir, source_map_url=sourcemap_url)
+    return _emit_module(mod; optimize=optimize, validate=validate)
 end
 
 # ============================================================================
-# PURE-9047: Compile with base.wasm merge
+# Compile with base.wasm merge
 # ============================================================================
 
+# parity(quarantine: WT links a prebuilt base module into a host framework's module with Binaryen's module merger; dart2wasm emits one module.)
 const WASM_MERGE_GC_FLAGS = [
     "--enable-gc", "--enable-reference-types", "--enable-multivalue",
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
@@ -245,10 +294,12 @@ can call base functions directly.
 
 # Returns
 Merged `Vector{UInt8}` containing both base and user functions.
+parity(quarantine: WT links a prebuilt base module into a host framework's module with Binaryen's module merger; dart2wasm emits one module.)
 """
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
                            optimize=false)::Vector{UInt8}
+    OPTIONS[] = options_from_env()
     # Check tools
     wasm_merge = Sys.which("wasm-merge")
     if wasm_merge === nothing
@@ -256,7 +307,7 @@ function compile_with_base(functions::Vector;
     end
 
     if !isfile(base_wasm_path)
-        error("base.wasm not found at $base_wasm_path. Run: julia --project=. scripts/build_base.jl")
+        error("base.wasm not found at $base_wasm_path; pass `base_wasm_path` to an existing module")
     end
 
     # Compile user functions
@@ -290,6 +341,7 @@ end
 # ============================================================================
 
 # dart2wasm's production flags for WasmGC optimization
+# parity(compile.dart:159 _binaryenFlags)
 const WASM_OPT_GC_FLAGS = [
     "--enable-gc", "--enable-reference-types", "--enable-multivalue",
     "--enable-bulk-memory", "--enable-sign-ext", "--enable-exception-handling",
@@ -298,9 +350,10 @@ const WASM_OPT_GC_FLAGS = [
 # NOTE: dart2wasm also passes --traps-never-happen, but that assumption is
 # UNSOUND here: WasmTarget uses wasm traps as Julia's error semantics (div by
 # zero, bounds checks, throw paths), and -tnh lets binaryen delete/reorder
-# those paths — optimized builds returned garbage where native throws
-# (ledger gaps dacbfa51e334, 5cc6c2b2ac64, c77a8f98bb53, …). Dart never relies
+# those paths — optimized builds returned garbage where native throws.
+# Dart never relies
 # on traps; Julia-compiled code does.
+# parity(compile.dart:159 _binaryenFlags)
 const WASM_OPT_PRODUCTION_FLAGS = [
     "--closed-world",
     "--type-unfinalizing", "-Os", "--type-ssa", "--gufa", "-Os",
@@ -312,6 +365,7 @@ const WASM_OPT_PRODUCTION_FLAGS = [
 # invocation is deterministic and completes when constrained to one worker.
 # Keep the artifact executable and the exact production pass pipeline; only its
 # host-side scheduling differs on Windows.
+# parity(quarantine: the worker count of WT's optional Binaryen pass; dart's wasm-opt runs from its SDK driver.)
 _binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
 
 """
@@ -329,8 +383,24 @@ Optimized `Vector{UInt8}`.
 
 # Throws
 - Error if optimization or validation fails
+
+parity(compile.dart:711 _runOptPhase)
 """
 function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
+    return first(_run_wasm_opt(bytes, nothing, nothing; level=level, validate=validate))
+end
+
+"""
+    _run_wasm_opt(bytes, source_map_json, source_map_url; level, validate) -> (bytes, source_map_json)
+
+Run wasm-opt at `level`. With a source map it reads the input map and writes the output's
+(`-ism`/`-osm`/`-osu`, as dart runs it), so the optimized module's map names the same source
+for its rewritten code.
+parity(pkg/dart2wasm/lib/io_util.dart:133 CompilerPhaseInputOutputManager.runWasmOpt)
+"""
+function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,String},
+                       source_map_url::Union{Nothing,String}; level::Symbol,
+                       validate::Bool)::Tuple{Vector{UInt8},Union{Nothing,String}}
     # Build flags based on level
     flags = copy(WASM_OPT_GC_FLAGS)
     if level === :size
@@ -352,6 +422,11 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         input_path = joinpath(dir, "input.wasm")
         output_path = joinpath(dir, "output.wasm")
         write(input_path, bytes)
+        if source_map_json !== nothing
+            write(joinpath(dir, "input.wasm.map"), source_map_json)
+            append!(flags, ["-ism", joinpath(dir, "input.wasm.map"),
+                            "-osm", joinpath(dir, "output.wasm.map"), "-osu", source_map_url])
+        end
 
         # Binaryen_jll supplies a platform-correct executable plus its required
         # library environment. Optimization therefore has no ambient PATH or
@@ -370,7 +445,8 @@ function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_
         # Soundness gate: validate optimized output (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(opt_bytes; label="optimized module")
 
-        return opt_bytes
+        return opt_bytes, source_map_json === nothing ? nothing :
+                          read(joinpath(dir, "output.wasm.map"), String)
     end
 end
 
@@ -378,57 +454,46 @@ end
 # Independent validation cross-check — opt-in; the typed builder is the gate
 # ============================================================================
 
-const _WARNED_NO_WASM_TOOLS = Ref(false)
-function _warn_no_wasm_tools_once()
-    if !_WARNED_NO_WASM_TOOLS[]
-        @warn "wasm-tools not found — skipping the wasm validation gate (install: `cargo install wasm-tools`)"
-        _WARNED_NO_WASM_TOOLS[] = true
-    end
-end
-
 """
 Disassemble ±12 instructions around the first `(at offset 0x…)` in a validator
-message. Best-effort: any failure returns "" (validation errors must never be
-masked by their own diagnostics).
+message, "" when the message names no offset or the printer prints nothing (a module
+`wasm-tools print` rejects): the validation error it accompanies is never masked by
+its own diagnostic.
+parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 """
 function _disassembly_context(wasm_tools, wasm_path::AbstractString, validator_msg::AbstractString)::String
-    try
-        m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
-        m === nothing && return ""
-        target = parse(UInt64, m.captures[1]; base=16)
-        dis = read(pipeline(`$(wasm_tools) print --print-offsets $(wasm_path)`, stderr=devnull), String)
-        lines = split(dis, '\n')
-        # offsets appear as leading `(;@1fd2  ;)` comments
-        best = 0
-        for (i, ln) in enumerate(lines)
-            om = match(r"^\(;@([0-9a-f]+)\s*;\)", ln)
-            om === nothing && continue
-            off = parse(UInt64, om.captures[1]; base=16)
-            off <= target && (best = i)
-            off > target && break
-        end
-        best == 0 && return ""
-        lo, hi = max(1, best - 12), min(length(lines), best + 2)
-        join(lines[lo:hi], "\n")
-    catch
-        ""
+    m = match(r"at offset 0x([0-9a-f]+)", validator_msg)
+    m === nothing && return ""
+    target = parse(UInt64, m.captures[1]; base=16)
+    dis = read(pipeline(ignorestatus(`$(wasm_tools) print --print-offsets $(wasm_path)`), stderr=devnull), String)
+    lines = split(dis, '\n')
+    # offsets appear as leading `(;@1fd2  ;)` comments
+    best = 0
+    for (i, ln) in enumerate(lines)
+        om = match(r"^\(;@([0-9a-f]+)\s*;\)", ln)
+        om === nothing && continue
+        off = parse(UInt64, om.captures[1]; base=16)
+        off <= target && (best = i)
+        off > target && break
     end
+    best == 0 && return ""
+    lo, hi = max(1, best - 12), min(length(lines), best + 2)
+    return join(lines[lo:hi], "\n")
 end
 
 """
     validate_wasm_bytes(bytes; label="module") -> Vector{UInt8}
 
 Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError`](@ref)
-if the validator rejects the module. If `wasm-tools` is not installed, this is a no-op
-(with a one-time warning) so the package stays usable without the tool. Returns `bytes`
-unchanged so it can be used inline.
+if the validator rejects the module, and an `ErrorException` if `wasm-tools` is not installed:
+a validation that was asked for and cannot run is never skipped. Returns `bytes` unchanged so
+it can be used inline.
+parity(quarantine: WT validates a finished module with wasm-tools (WT_VALIDATE) and reports the disassembly around a failure; dart's builder asserts while it builds.)
 """
 function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module")
     wasm_tools = Sys.which("wasm-tools")
-    if wasm_tools === nothing
-        _warn_no_wasm_tools_once()
-        return bytes
-    end
+    wasm_tools === nothing && error("validation was requested (validate=true or WT_VALIDATE=1) " *
+        "and wasm-tools is not installed: install it (`cargo install wasm-tools`) or do not request validation")
     mktempdir() do dir
         p = joinpath(dir, "validate.wasm")
         write(p, bytes)
@@ -436,19 +501,18 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
         ok = try
             Base.run(pipeline(`$(wasm_tools) validate --features=gc $(p)`, stdout=devnull, stderr=err))
             true
-        catch
+        catch e
+            # A nonzero exit is the validator's rejection; a failure to run it is not.
+            e isa ProcessFailedException || rethrow()
             false
         end
         if !ok
-            # debug escape hatch: keep the rejected module for offline objdump
-            dump_to = get(ENV, "WT_DUMP_INVALID", "")
-            isempty(dump_to) || (write(dump_to, bytes); @info "invalid module dumped" dump_to)
             details = String(take!(err))
             # self-diagnosing failures: disassemble around the failing offset so the
             # error names the construct (e.g. WHICH callee a mis-arity call targets)
             ctx_dis = _disassembly_context(wasm_tools, p, details)
             isempty(ctx_dis) || (details *= "\n\nemitted code at the failing offset:\n" * ctx_dis)
-            throw(WasmValidationError("wasm-tools rejected the emitted $label", details))
+            throw(WasmValidationError("wasm-tools rejected the emitted $label", details, bytes))
         end
     end
     return bytes
@@ -460,8 +524,9 @@ end
 # runtime (Julia's global codegen lock serializes it, so threads can't hide it).
 # Exercising representative signatures HERE bakes those compiler method instances
 # into the `.ji` cache — the warmup is paid once at `]precompile` and is ~free on
-# every cached run. Compile-only (no Node, no binaryen). Each call is guarded so a
-# value-stub on some path can never break precompilation.
+# every cached run. Compile-only (no Node, no binaryen). Every signature here
+# compiles; a rejection or codegen error fails precompilation, naming its site.
+# parity-region(quarantine: Julia compiles a method instance at its first call, so WasmTarget's own codegen pays JIT latency unless a PrecompileTools workload bakes those instances into the package image; dart2wasm runs as an AOT snapshot)
 struct _PCStruct; a::Int32; b::Float64; end
 _pc_iadd(x::Int64)            = x + Int64(1)
 _pc_imix(x::Int64)           = ((x * Int64(3)) ÷ Int64(2)) % Int64(7) | Int64(1)
@@ -484,6 +549,7 @@ _pc_strlen(x::Int64)         = length(string(x))
 _pc_strup(s::String)         = length(uppercase(s))
 _pc_struct(x::Int32)         = (s = _PCStruct(x, 1.5); s.a + Int32(s.b))
 _pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3])
+# end parity-region
 
 @setup_workload begin
     @compile_workload begin
@@ -498,7 +564,7 @@ _pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3]
             (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
             (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
         )
-            try; compile(f, ts; validate=false); catch; end
+            compile(f, ts; validate=false)
         end
     end
 end

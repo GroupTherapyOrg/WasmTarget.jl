@@ -2,7 +2,8 @@
 # Main Compilation Entry Point
 # ============================================================================
 
-"""Declarative, typed substitutions for one closed-world compilation root."""
+"""Declarative, typed substitutions for one closed-world compilation root.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 struct RootBindings
     captured_globals::Dict{Symbol,Tuple{Bool,UInt32}}
     captured_constants::Dict{Symbol,Any}
@@ -17,6 +18,7 @@ struct RootBindings
     void_return::Bool
 end
 
+# parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)
 function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       captured_constants=Dict{Symbol,Any}(),
                       dom_bindings=Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(),
@@ -25,7 +27,7 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                       invoke_arguments=Dict{Int,Vector{Int}}(),
                       bound_leaves=Tuple{Any,Tuple}[],
                       entry_calls=UInt32[],
-                      elide_closure_context::Bool=false, void_return::Bool=false)
+                      elide_closure_context::Bool=false, void_return::Bool=false)::RootBindings
     RootBindings(Dict{Symbol,Tuple{Bool,UInt32}}(captured_globals),
                  Dict{Symbol,Any}(captured_constants),
                  Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}(dom_bindings),
@@ -37,7 +39,8 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                  elide_closure_context, void_return)
 end
 
-"""Add a nullable mutable reference global for initialization by a linked root."""
+"""Add a nullable mutable reference global for initialization by a linked root.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
     b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
     ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
@@ -51,6 +54,7 @@ Create a module initializer that stores the result of a typed zero-argument
 compilation root into a previously declared mutable reference global. Frameworks
 use this for exact mutable initial values that cannot appear in a Wasm constant
 expression. The initializer joins WT's canonical module-start composition.
+parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)
 """
 function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
                                       global_idx::Integer, root_idx::Integer)::UInt32
@@ -75,561 +79,186 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
     return init_idx
 end
 
-"""The one Julia-signature → physical Wasm-signature derivation."""
+"""The one Julia-signature → physical Wasm-signature derivation.
+parity(pkg/dart2wasm/lib/translator.dart:1862 Translator.signatureForDirectCall)"""
 function function_wasm_signature(arg_types, return_type, global_args,
-                                 mod::WasmModule, type_registry::TypeRegistry)
+                                 mod::WasmModule, type_registry::TypeRegistry)::Tuple{Vector{WasmValType}, Vector{WasmValType}}
     pts = WasmValType[]
     for (j, T) in enumerate(arg_types)
         j in global_args && continue
-        push!(pts, T isa Union && needs_anyref_boxing(T) ? AnyRef :
-                   get_concrete_wasm_type(T, mod, type_registry))
+        push!(pts, boundary_wasm_type(T, mod, type_registry))
     end
     rts = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
-          WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
+          WasmValType[boundary_wasm_type(return_type, mod, type_registry)]
     return pts, rts
+end
+
+"""
+    boundary_wasm_type(T, mod, registry) -> WasmValType
+
+The wasm type a value of Julia type T has where it crosses a call — a parameter or a result:
+a Union that boxes its numbers is anyref; a concrete MemoryRef is its single-value struct
+{mem, off0} (register_memoryref_box!), so its element offset crosses with it; anything else
+is its concrete wasm type.
+parity(sdk/lib/_internal/wasm/common/typed_data.dart:2441 WasmI8ArrayBase): a typed-data view
+is an object, passed with its _data and _offsetInElements.
+"""
+function boundary_wasm_type(@nospecialize(T), mod::WasmModule, type_registry::TypeRegistry)::WasmValType
+    T isa Union && needs_anyref_boxing(T) && return AnyRef
+    (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) &&
+        return ConcreteRef(register_memoryref_box!(mod, type_registry, T), true)
+    return get_concrete_wasm_type(T, mod, type_registry)
 end
 
 """
     compile_function(f, arg_types, func_name) -> WasmModule
 
 Compile a Julia function to a WebAssembly module.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile)
 """
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true)::WasmModule
+function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true,
+                          source_map_url::Union{Nothing,String}=nothing)::WasmModule
     # Use compile_module for single functions too, enabling auto-discovery of dependencies
     # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir)
+    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir,
+                          source_map_url=source_map_url)
 end
 
-"""
-Check if a function is a WasmTarget intrinsic that needs special code generation.
-Returns true if the function should be generated as an intrinsic instead of compiling Julia IR.
-"""
-function is_intrinsic_function(f)::Bool
-    # Only functions can be intrinsics, not types (constructors)
-    if !(f isa Function)
-        return false
+# ============================================================================
+# STANDALONE_INTRINSIC_BODIES — Method-keyed, for entries function_data compiles
+# as their OWN body (not a compile_invoke! call-site substitution).
+#
+# `rethrow`'s native body is itself just a bare `:foreigncall` to
+# `jl_rethrow`/`jl_rethrow_other` with no lowering, and Julia's own closed-world
+# discovery (collect_closed_world) adds `rethrow`'s MethodInstance to
+# function_data as a real entry needing a compiled body whenever ANY reachable
+# `:invoke` resolves to it; every such call site is an ordinary cross-call to
+# that compiled body. This is common: `try ... finally ... end` nested
+# inside an enclosing `catch` lowers to an IMPLICIT `rethrow()` call on the
+# exceptional path with no `rethrow` token anywhere in the Julia source
+# (confirmed by deleting this arm: a differential test with two nested
+# try/finally regions inside a catch failed to compile with no source-text
+# `rethrow(` anywhere in the test file). `rethrow()` throws the top of Julia's exception
+# stack again (jl_rethrow); `rethrow(e)` first overwrites the top entry's exception with `e`
+# (jl_rethrow_other); either, at depth 0, throws Julia's ErrorException (emit_rethrow!).
+# ============================================================================
+# parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
+const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
+
+"""Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use.
+parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
+function _build_standalone_intrinsic_bodies!()::Nothing
+    isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
+    for m in methods(Base.rethrow)
+        STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body
     end
-    fname = nameof(f)
-    return f === Base.rethrow ||
-           fname in [:str_char, :str_getchar, :str_len, :str_charlen, :str_eq, :str_new,
-                     :str_setchar!, :str_concat, :str_substr]
-end
-
-"""
-Generate intrinsic function body for WasmTarget runtime functions.
-These functions have special WASM implementations that differ from their Julia fallbacks.
-Returns the function body bytes, or nothing if not an intrinsic.
-"""
-function generate_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
-                                 return_type::Union{Type, Nothing}=nothing)::Union{Tuple{Vector{UInt8}, Vector{WasmValType}}, Nothing}
-    # Only functions can have intrinsic bodies
-    if !(f isa Function)
-        return nothing
-    end
-    fname = nameof(f)
-    # tag-run: the builder declares its params (the same julia→wasm mapping the
-    # emitted function will carry) so the tracker reads truth for every local.get
-    local _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-    local _ib_results = (return_type === nothing || return_type === Nothing || return_type === Union{}) ?
-                        WasmValType[] : WasmValType[get_concrete_wasm_type(return_type, mod, type_registry)]
-    b = InstrBuilder(_ib_params, _ib_results; func_name="generate_intrinsic_body", mod=mod)
-    extra_locals = WasmValType[]
-
-    if f === Base.rethrow
-        ensure_exception_tag!(mod)
-        global_get!(b, ensure_exception_global!(mod), AnyRef)
-        ref_null!(b, ExternRef)
-        throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-    end
-
-    # Get string array type for string operations
-    str_type_idx = get_string_array_type!(mod, type_registry)
-    # parity(M9): params are the CLASSED string — every string push reads through
-    # to the DATA array (dart: methods read the class's array field).
-    # parity(M9): string-returning bodies publish the CLASSED string. The caller-visible
-    # result type is $JlString; the array is saved through a dedicated extra local.
-    function _wrap_result_str!(bb, scratch_idx)
-        builder_set_local_type!(bb, Int(scratch_idx), ConcreteRef(UInt32(str_type_idx), true))
-        local_set!(bb, scratch_idx)
-        i32_const!(bb, Int64(ensure_type_id!(type_registry, String)))
-        i32_const!(bb, 0)
-        local_get!(bb, scratch_idx)
-        i32_const!(bb, -1)
-        struct_new!(bb, get_string_struct_type!(mod, type_registry),
-                    WasmValType[I32, I32, ConcreteRef(UInt32(str_type_idx), true), I32])
-    end
-    _str0!(bb) = (local_get!(bb, 0);
-                  struct_get!(bb, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
-                              ConcreteRef(UInt32(str_type_idx), true)))
-
-    if fname === :str_char
-        # str_char(s::String, i::Int32)::Int32
-        # Gets character at 1-based index
-        # local 0 = string (array ref)
-        # local 1 = index (i32)
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # index
-        # Subtract 1 for 0-based indexing
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        # array.get_u (packed i8 → i32)
-        array_get!(b, str_type_idx, I32; signed=false)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_getchar
-        # str_getchar(s::String, i::Int32)::Int32
-        # Decode UTF-8 character at 1-based byte index → Unicode codepoint as i32
-        # local 0 = string (array ref)
-        # local 1 = index (i32, 1-based)
-        # extra locals: local 2 = b0 (first byte), local 3 = idx0 (0-based index)
-        push!(extra_locals, I32)  # local 2: b0
-        push!(extra_locals, I32)  # local 3: idx0
-
-        # idx0 = i - 1 (convert 1-based to 0-based)
-        local_get!(b, 1)  # i
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        local_set!(b, 3)  # idx0
-
-        # b0 = s[idx0] (array.get_u)
-        _str0!(b)          # string DATA
-        local_get!(b, 3)  # idx0
-        array_get!(b, str_type_idx, I32; signed=false)
-        local_set!(b, 2)  # b0
-
-        # if b0 < 0x80: return b0 (ASCII)
-        # else if b0 < 0xE0: 2-byte
-        # else if b0 < 0xF0: 3-byte
-        # else: 4-byte
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0x80))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))  # result type i32
-
-        # === ASCII: return b0 ===
-        local_get!(b, 2)  # b0
-
-        else_!(b)
-
-        # Check if 2-byte (b0 < 0xE0)
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0xE0))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))
-
-        # === 2-byte: ((b0 & 0x1F) << 6) | (s[idx0+1] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x1F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        # s[idx0+1] & 0x3F
-        _str0!(b)          # string DATA
-        local_get!(b, 3)  # idx0
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        else_!(b)
-
-        # Check if 3-byte (b0 < 0xF0)
-        local_get!(b, 2)  # b0
-        i32_const!(b, Int32(0xF0))
-        num!(b, Opcode.I32_LT_U)
-        if_!(b, UInt8(I32))
-
-        # === 3-byte: ((b0 & 0x0F) << 12) | ((s[idx0+1] & 0x3F) << 6) | (s[idx0+2] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x0F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x0C)  # 12
-        num!(b, Opcode.I32_SHL)
-        # (s[idx0+1] & 0x3F) << 6
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # s[idx0+2] & 0x3F
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 2)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        else_!(b)
-
-        # === 4-byte: ((b0 & 0x07) << 18) | ((s[idx0+1] & 0x3F) << 12) | ((s[idx0+2] & 0x3F) << 6) | (s[idx0+3] & 0x3F) ===
-        local_get!(b, 2)  # b0
-        i32_const!(b, 0x07)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x12)  # 18
-        num!(b, Opcode.I32_SHL)
-        # (s[idx0+1] & 0x3F) << 12
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x0C)  # 12
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # (s[idx0+2] & 0x3F) << 6
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 2)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, 0x06)
-        num!(b, Opcode.I32_SHL)
-        num!(b, Opcode.I32_OR)
-        # s[idx0+3] & 0x3F
-        _str0!(b)
-        local_get!(b, 3)
-        i32_const!(b, 3)
-        num!(b, Opcode.I32_ADD)
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, 0x3F)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_OR)
-
-        end_block!(b)  # end 3-byte if/else (4-byte)
-        end_block!(b)  # end 2-byte if/else (3/4-byte)
-        end_block!(b)  # end ASCII if/else (multi-byte)
-
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_len
-        # str_len(s::String)::Int32
-        # Returns byte length of string (ncodeunits)
-        # local 0 = string (array ref)
-        _str0!(b)          # string DATA
-        # array.len
-        array_len!(b)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_charlen
-        # str_charlen(s::String)::Int32
-        # Count UTF-8 codepoints by counting non-continuation bytes
-        # A byte is a continuation byte if (byte & 0xC0) == 0x80
-        # local 0 = string (array ref)
-        # local 1 = i (loop counter), local 2 = count, local 3 = len
-        push!(extra_locals, I32)  # local 1: i
-        push!(extra_locals, I32)  # local 2: count
-        push!(extra_locals, I32)  # local 3: len
-
-        # len = array.len(s)
-        _str0!(b)
-        array_len!(b)
-        local_set!(b, 3)  # len
-
-        # i = 0, count = 0 (already zero-initialized)
-
-        # block $exit (result i32)
-        exit_label = block!(b, UInt8(I32))
-
-        # loop $loop (void)
-        loop_label = loop!(b)
-
-        # if i >= len: break with count
-        local_get!(b, 1)  # i
-        local_get!(b, 3)  # len
-        num!(b, Opcode.I32_GE_U)
-        if_!(b)
-        local_get!(b, 2)  # count
-        br!(b, exit_label)
-        end_block!(b)
-
-        # byte = s[i]; if (byte & 0xC0) != 0x80: count++
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        i32_const!(b, Int32(0xC0))
-        num!(b, Opcode.I32_AND)
-        i32_const!(b, Int32(0x80))
-        num!(b, Opcode.I32_NE)
-        if_!(b)
-        # count++
-        local_get!(b, 2)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 2)
-        end_block!(b)
-
-        # i++
-        local_get!(b, 1)
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 1)
-
-        # continue loop
-        br!(b, loop_label)
-
-        end_block!(b)  # end loop
-        unreachable!(b)  # structural trap (dart-legit dead path)
-        end_block!(b)  # end block
-
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_eq
-        # str_eq(a::String, b::String)::Bool
-        # Element-by-element comparison (not ref.eq identity check)
-        # local 0 = a (array ref), local 1 = b (array ref), local 2 = i (loop counter)
-        push!(extra_locals, I32)  # local 2: loop counter i
-
-        # Compare lengths first: if a.len != b.len, return false
-        local_get!(b, 0)  # a
-        array_len!(b)
-        local_get!(b, 1)  # b
-        array_len!(b)
-        num!(b, Opcode.I32_NE)
-        if_!(b, UInt8(I32))  # result type i32
-        # Lengths differ → return 0 (false)
-        i32_const!(b, 0)
-        else_!(b)
-
-        # Lengths equal — loop to compare elements
-        # i = 0
-        i32_const!(b, 0)
-        local_set!(b, 2)  # i = 0
-
-        # block $exit (result i32) — for early return of false
-        exit_label = block!(b, UInt8(I32))  # result type i32
-
-        # loop $loop (void)
-        loop_label = loop!(b)  # void block type
-
-        # if i >= a.len → break out with true (all matched)
-        local_get!(b, 2)  # i
-        local_get!(b, 0)  # a
-        array_len!(b)
-        num!(b, Opcode.I32_GE_U)
-        if_!(b)  # void
-        # Done — push 1 (true) and break out of block
-        i32_const!(b, 1)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # Compare a[i] vs b[i] (array.get_u for packed i8)
-        local_get!(b, 0)  # a
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        local_get!(b, 1)  # b
-        local_get!(b, 2)  # i
-        array_get!(b, str_type_idx, I32; signed=false)
-        num!(b, Opcode.I32_NE)
-        if_!(b)  # void
-        # Mismatch — push 0 (false) and break out of block
-        i32_const!(b, 0)
-        br!(b, exit_label)
-        end_block!(b)  # end if
-
-        # i++
-        local_get!(b, 2)  # i
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_ADD)
-        local_set!(b, 2)  # i = i + 1
-
-        # br $loop (continue)
-        br!(b, loop_label)
-        end_block!(b)  # end loop
-        unreachable!(b)  # all loop paths branch — unreachable  # structural trap (dart-legit dead path)
-        end_block!(b)  # end block
-
-        end_block!(b)  # end if/else (lengths equal)
-        end_block!(b)  # end function
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_new
-        # str_new(len::Int32)::String
-        # Create new string array of given length
-        local_get!(b, 0)  # length
-        array_new_default!(b, str_type_idx)
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
-        _wrap_result_str!(b, 1 + length(extra_locals) - 1)   # 1 param
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_setchar!
-        # str_setchar!(s::String, i::Int32, c::Int32)::Nothing
-        # Sets character at 1-based index
-        _str0!(b)          # string DATA
-        local_get!(b, 1)  # index
-        # Subtract 1 for 0-based indexing
-        i32_const!(b, 1)
-        num!(b, Opcode.I32_SUB)
-        local_get!(b, 2)  # char
-        # array.set
-        array_set!(b, str_type_idx, I32)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_concat
-        # str_concat(a::String, b::String)::String
-        # Concatenate two UTF-8 byte arrays into a new array
-        # local 0 = a (array ref), local 1 = b (array ref)
-        # extra locals: local 2 = len_a, local 3 = result (array ref)
-        # parity(M9): params are CLASSED strings — unwrap once into array locals
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # a data
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))  # b data
-        _a_data = 2 + length(extra_locals) - 2
-        _b_data = 2 + length(extra_locals) - 1
-        builder_set_local_type!(b, _a_data, extra_locals[end - 1])
-        builder_set_local_type!(b, _b_data, extra_locals[end])
-        _str0!(b); local_set!(b, _a_data)
-        local_get!(b, 1)
-        struct_get!(b, UInt32(get_string_struct_type!(mod, type_registry)), UInt32(2),
-                    ConcreteRef(UInt32(str_type_idx), true))
-        local_set!(b, _b_data)
-        push!(extra_locals, I32)  # len_a
-        str_ref_type = ConcreteRef(str_type_idx, true)
-        push!(extra_locals, str_ref_type)  # local 3: result array ref
-        builder_set_local_type!(b, 4, I32)
-        builder_set_local_type!(b, 5, str_ref_type)
-
-        # len_a = array.len(a)
-        local_get!(b, _a_data)  # a data
-        array_len!(b)
-        local_set!(b, 4)  # len_a
-
-        # result = array.new_default(len_a + array.len(b))
-        local_get!(b, 4)  # len_a
-        local_get!(b, _b_data)  # b data
-        array_len!(b)
-        num!(b, Opcode.I32_ADD)
-        array_new_default!(b, str_type_idx)
-        local_set!(b, 5)  # result
-
-        # array.copy(result, 0, a, 0, len_a)
-        local_get!(b, 5)  # dst: result
-        i32_const!(b, 0)  # dst_offset: 0
-        local_get!(b, _a_data)  # src: a data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, 4)  # len: len_a
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # array.copy(result, len_a, b, 0, array.len(b))
-        local_get!(b, 5)  # dst: result
-        local_get!(b, 4)  # dst_offset: len_a
-        local_get!(b, _b_data)  # src: b data
-        i32_const!(b, 0)  # src_offset: 0
-        local_get!(b, _b_data)  # b data
-        array_len!(b)  # len: array.len(b)
-        array_copy!(b, str_type_idx, str_type_idx)  # dst type, src type
-
-        # return result
-        local_get!(b, 5)  # result
-        push!(extra_locals, ConcreteRef(UInt32(str_type_idx), true))
-        _wrap_result_str!(b, 2 + length(extra_locals) - 1)   # 2 params
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-
-    elseif fname === :str_substr
-        # WBUILD-8001: str_substr intrinsic body not implemented.
-        # The inline version at call sites properly implements this using
-        # array.new + array.copy. This path is only hit when str_substr is
-        # called as a standalone function (not inlined at call site).
-        unreachable!(b)  # structural trap (dart-legit dead path)
-        end_block!(b)
-        return (builder_code(b), extra_locals)
-    end
-
     return nothing
 end
 
-"""Return whether a typed `print`/`println`/`show` call has an explicit IO receiver.
+"""The one standalone body every `Base.rethrow` MethodInstance compiles to when
+function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above): Julia's
+jl_rethrow or jl_rethrow_other over the exception stack (emit_rethrow!).
+parity(code_generator.dart:2966 visitRethrow): throw the caught exception with the stack trace
+its throw captured.
+parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C
+runtime's jl_rethrow, not an expression inside its handler, so it reads the task's exception
+stack rather than a handler local.)"""
+function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                           return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
+    _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
+    b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
+    if length(arg_types) == 1
+        # rethrow(e): `e` overwrites the top entry's exception, thrown with its stack
+        _wt_is_ref(_ib_params[1]) || error("rethrow(e) of a $(arg_types[1]), a value WT does not box " *
+                                           "here: its wasm type is $(_ib_params[1])")
+    end
+    emit_rethrow!(b, mod, type_registry; other=length(arg_types) == 1 ? 0 : nothing)
+    end_block!(b)
+    return (builder_code(b), WasmValType[])
+end
 
-`print(io, ...)` and `show(io, ...)` are ordinary Julia formatting calls.  They
-must stay in the collected call graph; only receiver-free display calls use the
-host IO bridge.  Confusing the two also used to append imports to a
-framework-supplied module after it already contained local functions, shifting
-every pre-existing function index.
-"""
-function _ir_call_has_explicit_io(stmt::Expr, code_info::Core.CodeInfo)::Bool
-    first_type = Any
-    if stmt.head === :invoke && !isempty(stmt.args) &&
-       stmt.args[1] isa Core.MethodInstance
-        spec = Base.unwrap_unionall(stmt.args[1].specTypes)
-        if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 2
-            first_type = spec.parameters[2]
-        end
-    else
-        first_pos = stmt.head === :invoke ? 3 : 2
-        if length(stmt.args) >= first_pos
-            arg = stmt.args[first_pos]
-            first_type = if arg isa Core.SSAValue &&
-                            code_info.ssavaluetypes isa Vector &&
-                            1 <= arg.id <= length(code_info.ssavaluetypes)
-                code_info.ssavaluetypes[arg.id]
-            elseif arg isa Core.Argument && code_info.slottypes !== nothing &&
-                   1 <= arg.n <= length(code_info.slottypes)
-                code_info.slottypes[arg.n]
-            elseif arg isa QuoteNode
-                typeof(arg.value)
-            else
-                typeof(arg)
-            end
-        end
-    end
-    first_type = try
-        Core.Compiler.widenconst(first_type)
-    catch
-        Any
-    end
-    return first_type isa Type && first_type <: IO
+"""Look up whether (f, arg_types) resolves to a Method registered in
+STANDALONE_INTRINSIC_BODIES, and if so return its compiled body.
+parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
+function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
+                                    return_type::Union{Type,Nothing}=nothing)::Union{Tuple{Vector{UInt8},Vector{WasmValType}},Nothing}
+    f isa Function || return nothing
+    _build_standalone_intrinsic_bodies!()
+    isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
+    # Julia's own method lookup, which answers `nothing` for no match or an ambiguity
+    hit = Base._which(Tuple{Core.Typeof(f), arg_types...}; raise=false)
+    hit === nothing && return nothing
+    haskey(STANDALONE_INTRINSIC_BODIES, hit.method) || return nothing
+    return STANDALONE_INTRINSIC_BODIES[hit.method](arg_types, mod, type_registry; return_type=return_type)
 end
 
 """
-    compile_module(functions::Vector) -> WasmModule
+    _check_import_stub_external_types!(mod, registry, name, arg_types, wasm_idx, return_type)
 
-Compile multiple Julia functions into a single WebAssembly module.
-
-Each element of `functions` should be a tuple of (function, arg_types) or
-(function, arg_types, name). If name is omitted, the function's name is used.
-
-# Example
-```julia
-mod = compile_module([
-    (add, (Int32, Int32)),
-    (sub, (Int32, Int32)),
-    (mul, (Int32, Int32), "multiply"),
-])
-```
-
-Functions can call each other within the module.
+Validate an `import_stubs` entry against dart2wasm's host-boundary restriction
+(`translate_external_type`, `parity(translator.dart:1239 translateExternalType)`).
+The host declares the import's REAL wasm signature directly via `add_import!`; the
+Julia stub's `arg_types`/`return_type` are a SEPARATE declaration used only for
+call-site resolution (`register_function!` below) — nothing previously checked
+that the two agree. Because call-site coercion derives its target wasm type from
+these SAME Julia types (never from the import's actual declared signature), any
+divergence produces invalid wasm bytes at the call site with no diagnostic naming
+the parameter — this closes that gap at registration time, loudly, before any
+call is compiled. Every current caller (WasmMakie/Snapshot canvas providers:
+`Float64`/`Int64` only) already agrees with `translate_external_type` byte-for-byte.
+Skipped when `wasm_idx` is not an import index (defensive; `import_stubs` entries
+are host imports by contract).
 """
-function _compile_closed_world_plan(functions::Vector;
+function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegistry,
+                                             name::AbstractString, arg_types::Tuple,
+                                             wasm_idx::Integer, return_type::Type)::Nothing
+    Int(wasm_idx) < num_imported_funcs(mod) || return nothing
+    ft = _function_type(mod, Int(wasm_idx))
+    required_params = WasmValType[translate_external_type(T, mod, registry) for T in arg_types]
+    if length(required_params) != length(ft.params)
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" declares $(length(ft.params)) wasm parameter(s) but the " *
+            "Julia stub signature $(arg_types) has $(length(required_params)) — the host " *
+            "boundary signature and the call-site Julia arg types must agree in arity",
+            nothing, arg_types)))
+    end
+    for (i, (required, declared, T)) in enumerate(zip(required_params, ft.params, arg_types))
+        required == declared || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+            "import \"$(name)\" parameter $(i) (::$(T)) crosses the host boundary as " *
+            "$(declared) but dart2wasm's external-type restriction (translateExternalType, " *
+            "translator.dart:1239) requires $(required) for this Julia type",
+            nothing, T)))
+    end
+    required_results = (return_type === Nothing || return_type === Union{}) ? WasmValType[] :
+                        WasmValType[translate_external_type(return_type, mod, registry)]
+    required_results == ft.results || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, String(name),
+        "import \"$(name)\" returns $(ft.results) but dart2wasm's external-type " *
+        "restriction (translateExternalType, translator.dart:1239) requires $(required_results) " *
+        "for return type ::$(return_type)",
+        nothing, return_type)))
+    return nothing
+end
+
+"""
+Compile a complete closed-world plan (from trim_compile_plan) into one module: register every
+function, number the closed world's classes, then emit every body. It never discovers or
+silently adds a function.
+parity(pkg/dart2wasm/lib/translator.dart:524 Translator.translate)
+"""
+function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                         link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
-                        register_ir_types::Bool=false
-                        )
+                        register_ir_types::Bool=false,
+                        source_map_url::Union{Nothing,String}=nothing,
+                        trace::Union{Nothing,StatementTrace}=nothing
+                        )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
+    functions = plan.functions
     # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
     # Must be created here (after user functions exist) so world age is current.
     interp = get_wasm_interpreter()
@@ -644,11 +273,8 @@ function _compile_closed_world_plan(functions::Vector;
     # SOUNDNESS: reset every per-module task-local cache for every compilation.
     # A framework-supplied `existing_module` is still a new component and must not
     # inherit type/function indices or callable identities from the previous one.
-    clear_io_imports!()
     clear_rng_globals!()
     clear_perf_now!()
-    clear_char_array_type!()
-    clear_utf8_to_js_func!()
 
     # Create shared module and registries (or use the framework's predeclared module).
     if existing_module !== nothing
@@ -656,27 +282,43 @@ function _compile_closed_world_plan(functions::Vector;
     else
         mod = WasmModule()
     end
+    # one module shape: every module can report where its exceptions were thrown, and a
+    # source map only maps its code (dart: a throw always captures StackTrace.current). A
+    # framework's module declares these imports before its own definitions.
+    (existing_module !== nothing && _stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
+        throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
+                            "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
+    ensure_provenance_imports!(mod)
+    source_map_url === nothing || (mod.source_map_url = source_map_url)
+    trace === nothing || ensure_trace_imports!(mod)
+    local translator = Translator(plan, trace)
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
-    # PURE-9026: Create base struct type FIRST — all other structs will be subtypes
+    # Create base struct type FIRST — all other structs will be subtypes — then the $JlType
+    # hierarchy, before any other type registers: every `Any` field, local and signature is
+    # anyref, and a type-valued field names its kind's struct.
+    # parity(class_info.dart:666 ClassInfoCollector.collect): Top, then `_Type`, before the
+    # classes that refer to them.
     get_base_struct_type!(mod, type_registry)
+    create_jl_type_hierarchy!(mod, type_registry)
 
     # Pre-register import stubs at their import indices in func_registry.
     # This enables compiled functions to call imports via cross-function call resolution.
     for entry in import_stubs
         func_ref, name, arg_types, wasm_idx, return_type = entry
+        _check_import_stub_external_types!(mod, type_registry, name, arg_types, wasm_idx, return_type)
         register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
     end
 
-    # PURE-325: Pre-register numeric box types for all common numeric Wasm types.
+    # Pre-register numeric box types for all common numeric Wasm types.
     # These are needed when functions with ExternRef return types (heterogeneous Unions)
     # need to return numeric values. Pre-registering avoids compilation order issues
     # where the caller's isa() check is compiled before the callee's box type exists.
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
-    # PURE-9028: Pre-register BoxedNothing type
+    # Pre-register BoxedNothing type
     get_nothing_box_type!(mod, type_registry)
 
     # Normalize input: ensure each entry is (func, arg_types, name)
@@ -732,80 +374,33 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
-    # PURE-9040/9041: Scan all functions for println/print/show usage and add IO imports if needed
-    needs_io = false
-    for (f, arg_types, fname) in normalized
-        try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
-            for stmt in ci.code
-                if stmt isa Expr && (stmt.head === :invoke || stmt.head === :call)
-                    func_arg = stmt.head === :invoke ? stmt.args[2] : stmt.args[1]
-                    if func_arg isa GlobalRef &&
-                       (func_arg.name === :println || func_arg.name === :print ||
-                        func_arg.name === :show) &&
-                       !_ir_call_has_explicit_io(stmt, code_info)
-                        needs_io = true
-                        break
-                    end
-                end
-            end
-        catch
-            # If IR fails, skip — the main compilation loop will handle errors
-        end
-        needs_io && break
-    end
-    if needs_io
-        io_imports = add_io_imports!(mod, type_registry)
-        set_io_imports!(io_imports)
-    else
-        clear_io_imports!()
-    end
-
-    # PURE-9043: Scan for jl_get_current_task (rand() usage) and add RNG globals if needed
-    needs_rng = false
-    for (f, arg_types, fname) in normalized
-        try
-            ci, _ = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
-            for stmt in ci.code
-                if stmt isa Expr && stmt.head === :foreigncall
-                    fc_name_sym = extract_foreigncall_name(stmt.args[1])
-                    if fc_name_sym === :jl_get_current_task
-                        needs_rng = true
-                        break
-                    end
-                end
-            end
-        catch
-        end
-        needs_rng && break
-    end
-    if needs_rng
-        ensure_rng_globals!(mod)
-    else
-        clear_rng_globals!()
-    end
-
     # Track all required globals across all functions
     required_globals = Dict{Int, Tuple{WasmValType, Type}}()  # global_idx -> (wasm_type, julia_elem_type)
 
     # First pass: register types, detect WasmGlobals, and reserve function slots
     # We need to know all function indices before compiling bodies
-    function_data = []  # Store (f, arg_types, name, code_info, return_type, global_args) for each function
+    # (f, arg_types, name, typed IR, return_type, global_args, is_closure, NIR body) per
+    # function — the typed IR only for ir.jl's closed-world type collector; codegen reads
+    # the NIR body, built once here
+    function_data = []
 
-    for (f, arg_types, name) in normalized
+    for entry in normalized
+        f, arg_types, name = entry[1], entry[2], entry[3]
+        local entry_mi = length(entry) >= 4 ? entry[4] : nothing
         # Check if this is a closure (function with captured variables)
-        # march16: a TYPE-KEYED entry (f IS the closure DataType — capturing
+        # A TYPE-KEYED entry (f IS the closure DataType — capturing
         # closures have no instance) resolves IR by ftype, and the closure type
         # is f itself, not typeof(f).
         local _type_keyed_closure = f isa DataType && is_closure_type(f)
         closure_type = _type_keyed_closure ? f : typeof(f)
         is_closure = is_closure_type(closure_type)
 
-        # Get typed IR using the ORIGINAL arg_types (without closure type prepend).
-        # Base.code_typed already knows the first slot is typeof(f) for closures.
-        # (type-keyed closures resolve via the TRIM_IR_CACHE hit — trimcollect
-        # cached their pair under (T, arg_types); a miss errors loudly.)
-        code_info, return_type = get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
+        # the function's typed IR is its MethodInstance's in the collected closed world
+        (entry_mi isa Core.MethodInstance && !optimize_ir) &&
+            error("unoptimized IR for $f$(arg_types) requested inside a collected closed world, whose IR is optimized")
+        entry_mi isa Core.MethodInstance ||
+            error("a planned function without its MethodInstance: $(f)$(arg_types)")
+        typed, return_type = plan_ir(plan, entry_mi)
 
         bindings = get(root_bindings, name, nothing)
         elide_closure_context = bindings !== nothing && bindings.elide_closure_context
@@ -839,54 +434,15 @@ function _compile_closed_world_plan(functions::Vector;
             end
         end
 
-        # Register types used in parameters (skip WasmGlobal)
+        # Register the signature's types (skip WasmGlobal)
         for (i, T) in enumerate(arg_types)
-            if i in global_args
-                continue
-            end
-            if is_closure_type(T)
-                register_closure_type!(mod, type_registry, T)
-            elseif T === Symbol
-                # Symbol is represented as a string (byte array), not a struct
-                get_string_struct_type!(mod, type_registry)
-            elseif is_struct_type(T)
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: Vector
-                # Vector (1-D only — matrices use register_matrix_type! below)
-                register_vector_type!(mod, type_registry, T)
-            elseif T <: AbstractVector && T isa DataType
-                # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-                register_struct_type!(mod, type_registry, T)
-            elseif T <: AbstractArray
-                # Multi-dimensional arrays (Matrix, etc.) - register as struct
-                register_matrix_type!(mod, type_registry, T)
-            elseif T === String
-                get_string_struct_type!(mod, type_registry)
-            end
+            i in global_args && continue
+            register_reachable_type!(mod, type_registry, T)
         end
+        register_reachable_type!(mod, type_registry, return_type)
 
-        # Register return type
-        if is_closure_type(return_type)
-            register_closure_type!(mod, type_registry, return_type)
-        elseif return_type === Symbol
-            # Symbol is represented as a string (byte array), not a struct
-            get_string_struct_type!(mod, type_registry)
-        elseif is_struct_type(return_type)
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: Vector
-            # Vector (1-D only — matrices use register_matrix_type! below)
-            register_vector_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractVector && return_type isa DataType
-            # Other AbstractVector types (SubArray, UnitRange, etc.) - register as regular struct
-            register_struct_type!(mod, type_registry, return_type)
-        elseif return_type !== Union{} && return_type <: AbstractArray
-            # Multi-dimensional arrays (Matrix, etc.) - register as struct
-            register_matrix_type!(mod, type_registry, return_type)
-        elseif return_type === String
-            get_string_struct_type!(mod, type_registry)
-        end
-
-        push!(function_data, (f, arg_types, name, code_info, return_type, global_args, is_closure))
+        push!(function_data, (f, arg_types, name, typed, return_type, global_args, is_closure,
+                              typed === nothing ? nothing : nir_body(typed), entry_mi))
     end
 
     # Add all required globals to the module
@@ -897,13 +453,30 @@ function _compile_closed_world_plan(functions::Vector;
         end
     end
 
+    # A foreigncall whose lowering calls the host takes its import here, from the NIR bodies
+    # the first pass built: every import precedes the first defined function (add_import!
+    # refuses a later one), and the RNG's state globals follow the ones a WasmGlobal argument
+    # names by index. rand() reads the Task's Xoshiro state (RNGGlobals, seeded by the host);
+    # time_ns() reads the host clock.
+    for fd in function_data
+        fd[8] === nothing && continue
+        for rec in fd[8].stmts
+            (rec.slot == 0 && rec.node isa NirForeignCall) || continue
+            rec.node.c_symbol === :jl_get_current_task && ensure_rng_globals!(mod)
+            rec.node.c_symbol === :jl_hrtime && ensure_perf_now_import!(mod)
+        end
+    end
+    # the first module initializer seeds the RNG's state words from the host
+    local _rng = get_rng_globals()
+    _rng === nothing || push!(type_registry.module_init_functions, rng_seed_initializer!(mod, _rng))
+
     # Exception objects synthesized by lowering must join the closed component
     # before DFS class IDs freeze; late registration makes catch-side `isa`
     # structurally unable to classify an otherwise real payload.
     for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
                    StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
                    DomainError, InexactError, KeyError, MethodError,
-                   AssertionError, UndefVarError)
+                   AssertionError, UndefVarError, FieldError)
         register_struct_type!(mod, type_registry, _exn_T)
     end
 
@@ -912,13 +485,7 @@ function _compile_closed_world_plan(functions::Vector;
         register_core_ir_types!(mod, type_registry)
     end
 
-    # PURE-9063: Create $JlType hierarchy types FIRST (march5 reorder: the closed-world
-    # collector below registers structs whose DataType-typed fields must resolve to
-    # $JlDataType — pre-hierarchy registration resolved them to a stale struct type,
-    # which the Any-only patch pass below can't fix)
-    create_jl_type_hierarchy!(mod, type_registry)
-
-    # census F2 (march5): CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
+    # Census F2 CLOSE THE TYPE UNIVERSE BEFORE NUMBERING — dart numbers the
     # whole component ONCE, before codegen (class_info.dart:583-690). Walk every
     # function's typed IR and COLLECT every reachable concrete struct / union member
     # so the DFS below numbers the closed world (real [low, high] ranges for isa/
@@ -928,87 +495,70 @@ function _compile_closed_world_plan(functions::Vector;
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
     _reachable = _collect_reachable_ir_types(function_data)
 
-    # PURE-9025: Assign DFS type IDs (the closed world = registered + reachable)
+    # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)
 
-    # PURE-9028: Create BoxedNothing singleton global (after type IDs assigned)
+    # Create BoxedNothing singleton global (after type IDs assigned)
     get_nothing_global!(mod, type_registry)
 
-    # PURE-9064: Patch struct types registered before JlType hierarchy existed.
-    # Any-typed fields were mapped to ExternRef (since jl_type_idx was nothing).
-    # Now that the hierarchy exists, patch them to AnyRef.
-    patch_any_fields_for_jltype_hierarchy!(mod, type_registry)
-
-    # PURE-9063: Create DataType globals for ALL types with DFS IDs + type lookup table
+    # Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)
     create_type_lookup_table!(mod, type_registry)
 
-    # PURE-9065: Pre-create string hash helper function if any function uses memhash.
-    # This must happen BEFORE function index assignment, because adding functions during
-    # body compilation would shift indices and break cross-function calls.
-    needs_string_hash = false
-    for (_, _, _, code_info, _, _, _) in function_data
-        if code_info !== nothing
-            for stmt in code_info.code
-                if stmt isa Expr && stmt.head === :foreigncall && length(stmt.args) >= 1
-                    fc_sym = extract_foreigncall_name(stmt.args[1])
-                    if fc_sym === :memhash
-                        needs_string_hash = true
-                        break
-                    end
-                end
-                # Julia 1.13: hash_bytes replaces memhash foreigncall
-                if stmt isa Expr && stmt.head === :invoke && length(stmt.args) >= 2
-                    callee = stmt.args[2]
-                    callee_name = callee isa GlobalRef ? callee.name : nothing
-                    if callee_name === :hash_bytes
-                        needs_string_hash = true
-                        break
-                    end
-                end
-            end
-        end
-        needs_string_hash && break
-    end
-    if needs_string_hash
-        get_or_create_string_hash_func!(mod, type_registry)
-    end
+    # String hashing needs no pre-created helper function: hash(::String,::UInt)/
+    # hash(::SubString{String},::UInt) are overlaid with a pure-Julia,
+    # bit-exact-with-native port of the native algorithm (interpreter.jl,
+    # "String hash Overlay") that compiles through the ordinary :invoke path
+    # like any other Julia function — no special-cased wasm helper needed.
 
-    # Pre-create the shared utf8proc property table/helper before function-index
-    # assignment. Both category and character width read the same packed byte.
+    # Pre-create the shared utf8proc helpers before function-index assignment:
+    # category and character width read the same packed property word; case
+    # mapping and the case predicates read utf8proc's case records.
     needs_unicode_properties = false
-    for (_, _, _, code_info, _, _, _) in function_data
-        code_info === nothing && continue
-        for stmt in code_info.code
-            if stmt isa Expr && stmt.head === :foreigncall && !isempty(stmt.args)
-                fc_sym = extract_foreigncall_name(stmt.args[1])
+    needs_unicode_case = false
+    for fd in function_data
+        fn_nir = fd[8]
+        fn_nir === nothing && continue
+        for rec in fn_nir.stmts
+            if rec.slot == 0 && rec.node isa NirForeignCall
+                fc_sym = rec.node.c_symbol
                 if fc_sym in (:utf8proc_category, :utf8proc_charwidth,
                               :jl_id_start_char, :jl_id_char)
                     needs_unicode_properties = true
-                    break
+                elseif fc_sym in (:utf8proc_toupper, :utf8proc_tolower, :utf8proc_totitle,
+                                  :utf8proc_isupper, :utf8proc_islower)
+                    needs_unicode_case = true
                 end
             end
         end
-        needs_unicode_properties && break
     end
     needs_unicode_properties && get_or_create_unicode_property_func!(mod, type_registry)
+    needs_unicode_case && get_or_create_unicode_case_func!(mod, type_registry)
 
-    # march7 LAZY constants: collect long (>64B) String/Symbol literals and pre-create
-    # their init functions NOW — the same index-freeze constraint (functions cannot be
-    # added during body compilation without shifting indices). dart constants.dart:454.
-    for (_, _, _, code_info, _, _, _) in function_data
-        code_info === nothing && continue
-        for stmt in code_info.code
-            for lit in (stmt isa Expr ? stmt.args : (stmt,))
-                v = lit isa QuoteNode ? lit.value : lit
+    # LAZY constants: collect long (>64B) String literals and pre-create their init
+    # functions NOW — the same index-freeze constraint (functions cannot be added during
+    # body compilation without shifting indices). dart constants.dart:454. A long Symbol
+    # literal is built in place (values.jl), so it takes no lazy global.
+    for fd in function_data
+        fn_nir = fd[8]
+        fn_nir === nothing && continue
+        for rec in fn_nir.stmts
+            for v in nir_literal_values(rec)
                 if v isa String && ncodeunits(v) > 64
                     get_or_create_lazy_string!(mod, type_registry, v)
-                elseif v isa Symbol && ncodeunits(String(v)) > 64
-                    get_or_create_lazy_string!(mod, type_registry, String(v))
                 end
             end
         end
     end
+
+    # Captured variables' types, from the functions that declare them, recorded for every body
+    # before any compiles, so no body's box reads depend on which compiled first
+    # (record_capture_contents; CaptureType.tla).
+    local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
+                                 isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
+                                for fd in function_data if fd[8] !== nothing]
+    merge!(type_registry.box_contents_types,
+           record_capture_contents(_capture_bodies; closure_ir=mi -> get(plan.ir_cache, mi, nothing)))
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
@@ -1017,23 +567,45 @@ function _compile_closed_world_plan(functions::Vector;
     # (registration) and the body fill use — the builder's call! deriver then reads
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
-    n_existing = length(mod.functions)  # PURE-9065: includes pre-created helper functions
+    n_existing = length(mod.functions)  # includes pre-created helper functions
     # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
     # collection) register as is_candidate=true → visible to the call-site typeId
     # switch (by_ref) but invisible to get_function cross-call resolution.
-    _disp_cands = _TRIM_DISPATCH_CANDIDATES[]
+    _disp_cands = plan.dispatch_candidates
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
+        local fd_mi = function_data[i][9]
+        # a traced compile traces every function compiled from Julia IR: its id numbers the
+        # typed IR its probes report, and the entry's is remembered. A function compiled from
+        # a bespoke body (STANDALONE_INTRINSIC_BODIES: rethrow) is not its IR, so it is not
+        # traced, and the native run calls it as Julia does
+        if trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance &&
+           !(_build_standalone_intrinsic_bodies!(); fd_mi.def isa Method && haskey(STANDALONE_INTRINSIC_BODIES, fd_mi.def))
+            push!(trace.codes, function_data[i][4]); push!(trace.mis, fd_mi)
+            push!(trace.probed, Set{Int}())
+            trace.ids[func_idx] = length(trace.codes)
+            name == trace.entry_name && (trace.entry = length(trace.codes))
+        end
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
-                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands))
+                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
+                           mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
+                           invoke_only = fd_mi in plan.invoke_only)
         # fullstrict: the PLACEHOLDER carries the true signature from birth
-        local _pp, _rr = function_wasm_signature(arg_types, return_type, global_args,
-                                                  mod, type_registry)
+        local _pp, _rr = try
+            function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
+        catch err
+            # located at the function whose signature this is, and why it is in the module
+            (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
+            throw(WasmInternalError(name, 0, "",
+                String["declaring the wasm signature of $(name)($(join(("::" * string(T) for T in arg_types), ", "))) -> $(return_type)",
+                       "enrolled as " * plan.enrolled_as[fd_mi]],
+                err, _raised_frames(catch_backtrace(), :_compile_closed_world_plan)))
+        end
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
         push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
     end
 
-    # march16: THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
+    # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
     # may add functions during body compilation). Trampolines + vtable globals for
     # every type-keyed userland closure are created NOW; their bodies' FINAL indices
     # are computable deterministically (bodies start after the K trampolines).
@@ -1041,44 +613,52 @@ function _compile_closed_world_plan(functions::Vector;
     for (i, (f, _, _, _, _, _, _)) in enumerate(function_data)
         if f isa DataType && is_closure_type(f)
             push!(_cvp, (i, f, true))
-        elseif f isa Function && typeof(f) in _ENROLLED_CALLABLE_TYPES[]
+        elseif f isa Function && typeof(f) in plan.callable_types
             push!(_cvp, (i, typeof(f), false))
         end
     end
     if !isempty(_cvp)
-        for (_slot, (_i, _T, _takes_context)) in enumerate(_cvp)
+        # ONE vtable per callable TYPE, holding every specialization the closed world
+        # contains (one trampoline per arity — dart's per-shape entries); grouped in
+        # program order so the trampolines' indices are deterministic.
+        local _cv_types = DataType[]
+        local _cv_bodies = Dict{DataType, Vector{ClosureBody}}()
+        local _cv_ctx = Dict{DataType, Bool}()
+        for (_i, _T, _takes_context) in _cvp
             local _entry = function_data[_i]
-            local _ats, _rt = _entry[2], _entry[5]
+            local _ats, _rt, _gas = _entry[2], _entry[5], _entry[6]
             # fullstrict reorder: the placeholders occupy the body indices ALREADY —
             # the standard formula reads them; trampolines append after.
             local _body_idx = UInt32(n_imports + n_existing + _i - 1)
-            local _bps = WasmValType[get_concrete_wasm_type(T2, mod, type_registry) for T2 in _ats]
-            local _brs = (_rt === Nothing || _rt === Union{}) ? WasmValType[] :
-                         WasmValType[get_concrete_wasm_type(_rt, mod, type_registry)]
-            ensure_closure_vtable!(mod, type_registry, _T, _body_idx, _bps, _brs;
-                                   body_return_type=_rt, takes_context=_takes_context)
+            # the body's own signature, the one its placeholder was declared with: a
+            # MemoryRef parameter crosses as its single-value struct, never its bare Memory
+            local _bps, _brs = function_wasm_signature(_ats, _rt, _gas, mod, type_registry)
+            haskey(_cv_bodies, _T) || (push!(_cv_types, _T); _cv_bodies[_T] = ClosureBody[]; _cv_ctx[_T] = _takes_context)
+            push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt,
+                                              Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)]))
+        end
+        for _T in _cv_types
+            build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T])
         end
     end
 
     if link_roots !== nothing
-        imports_before_link = length(mod.imports)
+        # the linker runs after function indices exist, so add_import! refuses an import from it
         root_indices = Dict{String,UInt32}(
             name => UInt32(n_imports + n_existing + i - 1)
             for (i, (_, _, name, _, _, _, _)) in enumerate(function_data))
         link_roots(mod, root_indices, type_registry)
-        length(mod.imports) == imports_before_link || throw(ArgumentError(
-            "the root linker cannot add imports after function indices are frozen"))
     end
 
 
 
-    # PURE-9060: Build dispatch tables for megamorphic functions (>8 specializations)
+    # Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
     dispatch_registry = build_dispatch_tables(func_registry, type_registry)
 
     if !isempty(dispatch_registry.tables)
         emit_dispatch_metadata!(mod, type_registry, dispatch_registry)
-        # parity(M8.2): pack single-axis selectors into the ONE dart table
+        # parity(dispatch_table.dart:501 DispatchTable.build): pack single-axis selectors into the ONE dart table
         pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
@@ -1086,37 +666,38 @@ function _compile_closed_world_plan(functions::Vector;
     export_name_counts = Dict{String, Int}()
 
     # Second pass: compile function bodies
-    for (i, (f, arg_types, name, code_info, return_type, global_args, is_closure)) in enumerate(function_data)
+    for (i, (f, arg_types, name, _, return_type, global_args, is_closure, fn_nir)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
-        # Check if this is an intrinsic function that needs special code generation
-        intrinsic_body = is_intrinsic_function(f) ? generate_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type) : nothing
 
         local body::Vector{UInt8}
         local locals::Vector{WasmValType}
 
-        # PURE-9060: Check if this function is a dispatch caller (calls a megamorphic function
+        standalone_body = _standalone_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type)
+
+        # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
         dispatch_dt = nothing
-        if code_info !== nothing && type_registry.base_struct_idx !== nothing &&
+        if fn_nir !== nothing && type_registry.base_struct_idx !== nothing &&
            !isempty(dispatch_registry.tables)
-            dispatch_dt = find_dispatch_call(code_info, dispatch_registry)
+            dispatch_dt = find_dispatch_call(fn_nir.stmts, dispatch_registry)
+            # a table with no selector route (three or more varying arguments, an axis tie)
+            # makes no dispatch caller: the body compiles from Julia's IR, whose dynamic call
+            # dispatches or rejects at its statement
+            dispatch_dt !== nothing && !haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref) &&
+                (dispatch_dt = nothing)
         end
 
-        if intrinsic_body !== nothing
-            # Use the intrinsic body directly
-            body, locals = intrinsic_body
+        # a dispatcher or standalone body is compiler-generated: no statement emitted it
+        local body_mappings = SourceMapping[]
+        if standalone_body !== nothing
+            body, locals = standalone_body
         elseif dispatch_dt !== nothing
-            # PURE-9060: Generate dispatch-only body (probe + call_indirect + return)
+            # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
-                # parity(M8.2): the dart virtual call — classId + offset + call_indirect
-                body, locals = generate_selector_caller_body(
-                    dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
-                    caller_return_type=return_type, mod=mod, type_registry=type_registry)
-            else
-                body, locals = generate_dispatch_caller_body(
-                    dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
-            end
+            # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
+            body, locals = generate_selector_caller_body(
+                dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
+                caller_return_type=return_type, mod=mod, type_registry=type_registry)
         else
             # Generate function body from Julia IR
             bindings = get(root_bindings, name, nothing)
@@ -1126,8 +707,8 @@ function _compile_closed_world_plan(functions::Vector;
                     for (site, target) in bindings.invoke_roots)
             local _bound_invokes = bindings === nothing ? Dict{Int,UInt32}() :
                 merge(bindings.invoke_imports, _root_invokes)
-            ctx = CompilationContext(code_info, arg_types, return_type, mod, type_registry;
-                                    func_registry=func_registry, func_idx=func_idx, func_ref=f,
+            ctx = CompilationContext(fn_nir, arg_types, return_type, mod, type_registry;
+                                    translator=translator, func_registry=func_registry, func_idx=func_idx, func_ref=f,
                                     global_args=global_args,
                                     is_compiled_closure=is_closure &&
                                         !(bindings !== nothing && bindings.elide_closure_context),
@@ -1146,7 +727,7 @@ function _compile_closed_world_plan(functions::Vector;
             # diagnostic ledgers. The context already carries the root function
             # and source location; converting failures to ErrorException here
             # erased the machine-readable contract used by framework callers.
-            body = generate_body(ctx)
+            body, body_mappings = generate_body(ctx)
             locals = ctx.locals
         end
 
@@ -1155,7 +736,8 @@ function _compile_closed_world_plan(functions::Vector;
                                                              mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
-        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body)
+        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body,
+                                            body_mappings)
         actual_idx = func_idx
 
         # Export the function with a unique name
@@ -1168,25 +750,22 @@ function _compile_closed_world_plan(functions::Vector;
         add_codegen_export!(mod, export_name, 0, actual_idx)
     end
 
-    # PURE-9060 Phase 2: Add wrapper functions AFTER all actual functions are compiled.
+    # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
     # This ensures entry.target_idx values (from func_registry) point to correct indices.
     if !isempty(dispatch_registry.tables)
         emit_dispatch_wrappers!(mod, type_registry, dispatch_registry)
     end
 
-    # PURE-9062 Phase 2: Add overlay wrapper functions
+    # Phase 2: Add overlay wrapper functions
 
-    # PURE-4149: Populate DataType/TypeName fields for type constant globals.
+    # Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
 
-    # PURE-9040/9042/9043: Clear module-level state after compilation
-    clear_io_imports!()
+    # Clear module-level state after compilation
     clear_rng_globals!()
     clear_perf_now!()
-    clear_char_array_type!()
-    clear_utf8_to_js_func!()
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
@@ -1194,584 +773,11 @@ function _compile_closed_world_plan(functions::Vector;
     return mod
 end
 
-"""
-    compile_module_from_ir(ir_entries::Vector)::WasmModule
-
-Compile pre-computed typed CodeInfo entries to a WasmModule, bypassing Base.code_typed().
-Each entry is (code_info::CodeInfo, return_type::Type, arg_types::Tuple, name::String).
-Optionally a 5th element func_ref can be provided for cross-function call resolution.
-
-This is the entry point for the eval_julia pipeline where type inference has already been run.
-Unlike `compile_module`, this adapter starts from caller-supplied typed IR rather than
-running inference, then enters the same closed-world module compiler.
-"""
-struct _PrecomputedIRKey
-    id::Int
-end
-
-function compile_module_from_ir(ir_entries::Vector)::WasmModule
-    functions = Any[]
-    cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
-    for (i, entry) in enumerate(ir_entries)
-        length(entry) >= 4 || throw(ArgumentError(
-            "IR entry $i must be (CodeInfo, return_type, arg_types, name[, func_ref])"))
-        code_info, return_type, arg_types, name = entry[1], entry[2], entry[3], entry[4]
-        code_info isa Core.CodeInfo || throw(ArgumentError("IR entry $i does not contain Core.CodeInfo"))
-        arg_types isa Tuple || throw(ArgumentError("IR entry $i arg_types must be a Tuple"))
-        key = length(entry) >= 5 && entry[5] !== nothing ? entry[5] : _PrecomputedIRKey(i)
-        push!(functions, (key, arg_types, String(name)))
-        cache[(key, arg_types)] = (code_info, return_type)
-    end
-
-    previous = TRIM_IR_CACHE[]
-    TRIM_IR_CACHE[] = cache
-    try
-        return _compile_closed_world_plan(functions)
-    finally
-        TRIM_IR_CACHE[] = previous
-    end
-end
-
-# ============================================================================
-# GlobalRef Pre-Resolution — Self-hosting support
-# ============================================================================
-
-"""
-    collect_globalrefs(code_info::Core.CodeInfo) -> Set{GlobalRef}
-
-Walk a CodeInfo and collect all unique GlobalRef values from statements
-and expression arguments. Used at build time to discover all module-level
-references that need to be pre-resolved for self-hosting.
-"""
-function collect_globalrefs(code_info::Core.CodeInfo)
-    refs = Set{GlobalRef}()
-    for stmt in code_info.code
-        _scan_globalrefs!(refs, stmt)
-    end
-    return refs
-end
-
-function _scan_globalrefs!(refs::Set{GlobalRef}, val)
-    if val isa GlobalRef
-        push!(refs, val)
-    elseif val isa Expr
-        for arg in val.args
-            _scan_globalrefs!(refs, arg)
-        end
-    end
-end
-
-"""
-    resolve_globalrefs(refs::Set{GlobalRef}) -> Dict{GlobalRef, Any}
-
-Resolve each GlobalRef to its build-time value using getfield.
-Unresolvable refs are skipped (they may be forward declarations, etc).
-"""
-function resolve_globalrefs(refs::Set{GlobalRef})
-    resolved = Dict{GlobalRef, Any}()
-    for ref in refs
-        try
-            resolved[ref] = getfield(ref.mod, ref.name)
-        catch
-            # Skip unresolvable refs
-        end
-    end
-    return resolved
-end
-
-"""
-    collect_and_resolve_all_globalrefs(ir_entries::Vector) -> Dict{GlobalRef, Any}
-
-Collect and resolve ALL GlobalRefs across multiple IR entries at build time.
-This is the main entry point for Phase 1 self-hosting: eliminates all
-getfield(Module, Symbol) calls from the CodeInfo before it's sent to the browser.
-"""
-function collect_and_resolve_all_globalrefs(ir_entries::Vector)
-    all_refs = Set{GlobalRef}()
-    for entry in ir_entries
-        code_info = entry[1]  # First element is CodeInfo
-        union!(all_refs, collect_globalrefs(code_info))
-    end
-    return resolve_globalrefs(all_refs)
-end
-
-"""
-    substitute_globalrefs(code_info::Core.CodeInfo, resolved::Dict{GlobalRef, Any}) -> Core.CodeInfo
-
-Create a copy of CodeInfo with all GlobalRef values replaced by their
-pre-resolved values. After substitution, the CodeInfo contains no
-module-level references and can be compiled without access to Julia modules.
-"""
-function substitute_globalrefs(code_info::Core.CodeInfo, resolved::Dict{GlobalRef, Any})
-    new_ci = copy(code_info)
-    new_code = Any[]
-    for stmt in new_ci.code
-        push!(new_code, _substitute_globalref(stmt, resolved))
-    end
-    new_ci.code = new_code
-    return new_ci
-end
-
-function _substitute_globalref(val, resolved::Dict{GlobalRef, Any})
-    if val isa GlobalRef
-        return get(resolved, val, val)
-    elseif val isa Expr
-        new_args = Any[_substitute_globalref(arg, resolved) for arg in val.args]
-        return Expr(val.head, new_args...)
-    end
-    return val
-end
-
-"""
-    preprocess_ir_entries(ir_entries::Vector) -> Vector
-
-Pre-resolve all GlobalRefs in IR entries. Returns new entries with substituted
-CodeInfo that contain no module-level references. This is the build-time
-preprocessing step for self-hosted compilation.
-"""
-function preprocess_ir_entries(ir_entries::Vector)
-    resolved = collect_and_resolve_all_globalrefs(ir_entries)
-    result = []
-    for (code_info, return_type, arg_types, name) in ir_entries
-        sub_ci = substitute_globalrefs(code_info, resolved)
-        push!(result, (sub_ci, return_type, arg_types, name))
-    end
-    return result
-end
-
-# ============================================================================
-# Browser byte-vector accessors. These are ordinary Julia functions compiled through
-# the canonical closed-world pipeline when an embedder requests them; they are not
-# a compiler or serializer path.
-wasm_bytes_length(v::Vector{UInt8})::Int32 = Int32(length(v))
-wasm_bytes_get(v::Vector{UInt8}, i::Int32)::Int32 = Int32(v[i])
-
-# ============================================================================
-# CodeInfo Transport — Phase 1 self-hosting (PHASE-1-009)
-# ============================================================================
-# Serialize CodeInfo + metadata to JSON for server→browser transport.
-# The browser deserializes and passes to compile_module_from_ir to produce WASM.
-#
-# Flow: server code_typed → preprocess_ir_entries → serialize → HTTP →
-#       browser deserialize → compile_module_from_ir → to_bytes → execute
-
-import JSON
-
-"""
-    serialize_ir_value(val) -> Any
-
-Serialize a single IR value (Expr arg, PhiNode value, etc.) to a JSON-safe Dict.
-"""
-function serialize_ir_value(val)
-    if val isa Core.SSAValue
-        return Dict("_t" => "ssa", "id" => val.id)
-    elseif val isa Core.Argument
-        return Dict("_t" => "arg", "n" => val.n)
-    elseif val isa Core.SlotNumber
-        return Dict("_t" => "slot", "id" => val.id)
-    elseif val isa Core.IntrinsicFunction
-        return Dict("_t" => "intrinsic", "name" => string(nameof(val)))
-    elseif val isa GlobalRef
-        return Dict("_t" => "globalref", "mod" => string(val.mod), "name" => string(val.name))
-    elseif val isa QuoteNode
-        return Dict("_t" => "quote", "value" => serialize_ir_value(val.value))
-    elseif val isa Symbol
-        return Dict("_t" => "symbol", "name" => string(val))
-    elseif val isa Bool
-        # Bool before Int because Bool <: Integer
-        return Dict("_t" => "lit", "jt" => "Bool", "v" => val)
-    elseif val isa Int64
-        return Dict("_t" => "lit", "jt" => "Int64", "v" => val)
-    elseif val isa Int32
-        return Dict("_t" => "lit", "jt" => "Int32", "v" => Int64(val))
-    elseif val isa UInt64
-        return Dict("_t" => "lit", "jt" => "UInt64", "v" => Int64(val))
-    elseif val isa UInt32
-        return Dict("_t" => "lit", "jt" => "UInt32", "v" => Int64(val))
-    elseif val isa Float64
-        return Dict("_t" => "lit", "jt" => "Float64", "v" => val)
-    elseif val isa Float32
-        return Dict("_t" => "lit", "jt" => "Float32", "v" => Float64(val))
-    elseif val === nothing
-        return Dict("_t" => "nothing")
-    elseif val isa Type
-        return Dict("_t" => "type", "name" => serialize_type_name(val))
-    elseif val isa Expr
-        return serialize_ir_stmt(val)
-    elseif val isa Core.Builtin
-        return Dict("_t" => "builtin", "name" => string(nameof(val)))
-    elseif val isa Function
-        mod = parentmodule(val)
-        return Dict("_t" => "function", "name" => string(nameof(val)), "mod" => string(mod))
-    elseif val isa Core.MethodInstance
-        sig = val.specTypes
-        func_name = string(sig.parameters[1].instance)
-        arg_types = [serialize_type_name(p) for p in sig.parameters[2:end]]
-        return Dict("_t" => "method_instance", "func" => func_name, "sig" => arg_types)
-    elseif isdefined(Core, :CodeInstance) && val isa Core.CodeInstance
-        mi = val.def
-        sig = mi.specTypes
-        func_name = string(sig.parameters[1].instance)
-        arg_types = [serialize_type_name(p) for p in sig.parameters[2:end]]
-        return Dict("_t" => "code_instance", "func" => func_name, "sig" => arg_types)
-    else
-        return Dict("_t" => "opaque", "repr" => repr(val), "jt" => string(typeof(val)))
-    end
-end
-
-"""
-    serialize_ir_stmt(stmt) -> Any
-
-Serialize a single IR statement to a JSON-safe structure.
-"""
-function serialize_ir_stmt(stmt)
-    if stmt isa Expr
-        return Dict("_t" => "expr", "head" => string(stmt.head),
-                     "args" => [serialize_ir_value(a) for a in stmt.args])
-    elseif stmt isa Core.ReturnNode
-        if isdefined(stmt, :val)
-            return Dict("_t" => "return", "val" => serialize_ir_value(stmt.val))
-        else
-            return Dict("_t" => "return")
-        end
-    elseif stmt isa Core.GotoNode
-        return Dict("_t" => "goto", "label" => stmt.label)
-    elseif stmt isa Core.GotoIfNot
-        return Dict("_t" => "gotoifnot", "cond" => serialize_ir_value(stmt.cond),
-                     "dest" => stmt.dest)
-    elseif stmt isa Core.PhiNode
-        vals = []
-        for i in 1:length(stmt.values)
-            if isassigned(stmt.values, i)
-                push!(vals, serialize_ir_value(stmt.values[i]))
-            else
-                push!(vals, Dict("_t" => "undef"))
-            end
-        end
-        return Dict("_t" => "phi", "edges" => Int64.(stmt.edges), "values" => vals)
-    elseif stmt isa Core.PiNode
-        return Dict("_t" => "pi", "val" => serialize_ir_value(stmt.val),
-                     "typ" => serialize_type_name(stmt.typ))
-    elseif stmt isa Core.NewvarNode
-        return Dict("_t" => "newvar", "slot" => stmt.slot.id)
-    elseif stmt isa GlobalRef
-        # PHASE-2-INT-001: GlobalRef appears as standalone stmt in lowered IR
-        return Dict("_t" => "globalref_stmt", "mod" => string(stmt.mod), "name" => string(stmt.name))
-    elseif stmt isa Core.SlotNumber
-        # PHASE-2-INT-001: SlotNumber appears as standalone stmt in lowered IR
-        return Dict("_t" => "slot", "id" => stmt.id)
-    elseif stmt === nothing
-        return Dict("_t" => "nothing")
-    else
-        return Dict("_t" => "opaque", "repr" => repr(stmt), "jt" => string(typeof(stmt)))
-    end
-end
-
-"""
-    serialize_type_name(T) -> String
-
-Convert a Julia type to a string representation for JSON transport.
-"""
-function serialize_type_name(T)
-    T === Int64 && return "Int64"
-    T === Int32 && return "Int32"
-    T === UInt64 && return "UInt64"
-    T === UInt32 && return "UInt32"
-    T === Float64 && return "Float64"
-    T === Float32 && return "Float32"
-    T === Bool && return "Bool"
-    T === Nothing && return "Nothing"
-    T === String && return "String"
-    T === Symbol && return "Symbol"
-    T === Any && return "Any"
-    T === Union{} && return "Union{}"
-    return string(T)
-end
-
-"""
-    serialize_ssa_type(t) -> Any
-
-Serialize an SSA value type or slot type entry (may be Type or Core.Const).
-"""
-function serialize_ssa_type(t)
-    if t isa Core.Const
-        val = t.val
-        if val isa Core.IntrinsicFunction
-            return Dict("_t" => "const", "val" => Dict("_t" => "intrinsic", "name" => string(nameof(val))),
-                         "jt" => "Core.IntrinsicFunction")
-        elseif val isa Core.Builtin
-            return Dict("_t" => "const", "val" => Dict("_t" => "builtin", "name" => string(nameof(val))),
-                         "jt" => "Core.Builtin")
-        elseif val isa Function
-            # User-defined functions: store just the type (codegen only needs the type)
-            return serialize_type_name(typeof(val))
-        else
-            return Dict("_t" => "const", "val" => serialize_ir_value(val),
-                         "jt" => serialize_type_name(typeof(val)))
-        end
-    elseif t isa Type
-        return serialize_type_name(t)
-    else
-        return Dict("_t" => "opaque_type", "repr" => repr(t))
-    end
-end
-
-"""
-    serialize_ir_entries(ir_entries::Vector) -> String
-
-Serialize preprocessed IR entries to a JSON string for transport.
-Each entry is (code_info, return_type, arg_types, func_name).
-
-Call preprocess_ir_entries FIRST to resolve GlobalRefs before serialization.
-"""
-function serialize_ir_entries(ir_entries::Vector)::String
-    entries = []
-    for (code_info, return_type, arg_types, name) in ir_entries
-        entry = Dict(
-            "name" => name,
-            "arg_types" => [serialize_type_name(T) for T in arg_types],
-            "return_type" => serialize_type_name(return_type),
-            "code" => [serialize_ir_stmt(stmt) for stmt in code_info.code],
-            # PHASE-2-INT-001: Handle lowered IR where ssavaluetypes is an Int (count)
-            "ssavaluetypes" => code_info.ssavaluetypes isa Integer ?
-                code_info.ssavaluetypes :
-                [serialize_ssa_type(t) for t in code_info.ssavaluetypes],
-            "slottypes" => code_info.slottypes !== nothing ?
-                [serialize_ssa_type(t) for t in code_info.slottypes] : nothing,
-            "slotnames" => [string(s) for s in code_info.slotnames],
-            "ssaflags" => Int64.(code_info.ssaflags),
-            "slotflags" => Int64.(code_info.slotflags),
-        )
-        push!(entries, entry)
-    end
-    return JSON.json(Dict("version" => 1, "entries" => entries))
-end
-
-# ---- Deserialization ----
-
-const _TYPE_MAP = Dict{String, Type}(
-    "Int64" => Int64, "Int32" => Int32, "UInt64" => UInt64, "UInt32" => UInt32,
-    "Float64" => Float64, "Float32" => Float32, "Bool" => Bool,
-    "Nothing" => Nothing, "String" => String, "Symbol" => Symbol,
-    "Any" => Any, "Union{}" => Union{},
-)
-
-"""
-    deserialize_type_name(s::AbstractString) -> Type
-
-Reconstruct a Julia type from its serialized string name.
-"""
-function deserialize_type_name(s::AbstractString)::Type
-    haskey(_TYPE_MAP, s) && return _TYPE_MAP[s]
-    try
-        return Core.eval(Main, Meta.parse(s))
-    catch
-        return Any
-    end
-end
-
-"""
-    deserialize_ir_value(d) -> Any
-
-Reconstruct a Julia IR value from its JSON representation.
-"""
-function deserialize_ir_value(d)
-    d isa Bool && return d
-    d isa AbstractString && return d
-    d isa Number && return d
-    !isa(d, Dict) && return d
-
-    tag = get(d, "_t", "")
-    if tag == "ssa"
-        return Core.SSAValue(d["id"])
-    elseif tag == "arg"
-        return Core.Argument(d["n"])
-    elseif tag == "intrinsic"
-        return getfield(Core.Intrinsics, Symbol(d["name"]))
-    elseif tag == "builtin"
-        return getfield(Core, Symbol(d["name"]))
-    elseif tag == "function"
-        mod_str = get(d, "mod", "Main")
-        mod = mod_str == "Core" ? Core : mod_str == "Base" ? Base : Main
-        name = Symbol(d["name"])
-        try
-            return getfield(mod, name)
-        catch
-            # Fallback: try Base then Main
-            for m in (Base, Main)
-                try return getfield(m, name) catch end
-            end
-            return GlobalRef(mod, name)
-        end
-    elseif tag == "globalref"
-        mod = d["mod"] == "Core" ? Core : d["mod"] == "Base" ? Base : Main
-        return GlobalRef(mod, Symbol(d["name"]))
-    elseif tag == "quote"
-        return QuoteNode(deserialize_ir_value(d["value"]))
-    elseif tag == "symbol"
-        return Symbol(d["name"])
-    elseif tag == "lit"
-        jt = d["jt"]
-        v = d["v"]
-        jt == "Int64" && return Int64(v)
-        jt == "Int32" && return Int32(v)
-        jt == "UInt64" && return UInt64(v)
-        jt == "UInt32" && return UInt32(v)
-        jt == "Float64" && return Float64(v)
-        jt == "Float32" && return Float32(v)
-        jt == "Bool" && return Bool(v)
-        return v
-    elseif tag == "nothing"
-        return nothing
-    elseif tag == "type"
-        return deserialize_type_name(d["name"])
-    elseif tag == "expr"
-        return deserialize_ir_stmt(d)
-    elseif tag == "slot"
-        return Core.SlotNumber(d["id"])
-    elseif tag == "method_instance" || tag == "code_instance"
-        # Reconstruct MethodInstance from function name + arg types
-        func_name = d["func"]
-        arg_types = Tuple(deserialize_type_name.(d["sig"]))
-        try
-            func = Core.eval(Main, Meta.parse(func_name))
-            sig = Tuple{typeof(func), arg_types...}
-            mi = Base.method_instances(func, arg_types)[1]
-            if tag == "code_instance" && isdefined(Core, :CodeInstance)
-                # For CodeInstance, wrap the MI
-                ci_typed = Base.code_typed(func, arg_types)[1]
-                # Just return the MI — the codegen handles both MI and CI
-                return mi
-            end
-            return mi
-        catch
-            # If we can't reconstruct the MI, return nothing — codegen will handle
-            return nothing
-        end
-    elseif tag == "undef"
-        return nothing
-    else
-        error("Unknown IR value tag: $tag")
-    end
-end
-
-"""
-    deserialize_ir_stmt(d::Dict) -> Any
-
-Reconstruct a Julia IR statement from its JSON representation.
-"""
-function deserialize_ir_stmt(d::Dict)
-    tag = d["_t"]
-    if tag == "expr"
-        head = Symbol(d["head"])
-        args = Any[deserialize_ir_value(a) for a in d["args"]]
-        return Expr(head, args...)
-    elseif tag == "return"
-        if haskey(d, "val")
-            return Core.ReturnNode(deserialize_ir_value(d["val"]))
-        else
-            return Core.ReturnNode()
-        end
-    elseif tag == "goto"
-        return Core.GotoNode(d["label"])
-    elseif tag == "gotoifnot"
-        return Core.GotoIfNot(deserialize_ir_value(d["cond"]), d["dest"])
-    elseif tag == "phi"
-        edges = Int32.(d["edges"])
-        vals = Any[deserialize_ir_value(v) for v in d["values"]]
-        return Core.PhiNode(edges, vals)
-    elseif tag == "pi"
-        return Core.PiNode(deserialize_ir_value(d["val"]),
-                           deserialize_type_name(d["typ"]))
-    elseif tag == "newvar"
-        return Core.NewvarNode(Core.SlotNumber(d["slot"]))
-    elseif tag == "globalref_stmt"
-        # PHASE-2-INT-001: GlobalRef as standalone stmt (lowered IR)
-        mod = d["mod"] == "Core" ? Core : d["mod"] == "Base" ? Base : Main
-        return GlobalRef(mod, Symbol(d["name"]))
-    elseif tag == "slot"
-        # PHASE-2-INT-001: SlotNumber as standalone stmt (lowered IR)
-        return Core.SlotNumber(d["id"])
-    elseif tag == "nothing"
-        return nothing
-    else
-        error("Unknown IR statement tag: $tag")
-    end
-end
-
-"""
-    deserialize_ssa_type(d) -> Any
-
-Reconstruct an SSA/slot type entry from its JSON representation.
-"""
-function deserialize_ssa_type(d)
-    if d isa AbstractString
-        return deserialize_type_name(d)
-    elseif d isa Dict
-        tag = get(d, "_t", "")
-        if tag == "const"
-            val = deserialize_ir_value(d["val"])
-            return Core.Const(val)
-        end
-    end
-    return Any
-end
-
-"""
-    _make_template_codeinfo() -> Core.CodeInfo
-
-Get a template CodeInfo that can be copied and modified for deserialization.
-"""
-function _make_template_codeinfo()
-    _noop() = nothing
-    ci, _ = Base.code_typed(_noop, (); optimize=true)[1]
-    return ci
-end
-
-"""
-    deserialize_ir_entries(json_str::String) -> Vector{Tuple}
-
-Deserialize a JSON string back to IR entries for compile_module_from_ir.
-Returns Vector of (CodeInfo, return_type, arg_types, name) tuples.
-"""
-function deserialize_ir_entries(json_str::String)
-    data = JSON.parse(json_str)
-    version = get(data, "version", 0)
-    version == 1 || error("Unsupported CodeInfo transport version: $version")
-
-    template = _make_template_codeinfo()
-    result = []
-
-    for entry in data["entries"]
-        ci = copy(template)
-        ci.code = Any[deserialize_ir_stmt(s) for s in entry["code"]]
-        # PHASE-2-INT-001: Handle lowered IR where ssavaluetypes is an Int (count)
-        if entry["ssavaluetypes"] isa Integer
-            ci.ssavaluetypes = entry["ssavaluetypes"]
-        else
-            ci.ssavaluetypes = Any[deserialize_ssa_type(t) for t in entry["ssavaluetypes"]]
-        end
-        if entry["slottypes"] !== nothing
-            ci.slottypes = Any[deserialize_ssa_type(t) for t in entry["slottypes"]]
-        end
-        ci.slotnames = Symbol[Symbol(s) for s in entry["slotnames"]]
-        ci.ssaflags = UInt32.(entry["ssaflags"])
-        ci.slotflags = UInt8.(entry["slotflags"])
-
-        return_type = deserialize_type_name(entry["return_type"])
-        arg_types = Tuple(deserialize_type_name.(entry["arg_types"]))
-        name = entry["name"]
-
-        push!(result, (ci, return_type, arg_types, name))
-    end
-
-    return result
-end
-
 # The sole module pipeline: collect one closed world, install its paired typed-IR
 # cache for the duration of codegen, then compile that immutable plan. Public
 # entry points may normalize inputs, but none may bypass this collector.
-function _compile_module_trim(functions::Vector; kwargs...)
+# parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     normalized = Any[]
     for entry in functions
         if length(entry) == 2
@@ -1787,15 +793,50 @@ function _compile_module_trim(functions::Vector; kwargs...)
     for bindings in values(root_bindings), (f, arg_types) in bindings.bound_leaves
         push!(external_entries, (f, arg_types))
     end
-    plan, ir_cache = trim_compile_plan(normalized; external_entries)
-    TRIM_IR_CACHE[] = ir_cache
     try
-        return _compile_closed_world_plan(plan; kwargs...)
-    finally
-        TRIM_IR_CACHE[] = nothing
+        return with_layout_read_memo() do
+            plan = trim_compile_plan(normalized; external_entries)
+            return _compile_closed_world_plan(plan; kwargs...)
+        end
+    catch err
+        # a failure outside any statement — collecting the closed world, registering its
+        # types, building its dispatch tables, declaring its functions — located at the
+        # module's entries and the compiler frames it was raised through. The caller-facing
+        # errors (a rejection, an already-located bug, an invalid module, a misused API) and
+        # the process's own (an interrupt, exhausted memory) pass through as they are.
+        (err isa WasmCompileError || err isa WasmInternalError || err isa ModuleValidationError ||
+         err isa ArgumentError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
+        throw(WasmInternalError(_module_entries_label(normalized), 0, "",
+                                String["while planning the module (no statement was being compiled)"],
+                                err, _raised_frames(catch_backtrace(), :_compile_module_trim)))
     end
 end
 
+# the entries a module compiles, for a failure outside any statement to name
+# parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+_module_entries_label(entries::Vector)::String =
+    "module of " * join((string(e[3], "(", join(("::" * string(T) for T in e[2]), ", "), ")") for e in entries), ", ")
+
+"""
+    compile_module(functions::Vector) -> WasmModule
+
+Compile multiple Julia functions into a single WebAssembly module.
+
+Each element of `functions` should be a tuple of (function, arg_types) or
+(function, arg_types, name). If name is omitted, the function's name is used.
+
+# Example
+```julia
+mod = compile_module([
+    (add, (Int32, Int32)),
+    (sub, (Int32, Int32)),
+    (mul, (Int32, Int32), "multiply"),
+])
+```
+
+Functions can call each other within the module.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+"""
 function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,
                         import_stubs::Vector=[],
@@ -1804,70 +845,21 @@ function compile_module(functions::Vector;
                         return_registries::Bool=false,
                         optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
-                        discovery::Symbol=:trim)
-    discovery === :trim || throw(ArgumentError(
-        "only the closed-world compilation path is supported (discovery=:trim)"))
+                        source_map_url::Union{Nothing,String}=nothing,
+                        trace::Union{Nothing,StatementTrace}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, link_roots, optimize_ir, register_ir_types)
+        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url, trace)
 end
 
-"""
-    _collect_reachable_ir_types(function_data) -> Set{DataType}
+# _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
+# trimcollect.jl beside the planner; it reads the NIR bodies in `function_data`.
 
-census F2 (march5) — the CLOSED-WORLD type collector (dart class_info.dart:583-690:
-number every class of the component once, before codegen). Walks every function's
-typed-IR ssa/arg/return types and decomposes Unions, returning the concrete struct
-types reachable from the IR so `assign_type_ids!` numbers the whole world in one
-DFS. PURE COLLECTION — registration stays lazy (eager registration reorders field
-resolution and forks layouts); a collected type registered later receives its
-pre-assigned id via `ensure_type_id!`.
-"""
-function _collect_reachable_ir_types(function_data)::Set{DataType}
-    out = Set{DataType}()
-    seen = Set{Any}()
-    function reg!(@nospecialize(T))
-        T === nothing && return
-        T in seen && return
-        push!(seen, T)
-        if T isa Union
-            reg!(T.a); reg!(T.b)
-            return
-        end
-        T isa DataType || return
-        if T <: Type && T !== Type && length(T.parameters) == 1
-            reg!(T.parameters[1])
-            return
-        end
-        # exclude what WT represents as NON-structs: Memory/MemoryRef lower to
-        # wasm arrays (an id here admits them as dispatch candidates whose
-        # wrappers then have no struct to cast to — the _la_sub regression)
-        if isconcretetype(T) && isstructtype(T) &&
-           (!(T <: Function) || T in _ENROLLED_CALLABLE_TYPES[]) && T !== Core.Box &&
-           !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
-            push!(out, T)
-        end
-    end
-    for fd in function_data
-        code_info = fd[4]
-        code_info === nothing && continue
-        for at in fd[2]
-            reg!(at isa Type ? at : typeof(at))
-        end
-        reg!(fd[5])
-        ssats = code_info.ssavaluetypes
-        if ssats isa Vector
-            for t in ssats
-                reg!(Core.Compiler.widenconst(t))
-            end
-        end
-    end
-    return out
-end
 # Julia may discover several specialized functions with the same source-level name.
 # Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
 # ExportsBuilder, rejects duplicate names instead of silently repairing the request.
-function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
+# parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
+function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
     final = name
     if any(e -> e.name == final, mod.exports)
         local k = 2
