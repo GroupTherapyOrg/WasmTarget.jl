@@ -1489,6 +1489,15 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         dt_global = ctx.type_registry.type_constant_globals[arg_type]
         global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
     else
+        local _shared = _shared_bare_array_classes(ctx.type_registry, arg_type)
+        if !isempty(_shared)
+            record_unsupported!(ctx, :unsupported_method,
+                "typeof of a $(something(arg_type, Any)) value that may be $(join(_shared, " or ")), one wasm array type no test tells apart";
+                idx=idx)
+            unreachable!(_tofb)
+            append_builder!(fb, _tofb)
+            return append_builder!(b, fb)
+        end
         # parity(code_generator.dart:2258 visitInstanceGet): a potentially-null receiver's
         # `runtimeType` branches on null (`br_on_null`) to the Null type literal; `nothing`
         # is the null ref, so its type is Nothing, never a classId read through a null.
@@ -1575,6 +1584,30 @@ function _bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Tuple{
     end
     return Tuple{Type, UInt32}[(C, arr) for (C, arr) in all
         if count(p -> p[2] == arr, all) == 1 && (T === nothing || typeintersect(T, C) !== Union{})]
+end
+
+"""
+    _shared_bare_array_classes(registry, T) -> Vector{Type}
+
+The closed-world classes a value of static type `T` may be that are bare wasm arrays sharing
+their array type with another such class (Memory{Int64} and Memory{UInt64}): no runtime test
+tells which of them a value is, so a class read over `T` rejects rather than trap on one. The
+root is a Memory as a classed object, as dart's lists are (`_List` holds its WasmArray).
+parity(quarantine: WT represents a Memory as a bare wasm array, outside the numbered classes.)
+"""
+function _shared_bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Type}
+    local all = Tuple{Type, UInt32}[]
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
+                                C -> (C isa DataType && C <: GenericMemory) || C === Core.SimpleVector)
+        if C isa DataType && C <: GenericMemory
+            local arr = get(reg.arrays, eltype(C), nothing)
+            arr === nothing || push!(all, (C, arr))
+        elseif C === Core.SimpleVector && reg.jl_svec_idx !== nothing
+            push!(all, (C, reg.jl_svec_idx))
+        end
+    end
+    return Type[C for (C, arr) in all
+        if count(p -> p[2] == arr, all) > 1 && (T === nothing || typeintersect(T, C) !== Union{})]
 end
 
 """

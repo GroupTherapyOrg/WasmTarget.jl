@@ -456,6 +456,12 @@ function resolve_call_callee(x, types)::Any
         return isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : x
     elseif x isa QuoteNode
         return x.value
+    elseif x isa Function && Base.issingletontype(typeof(x))
+        # a function the IR embeds as the object itself (`(Core.svec)(x, 2)`, a Builtin
+        # constant-propagated into the call) names that function, as its GlobalRef would; a
+        # value of a singleton type is its instance (Julia's own answer). A closure that
+        # captures values is a value, not a name, and stays an operand.
+        return x
     else
         return resolve_operand(x, types)
     end

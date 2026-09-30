@@ -590,6 +590,8 @@ _g("exceptions", Any[
 
 # BUILTIN_LOWERINGS reached from ordinary code: a call the optimizer leaves as a :call.
 _g("builtins", Any[
+    # sizeof of an Any element: Base.aligned_sizeof's `Core.sizeof` reaches its lowering
+    ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
     # compilerbarrier(kind, x) is x, its type hidden: boxed with its own class into the
     # statement's Any
     ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
@@ -919,9 +921,6 @@ _xf("builtin_crashes", Any[
     # returns (dev/AUDIT.md E1); answering, wrong or right, is an outcome mismatch here.
     ("datatype_runtime_name", (x::Int64) -> (v = _sm_dt_getfield(x > 0 ? Int64 : Float64, x > 2 ? :hash : :flags); v isa Int32 ? Int64(v::Int32) : -1), Int64(3)),
     ("module_runtime_name", (x::Int64) -> (getfield(x > 0 ? Base : Core, x > 2 ? :pi : :nothing) === nothing ? 1 : 2), Int64(3)),
-    # Base.sizeof on an Any element: `Core.sizeof(Any)` in Base.aligned_sizeof rejects at its
-    # statement (an abstract type has no size; Julia throws there)
-    ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
     # Symbol of an Any element: `Symbol(::Any)` is Julia's dynamic dispatch, and a constructor
     # callee enrolls no dispatch candidates, so it rejects at its statement. A `Symbol` builtin
     # once cast the value to the classed string (a trap for an Int64), and get_function's
@@ -1544,6 +1543,25 @@ _g("typeassert_checks", Any[
     ("static_intersection_throws", (x::Int64) -> (try; t = _sm_ta_pair(x); (t::Tuple{Any,Any})[1]::Int64; catch e; _sm_ta_kind(e); end), Int64(-3)),
 ])
 @noinline _sm_ta_pair(x::Int64) = x > 0 ? (x, 2) : nothing
+# A SimpleVector is dart's immutable array of its elements, a wasm type of its own; a
+# Memory{Any} is a mutable one, so a value of either is told apart (Core.svec as the IR embeds
+# it is the builtin it names)
+@noinline _sm_sv(x::Int64) = Core.svec(x, 2)
+@noinline _sm_sv_mem(x::Int64) = Memory{Any}(undef, x)
+_g("simplevector_values", Any[
+    ("svec_length", (x::Int64) -> length(_sm_sv(x)), Int64(3)),
+    ("memory_any_typeof", (x::Int64) -> (v = Any[_sm_sv_mem(x), _sm_sv(x)]; typeof(v[x > 0 ? 1 : 2]) === Memory{Any} ? 1 : 2), Int64(3)),
+    ("svec_typeof", (x::Int64) -> (v = Any[_sm_sv_mem(x), _sm_sv(x)]; typeof(v[x > 0 ? 2 : 1]) === Core.SimpleVector ? 1 : 2), Int64(3)),
+    ("svec_isa", (x::Int64) -> (v = Any[_sm_sv_mem(x), _sm_sv(x)]; v[2] isa Core.SimpleVector ? 1 : 2), Int64(3)),
+])
+# A Memory{Int64} and a Memory{UInt64} are one wasm array type, so no test tells a value of one
+# from the other: a class read over both rejects at its statement, where it would trap on one
+# (MARCH 13.17 A3S2; the root is a Memory as a classed object, as dart's `_List` is)
+@noinline _sm_mi(x::Int64) = Memory{Int64}(undef, x)
+@noinline _sm_mu(x::Int64) = Memory{UInt64}(undef, x)
+_xf("shared_bare_arrays", Any[
+    ("typeof_either", (x::Int64) -> (v = Vector{Any}(undef, 2); v[1] = _sm_mi(x); v[2] = _sm_mu(x); typeof(v[x > 0 ? 2 : 1]) === Memory{UInt64} ? 1 : 2), Int64(3)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

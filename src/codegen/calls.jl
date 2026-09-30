@@ -2444,10 +2444,10 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
          (isstructtype(Tc) || isprimitivetype(Tc))) || return nothing
         length(_function_type(ctx.mod, c.wasm_idx).params) == n || return nothing
         # a bare-array class (a Memory, a SimpleVector) is told apart only by an array type
-        # no other class shares (emit_class_id!); one that shares it gets no row, and a call
-        # that reaches it traps with the unmatched ones
+        # no other class shares (emit_class_id!); a call with a candidate whose array type is
+        # shared has no switch, and rejects at its statement where the switch would trap
         (Tc <: GenericMemory || Tc === Core.SimpleVector) &&
-            !any(p -> p[1] === Tc, _bare_array_classes(ctx.type_registry, Tc)) && continue
+            !isempty(_shared_bare_array_classes(ctx.type_registry, Tc)) && return nothing
         cw = _function_type(ctx.mod, c.wasm_idx).params[dpos]
         (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing
         tid = ensure_type_id!(ctx.type_registry, Tc)

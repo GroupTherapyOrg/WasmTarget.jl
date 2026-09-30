@@ -340,5 +340,20 @@ other exception is a crash, which fails the lane. It found three, each now Julia
 located rejection: `compilerbarrier(:type, x)` boxes x with its class into the statement's Any
 (inferencebarrier_int passes, promoted out of the xfails), `getfield(T, :layout)` is C_NULL for
 a type with no layout as in Julia (sizeof of an Any element now rejects at `Core.sizeof(Any)`),
-and a tuple whose type is known only at run time rejects at its statement.
+and a tuple whose type is known only at run time rejects at its statement. Batch 72 — A3S2, the trap. A
+SimpleVector is dart's immutable array (translator.dart:1218 wasmArrayType, `mutable: false`),
+so it and a Memory{Any} are two wasm types and a value of either is told apart; every probe
+module changes only in that one type line (all 225 printed and compared). Core.svec could not
+be tested: a function the IR embeds as the object itself (`(Core.svec)(x, 2)`) was a literal
+operand at the NIR boundary, where a GlobalRef to it is the function, so every `func === X`
+arm missed it; resolve_call_callee now gives both one representation for a function of a
+singleton type, which is its instance (0 probes change; the fuzz lane caught the first version,
+which also took a capturing closure for a name and dropped SparseArrays' throwTi's captured Ti),
+and Core.svec and `Core.sizeof(Any)` reach their lowerings. Memory classes that still share an
+array type (Memory{Int64} and Memory{UInt64}) are told apart by no test: a typeof over them,
+the inline class switch and the closure trampoline reject at compile time where they trapped
+(measured: the trampoline trapped with an illegal cast where native answered 3). The inline
+switch's rejection has no case that reaches it; a program whose runtime value is another class
+now rejects where it answered, a capability loss. The root, a Memory as a classed object, and
+the trampoline's unlocated rejection are on 13.17.
 

@@ -376,7 +376,7 @@ mutable struct TypeRegistry
     jl_unionall_idx::Union{Nothing, UInt32}   # $JlUnionAll (sub $JlType) — type constructor
     jl_typevar_idx::Union{Nothing, UInt32}    # $JlTypeVar (sub $JlType) — bound variable
     jl_typename_idx::Union{Nothing, UInt32}   # $JlTypeName — identity token
-    jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous (array (mut anyref))
+    jl_svec_idx::Union{Nothing, UInt32}       # $JlSVec = heterogeneous, immutable (array anyref)
     # Exact utf8proc category/text-width table helper, shared by all Unicode calls.
     unicode_property_func_idx::Union{Nothing, UInt32}
     # The runtime egal function (`get_egal_function!`, dart's `identical` member intrinsic).
@@ -1385,8 +1385,10 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
 
     # 3. Core.SimpleVector is heterogeneous in Julia. Type parameter lists are
     # one use, not its representation contract; numeric and other boxed values
-    # must coexist with $JlType references without a downcast.
-    jl_svec = ArrayType(FieldType(AnyRef, true))
+    # must coexist with $JlType references without a downcast. It is immutable in Julia, so
+    # its array is dart's immutable array of that element (translator.dart:1218 wasmArrayType,
+    # `mutable: false`), a type of its own: a Memory{Any}'s mutable array is another.
+    jl_svec = ArrayType(FieldType(AnyRef, false))
     jl_svec_idx = add_type!(mod, jl_svec)
     registry.jl_svec_idx = jl_svec_idx
 

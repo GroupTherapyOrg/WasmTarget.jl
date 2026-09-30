@@ -33,6 +33,9 @@ mkE(v::Int32) = E(v); mkF(v::Int32) = F(v); mkG(v::Int32) = G(v); mkH(v::Int32) 
 # below max_methods, inference splits the call and Julia's IR ends it in
 # Core.throw_methoderror(u, v), with `v` erased: its args tuple has v's runtime type
 u(x::Int64) = Int32(1); u(x::String) = Int32(2)
+# a dynamic call whose candidates take a Memory{Int64} and a Memory{UInt64}, one wasm array type
+@noinline lenany(@nospecialize(x)) = length(x)
+gm(x::Int64) = (v = Any[Memory{Int64}(undef, x), Memory{UInt64}(undef, 2), "abcd"]; lenany(v[1]))
 gu(x::Int64)::Int32 = (v = Any[x, "s", 1.5]; try; u(v[x]); catch e; e isa MethodError ? Int32(7) : Int32(8); end)
 end
 
@@ -109,4 +112,8 @@ end
     let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gu, (Int64,)), "gu", "3n")
         @test r[1] === :trap
     end
+    # a candidate whose class shares its wasm array type has no row: the call rejects at
+    # compile time, never a switch that traps on it (dev/AUDIT.md A3S2)
+    @test M.gm(3) == 3
+    @test_throws WasmTarget.WasmCompileError WasmTarget.compile(M.gm, (Int64,))
 end

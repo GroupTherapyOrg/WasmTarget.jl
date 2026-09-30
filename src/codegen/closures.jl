@@ -249,13 +249,15 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     end
     for c in cands
         # a bare-array parameter (a Memory, a SimpleVector) is told only by an array type no
-        # other class shares; a candidate that has one that is shared gets no row, and a call
-        # that reaches it traps with the unmatched ones
-        any(1:arity) do j
+        # other class shares; a callable with a candidate whose array type is shared was
+        # rejected before any vtable is built (compile.jl)
+        for j in 1:arity
             local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
-            Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector) &&
-                !any(p -> p[1] === Tj, _bare_array_classes(registry, Tj))
-        end && continue
+            (Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector) &&
+             !isempty(_shared_bare_array_classes(registry, Tj))) &&
+                throw(_closure_layout_error(closure_type, cands,
+                    "a candidate takes $(Tj), whose wasm array type another class shares"))
+        end
         local lbl = block!(tb)
         for j in 1:arity
             local pj = c.params[j + (takes_context ? 1 : 0)]
