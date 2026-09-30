@@ -1358,6 +1358,15 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
     # Infer tuple type from arguments
     elem_types = Type[infer_value_type(arg, ctx) for arg in args]
     tuple_type = Tuple{elem_types...}
+    # a tuple's type is its elements' runtime types (jl_f_tuple): an element whose type is
+    # known only at run time makes a tuple of a type known only at run time, which WT does
+    # not build (MARCH 13.10)
+    if !(isconcretetype(tuple_type) || Base.isdispatchtuple(tuple_type))
+        emit_unsupported_stub!(ctx, fb, :unsupported_method,
+            "a tuple of $(tuple_type): its type is its elements' runtime types, known only at run time";
+            idx=idx, detail=call)
+        return append_builder!(b, fb)
+    end
 
     # Register tuple type
     if !haskey(ctx.type_registry.structs, tuple_type)
@@ -1426,11 +1435,17 @@ end
 # Special case for compilerbarrier - just pass through the value
 # parity(quarantine: Julia's `Core.compilerbarrier` inference barrier; dart has no such builtin.)
 function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)::InstrBuilder
-    # compilerbarrier(kind, value) - first arg is a symbol, second is the value
-    # We only want the value (second arg)
-    if length(args) >= 2
-        emit_value!(fb, args[2], ctx, static_wasm_type(args[2], ctx))
-    end
+    # compilerbarrier(kind, value) is `value`, its type hidden from inference: the statement's
+    # type is a supertype of the value's, so the value is emitted in the statement's
+    # representation, a boxed value carrying its own class (Base.inferencebarrier)
+    length(args) == 2 || error("compilerbarrier takes a kind and a value, got $(length(args)) operands")
+    local vt = get_ssa_type(ctx, args[2])
+    local li = get(ctx.ssa_locals, idx, nothing)
+    local target = (li !== nothing && 1 <= li - ctx.n_params + 1 <= length(ctx.locals)) ?
+        ctx.locals[li - ctx.n_params + 1] :                      # the local, before any narrowing
+        static_wasm_type(NirSSA(idx, get(ctx.ssa_types, idx, vt)), ctx)
+    emit_value!(fb, args[2], ctx, target;
+                from_julia=(vt isa DataType && isconcretetype(vt)) ? vt : nothing)
     return append_builder!(b, fb)
 end
 
@@ -1868,13 +1883,15 @@ function _lower_getfield_layout!(b, fb, ctx, call, idx, args)::Union{InstrBuilde
     # P3 gap 450889a9cb7e: getfield(::DataType-literal, :layout) — the layout
     # pointer is compile-time host metadata; its loads are folded in
     # _try_fold_layout_pointerref. Represent the opaque, non-null layout handle
-    # by the registered type id + 1 (zero remains C_NULL), never by a fabricated
-    # universal pointer value.
+    # by the registered type id + 1, never by a fabricated universal pointer value; a
+    # type Julia gives no layout (an abstract type: `Any.layout`) is C_NULL, zero, as
+    # Julia answers, and Base.datatype_alignment then throws its UndefRefError.
     if length(args) >= 2
         local _gf_dt = nir_const(args[1])
         local _gf_fld = nir_const(args[2])
         if _gf_dt isa DataType && _gf_fld === :layout
-            i64_const!(fb, Int64(ensure_type_id!(ctx.type_registry, _gf_dt)) + 1)
+            i64_const!(fb, _gf_dt.layout == C_NULL ? Int64(0) :
+                           Int64(ensure_type_id!(ctx.type_registry, _gf_dt)) + 1)
             return append_builder!(b, fb)
         end
     end

@@ -680,6 +680,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         if fn_nir !== nothing && type_registry.base_struct_idx !== nothing &&
            !isempty(dispatch_registry.tables)
             dispatch_dt = find_dispatch_call(fn_nir.stmts, dispatch_registry)
+            # a table with no selector route (three or more varying arguments, an axis tie)
+            # makes no dispatch caller: the body compiles from Julia's IR, whose dynamic call
+            # dispatches or rejects at its statement
+            dispatch_dt !== nothing && !haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref) &&
+                (dispatch_dt = nothing)
         end
 
         # a dispatcher or standalone body is compiler-generated: no statement emitted it
@@ -689,15 +694,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         elseif dispatch_dt !== nothing
             # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            if haskey(dispatch_registry.selector_offset, dispatch_dt.func_ref)
-                # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
-                body, locals = generate_selector_caller_body(
-                    dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
-                    caller_return_type=return_type, mod=mod, type_registry=type_registry)
-            else
-                body, locals = generate_dispatch_caller_body(
-                    dispatch_dt, n_params, type_registry.base_struct_idx, type_registry)
-            end
+            # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
+            body, locals = generate_selector_caller_body(
+                dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
+                caller_return_type=return_type, mod=mod, type_registry=type_registry)
         else
             # Generate function body from Julia IR
             bindings = get(root_bindings, name, nothing)

@@ -237,14 +237,15 @@ _xf(name, cases) = push!(XFAIL, name => cases)
 # (dev/CHARTER.md C6), terminal state 0.
 const XFAIL_RUNTIME = Dict{String,Symbol}(
 )
-# What an xfail case does now: :pass, one of XFAIL_RUNTIME's outcomes, or :loud (the compile
-# rejects it).
+# What an xfail case does now: :pass, one of XFAIL_RUNTIME's outcomes, :loud (the compile
+# rejects it at a statement it names, dev/CHARTER.md C6), or :crash (the compile raises
+# anything else: a codegen bug, a rejection that names no statement), which no xfail may do.
 function xfail_outcome(f, args)::Symbol
     expected = f(args...)
     bytes = try
         WasmTarget.compile(f, Tuple(map(typeof, args)); optimize=false)
-    catch
-        return :loud
+    catch err
+        return err isa WasmTarget.WasmCompileError && err.diag.stmt_idx > 0 ? :loud : :crash
     end
     status, val = WasmRunner.run_wasm_single(bytes, string(nameof(f)),
                                              join(map(format_js_arg, args), ", "))
@@ -589,6 +590,9 @@ _g("exceptions", Any[
 
 # BUILTIN_LOWERINGS reached from ordinary code: a call the optimizer leaves as a :call.
 _g("builtins", Any[
+    # compilerbarrier(kind, x) is x, its type hidden: boxed with its own class into the
+    # statement's Any
+    ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
     ("expr_new", (x::Int64) -> (e = Expr(:call, :+, 1, x); length(e.args)), Int64(1)),                              # Core._expr
     ("donotdelete", (x::Int64) -> (Base.donotdelete(x); x + 1), Int64(1)),                                           # Core.donotdelete
     ("isassigned_ref_elements", (x::Int64) -> (v = Vector{String}(undef, 3); v[1] = "a"; isassigned(v, x) ? 1 : 0), Int64(2)),  # memoryref_isassigned
@@ -915,10 +919,8 @@ _xf("builtin_crashes", Any[
     # returns (dev/AUDIT.md E1); answering, wrong or right, is an outcome mismatch here.
     ("datatype_runtime_name", (x::Int64) -> (v = _sm_dt_getfield(x > 0 ? Int64 : Float64, x > 2 ? :hash : :flags); v isa Int32 ? Int64(v::Int32) : -1), Int64(3)),
     ("module_runtime_name", (x::Int64) -> (getfield(x > 0 ? Base : Core, x > 2 ? :pi : :nothing) === nothing ? 1 : 2), Int64(3)),
-    # Core.compilerbarrier on an Int64: WasmInternalError "numeric-to-reference conversion
-    # lacks a concrete Julia source type"
-    ("inferencebarrier_int", (x::Int64) -> Base.inferencebarrier(x)::Int64 + 1, Int64(1)),
-    # Base.sizeof on an Any element: WasmInternalError at `getfield(Any, :layout)`
+    # Base.sizeof on an Any element: `Core.sizeof(Any)` in Base.aligned_sizeof rejects at its
+    # statement (an abstract type has no size; Julia throws there)
     ("sizeof_any", (x::Int64) -> (v = Any["abcd", 1]; sizeof(v[x])), Int64(1)),
     # Symbol of an Any element: `Symbol(::Any)` is Julia's dynamic dispatch, and a constructor
     # callee enrolls no dispatch candidates, so it rejects at its statement. A `Symbol` builtin
@@ -1076,11 +1078,10 @@ _g("union_nothing", Any[
 ])
 # A tuple or NamedTuple with a Union{Nothing,T} element is an abstract type in Julia (its
 # values are Tuple{Nothing,Int64} or Tuple{Int64,Int64}); WT gives it no class, and a
-# closure capturing such a value is typed by a runtime `apply_type`. All three reject at
-# their statement today (measured 2026-09-22): `tuple` raises WasmInternalError
-# "ensure_type_id!: Tuple{Union{Nothing, Int64}, Int64} reached codegen unnumbered",
-# `getproperty` on the NamedTuple "getfield call shape not lowerable", the capture
-# "unresolved dynamic call `Core.apply_type`".
+# closure capturing such a value is typed by a runtime `apply_type`. Each rejects at its
+# statement: the `tuple` (its type is its elements' runtime types), `getproperty` on the
+# NamedTuple ("getfield call shape not lowerable"), the capture ("unresolved dynamic call
+# `Core.apply_type`").
 @noinline _un_tup(x::Int64) = (x > 0 ? nothing : x, x)
 @noinline _un_nt(x::Int64) = (a = x > 0 ? nothing : iseven(x), b = x)
 _xf("union_nothing_containers", Any[

@@ -330,5 +330,15 @@ pop_exception restores it; the_exception reads the top; a rethrow at depth 0 thr
 ErrorException. TLC's first counterexample was against the design, not the code: pushing at the
 catch's landing gives a rethrow's landing a second entry, which a later `rethrow(e)` overwrites
 instead of Julia's (the LandingPush instance). Smoke group exception_stack's five new cases: the
-old lowering planted back answers four wrong. The stack across calls is on 13.17.
+old lowering planted back answers four wrong. The stack across calls is on 13.17. Batch 71 — A3S4: a dispatch caller is
+only a function whose table has a selector route; the other tables' functions compile from
+Julia's IR, whose dynamic call dispatches or rejects, where the deleted function was called.
+test/no_undefined_globals.jl reads every method the package's modules define, in Julia's
+lowered code, for a global that names no binding: it found that call and nothing else. A3P5:
+the xfail lane counts a rejection only when it is a WasmCompileError naming its statement; any
+other exception is a crash, which fails the lane. It found three, each now Julia's answer or a
+located rejection: `compilerbarrier(:type, x)` boxes x with its class into the statement's Any
+(inferencebarrier_int passes, promoted out of the xfails), `getfield(T, :layout)` is C_NULL for
+a type with no layout as in Julia (sizeof of an Any element now rejects at `Core.sizeof(Any)`),
+and a tuple whose type is known only at run time rejects at its statement.
 
