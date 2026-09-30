@@ -1470,9 +1470,10 @@ _g("invoke_in_world", Any[
     # result (dev/AUDIT.md E7)
     ("nothing_result", (x::Int64) -> (r = Ref(x); y = x * 3 + (Base.invoke_in_world(Base.tls_world_age(), _sm_iiw_set!, r, x + 1); r[]); y), Int64(4)),
 ])
-# Julia's exception stack: a catch makes its exception the one being handled, a
-# pop_exception restores what its try region's enter saw, `catch e` reads the top, and
-# rethrow() throws it again (rethrow(e) with `e` in its place) (dev/AUDIT.md A2E1–A2E3).
+# Julia's exception stack (dev/formal/ExceptionStack.tla): a throw pushes its exception, an
+# enter records the depth and its pop_exception restores it, `catch e` reads the top, rethrow()
+# throws the top again and rethrow(e) overwrites it, and either at depth 0 throws Julia's
+# ErrorException (dev/AUDIT.md A2E1–A2E3, A3E1, A3E2).
 @noinline function _sm_xs_nested_rethrow(x::Int64)::Int64
     try; throw(ArgumentError("outer")); catch
         try; x > 0 && throw(DomainError(x)); catch; end
@@ -1482,8 +1483,30 @@ _g("invoke_in_world", Any[
 end
 @noinline _sm_xs_rethrow_other(x::Int64)::Int64 =
     (try; error("orig"); catch; rethrow(ArgumentError("replaced")); end; Int64(0))
-_sm_xs_kind(e)::Int64 = e isa ArgumentError ? 1 : e isa DomainError ? 2 : 3
+_sm_xs_kind(e)::Int64 = e isa ArgumentError ? 1 : e isa DomainError ? 2 :
+    e isa ErrorException ? _sm_xs_msg((e::ErrorException).msg::String) : 3
+_sm_xs_msg(m::String)::Int64 = m == "rethrow() not allowed outside a catch block" ? 4 :
+    m == "rethrow(exc) not allowed outside a catch block" ? 5 : 6
+@noinline function _sm_xs_other_nested(x::Int64)::Int64
+    try; throw(ArgumentError("outer")); catch
+        try; x > 0 && rethrow(DomainError(x)); catch; end
+        rethrow()
+    end
+    return 0
+end
+@noinline function _sm_xs_other_finally(x::Int64)::Int64
+    try; throw(ArgumentError("outer")); catch
+        try; x > 0 && rethrow(DomainError(x)); finally; end
+    end
+    return 0
+end
+@noinline _sm_xs_after_handled(x::Int64)::Int64 = (try; throw(DomainError(x)); catch; end; x > 0 && rethrow(); 0)
 _g("exception_stack", Any[
+    ("rethrow_other_in_nested_region", (x::Int64) -> (try; _sm_xs_other_nested(x); catch e; _sm_xs_kind(e); end), Int64(3)),
+    ("rethrow_other_through_finally", (x::Int64) -> (try; _sm_xs_other_finally(x); catch e; _sm_xs_kind(e); end), Int64(3)),
+    ("rethrow_outside_catch", (x::Int64) -> (try; x > 0 && rethrow(); 0; catch e; _sm_xs_kind(e); end), Int64(3)),
+    ("rethrow_other_outside_catch", (x::Int64) -> (try; x > 0 && rethrow(ArgumentError("a")); 0; catch e; _sm_xs_kind(e); end), Int64(3)),
+    ("rethrow_after_a_handled_exception", (x::Int64) -> (try; _sm_xs_after_handled(x); catch e; _sm_xs_kind(e); end), Int64(3)),
     ("nested_catch_then_rethrow", (x::Int64) -> (try; _sm_xs_nested_rethrow(x); catch e; _sm_xs_kind(e); end), Int64(1)),
     ("rethrow_other_exception", (x::Int64) -> (try; _sm_xs_rethrow_other(x); catch e; _sm_xs_kind(e); end), Int64(1)),
     ("catch_after_nested_region", (x::Int64) -> (try; (try; throw(DomainError(x)); catch; end); throw(ArgumentError("o")); catch e; _sm_xs_kind(e); end), Int64(1)),

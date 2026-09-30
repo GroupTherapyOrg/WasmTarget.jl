@@ -138,11 +138,9 @@ end
 # exceptional path with no `rethrow` token anywhere in the Julia source
 # (confirmed by deleting this arm: a differential test with two nested
 # try/finally regions inside a catch failed to compile with no source-text
-# `rethrow(` anywhere in the test file). `rethrow()` throws the exception being handled
-# (`$current_exn`) again; `rethrow(e)` first makes `e` the exception being handled
-# (jl_rethrow_other replaces the top of the exception stack) and keeps the caught stack.
-# Until 2026-09-30 the argument was ignored, so `rethrow(ArgumentError("x"))` inside a
-# catch escaped as the exception it caught (dev/AUDIT.md A2E3).
+# `rethrow(` anywhere in the test file). `rethrow()` throws the top of Julia's exception
+# stack again (jl_rethrow); `rethrow(e)` first overwrites the top entry's exception with `e`
+# (jl_rethrow_other); either, at depth 0, throws Julia's ErrorException (emit_rethrow!).
 # ============================================================================
 # parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
 const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
@@ -158,24 +156,23 @@ function _build_standalone_intrinsic_bodies!()::Nothing
 end
 
 """The one standalone body every `Base.rethrow` MethodInstance compiles to when
-function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above).
+function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above): Julia's
+jl_rethrow or jl_rethrow_other over the exception stack (emit_rethrow!).
 parity(code_generator.dart:2966 visitRethrow): throw the caught exception with the stack trace
-its catch received (emit_rethrow_current!).
+its throw captured.
 parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C
-runtime's jl_rethrow, not an expression inside its handler, so the caught exception is read
-from the \$current_exn global rather than a handler local.)"""
+runtime's jl_rethrow, not an expression inside its handler, so it reads the task's exception
+stack rather than a handler local.)"""
 function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
                                            return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
     b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
     if length(arg_types) == 1
-        # rethrow(e): `e` becomes the exception being handled, thrown with the caught stack
+        # rethrow(e): `e` overwrites the top entry's exception, thrown with its stack
         _wt_is_ref(_ib_params[1]) || error("rethrow(e) of a $(arg_types[1]), a value WT does not box " *
                                            "here: its wasm type is $(_ib_params[1])")
-        local_get!(b, 0)
-        global_set!(b, ensure_exception_global!(mod))
     end
-    emit_rethrow_current!(b, mod)
+    emit_rethrow!(b, mod, type_registry; other=length(arg_types) == 1 ? 0 : nothing)
     end_block!(b)
     return (builder_code(b), WasmValType[])
 end

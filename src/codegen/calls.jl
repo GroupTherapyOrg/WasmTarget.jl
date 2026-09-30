@@ -140,13 +140,11 @@ end
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))::InstrBuilder
     ensure_exception_tag!(ctx.mod)
-    exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     info === nothing && error("exception layout is unavailable for $ErrT")
     emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
     struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields
-    global_set!(bld, exn_global)
-    emit_throw_current!(bld, ctx.mod)   # typed (exn, trace) tag
+    emit_throw_value!(bld, ctx.mod)   # typed (exn, trace) tag
     return bld
 end
 
@@ -156,7 +154,6 @@ parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                             @nospecialize(owner_type), field::Union{Symbol,NirNode})::InstrBuilder
     ensure_exception_tag!(ctx.mod)
-    exn_global = ensure_exception_global!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, FieldError)
     info === nothing && error("FieldError layout is unavailable")
     emit_struct_prefix!(bld, ctx.type_registry, FieldError, info)
@@ -166,8 +163,7 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     emit_value!(bld, field isa Symbol ? NirLiteral(field) : field, ctx,
                 fields[Int(info.field_offset) + 2].valtype; from_julia=Symbol)
     struct_new!(bld, info.wasm_type_idx)
-    global_set!(bld, exn_global)
-    emit_throw_current!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod)
     return bld
 end
 
@@ -243,7 +239,6 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
                                     arg_types::Tuple, physical_offset::Integer,
                                     index_local::Integer)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
-    exn_global = ensure_exception_global!(ctx.mod)
     tuple_type = Tuple{arg_types...}
     tuple_info = haskey(ctx.type_registry.structs, tuple_type) ?
                  ctx.type_registry.structs[tuple_type] :
@@ -260,8 +255,7 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
     local_get!(bld, index_local)
     coerce_stack_top!(bld, AnyRef, ctx; from_julia=Int64)
     struct_new!(bld, error_info.wasm_type_idx)
-    global_set!(bld, exn_global)
-    emit_throw_current!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod)
     return bld
 end
 
@@ -2621,8 +2615,7 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
                     from_julia=(source_type isa Type ? source_type : fieldtype(TypeError, i)))
     end
     struct_new!(b, info.wasm_type_idx)
-    global_set!(b, ensure_exception_global!(ctx.mod))
-    emit_throw_current!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod)
     return b
 end
 
@@ -3479,13 +3472,11 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
     # throw() - compile to WASM throw instruction
     if func === Core.throw
-        # Emit throw instruction with tag 0 (our Julia exception tag)
-        # Stash exception value in $current_exn global before throwing.
-        # The throw(obj) call has obj as args[1]. Compile it to anyref for stashing.
+        # throw(obj): obj as the anyref the tag carries, thrown through the one throw
+        length(args) == 1 || error("Core.throw takes one exception, got $(length(args)) operands")
         ensure_exception_tag!(ctx.mod)
-        exn_global = ensure_exception_global!(ctx.mod)
         local _thrb = _ctx_builder(ctx, "compile_call")
-        if length(args) >= 1
+        begin
             local _throw_val = args[1]
             # a constant exception object (a literal operand)
             local _throw_raw = _throw_val isa NirLiteral ? _throw_val.value : nothing
@@ -3503,15 +3494,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     return append_builder!(fb, _thrb)
                 end
             end
-            # Compile the exception value normally. Constants with undefined fields
-            # were rejected above because WasmGC has no equivalent representation.
-            local _exn_b = _compile_value_b(_throw_val, ctx)
-            if !isempty(_exn_b.instrs)
-                append_builder!(_thrb, _exn_b)   # typed merge
-                global_set!(_thrb, exn_global)
-            end
+            # Constants with undefined fields were rejected above because WasmGC has no
+            # equivalent representation.
+            local _throw_st = get_ssa_type(ctx, _throw_val)
+            emit_value!(_thrb, _throw_val, ctx, AnyRef;
+                        from_julia=(_throw_st isa DataType && isconcretetype(_throw_st)) ? _throw_st : nothing)
         end
-        emit_throw_current!(_thrb, ctx.mod)   # typed (exn, trace) tag
+        emit_throw_value!(_thrb, ctx.mod)   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
     elseif func === Core.throw_methoderror
@@ -4464,7 +4453,6 @@ parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 function _emit_apply_method_error!(bld::InstrBuilder, target_value,
                                    ctx::AbstractCompilationContext)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
-    local exn_global = ensure_exception_global!(ctx.mod)
     local error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
     local args_info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
     error_info === nothing && error("MethodError layout is unavailable")
@@ -4479,8 +4467,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
-    global_set!(bld, exn_global)
-    emit_throw_current!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod)
     return bld
 end
 
@@ -4523,8 +4510,7 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
-    global_set!(bld, ensure_exception_global!(ctx.mod))
-    emit_throw_current!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod)
     return bld
 end
 

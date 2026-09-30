@@ -223,16 +223,18 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test MBV._binaryen_worker_count(false) === nothing
     end
 
-    @testset "the exception global is found by its name, never by its type" begin
-        # a framework's own mutable anyref global was once taken for `\$current_exn` (the
-        # first mutable anyref global), so every throw wrote into it (dev/AUDIT.md N1)
+    @testset "the exception stack's top is found by its name, never by its type" begin
+        # a framework's own mutable anyref global was once taken for WT's exception global
+        # (the first mutable anyref global), so every throw wrote into it (dev/AUDIT.md N1)
         m = MBV.WasmModule()
         theirs = MBV.add_global!(m, MBV.AnyRef, true, nothing)
-        exn = MBV.ensure_exception_global!(m)
-        @test exn != theirs && m.globals[Int(exn) + 1].name == "\$current_exn"
-        @test MBV.ensure_exception_global!(m) == exn
-        @test MBV.ensure_exception_stack_global!(m) ∉ (theirs, exn)
-        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.AnyRef, true, nothing; name="\$current_exn")
+        top = MBV.ensure_exception_top_global!(m)
+        @test top != theirs && m.globals[Int(top) + 1].name == "\$exc_top"
+        @test MBV.ensure_exception_top_global!(m) == top
+        @test m.globals[Int(top) + 1].valtype == MBV.ConcreteRef(MBV.exc_cell_type!(m), true)
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.AnyRef, true, nothing; name="\$exc_top")
+        # a typed null reference global names a type the module defines
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.ConcreteRef(UInt32(999), true), true, nothing)
     end
 
     @testset "explicit IO formatting does not activate host-console imports" begin

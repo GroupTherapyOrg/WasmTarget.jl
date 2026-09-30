@@ -220,8 +220,8 @@ function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
-    # Payload: (anyref exn, externref stackTrace — the JS stack at the throw,
-    # emit_throw_current!, or the caught one a rethrow throws again).
+    # Payload: (anyref exn, externref stackTrace — the JS stack its throw captured,
+    # emit_throw_value!, which a rethrow throws again).
     if isempty(mod.tags)
         tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
         add_tag!(mod, add_type!(mod, tag_ft))
@@ -229,37 +229,95 @@ function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
 end
 
 """
-    emit_throw_current!(b, mod) -> b
+    emit_throw_value!(b, mod) -> b
 
-Throw the current exception (the `\$current_exn` global) through the typed tag with the stack
-trace at the throw: the imported `wasmtarget.stack_trace` answers `new Error()`
-(ensure_provenance_imports!, which every module has). The one throw every raise ends in, as
-every dart throw captures `StackTrace.current` into the tag's stack slot
-(`errorThrowWithCurrentStackTrace`).
+Throw the Julia exception on the stack: capture the stack trace at the throw (the imported
+`wasmtarget.stack_trace` answers `new Error()`), push it and the exception as a new entry of
+Julia's exception stack (task.c throw_internal, jl_push_excstack), and throw the tag with the
+entry's exception and stack. The one throw every raise ends in, as every dart throw captures
+`StackTrace.current` into the tag's stack slot (`errorThrowWithCurrentStackTrace`).
+formal(dev/formal/ExceptionStack.tla): a throw pushes, a rethrow does not, an enter's saved top
+is its depth, and every read and raised value is Julia's.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 """
-function emit_throw_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+function emit_throw_value!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     ensure_exception_tag!(mod)
-    global_get!(b, ensure_exception_global!(mod), AnyRef)
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
     call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])
+    struct_new!(b, cell)
+    global_set!(b, top)
+    _emit_throw_top!(b, mod)
+    return b
+end
+
+# throw the tag with the top entry's exception and stack, pushing nothing (jl_rethrow's
+# throw_internal(ct, NULL))
+# parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
+function _emit_throw_top!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 0, AnyRef)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 1, ExternRef)
     throw_!(b, 0)
     return b
 end
 
 """
-    emit_rethrow_current!(b, mod) -> b
+    emit_rethrow!(b, mod, registry; other=nothing) -> b
 
-Throw the exception being handled again with the stack its catch received (the
-`\$current_exn` and `\$current_stack` globals), so it still names the site of its first throw,
-as dart's rethrow throws its catch's `stackTraceLocal` and Julia's `rethrow` keeps the
-backtrace.
+Julia's `rethrow()` (task.c jl_rethrow): throw the top entry of the exception stack again,
+with the stack its throw captured, pushing nothing. With `other`, the local holding `e`,
+Julia's `rethrow(e)` (jl_rethrow_other): `e` overwrites the top entry's exception first. At
+depth 0 either throws Julia's ErrorException instead ("rethrow() not allowed outside a catch
+block", "rethrow(exc) not allowed outside a catch block"), which pushes as every throw does.
 parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
 """
-function emit_rethrow_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
-    ensure_exception_tag!(mod)
-    global_get!(b, ensure_exception_global!(mod), AnyRef)
-    global_get!(b, ensure_exception_stack_global!(mod), ExternRef)
-    throw_!(b, 0)
+function emit_rethrow!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
+                       other::Union{Nothing,Integer}=nothing)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    ref_is_null!(b)
+    if_!(b)
+    local info = register_struct_type!(mod, registry, ErrorException)
+    info === nothing && error("ErrorException layout is unavailable")
+    emit_struct_prefix!(b, registry, ErrorException, info)
+    local msg = other === nothing ? "rethrow() not allowed outside a catch block" :
+                                    "rethrow(exc) not allowed outside a catch block"
+    local g = get_string_constant_global!(mod, registry, msg; eager=true)
+    global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))
+    struct_new!(b, info.wasm_type_idx)
+    emit_throw_value!(b, mod)
+    end_block!(b)
+    if other !== nothing
+        global_get!(b, top, ConcreteRef(cell, true))
+        local_get!(b, UInt32(other))
+        struct_set!(b, cell, 0, AnyRef)
+    end
+    return _emit_throw_top!(b, mod)
+end
+
+"""
+    emit_current_exception!(b, mod) -> b
+
+Julia's `the_exception` (jl_current_exception): the top entry's exception, `nothing` (the
+null reference) when the exception stack is empty.
+parity(quarantine: Julia's per-task exception stack, read by the_exception; dart binds its catch's exception to a local, code_generator.dart:958 visitTryCatch.)
+"""
+function emit_current_exception!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
+    local cell = exc_cell_type!(mod)
+    local top = ensure_exception_top_global!(mod)
+    global_get!(b, top, ConcreteRef(cell, true))
+    ref_is_null!(b)
+    if_!(b; results=WasmValType[AnyRef])
+    ref_null!(b, AnyRef)
+    else_!(b)
+    global_get!(b, top, ConcreteRef(cell, true))
+    struct_get!(b, cell, 0, AnyRef)
+    end_block!(b)
     return b
 end
 
@@ -397,44 +455,41 @@ end
 _stack_trace_func_idx(mod::WasmModule)::Union{Nothing,UInt32} = _import_func_idx(mod, "wasmtarget", "stack_trace")
 
 """
-    ensure_exception_global!(mod) -> global_idx
+    exc_cell_type!(mod) -> type_idx
 
-The `\$current_exn` global, a (mut anyref) starting null, defined once and found by its name
-(global_named) — never by its type, which another mutable anyref global shares.
-parity(quarantine: WT stashes the thrown Julia value in a global beside the tag's payload, where `catch` and jl_current_exception read it; dart's tag carries its exception and stack trace.)
+One entry of Julia's exception stack: its exception, which `rethrow(e)` overwrites, and the
+stack trace its throw captured. Julia's entry also links the one below it; nothing in WT
+reads below the top except through the top an enter saved, so an entry holds no link.
+parity(quarantine: Julia's per-task exception stack (task.c jl_push_excstack) is dynamic state that rethrow() and callees read; dart binds its exception and stack to its catch's locals, code_generator.dart:958 visitTryCatch.)
 """
-function ensure_exception_global!(mod::WasmModule)::UInt32
-    local g = global_named(mod, "\$current_exn")
-    return g === nothing ? add_global!(mod, AnyRef, true, nothing; name="\$current_exn") : g
+exc_cell_type!(mod::WasmModule)::UInt32 =
+    add_type!(mod, StructType([FieldType(AnyRef, true), FieldType(ExternRef, false)]))
+
+"""
+    ensure_exception_top_global!(mod) -> global_idx
+
+The top of Julia's exception stack, `\$exc_top`, a mutable nullable reference to its entry,
+null while the stack is empty; defined once and found by its name (global_named).
+parity(quarantine: Julia's per-task exception stack, whose top a throw, a pop_exception and rethrow(e) change; dart has none.)
+"""
+function ensure_exception_top_global!(mod::WasmModule)::UInt32
+    local g = global_named(mod, "\$exc_top")
+    g === nothing || return g
+    return add_global!(mod, ConcreteRef(exc_cell_type!(mod), true), true, nothing; name="\$exc_top")
 end
 
 """
-    exn_saved_locals!(ctx, enter_idx) -> (exn_local, stack_local)
+    exc_saved_local!(ctx, enter_idx) -> local
 
-The locals where try region `enter_idx` keeps the exception and stack being handled when it
-was entered; its pop_exception restores them, as Julia's jl_restore_excstack pops the task's
-exception stack back to that region's depth.
+The local where try region `enter_idx` keeps the top of the exception stack when it is
+entered, its depth: its pop_exception restores it, as Julia's enter records
+jl_excstack_state and pop_exception calls jl_restore_excstack.
 parity(quarantine: Julia's exception stack is task state that a region's enter and pop_exception save and restore; dart binds each catch's exception to its own locals (code_generator.dart:958 visitTryCatch).)
 """
-function exn_saved_locals!(ctx::AbstractCompilationContext, enter_idx::Int)::Tuple{Int,Int}
-    return get!(ctx.exn_saved_locals, enter_idx) do
-        (allocate_local!(ctx, AnyRef), allocate_local!(ctx, ExternRef))
+function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int)::Int
+    return get!(ctx.exc_saved_locals, enter_idx) do
+        allocate_local!(ctx, ConcreteRef(exc_cell_type!(ctx.mod), true))
     end
-end
-
-"""
-    ensure_exception_stack_global!(mod) -> global_idx
-
-The stack trace of the exception being handled, beside `\$current_exn`: a catch stores the
-stack its payload carries, and a rethrow throws it again with the exception, as dart's
-rethrow throws its catch's `stackTraceLocal` (code_generator.dart:2966). A global, not a
-handler local, for the reason `\$current_exn` is one: Julia's `rethrow()` is a call that reads
-the task's exception stack.
-parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C runtime's jl_rethrow, not an expression inside its handler, so the caught exception is read from the \$current_exn global rather than a handler local.)
-"""
-function ensure_exception_stack_global!(mod::WasmModule)::UInt32
-    local g = global_named(mod, "\$current_stack")
-    return g === nothing ? add_global!(mod, ExternRef, true, nothing; name="\$current_stack") : g
 end
 
 

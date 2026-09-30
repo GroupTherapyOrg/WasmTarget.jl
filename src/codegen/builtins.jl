@@ -895,7 +895,6 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     num!(b, Opcode.I64_GE_U)
     if_!(b)
     ensure_exception_tag!(ctx.mod)
-    exn_global = ensure_exception_global!(ctx.mod)
     error_info = register_struct_type!(ctx.mod, ctx.type_registry, BoundsError)
     error_info === nothing && error("BoundsError layout is unavailable")
     emit_struct_prefix!(b, ctx.type_registry, BoundsError, error_info)
@@ -912,8 +911,7 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     end
     emit_value!(b, index, ctx, AnyRef; from_julia=Int64)
     struct_new!(b, error_info.wasm_type_idx)
-    global_set!(b, exn_global)
-    emit_throw_current!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod)
     end_block!(b)
     bc_static !== true && end_block!(b)
     return b
@@ -1284,10 +1282,8 @@ end
 # WT throw site does.
 function _emit_throw_value!(b::InstrBuilder, ctx::AbstractCompilationContext, exn::Exception)::InstrBuilder
     ensure_exception_tag!(ctx.mod)
-    exn_global = ensure_exception_global!(ctx.mod)
     emit_value!(b, NirLiteral(exn), ctx, AnyRef; from_julia=typeof(exn))   # a host exception value: the explicit literal node
-    global_set!(b, exn_global)
-    emit_throw_current!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod)
     return b
 end
 
@@ -1840,8 +1836,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     coerce_stack_top!(fb, _te_got_w, ctx;
                       from_julia=(_ta_static isa Type && isconcretetype(_ta_static) ? _ta_static : nothing))
     struct_new!(fb, _te_info.wasm_type_idx)
-    global_set!(fb, ensure_exception_global!(ctx.mod))
-    emit_throw_current!(fb, ctx.mod)   # typed (exn, trace) tag
+    emit_throw_value!(fb, ctx.mod)   # typed (exn, trace) tag
     end_block!(fb)
     local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
     return append_builder!(b, fb)

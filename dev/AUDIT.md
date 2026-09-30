@@ -321,4 +321,14 @@ other through `_compile_call_isa`, which now narrows a test to S ∩ T as Julia'
 `Union{Nothing,Tuple{Int64,Int64}}`). Smoke group typeassert_checks: the old lowering planted
 back answers 3 wrong and traps once. A3E7: MARCH 13.10 is back in the rewrite (rule 5), and
 its gaps that do not reject at their statement are on 13.17. A3P4, A3B12, A3C12: every open
-finding of the three audits is on 13.17, in the order it is taken. Everything else: MARCH 13.17.
+finding of the three audits is on 13.17, in the order it is taken. Everything else: MARCH 13.17. Batch 70 — A3E1, A3E2, A3E3,
+and A3E9's two channels: Julia's exception stack, modeled first (dev/formal/ExceptionStack.tla,
+its Julia side read from task.c and rtutils.c). A throw pushes an entry (its exception and the
+stack it captured) and throws the tag with it, one channel; a rethrow throws the top entry,
+pushing nothing, and `rethrow(e)` overwrites it; an enter saves the top, its depth, and its
+pop_exception restores it; the_exception reads the top; a rethrow at depth 0 throws Julia's
+ErrorException. TLC's first counterexample was against the design, not the code: pushing at the
+catch's landing gives a rethrow's landing a second entry, which a later `rethrow(e)` overwrites
+instead of Julia's (the LandingPush instance). Smoke group exception_stack's five new cases: the
+old lowering planted back answers four wrong. The stack across calls is on 13.17.
+

@@ -574,13 +574,10 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # THE stackifier owns the control boundary: after this block it opens the typed
         # try_table and catch landing for this EnterNode (stackified.jl: try_open_at), one
         # lowering route, as dart2wasm's visitTryCatch owns its region. Here the region only
-        # saves the exception being handled when it is entered, which its pop_exception
-        # restores (Julia's exception stack).
-        local _saved = exn_saved_locals!(ctx, idx)
-        global_get!(b, ensure_exception_global!(ctx.mod), AnyRef)
-        local_set!(b, _saved[1])
-        global_get!(b, ensure_exception_stack_global!(ctx.mod), ExternRef)
-        local_set!(b, _saved[2])
+        # records the exception stack's depth when it is entered (jl_excstack_state), which
+        # its pop_exception restores.
+        global_get!(b, ensure_exception_top_global!(ctx.mod), ConcreteRef(exc_cell_type!(ctx.mod), true))
+        local_set!(b, exc_saved_local!(ctx, idx))
 
     elseif node isa NirGlobalRef
         # A bare global read as a statement: straight-line global.get/local.set via typed
@@ -641,12 +638,9 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             stmt_bytes = builder_code(_sf)
         elseif node isa NirTheException
             # The exception being handled: the top of Julia's exception stack
-            # (jl_current_exception), which a catch landing sets and a pop_exception
-            # restores. Until 2026-09-30 it read the region whose enter came last before
-            # this statement, so an outer `catch e` after a nested try region read the
-            # nested region's exception (dev/AUDIT.md A2E2).
-            global_get!(_sf, ensure_exception_global!(ctx.mod), AnyRef)
-            # The global is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
+            # (jl_current_exception)
+            emit_current_exception!(_sf, ctx.mod)
+            # The exception is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
             # Downcast anyref → structref so the local.set is type-valid.
             local _exn_local_wasm = nothing
             if haskey(ctx.ssa_locals, idx)
@@ -667,19 +661,14 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             # Exception handling: Leave try block — no-op in WASM
             # (try_table control flow handles this structurally)
         elseif node isa NirPopException
-            # Leaving a catch pops Julia's exception stack back to what its try region's enter
-            # saw (jl_restore_excstack): the exception being handled before that region, which
-            # a later rethrow() throws again. Until 2026-09-30 this was a no-op, so a rethrow()
-            # after a nested catch rethrew the nested exception (dev/AUDIT.md A2E1).
+            # Leaving a catch pops Julia's exception stack back to the depth its try region's
+            # enter recorded (jl_restore_excstack).
             local _pop_enter = node.enter
             _pop_enter isa NirSSA || record_unsupported!(ctx, :unsupported_control_flow,
                 "pop_exception without the enter it pops to"; idx=idx, detail=node)
             if _pop_enter isa NirSSA
-                local _saved = exn_saved_locals!(ctx, _pop_enter.id)
-                local_get!(_sf, _saved[1])
-                global_set!(_sf, ensure_exception_global!(ctx.mod))
-                local_get!(_sf, _saved[2])
-                global_set!(_sf, ensure_exception_stack_global!(ctx.mod))
+                local_get!(_sf, exc_saved_local!(ctx, _pop_enter.id))
+                global_set!(_sf, ensure_exception_top_global!(ctx.mod))
                 stmt_bytes = builder_code(_sf)
             end
         elseif node isa NirNoOp
@@ -691,7 +680,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             # object, thrown through the one exception tag (never a skipped check
             # — before this lowering the head fell through as an empty statement).
             ensure_exception_tag!(ctx.mod)
-            local _tu_exn = ensure_exception_global!(ctx.mod)
             local _tu_info = register_struct_type!(ctx.mod, ctx.type_registry, UndefVarError)
             _tu_info === nothing && error("UndefVarError layout is unavailable")
             local _tu_fields = ctx.mod.types[_tu_info.wasm_type_idx + 1].fields
@@ -705,8 +693,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             emit_value!(_sf, NirLiteral(:local), ctx,
                         _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
             struct_new!(_sf, _tu_info.wasm_type_idx)
-            global_set!(_sf, _tu_exn)
-            emit_throw_current!(_sf, ctx.mod)
+            emit_throw_value!(_sf, ctx.mod)
             end_block!(_sf)
             stmt_bytes = builder_code(_sf)
         else

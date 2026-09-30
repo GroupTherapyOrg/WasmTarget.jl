@@ -833,6 +833,11 @@ function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init
     elseif valtype == AnyRef
         push!(init, Opcode.REF_NULL)
         push!(init, 0x6E)  # any heap type
+    elseif valtype isa ConcreteRef && valtype.nullable && init_value === nothing
+        Int(valtype.type_idx) < length(mod.types) ||
+            _module_invalid(:add_global, "type $(valtype.type_idx) is not defined")
+        push!(init, Opcode.REF_NULL)      # ref.null of its own type (a heap type index, s33)
+        append!(init, encode_leb128_signed(Int64(valtype.type_idx)))
     else
         error("Unsupported global type: $valtype")
     end

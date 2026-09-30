@@ -233,7 +233,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     if !isempty(try_regions)
         blocks = _split_blocks_for_regions(blocks, try_regions)
         ensure_exception_tag!(ctx.mod)
-        ensure_exception_global!(ctx.mod)
     end
     blocks = _thread_backward_trampolines!(blocks, nir, try_regions)
     # ========================================================================
@@ -1131,12 +1130,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
                     end_block!(b)          # end landing — the catch payload arrives here
-                    # The caught exception and its stack become the top of Julia's
-                    # exception stack (`\$current_exn`, `\$current_stack`): what the
-                    # handler's `the_exception` reads and a rethrow throws again, until
-                    # its pop_exception restores what the region's enter saved.
-                    global_set!(b, ensure_exception_stack_global!(ctx.mod))   # stackTrace
-                    global_set!(b, ensure_exception_global!(ctx.mod))         # exception
+                    # The caught exception and its stack are already the top of Julia's
+                    # exception stack, which its throw pushed (the handler reads it there,
+                    # as Julia's landing leaves the stack as it is): the payload is dropped.
+                    drop!(b)   # stackTrace
+                    drop!(b)   # exception
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end

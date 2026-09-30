@@ -1454,6 +1454,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         end
     end
     for fd in function_data
+        # Base.rethrow's body (emit_rethrow!) throws Julia's ErrorException at depth 0
+        fd[1] === Base.rethrow && (reg!(ErrorException); reg!(String))
         body = fd[8]
         body === nothing && continue
         for at in fd[2]
