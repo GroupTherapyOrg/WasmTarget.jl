@@ -2511,7 +2511,7 @@ const LOCKS = [
                         (read(joinpath(CODEGEN, "flow.jl"), String), "emit_trace_enter!(b, ctx)"),
                         (loc, "ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[3:end]...)"),
                         (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
-                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(trace)"),
+                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(plan, trace)"),
                         (loc, "filter!(keep, nevents)"),
                         (loc, "filter!(keep, wevents)"),
                         (smoke, "replace(_smoke_locate(f, args), "),
@@ -2544,6 +2544,14 @@ const LOCKS = [
                     occursin("mod=", m.match) || (n += 1)
                 end
             end
+            n
+        end),
+    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); the box-capture analysis takes its closure bodies as a required lookup (dev/CHARTER.md C1)",
+        () -> begin
+            local n = count_sites(r"\bget_typed_ir\("; roots=[SRC], exclude_files=["codegen/ir.jl"])
+            n += count_sites(r"TRIM_IR_CACHE"; roots=[SRC])
+            local box = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
         end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
@@ -2583,7 +2591,7 @@ const LOCKS = [
             # the four routes that register a field's or a signature's Array
             n += (count(r"register_array_wrapper!\(mod, registry, ft\)", structs) >= 3 ? 0 : 1)
             n += occursin("register_array_wrapper!(mod, registry, T)", structs) ? 0 : 1
-            n += occursin("_sc_ok = _is_direct_struct_constructor(_sc_tt, mi)", inv) ? 0 : 1
+            n += occursin("_sc_ok = _is_direct_struct_constructor(_sc_tt, mi, ctx)", inv) ? 0 : 1
             n += occursin("fieldcount(_sc_tt) == length(args)", inv) ? 1 : 0
             n
         end),

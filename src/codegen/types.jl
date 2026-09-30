@@ -31,6 +31,8 @@ Translator each CodeGenerator holds).
 parity(pkg/dart2wasm/lib/translator.dart:96 Translator)
 """
 struct Translator
+    # the closed world being compiled: every function's typed IR comes from it (plan_ir)
+    plan::ClosedWorldPlan
     # a traced compile's record; nothing otherwise
     # parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
     trace::Union{Nothing,StatementTrace}

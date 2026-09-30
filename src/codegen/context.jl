@@ -475,7 +475,8 @@ function numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type}
     if record !== nothing
         local selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
         merge!(joins, capture_read_types(ctx.nir, ctx.ssa_types, record, selfT;
-                                         spectypes=ctx.slot_types))
+                                         spectypes=ctx.slot_types,
+                                         closure_ir=mi -> get(ctx.translator.plan.ir_cache, mi, nothing)))
     end
     return joins
 end

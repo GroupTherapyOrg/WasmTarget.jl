@@ -124,7 +124,7 @@ end
     # funnel for one must reject at the statement, never leave the value unconverted.
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                        translator=WasmTarget.Translator(nothing))
+                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing))
     ctx.current_stmt_idx = 1
     b = WasmTarget._ctx_builder(ctx, "funnel_negative")
     WasmTarget.f64_const!(b, 1.5)
@@ -143,7 +143,7 @@ end
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
         ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                        translator=WasmTarget.Translator(nothing))
+                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing))
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "funnel_negative")
     end

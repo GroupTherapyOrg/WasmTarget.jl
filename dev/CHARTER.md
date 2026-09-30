@@ -44,7 +44,7 @@ with the per-clause status. A clause is never closed by argument.
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
   an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
-  `R29b` `R37`. Planned: dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits
+  `R29b` `R37` `L152` (codegen reads the plan's IR, never a second inference). Planned: dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits
   found computed twice (dev/AUDIT.md P3, E3, E4, E5, A2C3, A2C4, A2E4).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the

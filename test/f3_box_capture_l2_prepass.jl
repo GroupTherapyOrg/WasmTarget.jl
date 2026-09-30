@@ -4,6 +4,11 @@
 # a field whose writes are not one concrete type, or whose box no body creates, records Any
 # (dev/formal/CaptureType.tla).
 
+# The box-capture analysis takes its closure bodies as a lookup (closure_ir): a compilation
+# passes its collected world's; a test outside any compilation asks Julia's inference.
+_f3_ir_prepass(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter());
+              isempty(r) ? nothing : (r[1][1], r[1][2]))
+
 _rc_mki(x::Int64) = (c = x; () -> (c = c + 1; c))
 _rc_mkf(x::Float64) = (c = x; () -> (c = c + 1; c))
 _rc_mkmix(x::Int64) = (c = x; () -> (c = c + 0.5; c))
@@ -17,7 +22,7 @@ _rc_body(f, argtypes) = begin
 end
 # a creator and the closure it returns, as the closed world holds them
 _rc_world(mk, args...) = Any[_rc_body(mk, map(typeof, args)), _rc_body(mk(args...), ())]
-_rc_values(world) = collect(values(WasmTarget.record_capture_contents(world)))
+_rc_values(world) = collect(values(WasmTarget.record_capture_contents(world; closure_ir=_f3_ir_prepass)))
 
 @testset "record_capture_contents: captured variables' types from every write" begin
     # counter: `s` is a mutated capture → Core.Box; the foreach closure captures it.

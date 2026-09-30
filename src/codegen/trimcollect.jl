@@ -498,11 +498,19 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         empty!(_fn_dyn_sigs)
         return
     end
-    # captured variables' types over the whole world collected so far (record_capture_contents!)
+    # captured variables' types over the whole world collected so far (record_capture_contents!);
+    # a closure body's IR is the one collected, never a second inference
+    local collected_ir = IdDict{Any,Tuple{Core.CodeInfo,Any}}()
+    for k in 1:2:length(codeinfos)
+        (k + 1 <= length(codeinfos) && codeinfos[k] isa Core.CodeInstance && codeinfos[k + 1] isa Core.CodeInfo) || continue
+        local cmi = codeinfos[k].def isa Core.MethodInstance ? codeinfos[k].def : codeinfos[k].def.def
+        collected_ir[cmi] = (codeinfos[k + 1], codeinfos[k].rettype)
+    end
+    local closure_ir = mi -> get(collected_ir, mi, nothing)
     capture_record = record_capture_contents(Any[
         (nir_for(codeinfos[k]), nir_slot_types(codeinfos[k]),
          isempty(nir_slot_types(codeinfos[k])) ? nothing : nir_slot_types(codeinfos[k])[1])
-        for k in 2:2:length(codeinfos) if codeinfos[k] isa Core.CodeInfo])
+        for k in 2:2:length(codeinfos) if codeinfos[k] isa Core.CodeInfo]; closure_ir)
     while i + 1 <= length(codeinfos)
         ci, src = codeinfos[i], codeinfos[i + 1]
         i += 2
@@ -522,7 +530,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # function indices are frozen.
         local _capture_joins = capture_read_types(nir, nir, capture_record,
                                                   isempty(hparams) ? nothing : hparams[1];
-                                                  spectypes=nir_slot_types(src))
+                                                  spectypes=nir_slot_types(src), closure_ir)
         local _call_type = function(a)
             if a isa NirSSA && haskey(_capture_joins, a.id)
                 return _capture_joins[a.id]
@@ -1019,6 +1027,21 @@ struct ClosedWorldPlan
     invoke_only::Set{Core.MethodInstance}
     callable_types::Set{DataType}
     enrolled_as::IdDict{Core.MethodInstance,String}
+end
+
+"""
+    plan_ir(plan, mi) -> (CodeInfo, return type)
+
+The collected closed world's typed IR of one MethodInstance: the only IR codegen reads (L152).
+A MethodInstance outside the closed world is an error, never a second inference (which would
+run another interpreter, at another world, in another cache partition).
+parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm receives Kernel already built by the CFE.)
+"""
+function plan_ir(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Tuple{Core.CodeInfo,Any}
+    local hit = get(plan.ir_cache, mi, nothing)
+    hit === nothing && error("$(mi) is outside the collected closed world; codegen reads the " *
+                             "collection's IR, never a second inference")
+    return hit[1], hit[2]
 end
 
 """

@@ -7,13 +7,18 @@
 # dart2wasm's `translateTypeOfLocalVariable` — reconstructing what Julia erased, not a heuristic.
 # Pure analysis, not wired into codegen yet (byte-identical).
 
+# The box-capture analysis takes its closure bodies as a lookup (closure_ir): a compilation
+# passes its collected world's; a test outside any compilation asks Julia's inference.
+_f3_ir_l0(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter());
+              isempty(r) ? nothing : (r[1][1], r[1][2]))
+
 @testset "F3 L0: pure box_contents_type inference (dart2wasm-aligned)" begin
     _btype(fn) = begin
         ci = code_typed(fn, (Int64,); optimize=true)[1].first
         nir = WasmTarget.build_nir(ci)
         bs = WasmTarget.find_box_news(nir)
         @assert length(bs) == 1
-        WasmTarget.box_contents_type(nir, nir, bs[1])
+        WasmTarget.box_contents_type(nir, nir, bs[1]; closure_ir=_f3_ir_l0)
     end
 
     # MONOMORPHIC captures → typed cell (the variable's real concrete type).
@@ -30,7 +35,7 @@
     @test _btype(hetero) === nothing
 
     # A box with no resolvable write in this IR → nothing (no false concrete type).
-    @test WasmTarget.box_contents_type(WasmTarget.NirStmt[], Any[], 1) === nothing
+    @test WasmTarget.box_contents_type(WasmTarget.NirStmt[], Any[], 1; closure_ir=_f3_ir_l0) === nothing
 end
 
 # formal(dev/formal/BoxJoin.tla) — TRANSITIVE closure-write discovery. `_f3_capturing_closure_bodies`
@@ -64,10 +69,10 @@ end
 
     # The root's own one-hop scan finds `level1` only; `level1` never writes the box directly (it
     # only creates+invokes `level2`, which does). Transitive discovery must surface BOTH bodies.
-    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id)
+    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_ir=_f3_ir_l0)
     @test length(bodies) == 2
 
     # The join over ALL writes (Int64 init, Int64 `+=` in level2, Float64 literal in level2) must
     # widen to dynamic (`nothing`) — Int64 alone (the one-hop answer) is the documented soundness gap.
-    @test WasmTarget.box_contents_type(nir, nir, box_id) === nothing
+    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_ir=_f3_ir_l0) === nothing
 end

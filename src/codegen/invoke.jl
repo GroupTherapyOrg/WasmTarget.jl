@@ -10,13 +10,16 @@ read is the one the invoke calls, keyed by its MethodInstance's specTypes as the
 collection enrolled it.
 parity(pkg/dart2wasm/lib/code_generator.dart:1637 CodeGenerator.visitConstructorInvocation)
 """
-function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodInstance)::Bool
+function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodInstance,
+                                       ctx::AbstractCompilationContext)::Bool
     target isa DataType && isconcretetype(target) && isstructtype(target) || return false
     mi.def isa Method || return false
     isva = mi.def.isva
     fixed_count = isva ? mi.def.nargs - 2 : mi.def.nargs - 1  # exclude #self# (and the vararg slot)
     fieldcount(target) == fixed_count + (isva ? 1 : 0) || return false
-    body, _ = get_typed_ir(target, Tuple(mi.specTypes.parameters[2:end]))
+    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
+    hit === nothing && return false
+    body = hit[1]
     nir = build_nir(body)
     news = NirNew[s.node for s in nir if s.slot == 0 && s.node isa NirNew]
     length(news) == 1 || return false
@@ -841,7 +844,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                             # constructor is called as its compiled function, or rejects via
                             # the terminal :unsupported_method.
                             if is_struct_type(_sc_tt)
-                                _sc_ok = _is_direct_struct_constructor(_sc_tt, mi)
+                                _sc_ok = _is_direct_struct_constructor(_sc_tt, mi, ctx)
                             end
                         end
                     end

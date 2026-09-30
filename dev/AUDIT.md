@@ -217,4 +217,8 @@ select and call_ref check what dart checks, else re-pushes the if's inputs, an i
 results needs an else, and every codegen builder has its module (L151). The stricter pops
 found the closure vtable's funcref fields declared as the raw byte 0x70; FieldType now
 refuses a raw byte that is not a packed type. A2P3 measured: WasmMakie fails on the new
-import (paused with Therapy, MARCH 13.16); Snapshot passes. A2E5 measured: not reproduced.
+import (paused with Therapy, MARCH 13.16); Snapshot passes. A2E5 measured: not reproduced. Batch 67 — A2C3's IR half: the Translator carries the
+plan, and codegen reads every function's IR from it (plan_ir) or, in collection, from the
+collected pairs; the box-capture analysis takes its closure bodies as a required lookup (the
+smoke corpus never reached its second inference, but nothing forbade it); TRIM_IR_CACHE is
+gone (R40 8 → 7), and L152 forbids any other IR source in codegen.

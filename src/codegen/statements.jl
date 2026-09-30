@@ -869,21 +869,11 @@ end
 """The collected IR of an `:invoke` target, from the trim collector's cache, keyed by the
 callee FUNCTION OBJECT the node carries and the MethodInstance's argument types.
 parity(quarantine: the callee IR the definite-initialization proof reads, from the closed world's collection; see _setfield_of_value.)"""
-function _cached_invoke_ir(node::NirInvoke)::Union{Nothing, Core.CodeInfo}
+function _cached_invoke_ir(node::NirInvoke, ctx::AbstractCompilationContext)::Union{Nothing, Core.CodeInfo}
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
-    f = _nir_callee_object(node.callee)
-    f isa Function || return nothing
-    sig = mi.specTypes
-    sig isa DataType && sig <: Tuple || return nothing
-    arg_types = Tuple(sig.parameters[2:end])
-    cache = TRIM_IR_CACHE[]
-    cache === nothing && return nothing
-    for (key, value) in cache
-        key isa Tuple && length(key) == 2 || continue
-        key[1] === f && key[2] == arg_types && return value[1]
-    end
-    return nothing
+    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
+    return hit === nothing ? nothing : hit[1]
 end
 
 """Prove that every missing primitive field is assigned before the object is observed.
@@ -913,7 +903,7 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
     end
     length(uses) == 1 || return false
     use, explicit_pos = only(uses)
-    callee_ir = _cached_invoke_ir(use)
+    callee_ir = _cached_invoke_ir(use, ctx)
     callee_ir isa Core.CodeInfo || return false
     arg_n = explicit_pos + 1 # Core.Argument(1) is the callable/self slot
     return _definitely_initializes_in_nir(

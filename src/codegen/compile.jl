@@ -294,7 +294,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     ensure_provenance_imports!(mod)
     source_map_url === nothing || (mod.source_map_url = source_map_url)
     trace === nothing || ensure_trace_imports!(mod)
-    local translator = Translator(trace)
+    local translator = Translator(plan, trace)
     type_registry = TypeRegistry()
     func_registry = FunctionRegistry()
 
@@ -398,14 +398,12 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         closure_type = _type_keyed_closure ? f : typeof(f)
         is_closure = is_closure_type(closure_type)
 
-        # Get typed IR using the ORIGINAL arg_types (without closure type prepend).
-        # Base.code_typed already knows the first slot is typeof(f) for closures.
-        # (type-keyed closures resolve via the TRIM_IR_CACHE hit — trimcollect
-        # cached their pair under (T, arg_types); a miss errors loudly.)
+        # the function's typed IR is its MethodInstance's in the collected closed world
         (entry_mi isa Core.MethodInstance && !optimize_ir) &&
             error("unoptimized IR for $f$(arg_types) requested inside a collected closed world, whose IR is optimized")
-        typed, return_type = entry_mi isa Core.MethodInstance ? get_typed_ir(entry_mi) :
-                             get_typed_ir(f, arg_types; optimize=optimize_ir, interp=interp)
+        entry_mi isa Core.MethodInstance ||
+            error("a planned function without its MethodInstance: $(f)$(arg_types)")
+        typed, return_type = plan_ir(plan, entry_mi)
 
         bindings = get(root_bindings, name, nothing)
         elide_closure_context = bindings !== nothing && bindings.elide_closure_context
@@ -562,7 +560,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
                                  isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
                                 for fd in function_data if fd[8] !== nothing]
-    merge!(type_registry.box_contents_types, record_capture_contents(_capture_bodies))
+    merge!(type_registry.box_contents_types,
+           record_capture_contents(_capture_bodies; closure_ir=mi -> get(plan.ir_cache, mi, nothing)))
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
@@ -800,12 +799,7 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     try
         return with_layout_read_memo() do
             plan = trim_compile_plan(normalized; external_entries)
-            TRIM_IR_CACHE[] = plan.ir_cache
-            try
-                return _compile_closed_world_plan(plan; kwargs...)
-            finally
-                TRIM_IR_CACHE[] = nothing
-            end
+            return _compile_closed_world_plan(plan; kwargs...)
         end
     catch err
         # a failure outside any statement — collecting the closed world, registering its
