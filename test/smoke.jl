@@ -898,6 +898,14 @@ _g("abstract_receivers", Any[
     ("ncodeunits_error_message", (x::Int64) -> (try; throw(ArgumentError(x > 0 ? "bad" : "no")); catch e; ncodeunits((e::ArgumentError).msg); end), Int64(1)),
     ("boxed_memory_typeof", (x::Int64) -> (v = Any[Memory{UInt8}(undef, x)]; Int64(typeof(_si_any(v, 1)) === Memory{UInt8})), Int64(3)),
 ])
+# A dynamic ==/!= over two erased operands is Julia's dispatch on both operands' classes, which
+# WT does not lower yet (two-position dispatch, MARCH 13.10): each rejects at its statement, and
+# an answer, right or wrong, is reported here.
+_xf("dynamic_eq_erased", Any[
+    ("float_pair", (x::Int64) -> (v = Any[1.0, 1.0]; v[1] == v[2] ? 1 : 0), Int64(1)),
+    ("int_pair", (x::Int64) -> (v = Any[x, x]; v[1] == v[2] ? 1 : 0), Int64(3)),
+    ("mixed_pair", (x::Int64) -> (v = Any[x, 1.0]; v[1] == v[2] ? 1 : 0), Int64(1)),
+])
 # BUILTIN_LOWERINGS crashes: each compiles or runs to a failure where native returns a value.
 _xf("builtin_crashes", Any[
     # getfield by a runtime name where WT's layout does not hold Julia's fields in Julia's

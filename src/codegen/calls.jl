@@ -4035,68 +4035,22 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     end
                 end
             else
-                # P4-stdlib (Random hash_seed): dynamic ==/!= on BOXED operands
-                # (Any-typed foldl results in anyref locals) is LIVE code — the
-                # unreachable below dead-coded the loop-exit condition. Unbox
-                # both sides as i64 boxes and compare; a non-i64 box traps
-                # LOUD on the cast (correct-or-loud) instead of silently.
-                local _dyneq_ok = false
-                if (called_func === (==) || called_func === (!=)) && length(args) == 2
-                    local _dq_all_ref = true
-                    for _dq_a in args
-                        local _dq_is = false
-                        if _dq_a isa NirSSA
-                            local _dq_li = get(ctx.ssa_locals, _dq_a.id, nothing)
-                            _dq_li === nothing && (_dq_li = get(ctx.phi_locals, _dq_a.id, nothing))
-                            if _dq_li !== nothing
-                                local _dq_off = _dq_li - ctx.n_params
-                                if _dq_off >= 0 && _dq_off < length(ctx.locals)
-                                    _dq_is = ctx.locals[_dq_off + 1] === AnyRef
-                                end
-                            end
-                        end
-                        _dq_is || (_dq_all_ref = false)
-                    end
-                    if _dq_all_ref
-                        fb = _ctx_builder(ctx, "compile_call.frag")
-                        local _dqb = _ctx_builder(ctx, "compile_call")
-                        for _dq_a in args
-                            emit_value!(_dqb, _dq_a, ctx, AnyRef)  # every operand's local is anyref (checked above)
-                            # unbox each boxed-i64 operand via THE single consumer, then compare
-                            emit_classid_unbox!(_dqb, ctx, I64; nullable=true)
-                        end
-                        num!(_dqb, Opcode.I64_EQ)
-                        called_func === (!=) && num!(_dqb, Opcode.I32_EQZ)
-                        # The result SSA is Any-typed (anyref local) — box the
-                        # i32 Bool; compile_condition_to_i32 unboxes at use.
-                        local _dq_dst = get(ctx.ssa_locals, idx, nothing)
-                        if _dq_dst !== nothing
-                            local _dq_doff = _dq_dst - ctx.n_params
-                            local _dq_lt = _dq_doff >= 0 && _dq_doff < length(ctx.locals) ?
-                                ctx.locals[_dq_doff + 1] : nothing
-                            if _dq_lt === AnyRef || _dq_lt isa ConcreteRef || _dq_lt === StructRef
-                                # Box the Bool === result for the ref-typed dest via THE single emitter,
-                                # carrying Bool's REAL classId (was a hardcoded typeId 0 = non-discriminable).
-                                emit_classid_box!(_dqb, ctx, I32, Bool)
-                            end
-                        end
-                        append_builder!(fb, _dqb)
-                        _dyneq_ok = true
-                    end
-                end
+                # A dynamic ==/!= over two erased operands is Julia's dynamic dispatch on both
+                # operands' classes, which the call path below dispatches or rejects.
+                local _handled = false
                 # parity(translator.dart:1597 Translator.convertType): convert(T, x) where x's REFINED type is already T —
                 # identity (dart: no conversion node when types agree). The join can
                 # refine an erased Any to T after inference classified the convert.
-                if !_dyneq_ok && called_func === Base.convert && length(args) == 2 &&
+                if called_func === Base.convert && length(args) == 2 &&
                    length(call_arg_types) == 2 && call_arg_types[1] isa Type &&
                    call_arg_types[1] <: Type && call_arg_types[1] isa DataType &&
                    length(call_arg_types[1].parameters) == 1 &&
                    call_arg_types[2] === call_arg_types[1].parameters[1]
                     fb = _ctx_builder(ctx, "compile_call.frag")  # clear pre-pushed args — identity re-emits the value itself
                     emit_value!(fb, args[2], ctx, static_wasm_type(args[2], ctx))
-                    _dyneq_ok = true
+                    _handled = true
                 end
-                if !_dyneq_ok
+                if !_handled
                 # A concrete field-wise constructor is structural, not dynamic
                 # dispatch. The closed-world result type and exact field count
                 # prove the allocation even when inference erased a field value
