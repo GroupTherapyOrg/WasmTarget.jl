@@ -1787,71 +1787,63 @@ function _lower_ifelse!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder
     return append_builder!(b, fb)
 end
 
-# Core.typeassert(x, T) — dart's CHECKED cast (census F4; emitAsCheck,
-# types.dart:527: is-check, throw on mismatch). Statically-proven casts stay
-# pass-through (the common case — inference already narrowed). A runtime check
-# emits when the value is a GC ref and the target has a DFS classId range:
-# typeId ∈ [low, high] or throw TypeError. Values the discriminator can't see
-# (non-$JlBase refs) pass through UNCHECKED (under-check, never wrong-throw).
-# Self-contained: emits its own operand through `emit_value!`.
+# Core.typeassert(x, T) — dart's checked cast (types.dart:527 emitAsCheck): the is-test, and
+# a throw on mismatch. A value whose static type is concrete has that runtime type, so Julia's
+# subtype test answers at compile time (pass, or always throw). Every other value is tested by
+# the one `isa` lowering (`_compile_call_isa`), which rejects at the statement where it cannot
+# answer; a failed test throws TypeError(:typeassert, "", T, x). A T known only at run time
+# rejects. Self-contained: emits its own operand through `emit_call_operand!`.
 # L57_exact_typeassert_exception pins this body's `_emit_typeerror_throw!` call.
 # parity(types.dart:527 emitAsCheck)
 function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
-    if length(args) >= 1
-        local _ta_target = length(args) >= 2 ? (nir_const(args[2]) isa Type ? nir_const(args[2]) :
-            args[2] isa NirGlobalRef ? Core.eval(args[2].mod, args[2].name) : nothing) : nothing
-        local _ta_static = get_ssa_type(ctx, args[1])
-        if _ta_target isa Type && isconcretetype(_ta_target) &&
-           _ta_static isa Type && isconcretetype(_ta_static)
-            if _ta_static <: _ta_target
-                emit_value!(fb, args[1], ctx,
-                            get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry))
-            else
-                _emit_typeerror_throw!(fb, args[1], _ta_target, idx, ctx)
-            end
-            return append_builder!(b, fb)
-        end
-        local _ta_ty = emit_value!(fb, args[1], ctx, static_wasm_type(args[1], ctx))  # dynamic typeassert selects its class-range check from the reference representation
-        if _ta_target isa Type && isconcretetype(_ta_target) &&
-           (_ta_ty === AnyRef || _ta_ty isa ConcreteRef || _ta_ty === StructRef) &&
-           ctx.type_registry.base_struct_idx !== nothing
-            local _ta_range = get_type_range(ctx.type_registry, _ta_target)
-            if _ta_range !== nothing
-                local _ta_low, _ta_high = _ta_range
-                local _ta_base = ctx.type_registry.base_struct_idx
-                local _ta_tmp = allocate_local!(ctx, AnyRef)
-                local_tee!(fb, _ta_tmp)
-                ref_test!(fb, Int64(_ta_base), false)
-                if_!(fb)                                   # discriminable ($JlBase struct)
-                local_get!(fb, UInt32(_ta_tmp))
-                emit_typeof!(fb, _ta_base)
-                emit_classid_range_check!(fb, _ta_low, _ta_high)
-                num!(fb, Opcode.I32_EQZ)
-                if_!(fb)                                   # out of range → THROW
-                ensure_exception_tag!(ctx.mod)
-                local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
-                local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
-                _te_def isa StructType || error("TypeError did not register as a Wasm struct")
-                emit_struct_prefix!(fb, ctx.type_registry, TypeError, _te_info)
-                local _te_values = Any[:typeassert, "", _ta_target]
-                for _te_i in 1:3
-                    local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
-                    emit_value!(fb, NirLiteral(_te_values[_te_i]), ctx, _te_w;
-                                from_julia=fieldtype(TypeError, _te_i))
-                end
-                local_get!(fb, UInt32(_ta_tmp))
-                local _te_got_w = _te_def.fields[wasm_field_idx(_te_info, 4) + 1].valtype
-                coerce_stack_top!(fb, _te_got_w, ctx;
-                                  from_julia=(_ta_static isa Type ? _ta_static : nothing))
-                struct_new!(fb, _te_info.wasm_type_idx)
-                global_set!(fb, ensure_exception_global!(ctx.mod))
-                emit_throw_current!(fb, ctx.mod)   # typed (exn, trace) tag
-                end_block!(fb)
-                end_block!(fb)
-                local_get!(fb, UInt32(_ta_tmp))            # the value survives the check
-            end
-        end
+    length(args) == 2 || return nothing
+    local _ta_target = nir_const(args[2]) isa Type ? nir_const(args[2]) :
+        (args[2] isa NirGlobalRef && args[2].bound && args[2].value isa Type) ? args[2].value : nothing
+    if !(_ta_target isa Type)
+        record_unsupported!(ctx, :unsupported_method,
+            "typeassert(x, T) with a T known only at run time"; idx=idx)
+        unreachable!(fb)
+        ctx.last_stmt_was_stub = true
+        return append_builder!(b, fb)
     end
+    local _ta_static = get_ssa_type(ctx, args[1])
+    if _ta_static isa Type && _ta_static <: _ta_target
+        emit_value!(fb, args[1], ctx, isconcretetype(_ta_static) && isconcretetype(_ta_target) ?
+                    get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry) :
+                    static_wasm_type(args[1], ctx))
+        return append_builder!(b, fb)
+    end
+    if _ta_static isa DataType && isconcretetype(_ta_static)
+        _emit_typeerror_throw!(fb, args[1], _ta_target, idx, ctx)
+        return append_builder!(b, fb)
+    end
+    local _ta_ty = emit_call_operand!(fb, ctx, args[1])
+    _ta_ty isa WasmValType || error("typeassert's operand has no value")
+    local _ta_tmp = allocate_local!(ctx, _ta_ty)
+    local_tee!(fb, UInt32(_ta_tmp))
+    _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
+    num!(fb, Opcode.I32_EQZ)
+    if_!(fb)                                          # not a T → THROW
+    ensure_exception_tag!(ctx.mod)
+    local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
+    local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
+    _te_def isa StructType || error("TypeError did not register as a Wasm struct")
+    emit_struct_prefix!(fb, ctx.type_registry, TypeError, _te_info)
+    local _te_values = Any[:typeassert, "", _ta_target]
+    for _te_i in 1:3
+        local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
+        emit_value!(fb, NirLiteral(_te_values[_te_i]), ctx, _te_w;
+                    from_julia=fieldtype(TypeError, _te_i))
+    end
+    local_get!(fb, UInt32(_ta_tmp))
+    local _te_got_w = _te_def.fields[wasm_field_idx(_te_info, 4) + 1].valtype
+    coerce_stack_top!(fb, _te_got_w, ctx;
+                      from_julia=(_ta_static isa Type && isconcretetype(_ta_static) ? _ta_static : nothing))
+    struct_new!(fb, _te_info.wasm_type_idx)
+    global_set!(fb, ensure_exception_global!(ctx.mod))
+    emit_throw_current!(fb, ctx.mod)   # typed (exn, trace) tag
+    end_block!(fb)
+    local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
     return append_builder!(b, fb)
 end
 

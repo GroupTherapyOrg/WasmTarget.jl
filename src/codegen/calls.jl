@@ -2020,6 +2020,23 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
 
     bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
 
+    # Julia's emit_isa (codegen.cpp): a value of static type S is a T exactly when it is an
+    # S ∩ T. When S <: T every value is; when S ∩ T is empty none is; when S ∩ T is one concrete
+    # type C <: T, the test is C's exact one, which WT can make where T's own has none
+    # (`isa(x::Union{Nothing,Tuple{Int64,Int64}}, Tuple{Any,Any})`, Base._accumulate1!).
+    if check_type isa Type && value_type isa Type
+        local _isect = typeintersect(value_type, check_type)
+        if value_type <: check_type || _isect === Union{}
+            drop!(bld)
+            i32_const!(bld, value_type <: check_type ? 1 : 0)
+            append_builder!(fb, bld)
+            return nothing
+        end
+        if _isect isa DataType && isconcretetype(_isect) && _isect <: check_type
+            check_type = _isect
+        end
+    end
+
     # Check if this is a tagged union check
     # NOTE: The value argument is already on the stack from the loop that pushes all args
     # B4/U2: the tagged-union isa branch (struct.get tag) is RETIRED — a Union value is a
@@ -3497,11 +3514,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         emit_throw_current!(_thrb, ctx.mod)   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
-    # throw_methoderror — emit throw (catchable) instead of unreachable
     elseif func === Core.throw_methoderror
-        fb = _ctx_builder(ctx, "compile_call.frag")
-        ensure_exception_tag!(ctx.mod)
-            emit_throw_current!(fb, ctx.mod)   # typed (exn, trace) tag
+        fb = _ctx_builder(ctx, "compile_call.frag")   # the operands are the MethodError's own
+        _emit_throw_methoderror!(fb, args, ctx)
         ctx.last_stmt_was_stub = true
 
     # Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
@@ -4465,6 +4480,50 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
     global_set!(bld, exn_global)
+    emit_throw_current!(bld, ctx.mod)
+    return bld
+end
+
+"""
+Julia's `Core.throw_methoderror(f, args...)` (jl_f_throw_methoderror, jl_method_error): throw
+`MethodError(f, (args...,), world)`, whose `args` tuple has the type the collector numbered for
+it (methoderror_args_type). When a value's runtime type is known only at run time, WT cannot
+build that tuple (MARCH 13.10), and the statement traps, as a dynamic call's class switch traps
+where Julia has no method (dev/formal/ClassIdSwitch.tla): never a MethodError that is not
+Julia's (dev/AUDIT.md A3S1 carries both traps).
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+"""
+function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
+                                  ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("Core.throw_methoderror takes its function")
+    local static(a) = _collector_static_type(a, ctx.slot_types)
+    local elem_types = Type[static(a) for a in args[2:end]]
+    local tuple_type = methoderror_args_type(elem_types)
+    if tuple_type === nothing
+        unreachable!(bld)   # structural trap: Julia has no method for this call (A3S1)
+        return bld
+    end
+    ensure_exception_tag!(ctx.mod)
+    local reg = ctx.type_registry
+    local error_info = register_struct_type!(ctx.mod, reg, MethodError)
+    local args_info = register_tuple_type!(ctx.mod, reg, tuple_type)
+    error_info === nothing && error("MethodError layout is unavailable")
+    args_info === nothing && error("$(tuple_type) layout is unavailable")
+    local err_def = ctx.mod.types[Int(error_info.wasm_type_idx) + 1]
+    local tup_def = ctx.mod.types[Int(args_info.wasm_type_idx) + 1]
+    emit_struct_prefix!(bld, reg, MethodError, error_info)
+    local f_type = static(args[1])
+    emit_value!(bld, args[1], ctx, err_def.fields[wasm_field_idx(error_info, 1) + 1].valtype;
+                from_julia=(f_type isa DataType && isconcretetype(f_type)) ? f_type : nothing)
+    emit_struct_prefix!(bld, reg, tuple_type, args_info)
+    for (i, a) in enumerate(args[2:end])
+        emit_value!(bld, a, ctx, tup_def.fields[wasm_field_idx(args_info, i) + 1].valtype;
+                    from_julia=elem_types[i])
+    end
+    struct_new!(bld, args_info.wasm_type_idx)
+    i64_const!(bld, Int64(WASM_WORLD_AGE))
+    struct_new!(bld, error_info.wasm_type_idx)
+    global_set!(bld, ensure_exception_global!(ctx.mod))
     emit_throw_current!(bld, ctx.mod)
     return bld
 end

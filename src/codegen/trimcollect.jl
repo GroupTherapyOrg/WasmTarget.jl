@@ -1275,21 +1275,36 @@ const _IR_META_TYPES = Set{DataType}([
 ])
 
 """
-    _collector_static_type(operand, body) -> Type
+    methoderror_args_type(elem_types) -> Union{Nothing, DataType}
+
+The type of the `args` tuple `Core.throw_methoderror(f, args...)` builds (jl_f_tuple types it
+by each value's runtime type), when every operand's static type is its runtime type: a
+concrete type that is not a `Type{T}` (a type value's runtime type is its kind). Otherwise
+nothing: the tuple's type is known only at run time.
+parity(quarantine: Julia's MethodError carries its arguments as a tuple typed at run time; dart's
+NoSuchMethodError carries an Invocation whose arguments are an untyped List.)
+"""
+function methoderror_args_type(elem_types::AbstractVector)::Union{Nothing, DataType}
+    all(T -> T isa DataType && isconcretetype(T) && !(T <: Type), elem_types) || return nothing
+    return Tuple{elem_types...}
+end
+
+"""
+    _collector_static_type(operand, slot_types) -> Type
 
 A static, `ctx`-free echo of `infer_value_type` (context.jl) for the branches that
-don't need one — used ONLY to reconstruct the composite type `_lower_tuple!` (the ONE
-`Core.tuple` lowering) will give a `Core.tuple(...)` call's RESULT, so the collector can
-admit that exact composite. An SSA use or an argument reads the inferred type the NIR
-boundary recorded for it (the same source `ctx.ssa_types`/`ctx.arg_types` are seeded
+don't need one — used to reconstruct the composite a call builds (`Core.tuple`'s result,
+`Core.throw_methoderror`'s args tuple), so the collector admits the exact class codegen
+then builds from the same answer. An SSA use or an argument reads the inferred type the NIR
+boundary recorded for it (the same source `ctx.ssa_types`/`ctx.slot_types` are seeded
 from); a constant global reads its bound value; a literal its own type.
 parity(code_generator.dart:135 getStaticType): an operand's type read through one context.
 """
-function _collector_static_type(operand::NirNode, body::NirBody)::Type
+function _collector_static_type(operand::NirNode, slot_types::AbstractVector)::Type
     if operand isa NirSSA
         return operand.julia_type
     elseif operand isa NirArgument
-        return 1 <= operand.n <= length(body.slot_types) ? body.slot_types[operand.n] : Any
+        return 1 <= operand.n <= length(slot_types) ? slot_types[operand.n] : Any
     elseif operand isa NirGlobalRef
         (operand.bound && isconst(operand.mod, operand.name)) || return Any
         return operand.value isa Type ? Type{operand.value} : typeof(operand.value)
@@ -1462,7 +1477,13 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                 # the whole tuple's type to. No per-argument walk can reconstruct that
                 # composite after the fact, so it is synthesized here the same way.
                 if node.callee === Core.tuple
-                    reg!(Tuple{Type[_collector_static_type(a, body) for a in node.operands]...})
+                    reg!(Tuple{Type[_collector_static_type(a, body.slot_types) for a in node.operands]...})
+                elseif node.callee === Core.throw_methoderror
+                    # the MethodError it throws and its args tuple (calls.jl
+                    # _emit_throw_methoderror!, from the same operand types)
+                    reg!(MethodError)
+                    reg!(methoderror_args_type(Type[_collector_static_type(a, body.slot_types)
+                                                    for a in node.operands[2:end]]))
                 elseif node.callee === Core._apply_iterate
                     # a splat's argument pack is a tuple the LOWERING builds (calls.jl's
                     # _apply_iterate route); an empty collection yields Tuple{}, which no

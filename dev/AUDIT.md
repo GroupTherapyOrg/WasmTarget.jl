@@ -222,3 +222,103 @@ plan, and codegen reads every function's IR from it (plan_ir) or, in collection,
 collected pairs; the box-capture analysis takes its closure bodies as a required lookup (the
 smoke corpus never reached its second inference, but nothing forbade it); TRIM_IR_CACHE is
 gone (R40 8 → 7), and L152 forbids any other IR source in codegen.
+
+## 2026-09-30 — audited through 23cdab07 (9366d55b..23cdab07: batches 64–68)
+
+The third audit, of the second audit's fix batches: 51 findings, 47 distinct. Four are wrong
+answers, all reproduced: two the auditors found by reading (A3E1, A3E2) and two found while
+measuring those (A3E10, A3E11); three more are traps where Julia answers (A3S1 under a catch,
+A3S2, A3S3). Two resolutions of the second entry do not hold: A2B1's return check never runs
+on compiled code, and A2P6's "every open finding is on 13.17" left thirteen out.
+
+Area: builder — (A3B1) `return_!`'s check never runs on compiled code: the function and
+fragment builders carry no results, so only the int128, egal, trampoline and selector-caller
+builders are checked (A2B1's resolution is false for codegen). (A3B2) `ref_test!` validates
+without its target, `ref_cast!(::RefType)` pops untyped, `local_set!` of an unknown index pops
+untyped, `builder_set_local_type!` invents AnyRef. (A3B3) the validator calls `wasm_subtype`
+and `_wt_same_hierarchy` from codegen/values.jl; `_non_null` duplicates `_wt_drop_nullable`;
+`_wt_heap_kind` guesses a struct for an unknown index. (A3B4) `WasmValType` admits a raw
+UInt8, so a raw byte passes through signatures, locals, globals, labels and `select!`; void is
+the byte 0x40 in `BlockTypeArg`; no test of the `_block_type!` guard. (A3B5) L151 matches the
+text `mod=`, which `mod=nothing` satisfies (selector_table.jl:287), and the module-less
+fallbacks stay reachable. (A3B6) `ref_null!` pushes the caller's claimed type (a non-null
+claim tracks a null as `(ref $T)`); `struct_new!`'s explicit form pops the caller's field list
+(23 sites), and its module form pops a packed field as its raw byte. (A3B7) `num!` encodes every
+opcode the validator models as one byte (consts, loads, stores, memory.size/grow without
+immediates); `ref.eq` goes through it. (A3B8) extern.convert_any and any.convert_extern
+always push a nullable result; dart keeps the input's nullability. (A3B9) the signed/unsigned
+packed read, immutable-field writes, and the kind of a new-default/new-data/copy index are
+not checked. (A3B10) one rule, the module's type against the caller's claim, has four
+policies; `_true_call_sig` re-implements `_function_type`. (A3B11) batch 66 changed the
+if/else rule without changing OperandStack.tla, and rejects a valid else-less if whose inputs
+are subtypes of its results. (A3B12) A2B9 and two of B5's items on no list. (A3B13) prose.
+(A3B14) batch 66's checks untested: global.get, ref.as_non_null, ref.eq, extern.convert_any,
+ref.cast, call_indirect, call_ref, an unknown index. (A3B15) A2B6 stands: `global_named` is a
+lookup by name, and no global name reaches a name section. (A3B16) no define-then-fill
+function API: codegen writes `mod.functions[slot]` directly.
+
+Area: collection and planning — (A3C1) codegen still asks Julia's inference at six sites
+(context.jl:1547 re-infers a return type the plan holds; :1578; builtins.jl:92;
+box_capture.jl:124, 355, 502, the last three in collection too), each a fresh interpreter at
+the current world; L152, plan_ir's docstring and batch 67's resolution say never. (A3C2)
+box_capture.jl:230 skips a captor body the lookup misses, so its writes leave the join; the
+old path raised. (A3C3) plan_ir, the loud reader, runs where a miss is impossible; four sites
+read `get(plan.ir_cache, mi, nothing)`. (A3C4) the capture record is computed twice, over two
+domains; six copies of the collected-pair walk. (A3C5) ir_cache's `(f, arg_types)` keys have
+no reader; R31's allowlist reason is false. (A3C6) dead code from batch 67. (A3C7)
+`rethrow(e)` of a non-reference raises an unlocated internal error. (A3C8) "compiled from a
+bespoke body" decided twice, by two keys. (A3C9) L152 pins text. (A3C10) stale prose, among it
+ir.jl's claim that `get_typed_ir` shows the IR codegen compiles (collection rewrites invokes).
+(A3C11) batch 67's invoke-MI keying is a behavior change no case pins. (A3C12) A2C7's
+existing_module half, A2C9, P3 and P4 on no row.
+
+Area: emission and diagnostics — (A3E1) WRONG ANSWER, reproduced (native 2, wasm 1): a try
+region's enter saves the exception's value where Julia saves the stack's depth, and
+`rethrow(e)` overwrites the top in place, so a `rethrow(e)` inside a region nested in a catch
+is undone by that region's pop. (A3E2) WRONG ANSWER, reproduced three ways (native 4, wasm 3,
+1, 3): `rethrow()` and `rethrow(e)` outside a catch throw `$current_exn` or `e`, where Julia
+raises ErrorException("rethrow() not allowed outside a catch block"), including after a catch
+has finished. (A3E3) batch 64's protocol has no TLA+ model. (A3E6) a twin of batch 68's
+deleted path: calls.jl unboxes any AnyRef operand of div/rem/mod and numeric intrinsics as
+Int64 or Int32 without its class. (A3E7) dated history in src comments; MARCH 13.10 moved the
+capability gaps "after the merge" without Dale's decision (rule 5). (A3E9) two channels for
+the thrown value; `_lower_ifelse!` takes its type from a re-inference.
+Found while measuring: (A3E10) WRONG ANSWER, reproduced (native 7, wasm 8):
+`Core.throw_methoderror` threw `$current_exn`, the exception last handled or null, never a
+MethodError. (A3E11) WRONG ANSWER, reproduced (native −7, wasm 5, three shapes): typeassert
+checked only a classed struct against a concrete target; `x::Integer` of a Float64,
+`x::AbstractString` of a struct and `nothing::T` passed. (A3S1) a dynamic call with no method
+traps; Julia throws a catchable MethodError and dart calls noSuchMethod. (A3S2) `add_type!`
+dedups Memory{Any}'s array with SimpleVector's, and Memory{Int64} with Memory{UInt64}: a
+dynamic dispatch among them traps (reproduced: native 3, wasm illegal cast). (A3S3) a dynamic
+`getindex` on a tuple held as Any traps where Julia has the method (reproduced: native 3, wasm
+unreachable), against ClassIdSwitch's "a trap only where Julia has no method". (A3S4)
+compile.jl:701 calls `generate_dispatch_caller_body`, deleted in aa809d94.
+
+Area: enforcement and prose — (A3P1 = A3C1) L152 counts one spelling. (A3P2 = A3E7) 13.10's
+premise "each rejects at its statement" is false for three of its gaps (a `repr` that does not
+finish, an unlocated MethodError in inference, a WasmInternalError at a tuple of an Any).
+(A3P3) the known traps sit outside every lane. (A3P4) the Planned markers drifted: C0 reads
+CLOSED while A2P5 is open; C7 lists fixed findings; C8 points to a finished 13.9; thirteen IDs
+(P3 P4 E3 E4 E5 H3 M7 L11 A2B7 A2B9 A2C7 A2C9 A2E8) are on no row. (A3P5) the xfail lane
+counts any compile exception as a located rejection (`catch; :loud`), so a WasmInternalError
+passes as one. (A3P6 = A3B14) (A3P7 = A3B5) (A3P8) runtests' `total <= 65` raw-emission check
+is a ratchet no clause cites, at 37 measured. (A3P9) the status passes a lock equal to its
+baseline; the 14 converted locks still sit under [metrics]. (A3P10) prose (smoke's "each case
+answered 2", misplaced headings, three places naming get_typed_ir as codegen's IR, R40's
+file, downstream.yml's date). (A3P11) text pins in L152, L147, L142; three copies of the f3
+test helper.
+
+Resolution: batch 69 (this commit) — A3E10: `Core.throw_methoderror(f, args...)` throws
+`MethodError(f, (args...,), world)`, its args tuple typed by one answer the collector numbers
+and codegen builds (`methoderror_args_type`); when an argument's runtime type is known only at
+run time it traps, as the class switch traps where Julia has no method, and A3S1 carries both.
+Smoke group method_error_value reads the caught value (Julia folds `e isa MethodError` here);
+the old throw planted back fails all three cases. A3E11: typeassert is dart's emitAsCheck, the
+one `isa` test and a throw: a value of concrete static type is decided at compile time, every
+other through `_compile_call_isa`, which now narrows a test to S ∩ T as Julia's emit_isa does
+(without it, `using WasmTarget` fails: Base._accumulate1!'s `x::Tuple{Any,Any}` of a
+`Union{Nothing,Tuple{Int64,Int64}}`). Smoke group typeassert_checks: the old lowering planted
+back answers 3 wrong and traps once. A3E7: MARCH 13.10 is back in the rewrite (rule 5), and
+its gaps that do not reject at their statement are on 13.17. A3P4, A3B12, A3C12: every open
+finding of the three audits is on 13.17, in the order it is taken. Everything else: MARCH 13.17.

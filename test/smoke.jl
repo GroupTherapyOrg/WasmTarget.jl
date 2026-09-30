@@ -1472,9 +1472,7 @@ _g("invoke_in_world", Any[
 ])
 # Julia's exception stack: a catch makes its exception the one being handled, a
 # pop_exception restores what its try region's enter saw, `catch e` reads the top, and
-# rethrow() throws it again (rethrow(e) with `e` in its place). Until 2026-09-30 a
-# pop_exception did nothing and `catch e` read the last region entered before it, so each
-# case below answered 2 where Julia answers 1 (dev/AUDIT.md A2E1–A2E3).
+# rethrow() throws it again (rethrow(e) with `e` in its place) (dev/AUDIT.md A2E1–A2E3).
 @noinline function _sm_xs_nested_rethrow(x::Int64)::Int64
     try; throw(ArgumentError("outer")); catch
         try; x > 0 && throw(DomainError(x)); catch; end
@@ -1491,6 +1489,37 @@ _g("exception_stack", Any[
     ("catch_after_nested_region", (x::Int64) -> (try; (try; throw(DomainError(x)); catch; end); throw(ArgumentError("o")); catch e; _sm_xs_kind(e); end), Int64(1)),
     ("nested_in_one_function", (x::Int64) -> (try; (try; throw(ArgumentError("o")); catch; (try; x > 0 && throw(DomainError(x)); catch; end); rethrow(); end); Int64(0); catch e; _sm_xs_kind(e); end), Int64(1)),
 ])
+# Core.throw_methoderror(f, args...), where Julia's IR throws for a call with no method: it
+# throws MethodError(f, (args...,), world), never the exception last handled. Each case reads
+# the caught value: Julia folds `e isa MethodError` here, since it knows what the call throws.
+@noinline _sm_nm(x::Int64) = 1
+@noinline _sm_nm(x::String) = 2
+_g("method_error_value", Any[
+    ("function_and_args", (x::Int64) -> (try; _sm_nm(Float64(x)); catch e; e isa MethodError && e.f === _sm_nm && e.args isa Tuple{Float64} ? 1 : 2; end), Int64(3)),
+    ("args_value", (x::Int64) -> (try; _sm_nm(Float64(x)); catch e; Int64(((e::MethodError).args::Tuple{Float64})[1]); end), Int64(3)),
+    ("after_a_handled_exception", (x::Int64) -> (try; throw(ArgumentError("a")); catch; end; try; _sm_nm(Float64(x)); catch e; (e::MethodError).f === _sm_nm ? 1 : 2; end), Int64(3)),
+])
+# typeassert(x, T) is Julia's checked cast: a value that is not a T throws TypeError, whatever
+# T is (abstract, a struct) and whatever the value is (a number, a struct, nothing)
+struct _SmTa; a::Int64; end
+@noinline _sm_ta_num(x::Int64) = x > 0 ? Ref{Any}(1.5) : Ref{Any}(x)
+@noinline _sm_ta_obj(x::Int64) = x > 0 ? Ref{Any}(_SmTa(x)) : Ref{Any}("s")
+@noinline _sm_ta_nothing(x::Int64) = x > 0 ? Ref{Any}(nothing) : Ref{Any}(_SmTa(x))
+_sm_ta_kind(e)::Int64 = e isa TypeError ? -7 : -8
+_g("typeassert_checks", Any[
+    ("abstract_number_target", (x::Int64) -> (try; y = _sm_ta_num(x)[]::Integer; 5; catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("abstract_string_target", (x::Int64) -> (try; y = _sm_ta_obj(x)[]::AbstractString; 5; catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("abstract_target_holds", (x::Int64) -> (try; y = _sm_ta_num(x)[]::Real; 5; catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("nothing_to_struct", (x::Int64) -> (try; y = _sm_ta_nothing(x)[]::_SmTa; 5; catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("nothing_to_struct_field", (x::Int64) -> (try; (_sm_ta_nothing(x)[]::_SmTa).a; catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("struct_to_struct_holds", (x::Int64) -> (try; (_sm_ta_nothing(x)[]::_SmTa).a; catch e; _sm_ta_kind(e); end), Int64(-2)),
+    ("concrete_number_target", (x::Int64) -> (try; y = _sm_ta_num(x)[]::Int64; 5; catch e; _sm_ta_kind(e); end), Int64(3)),
+    # a value of static type S is a T exactly when it is an S ∩ T (Julia's emit_isa): here the
+    # one concrete Tuple{Int64,Int64}, tested where Tuple{Any,Any} has no test of its own
+    ("static_intersection_target", (x::Int64) -> (t = _sm_ta_pair(x); (t::Tuple{Any,Any})[1]::Int64), Int64(3)),
+    ("static_intersection_throws", (x::Int64) -> (try; t = _sm_ta_pair(x); (t::Tuple{Any,Any})[1]::Int64; catch e; _sm_ta_kind(e); end), Int64(-3)),
+])
+@noinline _sm_ta_pair(x::Int64) = x > 0 ? (x, 2) : nothing
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

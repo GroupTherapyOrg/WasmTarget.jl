@@ -44,8 +44,10 @@ with the per-clause status. A clause is never closed by argument.
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
   an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
-  `R29b` `R37` `L152` (codegen reads the plan's IR, never a second inference). Planned: dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits
-  found computed twice (dev/AUDIT.md P3, E3, E4, E5, A2C3, A2C4, A2E4).
+  `R29b` `R37` `L152` (codegen reads a function's IR from the plan, not from `get_typed_ir`). Planned:
+  dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits found computed twice,
+  and codegen's six remaining inference questions answered by the plan (dev/AUDIT.md P3, E3,
+  E4, E5, A2C3, A2C4, A2E4, A3C1, A3C3, A3C4, A3C8).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
@@ -86,20 +88,23 @@ with the per-clause status. A clause is never closed by argument.
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `R34` `R39` (no smoke xfail compiles
   and then answers wrong, traps, or returns what the harness cannot read). Planned:
-  dev/MARCH.md 13.0, 13.1, 13.14, 13.15, 13.17 — the audits' unlocated and lossy paths
-  (dev/AUDIT.md M7, E9, A2C1, A2C2, A2E5).
+  dev/MARCH.md 13.0, 13.1, 13.10, 13.14, 13.15, 13.17 — Julia's exception stack, the traps
+  where Julia answers, the xfail lane that counts a crash as a rejection, and the audits'
+  unlocated and lossy paths (dev/AUDIT.md A3E1, A3E2, A3S1–A3S4, A3P5, A3C2, A3C7, M7, E9,
+  A2C1, A2C2, A2E5).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
-  Planned: dev/MARCH.md 13.17 — one value-type encoder and no raw byte as a block type, typed
-  pops and returns, a throw checked against its tag, validated initializers (dev/AUDIT.md
-  A2B1–A2B5, B4, B5).
+  Planned: dev/MARCH.md 13.17 — a function's results checked at every return, casts, nulls,
+  struct.new and conversions typed by the module, no raw byte as a value type, one subtype
+  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
   `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
-  its model or states why it has none). Planned: dev/MARCH.md 13.9 — the closed-world model
-  prunes and models the hidden edges' two computations (dev/AUDIT.md P4, A2C1).
+  its model or states why it has none). Planned: dev/MARCH.md 13.17 — Julia's exception
+  stack modeled before it is ported, the operand stack's if/else, and the closed-world model's
+  pruning and hidden edges (dev/AUDIT.md A3E3, A3B11, P4, A2C1).
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
@@ -119,7 +124,9 @@ with the per-clause status. A clause is never closed by argument.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
-  charter within 5 commits, `dev/AUDIT.md`).
+  charter within 5 commits, `dev/AUDIT.md`). Planned: dev/MARCH.md 13.17 — L148 chains its
+  entries and counts over the head that lands, and a check that every open finding is on the
+  row its clause names (dev/AUDIT.md A2P5, A3P4).
 
 ## Rules that keep the goal from drifting
 

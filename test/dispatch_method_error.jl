@@ -30,6 +30,10 @@ gk(x::Any)::Int32 = k(x)
 gf2(x::Any, y::Any)::Int32 = f2(x, y)
 mkA(v::Int32) = A(v); mkB(v::Int32) = B(v); mkC(v::Int32) = C(v); mkD(v::Int32) = D(v)
 mkE(v::Int32) = E(v); mkF(v::Int32) = F(v); mkG(v::Int32) = G(v); mkH(v::Int32) = H(v)
+# below max_methods, inference splits the call and Julia's IR ends it in
+# Core.throw_methoderror(u, v), with `v` erased: its args tuple has v's runtime type
+u(x::Int64) = Int32(1); u(x::String) = Int32(2)
+gu(x::Int64)::Int32 = (v = Any[x, "s", 1.5]; try; u(v[x]); catch e; e isa MethodError ? Int32(7) : Int32(8); end)
 end
 
 @testset "dispatch: MethodError receivers trap through the ONE table" begin
@@ -97,5 +101,12 @@ end
         w = wasm(name, js)
         @test n == (:err, MethodError)
         @test w[1] === :trap
+    end
+    # a split call's throw_methoderror over an erased value: WT cannot build the args tuple
+    # of its runtime type (MARCH 13.10), so it traps, never throwing an exception that is not
+    # Julia's MethodError, which Julia's catch answers (dev/AUDIT.md A3S1)
+    @test M.gu(3) == Int32(7)
+    let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gu, (Int64,)), "gu", "3n")
+        @test r[1] === :trap
     end
 end
