@@ -486,7 +486,7 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     local str_ref = ConcreteRef(struct_idx, false)
     results = WasmValType[str_ref]
     local init_locals = WasmValType[ConcreteRef(arr_idx, true), str_ref]
-    b = InstrBuilder(init_locals, results; func_name="lazy_string_init")
+    b = InstrBuilder(init_locals, results; func_name="lazy_string_init", mod=mod)
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
@@ -1256,7 +1256,7 @@ function get_typevar_constant_global!(mod::WasmModule, registry::TypeRegistry, t
     haskey(registry.typevar_constant_globals, tv) && return registry.typevar_constant_globals[tv]
     idx = registry.jl_typevar_idx
     idx === nothing && error("TypeVar constants require the canonical JlType hierarchy")
-    b = InstrBuilder(; func_name="get_typevar_constant_global!")
+    b = InstrBuilder(; func_name="get_typevar_constant_global!", mod=mod)
     struct_new_default!(b, idx)
     g = add_global_ref!(mod, idx, true, builder_code(b); nullable=false)
     registry.typevar_constant_globals[tv] = g
@@ -1498,7 +1498,7 @@ function get_module_constant_global!(mod::WasmModule, registry::TypeRegistry,
     string_idx = get_string_struct_type!(mod, registry)
     name_global = get_string_constant_global!(mod, registry, nameof(module_value))
     name_global === nothing && error("Module name exceeds the eager Symbol constant limit")
-    b = InstrBuilder(; func_name="get_module_constant_global!")
+    b = InstrBuilder(; func_name="get_module_constant_global!", mod=mod)
     i32_const!(b, Int64(ensure_type_id!(registry, Module)))
     i32_const!(b, 0)
     global_get!(b, name_global, ConcreteRef(string_idx, false))
@@ -1901,7 +1901,7 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     rec_global = add_global_ref!(mod, rec_idx, true,
         vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(rec_idx))))
     # locals: 0 cp, 1 field, 2 the stage table, 3 the record index
-    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32]; func_name=name)
+    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32]; func_name=name, mod=mod)
     i32_const!(b, tables.oob); local_set!(b, 3)
     local_get!(b, 0); i32_const!(b, 0x110000); num!(b, Opcode.I32_LT_U)
     if_!(b)
@@ -2054,7 +2054,7 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end
     box_type = get_nothing_box_type!(mod, registry)
     # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
-    b = InstrBuilder(; func_name="get_nothing_global!")
+    b = InstrBuilder(; func_name="get_nothing_global!", mod=mod)
     emit_type_id!(b, registry, Nothing)
     struct_new!(b, box_type, WasmValType[I32])
     init_expr = builder_code(b)
@@ -2085,7 +2085,7 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # the constant is an instance of its kind; struct.new_default zeroes it, and
     # populate_type_constant_globals! fills it (ref.eq tells two allocations apart)
     kind_idx = type_object_struct_idx(registry, type_val)
-    b = InstrBuilder(; func_name="get_type_constant_global!")
+    b = InstrBuilder(; func_name="get_type_constant_global!", mod=mod)
     struct_new_default!(b, kind_idx)
     init_bytes = builder_code(b)
 
@@ -2143,7 +2143,7 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
 
     # Immutable classId must be established at allocation; mutable payload fields
     # begin null and are populated by the start function.
-    b = InstrBuilder(; func_name="get_typename_constant_global!")
+    b = InstrBuilder(; func_name="get_typename_constant_global!", mod=mod)
     str_arr_idx = get_string_array_type!(mod, registry)
     string_idx = get_string_struct_type!(mod, registry)
     jl_type_idx = registry.jl_type_idx
@@ -2615,7 +2615,7 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)::Uni
 
     # Create the lookup array global initialized with null refs
     # Init expression: i32.const <size>, array.new_default $arr_type
-    b = InstrBuilder(; func_name="create_type_lookup_table!")
+    b = InstrBuilder(; func_name="create_type_lookup_table!", mod=mod)
     i32_const!(b, Int64(table_size))
     array_new_default!(b, arr_type_idx)
     init_bytes = builder_code(b)
@@ -3069,7 +3069,7 @@ function get_closure_vtable_struct!(mod::WasmModule, registry::TypeRegistry, max
     max_arity >= 0 || error("closure vtable arity must be non-negative, got $max_arity")
     parent = max_arity == 0 ? nothing : get_closure_vtable_struct!(mod, registry, max_arity - 1)
     # (ref null func) entries — set once at vtable-global creation, read at call_ref
-    fields = FieldType[FieldType(UInt8(FuncRef), false) for _ in 0:max_arity]
+    fields = FieldType[FieldType(FuncRef, false) for _ in 0:max_arity]
     idx = UInt32(add_type!(mod, StructType(fields, parent)))
     d[max_arity] = idx
     return idx

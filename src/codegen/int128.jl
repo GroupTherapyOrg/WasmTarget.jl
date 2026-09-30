@@ -405,13 +405,13 @@ function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     i64_const!(b, 0)
     local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
-    select!(b); local_set!(b, result_lo_local)
+    select!(b, I64); local_set!(b, result_lo_local)
 
     # cross = n_mod==0 ? 0 : x_lo >> (64 - n_mod)   via select(0, x_lo>>(64-n_mod), n_mod==0)
     i64_const!(b, 0)
     local_get!(b, x_lo_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHR_U)
     local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
-    select!(b); local_set!(b, cross_local)
+    select!(b, I64); local_set!(b, cross_local)
 
     # hi_normal = (x_hi << n_mod) | cross   (left on stack)
     local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
@@ -420,14 +420,14 @@ function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHL)
     # result_hi = n<64 ? hi_normal : hi_ge64   (negated cond so select args line up)
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
-    select!(b); local_set!(b, result_hi_local)
+    select!(b, I64); local_set!(b, result_hi_local)
 
     # an amount of at least 128 gives 0: Julia's shl_int selects on `shift >= width`
     # (intrinsics.cpp), which the limb shifts above, taking their amount modulo 64, never see
     for r in (result_lo_local, result_hi_local)
         local_get!(b, r); i64_const!(b, 0)
         local_get!(b, n_local); i64_const!(b, 128); num!(b, Opcode.I64_LT_U)
-        select!(b); local_set!(b, r)
+        select!(b, I64); local_set!(b, r)
     end
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
@@ -474,13 +474,13 @@ function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     i64_const!(b, 0)
     local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
-    select!(b); local_set!(b, result_hi_local)
+    select!(b, I64); local_set!(b, result_hi_local)
 
     # cross = n_mod==0 ? 0 : x_hi << (64 - n_mod)
     i64_const!(b, 0)
     local_get!(b, x_hi_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHL)
     local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
-    select!(b); local_set!(b, cross_local)
+    select!(b, I64); local_set!(b, cross_local)
 
     # lo_normal = (x_lo >>u n_mod) | cross  (on stack); lo_ge64 = x_hi >>u n_mod (on stack)
     local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
@@ -488,14 +488,14 @@ function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
     # result_lo = n<64 ? lo_normal : lo_ge64
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
-    select!(b); local_set!(b, result_lo_local)
+    select!(b, I64); local_set!(b, result_lo_local)
 
     # an amount of at least 128 gives 0: Julia's lshr_int selects on `shift >= width`
     # (intrinsics.cpp), which the limb shifts above, taking their amount modulo 64, never see
     for r in (result_lo_local, result_hi_local)
         local_get!(b, r); i64_const!(b, 0)
         local_get!(b, n_local); i64_const!(b, 128); num!(b, Opcode.I64_LT_U)
-        select!(b); local_set!(b, r)
+        select!(b, I64); local_set!(b, r)
     end
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
@@ -550,13 +550,13 @@ function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     local_get!(b, sign_local)
     local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_S)
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
-    select!(b); local_set!(b, result_hi_local)
+    select!(b, I64); local_set!(b, result_hi_local)
 
     # cross = n_mod==0 ? 0 : x_hi << (64 - n_mod)
     i64_const!(b, 0)
     local_get!(b, x_hi_local); i64_const!(b, 64); local_get!(b, n_mod_local); num!(b, Opcode.I64_SUB); num!(b, Opcode.I64_SHL)
     local_get!(b, n_mod_local); num!(b, Opcode.I64_EQZ)
-    select!(b); local_set!(b, cross_local)
+    select!(b, I64); local_set!(b, cross_local)
 
     # lo_normal = (x_lo >>u n_mod) | cross (stack); lo_ge64 = x_hi >>s n_mod (stack)
     local_get!(b, x_lo_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_U)
@@ -564,14 +564,14 @@ function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     local_get!(b, x_hi_local); local_get!(b, n_mod_local); num!(b, Opcode.I64_SHR_S)
     # result_lo = n<64 ? lo_normal : lo_ge64
     local_get!(b, n_local); i64_const!(b, 64); num!(b, Opcode.I64_LT_U)
-    select!(b); local_set!(b, result_lo_local)
+    select!(b, I64); local_set!(b, result_lo_local)
 
     # an amount of at least 128 gives the sign in every bit: Julia's ashr_int selects on `shift >= width`
     # (intrinsics.cpp), which the limb shifts above, taking their amount modulo 64, never see
     for r in (result_lo_local, result_hi_local)
         local_get!(b, r); local_get!(b, sign_local)
         local_get!(b, n_local); i64_const!(b, 128); num!(b, Opcode.I64_LT_U)
-        select!(b); local_set!(b, r)
+        select!(b, I64); local_set!(b, r)
     end
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
@@ -612,7 +612,7 @@ function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     i64_const!(b, 64); local_get!(b, x_lo_local); num!(b, Opcode.I64_CLZ); num!(b, Opcode.I64_ADD)
     local_get!(b, clz_hi_local)
     local_get!(b, x_hi_local); num!(b, Opcode.I64_EQZ)
-    select!(b)
+    select!(b, I64)
 
     # Wrap i64 result in UInt128 struct (lo=clz_result, hi=0)
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -655,7 +655,7 @@ function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     i64_const!(b, 64); local_get!(b, x_hi_local); num!(b, Opcode.I64_CTZ); num!(b, Opcode.I64_ADD)
     local_get!(b, ctz_lo_local)
     local_get!(b, x_lo_local); num!(b, Opcode.I64_EQZ)
-    select!(b)
+    select!(b, I64)
 
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     builder_set_local_type!(b, result_local, I64)
@@ -951,7 +951,7 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local_get!(b, n_hi); local_get!(b, i); num!(b, Opcode.I64_SHR_U)
     local_get!(b, n_lo); local_get!(b, i); num!(b, Opcode.I64_SHR_U)
     local_get!(b, i); i64_const!(b, 64); num!(b, Opcode.I64_GE_U)
-    select!(b)
+    select!(b, I64)
     i64_const!(b, 1); num!(b, Opcode.I64_AND)
     num!(b, Opcode.I64_OR); local_set!(b, r_lo)
     # r >= d (unsigned): not (r_hi <u d_hi or (r_hi == d_hi and r_lo <u d_lo))
@@ -965,7 +965,7 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     # r -= d
     i64_const!(b, 1); i64_const!(b, 0)
     local_get!(b, r_lo); local_get!(b, d_lo); num!(b, Opcode.I64_LT_U)
-    select!(b); local_set!(b, borrow)
+    select!(b, I64); local_set!(b, borrow)
     local_get!(b, r_lo); local_get!(b, d_lo); num!(b, Opcode.I64_SUB); local_set!(b, r_lo)
     local_get!(b, r_hi); local_get!(b, d_hi); num!(b, Opcode.I64_SUB)
     local_get!(b, borrow); num!(b, Opcode.I64_SUB); local_set!(b, r_hi)
@@ -1038,7 +1038,7 @@ function emit_int128_divrem!(b::InstrBuilder, ctx, result_type::Type; signed::Bo
     # a limb pair negated in place: ~x + 1, the carry into the high limb when the low one is 0
     local neg! = (lo, hi) -> begin
         local_get!(b, hi); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
-        i64_const!(b, 1); i64_const!(b, 0); local_get!(b, lo); num!(b, Opcode.I64_EQZ); select!(b)
+        i64_const!(b, 1); i64_const!(b, 0); local_get!(b, lo); num!(b, Opcode.I64_EQZ); select!(b, I64)
         num!(b, Opcode.I64_ADD); local_set!(b, hi)
         local_get!(b, lo); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
         i64_const!(b, 1); num!(b, Opcode.I64_ADD); local_set!(b, lo)

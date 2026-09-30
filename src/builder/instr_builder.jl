@@ -295,7 +295,13 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:998 InstructionsBuilder.drop)
 drop!(b::InstrBuilder)::InstrBuilder = (validate_pop_any!(b.v); _emit!(b, InstrIR.Drop()))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1004 InstructionsBuilder.select)
-select!(b::InstrBuilder)::InstrBuilder = (validate_instruction!(b.v, Opcode.SELECT); _emit!(b, InstrIR.Select()))
+# select t: [t, t, i32] → [t]; a numeric t encodes the untyped select, any other the typed one
+# (dart: `type is ir.NumType ? ir.Select() : ir.SelectWithType(type)`)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1004 InstructionsBuilder.select)
+function select!(b::InstrBuilder, t::WasmValType)::InstrBuilder
+    validate_instruction!(b.v, Opcode.SELECT, t)
+    _emit!(b, t isa NumType ? InstrIR.Select() : InstrIR.SelectWithType(t))
+end
 
 # ── Variable ────────────────────────────────────────────────────────────────────
 # fullstrict: the LIVE type for a local — the provider (fresh truth) outranks the
@@ -334,14 +340,33 @@ function local_tee!(b::InstrBuilder, idx::Integer)::InstrBuilder
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get)
 function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)::InstrBuilder
-    # fullstrict: the module's declared global valtype outranks the caller's claim
+    # the module's global, whose type is its definition's (dart global_get: [] → [global.type]);
+    # a builder with no module (a unit test) has only the caller's type
     local m = b.v.mod
-    local t = (m !== nothing && (idx + 1) <= length(m.globals)) ? m.globals[idx + 1].valtype : typ
-    validate_push!(b.v, t isa WasmValType ? t : typ)
+    local t = m === nothing ? typ : _defined_global(m, idx, :global_get).valtype
+    validate_push!(b.v, t)
     _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1072 InstructionsBuilder.global_set)
-global_set!(b::InstrBuilder, idx::Integer)::InstrBuilder = (validate_pop_any!(b.v); _emit!(b, InstrIR.GlobalSet(UInt32(idx))))
+function global_set!(b::InstrBuilder, idx::Integer)::InstrBuilder
+    # dart global_set: the global is mutable and its type is popped
+    local m = b.v.mod
+    if m === nothing
+        validate_pop_any!(b.v)   # a builder with no module (a unit test) has no global to check
+    else
+        local g = _defined_global(m, idx, :global_set)
+        g.mutable_ || _module_invalid(:global_set, "global $idx is immutable")
+        validate_pop!(b.v, g.valtype)
+    end
+    _emit!(b, InstrIR.GlobalSet(UInt32(idx)))
+end
+
+# the defined global `idx` (WT imports functions only, so a global's index is its definition's)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get)
+function _defined_global(m::WasmModule, idx::Integer, op::Symbol)::WasmGlobalDef
+    0 <= idx < length(m.globals) || _module_invalid(op, "global $idx is not defined")
+    return m.globals[idx + 1]
+end
 
 # ── Control flow ────────────────────────────────────────────────────────────────
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:676 InstructionsBuilder.unreachable)
@@ -460,7 +485,15 @@ br!(b::InstrBuilder, target::ControlLabel)::InstrBuilder = _br_depth!(b, _label_
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 br_if!(b::InstrBuilder, target::ControlLabel)::InstrBuilder = _br_if_depth!(b, _label_depth(b, target))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:933 InstructionsBuilder.return_)
-return_!(b::InstrBuilder)::InstrBuilder = (b.v.reachable = false; _emit!(b, InstrIR.Return()))
+function return_!(b::InstrBuilder)::InstrBuilder
+    # the function's results, popped from above the innermost block's base, then nothing
+    # after is reachable (dart return_: _verifyTypes(_labelStack[0].outputs, [], reachableAfter: false))
+    if b.v.reachable
+        for t in reverse(b.v.labels[1].result_types); validate_pop!(b.v, t); end
+    end
+    b.v.reachable = false
+    _emit!(b, InstrIR.Return())
+end
 
 # fullstrict: the module KNOWS every function's signature — derive it there; the
 # caller's claim is only a fallback for a genuinely unresolved index.
@@ -500,6 +533,7 @@ end
 # signature it already knows (same as call!).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:960 InstructionsBuilder.call_indirect)
 function call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})::InstrBuilder
+    params, results = _function_type_sig(b, type_idx, params, results, :call_indirect)
     if b.v.reachable
         validate_pop!(b.v, I32)  # the function index into the table
         for p in reverse(params); validate_pop!(b.v, p); end
@@ -513,12 +547,29 @@ end
 # function-type index (dart2wasm CallRef writes the type index after 0x14).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:973 InstructionsBuilder.call_ref)
 function call_ref!(b::InstrBuilder, type_idx::Integer, params::Vector{<:Any}, results::Vector{<:Any})::InstrBuilder
+    params, results = _function_type_sig(b, type_idx, params, results, :call_ref)
     if b.v.reachable
-        validate_pop_any!(b.v)  # the (ref $type) function reference on top
+        validate_pop!(b.v, ConcreteRef(UInt32(type_idx), true))  # the callee, a (ref null $type)
         for p in reverse(params); validate_pop!(b.v, p); end
         for r in results; validate_push!(b.v, r); end
     end
     _emit!(b, InstrIR.CallRef(UInt32(type_idx)))
+end
+
+# The signature function type `type_idx` names in the module; a caller's differing claim is a
+# codegen bug, raised at the emitting line (dart call_ref and call_indirect take the type itself)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:973 InstructionsBuilder.call_ref)
+function _function_type_sig(b::InstrBuilder, type_idx::Integer, params::Vector{<:Any},
+                            results::Vector{<:Any}, op::Symbol)::Tuple{Vector{WasmValType},Vector{WasmValType}}
+    local m = b.v.mod
+    m === nothing && return (WasmValType[p for p in params], WasmValType[r for r in results])
+    0 <= type_idx < length(m.types) || _module_invalid(op, "type $type_idx is not defined")
+    local ft = m.types[type_idx + 1]
+    ft isa FuncType || _module_invalid(op, "type $type_idx is not a function type")
+    (length(params) == length(ft.params) && all(p -> p[1] == p[2], zip(params, ft.params)) &&
+     length(results) == length(ft.results) && all(r -> r[1] == r[2], zip(results, ft.results))) ||
+        _module_invalid(op, "the caller's signature $(params) -> $(results) is not type $type_idx's $(ft.params) -> $(ft.results)")
+    return (ft.params, ft.results)
 end
 
 # The reference operand of br_on_null / br_on_non_null, and the type it has once not null: a
@@ -535,8 +586,14 @@ function _branch_ref_operand(b::InstrBuilder, op::String)::WasmValType
         push!(b.v.errors, "$(b.func_name): $op needs a reference operand, found $t")
         return AnyRef
     end
-    return t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : t
+    return _non_null(t)
 end
+
+# A reference type made non-null (dart RefType.withNullability(false)): a concrete one loses
+# its null, a nullable abstract one becomes its non-null form.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:229 RefType.withNullability)
+_non_null(t::WasmValType)::WasmValType =
+    t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : t isa RefType ? NonNullAbstractRef(UInt8(t)) : t
 
 # br_on_null: [(ref null ht)] -> [(ref ht)] on fallthrough; branches to `depth` carrying what
 # lies under the operand. On fallthrough the top becomes non-null; reachability stays true.
@@ -568,18 +625,6 @@ br_on_null!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1644 InstructionsBuilder.br_on_non_null)
 br_on_non_null!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     _br_on_non_null_depth!(b, _label_depth(b, target))
-
-# ── Parametric: typed select ──────────────────────────────────────────────────────
-# select (typed, 0x1C): pop i32 condition, pop T, pop T, push T — same operand-stack
-# effect as untyped select (the validator's SELECT/SELECT_T path is shared). `type_bytes`
-# are the EXACT on-wire result-valtype bytes the caller already has (e.g.
-# `[0x63, encode_leb128_signed(type_idx)...]` for a nullable concrete ref), serialized
-# verbatim after the 0x1C + vec-len-1 prefix (dart2wasm SelectWithType).
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1004 InstructionsBuilder.select)
-function select_t!(b::InstrBuilder, type_bytes::Vector{UInt8})::InstrBuilder
-    validate_instruction!(b.v, Opcode.SELECT_T)
-    _emit!(b, InstrIR.SelectWithType(copy(type_bytes)))
-end
 
 # ── Exception handling (Wasm 3.0) ─────────────────────────────────────────────────
 # Catch-clause constructors a caller hands to `try_table!`. Label is the branch target
@@ -632,9 +677,15 @@ function try_table!(b::InstrBuilder, catches::Vector; inputs::Vector{<:Any}=Wasm
 end
 # throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:820 InstructionsBuilder.throw_)
-function throw_!(b::InstrBuilder, tag::Integer; inputs::Vector{<:Any}=WasmValType[])::InstrBuilder
+function throw_!(b::InstrBuilder, tag::Integer)::InstrBuilder
+    # the tag's own inputs (dart throw_: _verifyTypes(tag.type.inputs, []))
+    local m = b.v.mod
+    m === nothing && throw(ArgumentError("throw needs the module that defines tag $tag"))
+    0 <= tag < length(m.tags) || _module_invalid(:throw, "tag $tag is not defined")
+    local ft = m.types[Int(m.tags[tag + 1].type_idx) + 1]
+    ft isa FuncType || _module_invalid(:throw, "tag $tag's type is not a function type")
     if b.v.reachable
-        for t in reverse(inputs); validate_pop!(b.v, t); end
+        for t in reverse(ft.params); validate_pop!(b.v, t); end
     end
     b.v.reachable = false
     _emit!(b, InstrIR.Throw(UInt32(tag)))
@@ -650,13 +701,12 @@ ref_null!(b::InstrBuilder, heaptype::Integer, reftype::WasmValType)::InstrBuilde
 ref_null!(b::InstrBuilder, rt::RefType)::InstrBuilder =
     (validate_push!(b.v, rt); _emit!(b, InstrIR.RefNullAbstract(UInt8(rt))))
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1582 InstructionsBuilder.ref_is_null)
-ref_is_null!(b::InstrBuilder)::InstrBuilder = (validate_pop_any!(b.v); validate_push!(b.v, I32); _emit!(b, InstrIR.RefIsNull()))
+ref_is_null!(b::InstrBuilder)::InstrBuilder = (validate_instruction!(b.v, Opcode.REF_IS_NULL); _emit!(b, InstrIR.RefIsNull()))
 # dart2wasm: ref_as_non_null output = actual top-of-stack with nullability=false.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1607 InstructionsBuilder.ref_as_non_null)
 function ref_as_non_null!(b::InstrBuilder)::InstrBuilder
-    t = validate_pop_any!(b.v)
-    nn = t isa ConcreteRef ? ConcreteRef(t.type_idx, false) : (t === nothing ? AnyRef : t)
-    validate_push!(b.v, nn)
+    t = validate_pop_ref!(b.v)
+    validate_push!(b.v, t === nothing ? AnyRef : _non_null(t))
     _emit!(b, InstrIR.RefAsNonNull())
 end
 
@@ -692,11 +742,11 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
 @inline function _true_field_type(b::InstrBuilder, type_idx::Integer, field_idx::Integer, declared::WasmValType)::WasmValType
     m = b.v.mod
-    m === nothing && return declared
-    (type_idx + 1) <= length(m.types) || return declared
+    m === nothing && return declared   # a builder with no module (a unit test)
+    0 <= type_idx < length(m.types) || _module_invalid(:struct_field, "type $type_idx is not defined")
     local ct = m.types[type_idx + 1]
-    ct isa StructType || return declared
-    (field_idx + 1) <= length(ct.fields) || return declared
+    ct isa StructType || _module_invalid(:struct_field, "type $type_idx is not a struct type")
+    0 <= field_idx < length(ct.fields) || _module_invalid(:struct_field, "struct type $type_idx has no field $field_idx")
     local ft = ct.fields[field_idx + 1].valtype
     # packed i8/i16 storage reads as i32
     ft isa UInt8 && ft in (0x78, 0x77) && return I32
@@ -737,10 +787,10 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1735 InstructionsBuilder.array_get)
 @inline function _true_elem_type(b::InstrBuilder, type_idx::Integer, declared::WasmValType)::WasmValType
     m = b.v.mod
-    m === nothing && return declared
-    (type_idx + 1) <= length(m.types) || return declared
+    m === nothing && return declared   # a builder with no module (a unit test)
+    0 <= type_idx < length(m.types) || _module_invalid(:array_elem, "type $type_idx is not defined")
     local ct = m.types[type_idx + 1]
-    ct isa ArrayType || return declared
+    ct isa ArrayType || _module_invalid(:array_elem, "type $type_idx is not an array type")
     local ft = ct.elem.valtype
     ft isa UInt8 && ft in (0x78, 0x77) && return I32
     return ft isa WasmValType ? ft : declared

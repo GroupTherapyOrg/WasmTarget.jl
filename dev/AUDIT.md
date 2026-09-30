@@ -209,4 +209,12 @@ clause OPEN until it is a lock; the 14 ratchets at 0 became locks (R36 negative-
 clause's Planned names its open MARCH rows and findings. A2P6: every open finding is now on
 dev/MARCH.md 13.17 in the order it is taken, and E9 is on 13.15. On A2P10's last point:
 Dale's "don't wait on me" (2026-09-29) delegated the charter markers; ed7f2323 said "direction".
-Everything else: MARCH 13.17.
+Everything else: MARCH 13.17. Batch 65 — A2B2, A2B3, and B5's shorthand: one value-type
+writer, dart's one-byte nullable abstract references, no raw byte as a block type (all 225
+probe modules print identical text). Batch 66 — A2B1, A2B4, A2B5, B4, most of A2B7: return,
+throw, global.set/get, ref.is_null, ref.as_non_null, array.len, extern.convert_any, ref.test,
+select and call_ref check what dart checks, else re-pushes the if's inputs, an if with
+results needs an else, and every codegen builder has its module (L151). The stricter pops
+found the closure vtable's funcref fields declared as the raw byte 0x70; FieldType now
+refuses a raw byte that is not a packed type. A2P3 measured: WasmMakie fails on the new
+import (paused with Therapy, MARCH 13.16); Snapshot passes. A2E5 measured: not reproduced.

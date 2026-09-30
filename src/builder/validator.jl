@@ -134,6 +134,21 @@ function validate_pop_any!(v::WasmStackValidator)::Union{WasmValType, Nothing}
 end
 
 """
+    validate_pop_ref!(v) -> Union{WasmValType, Nothing}
+
+Pop a reference of any hierarchy (dart's `RefType.common(nullable: true)`, which ref.is_null,
+ref.as_non_null and the casts take): a numeric operand is an error at the emitting line.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1582 InstructionsBuilder.ref_is_null)
+"""
+function validate_pop_ref!(v::WasmStackValidator)::Union{WasmValType, Nothing}
+    local t = validate_pop_any!(v)
+    t === nothing && return nothing
+    (t isa RefType || t isa ConcreteRef || t isa NonNullAbstractRef) ||
+        push!(v.errors, "$(v.func_name): expected a reference, found $(t) [ctx: $(v.context_hint)]")
+    return t
+end
+
+"""
     stack_height(v) -> Int
 
 Current number of values on the validation stack.
@@ -326,14 +341,14 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode == Opcode.DROP
         validate_pop_any!(v)
     elseif opcode == Opcode.SELECT || opcode == Opcode.SELECT_T
-        # select / select (typed): pop i32 condition, pop T, pop T, push T
+        # select t: [t, t, i32] → [t], its value type named by the caller (dart select(type),
+        # instructions.dart:1004)
+        type_info isa WasmValType ||
+            throw(ArgumentError("select needs its value type (select!(b, t))"))
         validate_pop!(v, I32)  # condition
-        val2 = validate_pop_any!(v)
-        validate_pop_any!(v)
-        # Push back the type of one of the values (both should be same type)
-        if val2 !== nothing
-            validate_push!(v, val2)
-        end
+        validate_pop!(v, type_info)
+        validate_pop!(v, type_info)
+        validate_push!(v, type_info)
 
     # --- Integer conversions ---
     elseif opcode == Opcode.I32_WRAP_I64
@@ -388,9 +403,10 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
             validate_push!(v, type_info)
         end
     elseif opcode == Opcode.REF_IS_NULL
-        validate_pop_any!(v); validate_push!(v, I32)
+        # a nullable reference of any hierarchy (dart RefType.common(nullable: true))
+        validate_pop_ref!(v); validate_push!(v, I32)
     elseif opcode == Opcode.REF_EQ
-        validate_pop_any!(v); validate_pop_any!(v); validate_push!(v, I32)
+        validate_pop!(v, EqRef); validate_pop!(v, EqRef); validate_push!(v, I32)
 
     # --- Memory instructions ---
     elseif opcode == Opcode.I32_LOAD
@@ -471,6 +487,11 @@ function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
         return
     end
     label = pop!(v.labels)
+    # an if without else passes its inputs through its implicit else, so it is valid only when
+    # its results are its inputs (the Wasm spec; dart does not check it, the engine does)
+    (label.kind === :if && !label.has_else && label.input_types != label.result_types) &&
+        push!(v.errors, "$(v.func_name): an if with results $(label.result_types) needs an else " *
+                        "(its inputs are $(label.input_types))")
 
     # Validate stack height and types if code is reachable
     if v.reachable
@@ -633,8 +654,10 @@ function validate_else!(v::WasmStackValidator)::Union{Nothing, Bool}
                                    label.input_types, label.result_types,
                                    label.reachable_at_entry, true)
 
-    # Reset stack to entry height for else-branch (dart2wasm: _stackTypes.length = baseStackHeight)
+    # Reset the stack to the if's base and give the else arm the if's inputs, as the then arm
+    # had them (dart else_: `_stackTypes.length = baseStackHeight; addAll(label.inputs)`)
     resize!(v.stack, label.stack_height_at_entry)
+    append!(v.stack, label.input_types)
 
     # Restore reachability from block entry
     v.reachable = label.reachable_at_entry
@@ -720,8 +743,8 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         validate_pop!(v, ConcreteRef(UInt32(type_idx), true))  # array ref
 
     elseif gc_opcode == Opcode.ARRAY_LEN
-        # array.len: pop any array ref, push i32
-        validate_pop_any!(v)
+        # array.len: pop an array reference, push i32 (dart array_len: RefType.array)
+        validate_pop!(v, ArrayRef)
         validate_push!(v, I32)
 
     elseif gc_opcode == Opcode.ARRAY_FILL
@@ -745,7 +768,7 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
     elseif gc_opcode == Opcode.REF_CAST
         # ref.cast (ref $t): pop ref, push (ref $t) non-nullable
         target_type = type_info
-        actual = validate_pop_any!(v)
+        actual = validate_pop_ref!(v)
         # P13: a ref.cast is only valid WITHIN one reference hierarchy — the operand and
         # the target must share a top (any / func / extern / exn). A cross-hierarchy cast
         # (e.g. externref → a GC struct) can never be expressed; codegen must emit an
@@ -758,7 +781,7 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
     elseif gc_opcode == Opcode.REF_CAST_NULL
         # ref.cast null (ref null $t): pop ref, push (ref null $t) nullable
         target_type = type_info
-        actual = validate_pop_any!(v)
+        actual = validate_pop_ref!(v)
         if actual !== nothing && !_wt_same_hierarchy(actual, target_type, v.mod)
             push!(v.errors, "$(v.func_name): ref.cast null target $(target_type) is in a different hierarchy than the operand $(actual)")
         end
@@ -770,13 +793,17 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         validate_push!(v, AnyRef)
 
     elseif gc_opcode == Opcode.EXTERN_CONVERT_ANY
-        # extern.convert_any: pop anyref, push externref
-        validate_pop_any!(v)  # any anyref subtype
+        # extern.convert_any: pop anyref, push externref (dart extern_convert_any)
+        validate_pop!(v, AnyRef)
         validate_push!(v, ExternRef)
 
     elseif gc_opcode == Opcode.REF_TEST || gc_opcode == Opcode.REF_TEST_NULL
-        # ref.test (ref $t): pop ref, push i32
-        validate_pop_any!(v); validate_push!(v, I32)
+        # ref.test (ref $t): pop a reference in the target's hierarchy, push i32
+        local actual = validate_pop_ref!(v)
+        if actual !== nothing && type_info !== nothing && !_wt_same_hierarchy(actual, type_info, v.mod)
+            push!(v.errors, "$(v.func_name): ref.test target $(type_info) is in a different hierarchy than the operand $(actual)")
+        end
+        validate_push!(v, I32)
 
     else
         throw(ArgumentError("unmodeled Wasm GC opcode 0x$(string(gc_opcode, base=16, pad=2)) in strict instruction validator"))

@@ -485,7 +485,7 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     ref_cast!(b, Int64(base_idx), false)
     struct_get!(b, base_idx, UInt32(3), StructRef)          # .vtable
     ref_cast!(b, Int64(vt_struct), false)
-    struct_get!(b, vt_struct, UInt32(arity), UInt8(FuncRef)) # entry[arity]
+    struct_get!(b, vt_struct, UInt32(arity), FuncRef) # entry[arity]
     ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)
     call_ref!(b, sig_idx, sig.params, sig.results)
     # the uniform result (anyref) converts to the call's inferred type (the funnel

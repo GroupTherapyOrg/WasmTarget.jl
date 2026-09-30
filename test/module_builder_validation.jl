@@ -451,6 +451,58 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test true
     end
 
+    @testset "every operand is typed as dart types it (return, throw, globals, refs, select, else)" begin
+        # each check below once took the operand untyped or the caller's claim (dev/AUDIT.md
+        # A2B1, A2B4, A2B5, A2B7, B4): a wrong program reached the bytes and only the engine
+        # or wasm-tools saw it
+        m = MBV.WasmModule()
+        g_mut = MBV.add_global!(m, MBV.I64, true, 0)
+        g_imm = MBV.add_global!(m, MBV.I64, false, 0)
+        arr = MBV.add_type!(m, MBV.ArrayType(MBV.FieldType(MBV.I32, true)))
+        tag_t = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.I64], MBV.WasmValType[]))
+        tag = MBV.add_tag!(m, tag_t)
+        fn_t = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.I32], MBV.WasmValType[MBV.I32]))
+        mk(ps=MBV.WasmValType[], rs=MBV.WasmValType[]) = MBV.InstrBuilder(ps, rs; mod=m)
+        # return pops the function's results
+        b = mk(MBV.WasmValType[], MBV.WasmValType[MBV.I64]); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.return_!(b)
+        b = mk(MBV.WasmValType[], MBV.WasmValType[MBV.I64]); MBV.i64_const!(b, 1)
+        @test MBV.return_!(b) isa MBV.InstrBuilder
+        # throw takes its tag's inputs
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.throw_!(b, tag)
+        b = mk(); MBV.i64_const!(b, 1)
+        @test MBV.throw_!(b, tag) isa MBV.InstrBuilder
+        # global.set: a mutable global, and its own type
+        b = mk(); MBV.i64_const!(b, 1)
+        @test_throws MBV.ModuleValidationError MBV.global_set!(b, g_imm)
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.global_set!(b, g_mut)
+        # ref.is_null, array.len, select take the operands dart names
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.ref_is_null!(b)
+        b = mk(); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.array_len!(b)
+        b = mk(); MBV.i64_const!(b, 1); MBV.i64_const!(b, 2); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.select!(b, MBV.I32)
+        b = mk(); MBV.i64_const!(b, 1); MBV.i64_const!(b, 2); MBV.i32_const!(b, 1)
+        @test MBV.select!(b, MBV.I64) isa MBV.InstrBuilder
+        # call_ref's signature is its function type's
+        b = mk(); MBV.i32_const!(b, 1); MBV.ref_null!(b, Int64(fn_t), MBV.ConcreteRef(UInt32(fn_t), true))
+        @test_throws MBV.ModuleValidationError MBV.call_ref!(b, fn_t, MBV.WasmValType[MBV.I64], MBV.WasmValType[MBV.I32])
+        # else gives its arm the if's inputs; an if with results needs an else
+        b = mk(); MBV.i32_const!(b, 7); MBV.i32_const!(b, 1)
+        MBV.if_!(b; inputs=MBV.WasmValType[MBV.I32], results=MBV.WasmValType[MBV.I32])
+        MBV.else_!(b)
+        @test MBV.end_block!(b) isa MBV.InstrBuilder      # both arms pass the input through
+        b = mk(); MBV.i32_const!(b, 1)
+        MBV.if_!(b; results=MBV.WasmValType[MBV.I32]); MBV.i32_const!(b, 2)
+        @test_throws MBV.StackImbalanceError MBV.end_block!(b)
+        # a field's storage type is a value type, never a raw byte standing for one
+        @test_throws ArgumentError MBV.FieldType(0x70, false)
+        @test MBV.FieldType(MBV.FuncRef, false).valtype === MBV.FuncRef
+    end
+
     @testset "an if's then-branch is typed against the if's results at else" begin
         # dart else_ → _verifyEndOfBlock → _checkStackTypes(label.outputs): only the height was
         # checked, and a then-arm leaving a value of an unrelated type reached the module

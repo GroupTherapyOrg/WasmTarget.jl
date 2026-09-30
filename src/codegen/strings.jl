@@ -250,7 +250,7 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     ctx.scratch_locals === nothing && allocate_string_scratch!(ctx)
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_equal")
+    b = InstrBuilder(; func_name="compile_string_equal", mod=ctx.mod)
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, str1_local, strref)

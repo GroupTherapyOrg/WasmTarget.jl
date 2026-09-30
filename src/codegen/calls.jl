@@ -435,7 +435,7 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
         _lset(Opcode.LOCAL_GET, sl)              # [value, shift, w-1, shift]
         _wc(width)                               # [..., width]
         num!(bld, wltu)                          # [value, shift, w-1, cond]
-        select!(bld)                             # [value, cond? shift : w-1]
+        select!(bld, is32 ? I32 : I64)           # [value, cond? shift : w-1]
         num!(bld, shop)                          # [value >>s clamped]
     else
         # [value, shift] → [result] → select(result, 0, shift < thr)
@@ -445,7 +445,7 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
         _lset(Opcode.LOCAL_GET, sl)              # [result, 0, shift]
         _wc(thr)                                 # [result, 0, shift, thr]
         num!(bld, wltu)                          # [result, 0, cond]
-        select!(bld)                             # [cond? result : 0]
+        select!(bld, is32 ? I32 : I64)           # [cond? result : 0]
         if narrow && (kind === :shl || (kind === :lshr && signed_narrow))
             # P3 (found probing da22976c7cd6): a SIGNED narrow result must be
             # re-sign-extended, not zero-masked — `Int8(-1) << 0` masked to
@@ -479,7 +479,7 @@ function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractComp
     local_get!(bld, amt)                         # [amount, jw, amount]
     i64_const!(bld, Int64(julia_width))          # [amount, jw, amount, jw]
     num!(bld, Opcode.I64_LT_U)                   # [amount, jw, cond]   cond = amount <u jw
-    select!(bld)                                 # [cond ? amount : jw]
+    select!(bld, I64)                            # [cond ? amount : jw]
     num!(bld, Opcode.I32_WRAP_I64)               # [amount_i32]
     append_builder!(fb, bld)
     return fb
@@ -497,7 +497,7 @@ parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dar
 """
 function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [codepoint:i32] from the stack, pushes [rawbits:i32].
-    b = InstrBuilder(; func_name="emit_char_codepoint_to_rawbits")
+    b = InstrBuilder(; func_name="emit_char_codepoint_to_rawbits", mod=ctx.mod)
     seed_input!(b, WasmValType[I32])
     cp_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -627,7 +627,7 @@ parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dar
 """
 function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [rawbits:i32] from the stack, pushes [codepoint:i32].
-    b = InstrBuilder(; func_name="emit_char_rawbits_to_codepoint")
+    b = InstrBuilder(; func_name="emit_char_rawbits_to_codepoint", mod=ctx.mod)
     seed_input!(b, WasmValType[I32])
     raw_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))

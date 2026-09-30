@@ -242,7 +242,7 @@ function emit_throw_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     ensure_exception_tag!(mod)
     global_get!(b, ensure_exception_global!(mod), AnyRef)
     call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])
-    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    throw_!(b, 0)
     return b
 end
 
@@ -259,7 +259,7 @@ function emit_rethrow_current!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     ensure_exception_tag!(mod)
     global_get!(b, ensure_exception_global!(mod), AnyRef)
     global_get!(b, ensure_exception_stack_global!(mod), ExternRef)
-    throw_!(b, 0; inputs=WasmValType[AnyRef, ExternRef])
+    throw_!(b, 0)
     return b
 end
 

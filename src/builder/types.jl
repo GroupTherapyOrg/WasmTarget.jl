@@ -110,6 +110,14 @@ parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
 struct FieldType
     valtype::WasmValType  # The type of the field
     mutable_::Bool        # Whether the field is mutable
+    # a field's storage type is a value type or a packed i8/i16 (dart's StorageType); a raw byte
+    # standing for a reference type (0x70 for funcref) encodes the same bytes but is not a
+    # reference to the builder, which then cannot check what the field holds
+    function FieldType(valtype::WasmValType, mutable_::Bool)::FieldType
+        (valtype isa UInt8 && !(valtype in (0x78, 0x77))) &&
+            throw(ArgumentError("a field's storage type is a value type or a packed i8/i16, not the raw byte $(repr(valtype))"))
+        return new(valtype, mutable_)
+    end
 end
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)

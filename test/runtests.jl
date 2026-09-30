@@ -1257,11 +1257,13 @@ begin
             bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
             @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
             bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
-            WT.if_!(bbi; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)   # I32 encodes as 0x7F
-            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
+            WT.if_!(bbi; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0)   # I32 encodes as 0x7F
+            WT.else_!(bbi); WT.i32_const!(bbi, 2); WT.end_block!(bbi)           # an if with a result has an else
+            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00,
+                                                WT.Opcode.ELSE, WT.Opcode.I32_CONST, 0x02, WT.Opcode.END]
             # instruction-IR ADT (dart2wasm ir/ layer): records typed instrs + symbolic disasm
             @test all(i -> i isa WT.InstrIR.WasmInstr, bbi.instrs)
-            @test WT.builder_disasm(bbi) == ["i32.const 1", "if I32", "i32.const 0", "end"]
+            @test WT.builder_disasm(bbi) == ["i32.const 1", "if I32", "i32.const 0", "else", "i32.const 2", "end"]
         end
 
         @testset "InstrBuilder migration invariant (no raw-emission regression)" begin

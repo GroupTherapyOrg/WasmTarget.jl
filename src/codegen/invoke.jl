@@ -400,7 +400,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     emit_value!(bd, _x, ctx, I64)  # x
                     i64_const!(bd, 0)                                   # 0
                     num!(bd, Opcode.I64_GE_S)                           # x >= 0 (i32 condition)
-                    select!(bd)                                         # abs(x)
+                    select!(bd, I64)                                    # abs(x)
 
                     # Push pad (arg 2)
                     emit_value!(bd, args[2], ctx, I64)

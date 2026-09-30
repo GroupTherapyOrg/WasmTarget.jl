@@ -2535,6 +2535,17 @@ const LOCKS = [
                                  for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", \"", gen))
             length(symdiff(created, answered))
         end),
+    "L151_every_builder_has_its_module" => ("every InstrBuilder codegen constructs names its module (`mod=`), as every dart InstructionsBuilder has one: a builder without it cannot resolve a type index, so a subtype check against an abstract reference (an array.len's arrayref, a struct's field) could not be made and a global's initializer went unchecked; the module-less builder remains only for the builder's own unit tests (dev/AUDIT.md A2B7, B5; dev/CHARTER.md C7)",
+        () -> begin
+            local n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"InstrBuilder\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", read(joinpath(dir, f), String))
+                    occursin("mod=", m.match) || (n += 1)
+                end
+            end
+            n
+        end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")

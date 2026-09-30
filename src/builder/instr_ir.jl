@@ -40,11 +40,9 @@ struct NumOp    <: WasmInstr; op::UInt8; end   # generic no-immediate numeric/cm
 # ── parametric ───────────────────────────────────────────────────────────────────
 struct Drop   <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1291 Drop)
 struct Select <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1300 Select)
-# Typed select (0x1C): carries the on-wire bytes of the single result valtype
-# (dart2wasm SelectWithType writes 0x1C, vec-len 1, then `write(type)`). The caller
-# already has the valtype bytes (e.g. 0x63 + signed-LEB type_idx), so carry them
-# verbatim — keeps this submodule dependency-free of the type-encoding layer.
-struct SelectWithType <: WasmInstr; type_bytes::Vector{UInt8}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1319 SelectWithType)
+# Typed select (0x1C): its one result value type, written as every value type is (dart
+# SelectWithType writes 0x1C, vec-len 1, then `write(type)`).
+struct SelectWithType <: WasmInstr; type::WasmValType; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1319 SelectWithType)
 
 # ── variable ─────────────────────────────────────────────────────────────────────
 struct LocalGet  <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1350 LocalGet)
@@ -176,7 +174,7 @@ encode!(c::Vector{UInt8}, i::NumOp)::Vector{UInt8}    = push!(c, i.op)
 encode!(c::Vector{UInt8}, ::Drop)::Vector{UInt8}      = push!(c, Opcode.DROP)
 encode!(c::Vector{UInt8}, ::Select)::Vector{UInt8}    = push!(c, Opcode.SELECT)
 # select (typed): 0x1C, vec-len 1, then the result valtype bytes (dart2wasm SelectWithType).
-encode!(c::Vector{UInt8}, i::SelectWithType)::Vector{UInt8} = (push!(c, Opcode.SELECT_T); _u!(c, 1); append!(c, i.type_bytes))
+encode!(c::Vector{UInt8}, i::SelectWithType)::Vector{UInt8} = (push!(c, Opcode.SELECT_T); _u!(c, 1); write_valtype!(WasmWriter(c), i.type); c)
 encode!(c::Vector{UInt8}, i::LocalGet)::Vector{UInt8}  = (push!(c, Opcode.LOCAL_GET);  _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::LocalSet)::Vector{UInt8}  = (push!(c, Opcode.LOCAL_SET);  _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::LocalTee)::Vector{UInt8}  = (push!(c, Opcode.LOCAL_TEE);  _u!(c, i.idx))
@@ -282,7 +280,7 @@ mnemonic(i::NumOp)::String    = "num 0x$(string(i.op, base=16))"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(::Drop)::String   = "drop"
 mnemonic(::Select)::String = "select"
-mnemonic(i::SelectWithType)::String = "select (result <$(length(i.type_bytes))B>)"
+mnemonic(i::SelectWithType)::String = "select (result $(i.type))"
 mnemonic(i::LocalGet)::String  = "local.get $(i.idx)"
 mnemonic(i::LocalSet)::String  = "local.set $(i.idx)"
 mnemonic(i::LocalTee)::String  = "local.tee $(i.idx)"

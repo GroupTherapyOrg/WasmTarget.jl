@@ -90,7 +90,7 @@ with the per-clause status. A clause is never closed by argument.
   (dev/AUDIT.md M7, E9, A2C1, A2C2, A2E5).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
-  the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99`.
+  the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
   Planned: dev/MARCH.md 13.17 — one value-type encoder and no raw byte as a block type, typed
   pops and returns, a throw checked against its tag, validated initializers (dev/AUDIT.md
   A2B1–A2B5, B4, B5).

@@ -1779,32 +1779,10 @@ function _lower_ifelse!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder
     # Determine the type of the values for select
     val_type = infer_value_type(args[2], ctx)
 
-    # For reference types (like Int128/UInt128 structs), need typed select.
-    # The result-type operand after `0x63` (ref null heaptype) is a
-    # SIGNED LEB128 — heaptype is either a negative abstract-type code
-    # (anyref = -18, etc.) or a non-negative type index, and WASM uses
-    # signed encoding for both so a parser can tell them apart. Using
-    # `encode_leb128_unsigned` for a type index whose low 7 bits have
-    # bit 6 set (e.g. 84) emits a single byte `0x54` that the browser
-    # then interprets as the signed value -44: "Unknown heap type -44".
-    if val_type === Int128 || val_type === UInt128
-        # Use select_t with the struct type
-        type_idx = get_int128_type!(ctx.mod, ctx.type_registry, val_type)
-        # Encode (ref null type_idx) for nullable struct ref
-        select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(type_idx))...])
-    elseif is_struct_type(val_type) || val_type <: AbstractArray || val_type === String
-        # Other reference types need typed select too
-        wasm_type = get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry; for_local=true)
-        if wasm_type isa ConcreteRef
-            select_t!(_ieb, UInt8[0x63, encode_leb128_signed(Int64(wasm_type.type_idx))...])
-        else
-            # Fall back to untyped select for value types
-            select!(_ieb)
-        end
-    else
-        # Value types (i32, i64, f32, f64) use untyped select
-        select!(_ieb)
-    end
+    # The select's type is the value's (dart select(type)): a numeric type encodes the untyped
+    # select, a reference the typed one. Until 2026-09-30 a struct whose wasm type is an abstract
+    # reference fell back to the untyped select, which the Wasm spec allows only for numbers.
+    select!(_ieb, get_concrete_wasm_type(val_type, ctx.mod, ctx.type_registry; for_local=true))
     append_builder!(fb, _ieb)
     return append_builder!(b, fb)
 end
