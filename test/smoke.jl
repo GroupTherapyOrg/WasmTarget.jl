@@ -1462,6 +1462,27 @@ _g("invoke_in_world", Any[
     # result (dev/AUDIT.md E7)
     ("nothing_result", (x::Int64) -> (r = Ref(x); y = x * 3 + (Base.invoke_in_world(Base.tls_world_age(), _sm_iiw_set!, r, x + 1); r[]); y), Int64(4)),
 ])
+# Julia's exception stack: a catch makes its exception the one being handled, a
+# pop_exception restores what its try region's enter saw, `catch e` reads the top, and
+# rethrow() throws it again (rethrow(e) with `e` in its place). Until 2026-09-30 a
+# pop_exception did nothing and `catch e` read the last region entered before it, so each
+# case below answered 2 where Julia answers 1 (dev/AUDIT.md A2E1–A2E3).
+@noinline function _sm_xs_nested_rethrow(x::Int64)::Int64
+    try; throw(ArgumentError("outer")); catch
+        try; x > 0 && throw(DomainError(x)); catch; end
+        rethrow()
+    end
+    return 0
+end
+@noinline _sm_xs_rethrow_other(x::Int64)::Int64 =
+    (try; error("orig"); catch; rethrow(ArgumentError("replaced")); end; Int64(0))
+_sm_xs_kind(e)::Int64 = e isa ArgumentError ? 1 : e isa DomainError ? 2 : 3
+_g("exception_stack", Any[
+    ("nested_catch_then_rethrow", (x::Int64) -> (try; _sm_xs_nested_rethrow(x); catch e; _sm_xs_kind(e); end), Int64(1)),
+    ("rethrow_other_exception", (x::Int64) -> (try; _sm_xs_rethrow_other(x); catch e; _sm_xs_kind(e); end), Int64(1)),
+    ("catch_after_nested_region", (x::Int64) -> (try; (try; throw(DomainError(x)); catch; end); throw(ArgumentError("o")); catch e; _sm_xs_kind(e); end), Int64(1)),
+    ("nested_in_one_function", (x::Int64) -> (try; (try; throw(ArgumentError("o")); catch; (try; x > 0 && throw(DomainError(x)); catch; end); rethrow(); end); Int64(0); catch e; _sm_xs_kind(e); end), Int64(1)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

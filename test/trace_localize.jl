@@ -21,6 +21,7 @@ const CC = Core.Compiler
 const Event = Tuple{Int,Int,Int,String}
 const _NATIVE = Event[]
 const _OCS = Dict{Int,Any}()   # trace id → the OpaqueClosure of that function's IR
+const _NATIVE_PROBED = Dict{Int,Set{Int}}()   # trace id → the statements its closure probes
 
 _bits(v::Int64)::String = string(v)
 _bits(v::UInt64)::String = string(reinterpret(Int64, v))
@@ -72,9 +73,15 @@ function _traced_closure(trace, id::Int, ids::IdDict{Any,Int}, routable::Vector{
         local T = CC.widenconst(ir.stmts[i][:type])
         haskey(WasmTarget.TRACED_STATEMENT_TYPES, T) || continue
         local st = ir.stmts[i][:stmt]
-        (st isa Core.PhiNode || st isa Core.GotoNode || st isa Core.GotoIfNot ||
-         st isa Core.ReturnNode || st === nothing) && continue
+        # no statement may follow a block's terminator (an `enter` ends its block as a goto
+        # does) or sit among its phis; an exception region's Upsilon and PhiC nodes carry
+        # values across it and take nothing between them (a probe after either aborted
+        # Julia's process)
+        (st isa Core.PhiNode || st isa Core.PhiCNode || st isa Core.UpsilonNode ||
+         st isa Core.GotoNode || st isa Core.GotoIfNot || st isa Core.ReturnNode ||
+         st isa Core.EnterNode || st === nothing) && continue
         CC.insert_node!(ir, CC.SSAValue(i), CC.NewInstruction(Expr(:call, _probe, id, i, CC.SSAValue(i)), Nothing), true)
+        push!(get!(Set{Int}, _NATIVE_PROBED, id), i)
     end
     CC.insert_node!(ir, CC.SSAValue(1), CC.NewInstruction(Expr(:call, _probe_enter, id), Nothing), false)
     ir = CC.compact!(ir)
@@ -88,6 +95,7 @@ function native_trace(trace, args::Tuple)
     local routable = Bool[!_reads_self(c) for c in trace.codes]
     routable[trace.entry] || error("the entry reads its own #self# (a closure): it cannot be run as its IR")
     empty!(_OCS)
+    empty!(_NATIVE_PROBED)
     for id in eachindex(trace.codes)
         routable[id] && (_OCS[id] = _traced_closure(trace, id, ids, routable))
     end
@@ -154,9 +162,11 @@ function first_divergence(f, args...; js_args::String)
     local jres = try (:ok, f(args...)) catch e; (:throw, e) end
     local ir_matches_julia = isequal(nres, jres)
     local wevents, outcome = wasm_trace(bytes, string(nameof(f)), js_args)
-    # only the statements both sides report (a statement codegen stores nowhere has no probe),
-    # and only the functions whose IR the native run follows
-    local keep = (e::Event) -> haskey(_OCS, e[2]) && (e[1] == 0 || e[3] in trace.probed[e[2]])
+    # only the statements both sides report (a statement codegen stores nowhere has no probe,
+    # and one the native run cannot probe has none there), and only the functions whose IR the
+    # native run follows
+    local keep = (e::Event) -> haskey(_OCS, e[2]) &&
+        (e[1] == 0 || (e[3] in trace.probed[e[2]] && e[3] in get(_NATIVE_PROBED, e[2], Set{Int}())))
     filter!(keep, nevents)
     filter!(keep, wevents)
     local seen = Dict{Tuple{Int,Int},Int}()

@@ -409,6 +409,20 @@ function ensure_exception_global!(mod::WasmModule)::UInt32
 end
 
 """
+    exn_saved_locals!(ctx, enter_idx) -> (exn_local, stack_local)
+
+The locals where try region `enter_idx` keeps the exception and stack being handled when it
+was entered; its pop_exception restores them, as Julia's jl_restore_excstack pops the task's
+exception stack back to that region's depth.
+parity(quarantine: Julia's exception stack is task state that a region's enter and pop_exception save and restore; dart binds each catch's exception to its own locals (code_generator.dart:958 visitTryCatch).)
+"""
+function exn_saved_locals!(ctx::AbstractCompilationContext, enter_idx::Int)::Tuple{Int,Int}
+    return get!(ctx.exn_saved_locals, enter_idx) do
+        (allocate_local!(ctx, AnyRef), allocate_local!(ctx, ExternRef))
+    end
+end
+
+"""
     ensure_exception_stack_global!(mod) -> global_idx
 
 The stack trace of the exception being handled, beside `\$current_exn`: a catch stores the

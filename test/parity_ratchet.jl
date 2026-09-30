@@ -851,12 +851,43 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
+    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Terminal state 0 (dev/CHARTER.md C2)",
+        () -> length(process_global_state_sites())),
+    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Terminal state 0 (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
+    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
+    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
+                          roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
+    # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
+    # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — heap constants built outside the ONE constant funnel (dart ensureConstant, constants.dart). Terminal state 0: per-object-identity kinds move to an exact per-site allowlist with their reason (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
+    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
+                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
+    # ── Phase 10.1a: the normalized frontend boundary (frontend/nir.jl; PARITY_MASTER item
+    # 4 / DESIGN.md §10.1) — dart: AstCodeGenerator reads every node's type through ONE
+    # StaticTypeContext (code_generator.dart:77 typeContext, :135 getStaticType), never
+    # re-derived per visitor. R29 tracks per-file migration off raw CodeInfo reads onto the
+    # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
+    # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
+    # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
+    # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
+    # regard" made machine-checked for API types, not just codegen structure.
+    "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
+        () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
+]
+
+# ---- LOCKS (completed dimensions; exact match required) ---------------------
+const LOCKS = [
+    # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
+    # each ratchet it cites "has reached 0 and been converted to a lock"), 2026-09-30
     "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`, and through any alias of the table, `@overlay WMT`: both went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
         () -> length(overlays_without_reason())),
     "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
         () -> smoke_runtime_xfails()),
-    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Terminal state 0 (dev/CHARTER.md C2)",
-        () -> length(process_global_state_sites())),
     "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
         () -> length(components_without_model())),
     "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
@@ -896,17 +927,6 @@ const METRICS = [
             end
             n
         end),
-    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Terminal state 0 (dev/CHARTER.md C9, rule 2)",
-        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
-        () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
-    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
-        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
-                          roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
-    # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
-    # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
-    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — heap constants built outside the ONE constant funnel (dart ensureConstant, constants.dart). Terminal state 0: per-object-identity kinds move to an exact per-site allowlist with their reason (dev/CHARTER.md C9, rule 2)",
-        () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
     "R15_constant_data_segments" => ("add_passive_data_segment! outside the builder and the string/type creators — the long-string and Symbol paths that bypass the one constant funnel. Terminal state 0 (dev/CHARTER.md C9)",
         () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
     "R17_unwrapped_value_emissions" => ("emit_value! calls with no expectedType, on the parse tree (untyped_value_emissions) — dart's only one is translateExpression's own accept1 call (code_generator.dart:676), which is not counted. Terminal state 0 (dev/CHARTER.md C4)",
@@ -923,18 +943,6 @@ const METRICS = [
                             occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
                   split(stmt_src, '\n'))
         end),
-    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
-        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
-                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
-    # ── Phase 10.1a: the normalized frontend boundary (frontend/nir.jl; PARITY_MASTER item
-    # 4 / DESIGN.md §10.1) — dart: AstCodeGenerator reads every node's type through ONE
-    # StaticTypeContext (code_generator.dart:77 typeContext, :135 getStaticType), never
-    # re-derived per visitor. R29 tracks per-file migration off raw CodeInfo reads onto the
-    # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
-    # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
-    # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
-    # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
-    # regard" made machine-checked for API types, not just codegen structure.
     "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation, or with `::Any` outside R30_ANY_SEAMS's named seams (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
         () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
     "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
@@ -942,8 +950,6 @@ const METRICS = [
     # ── dev/CHARTER.md (2026-09-22) ─────────────────────────────────────────────
     "R32_unanchored_definitions" => ("top-level definitions in src — every method separately, read from the parsed syntax tree — with no parity(<dart file:line>) or parity(quarantine: …) anchor in their docstring or directly above them — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
         () -> count_unanchored_definitions()),
-    "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
-        () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
     "R35_detached_docstrings" => ("bare string literals among top-level statements in src: docstrings a comment line cut off from their definition (Julia then attaches them to nothing — a `# formal(…)` line between docstring and function did this repeatedly) or prose with no definition under it (dev/CHARTER.md C9). Terminal state 0: a docstring sits directly on its definition, with any anchor inside it",
         () -> count_detached_docstrings()),
     "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently). Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
@@ -951,10 +957,6 @@ const METRICS = [
                           exclude_files=["parity_ratchet.jl"])),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
         () -> count_silent_catches()),
-]
-
-# ---- LOCKS (completed dimensions; exact match required) ---------------------
-const LOCKS = [
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
         () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
                           roots=[CODEGEN])),
@@ -2734,7 +2736,9 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
         for i in ids
             k = get(byshort, i, nothing)
             k === nothing && (push!(open_, "$i?"); continue)
-            haskey(current_m, k) && current_m[k] > 0 && push!(open_, "$i=$(current_m[k])")
+            # a cited ratchet keeps its clause open until it is a lock: "reached 0 and been
+            # converted to a lock" (dev/CHARTER.md), not merely at 0
+            haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
             haskey(current_l, k) && current_l[k] != get(bl, k, 0) && push!(open_, "$i BROKEN")
         end
         occursin("Planned:", body) && push!(open_, "planned check")

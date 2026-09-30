@@ -146,3 +146,67 @@ branch; module_builder_validation now does, for br and br_if, each negative-test
 order: the second audit (L148); 64 B4, B5 (typed pops,
 no fallback types); 65 H3 (the native reference computes muladd as fma: bit-exact); 66 M7, L11; then P3
 with P4 (the model first), E3–E6, B5–B7, P6, S6, M6, L8, E10, E11 and the side notes.
+
+## 2026-09-30 — audited through 9366d55b (7acc21c9..9366d55b: batches 60–63)
+
+The second audit, of the first audit's fix batches: 37 findings. Three were wrong answers,
+all reproduced (A2E1–A2E3), all older than the range and carried into it.
+
+Area: builder — (A2B1) `return_!` checks nothing; dart's `return_` checks the function's
+results. (A2B2) one-result block types are encoded by codegen's `encode_block_type`, a second
+value-type encoder that disagrees with `write_valtype!` and has no NonNullAbstractRef arm.
+(A2B3) `_block_type!` accepts a raw byte (0x40, a packed type) as a result. (A2B4)
+`validate_else!` drops an if's inputs; an if with results and no else is not rejected. (A2B5)
+`throw_!` checks the caller's `inputs`, not the tag's. (A2B6) N1's lookup by name is not dart's:
+dart keeps the global it defines and writes names only into the name section. (A2B7)
+`select_t!` takes raw bytes; `global_get!`, `call_indirect!` and `call_ref!` fall back to the
+caller's types. (A2B8) the builder still reads `OPTIONS[]` and hosts `JSValue`, `WasmGlobal`.
+(A2B9) stale prose (OperandStack.tla, `validate_br!`'s loop claim, instr_ir.jl:94) and a
+twice-computed catch depth. (A2B10) C1 and C7 still listed B2 and B3.
+
+Area: collection and planning — (A2C1) the reason table misses edges Julia's compile queue
+follows: a finalizer, a `:cfunction`, and on 1.13 `:new` of a Function; the pruner follows
+neither those nor `:invoke_modify`. (A2C2) two more catch-alls re-infer on an interrupt, and
+internal ArgumentErrors still pass unlocated. (A2C3) the Translator holds only the trace; the
+plan is republished through TRIM_IR_CACHE, whose reset to `nothing` lets a later read fall to
+a second inference. (A2C4) `:invoke` edges are walked twice and the planner mutates the
+ClosedWorld's dict. (A2C5) `collect_new_pairs!` keeps a default reason. (A2C6) the source-map
+and trace entries lack `diagnostics_sink` and the framework keywords. (A2C7) the
+existing_module check runs after collection; the tag is found by position. (A2C8) a closure's
+dispatch-candidate key lacks the prepended closure type. (A2C9) new locks pin text.
+
+Area: emission and diagnostics — (A2E1) WRONG ANSWER: `pop_exception` did nothing, so after a
+nested catch a `rethrow()` rethrew the nested exception (reproduced: native 1, wasm 2). (A2E2)
+WRONG ANSWER: `catch e` read the last region entered before it, so an outer catch after a
+nested try region bound the nested exception (reproduced inside A2E1's case and alone).
+(A2E3) WRONG ANSWER: `rethrow(e)` ignored `e` (reproduced: native 1, wasm 2). (A2E4)
+HOST_RUNTIME is a second list, not generated from the module. (A2E5) a Union mixing a
+primitive and a struct-stored number is not boxed (`Union{Int64,Int128}` → i64), and
+`julia_to_wasm_type` keeps placeholder fallbacks. (A2E6) E8 takes any Integer; Julia's field
+index is an Int. (A2E7) the exception tag is found by position. (A2E8) false prose.
+
+Area: enforcement and prose — (A2P1 = A2E1). (A2P2) README and docs instantiate modules with
+no imports, false since batch 62. (A2P3) the new import breaks WasmMakie, Snapshot and the
+docs islands too, and only Therapy is tracked. (A2P4) the clause status counted a ratchet at 0
+as closed; the charter requires a lock; Planned markers were stale and incomplete. (A2P5) L148
+checks recency, not coverage (unchained entries, `--ancestry-path` on merges, rebases). (A2P6)
+first-audit findings left only in this file's "Next" line; E9 claimed by 13.15 but absent.
+(A2P7) C3's tolerance wording is narrower than L138; cov and cor claims disagree. (A2P8) R40
+depends on spelling; STANDALONE_INTRINSIC_BODIES fills during a compilation. (A2P9) L150's
+text match; B3 has no lock; restated locks not negative-tested. (A2P10) prose: README's stray
+quote, "a lock" for R38, "the builder checks every instruction" while B4 is open,
+ClosedWorld.tla's retired name, and "At Dale's direction" where Dale delegated.
+
+Resolution: batch 64 — A2E1, A2E2, A2E3 fixed as Julia's exception stack: a try region's
+enter saves the exception and stack being handled, its pop_exception restores them, `catch e`
+reads the top, and `rethrow(e)` puts `e` on top and keeps the caught stack. Smoke group
+exception_stack pins each case; planting the pop no-op back and planting `rethrow(e)` back each
+fail it. Planting the pop no-op back also exposed a fourth defect, now fixed: the wrong-value
+locator aborted Julia's process on IR with try regions (a probe after an Upsilon or PhiC node),
+so a wrong answer took the whole run down; it now names the first divergent statement, and a
+function compiled from a bespoke body (rethrow) is not traced. A2P4: a cited ratchet keeps its
+clause OPEN until it is a lock; the 14 ratchets at 0 became locks (R36 negative-tested); every
+clause's Planned names its open MARCH rows and findings. A2P6: every open finding is now on
+dev/MARCH.md 13.17 in the order it is taken, and E9 is on 13.15. On A2P10's last point:
+Dale's "don't wait on me" (2026-09-29) delegated the charter markers; ed7f2323 said "direction".
+Everything else: MARCH 13.17.

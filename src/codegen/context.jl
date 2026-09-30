@@ -76,7 +76,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # Per-try-region exception payload locals (dart binds each catch's
     # exception to its OWN local; keyed by the region's enter_idx). :the_exception
     # reads the ENCLOSING region's local; $current_exn dies when all reads are local.
-    exn_region_locals::Dict{Int, Int}
+    # per try region (by its enter), the exception and stack being handled when it was
+    # entered, restored at its pop_exception (Julia's exception stack; exn_saved_locals!)
+    exn_saved_locals::Dict{Int, Tuple{Int, Int}}
     # NIR boundary (parity: code_generator.dart:77 typeContext) — frontend/nir.jl's
     # build_nir output, one record per IR statement. Built FIRST, from the typed IR alone,
     # so the analysis passes below are themselves NIR consumers rather than its
@@ -146,7 +148,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         Dict{Int,Vector{Int}}(), # bound-invoke argument projections (assigned by plan)
         UInt32[],                # root entry calls (assigned by the closed-world plan)
         WasmDiagnostic[],        # Diagnostics accumulated during compilation
-        Dict{Int, Int}(),       # exn_region_locals
+        Dict{Int, Tuple{Int, Int}}(),  # exn_saved_locals
         body.stmts,             # NIR boundary — built first, from the typed IR alone
         nir_ssa_users(body.stmts),
         Dict{Int,Union{Nothing,SourceInfo}}(),

@@ -138,10 +138,11 @@ end
 # exceptional path with no `rethrow` token anywhere in the Julia source
 # (confirmed by deleting this arm: a differential test with two nested
 # try/finally regions inside a catch failed to compile with no source-text
-# `rethrow(` anywhere in the test file). It ignores its argument, if any — `rethrow(e)`'s `e` is always the
-# ALREADY-caught exception in `$current_exn`, so rethrowing the global slot is
-# exact, not an approximation, for the only valid call shape (`rethrow()`/
-# `rethrow(e)` from inside the handler that caught `e`).
+# `rethrow(` anywhere in the test file). `rethrow()` throws the exception being handled
+# (`$current_exn`) again; `rethrow(e)` first makes `e` the exception being handled
+# (jl_rethrow_other replaces the top of the exception stack) and keeps the caught stack.
+# Until 2026-09-30 the argument was ignored, so `rethrow(ArgumentError("x"))` inside a
+# catch escaped as the exception it caught (dev/AUDIT.md A2E3).
 # ============================================================================
 # parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
 const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
@@ -167,6 +168,13 @@ function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, ty
                                            return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
     b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
+    if length(arg_types) == 1
+        # rethrow(e): `e` becomes the exception being handled, thrown with the caught stack
+        _wt_is_ref(_ib_params[1]) || error("rethrow(e) of a $(arg_types[1]), a value WT does not box " *
+                                           "here: its wasm type is $(_ib_params[1])")
+        local_get!(b, 0)
+        global_set!(b, ensure_exception_global!(mod))
+    end
     emit_rethrow_current!(b, mod)
     end_block!(b)
     return (builder_code(b), WasmValType[])
@@ -572,8 +580,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         func_idx = UInt32(n_imports + n_existing + i - 1)
         local fd_mi = function_data[i][9]
         # a traced compile traces every function compiled from Julia IR: its id numbers the
-        # typed IR its probes report, and the entry's is remembered
-        if trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance
+        # typed IR its probes report, and the entry's is remembered. A function compiled from
+        # a bespoke body (STANDALONE_INTRINSIC_BODIES: rethrow) is not its IR, so it is not
+        # traced, and the native run calls it as Julia does
+        if trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance &&
+           !(_build_standalone_intrinsic_bodies!(); fd_mi.def isa Method && haskey(STANDALONE_INTRINSIC_BODIES, fd_mi.def))
             push!(trace.codes, function_data[i][4]); push!(trace.mis, fd_mi)
             push!(trace.probed, Set{Int}())
             trace.ids[func_idx] = length(trace.codes)

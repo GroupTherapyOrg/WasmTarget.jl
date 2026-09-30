@@ -1131,16 +1131,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
                     end_block!(b)          # end landing — the catch payload arrives here
-                    # Bind the payload to the REGION's OWN local (dart binds each
-                    # catch's exception to a named local — nested regions never clobber).
-                    # $current_exn still receives a copy while non-local readers remain,
-                    # and $current_stack the stack a rethrow throws again.
+                    # The caught exception and its stack become the top of Julia's
+                    # exception stack (`\$current_exn`, `\$current_stack`): what the
+                    # handler's `the_exception` reads and a rethrow throws again, until
+                    # its pop_exception restores what the region's enter saved.
                     global_set!(b, ensure_exception_stack_global!(ctx.mod))   # stackTrace
-                    local _rex = get!(ctx.exn_region_locals, Int(r.enter_idx)) do
-                        allocate_local!(ctx, AnyRef)
-                    end
-                    local_tee!(b, UInt32(_rex))
-                    global_set!(b, ensure_exception_global!(ctx.mod))   # exn (legacy copy)
+                    global_set!(b, ensure_exception_global!(ctx.mod))         # exception
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end
