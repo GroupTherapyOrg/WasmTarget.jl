@@ -1550,19 +1550,11 @@ function write_valtype!(w::WasmWriter, vt::NumType)::WasmWriter
     write_byte!(w, UInt8(vt))
 end
 
+# A nullable reference to an abstract heap type, written as dart writes it: an abstract heap
+# type's default nullability is nullable, so the heap type's one byte is the whole value type
+# (`anyref` is 0x6E, not 0x63 0x6E), and a non-null one is NonNullAbstractRef's 0x64 prefix.
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
-function write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter
-    # FuncRef (0x70) and ExternRef (0x6F) are nullable shorthand forms
-    # Abstract GC heap types (StructRef, ArrayRef, etc.) need nullable wrapper
-    # when used as locals/params: (ref null struct) = 0x63 + heaptype
-    if vt == StructRef || vt == ArrayRef || vt == EqRef || vt == AnyRef || vt == I31Ref
-        write_byte!(w, 0x63)  # ref null prefix
-        write_byte!(w, UInt8(vt))
-    else
-        # FuncRef, ExternRef are already nullable shorthand
-        write_byte!(w, UInt8(vt))
-    end
-end
+write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter = write_byte!(w, UInt8(vt))
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize)
 function write_valtype!(w::WasmWriter, vt::UInt8)::WasmWriter

@@ -1267,7 +1267,7 @@ begin
         @testset "InstrBuilder migration invariant (no raw-emission regression)" begin
             # All codegen function-body emission is migrated onto the typed InstrBuilder.
             # The residual raw push!(bytes, Opcode.*) sites are out-of-scope module-section
-            # module-section serialization and encode_block_type + intentional
+            # module-section serialization and the block-type encoding + intentional
             # byte-inspecting/byte-exact local buffers. Lock the invariant so new code can't
             # silently re-introduce blind raw emission — it must go through the builder.
             cgdir = joinpath(dirname(pathof(WasmTarget)), "codegen")

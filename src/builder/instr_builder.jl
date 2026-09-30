@@ -360,6 +360,16 @@ parity(pkg/wasm_builder/lib/src/builder/instructions.dart:707 InstructionsBuilde
 """
 function _block_type!(b::InstrBuilder, inputs::Vector{WasmValType},
                       results::Vector{WasmValType})::Union{UInt8,WasmValType,Int}
+    # a frame's inputs and results are value types: a raw byte (the void marker 0x40, a packed
+    # i8/i16 storage type) is not one, and would encode a frame the tracker does not hold
+    any(t -> t isa UInt8, inputs) || any(t -> t isa UInt8, results) ||
+        return _block_type_derived!(b, inputs, results)
+    throw(ArgumentError("a block's inputs $(inputs) and results $(results) must be value types, not raw bytes"))
+end
+
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:707 InstructionsBuilder._beginBlock)
+function _block_type_derived!(b::InstrBuilder, inputs::Vector{WasmValType},
+                              results::Vector{WasmValType})::Union{UInt8,WasmValType,Int}
     isempty(inputs) && isempty(results) && return 0x40
     isempty(inputs) && length(results) == 1 && return results[1]
     return Int(add_type!(b.v.mod, FuncType(inputs, results)))

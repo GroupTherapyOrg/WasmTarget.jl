@@ -184,9 +184,19 @@ encode!(c::Vector{UInt8}, i::GlobalGet)::Vector{UInt8} = (push!(c, Opcode.GLOBAL
 encode!(c::Vector{UInt8}, i::GlobalSet)::Vector{UInt8} = (push!(c, Opcode.GLOBAL_SET); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, ::Unreachable)::Vector{UInt8} = push!(c, Opcode.UNREACHABLE)
 encode!(c::Vector{UInt8}, ::Nop)::Vector{UInt8}         = push!(c, Opcode.NOP)
-encode!(c::Vector{UInt8}, i::Block)::Vector{UInt8} = (push!(c, Opcode.BLOCK); append!(c, encode_block_type(i.blocktype)))
-encode!(c::Vector{UInt8}, i::Loop)::Vector{UInt8}  = (push!(c, Opcode.LOOP);  append!(c, encode_block_type(i.blocktype)))
-encode!(c::Vector{UInt8}, i::If)::Vector{UInt8}    = (push!(c, Opcode.IF);    append!(c, encode_block_type(i.blocktype)))
+# A block type's bytes: void 0x40, the one output's value type written as every value type is
+# (write_valtype!), or a function type's index as a signed LEB128 (dart's BeginNoEffect-,
+# BeginOneOutput- and BeginFunctionBlock).
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:667 BeginOneOutputBlock)
+function _block_type_bytes!(c::Vector{UInt8}, bt::InstrIR.BlockTypeArg)::Vector{UInt8}
+    bt === 0x40 && return push!(c, 0x40)
+    bt isa Int && return append!(c, encode_leb128_signed(Int64(bt)))
+    write_valtype!(WasmWriter(c), bt)
+    return c
+end
+encode!(c::Vector{UInt8}, i::Block)::Vector{UInt8} = (push!(c, Opcode.BLOCK); _block_type_bytes!(c, i.blocktype))
+encode!(c::Vector{UInt8}, i::Loop)::Vector{UInt8}  = (push!(c, Opcode.LOOP);  _block_type_bytes!(c, i.blocktype))
+encode!(c::Vector{UInt8}, i::If)::Vector{UInt8}    = (push!(c, Opcode.IF);    _block_type_bytes!(c, i.blocktype))
 encode!(c::Vector{UInt8}, ::Else)::Vector{UInt8}   = push!(c, Opcode.ELSE)
 encode!(c::Vector{UInt8}, ::End)::Vector{UInt8}    = push!(c, Opcode.END)
 encode!(c::Vector{UInt8}, i::Br)::Vector{UInt8}    = (push!(c, Opcode.BR);    _u!(c, i.depth))
@@ -214,7 +224,7 @@ function _encode_catch!(c::Vector{UInt8}, k::TryCatch)::Vector{UInt8}
 end
 function encode!(c::Vector{UInt8}, i::TryTable)::Nothing
     push!(c, Opcode.TRY_TABLE)
-    append!(c, encode_block_type(i.blocktype))
+    _block_type_bytes!(c, i.blocktype)
     _u!(c, length(i.catches))
     for k in i.catches; _encode_catch!(c, k); end
 end

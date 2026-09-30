@@ -392,42 +392,6 @@ function emit_convert_to_f64!(b::InstrBuilder, valtype::WasmValType)::InstrBuild
     return b
 end
 
-"""
-Encode a block result type (for if/block/loop).
-Handles both simple types (i32/i64/f32/f64) and concrete reference types.
-Returns a vector of bytes to append to the instruction stream.
-MULTI-VALUE blocktype — a function-type INDEX encoded as s33
-(wasm spec). Used by the typed-catch landing block (results = the tag payload).
-Int specifically (not Integer): UInt8 0x40/void keeps its raw single-byte path.
-parity(pkg/wasm_builder/lib/src/ir/instruction.dart:667 BeginOneOutputBlock)
-"""
-encode_block_type(type_idx::Int)::Vector{UInt8} = encode_leb128_signed(Int64(type_idx))
-
-# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:667 BeginOneOutputBlock)
-function encode_block_type(result_type::WasmValType)::Vector{UInt8}
-    bytes = UInt8[]
-    if result_type isa NumType
-        push!(bytes, UInt8(result_type))
-    elseif result_type isa RefType
-        push!(bytes, UInt8(result_type))
-    elseif result_type isa ConcreteRef
-        # Concrete reference type: 0x63 (nullable) or 0x64 (non-nullable) + type index
-        if result_type.nullable
-            push!(bytes, 0x63)  # ref null
-        else
-            push!(bytes, 0x64)  # ref
-        end
-        # Type index as signed LEB128
-        append!(bytes, encode_leb128_signed(Int64(result_type.type_idx)))
-    elseif result_type isa UInt8
-        push!(bytes, result_type)
-    else
-        # Fallback - try to convert to UInt8
-        push!(bytes, UInt8(result_type))
-    end
-    return bytes
-end
-
 # parity(code_generator.dart:3170 CodeGenerator.visitAsExpression): a CAST carries its target type — dart's `as T`
 # (code_generator.dart:3170 visitAsExpression: a statically-satisfied cast —
 # `omitExplicitTypeChecks || node.isUnchecked` — is EXACTLY `wrap(operand,
