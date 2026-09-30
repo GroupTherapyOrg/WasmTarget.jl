@@ -609,7 +609,7 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
             local _uw = allocate_local!(ctx, AnyRef)
             local_tee!(b, UInt32(_uw))
             ref_test!(b, Int64(_cbase), false)
-            if_!(b, to)
+            if_!(b; results=WasmValType[to])
             local_get!(b, UInt32(_uw))
             ref_cast!(b, Int64(_cbase), false)
             struct_get!(b, _cbase, UInt32(2), AnyRef)   # .context
@@ -838,7 +838,7 @@ function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
     builder_set_local_type!(b, tmp, AnyRef)
     local_tee!(b, tmp)
     ref_test!(b, Int64(box_idx), false)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     local_get!(b, tmp)
     ref_cast!(b, Int64(box_idx), false)
     struct_get!(b, UInt32(box_idx), UInt32(0), I32)   # field 0 = classId
@@ -1546,7 +1546,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         if _lz !== nothing
             # parity(constants.dart:1937 _readDefinedConstant): `block [T]`, T non-null
             local _lzs = ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false)
-            local _lazy_done = block!(b, _lzs)
+            local _lazy_done = block!(b; results=WasmValType[_lzs])
             global_get!(b, _lz[1], ConcreteRef(_lzs.type_idx, true))
             br_on_non_null!(b, _lazy_done)
             call!(b, _lz[2], WasmValType[], WasmValType[_lzs])

@@ -134,7 +134,15 @@ the first mutable anyref global; globals now carry dart's names and are found by
 fixed here, what batch 60's CI found: the fuzz bridges still passed `discovery`, and on Julia
 1.13 the planning check found an enrollment nobody recorded — an atomic modify's operator
 (`:invoke_modify`), now recorded with its statement. E9 (unmapped instructions, borrowed
-locations) is not done: it stays with MARCH 13.15. Next, in order: 63 B2, B3 (the block type
-from its signature, one branch check); then the second audit (L148); 64 B4, B5 (typed pops,
+locations) is not done: it stays with MARCH 13.15. Batch 63 — B2: block!, loop!, if_! and try_table!
+take only the frame's inputs and results and derive the encoding as dart's `_beginBlock` does
+(void, the one result's value type, or a function type it defines); the positional block type
+is gone, so `try_table!(b, cs, I32)` cannot be written (a test asserts no such method). Only 5
+of 225 probes changed, and modulo renumbering their modules are identical: one-result blocks
+now encode their value type instead of a hand-made function type. B3: br, br_if and every
+try_table catch go through validate_branch_types!, dart's one `_verifyBranchTypes`. Measured
+first: with br's check removed, all of Phase 29 still passed — no test rejected a wrong-typed
+branch; module_builder_validation now does, for br and br_if, each negative-tested. Next, in
+order: the second audit (L148); 64 B4, B5 (typed pops,
 no fallback types); 65 H3 (the native reference computes muladd as fma: bit-exact); 66 M7, L11; then P3
 with P4 (the model first), E3–E6, B5–B7, P6, S6, M6, L8, E10, E11 and the side notes.

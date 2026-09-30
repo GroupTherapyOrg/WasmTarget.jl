@@ -222,7 +222,7 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
     local ib = _ctx_builder(ctx, "compile_call.getfield_runtime_name")
     for (i, fname) in enumerate(names)
         append_builder!(ib, compile_string_equal_b(name, NirLiteral(fname), ctx))
-        if_!(ib, out)
+        if_!(ib; results=WasmValType[out])
         local wfi = wasm_field_idx(info, i)
         emit_value!(ib, obj, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
         struct_get!(ib, info.wasm_type_idx, wfi, flds[Int(wfi) + 1].valtype)
@@ -1164,7 +1164,7 @@ function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::Abst
             # Use if/else chain: a.eqz ? 0 : (a==-1 ? (b==MIN) : (result/a != b))
             local_get!(bld, local_a)
             num!(bld, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-            if_!(bld, I32)  # result type i32
+            if_!(bld; results=WasmValType[I32])  # result type i32
             # a == 0 → no overflow
             i32_const!(bld, 0)
             else_!(bld)
@@ -1177,7 +1177,7 @@ function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::Abst
                 i64_const!(bld, -1)
                 num!(bld, Opcode.I64_EQ)
             end
-            if_!(bld, I32)  # result type i32
+            if_!(bld; results=WasmValType[I32])  # result type i32
             # a == -1 → overflow iff b == MIN_INT
             local_get!(bld, local_b)
             if is_32bit
@@ -1200,7 +1200,7 @@ function _compile_call_checked_mul(op::Symbol, args, fb::InstrBuilder, ctx::Abst
             # Unsigned mul overflow: if a==0: false; else: result/a != b
             local_get!(bld, local_a)
             num!(bld, is_32bit ? Opcode.I32_EQZ : Opcode.I64_EQZ)
-            if_!(bld, I32)  # result type i32
+            if_!(bld; results=WasmValType[I32])  # result type i32
             i32_const!(bld, 0)
             else_!(bld)
             local_get!(bld, local_result)
@@ -1390,7 +1390,7 @@ function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
                 ConcreteRef(UInt32(symbol_struct_idx), true))
     struct_get!(b, symbol_struct_idx, UInt32(2), ConcreteRef(UInt32(str_idx), true))
     num!(b, Opcode.REF_EQ)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
     struct_get!(b, tn_idx, singleton_field, I32)
     else_!(b)
@@ -1624,7 +1624,7 @@ function _emit_fields_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegi
             local f1, f2 = _egal_local!(b, alloc, field(s1), wf), _egal_local!(b, alloc, field(s2), wf)
             local_get!(b, f1); ref_is_null!(b); local_get!(b, f2); ref_is_null!(b)
             num!(b, Opcode.I32_OR)
-            if_!(b, I32)
+            if_!(b; results=WasmValType[I32])
             local_get!(b, f1); ref_is_null!(b); local_get!(b, f2); ref_is_null!(b)
             num!(b, Opcode.I32_AND)
             else_!(b)
@@ -1650,11 +1650,11 @@ Julia's `nothing` carried either as null or as the Nothing class.
 function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer)::InstrBuilder
     local top = registry.base_struct_idx
     local_get!(b, l); ref_is_null!(b)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     i32_const!(b, 1)
     else_!(b)
     local_get!(b, l); ref_test!(b, Int64(top), false)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     local_get!(b, l); emit_typeof!(b, top)
     i32_const!(b, Int64(ensure_type_id!(registry, Nothing))); num!(b, Opcode.I32_EQ)
     else_!(b)
@@ -1699,7 +1699,7 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
 
     # nothing: null or the Nothing class, on either side
     local_get!(b, 0); ref_is_null!(b)
-    ret!(() -> (local_get!(b, 1); ref_is_null!(b); if_!(b, I32); i32_const!(b, 1); else_!(b);
+    ret!(() -> (local_get!(b, 1); ref_is_null!(b); if_!(b; results=WasmValType[I32]); i32_const!(b, 1); else_!(b);
                 _emit_is_nothing!(b, registry, 1); end_block!(b)))
     local_get!(b, 1); ref_is_null!(b)
     ret!(() -> _emit_is_nothing!(b, registry, 0))
@@ -2192,7 +2192,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     # Emit: local.tee $tmp → ref.test → if (i32) → reload+cast+typeId check → else 0 → end
                     local_tee!(bld, _tmp_idx)
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
-                    if_!(bld, I32)  # result type i32
+                    if_!(bld; results=WasmValType[I32])  # result type i32
                     # Inside if-true: reload, cast, get typeId, compare
                     local_get!(bld, _tmp_idx)
                     ref_cast!(bld, Int64(target_wasm_isa.type_idx), false)
@@ -2277,7 +2277,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 ref_test!(bld, Int64(_base_idx), false)  # ref.test (ref $JlBase)
                 num!(bld, Opcode.I32_EQZ)
                 # if (not $JlBase) { its type-object kind } else { dfs range check }
-                if_!(bld, I32)  # i32 result type
+                if_!(bld; results=WasmValType[I32])  # i32 result type
                 _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type)
                 else_!(bld)
                 local_get!(bld, _isa_guard_local)
@@ -2353,12 +2353,12 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
     local tv, jt = reg.jl_typevar_idx, reg.jl_type_idx
     local_get!(bld, UInt32(local_idx))
     ref_test!(bld, Int64(tv), false)
-    if_!(bld, I32)
+    if_!(bld; results=WasmValType[I32])
     i32_const!(bld, TypeVar <: check_type ? 1 : 0)
     else_!(bld)
     local_get!(bld, UInt32(local_idx))
     ref_test!(bld, Int64(jt), false)
-    if_!(bld, I32)
+    if_!(bld; results=WasmValType[I32])
     if isempty(codes)
         i32_const!(bld, 0)
     else
@@ -2516,7 +2516,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         local_get!(bld, tid_local)
         i32_const!(bld, Int64(tid))
         num!(bld, Opcode.I32_EQ)
-        if_!(bld, result_wasm === nothing ? 0x40 : result_wasm)
+        if_!(bld; results=result_wasm === nothing ? WasmValType[] : WasmValType[result_wasm])
         local _bbr_b = _ctx_builder(ctx, "_try_inline_typeid_dispatch.branch")
         emit_branch(_bbr_b, tid, cw, c)
         append_builder!(bld, _bbr_b)   # typed merge
@@ -2546,7 +2546,7 @@ function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompil
                  register_struct_type!(ctx.mod, ctx.type_registry, UnitRange{Int64})
     emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
     struct_get!(b, tn_idx, UInt32(8), I32)
-    if_!(b, AnyRef)
+    if_!(b; results=WasmValType[AnyRef])
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, UnitRange{Int64})))
     i32_const!(b, 0) # ordinary immutable Object identity slot
     emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
@@ -2571,7 +2571,7 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     emit_value!(b, from, ctx, module_ref); local_set!(b, from_local)
 
     local_get!(b, parent_local); local_get!(b, from_local); num!(b, Opcode.REF_EQ)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     # Same module means the same binding, provided it is not deprecated.
     emit_typename_symbol_metadata!(b, symbol, owner, UInt32(11), UInt32(12), ctx)
     num!(b, Opcode.I32_EQZ)
@@ -2579,7 +2579,7 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     main_global = get_module_constant_global!(ctx.mod, ctx.type_registry, Main)
     local_get!(b, from_local); global_get!(b, main_global, module_ref)
     num!(b, Opcode.REF_EQ)
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
     emit_typename_symbol_metadata!(b, symbol, owner, UInt32(13), UInt32(14), ctx)
     else_!(b)
     unreachable!(b)  # structural trap: visibility from this runtime Module was not collected
@@ -3703,7 +3703,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     end
                     local_get!(_gft_ib, _gft_index_local); i64_const!(_gft_ib, i)
                     num!(_gft_ib, Opcode.I64_EQ)
-                    if_!(_gft_ib, _gft_result_w)
+                    if_!(_gft_ib; results=WasmValType[_gft_result_w])
                     local_get!(_gft_ib, _gft_fixed + i - 1)
                     coerce_stack_top!(_gft_ib, _gft_result_w, ctx;
                                       from_julia=ctx.arg_types[_gft_fixed + i])
@@ -4583,7 +4583,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
                    signed=packed_array_signedness(elem_type))
         local_set!(bld, elem_local)
         local_get!(bld, has_value)
-        if_!(bld, elem_wasm_type)
+        if_!(bld; results=WasmValType[elem_wasm_type])
         local_get!(bld, acc_local)
         local_get!(bld, elem_local)
         num!(bld, reduce_op)

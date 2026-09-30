@@ -1290,7 +1290,7 @@ const LOCKS = [
                         "br!(b::InstrBuilder, target::ControlLabel)",
                         "branch target is not an open label",
                         "try_table catches must retain symbolic ControlLabel targets",
-                        "catch target type mismatch",
+                        "validate_branch_types!(b.v, length(b.v.labels) - i, 0, caught)",
                         "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
                         "get_forward_label(target_block::Int)::ControlLabel"]
             sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +

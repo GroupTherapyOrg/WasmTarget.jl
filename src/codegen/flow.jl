@@ -218,7 +218,7 @@ function _emit_phi_edge_guarded_unbox!(b::InstrBuilder, ctx::AbstractCompilation
     local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, phi_local_type)
     local_get!(b, val_local)
     emit_isa_classid!(b, ctx, box_idx, phi_julia)
-    if_!(b, phi_local_type)
+    if_!(b; results=WasmValType[phi_local_type])
     local_get!(b, val_local)
     emit_classid_unbox!(b, ctx, phi_local_type)
     else_!(b)

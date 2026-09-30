@@ -1597,8 +1597,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 # payload (exn, stackTrace) as its results; catch_clause retains
                 # the landing label identity until the builder serializes it
                 # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
-                local _lbt = add_type!(ctx.mod, FuncType(WasmValType[], WasmValType[AnyRef, ExternRef]))
-                local landing_label = block!(b, Int(_lbt); results=WasmValType[AnyRef, ExternRef])
+                local landing_label = block!(b; results=WasmValType[AnyRef, ExternRef])
                 push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0), landing_label))
                 local try_label = try_table!(b, [catch_clause(0, landing_label)])
                 push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))

@@ -1257,7 +1257,7 @@ begin
             bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
             @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
             bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
-            WT.if_!(bbi, WT.I32); WT.i32_const!(bbi, 0); WT.end_block!(bbi)   # I32 encodes as 0x7F
+            WT.if_!(bbi; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)   # I32 encodes as 0x7F
             @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
             # instruction-IR ADT (dart2wasm ir/ layer): records typed instrs + symbolic disasm
             @test all(i -> i isa WT.InstrIR.WasmInstr, bbi.instrs)

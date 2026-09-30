@@ -206,15 +206,15 @@ function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
     local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
 
     # If lengths differ → 0; else compare elements
-    if_!(b, I32)
+    if_!(b; results=WasmValType[I32])
         i32_const!(b, 0)                                   # lengths differ → not equal
     else_!(b)
         i32_const!(b, 0); local_set!(b, i_local)           # i = 0
-        done_label = block!(b, I32) # break-with-result block
-            loop_label = loop!(b, 0x40)                    # void loop
+        done_label = block!(b; results=WasmValType[I32]) # break-with-result block
+            loop_label = loop!(b)                    # void loop
                 # if i >= len → all matched, push 1 and break to block
                 local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
-                if_!(b, 0x40)
+                if_!(b)
                     i32_const!(b, 1); br!(b, done_label)
                 end_block!(b)
                 # compare str1[i] vs str2[i] (unsigned packed-byte get)
@@ -223,7 +223,7 @@ function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
                 local_get!(b, str2_local); local_get!(b, i_local)
                 array_get!(b, str_type_idx, I32; signed=false)
                 num!(b, Opcode.I32_NE)
-                if_!(b, 0x40)
+                if_!(b)
                     i32_const!(b, 0); br!(b, done_label)    # differ → not equal
                 end_block!(b)
                 # i += 1; continue

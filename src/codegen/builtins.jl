@@ -1486,7 +1486,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         if nullable
             haskey(ctx.type_registry.type_constant_globals, Nothing) ||
                 error("closed-world typeof is missing the static type global for Nothing")
-            done = block!(_tofb, AnyRef)
+            done = block!(_tofb; results=WasmValType[AnyRef])
             isnull = block!(_tofb)
         end
         actual_type = emit_value!(_tofb, arg, ctx, static_wasm_type(arg, ctx))  # typeof inspects the value's heap representation
@@ -1506,7 +1506,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             local v = allocate_local!(ctx, AnyRef)
             local k = allocate_local!(ctx, I32)
             local_set!(_tofb, v)
-            local kdone = block!(_tofb, AnyRef)
+            local kdone = block!(_tofb; results=WasmValType[AnyRef])
             local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_typevar_idx), false)
             if_!(_tofb); konst!(TypeVar); br!(_tofb, kdone); end_block!(_tofb)
             local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_type_idx), false)
@@ -1581,7 +1581,7 @@ function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospe
     isempty(bare) && return emit_typeof!(b, base_idx)
     local v = allocate_local!(ctx, AnyRef)
     local_set!(b, v)
-    local done = block!(b, I32)
+    local done = block!(b; results=WasmValType[I32])
     for (C, arr) in bare
         local_get!(b, v); ref_test!(b, Int64(arr), false)
         if_!(b); i32_const!(b, Int64(ensure_type_id!(reg, C))); br!(b, done); end_block!(b)
@@ -2584,7 +2584,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                                 local_get!(_hetb, idx_local)
                                 i32_const!(_hetb, Int64(i))
                                 num!(_hetb, Opcode.I32_EQ)
-                                if_!(_hetb, union_wasm; results=WasmValType[union_wasm])
+                                if_!(_hetb; results=WasmValType[union_wasm])
                                 emit_field_wrap(i)
                                 else_!(_hetb)
                             end

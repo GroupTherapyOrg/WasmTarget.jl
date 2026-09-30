@@ -509,38 +509,10 @@ Validate an unconditional branch. Checks that:
 After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
 """
-function validate_br!(v::WasmStackValidator, label_depth::Int)::Union{Nothing, Bool}
-    if !v.reachable
-        return  # Skip validation in unreachable code
-    end
-    if label_depth < 0 || label_depth >= length(v.labels)
-        push!(v.errors, "$(v.func_name): br label depth $(label_depth) out of range ($(length(v.labels)) labels)")
-        v.reachable = false
-        return
-    end
-    # Label at depth 0 = top of stack, depth N = N from top
-    label = v.labels[end - label_depth]
-
-    # For loops, br targets the loop start (no values needed — loop consumes nothing on restart)
-    # For blocks/if, br targets the end (need result_types on stack)
-    target_types = label.kind === :loop ? label.input_types : label.result_types
-
-    # Check stack has enough values above the label's base
-    needed = length(target_types)
-    available = length(v.stack) - label.stack_height_at_entry
-    if available < needed
-        push!(v.errors, "$(v.func_name): br to $(label.kind) needs $(needed) values, only $(available) available above block base")
-    else
-        # Check types of top-of-stack values
-        for (i, expected) in enumerate(target_types)
-            actual = v.stack[end - needed + i]
-            if !wasm_subtype(actual, expected, v.mod)
-                push!(v.errors, "$(v.func_name): br type mismatch at position $i — expected $(expected), found $(actual)")
-            end
-        end
-    end
-
+function validate_br!(v::WasmStackValidator, label_depth::Int)::Nothing
+    validate_branch_types!(v, label_depth)
     v.reachable = false
+    return nothing
 end
 
 """
@@ -585,34 +557,11 @@ label like br. Unlike br, code after br_if remains reachable.
 Mirrors dart2wasm's `br_if(label)`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 """
-function validate_br_if!(v::WasmStackValidator, label_depth::Int)::Union{Nothing, Vector{String}}
-    if !v.reachable
-        return
-    end
-    # Pop i32 condition
+function validate_br_if!(v::WasmStackValidator, label_depth::Int)::Nothing
+    v.reachable || return nothing
     validate_pop!(v, I32)
-
-    # Validate target label (same as br, but don't mark unreachable)
-    if label_depth < 0 || label_depth >= length(v.labels)
-        push!(v.errors, "$(v.func_name): br_if label depth $(label_depth) out of range ($(length(v.labels)) labels)")
-        return
-    end
-    label = v.labels[end - label_depth]
-    target_types = label.kind === :loop ? label.input_types : label.result_types
-
-    needed = length(target_types)
-    available = length(v.stack) - label.stack_height_at_entry
-    if available < needed
-        push!(v.errors, "$(v.func_name): br_if to $(label.kind) needs $(needed) values, only $(available) available above block base")
-    else
-        for (i, expected) in enumerate(target_types)
-            actual = v.stack[end - needed + i]
-            if !wasm_subtype(actual, expected, v.mod)
-                push!(v.errors, "$(v.func_name): br_if type mismatch at position $i — expected $(expected), found $(actual)")
-            end
-        end
-    end
-    # Reachability stays true — conditional branch
+    validate_branch_types!(v, label_depth)
+    return nothing
 end
 
 """

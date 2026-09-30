@@ -1423,7 +1423,7 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
                 struct_get!(b, object_idx, UInt32(1), I32)
                 local_tee!(b, hash_local)
                 num!(b, Opcode.I32_EQZ)
-                if_!(b, I32)
+                if_!(b; results=WasmValType[I32])
                     # next = counter + 1; persist it globally and on the object.
                     global_get!(b, counter, I32)
                     i32_const!(b, 1)
@@ -2316,7 +2316,7 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     if_!(b)
     _emit_typeerror_throw!(b, node.operands[2], Type, idx, ctx; func=:UnionAll)
     end_block!(b)
-    done = block!(b, AnyRef)
+    done = block!(b; results=WasmValType[AnyRef])
     # `T where T<:S` is S
     local_get!(b, t); ref_cast!(b, EqRef, true); local_get!(b, v); ref_cast!(b, EqRef, true)
     num!(b, Opcode.REF_EQ)

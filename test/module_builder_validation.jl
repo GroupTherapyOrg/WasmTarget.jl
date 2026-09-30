@@ -125,19 +125,30 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         r1, r2 = MBV.ConcreteRef(s1, true), MBV.ConcreteRef(s2, true)
         mk() = MBV.InstrBuilder(MBV.WasmValType[r1, r2], MBV.WasmValType[]; func_name = "branch", mod = m)
         # br_on_non_null carries its operand made non-null
-        b = mk(); l = MBV.block!(b, MBV.ConcreteRef(s1, false))
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[MBV.ConcreteRef(s1, false)])
         MBV.local_get!(b, 0)
         @test MBV.br_on_non_null!(b, l) isa MBV.InstrBuilder
-        b = mk(); l = MBV.block!(b, MBV.ConcreteRef(s1, false))
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[MBV.ConcreteRef(s1, false)])
         MBV.local_get!(b, 1)
         @test_throws MBV.StackImbalanceError MBV.br_on_non_null!(b, l)
         # br_on_null carries what lies under its operand
-        b = mk(); l = MBV.block!(b, r1)
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
         MBV.local_get!(b, 0); MBV.local_get!(b, 1)
         @test MBV.br_on_null!(b, l) isa MBV.InstrBuilder
-        b = mk(); l = MBV.block!(b, r1)
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
         MBV.local_get!(b, 1); MBV.local_get!(b, 1)
         @test_throws MBV.StackImbalanceError MBV.br_on_null!(b, l)
+        # br and br_if carry the top of the stack to their target through the same check
+        # (dart br / br_if → _verifyBranchTypes); a wrong-typed value is rejected at the branch
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 0)
+        @test MBV.br!(b, l) isa MBV.InstrBuilder
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br!(b, l)
+        b = mk(); l = MBV.block!(b; results=MBV.WasmValType[r1])
+        MBV.local_get!(b, 1); MBV.i32_const!(b, 1)
+        @test_throws MBV.StackImbalanceError MBV.br_if!(b, l)
         # the operand is a reference
         b = mk(); l = MBV.block!(b)
         MBV.i32_const!(b, 1)
@@ -393,10 +404,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             MBV.WasmValType[MBV.AnyRef, MBV.ExternRef], MBV.WasmValType[]))
         tag = MBV.add_tag!(m, tag_type)
         catches = MBV.InstrBuilder(; mod=m)
-        landing_type = MBV.add_type!(m, MBV.FuncType(
-            MBV.WasmValType[], MBV.WasmValType[MBV.AnyRef, MBV.ExternRef]))
-        landing = MBV.block!(catches, Int(landing_type);
-                             results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
+        landing = MBV.block!(catches; results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
         MBV.try_table!(catches, [MBV.catch_clause(tag, landing)])
         MBV.end_block!(catches)
         MBV.unreachable!(catches)
@@ -406,24 +414,34 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.finish_function!(catches)
 
         bad_catch = MBV.InstrBuilder(; mod=m)
-        wrong = MBV.block!(bad_catch, MBV.I32)
+        wrong = MBV.block!(bad_catch; results=MBV.WasmValType[MBV.I32])
         @test_throws MBV.StackImbalanceError MBV.try_table!(
             bad_catch, [MBV.catch_clause(tag, wrong)])
     end
 
-    @testset "a frame's encoded block type is its signature (dart derives it, instructions.dart:729)" begin
-        # `if_!(b; results=[T])` once validated as typed and encoded a void block type: the
-        # engine rejected the module ("expected 0 elements on the stack for fallthru")
+    @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin
+        # A caller names only the frame's inputs and results and the builder derives the
+        # encoding (instructions.dart:707), so the encoded type and the tracked frame are one
+        # fact. A positional block type once let `try_table!(b, cs, I32)` track a void frame
+        # and encode a result (dev/AUDIT.md B2).
         m = MBV.WasmModule()
         mk() = (b = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[]; mod=m);
                 MBV.local_get!(b, 0); b)
-        @test_throws ArgumentError MBV.if_!(mk(); results=MBV.WasmValType[MBV.I32])
-        @test_throws ArgumentError MBV.if_!(mk(), MBV.I32; results=MBV.WasmValType[MBV.I64])
-        @test_throws ArgumentError MBV.if_!(mk(), 0x7f)
-        @test_throws ArgumentError MBV.block!(MBV.InstrBuilder(; mod=m); results=MBV.WasmValType[MBV.I32])
-        @test_throws ArgumentError MBV.loop!(MBV.InstrBuilder(; mod=m); inputs=MBV.WasmValType[MBV.I32])
+        enc(f) = (b = mk(); f(b); b.instrs[end].blocktype)
+        @test enc(b -> MBV.if_!(b)) === 0x40
+        @test enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32])) === MBV.I32
+        two = enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32, MBV.I64]))
+        @test two isa Int && m.types[two + 1].params == MBV.WasmValType[] &&
+              m.types[two + 1].results == MBV.WasmValType[MBV.I32, MBV.I64]
+        ins = enc(b -> MBV.block!(b; inputs=MBV.WasmValType[MBV.I32]))
+        @test ins isa Int && m.types[ins + 1].params == MBV.WasmValType[MBV.I32] &&
+              isempty(m.types[ins + 1].results)
+        # no positional block type exists to disagree with the frame
+        @test !hasmethod(MBV.if_!, Tuple{MBV.InstrBuilder, Any})
+        @test !hasmethod(MBV.block!, Tuple{MBV.InstrBuilder, Any})
+        @test !hasmethod(MBV.try_table!, Tuple{MBV.InstrBuilder, Vector, Any})
         ok = mk()
-        MBV.if_!(ok, MBV.I32)
+        MBV.if_!(ok; results=MBV.WasmValType[MBV.I32])
         MBV.i32_const!(ok, 1)
         MBV.else_!(ok)
         MBV.i32_const!(ok, 2)
@@ -442,7 +460,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         ra, rc = MBV.ConcreteRef(UInt32(a), true), MBV.ConcreteRef(UInt32(c), true)
         ok = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
         MBV.local_get!(ok, 0)
-        MBV.if_!(ok, ra)
+        MBV.if_!(ok; results=MBV.WasmValType[ra])
         MBV.ref_null!(ok, Int64(a), ra)
         MBV.else_!(ok)
         MBV.ref_null!(ok, Int64(a), ra)
@@ -451,7 +469,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
 
         bad = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
         MBV.local_get!(bad, 0)
-        MBV.if_!(bad, ra)
+        MBV.if_!(bad; results=MBV.WasmValType[ra])
         MBV.ref_null!(bad, Int64(c), rc)
         @test_throws MBV.StackImbalanceError MBV.else_!(bad)
     end
