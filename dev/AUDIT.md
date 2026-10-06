@@ -434,5 +434,15 @@ itself; `Type{X}` of a known X is `typeof(X)`; anything else is known only at ru
 tuple rejects), for `_lower_tuple!`, the collector's numbering and a MethodError's args;
 `_lower_tuple!` reads its operands' types from Julia's IR as the collector does
 (`_collector_static_type`), not from WT's re-inference. Smoke group tuple_runtime_types: the old
-typing planted back answers 4 of its 5 cases wrong.
+typing planted back answers 4 of its 5 cases wrong. Batch 75 — A3S3, A4S2: three
+traps where Julia answers, measured (native, wasm): a closure called with an erased struct of
+another class (23, trap), `getindex` and `length` of a tuple held as Any (3 and 2, trap). The
+candidate collector never noted a tuple as instantiated (Core.tuple allocates without a %new)
+and excluded tuple classes from candidates ("tuples keep their own path"); it now observes the
+class Core.tuple builds (tuple_runtime_type) and treats a tuple as the classed struct it is, and
+the inline switch takes tuple rows. A closure called with an erased argument enrolled no body
+(its signature had to be all concrete); it now enrolls the body specialized on the argument's
+static type, which the trampoline's abstract row tests. Smoke group dynamic_enrollment: with
+the collector change reverted, all three trap. A4S1 measured unreachable: an erased
+generic-function value rejects (13.10) and the inline switch's rows are concrete classes.
 

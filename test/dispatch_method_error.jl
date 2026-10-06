@@ -122,11 +122,10 @@ end
     @test M.gm(3) == 3
     @test_throws WasmTarget.WasmCompileError WasmTarget.compile(M.gm, (Int64,))
     # a vtable entry tests its argument's class: the SA body never runs for an SB (it cast
-    # and answered 13; dev/AUDIT.md A4C3). Julia answers 23 from the closure's own method,
-    # whose SB specialization the closed world does not enroll (MARCH 13.17 A3S3), so the
-    # entry traps
+    # and answered 13; dev/AUDIT.md A4C3), and the erased call enrolls the closure's body for
+    # every class that may reach it, so the SB call answers as Julia does (A4S2)
     @test M.gq(3) == 23
     let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gq, (Int64,)), "gq", "3n")
-        @test r[1] === :trap
+        @test r[1] === :ok && occursin("23", string(r[2]))
     end
 end

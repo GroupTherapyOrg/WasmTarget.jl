@@ -455,12 +455,19 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             local node0 = s0.node
             node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)
             # the builtins that allocate a class without a %new instantiate it as surely:
-            # a MemoryRef (memoryrefnew) and a Memory (jl_alloc_genericmemory)
+            # a MemoryRef (memoryrefnew), a Memory (jl_alloc_genericmemory), and a tuple
+            # (Core.tuple), whose class is its elements' runtime types (tuple_runtime_type,
+            # the answer that numbers it and that _lower_tuple! builds)
             if s0.slot == 0 && ((node0 isa NirCall &&
                                  _nir_callee_object(node0.callee) === Core.memoryrefnew) ||
                                 (node0 isa NirForeignCall &&
                                  node0.c_symbol === :jl_alloc_genericmemory))
                 observe_type!(CC.widenconst(s0.julia_type))
+            end
+            if node0 isa NirCall && _nir_callee_object(node0.callee) === Core.tuple
+                local tt = tuple_runtime_type(Type[_collector_static_type(a, nir_slot_types(codeinfos[j + 1]))
+                                                   for a in node0.operands])
+                tt === nothing || observe_type!(tt)
             end
             foreach(observe_runtime_operand!, statement_operands(node0))
         end
@@ -576,7 +583,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                 ((a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any) :
                               a isa NirLiteral ? Core.Typeof(a.value) :
                               (a isa NirGlobalRef && a.bound) ? Core.Typeof(a.value) : Any
-                    (t isa DataType && isconcretetype(t)) || (_dok = false; break)
+                    # an erased argument enrolls the body specialized on its static type,
+                    # one body for every class that may reach it (the trampoline's row for
+                    # an abstract parameter tests the class; a specialization of one method
+                    # answers as any other would)
+                    (t isa Type && !(t isa Core.TypeofVararg)) || (_dok = false; break)
                     push!(_dargs, t)
                 end
                 if _dok && !isempty(_dargs)
@@ -630,9 +641,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # slot: concrete structs, and — boxed behind the same $JlTop classId header —
             # the numerics and the classed String/Symbol (`==(::Any, ::String)` over
             # Any[1, "x", 2.5] needs the Int64/Float64/String rows; without them the
-            # switch had no row and trapped at runtime). Tuples keep their own path.
+            # switch had no row and trapped at runtime), and a tuple, classed alike.
             for target_type in runtime_types
-                (isconcretetype(target_type) && !(target_type <: Tuple) &&
+                (isconcretetype(target_type) &&
                  (isstructtype(target_type) || isprimitivetype(target_type)) &&
                  target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))

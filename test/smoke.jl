@@ -1583,6 +1583,17 @@ _g("tuple_runtime_types", Any[
     ("union_element_typeof", (x::Int64) -> (v = Any[_sm_tu(x)]; typeof(v[1]) === Tuple{Union,Int64} ? 1 : 2), Int64(3)),
     ("type_element_read", (x::Int64) -> (t = _sm_tt(x); t[2] + (t[1] === Int64 ? 10 : 20)), Int64(3)),
 ])
+# A dynamic call reaches every class that may be its argument: a tuple, which Core.tuple
+# allocates without a %new, is a candidate class like any struct (dev/AUDIT.md A3S3), and a
+# closure called with an erased argument has its body enrolled for it (A4S2); each trapped
+@noinline _sm_dh(@nospecialize(x)) = Ref{Any}(x)
+struct _SmEA; x::Int64; end
+struct _SmEB; x::Int64; end
+_g("dynamic_enrollment", Any[
+    ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
+    ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),
+    ("tuple_length_erased", (n::Int64) -> (v = Any[(n, 2), "ab"]; length(v[1])::Int64), Int64(3)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

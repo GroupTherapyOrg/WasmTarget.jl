@@ -2439,7 +2439,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     branches = Tuple{Int32, WasmValType, FunctionInfo}[]
     for c in cands
         Tc = c.arg_types[dpos]
-        (Tc isa DataType && isconcretetype(Tc) && !(Tc <: Tuple) &&
+        (Tc isa DataType && isconcretetype(Tc) &&
          (isstructtype(Tc) || isprimitivetype(Tc))) || return nothing
         length(_function_type(ctx.mod, c.wasm_idx).params) == n || return nothing
         # a bare-array class (a Memory, a SimpleVector) is told apart only by an array type
