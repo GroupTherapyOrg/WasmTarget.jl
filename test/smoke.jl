@@ -1594,6 +1594,15 @@ _g("dynamic_enrollment", Any[
     ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),
     ("tuple_length_erased", (n::Int64) -> (v = Any[(n, 2), "ab"]; length(v[1])::Int64), Int64(3)),
 ])
+# isa against a kind (DataType, UnionAll, …): Julia folds S <: T only where its subtyping of
+# kinds is sound (jl_is_not_broken_subtype), and tests the type object's kind elsewhere
+@noinline _sm_kv(x::Int64) = x > 0 ? Vector : Int64
+@noinline _sm_ki(x::Int64)::Type{Int64} = Int64
+_g("kind_isa", Any[
+    ("type_of_type_isa_datatype", (x::Int64) -> (t = _sm_ki(x); t isa DataType ? 1 : 2), Int64(3)),
+    ("unionall_isa_datatype", (x::Int64) -> (T = _sm_kv(x); T isa DataType ? 1 : 2), Int64(3)),
+    ("unionall_isa_unionall", (x::Int64) -> (T = _sm_kv(x); T isa UnionAll ? 1 : 2), Int64(3)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

@@ -444,5 +444,12 @@ the inline switch takes tuple rows. A closure called with an erased argument enr
 (its signature had to be all concrete); it now enrolls the body specialized on the argument's
 static type, which the trampoline's abstract row tests. Smoke group dynamic_enrollment: with
 the collector change reverted, all three trap. A4S1 measured unreachable: an erased
-generic-function value rejects (13.10) and the inline switch's rows are concrete classes.
+generic-function value rejects (13.10) and the inline switch's rows are concrete classes. Batch 76 — A4E8: Julia's emit_isa
+(cgutils.cpp) folds S <: T only under jl_is_not_broken_subtype (subtype.c: never a `Type{…}`
+against a kind, JuliaLang/julia#27078); `_compile_call_isa` now guards its fold the same way
+and tests the type object's kind there (smoke group kind_isa; no program was found that the
+unguarded fold answered wrong). A3E6 closed by measurement: the AnyRef unbox in compile_call!
+had 0 hits over the smoke corpus, a dynamic div/rem/mod over an erased operand dispatches and
+answers as Julia (four cases), and the unbox applies only where Julia's IR types the operand
+concretely and WT holds it in an anyref local, at the width Julia states.
 

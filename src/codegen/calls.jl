@@ -2019,10 +2019,15 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # type C <: T, the test is C's exact one, which WT can make where T's own has none
     # (`isa(x::Union{Nothing,Tuple{Int64,Int64}}, Tuple{Any,Any})`, Base._accumulate1!).
     if check_type isa Type && value_type isa Type
-        local _isect = typeintersect(value_type, check_type)
-        if value_type <: check_type || _isect === Union{}
+        # Julia folds S <: T only where its subtyping of kinds is sound (jl_is_not_broken_subtype,
+        # subtype.c: not a `Type{…}` against a kind, JuliaLang/julia#27078); elsewhere it tests
+        local _not_broken = !(check_type in (DataType, Union, UnionAll, Core.TypeofBottom)) ||
+                            !(value_type isa DataType && value_type.name === Type.body.name)
+        local _known = _not_broken && value_type <: check_type
+        local _isect = _known ? value_type : typeintersect(value_type, check_type)
+        if _known || _isect === Union{}
             drop!(bld)
-            i32_const!(bld, value_type <: check_type ? 1 : 0)
+            i32_const!(bld, _known ? 1 : 0)
             append_builder!(fb, bld)
             return nothing
         end
