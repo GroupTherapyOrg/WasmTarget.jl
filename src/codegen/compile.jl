@@ -642,11 +642,17 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # trampoline row a call could be routed by: the callable rejects where its call
             # would trap on that candidate (dev/AUDIT.md A3S2)
             local _shared = bare_array_partition(mod, type_registry, nothing).shared
-            for _c in _cv_bodies[_T], _Tj in something(_c.julia_params, Type[])
+            for _c in _cv_bodies[_T], _Tj in _c.julia_params
                 (_Tj isa DataType && (_Tj <: GenericMemory || _Tj === Core.SimpleVector) &&
                  _Tj in _shared) &&
                     throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                         "a callable with a candidate taking $(_Tj), whose wasm array type another closed-world class shares: no test tells them apart",
+                        nothing, nothing)))
+                # an abstract parameter admitting a type object or a bare array: no row tests
+                # its values' classes (rows per observed class are MARCH 13.17's, A5C4)
+                _closure_param_untestable(mod, type_registry, _Tj) &&
+                    throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
+                        "a callable with a candidate taking $(_Tj), which admits a type object or a bare array: no entry row tells its values' classes",
                         nothing, nothing)))
             end
             build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T])

@@ -1991,7 +1991,6 @@ end
     _compile_call_isa(args, fb, ctx)
 
 Extracted handler for isa() type checking.
-Modifies `bytes` in-place.
 parity(pkg/dart2wasm/lib/code_generator.dart:3159 CodeGenerator.visitIsExpression)
 """
 function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationContext)::Nothing
@@ -2014,7 +2013,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
 
     bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
 
-    # Julia's emit_isa (codegen.cpp): a value of static type S is a T exactly when it is an
+    # Julia's emit_isa (cgutils.cpp): a value of static type S is a T exactly when it is an
     # S ∩ T. When S <: T every value is; when S ∩ T is empty none is; when S ∩ T is one concrete
     # type C <: T, the test is C's exact one, which WT can make where T's own has none
     # (`isa(x::Union{Nothing,Tuple{Int64,Int64}}, Tuple{Any,Any})`, Base._accumulate1!).
@@ -4488,8 +4487,7 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
                                   ctx::AbstractCompilationContext)::InstrBuilder
     isempty(args) && error("Core.throw_methoderror takes its function")
     local static(a) = _collector_static_type(a, ctx.slot_types)
-    local elem_types = Type[static(a) for a in args[2:end]]
-    local tuple_type = tuple_runtime_type(elem_types)
+    local tuple_type = tuple_runtime_type(args[2:end], ctx.slot_types)
     if tuple_type === nothing
         unreachable!(bld)   # structural trap: Julia has no method for this call (A3S1)
         return bld
@@ -4509,7 +4507,7 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     emit_struct_prefix!(bld, reg, tuple_type, args_info)
     for (i, a) in enumerate(args[2:end])
         emit_value!(bld, a, ctx, tup_def.fields[wasm_field_idx(args_info, i) + 1].valtype;
-                    from_julia=elem_types[i])
+                    from_julia=tuple_type.parameters[i])
     end
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))

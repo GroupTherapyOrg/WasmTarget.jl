@@ -52,6 +52,7 @@ anchor in `src/` has a row.)
 | Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
 | External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_emit_closure_arg_tests!`, `_closure_dispatch_trampoline!`, `_closure_trampoline!` (closures.jl), `bare_array_partition` (builtins.jl) | ClassIdSwitch |
+| Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` (trimcollect.jl), `_most_specific_first` (closures.jl) | Enrollment |
 | `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | EgalDispatch |
 | Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |

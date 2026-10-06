@@ -444,11 +444,12 @@ the inline switch takes tuple rows. A closure called with an erased argument enr
 (its signature had to be all concrete); it now enrolls the body specialized on the argument's
 static type, which the trampoline's abstract row tests. Smoke group dynamic_enrollment: with
 the collector change reverted, all three trap. A4S1 measured unreachable: an erased
-generic-function value rejects (13.10) and the inline switch's rows are concrete classes. Batch 76 — A4E8: Julia's emit_isa
+generic-function value rejects (13.10) and the inline switch's rows are concrete classes (false:
+only the inline switch was measured, and the vtable reaches it, audit #5 A5P2). Batch 76 — A4E8: Julia's emit_isa
 (cgutils.cpp) folds S <: T only under jl_is_not_broken_subtype (subtype.c: never a `Type{…}`
 against a kind, JuliaLang/julia#27078); `_compile_call_isa` now guards its fold the same way
 and tests the type object's kind there (smoke group kind_isa; no program was found that the
-unguarded fold answered wrong). A3E6 closed by measurement: the AnyRef unbox in compile_call!
+unguarded fold answered wrong). A3E6 closed by measurement (on a false description, reopened by audit #5, A5P5): the AnyRef unbox in compile_call!
 had 0 hits over the smoke corpus, a dynamic div/rem/mod over an erased operand dispatches and
 answers as Julia (four cases), and the unbox applies only where Julia's IR types the operand
 concretely and WT holds it in an anyref local, at the width Julia states. Batch 77 — A3C2: the box-capture walk
@@ -458,3 +459,74 @@ box stays erased (BoxJoin.tla: an invisible write never narrows the cell).
 test/f3_box_capture_l0.jl asserts both with a lookup that holds nothing; the old walk fails 2 of
 its 4 checks.
 
+
+## 2026-10-06 — audited through e225334d (f3791ced..e225334d: batches 73–76)
+
+The fifth audit, of the fourth audit's fix batches: 37 findings. Each wrong answer an auditor
+predicted was measured (each program compiled with WasmTarget.compile and run against native Julia). Five are wrong
+answers today: one batch 75 caused (A5E1 = A5C1 = A5P2), four were already there (A5E2,
+A5E3, A5E4 = A5B3). Batch 75's resolution claimed A4S1 unreachable; the vtable reaches it.
+
+Area: builder — (A5B1) the closure entry's DataType row admits a TypeVar: populate never
+writes a $JlTypeVar's $kind, so it reads 0, DATATYPE's code, and the field comment says 3
+(measured: native 22, wasm trap, not the predicted wrong answer). (A5B2) a CodeUnits has
+Memory{UInt8}'s array type and is not in bare_array_partition (native 2, wasm trap). (A5B3 =
+A5E4) add_type_group! never deduplicates, so two isomorphic recursion groups get two indices
+for one wasm type, and the concrete isa arm's `ref.test` cannot tell them (native 2, wasm 1;
+over Memory{LA} and Memory{LB} the isa rejects at its statement). (A5B4 = A5E10) an inline
+switch with a DataType row; not reproduced: native 1 and 21, wasm 1 and 21. (A5B5) the
+single-body argument test has a dart anchor: a dynamic closure call checks its argument types
+(dynamic_dispatchers.dart:596). (A5B6) no case for the kind, `Type{X}`, abstract-with-Nothing,
+bare-array or TypeVar rows. (A5B7) the second shared-array check in the entry survived, with a
+message false for the only class that can reach it. (A5B8) stale prose (the dispatch entry's
+docstring, the TypeVar kind, `told`). (A5B9) trampoline locals declared in three places.
+
+Area: collection and planning — (A5C1 = A5E1 = A5P2, A5P3) WRONG ANSWER batch 75 caused: an
+erased argument enrolled only the methods whose signature contains the call's static type, so
+a closure with h(::Int64) and h(x) called with an erased Int64 ran h(x) (native 4, wasm 5), and
+one whose only method is h(::Int64) got no body (native 6, wasm rejection); with both methods
+enrolled, rows were tried in program order (A4S1). (A5C2 = A5P1) a tuple's `Type{X}` element is
+typed `typeof(X)` where tuple_tfunc does so only under `hasuniquerep(X)` (measured: traps,
+illegal cast, where Julia answers 1). (A5C3) a kind observed from a tuple's parameters becomes
+an inline-switch candidate; not reproduced (native 1, wasm 1). (A5C4 = A5E6) a body enrolled on
+an abstract parameter that admits a bare array fails the module with a WasmInternalError
+(native 13). (A5C5 = A5E5) `_canonical_tuple_type` keeps a second `Type{X}` rule. (A5C6) the
+dynamic signature ignored the capture joins `_call_type` applies. (A5C7) a dead Vararg test,
+stale prose in ClosedWorld.tla and MARCH 13.10.
+
+Area: emission and diagnostics — (A5E2) WRONG ANSWER: `isa(x, Type{Int64})` of an erased
+type object answers 2 where native answers 1, and `x::Type{Int64}` throws (wasm -7, native 1):
+the abstract arm keeps a kind only when the kind is contained in T. (A5E3) WRONG ANSWER: a tuple
+of run-time length is classed `Tuple{Vararg{Int64}}`, so typeof, `===` and isa answer 2 where
+native answers 1. (A5E7) a dormant 4-argument ClosureBody whose `nothing` parameters read as
+"accepts anything". (A5E8) the type-object kind partition is over every class, not the value's
+static type. (A5E9 = A5P4) no kind_isa case reaches batch 76's guard. (A5E11) prose.
+
+Area: enforcement and prose — (A5P5) A3E6 was closed on a false description: the unbox takes
+its width from the operator and tests no class. (A5P6) ClassIdSwitch.tla omits the abstract
+parameter refusal and overlapping rows. (A5P7) A4C3's negative test depended on row order, and
+gq matched "23" as a substring. (A5P8) A4P3 and 25 audit-4 IDs on no Planned list. (A5P9) no
+model of enrollment. (A5P10) the dead Vararg test; "measured unreachable" cites no command.
+
+Resolution: batch 78 (this commit) — model first: Enrollment.tla claims that for every class
+that may reach a dynamic call the body Julia selects runs; its Broken instances keep the subset
+rule (SubsetRule, the w2 counterexample) and program order (ProgramOrder). A5C1, A5E1, A5P2,
+A5P3, A4S1, A5P9: the collector enrolls what Julia's matching gives the call's static signature
+(`Base._methods_by_ftype`, each method at its intersection), and an entry tries its rows most
+specific first (`_most_specific_first`, Base.morespecific). Smoke dynamic_enrollment gains
+closure_two_methods_erased, closure_narrow_method_erased, closure_overlapping_rows and
+closure_overlapping_any_vector: the old enrollment planted back answers 5 where native answers 4
+and fails to compile the second; program order planted back answers 3 of them wrong. A5C6: the
+dynamic signature types its operands by `_call_type`. A5C7, A5P10: the dead test goes; 13.10's
+prose says what WT does. A5E7: `julia_params` is required and its `nothing` arms go. A5C4,
+A5E6: the refusal is a WasmCompileError naming the callable, raised before the vtable is built
+by the one predicate `_closure_param_untestable` (e6 measured), the entry keeping only an
+internal guard; rows per observed class are on 13.17. A5B7: the guard's message says what it
+found. A5B4, A5C3, A5E10: measured correct; smoke kind_and_class_rows pins it. A5B5: the anchor.
+A5B8, A5E11: the prose. A5P6: ClassIdSwitch.tla states what it leaves to Enrollment.tla and the
+refusal. A5P7: rows now come most specific first, so with the argument tests removed gq answers
+13 (test/dispatch_method_error.jl:129 fails) and closure_erased_argument answers 13; gq
+compares the value exactly. A5P8, A4P3: the open IDs are on their Planned lists. A5P1 (= A5C2),
+A5P4 (= A5E9): MARCH 13.14. Everything else, A5P5 included (A3E6 reopened): MARCH 13.17.
+`tuple_runtime_type` now reads its operands: a literal or constant-global operand's type is its
+value's (a type object's kind).

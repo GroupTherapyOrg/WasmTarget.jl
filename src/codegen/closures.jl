@@ -18,11 +18,12 @@ function is_callable_julia_type(@nospecialize(T))::Bool
 end
 
 """
-    ClosureBody(body_idx, params, results, return_type)
+    ClosureBody(body_idx, params, results, return_type, julia_params)
 
 One compiled specialization of a callable type, as the layouter sees it: the body's
-function index, its physical signature, and its inferred Julia return type (the
-trampoline re-boxes a numeric result with that type's classId).
+function index, its physical signature, its inferred Julia return type (the trampoline
+re-boxes a numeric result with that type's classId) and its Julia parameter types (what an
+entry tests each argument against).
 parity(closures.dart:31 ClosureImplementation.functions)
 """
 struct ClosureBody
@@ -30,10 +31,8 @@ struct ClosureBody
     params::Vector{WasmValType}
     results::Vector{WasmValType}
     return_type::Type
-    julia_params::Union{Nothing, Vector{Type}}   # the specialization's Julia parameter types (self included for capturing closures)
+    julia_params::Vector{Type}   # the specialization's Julia parameter types (self included for capturing closures)
 end
-# parity(pkg/dart2wasm/lib/closures.dart:23 ClosureImplementation)
-ClosureBody(body_idx, params, results, return_type)::ClosureBody = ClosureBody(body_idx, params, results, return_type, nothing)
 
 """
     build_closure_vtable!(mod, registry, closure_type, bodies; takes_context)
@@ -82,7 +81,7 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     # classIds against each specialization's parameter types in program order
     local tramps = Dict{Int, UInt32}()
     for arity in arities
-        local cands = by_arity[arity]
+        local cands = _most_specific_first(by_arity[arity])
         tramps[arity] = length(cands) == 1 ?
             _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info) :
             _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info)
@@ -109,6 +108,53 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
 end
 
 """
+    _most_specific_first(bodies) -> Vector{ClosureBody}
+
+The bodies in the order a vtable entry tries them: a body whose parameter types are more
+specific (Base.morespecific) before every body it is more specific than, program order
+otherwise, so the first row that matches a value runs the method Julia selects for it.
+formal(dev/formal/Enrollment.tla): rows are tried most specific first.
+parity(quarantine: a Julia callable's methods are selected by specificity; a dart closure has
+one body.)
+"""
+function _most_specific_first(bodies::Vector{ClosureBody})::Vector{ClosureBody}
+    local sig(c) = Tuple{c.julia_params...}
+    local rest = copy(bodies)
+    local out = ClosureBody[]
+    while !isempty(rest)
+        local k = findfirst(rest) do c
+            !any(d -> d !== c && Base.morespecific(sig(d), sig(c)), rest)
+        end
+        push!(out, popat!(rest, something(k, 1)))
+    end
+    return out
+end
+
+# a `Type{X}` parameter of a known X: an entry tests the operand's identity against X's one
+# type object (`_emit_closure_arg_tests!`)
+# parity(quarantine: a Julia `Type{X}` parameter admits one type object; a dart parameter is a class.)
+_is_type_identity_param(@nospecialize(T))::Bool =
+    T isa DataType && T <: Type && length(T.parameters) == 1 && T.parameters[1] isa Type
+
+"""
+    _closure_param_untestable(mod, registry, T) -> Bool
+
+Whether an abstract parameter type `T` other than Any (which an entry does not test)
+admits a value no entry row tells by its classId: a
+type object (a kind or a TypeVar, which carry no class header) or a bare array (a Memory or
+SimpleVector, represented without one). A callable with such a candidate rejects
+(compile.jl) until rows are enrolled per observed class (MARCH 13.17, A5C4).
+parity(quarantine: Julia type objects and bare arrays have no dart class header; a dart
+closure's parameter is a class.)
+"""
+function _closure_param_untestable(mod::WasmModule, registry::TypeRegistry, @nospecialize(T))::Bool
+    (T === Any || isconcretetype(T)) && return false     # an Any parameter is not tested
+    _is_type_identity_param(T) && return false            # X's one type object, by identity
+    any(K -> typeintersect(K, T) !== Union{}, (DataType, Union, UnionAll, Core.TypeofBottom, TypeVar)) && return true
+    return any(p -> typeintersect(p[1], T) !== Union{}, bare_array_partition(mod, registry, nothing).all)
+end
+
+"""
     _emit_closure_arg_tests!(tb, mod, registry, closure_type, bodies, c, arity, takes_context, tmp, itmp, lbl) -> tb
 
 Branch to `lbl` unless every erased argument is a value of `c`'s Julia parameter type, as
@@ -118,12 +164,15 @@ SimpleVector) the array type only it is (`bare_array_partition`; a shared one wa
 before any vtable is built); a type object's kind its `\$kind`; any other concrete type the
 value's header classId; an abstract type the classIds of its numbered classes (`nothing`
 too, when it admits Nothing). An abstract parameter that also admits a type object or a bare
-array has no such test here, and the vtable is not built. `tmp` is an anyref scratch and
-`itmp` an i32 scratch of the entry.
+array has no such test here, and the callable rejects before its vtable is built
+(`_closure_param_untestable`, compile.jl). `tmp` is an anyref scratch and `itmp` an i32
+scratch of the entry.
 formal(dev/formal/ClassIdSwitch.tla): a row runs its body only for a value of its parameter type.
-parity(quarantine: a Julia closure's call dispatches on its erased arguments' runtime classes;
-a dart closure's static types guarantee its arguments, so its vtable entry only casts them,
-translator.dart:2787 _ClosureTrampolineGenerator.generate.)
+parity(dynamic_dispatchers.dart:596 generateDynamicClosureCallShapeAndTypeCheck): dart checks a
+dynamic closure call's argument types before the entry runs (`_checkClosureType`), the test a
+single body's entry makes here. Choosing among several specializations by these tests is
+Julia's: parity(quarantine: a Julia callable's methods are selected by its arguments' runtime
+classes; a dart closure has one body.)
 """
 function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                                   closure_type::Type, bodies::Vector{ClosureBody}, c::ClosureBody,
@@ -135,12 +184,9 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
     local kinds = ((DataType, JL_TYPE_KIND_DATATYPE), (Union, JL_TYPE_KIND_UNION),
                    (UnionAll, JL_TYPE_KIND_UNIONALL), (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
     for j in 1:arity
-        local pj = c.params[j + (takes_context ? 1 : 0)]
-        local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
-        (Tj === Any || (Tj === nothing && pj === AnyRef)) && continue       # accepts anything
-        Tj isa Type || throw(_closure_layout_error(closure_type, bodies,
-            "an entry's argument $j has no Julia parameter type"))
-        if Tj isa DataType && Tj <: Type && length(Tj.parameters) == 1 && Tj.parameters[1] isa Type
+        local Tj = c.julia_params[j + (takes_context ? 1 : 0)]
+        Tj === Any && continue       # accepts anything
+        if _is_type_identity_param(Tj)
             # a `Type{X}` parameter: the operand is X's one type object — identity against
             # its global (a type object's class is its kind, not X)
             local tg = get_type_constant_global!(mod, registry, Tj.parameters[1])
@@ -156,7 +202,7 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
             local told = bare_array_partition(mod, registry, nothing).told
             local k = findfirst(p -> p[1] === Tj, told)
             k === nothing && throw(_closure_layout_error(closure_type, bodies,
-                "a candidate takes $(Tj), whose wasm array type another class shares"))
+                "a candidate takes $(Tj), a bare-array class the closed world did not number (compile.jl rejects a shared one first)"))
             local_get!(tb, UInt32(j))
             ref_test!(tb, Int64(told[k][2]), false)
             num!(tb, Opcode.I32_EQZ)
@@ -183,10 +229,10 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
         local ids = if isconcretetype(Tj)
             Int32[ensure_type_id!(registry, Tj)]
         else
-            (any(K -> typeintersect(K[1], Tj) !== Union{}, kinds) || typeintersect(TypeVar, Tj) !== Union{} ||
-             any(p -> typeintersect(p[1], Tj) !== Union{}, bare_array_partition(mod, registry, nothing).all)) &&
+            # compile.jl rejects such a callable before its vtable is built
+            _closure_param_untestable(mod, registry, Tj) &&
                 throw(_closure_layout_error(closure_type, bodies,
-                    "an entry's argument $j is a $(Tj), which admits a type object or a bare array: no row test tells its values' classes"))
+                    "an entry's argument $j is a $(Tj), which admits a type object or a bare array"))
             concrete_class_ids(registry, Tj)
         end
         local takes_nothing = Nothing <: Tj
@@ -238,8 +284,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     # an argument whose parameter type is not Any is tested against it (every one of an
     # arity-0 entry, or of an all-Any body, takes anything)
     local tested = any(1:arity) do j
-        local Tj = body.julia_params === nothing ? nothing : body.julia_params[j + (takes_context ? 1 : 0)]
-        !(Tj === Any || (Tj === nothing && body.params[j + (takes_context ? 1 : 0)] === AnyRef))
+        body.julia_params[j + (takes_context ? 1 : 0)] !== Any
     end
     # locals after the params: the result's re-box scratch (a numeric result), then the
     # argument tests' anyref and i32 scratch
@@ -344,7 +389,7 @@ parity(compile.dart:113 CFECrashError)
 function _closure_layout_error(@nospecialize(closure_type), bodies::Vector{ClosureBody}, msg::AbstractString)::WasmInternalError
     local sigs = String[]
     for c in bodies
-        local jps = c.julia_params === nothing ? "?" : join(("::$T" for T in c.julia_params), ", ")
+        local jps = join(("::$T" for T in c.julia_params), ", ")
         push!(sigs, "($jps) -> $(c.return_type)  [wasm func $(c.body_idx): $(c.params) -> $(c.results)]")
     end
     local text = "closure vtable for $closure_type: $msg" *
@@ -357,13 +402,14 @@ end
     _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info)
 
 The vtable entry for an arity that several specializations of `closure_type` share. Every
-argument arrives erased (anyref); each candidate is tried in program order — every
-argument must carry the classId the candidate's Julia parameter type has (a classed value
-is a `\$JlTop` subtype whose field 0 is its classId; a box, a string, a struct alike) —
-and the first match is narrowed, called and its result converted exactly as a single-body
-entry's, then returned. No match traps: Julia would throw MethodError for the same call.
+argument arrives erased (anyref); the candidates are tried most specific first
+(`_most_specific_first`), each argument tested against the candidate's Julia parameter type
+(`_emit_closure_arg_tests!`) — and the first match is narrowed, called and its result
+converted exactly as a single-body entry's, then returned. No match traps: Julia would throw
+MethodError for the same call.
 formal(dev/formal/ClassIdSwitch.tla): the entry runs the specialization Julia selects, or
 traps where Julia has none (a candidate class no test tells apart was rejected before).
+formal(dev/formal/Enrollment.tla): rows are tried most specific first.
 parity(quarantine: a Julia generic function used as a value carries every reachable
 specialization of one arity (`string` as a value), chosen by the erased arguments' runtime
 classes; a dart closure has exactly one body per FunctionNode, so one vtable entry per arity

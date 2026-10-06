@@ -1358,9 +1358,9 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
     # a tuple's type is its elements' runtime types (jl_f_tuple, tuple_runtime_type), read from
     # the operands' types in Julia's IR as the collector reads them; an element whose runtime
     # type is known only at run time makes a tuple WT does not build (MARCH 13.10)
-    local static_types = Type[_collector_static_type(a, ctx.slot_types) for a in args]
-    tuple_type = tuple_runtime_type(static_types)
+    tuple_type = tuple_runtime_type(args, ctx.slot_types)
     if tuple_type === nothing
+        local static_types = Type[_collector_static_type(a, ctx.slot_types) for a in args]
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
             "a tuple of $(Tuple{static_types...}): its type is its elements' runtime types, known only at run time";
             idx=idx, detail=call)
@@ -1567,7 +1567,9 @@ end
 The numbered classes a value of static type `T` may be (every one when `T` is `nothing`)
 that are bare wasm arrays — a Memory, a SimpleVector — each with its array type (`all`),
 partitioned by whether a test tells it apart: `told` holds each class whose array type no
-other of them is, which `ref.test` answers; `shared` the classes whose array type another of
+other of them is, which `ref.test` answers (a CodeUnits sharing Memory{UInt8}'s array type,
+and two isomorphic recursion groups' types, are not yet counted: MARCH 13.17, A5B2 A5B3);
+`shared` the classes whose array type another of
 them is too (Memory{Int64} and Memory{UInt64}), which no test tells apart, so a class read
 over `T` rejects rather than trap or answer for the wrong class. The array types are decided
 here from the numbered classes (get_array_type!), never from whichever arrays the bodies

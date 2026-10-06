@@ -465,8 +465,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 observe_type!(CC.widenconst(s0.julia_type))
             end
             if node0 isa NirCall && _nir_callee_object(node0.callee) === Core.tuple
-                local tt = tuple_runtime_type(Type[_collector_static_type(a, nir_slot_types(codeinfos[j + 1]))
-                                                   for a in node0.operands])
+                local tt = tuple_runtime_type(node0.operands, nir_slot_types(codeinfos[j + 1]))
                 tt === nothing || observe_type!(tt)
             end
             foreach(observe_runtime_operand!, statement_operands(node0))
@@ -578,16 +577,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 local _dargs = Any[]
                 local _dok = true
                 for a in operands
-                    local t = a isa NirSSA ? a.julia_type :
-                              a isa NirArgument ?
-                                ((a.n >= 1 && a.n <= length(hparams)) ? hparams[a.n] : Any) :
-                              a isa NirLiteral ? Core.Typeof(a.value) :
-                              (a isa NirGlobalRef && a.bound) ? Core.Typeof(a.value) : Any
-                    # an erased argument enrolls the body specialized on its static type,
-                    # one body for every class that may reach it (the trampoline's row for
-                    # an abstract parameter tests the class; a specialization of one method
-                    # answers as any other would)
-                    (t isa Type && !(t isa Core.TypeofVararg)) || (_dok = false; break)
+                    # the operand's static type as the collector types it (a box read at its
+                    # capture join); an abstract one enrolls every method Julia's matching
+                    # gives it, each at its intersection (the loop over callable_invocations)
+                    local t = _call_type(a)
+                    t isa Type || (_dok = false; break)
                     push!(_dargs, t)
                 end
                 if _dok && !isempty(_dargs)
@@ -667,21 +661,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # specialization. Never form a component-wide Cartesian product: dart's
     # selector rows are call-site scoped, and unrelated same-arity signatures
     # must not enroll new bodies.
+    # formal(dev/formal/Enrollment.tla): for every class that may reach the call, the body
+    # Julia selects is enrolled: Julia's own matching of the call's static signature
+    # (Base._methods_by_ftype) gives every method whose parameter types intersect it, each
+    # specialized at the intersection (a method narrower than an erased argument included;
+    # the entry tries them most specific first, closures.jl)
     for (_T, ds) in callable_invocations
-        local _mms2 = Base._methods_by_ftype(
-            Tuple{_T, Vararg{Any}}, nothing, -1, Base.get_world_counter())
+        local _mms2 = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
-            local m = mm.method
-            local msig = Base.unwrap_unionall(m.sig)
-            msig isa DataType || continue
-            local mps = collect(msig.parameters)
-            (length(mps) >= 1 && _T <: mps[1]) || continue
-            local marity = length(mps) - 1
-            length(ds) == marity || continue
-            local ssig = Tuple{_T, ds...}
-            # the observed args must be admissible for the method
-            (ssig <: m.sig) || continue
-            local cmi = CC.specialize_method(m, ssig, Core.svec())
+            local cmi = CC.specialize_method(mm.method, mm.spec_types, mm.sparams)
             cmi === nothing && continue
             cmi in seen && continue
             push!(seen, cmi)
@@ -1286,21 +1274,31 @@ const _IR_META_TYPES = Set{DataType}([
 ])
 
 """
-    tuple_runtime_type(elem_types) -> Union{Nothing, DataType}
+    tuple_runtime_type(operands, slot_types) -> Union{Nothing, DataType}
 
-The type of the tuple `Core.tuple` builds from operands of these static types, as jl_f_tuple
-types it, by each value's runtime type: a concrete type that is not a `Type{…}` is its
-values' runtime type; `Type{X}` of a known type X has one value, X, whose runtime type is its
-kind (`typeof(X)`: DataType, UnionAll, Union). Any other static type leaves the runtime type
-known only at run time: nothing. The one answer for `_lower_tuple!`, the collector's numbering
-and a MethodError's args tuple (Julia's own tuple_tfunc widens to the same type where it is
-exact, Compiler/src/tfuncs.jl tuple_tfunc).
+The type of the tuple `Core.tuple` builds from these operands, as jl_f_tuple types it, by each
+value's runtime type: a constant operand's value is known, so its type is (a type object's is
+its kind, `typeof(Vector)` is UnionAll); any other operand of a concrete static type that is
+not a `Type{…}` has that type; a `Type{X}` operand has `typeof(X)`. That last answer is exact
+only when X has a unique representation (Julia's tuple_tfunc, `hasuniquerep`): a value equal to
+a tuple type with abstract or Vararg parameters may be a UnionAll or a Union, so its tuple is
+of another class; telling which at run time is MARCH 13.14's (rejecting there instead would
+reject Base's own `_tuple_error(T, x)`). Any other operand leaves the type known only at run
+time: nothing. The one answer for `_lower_tuple!`, the collector's
+numbering and observation, and a MethodError's args tuple.
 parity(quarantine: a Julia tuple is typed by its elements' runtime types; a dart record's shape
 is static.)
 """
-function tuple_runtime_type(elem_types::AbstractVector)::Union{Nothing, DataType}
+function tuple_runtime_type(operands::AbstractVector, slot_types::AbstractVector)::Union{Nothing, DataType}
     local rt = Type[]
-    for T in elem_types
+    for a in operands
+        local has, val = a isa NirLiteral ? (true, a.value) :
+            (a isa NirGlobalRef && a.bound && isconst(a.mod, a.name)) ? (true, a.value) : (false, nothing)
+        if has
+            push!(rt, typeof(val))      # a type object's runtime type is its kind
+            continue
+        end
+        local T = _collector_static_type(a, slot_types)
         if T isa DataType && T.name === Type.body.name && length(T.parameters) == 1 &&
            T.parameters[1] isa Type && !(T.parameters[1] isa TypeVar)
             push!(rt, typeof(T.parameters[1]))
@@ -1498,13 +1496,12 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                 # `Core.tuple(a, b, ...)` builds a tuple of its elements' runtime types, the
                 # class `_lower_tuple!` builds from the same answer (tuple_runtime_type)
                 if node.callee === Core.tuple
-                    reg!(tuple_runtime_type(Type[_collector_static_type(a, body.slot_types) for a in node.operands]))
+                    reg!(tuple_runtime_type(node.operands, body.slot_types))
                 elseif node.callee === Core.throw_methoderror
                     # the MethodError it throws and its args tuple (calls.jl
                     # _emit_throw_methoderror!, from the same operand types)
                     reg!(MethodError)
-                    reg!(tuple_runtime_type(Type[_collector_static_type(a, body.slot_types)
-                                                    for a in node.operands[2:end]]))
+                    reg!(tuple_runtime_type(node.operands[2:end], body.slot_types))
                 elseif node.callee === Core._apply_iterate
                     # a splat's argument pack is a tuple the LOWERING builds (calls.jl's
                     # _apply_iterate route); an empty collection yields Tuple{}, which no

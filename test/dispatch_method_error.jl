@@ -126,6 +126,6 @@ end
     # every class that may reach it, so the SB call answers as Julia does (A4S2)
     @test M.gq(3) == 23
     let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gq, (Int64,)), "gq", "3n")
-        @test r[1] === :ok && occursin("23", string(r[2]))
+        @test r[1] === :ok && unmarshal_result(r[2]) == 23
     end
 end

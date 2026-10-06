@@ -1589,10 +1589,25 @@ _g("tuple_runtime_types", Any[
 @noinline _sm_dh(@nospecialize(x)) = Ref{Any}(x)
 struct _SmEA; x::Int64; end
 struct _SmEB; x::Int64; end
+_sm_kd(::DataType) = 1
+_sm_kd(::Int64) = 2
 _g("dynamic_enrollment", Any[
     ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
     ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),
     ("tuple_length_erased", (n::Int64) -> (v = Any[(n, 2), "ab"]; length(v[1])::Int64), Int64(3)),
+    # a closure with two methods called with an erased Int64 runs the more specific one, and one
+    # whose only method is narrower than the erased argument still gets its body (Julia's
+    # matching, Base._methods_by_ftype, and rows most specific first; dev/AUDIT.md A5P2 A5P3)
+    ("closure_two_methods_erased", (n::Int64) -> (k = n; h(x::Int64) = 1 + k; h(x) = 2 + k; f = _sm_dh(h)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
+    ("closure_narrow_method_erased", (n::Int64) -> (k = n; f = _sm_dh(x::Int64 -> x + k)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
+    # a closure whose two methods are also called directly: the dispatching entry's rows are
+    # tried most specific first (A4S1), and an erased Int64 among an Any vector runs
+    # inner(::Int64) (A5C1)
+    ("closure_overlapping_rows", (n::Int64) -> (k = n; h(x) = 2 + 0k; h(x::Int64) = 1 + 0k; a = h(n); g = _sm_dh(h)[]; a + 10 * g(_sm_dh(n)[])::Int64), Int64(3)),
+    ("closure_overlapping_any_vector", (n::Int64) -> (inner(x::Int64) = x + n; inner(x) = -1; f = _sm_dh(inner)[]; v = Any[n, "s"]; f(v[1])::Int64), Int64(3)),
+    # a function with a DataType method and an Int64 method, called on an erased type object
+    # and an erased Int64 (A5E10, A5B4: measured 21)
+    ("kind_and_class_rows", (n::Int64) -> (v = Any[Int64, n]; _sm_kd(v[1]) + 10 * _sm_kd(v[2])), Int64(3)),
 ])
 # isa against a kind (DataType, UnionAll, …): Julia folds S <: T only where its subtyping of
 # kinds is sound (jl_is_not_broken_subtype), and tests the type object's kind elsewhere

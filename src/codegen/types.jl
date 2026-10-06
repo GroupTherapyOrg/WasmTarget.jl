@@ -1428,7 +1428,7 @@ function create_jl_type_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Uni
 
     # 7. $JlTypeVar: (sub $JlType (struct $kind, $name, $lb, $ub))
     jl_typevar = StructType([
-        FieldType(I32, true),                                    # kind (mut i32) = TYPE_TYPEVAR=3
+        FieldType(I32, true),                                    # kind (mut i32): never written, reads 0; a reader tests $JlTypeVar first (MARCH 13.17, A5B1)
         FieldType(ConcreteRef(string_struct_idx, true), true),   # name (mut Symbol ref)
         FieldType(ConcreteRef(jl_type_idx, true), true),         # lb (mut ref null $JlType)
         FieldType(ConcreteRef(jl_type_idx, true), true),         # ub (mut ref null $JlType)
