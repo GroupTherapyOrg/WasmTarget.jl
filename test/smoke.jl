@@ -1570,6 +1570,19 @@ _xf("shared_bare_arrays", Any[
     # same read (A4E1 c)
     ("narrowed_isa_either", (x::Int64) -> _sm_mx(x) isa AbstractVector{Int64} ? 1 : 2, Int64(3)),
 ])
+# A tuple is typed by its elements' runtime types (jl_f_tuple): a type element is its kind, so
+# `(Int64, x)` is a Tuple{DataType,Int64}, never a Tuple{Type{Int64},Int64}, which no value has
+# (dev/AUDIT.md A4E2)
+@noinline _sm_tt(x::Int64) = (Int64, x)
+@noinline _sm_tv(x::Int64) = (Vector, x)
+@noinline _sm_tu(x::Int64) = (Union{Int64,Nothing}, x)
+_g("tuple_runtime_types", Any[
+    ("datatype_element_typeof", (x::Int64) -> (v = Any[_sm_tt(x)]; typeof(v[1]) === Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
+    ("datatype_element_egal", (x::Int64) -> (v = Any[_sm_tt(x)]; v[1] === (Int64, 3) ? 1 : 2), Int64(3)),
+    ("unionall_element_typeof", (x::Int64) -> (v = Any[_sm_tv(x)]; typeof(v[1]) === Tuple{UnionAll,Int64} ? 1 : 2), Int64(3)),
+    ("union_element_typeof", (x::Int64) -> (v = Any[_sm_tu(x)]; typeof(v[1]) === Tuple{Union,Int64} ? 1 : 2), Int64(3)),
+    ("type_element_read", (x::Int64) -> (t = _sm_tt(x); t[2] + (t[1] === Int64 ? 10 : 20)), Int64(3)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field

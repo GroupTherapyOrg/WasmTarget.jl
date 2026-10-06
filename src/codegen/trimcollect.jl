@@ -1275,18 +1275,31 @@ const _IR_META_TYPES = Set{DataType}([
 ])
 
 """
-    methoderror_args_type(elem_types) -> Union{Nothing, DataType}
+    tuple_runtime_type(elem_types) -> Union{Nothing, DataType}
 
-The type of the `args` tuple `Core.throw_methoderror(f, args...)` builds (jl_f_tuple types it
-by each value's runtime type), when every operand's static type is its runtime type: a
-concrete type that is not a `Type{T}` (a type value's runtime type is its kind). Otherwise
-nothing: the tuple's type is known only at run time.
-parity(quarantine: Julia's MethodError carries its arguments as a tuple typed at run time; dart's
-NoSuchMethodError carries an Invocation whose arguments are an untyped List.)
+The type of the tuple `Core.tuple` builds from operands of these static types, as jl_f_tuple
+types it, by each value's runtime type: a concrete type that is not a `Type{…}` is its
+values' runtime type; `Type{X}` of a known type X has one value, X, whose runtime type is its
+kind (`typeof(X)`: DataType, UnionAll, Union). Any other static type leaves the runtime type
+known only at run time: nothing. The one answer for `_lower_tuple!`, the collector's numbering
+and a MethodError's args tuple (Julia's own tuple_tfunc widens to the same type where it is
+exact, Compiler/src/tfuncs.jl tuple_tfunc).
+parity(quarantine: a Julia tuple is typed by its elements' runtime types; a dart record's shape
+is static.)
 """
-function methoderror_args_type(elem_types::AbstractVector)::Union{Nothing, DataType}
-    all(T -> T isa DataType && isconcretetype(T) && !(T <: Type), elem_types) || return nothing
-    return Tuple{elem_types...}
+function tuple_runtime_type(elem_types::AbstractVector)::Union{Nothing, DataType}
+    local rt = Type[]
+    for T in elem_types
+        if T isa DataType && T.name === Type.body.name && length(T.parameters) == 1 &&
+           T.parameters[1] isa Type && !(T.parameters[1] isa TypeVar)
+            push!(rt, typeof(T.parameters[1]))
+        elseif T isa DataType && isconcretetype(T)
+            push!(rt, T)
+        else
+            return nothing
+        end
+    end
+    return Tuple{rt...}
 end
 
 """
@@ -1471,20 +1484,15 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         for rec in body.stmts
             node = rec.node
             if node isa NirCall
-                # `Core.tuple(a, b, ...)` (builtins.jl `_lower_tuple!`, the ONE Core.tuple
-                # lowering) types the CONSTRUCTED tuple from its own per-argument types —
-                # `Tuple{[infer_value_type(arg, ctx) for arg in args]...}` — a literal Type
-                # argument (e.g. an error-message tuple's trailing `Int64`) becomes the
-                # SINGLETON `Type{Int64}`, not the `DataType` Julia's own inference widens
-                # the whole tuple's type to. No per-argument walk can reconstruct that
-                # composite after the fact, so it is synthesized here the same way.
+                # `Core.tuple(a, b, ...)` builds a tuple of its elements' runtime types, the
+                # class `_lower_tuple!` builds from the same answer (tuple_runtime_type)
                 if node.callee === Core.tuple
-                    reg!(Tuple{Type[_collector_static_type(a, body.slot_types) for a in node.operands]...})
+                    reg!(tuple_runtime_type(Type[_collector_static_type(a, body.slot_types) for a in node.operands]))
                 elseif node.callee === Core.throw_methoderror
                     # the MethodError it throws and its args tuple (calls.jl
                     # _emit_throw_methoderror!, from the same operand types)
                     reg!(MethodError)
-                    reg!(methoderror_args_type(Type[_collector_static_type(a, body.slot_types)
+                    reg!(tuple_runtime_type(Type[_collector_static_type(a, body.slot_types)
                                                     for a in node.operands[2:end]]))
                 elseif node.callee === Core._apply_iterate
                     # a splat's argument pack is a tuple the LOWERING builds (calls.jl's

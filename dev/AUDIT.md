@@ -428,4 +428,11 @@ body or several, tests each argument against its parameter type (`_emit_closure_
 classId, a kind, an abstract type's classes, a bare array's own type); the trampolines declare
 their scratch locals to the builder (the dispatch entry's anyref scratch had been an invented
 AnyRef). test/dispatch_method_error.jl pins that the SA body never runs for an SB; with the test
-removed, it answers. Everything else: MARCH 13.17.
+removed, it answers. Everything else: MARCH 13.17. Batch 74 — A4E2: one
+`tuple_runtime_type` answers a tuple's type as jl_f_tuple does (a concrete element type is
+itself; `Type{X}` of a known X is `typeof(X)`; anything else is known only at run time and the
+tuple rejects), for `_lower_tuple!`, the collector's numbering and a MethodError's args;
+`_lower_tuple!` reads its operands' types from Julia's IR as the collector does
+(`_collector_static_type`), not from WT's re-inference. Smoke group tuple_runtime_types: the old
+typing planted back answers 4 of its 5 cases wrong.
+

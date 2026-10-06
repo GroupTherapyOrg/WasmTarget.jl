@@ -1355,15 +1355,14 @@ end
 # parity(code_generator.dart:3239 visitRecordLiteral)
 function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) > 0 || return nothing
-    # Infer tuple type from arguments
-    elem_types = Type[infer_value_type(arg, ctx) for arg in args]
-    tuple_type = Tuple{elem_types...}
-    # a tuple's type is its elements' runtime types (jl_f_tuple): an element whose type is
-    # known only at run time makes a tuple of a type known only at run time, which WT does
-    # not build (MARCH 13.10)
-    if !(isconcretetype(tuple_type) || Base.isdispatchtuple(tuple_type))
+    # a tuple's type is its elements' runtime types (jl_f_tuple, tuple_runtime_type), read from
+    # the operands' types in Julia's IR as the collector reads them; an element whose runtime
+    # type is known only at run time makes a tuple WT does not build (MARCH 13.10)
+    local static_types = Type[_collector_static_type(a, ctx.slot_types) for a in args]
+    tuple_type = tuple_runtime_type(static_types)
+    if tuple_type === nothing
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
-            "a tuple of $(tuple_type): its type is its elements' runtime types, known only at run time";
+            "a tuple of $(Tuple{static_types...}): its type is its elements' runtime types, known only at run time";
             idx=idx, detail=call)
         return append_builder!(b, fb)
     end

@@ -4473,7 +4473,7 @@ end
 """
 Julia's `Core.throw_methoderror(f, args...)` (jl_f_throw_methoderror, jl_method_error): throw
 `MethodError(f, (args...,), world)`, whose `args` tuple has the type the collector numbered for
-it (methoderror_args_type). When a value's runtime type is known only at run time, WT cannot
+it (tuple_runtime_type). When a value's runtime type is known only at run time, WT cannot
 build that tuple (MARCH 13.10), and the statement traps, as a dynamic call's class switch traps
 where Julia has no method (dev/formal/ClassIdSwitch.tla): never a MethodError that is not
 Julia's (dev/AUDIT.md A3S1 carries both traps).
@@ -4484,7 +4484,7 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     isempty(args) && error("Core.throw_methoderror takes its function")
     local static(a) = _collector_static_type(a, ctx.slot_types)
     local elem_types = Type[static(a) for a in args[2:end]]
-    local tuple_type = methoderror_args_type(elem_types)
+    local tuple_type = tuple_runtime_type(elem_types)
     if tuple_type === nothing
         unreachable!(bld)   # structural trap: Julia has no method for this call (A3S1)
         return bld
