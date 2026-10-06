@@ -357,3 +357,75 @@ switch's rejection has no case that reaches it; a program whose runtime value is
 now rejects where it answered, a capability loss. The root, a Memory as a classed object, and
 the trampoline's unlocated rejection are on 13.17.
 
+
+## 2026-09-30 — audited through f3791ced (23cdab07..f3791ced: batches 69–72)
+
+The fourth audit, of the third audit's fix batches: 36 findings. Six are wrong answers, all
+reproduced; one of them batch 69 caused (A4E1 c). Batch 72's resolution claimed every class
+read over two Memory classes of one array type rejects; `isa` and typeassert answered.
+
+Area: builder — (A4B1) add_global!'s typed-null arm writes its initializer by hand, a third
+route beside `ref_null!` into add_global_ref!; dart's initializer is a validating builder
+(global.dart:13-21). (A4B2) SimpleVector keeps dead mutable fallbacks (structs.jl:268,
+types.jl:3009, calls.jl:3545) and prose saying "externref array". (A4B3) `builder_diagnose`
+and `reset_validator!`'s false quarantine are on no row. (A4B4) the exception cell type is found
+by content through add_type!'s dedup, not held by handle. (A4B5) add_global!'s arms reject a
+wrong call unevenly. (A4B6) batch 72 fixed an unnamed `===` wrong answer on two Memory{Any}
+(each passed the SimpleVector arm of the runtime egal); no case pins it. (A4B7) 13.7's "dart
+dedups only function types" misses dart's array cache (translator.dart:231, :1223). (A4B8) stale
+prose on the exception payload. (A4B9) L145 pins text; a throw that calls `_emit_throw_top!`
+without pushing passes it.
+
+Area: collection and planning — (A4C1) the shared-array check read `reg.arrays`, which fills as
+bodies compile, so a class no signature names looked unshared; measured: the program the
+auditor gave rejects in this order, the premise holds. (A4C2 = A4E1) WRONG ANSWER, reproduced:
+`isa(x, Memory{Int64})` of a Memory{UInt64} answered 1 where native answers 2, and
+`x::Memory{Int64}` returned 3 where Julia throws TypeError. (A4C3) WRONG ANSWER, reproduced
+(native 23, wasm 13): the single-body closure entry cast its argument, so a struct of another
+class with one deduplicated layout ran this body. (A4C4) a singleton callee no longer enters the
+dispatch-candidate class boundary (trimcollect.jl:430). (A4C5) the one callee representation
+covers singleton functions only; intrinsics and capturing closures stay literals. (A4C6) a third
+key for "compiles to rethrow's body". (A4C7) batch 71's selector-less route is in no lane. (A4C8)
+stale prose.
+
+Area: emission and diagnostics — (A4E1) WRONG ANSWERS, reproduced: (a) and (b) as A4C2; (c)
+batch 69's S ∩ T narrowing sent `x::Union{Int64,Memory{Int64},Memory{UInt64}} isa
+AbstractVector{Int64}` to the concrete arm, answering 1 where native answers 2 (it had
+rejected). (A4E2) WRONG ANSWERS, reproduced (native 1, wasm 2, twice): a tuple of a type operand
+is classed `Tuple{Type{Int64},Int64}`, a type no Julia value has (jl_f_tuple types an element by
+its kind), so `typeof` and `===` over it answer wrong. (A4E3 = A4P1) (A4E4) the shared-array fact
+computed three times and too broadly (a class that cannot be the value counted). (A4E5) the
+TypeError built in two places. (A4E6) a MethodError WT cannot build is an unrecorded trap, and a
+test pins the trap. (A4E7) stale prose. (A4E8) unverified: Julia's emit_isa may guard its S <: T
+fold (jl_is_not_broken_subtype).
+
+Area: enforcement and prose — (A4P1) batch 72 changed the class switch without its model:
+ClassIdSwitch.tla still allowed the trap, and no Broken instance kept the old rule. (A4P2) the
+trampoline's rejection is unlocated, and L118 exempts compile.jl as a whole file. (A4P3) a known
+trap (gu) is asserted as a pass outside R39; A3P3 and A3C6 are on no row; the Planned markers
+omit findings again. (A4P4) test/no_undefined_globals.jl misses closure bodies, methods added to
+Base/Core, overlays, return and branch operands, and Core.Compiler; its "for a year" is false
+(aa809d94 is 2026-07-02). (A4P5 = A4B9) and no test that `rethrow(e)` keeps its throw's stack.
+(A4P6) the LandingPush counterexample has no differential case. (A4P7) stale prose. (A4P8 = A4C7)
+(A4P9) the gm test passes on any WasmCompileError.
+
+Found while fixing: (A4S1) a vtable entry tries its rows in program order, so a row taking `Any`
+placed first runs where Julia selects a more specific method (not measured). (A4S2) the closure
+of A4C3 has one method over `Any`, and the closed world enrolls only its SA specialization, so a
+call with an SB traps where Julia answers 23 (with A3S3).
+
+Resolution: batch 73 (this commit) — model first: ClassIdSwitch.tla's rows test a parameter
+type's classes, a call with a candidate class no test tells apart rejects, and a trap is allowed
+only where Julia has no method; its Broken instances keep the old no-row rule (SharedNoRow) and a
+row that tests only the layout (CastOnly, A4C3's counterexample). A4C1, A4E4: one partition,
+`bare_array_partition`, over the numbered classes a value of the static type may be, each class's
+array type decided from its element (get_array_type!), serves typeof, the class read, both isa
+arms, the inline switch, the trampolines and the planner's check; the dead second check goes.
+A4C2, A4E1: an isa or typeassert of a Memory class whose array type another class the value may
+be is too rejects at its statement (smoke xfails isa_either, typeassert_either,
+narrowed_isa_either; with the check removed each answers wrong). A4C3: every vtable entry, one
+body or several, tests each argument against its parameter type (`_emit_closure_arg_tests!`: a
+classId, a kind, an abstract type's classes, a bare array's own type); the trampolines declare
+their scratch locals to the builder (the dispatch entry's anyref scratch had been an invented
+AnyRef). test/dispatch_method_error.jl pins that the SA body never runs for an SB; with the test
+removed, it answers. Everything else: MARCH 13.17.

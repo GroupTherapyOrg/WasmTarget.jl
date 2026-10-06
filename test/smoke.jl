@@ -1559,8 +1559,16 @@ _g("simplevector_values", Any[
 # (MARCH 13.17 A3S2; the root is a Memory as a classed object, as dart's `_List` is)
 @noinline _sm_mi(x::Int64) = Memory{Int64}(undef, x)
 @noinline _sm_mu(x::Int64) = Memory{UInt64}(undef, x)
+@noinline _sm_mx(x::Int64) = x > 2 ? Memory{UInt64}(undef, 1) : x > 1 ? Memory{Int64}(undef, 1) : x
 _xf("shared_bare_arrays", Any[
     ("typeof_either", (x::Int64) -> (v = Vector{Any}(undef, 2); v[1] = _sm_mi(x); v[2] = _sm_mu(x); typeof(v[x > 0 ? 2 : 1]) === Memory{UInt64} ? 1 : 2), Int64(3)),
+    # isa and typeassert are class reads too: both answered true for the other class
+    # (dev/AUDIT.md A4C2, A4E1)
+    ("isa_either", (x::Int64) -> (v = Vector{Any}(undef, 2); v[1] = _sm_mi(x); v[2] = _sm_mu(x); v[2] isa Memory{Int64} ? 1 : 2), Int64(3)),
+    ("typeassert_either", (x::Int64) -> (v = Vector{Any}(undef, 2); v[1] = _sm_mi(x); v[2] = _sm_mu(x); try; Int64((v[2]::Memory{Int64})[1]); catch e; e isa TypeError ? -7 : -8; end), Int64(3)),
+    # isa over an abstract type narrowed to its one concrete member (Julia's emit_isa) is the
+    # same read (A4E1 c)
+    ("narrowed_isa_either", (x::Int64) -> _sm_mx(x) isa AbstractVector{Int64} ? 1 : 2, Int64(3)),
 ])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads

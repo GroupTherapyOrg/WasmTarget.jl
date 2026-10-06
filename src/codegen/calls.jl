@@ -2068,6 +2068,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     ConcreteRef(size_info.wasm_type_idx, true))
         struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
         num!(bld, Opcode.I64_EQZ)
+    elseif check_type isa DataType && (check_type <: GenericMemory || check_type === Core.SimpleVector) &&
+           check_type in bare_array_partition(ctx.mod, ctx.type_registry, value_type).shared
+        # a bare-array class is told only by an array type no other class the value may be
+        # is; this one's is another's too (Memory{Int64} and Memory{UInt64})
+        _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): its wasm array type is another class's " *
+                               "the value may be, and no test tells them apart")
     elseif check_type !== nothing && isconcretetype(check_type)
         # isa(x, ConcreteType) -> type check
         # Value is already on stack — check if it's actually a ref type
@@ -2342,16 +2348,9 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
     reg = ctx.type_registry
     kinds = UInt32[]   # the bare-array representations (Memory, SimpleVector) under check_type
     outside = UInt32[]
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key, C -> C isa DataType && C <: GenericMemory)
-        (C isa DataType && C <: GenericMemory) || continue
-        arr = get(reg.arrays, eltype(C), nothing)   # no array type: no such value exists
-        arr === nothing && continue
+    for (C, arr) in bare_array_partition(ctx.mod, reg, nothing).all
         C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
     end
-    # a SimpleVector is a bare (array anyref) too, when the closed world has one
-    (reg.jl_svec_idx !== nothing && haskey(reg.type_ids, Core.SimpleVector)) &&
-        (Core.SimpleVector <: check_type ?
-            (reg.jl_svec_idx in kinds || push!(kinds, reg.jl_svec_idx)) : push!(outside, reg.jl_svec_idx))
     if any(in(outside), kinds)
         _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
         return nothing
@@ -2406,8 +2405,8 @@ end
 # heterogeneous AST nodes (md"…" rendering) and any `Any[…]`-of-structs + g(elt).
 # Returns the bytes (result left in the inferred SSA wasm type), or nothing if the
 # call doesn't qualify (caller then falls back to the `unreachable` stub).
-# formal(dev/formal/ClassIdSwitch.tla): the call runs the specialization Julia selects, or
-# traps where Julia has none or the class cannot be told apart.
+# formal(dev/formal/ClassIdSwitch.tla): the call runs the specialization Julia selects, traps
+# where Julia has none, and rejects a candidate class no test tells apart.
 # parity(quarantine: WT dispatches a dynamic call inline over the classes that reach it; dart's dynamic dispatcher reads the classId and calls through its dispatch table, dynamic_dispatchers.dart:178 (dev/MARCH.md 13.7).)
 function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_func,
                                      args, call_arg_types, idx::Int)::Union{Nothing, InstrBuilder}
@@ -2447,7 +2446,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         # no other class shares (emit_class_id!); a call with a candidate whose array type is
         # shared has no switch, and rejects at its statement where the switch would trap
         (Tc <: GenericMemory || Tc === Core.SimpleVector) &&
-            !isempty(_shared_bare_array_classes(ctx.type_registry, Tc)) && return nothing
+            Tc in bare_array_partition(ctx.mod, ctx.type_registry, call_arg_types[dpos]).shared && return nothing
         cw = _function_type(ctx.mod, c.wasm_idx).params[dpos]
         (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing
         tid = ensure_type_id!(ctx.type_registry, Tc)

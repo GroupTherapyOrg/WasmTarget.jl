@@ -641,9 +641,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # a candidate taking a Memory whose wasm array type another class shares has no
             # trampoline row a call could be routed by: the callable rejects where its call
             # would trap on that candidate (dev/AUDIT.md A3S2)
+            local _shared = bare_array_partition(mod, type_registry, nothing).shared
             for _c in _cv_bodies[_T], _Tj in something(_c.julia_params, Type[])
                 (_Tj isa DataType && (_Tj <: GenericMemory || _Tj === Core.SimpleVector) &&
-                 !isempty(_shared_bare_array_classes(type_registry, _Tj))) &&
+                 _Tj in _shared) &&
                     throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                         "a callable with a candidate taking $(_Tj), whose wasm array type another closed-world class shares: no test tells them apart",
                         nothing, nothing)))

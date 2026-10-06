@@ -1489,7 +1489,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         dt_global = ctx.type_registry.type_constant_globals[arg_type]
         global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
     else
-        local _shared = _shared_bare_array_classes(ctx.type_registry, arg_type)
+        local _shared = bare_array_partition(ctx.mod, ctx.type_registry, arg_type).shared
         if !isempty(_shared)
             record_unsupported!(ctx, :unsupported_method,
                 "typeof of a $(something(arg_type, Any)) value that may be $(join(_shared, " or ")), one wasm array type no test tells apart";
@@ -1517,7 +1517,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         # A TypeVar is its own struct; a DataType, Union or UnionAll is a $JlType whose $kind
         # names it (Union and UnionAll share one wasm struct).
         local reg = ctx.type_registry
-        local bare = _bare_array_classes(reg, arg_type)
+        local bare = bare_array_partition(ctx.mod, reg, arg_type).told
         if arg_type !== nothing && typeintersect(arg_type, Union{Type, TypeVar}) === Union{} && isempty(bare)
             emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
         else
@@ -1563,51 +1563,36 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
 end
 
 """
-    _bare_array_classes(registry, T) -> Vector{Tuple{Type, UInt32}}
+    bare_array_partition(mod, registry, T) -> (told, shared, all)
 
-The closed-world classes a value of static type `T` may be that are bare wasm arrays — a
-Memory, a SimpleVector — each with its array type, for the ones no other such class shares:
-an array type two classes share (Memory{Int64} and Memory{UInt64}) cannot tell them apart.
+The numbered classes a value of static type `T` may be (every one when `T` is `nothing`)
+that are bare wasm arrays — a Memory, a SimpleVector — each with its array type (`all`),
+partitioned by whether a test tells it apart: `told` holds each class whose array type no
+other of them is, which `ref.test` answers; `shared` the classes whose array type another of
+them is too (Memory{Int64} and Memory{UInt64}), which no test tells apart, so a class read
+over `T` rejects rather than trap or answer for the wrong class. The array types are decided
+here from the numbered classes (get_array_type!), never from whichever arrays the bodies
+compiled so far happen to have registered. The root is a Memory as a classed object, as
+dart's lists are (`_List` holds its WasmArray).
 parity(quarantine: WT represents a Memory and a SimpleVector as bare wasm arrays, outside the
 numbered classes, so their class is read off the array type.)
 """
-function _bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Tuple{Type, UInt32}}
+function bare_array_partition(mod::WasmModule, reg::TypeRegistry, @nospecialize(T))::NamedTuple{
+        (:told, :shared, :all), Tuple{Vector{Tuple{Type, UInt32}}, Vector{Type}, Vector{Tuple{Type, UInt32}}}}
     local all = Tuple{Type, UInt32}[]
     for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
                                 C -> (C isa DataType && C <: GenericMemory) || C === Core.SimpleVector)
-        if C isa DataType && C <: GenericMemory
-            local arr = get(reg.arrays, eltype(C), nothing)
-            arr === nothing || push!(all, (C, arr))
-        elseif C === Core.SimpleVector && reg.jl_svec_idx !== nothing
+        (T === nothing || typeintersect(T, C) !== Union{}) || continue
+        if C === Core.SimpleVector
+            reg.jl_svec_idx === nothing && error("SimpleVector is numbered without its array type")
             push!(all, (C, reg.jl_svec_idx))
+        else
+            push!(all, (C, get_array_type!(mod, reg, eltype(C))))
         end
     end
-    return Tuple{Type, UInt32}[(C, arr) for (C, arr) in all
-        if count(p -> p[2] == arr, all) == 1 && (T === nothing || typeintersect(T, C) !== Union{})]
-end
-
-"""
-    _shared_bare_array_classes(registry, T) -> Vector{Type}
-
-The closed-world classes a value of static type `T` may be that are bare wasm arrays sharing
-their array type with another such class (Memory{Int64} and Memory{UInt64}): no runtime test
-tells which of them a value is, so a class read over `T` rejects rather than trap on one. The
-root is a Memory as a classed object, as dart's lists are (`_List` holds its WasmArray).
-parity(quarantine: WT represents a Memory as a bare wasm array, outside the numbered classes.)
-"""
-function _shared_bare_array_classes(reg::TypeRegistry, @nospecialize(T))::Vector{Type}
-    local all = Tuple{Type, UInt32}[]
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
-                                C -> (C isa DataType && C <: GenericMemory) || C === Core.SimpleVector)
-        if C isa DataType && C <: GenericMemory
-            local arr = get(reg.arrays, eltype(C), nothing)
-            arr === nothing || push!(all, (C, arr))
-        elseif C === Core.SimpleVector && reg.jl_svec_idx !== nothing
-            push!(all, (C, reg.jl_svec_idx))
-        end
-    end
-    return Type[C for (C, arr) in all
-        if count(p -> p[2] == arr, all) > 1 && (T === nothing || typeintersect(T, C) !== Union{})]
+    local told = Tuple{Type, UInt32}[(C, a) for (C, a) in all if count(p -> p[2] == a, all) == 1]
+    local shared = Type[C for (C, a) in all if count(p -> p[2] == a, all) > 1]
+    return (told=told, shared=shared, all=all)
 end
 
 """
@@ -1615,13 +1600,13 @@ end
 
 The classId of the erased value on the stack, whose static type is `T`: a classed value's
 header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
-header), the id of the one closed-world class whose array type it is (_bare_array_classes).
+header), the id of the one closed-world class whose array type it is (bare_array_partition).
 parity(code_generator.dart:6076 loadClassId)
 """
 function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
     local reg = ctx.type_registry
     local base_idx = reg.base_struct_idx
-    local bare = _bare_array_classes(reg, T)
+    local bare = bare_array_partition(ctx.mod, reg, T).told
     isempty(bare) && return emit_typeof!(b, base_idx)
     local v = allocate_local!(ctx, AnyRef)
     local_set!(b, v)

@@ -36,6 +36,11 @@ u(x::Int64) = Int32(1); u(x::String) = Int32(2)
 # a dynamic call whose candidates take a Memory{Int64} and a Memory{UInt64}, one wasm array type
 @noinline lenany(@nospecialize(x)) = length(x)
 gm(x::Int64) = (v = Any[Memory{Int64}(undef, x), Memory{UInt64}(undef, 2), "abcd"]; lenany(v[1]))
+# a closure's one body, called with a struct of another class and one deduplicated layout
+struct SA; x::Int64; end
+struct SB; x::Int64; end
+@noinline hide(@nospecialize(x)) = Ref{Any}(x)
+gq(n::Int64) = (k = n; f = hide(s -> (s isa SA ? 10 : 20) + k)[]; f(SA(n)); f(hide(SB(n))[])::Int64)
 gu(x::Int64)::Int32 = (v = Any[x, "s", 1.5]; try; u(v[x]); catch e; e isa MethodError ? Int32(7) : Int32(8); end)
 end
 
@@ -116,4 +121,12 @@ end
     # compile time, never a switch that traps on it (dev/AUDIT.md A3S2)
     @test M.gm(3) == 3
     @test_throws WasmTarget.WasmCompileError WasmTarget.compile(M.gm, (Int64,))
+    # a vtable entry tests its argument's class: the SA body never runs for an SB (it cast
+    # and answered 13; dev/AUDIT.md A4C3). Julia answers 23 from the closure's own method,
+    # whose SB specialization the closed world does not enroll (MARCH 13.17 A3S3), so the
+    # entry traps
+    @test M.gq(3) == 23
+    let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gq, (Int64,)), "gq", "3n")
+        @test r[1] === :trap
+    end
 end

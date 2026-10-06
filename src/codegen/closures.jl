@@ -108,6 +108,122 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     return (g, vt_struct)
 end
 
+"""
+    _emit_closure_arg_tests!(tb, mod, registry, closure_type, bodies, c, arity, takes_context, tmp, itmp, lbl) -> tb
+
+Branch to `lbl` unless every erased argument is a value of `c`'s Julia parameter type, as
+Julia's dispatch of the call on its arguments' classes requires: an `Any` parameter takes
+anything; a `Type{X}` parameter X's one type object; a bare-array class (a Memory, a
+SimpleVector) the array type only it is (`bare_array_partition`; a shared one was rejected
+before any vtable is built); a type object's kind its `\$kind`; any other concrete type the
+value's header classId; an abstract type the classIds of its numbered classes (`nothing`
+too, when it admits Nothing). An abstract parameter that also admits a type object or a bare
+array has no such test here, and the vtable is not built. `tmp` is an anyref scratch and
+`itmp` an i32 scratch of the entry.
+formal(dev/formal/ClassIdSwitch.tla): a row runs its body only for a value of its parameter type.
+parity(quarantine: a Julia closure's call dispatches on its erased arguments' runtime classes;
+a dart closure's static types guarantee its arguments, so its vtable entry only casts them,
+translator.dart:2787 _ClosureTrampolineGenerator.generate.)
+"""
+function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                  closure_type::Type, bodies::Vector{ClosureBody}, c::ClosureBody,
+                                  arity::Int, takes_context::Bool, tmp::UInt32, itmp::UInt32,
+                                  lbl)::InstrBuilder
+    local top_idx = registry.base_struct_idx
+    top_idx === nothing && throw(_closure_layout_error(closure_type, bodies,
+        "an entry's argument tests need the class base struct"))
+    local kinds = ((DataType, JL_TYPE_KIND_DATATYPE), (Union, JL_TYPE_KIND_UNION),
+                   (UnionAll, JL_TYPE_KIND_UNIONALL), (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
+    for j in 1:arity
+        local pj = c.params[j + (takes_context ? 1 : 0)]
+        local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
+        (Tj === Any || (Tj === nothing && pj === AnyRef)) && continue       # accepts anything
+        Tj isa Type || throw(_closure_layout_error(closure_type, bodies,
+            "an entry's argument $j has no Julia parameter type"))
+        if Tj isa DataType && Tj <: Type && length(Tj.parameters) == 1 && Tj.parameters[1] isa Type
+            # a `Type{X}` parameter: the operand is X's one type object — identity against
+            # its global (a type object's class is its kind, not X)
+            local tg = get_type_constant_global!(mod, registry, Tj.parameters[1])
+            local_get!(tb, UInt32(j))
+            ref_cast!(tb, EqRef, true)          # ref.eq takes eqref operands
+            global_get!(tb, tg, mod.globals[Int(tg) + 1].valtype)
+            num!(tb, Opcode.REF_EQ)
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+            continue
+        end
+        if Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector)
+            local told = bare_array_partition(mod, registry, nothing).told
+            local k = findfirst(p -> p[1] === Tj, told)
+            k === nothing && throw(_closure_layout_error(closure_type, bodies,
+                "a candidate takes $(Tj), whose wasm array type another class shares"))
+            local_get!(tb, UInt32(j))
+            ref_test!(tb, Int64(told[k][2]), false)
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+            continue
+        end
+        local kc = findfirst(p -> p[1] === Tj, kinds)
+        if kc !== nothing
+            # a type object: a $JlType whose $kind names it
+            local jt = registry.jl_type_idx
+            local_get!(tb, UInt32(j))
+            local_tee!(tb, tmp)
+            ref_test!(tb, Int64(jt), false)
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+            local_get!(tb, tmp)
+            ref_cast!(tb, Int64(jt), false)
+            struct_get!(tb, jt, UInt32(0), I32)
+            i32_const!(tb, Int64(kinds[kc][2]))
+            num!(tb, Opcode.I32_NE)
+            br_if!(tb, lbl)
+            continue
+        end
+        local ids = if isconcretetype(Tj)
+            Int32[ensure_type_id!(registry, Tj)]
+        else
+            (any(K -> typeintersect(K[1], Tj) !== Union{}, kinds) || typeintersect(TypeVar, Tj) !== Union{} ||
+             any(p -> typeintersect(p[1], Tj) !== Union{}, bare_array_partition(mod, registry, nothing).all)) &&
+                throw(_closure_layout_error(closure_type, bodies,
+                    "an entry's argument $j is a $(Tj), which admits a type object or a bare array: no row test tells its values' classes"))
+            concrete_class_ids(registry, Tj)
+        end
+        local takes_nothing = Nothing <: Tj
+        # a classed value's header classId is one of `ids` (`nothing`, the null reference, too
+        # when the type admits it)
+        local done = block!(tb)
+        local_get!(tb, UInt32(j))
+        local_tee!(tb, tmp)
+        ref_is_null!(tb)
+        if_!(tb)
+        takes_nothing ? br!(tb, done) : br!(tb, lbl)
+        end_block!(tb)
+        local_get!(tb, tmp)
+        ref_test!(tb, Int64(top_idx), false)
+        num!(tb, Opcode.I32_EQZ)
+        br_if!(tb, lbl)
+        local_get!(tb, tmp)
+        ref_cast!(tb, Int64(top_idx), false)
+        struct_get!(tb, UInt32(top_idx), UInt32(0), I32)
+        local_set!(tb, itmp)
+        if isempty(ids)
+            br!(tb, lbl)
+        else
+            for (i, id) in enumerate(ids)
+                local_get!(tb, itmp)
+                i32_const!(tb, Int64(id))
+                num!(tb, Opcode.I32_EQ)
+                i > 1 && num!(tb, Opcode.I32_OR)
+            end
+            num!(tb, Opcode.I32_EQZ)
+            br_if!(tb, lbl)
+        end
+        end_block!(tb)
+    end
+    return tb
+end
+
 # The trampoline: the UNIFORM DYNAMIC SIGNATURE (anyref^(1+arity)) → anyref, dart's
 # vtable entry type (closures.dart:648: `[topType]` for every entry). Args arrive
 # boxed/erased; the trampoline unboxes/casts per the body's REAL signature and converts
@@ -119,10 +235,35 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
                       func_name="closure_trampoline", mod=mod)
     local numeric = !isempty(body.results) && body.results[1] in (I32, I64, F32, F64)
-    _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx, captured_info,
-                        UInt32(1 + arity))
+    # an argument whose parameter type is not Any is tested against it (every one of an
+    # arity-0 entry, or of an all-Any body, takes anything)
+    local tested = any(1:arity) do j
+        local Tj = body.julia_params === nothing ? nothing : body.julia_params[j + (takes_context ? 1 : 0)]
+        !(Tj === Any || (Tj === nothing && body.params[j + (takes_context ? 1 : 0)] === AnyRef))
+    end
+    # locals after the params: the result's re-box scratch (a numeric result), then the
+    # argument tests' anyref and i32 scratch
+    tramp_locals = WasmValType[]
+    numeric && push!(tramp_locals, body.results[1])
+    tested && append!(tramp_locals, WasmValType[AnyRef, I32])
+    for (k, t) in enumerate(tramp_locals)
+        builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
+    end
+    if tested
+        local lbl = block!(tb)
+        _emit_closure_arg_tests!(tb, mod, registry, closure_type, ClosureBody[body], body, arity,
+                                 takes_context, UInt32(arity + length(tramp_locals) - 1),
+                                 UInt32(arity + length(tramp_locals)), lbl)
+        _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
+                            captured_info, UInt32(1 + arity))
+        return_!(tb)
+        end_block!(tb)
+        unreachable!(tb)   # structural trap: the arguments are not the body's — Julia throws MethodError here
+    else
+        _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
+                            captured_info, UInt32(1 + arity))
+    end
     end_block!(tb)   # the function frame's own end
-    tramp_locals = numeric ? WasmValType[body.results[1]] : WasmValType[]
     tramp_idx = add_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef],
                               tramp_locals, builder_code(tb))
     declare_funcs!(mod, UInt32[tramp_idx])
@@ -222,7 +363,7 @@ is a `\$JlTop` subtype whose field 0 is its classId; a box, a string, a struct a
 and the first match is narrowed, called and its result converted exactly as a single-body
 entry's, then returned. No match traps: Julia would throw MethodError for the same call.
 formal(dev/formal/ClassIdSwitch.tla): the entry runs the specialization Julia selects, or
-traps where Julia has none or a bare-array argument's class cannot be told apart.
+traps where Julia has none (a candidate class no test tells apart was rejected before).
 parity(quarantine: a Julia generic function used as a value carries every reachable
 specialization of one arity (`string` as a value), chosen by the erased arguments' runtime
 classes; a dart closure has exactly one body per FunctionNode, so one vtable entry per arity
@@ -247,60 +388,14 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
             scratch_of[c.results[1]] = UInt32(arity + length(tramp_locals))
         end
     end
+    push!(tramp_locals, I32)                              # the argument tests' i32 scratch
+    local itmp = UInt32(arity + length(tramp_locals))
+    for (k, t) in enumerate(tramp_locals)
+        builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
+    end
     for c in cands
-        # a bare-array parameter (a Memory, a SimpleVector) is told only by an array type no
-        # other class shares; a callable with a candidate whose array type is shared was
-        # rejected before any vtable is built (compile.jl)
-        for j in 1:arity
-            local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
-            (Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector) &&
-             !isempty(_shared_bare_array_classes(registry, Tj))) &&
-                throw(_closure_layout_error(closure_type, cands,
-                    "a candidate takes $(Tj), whose wasm array type another class shares"))
-        end
         local lbl = block!(tb)
-        for j in 1:arity
-            local pj = c.params[j + (takes_context ? 1 : 0)]
-            pj === AnyRef && continue                   # accepts anything
-            local Tj = c.julia_params === nothing ? nothing : c.julia_params[j + (takes_context ? 1 : 0)]
-            if Tj isa DataType && Tj <: Type && length(Tj.parameters) == 1 && Tj.parameters[1] isa Type
-                # a `Type{X}` parameter: the operand is X's one type object — identity
-                # against its global (a type object's class is DataType, not X)
-                local tg = get_type_constant_global!(mod, registry, Tj.parameters[1])
-                local_get!(tb, UInt32(j))
-                ref_cast!(tb, EqRef, true)          # ref.eq takes eqref operands
-                global_get!(tb, tg, mod.globals[Int(tg) + 1].valtype)
-                num!(tb, Opcode.REF_EQ)
-                num!(tb, Opcode.I32_EQZ)
-                br_if!(tb, lbl)
-                continue
-            end
-            (Tj isa DataType && isconcretetype(Tj)) || throw(_closure_layout_error(closure_type, cands,
-                "a dispatching arity-$arity entry needs a concrete Julia parameter type at position $j, got $Tj"))
-            if Tj <: GenericMemory || Tj === Core.SimpleVector
-                # a bare wasm array carries no classId: its class is the one whose array type
-                # it is (_bare_array_classes; emit_class_id!), unshared here (checked above)
-                local _bare = _bare_array_classes(registry, Tj)
-                local _k = findfirst(p -> p[1] === Tj, _bare)
-                local_get!(tb, UInt32(j))
-                ref_test!(tb, Int64(_bare[_k][2]), false)
-                num!(tb, Opcode.I32_EQZ)
-                br_if!(tb, lbl)
-                continue
-            end
-            # arg j is a $JlTop subtype whose classId is Tj's
-            local_get!(tb, UInt32(j))
-            local_tee!(tb, tmp)
-            ref_test!(tb, Int64(top_idx), false)
-            num!(tb, Opcode.I32_EQZ)
-            br_if!(tb, lbl)
-            local_get!(tb, tmp)
-            ref_cast!(tb, Int64(top_idx), false)
-            struct_get!(tb, UInt32(top_idx), UInt32(0), I32)
-            i32_const!(tb, Int64(ensure_type_id!(registry, Tj)))
-            num!(tb, Opcode.I32_NE)
-            br_if!(tb, lbl)
-        end
+        _emit_closure_arg_tests!(tb, mod, registry, closure_type, cands, c, arity, takes_context, tmp, itmp, lbl)
         local c_scratch = isempty(c.results) ? UInt32(0) : get(scratch_of, c.results[1], UInt32(0))
         _closure_call_body!(tb, mod, registry, closure_type, c, arity, takes_context, base_idx, captured_info, c_scratch)
         return_!(tb)
