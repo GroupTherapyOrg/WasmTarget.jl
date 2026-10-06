@@ -192,15 +192,16 @@ _f3_box_captors(nir::Vector{NirStmt}, box_id::Int)::Set{Type} =
 # (boxfield = the field `_f3_box_captor_fields` matched for it); `_f3_box_captor_fields` and
 # `_f3_refers_to_box` already treat "the box" as any SSA value regardless of how it arrived, so the
 # same one-hop matching recurses unchanged on that SSA id, any depth. `visited` (keyed by specTypes)
-# guards a recursive closure that captures itself. Returns Vector{(nir, spectypes)}.
+# guards a recursive closure that captures itself. Returns Vector{(nir, spectypes)}, or nothing
+# when a captor's body is not in the lookup: its writes are then unknown, and the box stays erased.
 # parity(quarantine: every closure body that can write a Julia `Core.Box`, reached through the
 # MethodInstances its captors are invoked with; the join of their writes restores the type
 # `contents::Any` erased, where dart reads the variable's inferred type,
 # translator.dart:2100 translateTypeOfLocalVariable)
 function _f3_capturing_closure_bodies(nir::Vector{NirStmt}, box_id::Int;
-                                      closure_ir::Function)::Vector{Tuple{Vector{NirStmt}, Any}}
+                                      closure_ir::Function)::Union{Nothing, Vector{Tuple{Vector{NirStmt}, Any}}}
     out = Tuple{Vector{NirStmt}, Any}[]
-    _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id; closure_ir)
+    _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id; closure_ir) || return nothing
     return out
 end
 
@@ -208,13 +209,14 @@ end
 # closure re-captures the same `Core.Box` as `getfield(#self#, field)`, found one hop per body)
 function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}}, visited::Set{Any},
                                        nir::Vector{NirStmt}, box_id::Int;
-                                       closure_ir::Function)::Vector{Tuple{Vector{NirStmt}, Any}}
+                                       closure_ir::Function)::Bool
     field_captors = _f3_box_captor_fields(nir, box_id)
-    isempty(field_captors) && return out
+    isempty(field_captors) && return true
     captor_types = Set{Type}(ty for (ty, _) in field_captors)
     # find the invokes of those closures → the collected IR of their MethodInstances (closure_ir:
-    # the plan's in codegen, the collected pairs in collection; a body outside the closed world
-    # never runs, so its writes never happen)
+    # the plan's in codegen, the collected pairs in collection). A captor whose body the lookup
+    # does not hold has writes no one can see: the view is incomplete (false), and the box
+    # stays erased rather than narrowed (BoxJoin.tla: an invisible write never narrows the cell)
     for s in nir
         local node = s.node
         node isa NirInvoke || continue
@@ -227,19 +229,17 @@ function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}},
         st in visited && continue
         push!(visited, st)
         local hit = closure_ir(mi)
-        hit === nothing && continue
+        hit === nothing && return false
         boxfields = Set{Symbol}(f for (ty, f) in field_captors if ty === clo_T)
-        for body in (hit[1],)
-            body_nir = build_nir(body)
-            push!(out, (body_nir, collect(st.parameters)))
-            # A further-nested closure reaches the SAME box as `getfield(#self#, boxfield)` — find
-            # that read's SSA id in this body and recurse discovery one hop deeper from it.
-            for i in keys(_f3_self_field_reads(body_nir, boxfields))
-                _f3_collect_capturing_bodies!(out, visited, body_nir, i; closure_ir)
-            end
+        body_nir = build_nir(hit[1])
+        push!(out, (body_nir, collect(st.parameters)))
+        # A further-nested closure reaches the SAME box as `getfield(#self#, boxfield)` — find
+        # that read's SSA id in this body and recurse discovery one hop deeper from it.
+        for i in keys(_f3_self_field_reads(body_nir, boxfields))
+            _f3_collect_capturing_bodies!(out, visited, body_nir, i; closure_ir) || return false
         end
     end
-    return out
+    return true
 end
 
 """
@@ -275,6 +275,7 @@ function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int;
         init = init === nothing ? vt : Union{init, vt}
     end
     bodies = _f3_capturing_closure_bodies(nir, box_id; closure_ir)
+    bodies === nothing && return nothing     # a captor's writes are unknown: the box is dynamic
     # A box its creator declares but never writes starts undefined, and a read before any write
     # throws: its values are the closures' writes. Those that do not read the box (typed with the
     # contents unknown, Union{}) give the start; the others are then typed from it below.

@@ -451,5 +451,10 @@ and tests the type object's kind there (smoke group kind_isa; no program was fou
 unguarded fold answered wrong). A3E6 closed by measurement: the AnyRef unbox in compile_call!
 had 0 hits over the smoke corpus, a dynamic div/rem/mod over an erased operand dispatches and
 answers as Julia (four cases), and the unbox applies only where Julia's IR types the operand
-concretely and WT holds it in an anyref local, at the width Julia states.
+concretely and WT holds it in an anyref local, at the width Julia states. Batch 77 — A3C2: the box-capture walk
+skipped a captor whose body its lookup did not hold, so that closure's writes left the join and
+the box could narrow to its creator's init; the walk now reports the view incomplete and the
+box stays erased (BoxJoin.tla: an invisible write never narrows the cell).
+test/f3_box_capture_l0.jl asserts both with a lookup that holds nothing; the old walk fails 2 of
+its 4 checks.
 

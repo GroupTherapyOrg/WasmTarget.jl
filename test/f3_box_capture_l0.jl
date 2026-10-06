@@ -75,4 +75,10 @@ end
     # The join over ALL writes (Int64 init, Int64 `+=` in level2, Float64 literal in level2) must
     # widen to dynamic (`nothing`) — Int64 alone (the one-hop answer) is the documented soundness gap.
     @test WasmTarget.box_contents_type(nir, nir, box_id; closure_ir=_f3_ir_l0) === nothing
+
+    # A captor whose body the lookup does not hold writes what no one can see: the view is
+    # incomplete and the box stays erased, never narrowed to the creator's Int64 init (it was
+    # skipped, so the join saw only the init; dev/AUDIT.md A3C2, BoxJoin.tla)
+    @test WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_ir=mi -> nothing) === nothing
+    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_ir=mi -> nothing) === nothing
 end
