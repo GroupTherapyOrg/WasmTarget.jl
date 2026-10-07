@@ -529,4 +529,12 @@ refusal. A5P7: rows now come most specific first, so with the argument tests rem
 compares the value exactly. A5P8, A4P3: the open IDs are on their Planned lists. A5P1 (= A5C2),
 A5P4 (= A5E9): MARCH 13.14. Everything else, A5P5 included (A3E6 reopened): MARCH 13.17.
 `tuple_runtime_type` now reads its operands: a literal or constant-global operand's type is its
-value's (a type object's kind).
+value's (a type object's kind). Batch 79 — A5E2: `_compile_call_isa` takes emit_isa's cases for
+a test that meets `Type{…}`, asking Julia's own predicates: an intersection `Type{X}` whose values
+are pointer-unique (jl_pointer_egal) is X's identity (ref.eq against X's type constant), the
+intersection `Type` and a kind stay the kind test (jl_isa answers by the kind there), and a
+tested type that meets `Type{…}` otherwise (jl_has_intersect_type_not_kind) is jl_isa's type
+equality at run time, which rejects at its statement (smoke kind_isa's UnionAll case, whose
+intersection is `Type{Vector}`, keeps its kind test). Smoke group type_isa: the old
+lowering answers 2 and -7 where native answers 1; xfail type_or_nothing_isa, which the old
+lowering answered wrong, rejects.

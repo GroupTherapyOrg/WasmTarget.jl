@@ -60,6 +60,7 @@ anchor in `src/` has a row.)
 | Julia's exception stack | `emit_throw_value!`, `emit_rethrow!`, `emit_current_exception!`, `exc_saved_local!` (generate.jl), a region's enter and pop_exception (statements.jl), the catch landing (stackified.jl) | ExceptionStack |
 | SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
 | Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
+| `isa` and typeassert lowering | `_compile_call_isa` (calls.jl) | — a per-statement port of emit_isa's case order (cgutils.cpp), not an algorithm |
 | Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
 | Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
 | Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |

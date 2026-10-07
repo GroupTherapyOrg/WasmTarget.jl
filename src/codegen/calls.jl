@@ -2017,6 +2017,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # S ∩ T. When S <: T every value is; when S ∩ T is empty none is; when S ∩ T is one concrete
     # type C <: T, the test is C's exact one, which WT can make where T's own has none
     # (`isa(x::Union{Nothing,Tuple{Int64,Int64}}, Tuple{Any,Any})`, Base._accumulate1!).
+    local isa_isect = check_type      # S ∩ T, Julia's intersected_type
     if check_type isa Type && value_type isa Type
         # Julia folds S <: T only where its subtyping of kinds is sound (jl_is_not_broken_subtype,
         # subtype.c: not a `Type{…}` against a kind, JuliaLang/julia#27078); elsewhere it tests
@@ -2024,6 +2025,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                             !(value_type isa DataType && value_type.name === Type.body.name)
         local _known = _not_broken && value_type <: check_type
         local _isect = _known ? value_type : typeintersect(value_type, check_type)
+        isa_isect = _isect
         if _known || _isect === Union{}
             drop!(bld)
             i32_const!(bld, _known ? 1 : 0)
@@ -2032,6 +2034,21 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         end
         if _isect isa DataType && isconcretetype(_isect) && _isect <: check_type
             check_type = _isect
+        end
+    end
+    # a test that meets `Type{…}`, as emit_isa makes it: an intersection `Type{X}` whose values
+    # are pointer-unique (jl_pointer_egal) is X's identity (the abstract arm below); elsewhere
+    # emit_isa calls jl_isa at run time. Against a kind or `Type` itself jl_isa answers by the
+    # value's kind, the test the arms below make; against a type that meets `Type{…}` it tests
+    # type equality, which WT has no run-time subtyping for: the isa rejects at its statement
+    if isa_isect isa Type && isa_isect !== Any
+        if is_pointer_egal_type_type(isa_isect)
+            check_type = isa_isect
+        elseif check_type isa Type && check_type !== Type && has_intersect_type_not_kind(check_type)
+            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): Julia tests a type object against " *
+                                   "$(isa_isect) by type equality at run time (jl_isa), which WT does not have")
+            append_builder!(fb, bld)
+            return nothing
         end
     end
 
@@ -2287,7 +2304,23 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # `AbstractVector`, and a parametric abstract's extras were never
             # recorded), compressed to dart's range window when contiguous.
             local _ids = concrete_class_ids(ctx.type_registry, check_type)
-            if !isempty(_ids)
+            if is_pointer_egal_type_type(check_type)
+                # `Type{X}`: X's one type object, by identity (cgutils.cpp emit_isa's
+                # pointer comparison); a value that is not a type object is not X
+                local _tg = get_type_constant_global!(ctx.mod, ctx.type_registry, check_type.parameters[1])
+                local _jt = ctx.type_registry.jl_type_idx
+                local _tl = allocate_local!(ctx, AnyRef)
+                local_tee!(bld, _tl)
+                ref_test!(bld, Int64(_jt), false)
+                if_!(bld; results=WasmValType[I32])
+                local_get!(bld, _tl)
+                ref_cast!(bld, Int64(_jt), false)
+                global_get!(bld, _tg, ctx.mod.globals[Int(_tg) + 1].valtype)
+                num!(bld, Opcode.REF_EQ)
+                else_!(bld)
+                i32_const!(bld, 0)
+                end_block!(bld)
+            elseif !isempty(_ids)
                 local _base_idx = ctx.type_registry.base_struct_idx
                 # Guard against JlType hierarchy refs.
                 # emit_typeof! does ref.cast (ref $JlBase) which traps on $JlType
@@ -2323,6 +2356,28 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     append_builder!(fb, bld)
     return nothing
 end
+
+"""
+    is_pointer_egal_type_type(T) -> Bool
+
+Whether `T` is a `Type{X}` whose values are one pointer, so `isa(x, T)` is `x === X`: Julia's
+own answer (jl_pointer_egal, datatype.c), asked of `Type{X}` as emit_isa asks it.
+parity(quarantine: Julia type objects are values compared by type equality; dart's type test
+is a class test.)
+"""
+is_pointer_egal_type_type(@nospecialize(T))::Bool =
+    T isa DataType && T.name === Type.body.name && ccall(:jl_pointer_egal, Cint, (Any,), T) != 0
+
+"""
+    has_intersect_type_not_kind(T) -> Bool
+
+Whether `T` meets `Type{…}` other than through a kind (Julia's jl_has_intersect_type_not_kind,
+subtype.c): its values include type objects tested by type equality, which emit_isa leaves to
+jl_isa at run time.
+parity(quarantine: Julia type objects are values compared by type equality; dart's type test
+is a class test.)
+"""
+has_intersect_type_not_kind(@nospecialize(T))::Bool = ccall(:jl_has_intersect_type_not_kind, Cint, (Any,), T) != 0
 
 """A located rejection of an `isa` codegen cannot answer — never a constant false. The
 statement's operands are on `bld`; the trap after the recorded diagnostic makes the rest

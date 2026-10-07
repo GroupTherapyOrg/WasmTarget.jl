@@ -1618,6 +1618,20 @@ _g("kind_isa", Any[
     ("unionall_isa_datatype", (x::Int64) -> (T = _sm_kv(x); T isa DataType ? 1 : 2), Int64(3)),
     ("unionall_isa_unionall", (x::Int64) -> (T = _sm_kv(x); T isa UnionAll ? 1 : 2), Int64(3)),
 ])
+# isa against `Type{X}` of an erased value, as Julia's emit_isa tests it: X's one type object
+# by identity where its values are pointer-unique (jl_pointer_egal); any other test that meets
+# `Type{…}` is type equality at run time (jl_isa), which rejects at its statement (dev/AUDIT.md
+# A5E2: the type-object arm kept a kind only when the kind is under T, so it answered 2 and -7)
+_g("type_isa", Any[
+    ("type_identity_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
+    ("type_identity_isa_other_value", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(2)),
+    ("type_identity_isa_other_type", (n::Int64) -> (v = Any[Float64, Int64]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
+    ("type_identity_typeassert", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch; -7; end), Int64(1)),
+    ("type_identity_typeassert_throws", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch e; e isa TypeError ? -7 : -8; end), Int64(2)),
+])
+_xf("type_isa_equality", Any[
+    ("type_or_nothing_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Union{Nothing,Type{Int64}} ? 1 : 2), Int64(1)),
+])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads
 # that field, else throws FieldError(T, f); a type with no fields, or a Tuple (integer field
