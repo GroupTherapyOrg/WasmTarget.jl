@@ -12,7 +12,7 @@
 (* position. `ref.test` and `ref.cast` answer by runtime type.             *)
 (*                                                                         *)
 (* WT. A class's values have the type at its index. A class test reads the *)
-(* classId (emit_isa_classid!, as dart does), but a bare array, which      *)
+(* classId (emit_isa_class_header!, as dart does), but a bare array, which *)
 (* carries no header, is told by `ref.test` of its index                   *)
 (* (bare_array_partition), and an index handed to a class is the type its  *)
 (* values are built with: index inequality must be type inequality.        *)

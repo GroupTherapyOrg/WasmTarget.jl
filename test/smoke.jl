@@ -632,7 +632,7 @@ _g("builtins_invoked", Any[
 ])
 # Arithmetic whose operands are results of an erased (Vector{Any}) closure call: Julia
 # types each result `::Any`, so `+`/`-`/`*` runs on two Any values and rejects located at
-# `dynamic (%a + %b)::Any` ("boxed arithmetic result lacks a concrete Julia source type").
+# `dynamic (%a + %b)::Any`.
 # These passed only while the call result was guessed as its first argument's type. Gap:
 # the typed value channel — each boxed operand unboxed by its classId and the operator
 # dispatched on the classes, the result boxed with the class the chosen method returns.
@@ -659,8 +659,8 @@ end
 # literal operands join). What each case does now:
 # - numeric_join_seeded_phi: rejects located, "`+` on operands typed (Any, Float64) has no
 #   single opcode" at `+(%16, 0.5)` (the phi is Any once VERIFY bans its Int64 seed).
-# - numeric_join_dropped_phi: rejects located, "boxed arithmetic result lacks a concrete
-#   Julia source type" at `+(%26, 1)` (was a runtime "illegal cast" trap).
+# - numeric_join_dropped_phi: rejects located at `+(%26, 1)` (was a runtime "illegal cast"
+#   trap).
 # - box_value_literal_phi: rejects located at the closure's `s += 1` (same message).
 _xf("box_type_recovery", Any[
     ("numeric_join_seeded_phi", (n::Int64) -> (s = 0; foreach(i -> (s += 0.5), 1:n); s isa Float64 ? 1 : 2), Int64(4)),
@@ -1635,6 +1635,10 @@ _g("dynamic_enrollment", Any[
     # a generic function's method with a static parameter, a dispatch candidate for an erased
     # Int64, specialized with Julia's static parameter values (A7C6)
     ("generic_parametric_candidate", (n::Int64) -> (v = Any[n, "s"]; _sm_wf(v[1]) + 10 * _sm_wf(v[2])), Int64(3)),
+    # a static parameter fixed by a Type{X} argument (A8C2: no candidate class, no row, native
+    # 1, wasm 2), and one a match leaves a TypeVar (A8C6: it rejected the static_parameter node)
+    ("closure_parametric_type_position", (n::Int64) -> (k = n; h(x::T, ::Type{S}) where {T<:Integer,S} = 1 + 0k; h(x, y) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[], Int64)::Int64), Int64(3)),
+    ("closure_unbounded_parameter", (n::Int64) -> (k = n; h(x::T) where {T} = (T === Int64 ? 1 : 3) + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
     ("closure_invoke_only_body", (n::Int64) -> (k = n; @noinline h(x::Int64) = 1 + 0k; @noinline h(x::Integer) = 2 + 0k; a = invoke(h, Tuple{Integer}, n); f = _sm_dh(h)[]; a + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     # a function with a DataType method and an Int64 method, called on an erased type object
     # and an erased Int64 (A5E10, A5B4: measured 21)

@@ -16,12 +16,15 @@
 (* WT. The call site's static type S admits a set of classes. The          *)
 (* collector enrolls a row for each method Julia's matching returns for S  *)
 (* (Base._methods_by_ftype), at the method's intersection with S; a method *)
-(* with static parameters at each tuple of observed classes it admits (its *)
-(* intersection is a UnionAll that only classes fix). The entry tries the  *)
-(* rows in the methods' specificity order, each testing the value's        *)
-(* classes; a body reached only by `invoke` is no row. A tuple of numbered *)
-(* classes of S for which Julia's dispatch is ambiguous rejects the        *)
-(* callable at compile time (WT asks Julia per tuple).                     *)
+(* with static parameters at each tuple of candidates over the positions   *)
+(* its static parameters fix, the other positions kept as S has them. A    *)
+(* position's candidates are the numbered classes under it and, for a      *)
+(* static type that is one dispatch type (a `Type{X}`, whose one value is  *)
+(* a type object of no numbered class of its own), that type. The entry    *)
+(* tries the rows in the methods' specificity order, each testing the      *)
+(* value; a body reached only by `invoke` is no row. A tuple of candidates *)
+(* for which Julia's dispatch is ambiguous rejects the callable at compile *)
+(* time (WT asks Julia per tuple).                                         *)
 (*                                                                         *)
 (* THE CLAIM. For every class that may reach the call, the entry runs the  *)
 (* method Julia selects (NoWrongMethod), traps only where Julia has no     *)
@@ -37,14 +40,19 @@
 (* two positions fix, rowed one position at a time and so never            *)
 (* (PerPosition, batch 82: native 1, wasm 2, A7C1); and ambiguity judged   *)
 (* over every type, not the classes that reach the call (AllTypesAmbig,    *)
-(* batch 82: a program Julia runs rejected, A7C4).                         *)
+(* batch 82: a program Julia runs rejected, A7C4); and candidates taken     *)
+(* from the numbered classes alone, so a `Type{X}` position had none        *)
+(* (ClassesOnly, batch 87: an ambiguity ran a row, native -7, wasm 1, and a *)
+(* parametric method fixed by a `Type{X}` had no row, native 1, wasm 2,    *)
+(* A8C1, A8C2).                                                            *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes and methods are opaque; a method's   *)
 (* parameter type is the set of classes it admits; specificity is a       *)
 (* strict partial order; two dispatch positions, a value a pair of         *)
-(* classes; a row's specialization is the pairs it admits; `Fix[m]` is how *)
-(* many positions an observed class must fix for a method with static     *)
-(* parameters to be one signature.                                         *)
+(* elements; a row's specialization is the pairs it admits; `PFix[m]` is   *)
+(* the positions a method's static parameters mention, which a candidate   *)
+(* must fix for it to be one signature; an element outside `Numbered` is a *)
+(* type object, a candidate only as the dispatch type `Type{X}`.           *)
 (*                                                                         *)
 (* formal(src/codegen/trimcollect.jl _dynamic_dispatch_candidate_mis): a   *)
 (* dynamic call enrolls, for every class that may reach it, the body Julia *)
@@ -56,14 +64,15 @@
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS X, Methods, Callables,
+CONSTANTS X, Numbered, Methods, Callables,
           Owner,        \* [Methods -> Callables]
           Param,        \* [Methods -> SUBSET (X \X X)]
           More,         \* SUBSET (Methods \X Methods): <<m, n>> = m is more specific than n
           POrd,         \* [Methods -> Nat]: program order
-          Fix,          \* [Methods -> 0..2]: positions a static parameter needs fixed (0: none)
+          PFix,         \* [Methods -> SUBSET {1, 2}]: positions its static parameters mention
           Statics,      \* SUBSET (SUBSET (X \X X)): the numbered pairs a call site's static type admits
-          SubsetRule, ProgramOrder, SpecOrder, IgnoreAmbig, SkipParametric, PerPosition, AllTypesAmbig
+          SubsetRule, ProgramOrder, SpecOrder, IgnoreAmbig, SkipParametric, PerPosition, AllTypesAmbig,
+          ClassesOnly
 
 Values == X \X X
 VARIABLES f, s, v, outcome, done
@@ -83,9 +92,12 @@ Julia(g, x) == LET ms == {m \in Of(g) : x \in Param[m]} IN
 
 \* the rows WT builds for a call of g at static type S
 Matched(g, S) == {m \in Of(g) : IF SubsetRule THEN S \subseteq Param[m] ELSE S \cap Param[m] # {}}
-RowsOf(m, S) == IF Fix[m] = 0 THEN {<<m, Param[m] \cap S>>}
-                ELSE IF SkipParametric \/ (PerPosition /\ Fix[m] = 2) THEN {}
-                ELSE {<<m, {t}>> : t \in Param[m] \cap S}
+\* a candidate of S: under ClassesOnly (broken) only a pair whose fixed elements are numbered
+Cand(t, ps) == ~ClassesOnly \/ \A p \in ps : t[p] \in Numbered
+RowsOf(m, S) == IF PFix[m] = {} THEN {<<m, Param[m] \cap S>>}
+                ELSE IF SkipParametric \/ (PerPosition /\ Cardinality(PFix[m]) = 2) THEN {}
+                ELSE {<<m, {u \in Param[m] \cap S : \A p \in PFix[m] : u[p] = t[p]}>> :
+                      t \in {x \in Param[m] \cap S : Cand(x, PFix[m])}}
 Rows(g, S) == UNION {RowsOf(m, S) : m \in Matched(g, S)}
 
 \* row r is tried before row q
@@ -103,7 +115,7 @@ AmbiguousOver(g, S) ==
     THEN \E m, n \in Of(g) : m # n /\ <<m, n>> \notin More /\ <<n, m>> \notin More /\
              LET ov == Param[m] \cap Param[n] IN
              ov # {} /\ ~\E p \in Of(g) : <<p, m>> \in More /\ <<p, n>> \in More /\ ov \subseteq Param[p]
-    ELSE \E x \in S : Julia(g, x) = Ambig
+    ELSE \E x \in S : Cand(x, {1, 2}) /\ Julia(g, x) = Ambig
 
 Entry(g, S, x) ==
     IF ~IgnoreAmbig /\ AmbiguousOver(g, S) THEN Reject

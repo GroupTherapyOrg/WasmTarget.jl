@@ -192,11 +192,8 @@ raw callee via `is_func`) — there is no `func` parameter here at all.
 `fbref` is a `Ref{InstrBuilder}` rather than a plain `InstrBuilder`: only
 CHECKED_OPS's is_128bit add/sub reject ever needs to REPLACE the builder (see
 `_compile_call_checked_add!`'s docstring); every other entry just appends to
-`fbref[]`. No rebox link is needed here (unlike `emit_int128_op!`) — none of
-these op names are in `NUMERIC_INTRINSIC_ARG_OPS` (intrinsics_table.jl), so
-the boxed-operand-unbox flag that link depends on can never be set for them;
-the tail rebox in `compile_call!` was already a no-op for every op this
-dispatch owns.
+`fbref[]`. No result rebox is needed here: an operand held as any value is
+rejected before any of these ops (compile_call!, dev/AUDIT.md A3E6).
 parity(quarantine: dispatch over Julia intrinsics dart2wasm has no counterpart for —
 checked_*_int (overflow flag), mixed-width shl/ashr/lshr_int, muladd/fma_float/have_fma,
 bswap_int, flipsign_int; dart's `int` is one i64 with a fixed operator map,

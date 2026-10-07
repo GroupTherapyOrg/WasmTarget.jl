@@ -82,7 +82,7 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     # classIds against each specialization's parameter types, in Julia's specificity order
     local tramps = Dict{Int, UInt32}()
     for arity in arities
-        local cands = _most_specific_first(by_arity[arity])
+        local cands = _most_specific_first(by_arity[arity], closure_type)
         tramps[arity] = length(cands) == 1 ?
             _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info) :
             _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info)
@@ -114,13 +114,14 @@ end
 The bodies in the order a vtable entry tries them: a body of a method more specific than
 another's (Julia's dispatch ranks methods, jl_method_morespecific) before it, and of two
 specializations of one method the more specific first; program order otherwise. The first row
-that matches a value runs the method Julia selects for it: two methods neither more specific,
-over values both admit, rejected the callable before (compile.jl, Base.isambiguous).
+that matches a value runs the method Julia selects for it: a tuple of candidates two methods
+both admit for which Julia's dispatch is ambiguous rejected the callable before (compile.jl,
+ambiguous_class_tuple); a pair no candidate reaches stays in program order.
 formal(dev/formal/Enrollment.tla): rows are tried in the methods' specificity order.
 parity(quarantine: a Julia callable's methods are selected by specificity; a dart closure has
 one body.)
 """
-function _most_specific_first(bodies::Vector{ClosureBody})::Vector{ClosureBody}
+function _most_specific_first(bodies::Vector{ClosureBody}, @nospecialize(closure_type))::Vector{ClosureBody}
     local sig(c) = Tuple{c.julia_params...}
     local precedes(d, c) = d.method !== c.method ? Base.morespecific(d.method, c.method) :
                                                    Base.morespecific(sig(d), sig(c))
@@ -130,7 +131,7 @@ function _most_specific_first(bodies::Vector{ClosureBody})::Vector{ClosureBody}
         local k = findfirst(rest) do c
             !any(d -> d !== c && precedes(d, c), rest)
         end
-        k === nothing && throw(ArgumentError("the specificity order of $(length(rest)) closure bodies has a cycle"))
+        k === nothing && throw(_closure_layout_error(closure_type, rest, "the specificity order of these bodies has a cycle"))
         push!(out, popat!(rest, k))
     end
     return out
@@ -146,25 +147,40 @@ _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
 """
     ambiguous_class_tuple(registry, F, overlap) -> Union{Bool, Nothing, Tuple}
 
-A tuple of the closed world's numbered classes, one per argument of `overlap` (the argument
-types two methods both admit), for which Julia's dispatch of callable type `F` is ambiguous
-(`Base._which` finds no one method), or false when there is none; nothing when the tuples are
-not few enough to ask about (overlap not one tuple type, or more than 4096 tuples), which the
-caller reads as ambiguous.
+A tuple of candidates, one per argument of `overlap` (the argument types two methods both
+admit), for which Julia's dispatch of callable type `F` is ambiguous (`Base._which` finds no one
+method), or false when there is none; nothing when the tuples cannot all be asked about
+(overlap not one tuple type, a Vararg or candidate-less position, or more than 4096 tuples),
+which the caller reads as ambiguous. A position's candidates are dispatch_candidates'.
 parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
 ambiguity; a dart closure has one body.)
 """
 function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospecialize(overlap))::Union{Bool, Nothing, Tuple}
     overlap isa DataType || return nothing
+    any(P -> P isa Core.TypeofVararg, overlap.parameters) && return nothing
     local classes = Any[C for (C, _) in ordered_pairs(registry.type_ids, type_order_key,
                                                       C -> C isa DataType && isconcretetype(C))]
-    local choices = Vector{Any}[Any[C for C in classes if C <: Base.unwrapva(P)] for P in overlap.parameters]
-    prod(length, choices; init=1) > 4096 && return nothing
+    local choices = Vector{Any}[dispatch_candidates(P, classes) for P in overlap.parameters]
+    # a position with no candidate is one this search cannot ask about (formal(dev/formal/
+    # Enrollment.tla): ClassesOnly); a tuple too many to ask about, likewise
+    (any(isempty, choices) || prod(length, choices; init=1) > 4096) && return nothing
     for cs in Iterators.product(choices...)
         Base._which(Tuple{F, cs...}; raise=false) === nothing && return cs
     end
     return false
 end
+
+"""
+    dispatch_candidates(P, classes) -> Vector{Any}
+
+The dispatch types a value at a position of static type `P` may have: `P` itself when it is
+one dispatch type (`Base.isdispatchelem`: a concrete type, or a `Type{X}`, whose one value is a
+type object of no class of its own), else each of `classes` under `P`.
+parity(quarantine: Julia dispatches on a value's dispatch type, a type object's being its
+singleton `Type{X}`; a dart closure has one body.)
+"""
+dispatch_candidates(@nospecialize(P), classes::Vector{Any})::Vector{Any} =
+    Base.isdispatchelem(P) ? Any[P] : Any[C for C in classes if C <: P]
 
 """
     _closure_param_untestable(mod, registry, T) -> Bool

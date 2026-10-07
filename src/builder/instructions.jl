@@ -445,7 +445,7 @@ mutable struct WasmModule
     # the recursion groups add_type! and add_type_group! added, 0-based index ranges in section
     # order: the index their deduplication looks equal groups up in (dart computes its groups
     # once, after every type is defined, types.dart:77; recursion_groups computes the section's
-    # when it is written, and MARCH 13.17 A7B1 has them compared)
+    # when it is written, and checks the two agree)
     type_groups::Vector{UnitRange{Int}}
 end
 

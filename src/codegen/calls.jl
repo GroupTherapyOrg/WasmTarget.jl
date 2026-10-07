@@ -2175,30 +2175,21 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             local_set!(bld, _tk_local)
             _emit_isa_type_object_kinds!(bld, ctx, _tk_local, check_type)
         elseif isa2_val_wasm === ExternRef
-            # Value is externref (Any-typed field). Need proper type check.
-            # For Exception subtypes with DFS typeIds, use typeId comparison
-            # instead of ref.test (which can't distinguish structurally identical types
-            # due to Wasm type canonicalization).
-            local _isa2_check_tid = get_type_id(ctx.type_registry, check_type)
-            if _isa2_check_tid > 0 && check_type <: Exception && ctx.type_registry.base_struct_idx !== nothing
-                # typeId-based check: extract typeId from exception struct + compare
+            # an externref holds a Julia value crossed to the host, or a host value: a class whose
+            # values are objects is its header's classId, as dart's is checker loads it; a bare
+            # array is its array type; a class whose values are host references (no header) has
+            # no test here (dev/AUDIT.md A8B2)
+            local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
+            if target_wasm === ExternRef
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an externref value: $(check_type)'s values are host references, which carry no class")
+            elseif !is_bare_array_class(check_type)
                 any_convert_extern!(bld)
-                emit_typeof!(bld, ctx.type_registry.base_struct_idx)
-                i32_const!(bld, Int64(_isa2_check_tid))
-                num!(bld, Opcode.I32_EQ)
+                emit_isa_class_header!(bld, ctx, check_type)
+            elseif target_wasm isa ConcreteRef
+                any_convert_extern!(bld)
+                ref_test!(bld, Int64(target_wasm.type_idx), false)
             else
-                local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                if !is_bare_array_class(check_type)
-                    # a class is its header's classId, as dart's is checker loads it
-                    any_convert_extern!(bld)
-                    emit_isa_class_header!(bld, ctx, check_type)
-                elseif target_wasm isa ConcreteRef
-                    # a bare array, which has no header, is its array type
-                    any_convert_extern!(bld)
-                    ref_test!(bld, Int64(target_wasm.type_idx), false)
-                else
-                    _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an externref value: $(check_type) has no class test (wasm type $(target_wasm))")
-                end
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an externref value: $(check_type) has no class test (wasm type $(target_wasm))")
             end
         elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
             # anyref/structref value — use ref.test to check concrete box type.
@@ -3327,22 +3318,11 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 num!(fb, Opcode.I64_EXTEND_I32_S)
             end
         end
-        # P4-stdlib (Random hash_seed): unbox ANYREF-housed numeric args —
-        # Any-returning callees (e.g. _foldl_impl) box numerics, and
-        # Union{Nothing, UInt64}-style SSAs live in AnyRef locals; consuming
-        # them raw in i64 arithmetic failed validation. Mirror of the
-        # externref unbox below, minus any_convert_extern. Gated on the
-        # ACTUAL local type (type-derived guesses say I64 for these unions) —
-        # THE shared predicate (values.jl), which `_lower_arith!` reuses.
-        # Fires for the GENERIC arithmetic operators (div/rem/mod here; +,-,*
-        # own their operands in builtins.jl) too: dynamic call sites with
-        # everything typed Any (e.g. `4 - %foldl` in Random.hash_seed) default
-        # to the i64 opcodes but consume raw anyref.
+        # an operand held as any value (an anyref local, _is_boxed_numeric_operand: its SSA's
+        # type is not one of the machine numerics) has a class known only at run time; the arm
+        # that unboxed it at the operator's width with no class test is a rejection (dev/AUDIT.md
+        # A3E6: planted to reject every operand, the smoke corpus still passed)
         if (is_numeric_intrinsic || is_generic_arithmetic) && _is_boxed_numeric_operand(arg, ctx)
-            # an operand held as any value (an anyref local) whose class Julia's IR states as no
-            # one machine type: its class is known only at run time, and this arm unboxed it at
-            # the operator's width with no class test (dev/AUDIT.md A3E6); no smoke or lane case
-            # reaches it with a stated class
             emit_unsupported_stub!(ctx, fb, :unsupported_method,
                 "`$(func)` on an operand held as any value ($(arg isa NirSSA ? arg.julia_type : "unknown")): its class is known only at run time";
                 idx=idx)

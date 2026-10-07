@@ -47,6 +47,10 @@ gam(n::Int64) = (k = n; h(x::Union{Int64,String}) = 1 + 0k; h(x::Union{Int64,Flo
                  g = hide(h)[]; try; g(hide(n)[])::Int64; catch; -1; end)
 # a closure called with an AbstractVector{Int64} while a Memory{Int64} class is numbered
 struct WV; v::AbstractVector{Int64}; end
+# two closure methods ambiguous where an argument is the type object Int64 (a Type{Int64}
+# position has no numbered class of its own)
+gtam(n::Int64) = (k = n; h(::Type{Int64}, y) = 1 + 0k; h(x, ::Type{Int64}) = 2 + 0k; f = hide(h)[];
+                  try; f(hide(Int64)[], hide(Int64)[])::Int64; catch; -7; end)
 # a closure row taking a Type{X} whose values are not one pointer (type equality, jl_isa)
 gte(n::Int64) = (k = n; h(::Type{Tuple{Int64,Integer}}) = 1 + 0k; h(x) = 2 + 0k; f = hide(h)[];
                  f(hide(Tuple{Int64,T} where T<:Integer)[])::Int64)
@@ -149,6 +153,12 @@ end
     @test M.gab(3) == 13
     let e = try; WasmTarget.compile(M.gab, (Int64,)); nothing; catch err; err; end
         @test e isa WasmTarget.WasmCompileError && occursin("admits a type object or a bare array", sprint(showerror, e))
+    end
+    # an ambiguity at a Type{Int64} position rejects (dev/AUDIT.md A8C1: the search found no
+    # candidate there and ran a row, native -7, wasm 1)
+    @test M.gtam(3) == -7
+    let e = try; WasmTarget.compile(M.gtam, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("which are ambiguous", sprint(showerror, e))
     end
     # a Type{X} parameter jl_isa tests by type equality has no entry row: a WasmCompileError
     # naming the callable (A6B4 = A6C6: it raised a WasmInternalError)

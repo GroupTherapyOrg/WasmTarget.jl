@@ -366,7 +366,8 @@ of its function applicable to its argument types whose dispatch classes the coll
 instantiates (in its signatures or allocations), as dart builds dispatch rows only for the
 classes of its closed component; and for a callable constructed and called dynamically, every
 method Julia's matching gives the call's static signature, at its intersection (a method with
-static parameters at each observed class it admits).
+static parameters at each tuple of candidates over the positions its static parameters
+mention).
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
 its front end's whole-program type flow analysis.)
 """
@@ -615,7 +616,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 local m = which(g, concrete_args)
                 local ssig = Tuple{Core.Typeof(g), atypes...}
                 ssig <: m.sig || continue
-                local cmi = CC.specialize_method(m, ssig, Core.svec())
+                # the static parameters' values at ssig, as Julia's match computes them (A8C3)
+                local cmi = CC.specialize_method(m, ssig,
+                    ccall(:jl_type_intersection_with_env, Any, (Any, Any), ssig, m.sig)[2])
                 if !(cmi in seen)
                     push!(seen, cmi)
                     push!(out, cmi)
@@ -670,8 +673,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # (Base._methods_by_ftype) gives every method whose parameter types intersect it, each
     # specialized at the intersection (a method narrower than an erased argument included;
     # the entry tries them in Julia's specificity order, closures.jl). A method with static
-    # parameters intersects to a UnionAll, which Julia specializes at each argument's class
-    # when it runs: it is enrolled at each observed class it admits
+    # parameters a match leaves unfixed is enrolled at each tuple of candidates (below)
     for (_T, ds) in callable_invocations
         local enroll_closure!(cmi, at) = (cmi === nothing || cmi in seen) ? nothing :
             (push!(seen, cmi); push!(out, cmi);
@@ -679,23 +681,26 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
              nothing)
         local _mms2 = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
-            if mm.spec_types isa DataType
+            # a match is one signature when its intersection is a DataType and every static
+            # parameter has a value; otherwise (a UnionAll, or a static parameter left a TypeVar,
+            # A8C6) Julia specializes it at each argument's class when it runs
+            if mm.spec_types isa DataType && !any(sp -> sp isa TypeVar, mm.sparams)
                 enroll_closure!(CC.specialize_method(mm.method, mm.spec_types, mm.sparams), "")
                 continue
             end
             # the classes the program instantiates are every class a value can have (the
             # closed world, as the candidate loop above reads it): the method is enrolled at
-            # each tuple of observed classes over the erased positions that it admits (a
-            # static parameter may need several positions fixed); a method no observed tuple
-            # fixes is reached by no value
+            # each tuple of candidates over the positions its static parameters mention, the
+            # other positions kept as the call has them (formal(dev/formal/Enrollment.tla):
+            # PFix); a method no candidate tuple fixes is reached by no value
             local msig = Base.unwrap_unionall(mm.method.sig)
-            local admits(C, p) = (local P = msig.parameters[min(p + 1, length(msig.parameters))];
-                                  P = Base.unwrapva(P); P isa TypeVar && (P = P.ub);
-                                  typeintersect(C, P) !== Union{})
-            local observed = sort!([C for C in runtime_types
-                                    if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))]; by=string)
-            local choices = [isconcretetype(ds[p]) ? Any[ds[p]] :
-                             Any[C for C in observed if C <: ds[p] && admits(C, p)] for p in eachindex(ds)]
+            local param(p) = Base.unwrapva(msig.parameters[min(p + 1, length(msig.parameters))])
+            local mentions(p) = (P = param(p); P isa TypeVar || Base.has_free_typevars(P))
+            local admits(C, p) = (P = param(p); P isa TypeVar && (P = P.ub); typeintersect(C, P) !== Union{})
+            local observed = sort!(Any[C for C in runtime_types
+                                       if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))]; by=type_order_key)
+            local choices = [!mentions(p) ? Any[ds[p]] :
+                             Any[C for C in dispatch_candidates(ds[p], observed) if admits(C, p)] for p in eachindex(ds)]
             for cs in Iterators.product(choices...)
                 local cms = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
                 for cm in (cms === nothing ? () : cms)

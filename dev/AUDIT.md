@@ -750,3 +750,60 @@ test, is a located rejection; planted to reject every operand, it leaves the who
 passing, so no case reached it with a class Julia's IR states, and the tail rebox it fed, dead with
 it, goes. Smoke narrowed_union_arithmetic pins arithmetic on a value narrowed out of a Union, and
 xfail erased_div_any the rejection.
+
+## 2026-10-07 — audited through b62cc656 (18a25734..b62cc656: batches 87–90)
+
+The eighth audit, of the seventh audit's fix batches: 39 findings. Each predicted wrong answer
+was measured (native, then wasm): four are wrong answers today, all from one root batch 87 put in.
+Its candidates at a position were the closed world's numbered classes alone, and no class is a
+`Type{X}`: an ambiguity at a `Type{Int64}` position found no tuple to ask about and ran a row
+(native -1, wasm 1; native -7, wasm 1; native -1, wasm 1), and a static parameter a `Type{X}`
+argument fixes got no row (native 1, wasm 2). Batch 82's check had rejected the ambiguity.
+
+Area: builder — (A8B1 = A8C1 = A8P1) the wrong answers above. (A8B2) the externref isa arm
+lost its rejection for a class whose values are host references, and answered 0. (A8B3) an
+Exception-only classId read in that arm was a second path. (A8B4 = A8P10) the writer's group
+comparison is untested, and skipped after a direct push. (A8B5) TypeIdentity.tla assumes the
+component precondition. (A8B6, A8B7) prose: the type_groups comment, TypeIdentity's class test.
+(A8B8 = A8E7) emit_isa_class_header!'s `$JlBase` guard and closure branch are not dart's.
+
+Area: collection and planning — (A8C2) the wrong answer above. (A8C3) the candidate loop's
+monomorphic branch still specialized with no static parameter values. (A8C4 = A8P3) the selector
+table's `_classid_dispatchable` admitted a String's CodeUnits and SimpleVector (measured: an
+internal error planning the module). (A8C5 = A8E4) a String's CodeUnits is decided four more ways,
+three by bare name, and its byte-array layout is WT's. (A8C6) a match whose static parameter is a
+free TypeVar went to the one-signature branch (measured: rejected). (A8C7) the product ran over
+every erased position, unbounded. (A8C8) the 4096 bound is not in the model. (A8C9 = A8P9) a cycle
+raised an unlocated ArgumentError. (A8C10 = A8P11) observed classes sorted by string, a second
+order. (A8C11) prose.
+
+Area: emission and diagnostics — (A8E1, A8E2) a closure held as its context reaching other class
+readers (measured: e1 and e1t answer 1 as native does, e2 rejects; A7S1 carries the root).
+(A8E3) the AnyRef isa arm tests numerics, String, Symbol and MemoryRef by layout, a second path.
+(A8E5 = A8P4) batch 90 left prose saying the arm unboxes. (A8E6) the externref intrinsic arm
+unboxes at the operator's width. (A8E8 = A8C11) prose.
+
+Area: enforcement and prose — (A8P2) nothing pins batch 90. (A8P5) A7C4 and A7C6 have no
+behavioral pin. (A8P6) A7B5 and the A7C4 remainder on no Planned row. (A8P7) no Fix=1 method in
+Enrollment's instance, so SkipParametric and PerPosition checked one thing. (A8P8, A8P12) prose
+and placement.
+
+Resolution: batch 91 (this commit) — model first: Enrollment.tla's values include a type object
+with no numbered class, whose dispatch type is `Type{X}`; a method's static parameters name the
+positions they fix (PFix, a one-position method included, A8P7); a position's candidates are the
+numbered classes and, for a static type that is one dispatch type, that type. The Broken instance
+ClassesOnly keeps batch 87's numbered-only candidates, and TLC rejects it with the seven others.
+A8B1 = A8C1 = A8P1, A8C2: `dispatch_candidates` (Base.isdispatchelem, else the classes under the
+type) gives both the ambiguity search and the parametric product their candidates; a position
+with none, or a Vararg one, rejects. A8C6: a match leaving a static parameter a TypeVar is rowed
+per candidate. A8C7: the product runs over the positions a static parameter mentions, the others
+kept. A8C10: type_order_key. A8C3: the monomorphic branch takes Julia's static parameter values.
+A8C4 = A8P3: `_classid_dispatchable` asks is_bare_array_class; the CodeUnits program now traps
+instead of failing the plan, and the trap is on MARCH 13.17. A8C9 = A8P9: the cycle raises
+_closure_layout_error naming the callable. A8B2, A8B3: the externref arm rejects a class whose
+values are host references, and the Exception read goes. A8B6, A8B7, A8B8 = A8E7, A8C11,
+A8E5 = A8P4: as found. Smoke dynamic_enrollment gains closure_parametric_type_position and
+closure_unbounded_parameter, and test/dispatch_method_error.jl gtam: batch 90's code answers 2,
+rejects, and runs a body where native answers 1, 1 and -7. A8P6: A7B5 is on C7's Planned list
+(the A7C4 remainder stays with A3S3). Everything else (A8B4 = A8P10, A8B5, A8C4's trap, A8C5 =
+A8E4, A8C8, A8E3, A8E6, A8P2, A8P5): MARCH 13.17.

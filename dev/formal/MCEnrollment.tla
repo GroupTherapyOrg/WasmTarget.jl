@@ -9,19 +9,34 @@
 (* q: q1 admits {I, J, S} x X, q2 {I, J, F} x X, q3 {I} x X, more specific     *)
 (* than both: only a J is ambiguous, and no J reaches a call at (I, I).        *)
 (* b: b1 admits {I, S} x X, b2 {I, F} x X: an I is ambiguous.                  *)
-(* k: kI admits only (I, I). Static types: every pair, and (I, I).            *)
+(* k: kI admits only (I, I).                                                  *)
+(* t: t1 admits (T, _) (`h(::Type{Int64}, y)`; T is the type object Int64),  *)
+(* t2 admits (_, I) (`h(x, ::Int64)`): (T, I) is ambiguous.                  *)
+(* p: pA admits every pair, pP only (I, T) with static parameters both       *)
+(* positions mention (`h(x::T, ::Type{S}) where {T<:Integer, S}`).           *)
+(* o: oA admits every pair, oP admits (I, _) with a static parameter of the  *)
+(* first position only (`h(x::T, y) where T<:Integer`).                      *)
+(* Static types: every pair, and (I, I).                                     *)
 EXTENDS Enrollment
-MCX == {"I", "J", "S", "F"}
-MCCallables == {"h", "a", "g", "q", "b", "k"}
-MCMethods == {"hA", "hP", "aX", "aY", "aP", "gI", "gN", "q1", "q2", "q3", "b1", "b2", "kI"}
+MCX == {"I", "J", "S", "F", "T"}
+MCNumbered == {"I", "J", "S", "F"}
+MCCallables == {"h", "a", "g", "q", "b", "k", "t", "p", "o"}
+MCMethods == {"hA", "hP", "aX", "aY", "aP", "gI", "gN", "q1", "q2", "q3", "b1", "b2", "kI", "t1", "t2", "pA", "pP", "oA", "oP"}
 MCOwner == [m \in MCMethods |-> CASE m \in {"hA", "hP"} -> "h"
                                   [] m \in {"aX", "aY", "aP"} -> "a"
                                   [] m \in {"gI", "gN"} -> "g"
                                   [] m \in {"q1", "q2", "q3"} -> "q"
                                   [] m \in {"b1", "b2"} -> "b"
+                                  [] m \in {"t1", "t2"} -> "t"
+                                  [] m \in {"pA", "pP"} -> "p"
+                                  [] m \in {"oA", "oP"} -> "o"
                                   [] OTHER -> "k"]
 Row(xs) == xs \X MCX
-MCParam == [m \in MCMethods |-> CASE m = "hA" -> MCX \X MCX
+MCParam == [m \in MCMethods |-> CASE m \in {"hA", "pA", "oA"} -> MCX \X MCX
+                                  [] m = "t1" -> Row({"T"})
+                                  [] m = "t2" -> MCX \X {"I"}
+                                  [] m = "pP" -> {<<"I", "T">>}
+                                  [] m = "oP" -> Row({"I"})
                                   [] m \in {"hP", "aP", "kI"} -> {<<"I", "I">>}
                                   [] m = "aX" -> Row({"I"})
                                   [] m = "aY" -> MCX \X {"I"}
@@ -32,10 +47,12 @@ MCParam == [m \in MCMethods |-> CASE m = "hA" -> MCX \X MCX
                                   [] m = "q3" -> Row({"I"})
                                   [] m = "b1" -> Row({"I", "S"})
                                   [] OTHER -> Row({"I", "F"})]
-MCMore == {<<"hP", "hA">>, <<"aP", "aX">>, <<"aP", "aY">>, <<"gI", "gN">>, <<"q3", "q1">>, <<"q3", "q2">>}
-MCPOrd == [m \in MCMethods |-> CASE m \in {"hA", "aX", "gN", "q1", "b1", "kI"} -> 1
-                                  [] m \in {"aY", "q2", "b2"} -> 2
+MCMore == {<<"pP", "pA">>, <<"oP", "oA">>, <<"hP", "hA">>, <<"aP", "aX">>, <<"aP", "aY">>, <<"gI", "gN">>, <<"q3", "q1">>, <<"q3", "q2">>}
+MCPOrd == [m \in MCMethods |-> CASE m \in {"hA", "aX", "gN", "q1", "b1", "kI", "t1", "pA", "oA"} -> 1
+                                  [] m \in {"aY", "q2", "b2", "t2"} -> 2
                                   [] OTHER -> 3]
-MCFix == [m \in MCMethods |-> IF m \in {"hP", "aP"} THEN 2 ELSE 0]
+MCPFix == [m \in MCMethods |-> CASE m \in {"hP", "aP", "pP"} -> {1, 2}
+                                 [] m = "oP" -> {1}
+                                 [] OTHER -> {}]
 MCStatics == {MCX \X MCX, {<<"I", "I">>}}
 =============================================================================

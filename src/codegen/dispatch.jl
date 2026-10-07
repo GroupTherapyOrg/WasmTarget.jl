@@ -18,7 +18,7 @@ arrays with no classId header, and `Number`/primitive types; every dart receiver
 whose struct carries a classId, so dart needs no admission predicate)"""
 _classid_dispatchable(@nospecialize(T))::Bool =
     T isa DataType && isstructtype(T) && !isprimitivetype(T) && !(T <: Number) &&
-    !(T <: GenericMemory) && !(T <: Core.GenericMemoryRef)
+    !is_bare_array_class(T) && !(T <: Core.GenericMemoryRef)
 
 """
 One entry in a dispatch table (compile-time): the typeId tuple of a registered

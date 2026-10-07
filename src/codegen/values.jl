@@ -872,6 +872,9 @@ captured-fields context, which carries the classId at field 0 outside the class 
 Anything else (a type object, a bare array, a host value) is not. dart's is checker loads the classId from the
 top struct and compares it, whichever struct the class's own values are.
 parity(types.dart:907 IsCheckerCodeGenerator.generate): loadClassId, then the classId compare.
+The `ref.test \$JlBase` before it and the closure-context alternative: parity(quarantine: a
+Julia value held as any value may be a type object, a bare array or a closure's context, none
+of them a dart object; dart's every value of a top type is an object with the header.)
 """
 function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
     local base = ctx.type_registry.base_struct_idx
@@ -1093,12 +1096,12 @@ end
 """
     _is_boxed_numeric_operand(arg, ctx) -> Bool
 
-True when `arg` arrives in a physically `AnyRef` local — the erased/boxed
-operand shape a numeric operation must unbox before consuming (P4-stdlib:
-`Any`-returning callees box numerics, and `Union{Nothing,UInt64}`-style SSAs
-live in AnyRef locals). An SSA whose REFINED type is already numeric is NOT
-included: as in dart's translator.dart:2099 translateTypeOfLocalVariable, the load
-is THE single unbox source there, and a second unbox double-converted.
+True when `arg` arrives in a physically `AnyRef` local and its refined type is not one of the
+machine numerics (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool): a numeric operation on
+it rejects in compile_call! (its class is known only at run time, dev/AUDIT.md A3E6), and
+`_lower_arith!` unboxes it at the width its node states. An SSA whose refined type is a machine
+numeric is not included: its load is the one unbox (translator.dart:2099
+translateTypeOfLocalVariable).
 parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 """
 function _is_boxed_numeric_operand(arg::NirNode, ctx::AbstractCompilationContext)::Bool
