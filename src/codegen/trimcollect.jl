@@ -611,6 +611,18 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         foreach(s -> observe_callable!(s.julia_type), nir)
         for (sidx, s) in enumerate(nir)
             local node = s.node
+            # a function a statement holds as a literal operand is a value that statement
+            # passes on, as surely as one an SSA type names (a capture-less closure passed to a
+            # function that returns it erased reached a dynamic call with no row, MARCH 13.17
+            # A7S1 stage 4: native 4, wasm trap)
+            if node isa NirCall || node isa NirInvoke || node isa NirNew
+                for a in node.operands
+                    local v = a isa NirLiteral ? a.value :
+                              (a isa NirGlobalRef && a.bound && isconst(a.mod, a.name)) ? a.value : nothing
+                    (v isa Function && !(v isa Core.Builtin) && !(v isa Core.IntrinsicFunction)) &&
+                        observe_callable!(typeof(v))
+                end
+            end
             # (dart: creating a Lambda compiles its target): a CONSTRUCTED
             # closure enrolls its callable body — the erased/dynamic call site rides
             # the vtable trampoline, which needs the body compiled. Specialized with

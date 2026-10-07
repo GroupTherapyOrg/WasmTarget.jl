@@ -351,6 +351,21 @@ end
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`.
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)::InstrBuilder
+    if pt isa ConcreteRef && any(((T, info),) -> info.wasm_type_idx == pt.type_idx && is_closure_type(T) &&
+                                                 info.field_offset == 1, registered_structs(registry))
+        # a closure argument is its closure object (maybe_wrap_closure!): the body takes its
+        # context, field 2, as dart's direct closure call reads it (code_generator.dart:2656
+        # _generateDirectClosureCall; it trapped casting the object, MARCH 13.17 A7S1 stage 4)
+        local cb = get_closure_base_struct!(mod, registry)
+        local_get!(tb, UInt32(j)); ref_test!(tb, Int64(cb), false)
+        if_!(tb; results=WasmValType[pt])
+        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(cb), false); struct_get!(tb, cb, UInt32(2), AnyRef)
+        ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
+        else_!(tb)
+        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
+        end_block!(tb)
+        return tb
+    end
     local_get!(tb, UInt32(j))
     if pt in (I32, I64, F32, F64)
         emit_classid_unbox!(tb, mod, registry, pt)

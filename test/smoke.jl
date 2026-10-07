@@ -1813,6 +1813,11 @@ _g("closure_values", Any[
     # a closure captured by another, compared with `===`: the capture is held as its object
     # (A10E3: a cast of the object to its context trapped where native answers 1)
     ("captured_closure_egal", (n::Int64) -> (c = x -> x + n; f = _sm_dh(c)[]; f(1); mk = () -> (y -> c(y)); a = _sm_dh(mk())[]; b = _sm_dh(mk())[]; a === b ? 1 : 2), Int64(3)),
+    # a closure passed to an erased closure call: the callee, a capture-less closure the
+    # program passes on as a literal, has its row, and the argument arrives as its object,
+    # whose context the body takes (MARCH 13.17 A7S1 stage 4: native 4, wasm trap)
+    ("closure_argument_erased_call", (n::Int64) -> (k = n; c = x -> x + k; f = _sm_dh(y -> y(1))[]; f(c)::Int64), Int64(3)),
+    ("fix2_argument_erased_call", (n::Int64) -> (f = _sm_dh(y -> y(1))[]; f(Base.Fix2(+, n))::Int64), Int64(3)),
 ])
 # a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct
 # field, any value narrowed to a method's parameter (A8C4: a tuple field laid out as a class

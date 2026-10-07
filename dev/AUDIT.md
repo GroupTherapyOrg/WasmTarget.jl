@@ -982,4 +982,11 @@ module has vtables. With no context left at an erased position, the class read, 
 the class-header test lose their context alternatives, and register_struct_type! sends a closure
 type to its context again (batch 98's one registration, now safe). Smoke 750/750 and probes
 225/225 unchanged; with the context wrap removed, closure_values' typeof_erased_fix2,
-typeof_erased_fix2_held and isa_erased_fix2 trap or answer 2.
+typeof_erased_fix2_held and isa_erased_fix2 trap or answer 2. Batch 101 — A7S1 stage 4: a closure passed to an
+erased closure call trapped where native answers 4, twice over: the callee, a capture-less
+closure the program passed on only as a literal operand, was never observed as a callable (no
+row, no object), and the trampoline cast the argument's object to its context. The collector now
+observes a function held as a literal or constant operand as it observes one an SSA type names,
+and the trampoline reads an object's context (field 2), as dart's direct closure call does.
+Smoke closure_values gains closure_argument_erased_call and fix2_argument_erased_call; with the
+trampoline unwrap removed both trap, and batch 95 and 99 trap on both.
