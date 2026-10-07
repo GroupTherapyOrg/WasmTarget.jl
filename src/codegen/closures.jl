@@ -336,7 +336,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                             captured_info, UInt32(1 + arity))
         return_!(tb)
         end_block!(tb)
-        unreachable!(tb)   # structural trap: the arguments are not the body's — Julia throws MethodError here
+        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
     else
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
                             captured_info, UInt32(1 + arity))
@@ -346,6 +346,67 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                               tramp_locals, builder_code(tb))
     declare_funcs!(mod, UInt32[tramp_idx])
     return tramp_idx
+end
+
+"""
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity) -> tb
+
+A vtable entry whose arguments no body takes: Julia's MethodError, `f` the closure (param 0)
+and `args` the tuple of the arguments' classes. Each args tuple the collector numbered for a
+no-method call of this callable (registry.method_error_args) is tested by its elements'
+classIds and built from the erased arguments; arguments of a class with no numbered tuple, or
+read by no class header, trap.
+formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
+parity(translator.dart:2787 _ClosureTrampolineGenerator.generate): dart's entry for an argument
+count the closure does not take calls noSuchMethod.
+"""
+function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                       @nospecialize(closure_type), arity::Int)::InstrBuilder
+    local base = registry.base_struct_idx
+    local headed(C) = isconcretetype(C) && !(C <: Type) && !is_bare_array_class(C) &&
+                      (isstructtype(C) || isprimitivetype(C))
+    local tuples = DataType[T for T in registry.method_error_args
+                            if length(T.parameters) == arity && all(headed, T.parameters) &&
+                               (local ms = Base._methods_by_ftype(Tuple{closure_type, T.parameters...},
+                                                                  nothing, -1, Base.get_world_counter());
+                                ms !== nothing && isempty(ms))]
+    if base === nothing || isempty(tuples)
+        unreachable!(tb)   # structural trap: no numbered args tuple (MARCH 13.17 A3S1)
+        return tb
+    end
+    ensure_exception_tag!(mod)
+    local err_info = register_struct_type!(mod, registry, MethodError)
+    err_info === nothing && error("MethodError layout is unavailable")
+    local err_def = mod.types[Int(err_info.wasm_type_idx) + 1]
+    for T in tuples
+        for (j, C) in enumerate(T.parameters)
+            local_get!(tb, UInt32(j)); ref_test!(tb, Int64(base), false)
+            if_!(tb; results=WasmValType[I32])
+            local_get!(tb, UInt32(j)); emit_typeof!(tb, base)
+            i32_const!(tb, Int64(ensure_type_id!(registry, C))); num!(tb, Opcode.I32_EQ)
+            else_!(tb); i32_const!(tb, 0); end_block!(tb)
+            j > 1 && num!(tb, Opcode.I32_AND)
+        end
+        if_!(tb)
+        local args_info = register_tuple_type!(mod, registry, T)
+        args_info === nothing && error("$(T) layout is unavailable")
+        local tup_def = mod.types[Int(args_info.wasm_type_idx) + 1]
+        emit_struct_prefix!(tb, registry, MethodError, err_info)
+        local_get!(tb, UInt32(0))   # the closure, as the value it was called as
+        local fw = err_def.fields[wasm_field_idx(err_info, 1) + 1].valtype
+        fw === AnyRef || ref_cast!(tb, fw, true)
+        emit_struct_prefix!(tb, registry, T, args_info)
+        for j in 1:arity
+            _closure_narrow_arg!(tb, mod, registry, j, tup_def.fields[wasm_field_idx(args_info, j) + 1].valtype)
+        end
+        struct_new!(tb, args_info.wasm_type_idx)
+        i64_const!(tb, Int64(WASM_WORLD_AGE))
+        struct_new!(tb, err_info.wasm_type_idx)
+        emit_throw_value!(tb, mod)
+        end_block!(tb)
+    end
+    unreachable!(tb)   # structural trap: arguments of a class with no numbered args tuple (A3S1)
+    return tb
 end
 
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`.
@@ -495,7 +556,7 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
         return_!(tb)
         end_block!(tb)
     end
-    unreachable!(tb)   # structural trap: no specialization matched — Julia throws MethodError here
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
     end_block!(tb)
     tramp_idx = add_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef],
                               tramp_locals, builder_code(tb))

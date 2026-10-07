@@ -293,6 +293,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     trace === nothing || ensure_trace_imports!(mod)
     local translator = Translator(plan, trace)
     type_registry = TypeRegistry()
+    append!(type_registry.method_error_args,
+            sort!(DataType[T for T in plan.error_args_types if T <: Tuple]; by=type_order_key))
     func_registry = FunctionRegistry()
 
     # Create base struct type FIRST — all other structs will be subtypes — then the $JlType
@@ -494,6 +496,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
     _reachable = _collect_reachable_ir_types(function_data)
+    # the args tuple of each MethodError a dynamic call throws (the collector's no-method tuples)
+    union!(_reachable, plan.error_args_types)
+    isempty(plan.error_args_types) || push!(_reachable, MethodError, UInt64)
 
     # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)

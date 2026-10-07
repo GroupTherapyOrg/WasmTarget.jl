@@ -423,6 +423,9 @@ mutable struct TypeRegistry
     closure_vtable_globals::Dict{Type, UInt32}         # closure type -> vtable global
     # the vtable of a closure no dynamic call reaches: no entry (get_empty_closure_vtable!)
     empty_closure_vtable_global::Union{Nothing, UInt32}
+    # the args tuple of each MethodError a dynamic call throws (the plan's error_args_types),
+    # in type order: the classes a no-method entry builds its error from
+    method_error_args::Vector{DataType}
     # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
@@ -462,6 +465,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Type, UInt32}(),  # closure layouter
     nothing,                                            # empty_closure_vtable_global
+    DataType[],                                         # method_error_args
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants

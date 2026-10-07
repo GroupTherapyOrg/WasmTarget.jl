@@ -4,7 +4,13 @@
 #
 #   bash dev/lanes.sh            # all four lanes on the default `julia`
 #   JULIA="julia +1.13" bash dev/lanes.sh
-#   bash dev/lanes.sh --fast     # ratchet + smoke only (~1 min)
+#   bash dev/lanes.sh --fast     # ratchet + smoke only (~5 min): the inner loop, never a push
+#
+# The default run is the gate before a push (AGENTS.md, L153): it adds the byte probes, the
+# registry, the models, smoke on Julia 1.13 and the whole Pkg.test suite in one process
+# (WT_NO_SHARD=1, every family CI's shards run), so CI confirms rather than discovers: a
+# batch that passed smoke and broke a runtests family cost a CI cycle and a re-stacked branch
+# (batch 101, 2026-10-07).
 #   bash dev/lanes.sh --all      # also the deep TLC instances (>10^6 states, +2-3 min)
 #
 # Byte identity and registry coverage are skipped on Julia ≥ 1.13 (both baselines record
@@ -36,5 +42,14 @@ if [ $fast -eq 0 ]; then
   fi
   if command -v java >/dev/null; then lane formal bash dev/formal/run_tlc.sh; rm -rf dev/formal/states
   else printf '  skip formal         (no java)\n'; fi
+  # smoke on Julia 1.13 (CI's second version), then every test family CI runs, one process
+  if [ "$JULIA" != "julia" ]; then
+    printf '  skip smoke-1.13     (this run is on %s)\n' "$JULIA"
+  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
+    lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
+  else
+    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
+  fi
+  lane suite env WT_NO_SHARD=1 $JULIA --project=. -e 'using Pkg; Pkg.test()'
 fi
 [ $fail -eq 0 ] && echo "LANES green" || { echo "LANES red"; exit 1; }

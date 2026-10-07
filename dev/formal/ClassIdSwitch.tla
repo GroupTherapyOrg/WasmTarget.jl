@@ -17,18 +17,27 @@
 (* which tells it apart only when no other numbered class is that array    *)
 (* type (`bare_array_partition`). A call with a candidate whose class      *)
 (* shares its array type rejects at compile time. The matching row calls   *)
-(* its specialization; no match traps, where Julia throws MethodError.     *)
+(* its specialization; no match throws Julia's MethodError, its `args` a   *)
+(* tuple of the value's runtime class, a class the collector numbers for  *)
+(* each observed class the call has no method for (a class it reads none  *)
+(* for still traps).                                                       *)
 (*                                                                         *)
 (* THE CLAIM. The entry never runs a specialization Julia would not select *)
-(* for the value (NoWrongMethod); traps only where Julia has no method for *)
-(* the value's class (TrapOnlyWhenNoMethod); and rejects only a call with  *)
+(* for the value (NoWrongMethod); throws a MethodError only where Julia    *)
+(* has no method, its args the value's class (ErrorIsJulias), and wherever *)
+(* Julia throws one for a class it reads (ThrowWhereJuliaThrows); traps    *)
+(* only where Julia has no method for the value's class                    *)
+(* (TrapOnlyWhenNoMethod); and rejects only a call with                    *)
 (* a candidate class no test tells apart (RejectOnlyWhenShared). Broken    *)
 (* variants: a collector that saw only `%new` (a MemoryRef held erased had *)
 (* no row); the rule before 2026-09-30, a shared candidate given no row    *)
 (* (a call reaching it trapped where Julia answers); and a row that tests  *)
 (* only the value's wasm layout (the single-body closure entry cast its    *)
 (* argument, and a struct of another class with one deduplicated layout    *)
-(* ran this body: native 23, wasm 13, dev/AUDIT.md A4C3).                  *)
+(* ran this body: native 23, wasm 13, dev/AUDIT.md A4C3); the code before  *)
+(* batch 103, which trapped where Julia throws a MethodError the program  *)
+(* catches (TrapNoMethod: native -1, wasm trap, A3S1); and a MethodError    *)
+(* whose args tuple is built at the call's static type (StaticArgs).       *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes, layouts, array types and            *)
 (* specializations are opaque constants; one dispatch position; the        *)
@@ -51,7 +60,7 @@
 (* table on a header every object has; WT keeps a Memory as a bare array   *)
 (* and switches inline over one call's specializations).                   *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets
+EXTENDS Naturals, FiniteSets, Sequences
 
 CONSTANTS
     Classes,          \* the program's runtime classes
@@ -65,7 +74,10 @@ CONSTANTS
     Param,            \* [Methods -> SUBSET Classes]: the classes each parameter type admits
     ObserveBuiltins,  \* BOOLEAN: the collector counts builtin allocations (FALSE = broken)
     RejectShared,     \* BOOLEAN: a shared candidate class rejects the call (FALSE = the old rule)
-    CastOnly          \* BOOLEAN: a row tests only the value's layout (TRUE = broken)
+    CastOnly,         \* BOOLEAN: a row tests only the value's layout (TRUE = broken)
+    Static,           \* Classes: the class the call's static type names (an args tuple at it is wrong)
+    TrapNoMethod,     \* BOOLEAN: no row traps (TRUE = broken, before batch 103)
+    StaticArgs        \* BOOLEAN: the MethodError's args built at the static type (TRUE = broken)
 
 VARIABLES v, outcome, done
 
@@ -73,6 +85,8 @@ vars == <<v, outcome, done>>
 
 Trap == "trap"
 Reject == "reject"
+Err(a) == "MethodError:" \o a
+Errors == {Err(a) : a \in Classes}
 
 \* the classes the collector numbers
 Observed == {c \in Classes : c \notin ByBuiltin \/ ObserveBuiltins}
@@ -81,6 +95,10 @@ Observed == {c \in Classes : c \notin ByBuiltin \/ ObserveBuiltins}
 Shared(c) == c \in Bare /\ \E d \in (Bare \cap Observed) \ {c} : Layout[d] = Layout[c]
 
 Candidates == UNION {Param[m] : m \in Methods}
+
+\* the args-tuple classes the collector numbers: Tuple{c} for each observed class c the call
+\* has no method for
+ArgsNumbered == {c \in Observed : ~\E m \in Methods : c \in Param[m]}
 
 \* the class a row can read for an erased value of class c: a header's classId, or a bare
 \* array's class when its array type is its own; else no class (the read fails)
@@ -92,9 +110,17 @@ RowMatches(m, c) ==
     IF CastOnly THEN \E d \in Param[m] : Layout[d] = Layout[c]
     ELSE ReadClass(c) # Trap /\ ReadClass(c) \in Param[m]
 
+\* no row: Julia's MethodError, its args tuple the value's class when the read tells it and
+\* that tuple class is numbered, else a trap
+NoRow(c) ==
+    IF TrapNoMethod THEN Trap
+    ELSE IF ReadClass(c) # Trap /\ ReadClass(c) \in ArgsNumbered
+         THEN Err(IF StaticArgs THEN Static ELSE ReadClass(c))
+    ELSE Trap
+
 FirstRow(c) ==
     LET ms == {m \in Methods : RowMatches(m, c)} IN
-    IF ms = {} THEN Trap ELSE CHOOSE m \in ms : \A n \in ms : MOrd[m] <= MOrd[n]
+    IF ms = {} THEN NoRow(c) ELSE CHOOSE m \in ms : \A n \in ms : MOrd[m] <= MOrd[n]
 
 Outcome(c) ==
     IF RejectShared /\ \E d \in Candidates : Shared(d) THEN Reject
@@ -102,14 +128,23 @@ Outcome(c) ==
         \* the old rule: a shared candidate class gets no row
         LET ms == {m \in Methods : \A d \in Param[m] : ~Shared(d)} IN
         LET hit == {m \in ms : RowMatches(m, c)} IN
-        IF hit = {} THEN Trap ELSE CHOOSE m \in hit : \A n \in hit : MOrd[m] <= MOrd[n]
+        IF hit = {} THEN NoRow(c) ELSE CHOOSE m \in hit : \A n \in hit : MOrd[m] <= MOrd[n]
     ELSE FirstRow(c)
 
 Init == v \in Classes /\ outcome = Trap /\ done = FALSE
 Step == ~done /\ outcome' = Outcome(v) /\ done' = TRUE /\ UNCHANGED v
 Spec == Init /\ [][Step]_vars
 
-TypeOK == v \in Classes /\ outcome \in Methods \cup {Trap, Reject} /\ done \in BOOLEAN
+TypeOK == v \in Classes /\ outcome \in Methods \cup Errors \cup {Trap, Reject} /\ done \in BOOLEAN
+
+NoMethod(c) == ~\E m \in Methods : c \in Param[m]
+
+\* a MethodError only where Julia has no method, carrying the value's own class
+ErrorIsJulias == done \in BOOLEAN /\ (done /\ outcome \in Errors => NoMethod(v) /\ outcome = Err(v))
+
+\* wherever Julia throws a MethodError for a class the entry reads, the entry throws it
+ThrowWhereJuliaThrows ==
+    done \in BOOLEAN /\ (done /\ NoMethod(v) /\ ReadClass(v) # Trap /\ outcome # Reject => outcome = Err(v))
 
 \* a run is the specialization Julia selects for the value's class
 NoWrongMethod == done \in BOOLEAN /\ (done /\ outcome \in Methods => v \in Param[outcome])

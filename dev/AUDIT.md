@@ -993,4 +993,13 @@ trampoline unwrap removed both trap, and batch 95 and 99 trap on both. Batch 102
 a constant tuple states its type at a phi edge (_value_julia_type), as Julia's IR does, and
 convert_type!'s fixed-to-runtime-length arm takes the edge's type only; the guess from the
 struct's layout is gone, and an edge with no type rejects. Without the stated type, smoke
-varargs/splat_vararg_nonempty rejects.
+varargs/splat_vararg_nonempty rejects. Batch 103 — A3S1: a dynamic call with no method for
+its argument's class trapped where Julia throws a MethodError the program catches (native -1,
+wasm trap; measured on Julia's union split `Core.throw_methoderror(f, x::Any)`, a closure's
+vtable entry and the class switch). Model first: ClassIdSwitch.tla's no-row outcome is the
+MethodError, its args the value's class, with the claims ErrorIsJulias and
+ThrowWhereJuliaThrows and the Broken instances TrapNoMethod and StaticArgs. The collector
+numbers the args tuple of each no-method call (a union split's open position over the classes
+under its static type; the candidate tuples a closure or generic dynamic call has no method
+for, and the callee's class), and each no-row path builds `MethodError(f, (args...,), world)`
+from the class it reads. Smoke method_error (7 cases): with the builders removed all trap.

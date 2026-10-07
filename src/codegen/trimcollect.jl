@@ -374,7 +374,8 @@ its front end's whole-program type flow analysis.)
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[];
                                          reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}(),
-                                         held::Set{DataType})::Vector{Any}
+                                         held::Set{DataType},
+                                         error_args::Set{DataType}=Set{DataType}())::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -615,7 +616,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # passes on, as surely as one an SSA type names (a capture-less closure passed to a
             # function that returns it erased reached a dynamic call with no row, MARCH 13.17
             # A7S1 stage 4: native 4, wasm trap)
-            if node isa NirCall || node isa NirInvoke || node isa NirNew
+            # (a builtin's operand is no value passed on: `Core._apply_iterate(Base.iterate, …)`
+            # enrolled `iterate` as a callable, batch 101's CI regression)
+            if (node isa NirCall && !(_nir_callee_object(node.callee) isa Core.Builtin)) ||
+               node isa NirInvoke || node isa NirNew
                 for a in node.operands
                     local v = a isa NirLiteral ? a.value :
                               (a isa NirGlobalRef && a.bound && isconst(a.mod, a.name)) ? a.value : nothing
@@ -710,7 +714,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                  target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
                 concrete_args = Tuple{spec...}
-                hasmethod(g, concrete_args) || continue
+                if !hasmethod(g, concrete_args)
+                    # the call throws Julia's MethodError for this class: its args tuple
+                    # (formal(dev/formal/ClassIdSwitch.tla): ThrowWhereJuliaThrows)
+                    if all(t -> isconcretetype(t) && !(t <: Type), spec)
+                        push!(error_args, concrete_args)
+                        push!(error_args, Core.Typeof(g))   # the error's `f`, a class too
+                    end
+                    continue
+                end
                 m = which(g, concrete_args)
                 ssig = Tuple{Core.Typeof(g), spec...}
                 ssig <: m.sig || continue
@@ -737,7 +749,26 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # specialized at the intersection (a method narrower than an erased argument included;
     # the entry tries them in Julia's specificity order, closures.jl). A method with static
     # parameters a match leaves unfixed is enrolled at each tuple of candidates (below)
+    local observed_classes = sort!(Any[Any[C for C in runtime_types
+                                             if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
+                                         collect(held_type_objects)]; by=type_order_key)
     for (_T, ds) in callable_invocations
+        # each tuple of candidates for which the callable has no method: the call throws Julia's
+        # MethodError there, its args a tuple of the values' classes (a type object's class is
+        # its kind), numbered for the entry to build (formal(dev/formal/ClassIdSwitch.tla):
+        # ThrowWhereJuliaThrows)
+        local _ech = Vector{Any}[dispatch_candidates(P, observed_classes) for P in ds]
+        # a method whose signature covers the call's static one leaves no tuple without a method
+        local _all = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
+        local _covered = _all !== nothing && any(m -> Tuple{_T, ds...} <: m.method.sig, _all)
+        if !_covered && !any(isempty, _ech) && prod(length, _ech; init=1) <= 4096
+            for cs in Iterators.product(_ech...)
+                local _none = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                (_none === nothing || !isempty(_none)) && continue
+                local _rt = Any[(C isa DataType && C.name === Type.body.name) ? typeof(C.parameters[1]) : C for C in cs]
+                all(t -> t isa DataType && isconcretetype(t), _rt) && push!(error_args, Tuple{_rt...})
+            end
+        end
         local enroll_closure!(cmi, at) = (cmi === nothing || cmi in seen) ? nothing :
             (push!(seen, cmi); push!(out, cmi);
              reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))" * at;
@@ -822,6 +853,7 @@ struct ClosedWorld
     callable_types::Set{DataType}                    # callable types whose bodies the candidate fixpoint enrolled
     enrolled_as::IdDict{Core.MethodInstance,String}  # why each entered the closed world
     held_type_objects::Set{DataType}                 # the Type{X} of each type object the program holds
+    error_args_types::Set{DataType}                  # the args tuple (and `f`) of each MethodError a dynamic call throws
 end
 
 """Keep only code reachable from roots over the invoke edges as they stand, never the body of
@@ -921,6 +953,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     local callable_types = Set{DataType}()
     local dynamic_roots = Set{Core.MethodInstance}()
     local held_types = Set{DataType}()
+    local error_args_types = Set{DataType}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -1059,7 +1092,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             pruned_superseded = length(superseded_invokes)
         end
 
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types)
+        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,
+                                                error_args=error_args_types)
         extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
         union!(dynamic_roots, extra)
         for mi in extra
@@ -1095,7 +1129,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end
-    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, held_types)
+    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, held_types, error_args_types)
 end
 
 """
@@ -1132,6 +1166,7 @@ struct ClosedWorldPlan
     callable_types::Set{DataType}
     enrolled_as::IdDict{Core.MethodInstance,String}
     held_type_objects::Set{DataType}   # the Type{X} of each type object the program holds
+    error_args_types::Set{DataType}    # the args tuple of each MethodError a dynamic call throws
 end
 
 """
@@ -1371,7 +1406,8 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             ErrorException("no enrollment reason for $(fn[4])"), Base.StackTraces.StackFrame[]))
     end
     return ClosedWorldPlan(functions, ir_cache, dispatch_candidates, invoke_only,
-                           world.callable_types, enrolled_as, world.held_type_objects)
+                           world.callable_types, enrolled_as, world.held_type_objects,
+                           world.error_args_types)
 end
 
 # ============================================================================
@@ -1422,6 +1458,37 @@ function tuple_runtime_type(operands::AbstractVector, slot_types::AbstractVector
         end
     end
     return Tuple{rt...}
+end
+
+"""
+    methoderror_args_types(operands, slot_types) -> Union{Nothing, Tuple{Int, Type, Vector{Type}}}
+
+For a MethodError's args tuple whose type `tuple_runtime_type` cannot state, because one
+operand's runtime type is known only at run time: that position `p`, its static type, and the
+runtime type of every other position (`rt[p]` a placeholder). The tuple is then
+`Tuple{rt[1:p-1]..., C, rt[p+1:end]...}` for the class C the value has, which the collector
+numbers for each class under the static type and the throw tells at run time by its classId.
+Nothing when the tuple's type is stated, or when more than one position is known only at run
+time (that throw traps, MARCH 13.17 A3S1).
+formal(dev/formal/ClassIdSwitch.tla): the MethodError's args are the value's class (ErrorIsJulias).
+parity(quarantine: a Julia MethodError carries its arguments' tuple, typed by their runtime
+types; dart's NoSuchMethodError carries an Invocation of its arguments.)
+"""
+function methoderror_args_types(operands::AbstractVector, slot_types::AbstractVector)::Union{Nothing, Tuple{Int, Type, Vector{Type}}}
+    local rt = Type[]
+    local p = 0
+    for (j, a) in enumerate(operands)
+        local t = tuple_runtime_type(NirNode[a], slot_types)
+        if t === nothing
+            p == 0 || return nothing
+            p = j
+            push!(rt, Any)
+        else
+            push!(rt, t.parameters[1])
+        end
+    end
+    p == 0 && return nothing
+    return (p, _collector_static_type(operands[p], slot_types), rt)
 end
 
 """
@@ -1520,6 +1587,8 @@ before any id is assigned.
 function _collect_reachable_ir_types(function_data)::Set{DataType}
     out = Set{DataType}()
     seen = Set{Any}()
+    # a throw_methoderror whose args tuple is typed at run time: (p, static type, rt)
+    local error_args = Tuple{Int, Type, Vector{Type}}[]
     function reg!(@nospecialize(T))
         T === nothing && return
         T in seen && return
@@ -1618,7 +1687,13 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                     # the MethodError it throws and its args tuple (calls.jl
                     # _emit_throw_methoderror!, from the same operand types)
                     reg!(MethodError)
-                    reg!(tuple_runtime_type(node.operands[2:end], body.slot_types))
+                    local _tt = tuple_runtime_type(node.operands[2:end], body.slot_types)
+                    if _tt === nothing
+                        local _ea = methoderror_args_types(node.operands[2:end], body.slot_types)
+                        _ea === nothing || push!(error_args, _ea)
+                    else
+                        reg!(_tt)
+                    end
                 elseif node.callee === Core._apply_iterate
                     # a splat's argument pack is a tuple the LOWERING builds (calls.jl's
                     # _apply_iterate route); an empty collection yields Tuple{}, which no
@@ -1641,6 +1716,13 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
                 value!(node)                    # a statement that IS a value
             end
         end
+    end
+    # the args tuple of each such throw, for every class a value at its open position may have
+    # (the classes numbered above; a tuple class added here is no candidate of another throw)
+    local classes = collect(out)
+    for (p, S, rt) in error_args, C in classes
+        (isconcretetype(C) && C <: S && !(C <: Type) && (isstructtype(C) || isprimitivetype(C))) || continue
+        push!(out, Tuple{(j == p ? C : rt[j] for j in eachindex(rt))...})
     end
     return out
 end

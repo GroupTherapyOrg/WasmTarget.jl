@@ -2486,7 +2486,7 @@ const LOCKS = [
                         "reasons[cmi] = \"the body of the closure",
                         "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
                         "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by)",
-                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types)"]
+                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is
             # located too: at the module's entries, or at the function and why it is there
@@ -2550,6 +2550,17 @@ const LOCKS = [
             local box = read(joinpath(CODEGEN, "box_capture.jl"), String)
             n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
+        end),
+    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs, so CI confirms rather than discovers: dev/lanes.sh's default run (not --fast) has the whole Pkg.test suite in one process (WT_NO_SHARD=1, every family the CI shards split) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+        () -> begin
+            local lanes = read(joinpath(ROOT, "dev", "lanes.sh"), String)
+            local i = findfirst("if [ \$fast -eq 0 ]; then", lanes)
+            i === nothing && return 3
+            local gated = lanes[last(i):end]
+            local agents = read(joinpath(ROOT, "AGENTS.md"), String)
+            count(!, [occursin("lane suite env WT_NO_SHARD=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", gated),
+                      occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
+                      occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents)])
         end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
         () -> begin

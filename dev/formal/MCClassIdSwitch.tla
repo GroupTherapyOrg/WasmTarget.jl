@@ -21,4 +21,5 @@ MCMOrd == [m \in MCMethods |->
 MCParam == [m \in MCMethods |->
     IF m = "mS1" THEN {"S1"} ELSE IF m = "mAbs" THEN {"S2", "MR"} ELSE IF m = "mM1" THEN {"M1"}
     ELSE IF m = "mM2" THEN {"M2"} ELSE {"SV"}]
+MCStatic == "S1"   \* the call's static type names S1
 =============================================================================

@@ -119,7 +119,7 @@ with the per-clause status. A clause is never closed by argument.
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
-  throw site). Planned: dev/MARCH.md 13.15, 13.17 — an exception's type, every function named;
+  throw site) `L153` (the gate before a push runs every test family CI runs). Planned: dev/MARCH.md 13.15, 13.17 — an exception's type, every function named;
   one compile entry (dev/AUDIT.md A2C6); every throw's stack checked by its callers (A4B9 = A4P5); a check that `bash dev/lanes.sh` gives its verdict in
   minutes.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each

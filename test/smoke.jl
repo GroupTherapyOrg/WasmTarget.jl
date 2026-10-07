@@ -1819,6 +1819,26 @@ _g("closure_values", Any[
     ("closure_argument_erased_call", (n::Int64) -> (k = n; c = x -> x + k; f = _sm_dh(y -> y(1))[]; f(c)::Int64), Int64(3)),
     ("fix2_argument_erased_call", (n::Int64) -> (f = _sm_dh(y -> y(1))[]; f(Base.Fix2(+, n))::Int64), Int64(3)),
 ])
+# a dynamic call with no method for its argument's class throws Julia's MethodError, `f` the
+# callee and `args` the tuple of the arguments' classes, which the program can catch: through
+# Julia's own union split (Core.throw_methoderror), a closure's vtable entry, and WT's class
+# switch (MARCH 13.17 A3S1, formal(dev/formal/ClassIdSwitch.tla): each trapped, native -1)
+_sm_me_q(x::Int64) = 1
+_sm_me_r(x::Int64, y::Int64) = 1
+_sm_me_5(x::Int64) = 1
+_sm_me_5(x::String) = 2
+_sm_me_5(x::Int32) = 3
+_sm_me_5(x::UInt8) = 4
+_sm_me_5(x::Char) = 5
+_g("method_error", Any[
+    ("union_split_caught", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_q(v[n])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(2)),
+    ("union_split_fields", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_q(v[n])::Int64; catch e; (e isa MethodError && e.f === _sm_me_q && e.args isa Tuple{Float64} && e.args[1] == 1.5) ? 1 : 2; end), Int64(2)),
+    ("union_split_string_args", (n::Int64) -> (v = Any[n, "s"]; try; _sm_me_q(v[n])::Int64; catch e; (e isa MethodError && typeof(e.args) === Tuple{String} && e.args[1] == "s") ? 1 : 2; end), Int64(2)),
+    ("union_split_two_args", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_r(n, v[n])::Int64; catch e; (e isa MethodError && e.args === (n, 1.5)) ? 1 : 2; end), Int64(2)),
+    ("closure_entry_caught", (n::Int64) -> (k = n; f = _sm_dh(x::Int64 -> x + k)[]; f(1); try; f(_sm_dh(1.5)[])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(3)),
+    ("closure_entry_fields", (n::Int64) -> (k = n; g = x::Int64 -> x + k; f = _sm_dh(g)[]; f(1); try; f(_sm_dh(1.5)[])::Int64; catch e; (e isa MethodError && e.f === g && e.args === (1.5,)) ? 1 : 2; end), Int64(3)),
+    ("class_switch_caught", (n::Int64) -> (v = Any[n, "s", Int32(2), 0x01, 'c', 1.5]; s = _sm_me_5(v[1])::Int64 + _sm_me_5(v[2])::Int64 + _sm_me_5(v[3])::Int64 + _sm_me_5(v[4])::Int64 + _sm_me_5(v[5])::Int64; try; _sm_me_5(v[n])::Int64; catch e; (e isa MethodError && e.args === (1.5,)) ? s + 100 : s; end), Int64(6)),
+])
 # a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct
 # field, any value narrowed to a method's parameter (A8C4: a tuple field laid out as a class
 # struct trapped, and the narrowing read it as a String; native 100, wasm trap)

@@ -133,12 +133,12 @@ end
         @test n == (:err, MethodError)
         @test w[1] === :trap
     end
-    # a split call's throw_methoderror over an erased value: WT cannot build the args tuple
-    # of its runtime type (MARCH 13.10), so it traps, never throwing an exception that is not
-    # Julia's MethodError, which Julia's catch answers (dev/AUDIT.md A3S1)
+    # a split call's throw_methoderror over an erased value throws Julia's MethodError, its
+    # args tuple of the value's class, which the program's catch answers (dev/AUDIT.md A3S1:
+    # it trapped until batch 103)
     @test M.gu(3) == Int32(7)
     let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gu, (Int64,)), "gu", "3n")
-        @test r[1] === :trap
+        @test r[1] === :ok && unmarshal_result(r[2]) == 7
     end
     # a candidate whose class shares its wasm array type has no row: the call rejects at
     # compile time, never a switch that traps on it (dev/AUDIT.md A3S2)

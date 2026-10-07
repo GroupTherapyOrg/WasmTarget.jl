@@ -2707,7 +2707,10 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         append_builder!(bld, _bbr_b)   # typed merge
         else_!(bld)
     end
-    unreachable!(bld)  # structural trap (dart-legit dead path)
+    # no row: Julia's MethodError, its args the tuple of the arguments' classes, for each class
+    # the collector numbered an args tuple for (formal(dev/formal/ClassIdSwitch.tla):
+    # ErrorIsJulias, ThrowWhereJuliaThrows); another class traps
+    _emit_switch_methoderror!(bld, ctx, called_func, args, arg_locals, call_arg_types, dpos, tid_local)
     for _ in 1:nb; end_block!(bld); end
     # Heuristic-safe tail: land result in a scratch local, end with local.get.
     if result_wasm !== nothing
@@ -4637,8 +4640,12 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     local static(a) = _collector_static_type(a, ctx.slot_types)
     local tuple_type = tuple_runtime_type(args[2:end], ctx.slot_types)
     if tuple_type === nothing
-        unreachable!(bld)   # structural trap: Julia has no method for this call (A3S1)
-        return bld
+        local ea = methoderror_args_types(args[2:end], ctx.slot_types)
+        if ea === nothing
+            unreachable!(bld)   # structural trap: two positions typed at run time (A3S1)
+            return bld
+        end
+        return _emit_throw_methoderror_by_class!(bld, args, ea, ctx)
     end
     ensure_exception_tag!(ctx.mod)
     local reg = ctx.type_registry
@@ -4661,6 +4668,115 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
     emit_throw_value!(bld, ctx.mod)
+    return bld
+end
+
+"""
+    _emit_switch_methoderror!(bld, ctx, f, args, arg_locals, arg_types, dpos, tid_local) -> bld
+
+The class switch of a dynamic call with no row for the value's class: Julia's MethodError,
+`f` the callee and `args` the tuple of the arguments' classes, for each args tuple the collector
+numbered for a no-method call of `f` (registry.method_error_args) whose other elements are the
+call's static types; the class in `tid_local` selects it. Another class traps.
+formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+"""
+function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(f),
+                                   args, arg_locals::Vector{Int}, call_arg_types, dpos::Int,
+                                   tid_local::Integer)::InstrBuilder
+    local reg = ctx.type_registry
+    local n = length(args)
+    local tuples = DataType[T for T in reg.method_error_args
+                            if length(T.parameters) == n && T.parameters[dpos] <: call_arg_types[dpos] &&
+                               all(j -> j == dpos || T.parameters[j] === call_arg_types[j], 1:n) &&
+                               !hasmethod(f, Tuple{T.parameters...})]
+    if !isempty(tuples)
+        ensure_exception_tag!(ctx.mod)
+        local err_info = register_struct_type!(ctx.mod, reg, MethodError)
+        err_info === nothing && error("MethodError layout is unavailable")
+        local err_def = ctx.mod.types[Int(err_info.wasm_type_idx) + 1]
+        for T in tuples
+            local C = T.parameters[dpos]
+            local args_info = register_tuple_type!(ctx.mod, reg, T)
+            args_info === nothing && error("$(T) layout is unavailable")
+            local tup_def = ctx.mod.types[Int(args_info.wasm_type_idx) + 1]
+            local_get!(bld, tid_local); i32_const!(bld, Int64(ensure_type_id!(reg, C))); num!(bld, Opcode.I32_EQ)
+            if_!(bld)
+            emit_struct_prefix!(bld, reg, MethodError, err_info)
+            emit_value!(bld, NirLiteral(f), ctx, err_def.fields[wasm_field_idx(err_info, 1) + 1].valtype;
+                        from_julia=typeof(f))
+            emit_struct_prefix!(bld, reg, T, args_info)
+            for (j, l) in enumerate(arg_locals)
+                local_get!(bld, l)
+                coerce_stack_top!(bld, tup_def.fields[wasm_field_idx(args_info, j) + 1].valtype, ctx;
+                                  from_julia=T.parameters[j])
+            end
+            struct_new!(bld, args_info.wasm_type_idx)
+            i64_const!(bld, Int64(WASM_WORLD_AGE))
+            struct_new!(bld, err_info.wasm_type_idx)
+            emit_throw_value!(bld, ctx.mod)
+            end_block!(bld)
+        end
+    end
+    unreachable!(bld)   # structural trap: a class with no numbered args tuple (MARCH 13.17 A3S1)
+    return bld
+end
+
+"""
+    _emit_throw_methoderror_by_class!(bld, args, (p, S, rt), ctx) -> bld
+
+`Core.throw_methoderror(f, args...)` whose args tuple has one position, `p`, typed only at run
+time: the value's classId selects the numbered tuple class `Tuple{…C…}` its class C makes
+(methoderror_args_types; the collector numbers one for each class under the static type S),
+and the throw builds that tuple and the MethodError. A class with no numbered tuple traps.
+formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+"""
+function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVector, ea,
+                                           ctx::AbstractCompilationContext)::InstrBuilder
+    local (p, S, rt) = ea
+    local reg = ctx.type_registry
+    ensure_exception_tag!(ctx.mod)
+    local error_info = register_struct_type!(ctx.mod, reg, MethodError)
+    error_info === nothing && error("MethodError layout is unavailable")
+    local err_def = ctx.mod.types[Int(error_info.wasm_type_idx) + 1]
+    local operands = args[2:end]
+    local v = allocate_local!(ctx, AnyRef)
+    emit_value!(bld, operands[p], ctx, AnyRef)
+    local_set!(bld, v)
+    local cid = allocate_local!(ctx, I32)
+    local_get!(bld, v); emit_class_id!(bld, ctx, S); local_set!(bld, cid)
+    local f_type = _collector_static_type(args[1], ctx.slot_types)
+    for (C, id) in ordered_pairs(reg.type_ids, type_order_key,
+                                 C -> C isa DataType && isconcretetype(C) && C <: S && !(C <: Type) &&
+                                      (isstructtype(C) || isprimitivetype(C)))
+        local T = Tuple{(j == p ? C : rt[j] for j in eachindex(rt))...}
+        haskey(reg.type_ids, T) || continue   # no numbered tuple: this class traps below
+        local args_info = register_tuple_type!(ctx.mod, reg, T)
+        args_info === nothing && error("$(T) layout is unavailable")
+        local tup_def = ctx.mod.types[Int(args_info.wasm_type_idx) + 1]
+        local_get!(bld, cid); i32_const!(bld, Int64(id)); num!(bld, Opcode.I32_EQ)
+        if_!(bld)
+        emit_struct_prefix!(bld, reg, MethodError, error_info)
+        emit_value!(bld, args[1], ctx, err_def.fields[wasm_field_idx(error_info, 1) + 1].valtype;
+                    from_julia=(f_type isa DataType && isconcretetype(f_type)) ? f_type : nothing)
+        emit_struct_prefix!(bld, reg, T, args_info)
+        for (i, a) in enumerate(operands)
+            local fw = tup_def.fields[wasm_field_idx(args_info, i) + 1].valtype
+            if i == p
+                local_get!(bld, v)
+                coerce_stack_top!(bld, fw, ctx; from_julia=C)
+            else
+                emit_value!(bld, a, ctx, fw; from_julia=rt[i])
+            end
+        end
+        struct_new!(bld, args_info.wasm_type_idx)
+        i64_const!(bld, Int64(WASM_WORLD_AGE))
+        struct_new!(bld, error_info.wasm_type_idx)
+        emit_throw_value!(bld, ctx.mod)
+        end_block!(bld)
+    end
+    unreachable!(bld)   # structural trap: a class with no numbered args tuple (A3S1)
     return bld
 end
 

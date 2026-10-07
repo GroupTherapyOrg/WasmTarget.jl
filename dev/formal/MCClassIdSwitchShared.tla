@@ -14,4 +14,5 @@ MCByBuiltin == {"M1", "M3"}
 MCMethods == {"mS1", "mM1", "mM3"}
 MCMOrd == [m \in MCMethods |-> IF m = "mS1" THEN 1 ELSE IF m = "mM1" THEN 2 ELSE 3]
 MCParam == [m \in MCMethods |-> IF m = "mS1" THEN {"S1"} ELSE IF m = "mM1" THEN {"M1"} ELSE {"M3"}]
+MCStatic == "S1"   \* the call's static type names S1
 =============================================================================
