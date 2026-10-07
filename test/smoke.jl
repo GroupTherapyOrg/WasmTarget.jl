@@ -1569,6 +1569,10 @@ _xf("shared_bare_arrays", Any[
     # isa over an abstract type narrowed to its one concrete member (Julia's emit_isa) is the
     # same read (A4E1 c)
     ("narrowed_isa_either", (x::Int64) -> _sm_mx(x) isa AbstractVector{Int64} ? 1 : 2, Int64(3)),
+    # a String's CodeUnits is the String's byte array, Memory{UInt8}'s array type (dev/AUDIT.md
+    # A5B2: both trapped, illegal cast, where native answers 2)
+    ("codeunits_isa_memory", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; v[n - 2] isa Memory{UInt8} ? 1 : 2), Int64(3)),
+    ("codeunits_typeof", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; typeof(v[n - 2]) === Memory{UInt8} ? 1 : 2), Int64(3)),
 ])
 # A tuple is typed by its elements' runtime types (jl_f_tuple): a type element is its kind, so
 # `(Int64, x)` is a Tuple{DataType,Int64}, never a Tuple{Type{Int64},Int64}, which no value has

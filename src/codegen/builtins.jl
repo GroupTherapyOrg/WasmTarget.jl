@@ -1574,10 +1574,10 @@ end
     bare_array_partition(mod, registry, T) -> (told, shared, all)
 
 The numbered classes a value of static type `T` may be (every one when `T` is `nothing`)
-that are bare wasm arrays — a Memory, a SimpleVector — each with its array type (`all`),
+that are bare wasm arrays — a Memory, a SimpleVector, a String's CodeUnits — each with its
+array type (`all`),
 partitioned by whether a test tells it apart: `told` holds each class whose array type no
-other of them is, which `ref.test` answers (a CodeUnits sharing Memory{UInt8}'s array type is
-not yet counted: MARCH 13.17, A5B2);
+other of them is, which `ref.test` answers;
 `shared` the classes whose array type another of
 them is too (Memory{Int64} and Memory{UInt64}), which no test tells apart, so a class read
 over `T` rejects rather than trap or answer for the wrong class. The array types are decided
@@ -1590,12 +1590,19 @@ numbered classes, so their class is read off the array type.)
 function bare_array_partition(mod::WasmModule, reg::TypeRegistry, @nospecialize(T))::NamedTuple{
         (:told, :shared, :all), Tuple{Vector{Tuple{Type, UInt32}}, Vector{Type}, Vector{Tuple{Type, UInt32}}}}
     local all = Tuple{Type, UInt32}[]
+    # every class whose value is a bare wasm array: a Memory, a SimpleVector, and the CodeUnits
+    # of a String, which is the String's byte array (julia_to_wasm_type)
+    local codeunits_of_string(C) = C isa DataType && C.name === Base.CodeUnits.body.body.name &&
+                                   C.parameters[1] === UInt8 && C.parameters[2] === String
     for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
-                                C -> (C isa DataType && C <: GenericMemory) || C === Core.SimpleVector)
+                                C -> (C isa DataType && C <: GenericMemory) || C === Core.SimpleVector ||
+                                     codeunits_of_string(C))
         (T === nothing || typeintersect(T, C) !== Union{}) || continue
         if C === Core.SimpleVector
             reg.jl_svec_idx === nothing && error("SimpleVector is numbered without its array type")
             push!(all, (C, reg.jl_svec_idx))
+        elseif codeunits_of_string(C)
+            push!(all, (C, get_string_array_type!(mod, reg)))
         else
             push!(all, (C, get_array_type!(mod, reg, eltype(C))))
         end

@@ -653,4 +653,8 @@ of T (X's identity for a pointer-unique `Type{X}`, else its kind, a TypeVar firs
 a closure entry's `Type{X}`, kind and TypeVar rows all use it (a TypeVar row read a class header
 it lacks, and a TypeVar passed the DataType row). Smoke group type_object_rows: the old rows trap
 on typevar_row where native answers 22. typeof and jl_has_typevar read a kind, not test one, and
-already test $JlTypeVar first.
+already test $JlTypeVar first. Batch 86 — A5B2: a String's CodeUnits is the String's byte array,
+Memory{UInt8}'s array type, and bare_array_partition now counts it with the Memory and
+SimpleVector classes, so a class read over both rejects at its statement (smoke xfails
+codeunits_isa_memory, codeunits_typeof; the old partition traps on both, illegal cast, where
+native answers 2). A Memory as a classed object, A3S2, tells them apart.
