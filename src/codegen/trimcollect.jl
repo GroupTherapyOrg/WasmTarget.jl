@@ -374,7 +374,7 @@ its front end's whole-program type flow analysis.)
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[];
                                          reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}(),
-                                         held::Set{DataType}=Set{DataType}())::Vector{Any}
+                                         held::Set{DataType})::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -384,10 +384,15 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # abstract slot pulled unrelated BigFloat/MPFR code into integer-only modules and
     # forced the now-deleted trap-repair policy.
     runtime_types = Set{DataType}()
-    # the type objects the program holds as values (a literal or a constant global operand),
-    # each a candidate by its dispatch type `Type{X}` (formal(dev/formal/Enrollment.tla):
-    # a type object is no numbered class, StaticOnly)
+    # the type objects a value may be: a literal or a constant global a statement, a phi or a
+    # return holds (which over-approximates: a typeassert's, an isa's or an intrinsic's type
+    # operand is one too, adding rows and ambiguity questions, never dropping one), and the
+    # type object of each class a `typeof` may return; each a candidate by its dispatch type
+    # `Type{X}` (formal(dev/formal/Enrollment.tla): a type object is no numbered class,
+    # StaticOnly; one a `typeof` makes, LiteralsOnly), a constant tuple's or immutable struct's
+    # fields included
     held_type_objects = held   # the caller keeps it for the vtable pre-pass's ambiguity search
+    typeof_operand_types = Set{Any}()   # the static type of each `typeof` operand
     observed_type_nodes = Set{Any}()
     # One NIR per collected CodeInfo — this pass walks each body twice (runtime-class
     # observation, then candidate discovery). Call-local: `_missing_explicit_invoke_mis`
@@ -435,11 +440,29 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         (node isa NirLiteral || v !== nothing) || return
         v isa Expr && return
         local VT = Core.Typeof(v)
-        # a type object held as a value is the candidate Type{X} (when its values are one
-        # pointer, jl_pointer_egal); its own parameters are classes the program names
-        VT isa DataType && VT.name === Type.body.name && is_pointer_egal_type_type(VT) &&
-            push!(held_type_objects, VT)
+        observe_held!(node)
         node isa NirLiteral && observe_type!(VT)
+        return
+    end
+    # a type object held as a value is the candidate Type{X}, whether its values are one
+    # pointer or are told by type equality (a Type{X} row that tests type equality rejects,
+    # _closure_param_untestable; left out, a value of it ran another method, A10C1)
+    function observe_held!(node::NirNode)
+        local v = node isa NirLiteral ? node.value :
+                  (node isa NirGlobalRef && node.bound && isconst(node.mod, node.name)) ? node.value : nothing
+        hold!(v, 0)
+        return
+    end
+    function hold!(@nospecialize(v), depth::Int)
+        if v isa Type
+            local VT = Core.Typeof(v)
+            VT isa DataType && VT.name === Type.body.name && push!(held_type_objects, VT)
+        elseif depth < 8 && !(v isa Module) && isstructtype(typeof(v)) && !ismutable(v)
+            # a constant tuple's or immutable struct's fields are values the program reads out
+            for i in 1:nfields(v)
+                isdefined(v, i) && hold!(getfield(v, i), depth + 1)
+            end
+        end
         return
     end
     # The operands one statement carries. Every node's `args` hold exactly the
@@ -484,7 +507,23 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 tt === nothing || observe_type!(tt)
             end
             foreach(observe_runtime_operand!, statement_operands(node0))
+            # a type object a phi, a pi, an upsilon or a return holds is held as surely
+            local carried = node0 isa NirPhi || node0 isa NirPhiC ? node0.values :
+                            node0 isa NirReturn || node0 isa NirPi || node0 isa NirUpsilon ? Any[node0.value] : Any[]
+            for c in carried
+                c isa NirNode && observe_held!(c)
+            end
+            if node0 isa NirCall && _nir_callee_object(node0.callee) === Core.typeof &&
+               length(node0.operands) == 1
+                push!(typeof_operand_types,
+                      _collector_static_type(node0.operands[1], nir_slot_types(codeinfos[j + 1])))
+            end
         end
+    end
+    # a `typeof` returns the type object of its operand's class: each class a value of the
+    # operand's static type can have
+    for T in typeof_operand_types, C in runtime_types
+        isconcretetype(C) && C <: T && push!(held_type_objects, Type{C})
     end
     # OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's
@@ -704,7 +743,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # closed world, as the candidate loop above reads it): the method is enrolled at
             # each tuple of candidates over the positions its static parameters mention, the
             # other positions kept as the call has them (formal(dev/formal/Enrollment.tla):
-            # PFix); a method no candidate tuple fixes is reached by no value
+            # PFix); a method no candidate tuple fixes is reached by no value, the candidates
+            # being every class numbered and every type object a value may be (held)
             local msig = Base.unwrap_unionall(mm.method.sig)
             local param(p) = Base.unwrapva(msig.parameters[min(p + 1, length(msig.parameters))])
             local mentions(p) = (P = param(p); P isa TypeVar || Base.has_free_typevars(P))
@@ -759,7 +799,9 @@ end
 The closed world one collection built (collect_closed_world): the collected (CodeInstance,
 CodeInfo) pairs; the dynamic-dispatch selector roots, distinct from the ordinary dependencies
 their compilation reaches; the callable types whose bodies the candidate fixpoint enrolled;
-and why each MethodInstance entered it, for a later failure — declaring its signature — to name.
+why each MethodInstance entered it, for a later failure — declaring its signature — to name;
+and the `Type{X}` of each type object a value may be (`held_type_objects`), a candidate wherever
+a class is.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 struct ClosedWorld
@@ -1065,7 +1107,9 @@ names; the (f, arg_types) and MethodInstance → (CodeInfo, rettype) cache get_t
 so every function compiles from the collection's consistent-world IR; the (f, arg_types) keys
 discovered solely as dynamic-dispatch candidates; the MethodInstances reached only through an
 `invoke` of a method dispatch would not select for their argument types; the callable types
-the candidate fixpoint enrolled; and why each MethodInstance was enrolled.
+the candidate fixpoint enrolled; why each MethodInstance was enrolled; and the `Type{X}` of each
+type object a value may be (ClosedWorld's `held_type_objects`), which the vtable pre-pass's
+ambiguity search asks about.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 struct ClosedWorldPlan
@@ -1478,8 +1522,9 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # every length one {Object, data, size} representation (register_vararg_tuple_type!)
         # whose header names this class, which no value has: typeof rejects, an isa against a
         # tuple type tests the lengths it admits, and a widening of it to a slot of any class
-        # rejects, at its statement or in convert_type!, and a PiNode narrowing it to its NTuple
-        # builds that NTuple (emit_vararg_to_fixed_tuple!)
+        # rejects, at its statement or in convert_type!, and a PiNode with a local of its own
+        # narrowing it to its NTuple builds that NTuple (emit_vararg_to_fixed_tuple!; one with no
+        # local, re-emitted where it is read, does not: MARCH 13.17 A9E3)
         if is_runtime_vararg_tuple_type(T)
             push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return

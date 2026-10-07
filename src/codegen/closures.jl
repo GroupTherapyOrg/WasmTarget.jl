@@ -145,7 +145,7 @@ end
 _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
 
 """
-    ambiguous_class_tuple(registry, F, overlap) -> Union{Bool, Nothing, Tuple}
+    ambiguous_class_tuple(registry, F, overlap, held) -> Union{Bool, Nothing, Tuple}
 
 A tuple of candidates, one per argument of `overlap` (the argument types two methods both
 admit; a position's candidates are the numbered classes and the `Type{X}` of each type object
@@ -157,7 +157,7 @@ parity(quarantine: Julia selects among a callable's methods by specificity and r
 ambiguity; a dart closure has one body.)
 """
 function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospecialize(overlap),
-                               held::Set{DataType}=Set{DataType}())::Union{Bool, Nothing, Tuple}
+                               held::Set{DataType})::Union{Bool, Nothing, Tuple}
     overlap isa DataType || return nothing
     any(P -> P isa Core.TypeofVararg, overlap.parameters) && return nothing
     # the numbered classes and the dispatch type of each type object the program holds

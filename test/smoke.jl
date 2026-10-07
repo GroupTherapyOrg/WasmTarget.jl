@@ -1611,16 +1611,6 @@ _g("narrowed_union_arithmetic", Any[
 _xf("erased_operand_arithmetic", Any[
     ("erased_div_any", (n::Int64) -> (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2)))), Int64(9)),
 ])
-# `===` on closures compares their type and captures, as jl_egal compares an immutable struct,
-# whichever of WT's two representations each operand is (its captured-fields context, or the
-# closure object holding it once erased; dev/AUDIT.md A7S1: two equal closures answered 2, and
-# two erasures of one closure trapped)
-_g("closure_egal", Any[
-    ("equal_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n))[]; a === b ? 1 : 2), Int64(3)),
-    ("one_closure_erased_twice", (n::Int64) -> (c = x -> x + n; a = _sm_dh(c)[]; b = _sm_dh(c)[]; a(1); a === b ? 1 : 2), Int64(3)),
-    ("other_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n + 1))[]; a === b ? 1 : 2), Int64(3)),
-    ("equal_captures_static", (n::Int64) -> (mk = k -> (y -> y + k); mk(n) === mk(n) ? 1 : 2), Int64(3)),
-])
 _g("dynamic_enrollment", Any[
     ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
     ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),
@@ -1682,6 +1672,7 @@ _g("kind_isa", Any[
 # 2). isa tests its size; the rest reject at their statement
 @noinline _sm_mk(v::Vector{Int64}) = Core.tuple(v...)
 @noinline _sm_mk8(v::Vector{Int8}) = Core.tuple(v...)
+@noinline _sm_mkbool(v::Vector{Bool}) = Core.tuple(v...)
 struct _SmMT; m::Memory{Int64}; t::Tuple{Int64}; end
 _g("runtime_length_tuple", Any[
     ("isa_ntuple_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
@@ -1692,14 +1683,22 @@ _g("runtime_length_tuple", Any[
     ("isa_least_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
     ("isa_least_length_fails", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Int64,Int64,Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
     ("isa_union_of_lengths", (n::Int64) -> _sm_mk([n, 2, 3]) isa Union{Tuple{Int64},NTuple{3,Int64}} ? 1 : 2, Int64(3)),
-    # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
-    # two structs trapped where native answers 6)
     # a fixed tuple joining a runtime-length one at a phi is that runtime-length tuple (A9E4:
-    # a cast between the two structs trapped where native answers 7)
+    # a cast between the two structs trapped where native answers 7), whether the edge is a
+    # literal or a value (A10P7)
     ("fixed_joins_runtime_length", (n::Int64) -> (u = n == 3 ? (7,) : _sm_mk([n, 2]); u[1]), Int64(3)),
     ("runtime_length_joins_fixed", (n::Int64) -> (u = n == 3 ? (7,) : _sm_mk([n, 2]); u[1]), Int64(4)),
-    ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[n, 2, 3]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
+    ("value_joins_runtime_length", (n::Int64) -> (u = n == 3 ? (n,) : _sm_mk([n, 2]); u[1]), Int64(3)),
+    # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
+    # two structs trapped where native answers 6)
+    # a packed element is read with its sign: -3 read unsigned is 253 (A9B3, A10P6)
+    ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[-n, 2, 3]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
     ("isa_narrowed_fields", (n::Int64) -> (t = _sm_mk([n, 2, 3]); t isa NTuple{3,Int64} ? t[1] + t[3] : 0), Int64(3)),
+    # a Bool element is unpacked, read plainly (A10E5: a signed read of it was refused)
+    ("isa_narrowed_bool_fields", (n::Int64) -> (t = _sm_mkbool([true, false, n > 2]); t isa NTuple{3,Bool} ? (t[3] ? 2 : 1) : 0), Int64(3)),
+    # a fixed tuple held as any value and asserted a runtime-length tuple is built into it
+    # (A10E4: a cast of its struct trapped where native answers 3)
+    ("erased_asserted_runtime_length", (n::Int64) -> (v = Any[(n,)]; t = v[1]::Tuple{Vararg{Int64}}; t[1]), Int64(3)),
     # a struct whose layout is the representation's widens to Any as any struct does
     ("same_layout_struct_erased", (n::Int64) -> (m = Memory{Int64}(undef, 1); m[1] = n; v = Any[_SmMT(m, (n,))]; (v[1]::_SmMT).t[1]), Int64(3)),
 ])
@@ -1763,11 +1762,75 @@ _xf("type_isa_equality", Any[
 # TypeVar passed the DataType row, and a TypeVar row read a class header it lacks, native 22,
 # wasm trap)
 const _SM_TV = TypeVar(:T)
+const _SM_CT = (Int64, UInt8)
 _g("type_object_rows", Any[
     ("typevar_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(2)),
     # a closure row taking Type{Int64}: Int64's identity (A6B4 = A6C6)
     ("type_identity_row", (n::Int64) -> (k = n; h(::Type{Int64}) = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(Int64)[])::Int64 + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     ("datatype_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(1)),
+    # a type object a `typeof` makes is a candidate of an erased position: the method on
+    # `Type{S}` has its row (A10C1, A10P2: native 1, wasm 2 or a trap)
+    ("typeof_made_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(typeof(_sm_dh(_Pt(n, 2))[]))::Int64), Int64(3)),
+    ("typeof_made_unsigned_row", (n::Int64) -> (k = n; h(::Type{S}) where {S<:Unsigned} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(typeof(_sm_dh(0x03)[]))::Int64), Int64(3)),
+    # a type object a constant tuple holds, read out at run time (A10C1)
+    ("constant_tuple_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S<:Unsigned} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_SM_CT[n - 1])::Int64), Int64(3)),
+])
+# `===` on closures compares their type and captures, as jl_egal compares an immutable struct,
+# whichever of WT's two representations each operand is (its captured-fields context, or the
+# closure object holding it once erased; dev/AUDIT.md A7S1: two equal closures answered 2, and
+# two erasures of one closure trapped)
+_g("closure_egal", Any[
+    ("equal_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n))[]; a === b ? 1 : 2), Int64(3)),
+    ("one_closure_erased_twice", (n::Int64) -> (c = x -> x + n; a = _sm_dh(c)[]; b = _sm_dh(c)[]; a(1); a === b ? 1 : 2), Int64(3)),
+    ("other_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n + 1))[]; a === b ? 1 : 2), Int64(3)),
+    ("equal_captures_static", (n::Int64) -> (mk = k -> (y -> y + k); mk(n) === mk(n) ? 1 : 2), Int64(3)),
+])
+# `===`, typeof and isa over closures erased in either representation (dev/AUDIT.md A10B1: two
+# functions used as values share the dummy context and answered equal, native 18, wasm 118;
+# A10E2: a closure whose context registered after the egal function was built, native 1,
+# wasm 2; A10C2: typeof of an erased Base.Fix2 trapped; isa(x, Base.Fix2) of its context
+# answered 0, native 1)
+_sm_cv_a(x::Int64) = x + 3
+_sm_cv_m(x::Int64) = x * 4
+@noinline _sm_cv_mk(n::Int64) = Ref{Any}(y -> y + n)[]
+mutable struct _SmMC <: Function; n::Int64; end
+struct _SmHF; f::Base.Fix2{typeof(+),Int64}; end
+_sm_cv_k(::Base.Fix2) = 1
+_sm_cv_k(x) = 2
+_g("closure_values", Any[
+    ("two_functions_egal", (n::Int64) -> (fs = Any[_sm_cv_a, _sm_cv_m]; s = (fs[1](n))::Int64 + (fs[2](n))::Int64; fs[1] === fs[2] ? s + 100 : s), Int64(3)),
+    ("one_function_egal", (n::Int64) -> (fs = Any[_sm_cv_a, _sm_cv_a]; s = (fs[1](n))::Int64; fs[1] === fs[2] ? s + 100 : s), Int64(3)),
+    ("closures_built_apart_egal", (n::Int64) -> (a = _sm_cv_mk(n); b = _sm_cv_mk(n); a === b ? 1 : 2), Int64(3)),
+    ("closures_other_captures_egal", (n::Int64) -> (a = _sm_cv_mk(n); b = _sm_cv_mk(n + 1); a === b ? 1 : 2), Int64(3)),
+    ("typeof_erased_fix2", (n::Int64) -> (v = Any[Base.Fix2(+, n), n]; typeof(v[1]) === Base.Fix2{typeof(+),Int64} ? 1 : 2), Int64(3)),
+    ("isa_erased_fix2", (n::Int64) -> _sm_cv_k(_sm_dh(Base.Fix2(+, n))[]), Int64(3)),
+    ("typeof_erased_fix2_held", (n::Int64) -> typeof(_sm_dh(Base.Fix2(+, n))[]) === Base.Fix2{typeof(+),Int64} ? 1 : 2, Int64(3)),
+    # a mutable callable is compared by identity (A10B2: its fields were compared, native 2, wasm 1)
+    ("mutable_callables_egal", (n::Int64) -> (a = _sm_dh(_SmMC(n))[]; b = _sm_dh(_SmMC(n))[]; a === b ? 1 : 2), Int64(3)),
+    ("mutable_callable_self_egal", (n::Int64) -> (a = _sm_dh(_SmMC(n))[]; b = Any[a]; a === b[1] ? 1 : 2), Int64(3)),
+    # a closure type a struct field registers before its own value is built (A10P5, A10E8)
+    ("closure_in_field", (n::Int64) -> (h = _SmHF(Base.Fix2(+, n)); v = Any[h.f]; (v[1])(1)::Int64), Int64(3)),
+    # a closure captured by another, compared with `===`: the capture is held as its object
+    # (A10E3: a cast of the object to its context trapped where native answers 1)
+    ("captured_closure_egal", (n::Int64) -> (c = x -> x + n; f = _sm_dh(c)[]; f(1); mk = () -> (y -> c(y)); a = _sm_dh(mk())[]; b = _sm_dh(mk())[]; a === b ? 1 : 2), Int64(3)),
+])
+# a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct
+# field, any value narrowed to a method's parameter (A8C4: a tuple field laid out as a class
+# struct trapped, and the narrowing read it as a String; native 100, wasm trap)
+_sm_cu_q(::Base.CodeUnits{UInt8,String}) = 100
+_sm_cu_q(::Vector{Int64}) = 1
+_sm_cu_q(::Int64) = 2
+_sm_cu_q(::Float64) = 3
+struct _SmCU; c::Base.CodeUnits{UInt8,String}; n::Int64; end
+_g("codeunits_values", Any[
+    ("selector_codeunits", (n::Int64) -> (v = Any[codeunits("ab"), [n], n, 1.0]; _sm_cu_q(v[1])::Int64), Int64(3)),
+    ("selector_each_class", (n::Int64) -> (v = Any[codeunits("ab"), [n], n, 1.0]; _sm_cu_q(v[n - 1])::Int64 + 10 * _sm_cu_q(v[n])::Int64 + 100 * _sm_cu_q(v[n + 1])::Int64), Int64(2)),
+    ("struct_field_codeunits", (n::Int64) -> (v = Any[_SmCU(codeunits("abc"), n)]; length((v[1]::_SmCU).c) + n), Int64(3)),
+])
+# a tuple built at run time from a value of any class: its type is known only at run time, so
+# it rejects at its statement (it raised a WasmInternalError registering the abstract `Tuple`)
+_xf("abstract_tuple_values", Any[
+    ("splat_any_joins_fixed", (n::Int64) -> (u = n == 3 ? (n,) : Core.tuple(_sm_dh([n, 2])[][]...); u[1]), Int64(3)),
 ])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads

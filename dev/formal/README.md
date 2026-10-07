@@ -37,7 +37,7 @@ anchor in `src/` has a row.)
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
 | Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis`, `_builtin_call_edge_mi`, `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
 | Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
-| Coercion funnel | `convert_type!` (values.jl) | Coercion |
+| Coercion funnel | `convert_type!`, `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
 | Constant interning | `ensure_constant_global!` (types.jl) | Constants |
 | Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
@@ -54,7 +54,7 @@ anchor in `src/` has a row.)
 | Inline classId switch | `_try_inline_typeid_dispatch` (calls.jl), `_emit_closure_arg_tests!`, `_closure_dispatch_trampoline!`, `_closure_trampoline!` (closures.jl), `bare_array_partition` (builtins.jl) | ClassIdSwitch |
 | Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` (trimcollect.jl), `_most_specific_first` (closures.jl), the vtable pre-pass's invoke-only and ambiguity rules (compile.jl) | Enrollment |
 | Type identity under iso-recursive canonicalization | `add_type!`, `add_type_group!`, `_group_member_equal` (instructions.jl), `finish_pending!` (structs.jl) | TypeIdentity |
-| `===` over representations | `emit_egal!`, `get_egal_function!` (calls.jl) | EgalDispatch |
+| `===` over representations | `emit_egal!`, `get_egal_function!`, `fill_egal_function!` (calls.jl) | EgalDispatch |
 | Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |

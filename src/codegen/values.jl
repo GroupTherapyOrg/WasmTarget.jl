@@ -422,22 +422,27 @@ end
 The single coercion funnel (dart2wasm `translator.dart:1597 convertType`). Given a value of
 wasm type `from` already on the stack, emit the ops that leave a value of type `to`, or
 reject through the located diagnostic funnel. Every arm is decided on heap KIND, hierarchy
-and nullability — never on a type index — which is what lets dev/formal/Coercion.tla
-exhaust the whole lattice: for every pair the result is a wasm subtype of `to` or a
-rejection, an upcast emits nothing, and only pairs the wasm type system cannot express
-are rejected (cross-hierarchy without the extern bridge; a numeric into an array/i31/
-func/exn sink; a numeric without a concrete Julia source type to stamp the box's classId).
+and nullability, and the runtime-length tuple's arms on whether a struct is that
+representation (vararg_tuple_of_struct) — the kinds dev/formal/Coercion.tla models, which
+lets it exhaust the whole lattice: for every pair the result is a wasm subtype of `to` or a
+rejection, an upcast emits nothing, a value that may be a fixed tuple is built into the
+runtime-length tuple and never cast to it, and only pairs the wasm type system cannot
+express are rejected (cross-hierarchy without the extern bridge; a numeric into an array/
+i31/func/exn sink; a numeric without a concrete Julia source type to stamp the box's
+classId), with the runtime-length tuple's two (widened to a slot of any class; a struct that
+is no NTuple of its element bound for it).
 
   * numeric→ref: BOX through `emit_classid_box!`, then this funnel again for the box ref.
   * ref→numeric: `any.convert_extern` if extern, then UNBOX through `emit_classid_unbox!`.
-  * ref→ref: the string arms (classed string ↔ its byte array), the extern↔any bridge,
+  * ref→ref: the runtime-length tuple arms (emit_fixed_to_vararg_tuple!; `_narrow_ref!` for
+    a value of any class), the string arms (classed string ↔ its byte array), the extern↔any bridge,
     then `Narrow`: nothing on an upcast, `ref.as_non_null` when only nullability blocks it,
     else `ref.cast` to `to`'s heap type with `to`'s nullability.
   * numeric→numeric: WT's widening ladder plus the two narrowing arms Julia call
     boundaries need (dart2wasm throws here; Julia widens).
 
 Returns `b`.
-formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; only inexpressible pairs reject
+formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); only inexpressible pairs reject
 parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
@@ -537,9 +542,11 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             local _to_is_sstr = to isa ConcreteRef && to.type_idx == _ssi
             local _from_is_sarr = from isa ConcreteRef && from.type_idx == _sai
             local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
-            if _to_is_sarr && !_from_is_sarr
+            if _to_is_sarr && !_from_is_sarr && !(from_julia isa Type && is_bare_array_class(from_julia))
                 # any string-ish ref → its data array: narrow to $JlString, read data
-                # (an externref source crosses the boundary first)
+                # (an externref source crosses the boundary first). A String's CodeUnits or a
+                # Memory{UInt8} held as any value is the byte array itself, cast by the ref→ref
+                # arms below (A8C4: read as a String's data, it trapped where native answers 100)
                 _fh === :extern && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(2), ConcreteRef(UInt32(_sai), true))
@@ -627,6 +634,32 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
         # nullability (heap types compatible, source nullable → non-null target).
         # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
         ref_as_non_null!(b)
+    elseif to isa ConcreteRef && !(from isa ConcreteRef) &&
+           vararg_tuple_of_struct(ctx.type_registry, to.type_idx) !== nothing
+        # a value narrowed to a runtime-length tuple Tuple{Vararg{E}} is that representation or
+        # an NTuple{k,E} of a fixed class, built into it (emit_fixed_to_vararg_tuple!); a cast
+        # of the fixed struct trapped where native answers 3 (dev/AUDIT.md A10E4)
+        local reg = ctx.type_registry
+        local V = vararg_tuple_of_struct(reg, to.type_idx)
+        local v = allocate_local!(ctx, AnyRef)
+        local_set!(b, v)
+        local done = block!(b; results=WasmValType[to])
+        local_get!(b, v); ref_test!(b, Int64(to.type_idx), false)
+        if_!(b)
+        local_get!(b, v); ref_cast!(b, Int64(to.type_idx), false); br!(b, done)
+        end_block!(b)
+        for (T, _) in ordered_pairs(reg.type_ids, type_order_key,
+                                    T -> T isa DataType && T <: V && isconcretetype(T) &&
+                                         !is_runtime_vararg_tuple_type(T))
+            local tinfo = get(reg.structs, T, nothing)
+            tinfo isa StructInfo || continue   # a class with no layout has no value
+            local_get!(b, v); ref_test!(b, Int64(tinfo.wasm_type_idx), false)
+            if_!(b)
+            local_get!(b, v); emit_fixed_to_vararg_tuple!(b, ctx, T, V); br!(b, done)
+            end_block!(b)
+        end
+        local_get!(b, v); ref_cast!(b, Int64(to.type_idx), to.nullable)
+        end_block!(b)
     elseif to isa ConcreteRef
         local _cbase = ctx.type_registry.closure_base_idx
         local _cvg = ctx.type_registry.closure_vtable_globals

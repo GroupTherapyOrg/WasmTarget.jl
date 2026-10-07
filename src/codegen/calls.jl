@@ -1573,7 +1573,11 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         _emit_string_egal!(b, mod, registry, alloc, p1, p2)
     elseif concrete && _egal_needs_value_compare(T) && !isprimitivetype(T) &&
            !any(s -> s === T, seen) &&
-           haskey(registry.structs, T) && registry.structs[T].field_offset > 0
+           haskey(registry.structs, T) && registry.structs[T].field_offset > 0 &&
+           !(is_closure_type(T) && !all(w -> w isa ConcreteRef && w.type_idx == registry.structs[T].wasm_type_idx, (w1, w2)))
+        # a closure held in a wider slot (a capture or field is a structref) may be its closure
+        # object: the runtime egal tells the two forms (A10E3: a cast of the object to its
+        # context trapped where native answers 1; MARCH 13.17 A7S1)
         _emit_fields_egal!(b, mod, registry, alloc, T, p1, p2, seen)
     elseif concrete && ismutabletype(T) && !(T <: Type)
         p1(); _to_eqref!(b, mod, w1)
@@ -1670,23 +1674,58 @@ const _HEAP_EQ = Int64(-19)
 The ONE runtime egal function `(anyref, anyref) -> i32`, built once per module on first use.
 In order: `nothing` (null, or the Nothing class) against `nothing`; reference identity; type
 objects (a Union or UnionAll compared by its two fields, a DataType or TypeVar by identity);
-SimpleVector element by element; then two classed values of one classId, compared by that
-class's rule (`_emit_egal_class!`) when the class can be equal without being identical. The
-closed world is numbered before codegen, so the class list is complete when this is built.
+SimpleVector element by element; closures, a closure object read as its context unless that is
+the shared dummy context, and two contexts of one immutable closure type compared field by
+field; then two classed values of one classId, compared by that class's rule
+(`_emit_egal_class!`) when the class can be equal without being identical. Its
+first use defines it; `fill_egal_function!` fills its body once codegen has registered every
+layout a value may have (a closure's context registers where its first value is built).
 parity(intrinsics.dart:2974 MemberIntrinsic.identical): ref.eq, the null arm, the classId
-compare, then one unboxed compare per value class.
+compare, then one unboxed compare per value class. The closure arm: parity(quarantine: a WT
+closure is its context or a closure object holding it, two forms jl_egal must see as one value
+until a closure is one object, MARCH 13.17 A7S1; dart's closure is always the object.)
 """
 function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.egal_func_idx !== nothing && return registry.egal_func_idx
-    local top = registry.base_struct_idx
-    local jt = registry.jl_type_idx
+    registry.egal_filled &&
+        error("the runtime egal function is first used after its body was filled")
+    local top, jt = registry.base_struct_idx, registry.jl_type_idx
     (top === nothing || jt === nothing) &&
         error("the runtime egal function needs the class hierarchy and the JlType hierarchy")
-    local params = WasmValType[AnyRef, AnyRef]
-    local results = WasmValType[I32]
-    local fidx = add_function!(mod, params, results, WasmValType[],
+    local fidx = add_function!(mod, WasmValType[AnyRef, AnyRef], WasmValType[I32], WasmValType[],
                                UInt8[Opcode.UNREACHABLE, Opcode.END])
     registry.egal_func_idx = fidx
+    return fidx
+end
+
+"""
+    fill_egal_function!(mod, registry)
+
+Fills the runtime egal function's body when the module used it, after codegen: its class and
+closure lists are then every layout a value can have. Filling can register a field's layout,
+so it refills until the registries stop growing. A use after the fill raises.
+parity(quarantine: dart's classes and closure layouts are all known before its code generator
+runs (closures.dart ClosureLayouter); a WT closure's context registers lazily where its first
+value is built, MARCH 13.17 A7S1.)
+"""
+function fill_egal_function!(mod::WasmModule, registry::TypeRegistry)::Nothing
+    local fidx = registry.egal_func_idx
+    fidx === nothing && return
+    local seen = (-1, -1)
+    while seen != (length(registry.type_ids), length(registry.structs))
+        seen = (length(registry.type_ids), length(registry.structs))
+        _fill_egal_body!(mod, registry, fidx)
+    end
+    registry.egal_filled = true
+    return
+end
+
+# parity(intrinsics.dart:2974 MemberIntrinsic.identical): the body get_egal_function! defines
+function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Nothing
+    local top = registry.base_struct_idx
+    local jt = registry.jl_type_idx
+    local params = WasmValType[AnyRef, AnyRef]
+    local results = WasmValType[I32]
     local b = InstrBuilder(params, results; func_name="jl_egal", mod=mod)
     local extra = WasmValType[]
     local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
@@ -1772,19 +1811,34 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     # (two representations, MARCH 13.17 A7S1); jl_egal compares it as the immutable struct it
     # is, its type and then its captures (formal(dev/formal/EgalDispatch.tla): ClosureByIdentity
     # is the reference comparison that answered 2 for two equal closures and trapped on two
-    # erasures of one)
+    # erasures of one). A function used as a value holds the shared dummy context, which says
+    # nothing of its class: that object stays whole, compared by its classId below
+    # (UnwrapFirst unwrapped it, and two functions answered equal, A10B1)
     local cb = registry.closure_base_idx
+    # a mutable callable struct is compared by identity, as jl_egal compares any mutable
+    # object (julia.h jl_egal__unboxed_: `name->mutabl` answers 0; A10B2 answered 1)
     local closures = Any[(C, id) for (C, id) in ordered_pairs(registry.type_ids, type_order_key,
-                                                               C -> C isa DataType && is_closure_type(C))
+                                                               C -> C isa DataType && is_closure_type(C) &&
+                                                                    !ismutabletype(C))
                          if get(registry.structs, C, nothing) isa StructInfo &&
                             registry.structs[C].field_offset == 1]
     if cb !== nothing || !isempty(closures)
         if cb !== nothing
-            for l in (0, 1)   # a closure object is its context
+            local ng = get_nothing_global!(mod, registry)
+            local cx = alloc(AnyRef)
+            for l in (0, 1)   # a closure object is its context, unless that is the dummy
                 local_get!(b, l); ref_test!(b, Int64(cb), false)
                 if_!(b)
                 local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2), AnyRef)
-                local_set!(b, l)
+                local_tee!(b, cx); ref_test!(b, _HEAP_EQ, false)
+                if_!(b; results=WasmValType[I32])
+                local_get!(b, cx); ref_cast!(b, EqRef, false)
+                global_get!(b, ng, mod.globals[Int(ng) + 1].valtype)
+                num!(b, Opcode.REF_EQ); num!(b, Opcode.I32_EQZ)
+                else_!(b); i32_const!(b, 1); end_block!(b)
+                if_!(b)
+                local_get!(b, cx); local_set!(b, l)
+                end_block!(b)
                 end_block!(b)
             end
             local_get!(b, 0); ref_test!(b, _HEAP_EQ, false)
@@ -1835,7 +1889,7 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end_block!(b)
     local slot = fidx - num_imported_funcs(mod) + 1
     mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
-    return fidx
+    return
 end
 
 """
@@ -2442,15 +2496,29 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
         _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
         return nothing
     end
-    # a value that is no type object is one of the bare arrays under check_type, or not a T
+    # a closure of a class under check_type held as its captured-fields context, outside the
+    # class hierarchy, carries its classId at field 0 (MARCH 13.17 A7S1: until a closure is one
+    # object, as in emit_isa_class_header!); a closure type registered as a class is a `$JlBase`
+    local contexts = Tuple{UInt32,Any}[]
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
+                                C -> C isa DataType && is_closure_type(C) && C <: check_type)
+        local info = register_closure_type!(ctx.mod, reg, C)
+        info.field_offset == 1 && push!(contexts, (info.wasm_type_idx, C))
+    end
+    # a value that is no type object is a closure context or bare array under check_type, or not a T
     emit_type_object_test!(bld, ctx.mod, reg, local_idx, check_type, () -> allocate_local!(ctx, I32);
-        otherwise = b -> if isempty(kinds)
+        otherwise = b -> if isempty(kinds) && isempty(contexts)
             i32_const!(b, 0)
         else
             for (i, idx) in enumerate(kinds)
                 local_get!(b, UInt32(local_idx))
                 ref_test!(b, Int64(idx), false)
                 i > 1 && num!(b, Opcode.I32_OR)
+            end
+            for (i, (idx, C)) in enumerate(contexts)
+                local_get!(b, UInt32(local_idx))
+                emit_isa_classid!(b, ctx, idx, C)
+                (i > 1 || !isempty(kinds)) && num!(b, Opcode.I32_OR)
             end
         end)
     return nothing

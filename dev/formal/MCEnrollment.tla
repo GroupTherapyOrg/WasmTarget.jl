@@ -16,7 +16,9 @@
 (* positions mention (`h(x::T, ::Type{S}) where {T<:Integer, S}`).           *)
 (* o: oA admits every pair, oP admits (I, _) with a static parameter of the  *)
 (* first position only (`h(x::T, y) where T<:Integer`).                      *)
-(* Static types: every pair, and (I, I).                                     *)
+(* Static types: every pair, (I, I), and (I, T) (`h(x::Int64, ::Type{T})`,  *)
+(* whose second position is one type object). T is made by a               *)
+(* `typeof`; the program holds no type object as a literal.                *)
 EXTENDS Enrollment
 MCX == {"I", "J", "S", "F", "T"}
 MCNumbered == {"I", "J", "S", "F"}
@@ -54,5 +56,7 @@ MCPOrd == [m \in MCMethods |-> CASE m \in {"hA", "aX", "gN", "q1", "b1", "kI", "
 MCPFix == [m \in MCMethods |-> CASE m \in {"hP", "aP", "pP"} -> {1, 2}
                                  [] m = "oP" -> {1}
                                  [] OTHER -> {}]
-MCStatics == {MCX \X MCX, {<<"I", "I">>}}
+MCStatics == {MCX \X MCX, {<<"I", "I">>}, {<<"I", "T">>}}
+\* T is made by a `typeof` (`h(typeof(x))`), held as no literal
+MCLiterals == {}
 =============================================================================

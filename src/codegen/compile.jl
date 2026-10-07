@@ -627,7 +627,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         for (_i, _T, _takes_context) in _cvp
             local _entry = function_data[_i]
             # a body reached only by `invoke` is no row: dispatch never selects it
-            # (formal(dev/formal/Enrollment.tla): IncludeInvoke is a Broken variant)
+            # (an invoke reaches a body Julia's dispatch would not select for its arguments)
             local _mi = _entry[9]
             _mi in plan.invoke_only && continue
             _mi isa Core.MethodInstance && _mi.def isa Method ||
@@ -803,6 +803,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Populate DataType/TypeName fields for type constant globals.
     # This creates a start function that patches .name, .super, .parameters, .wrapper.
+    fill_egal_function!(mod, type_registry)
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
 

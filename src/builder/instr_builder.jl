@@ -754,10 +754,11 @@ end
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
-function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType; signed::Union{Nothing,Bool}=nothing)::InstrBuilder
-    op = signed === nothing ? Opcode.STRUCT_GET : (signed ? Opcode.STRUCT_GET_S : Opcode.STRUCT_GET_U)
-    validate_gc_instruction!(b.v, op, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
-    _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), op))
+function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)::InstrBuilder
+    # WT declares no packed struct field, so struct.get_s/_u (dart's struct_get_s/_u, asserted
+    # packed, instructions.dart:1675) have no caller (dev/AUDIT.md A10B9)
+    validate_gc_instruction!(b.v, Opcode.STRUCT_GET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
+    _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), Opcode.STRUCT_GET))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1696 InstructionsBuilder.struct_set)
 function struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)::InstrBuilder

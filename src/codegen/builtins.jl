@@ -1380,8 +1380,8 @@ function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     for i in 1:length(T.parameters)
         local_get!(b, data)
         i32_const!(b, Int64(i - 1))
-        # an element narrower than 32 bits is a packed i8/i16, read with its signedness
-        array_get!(b, arr, elem_w; signed=(E <: Integer && sizeof(E) < 4) ? (E <: Signed) : nothing)
+        # a packed i8/i16 element is read with its signedness, an unpacked one (Bool) plainly
+        array_get!(b, arr, elem_w; signed=packed_array_signedness(E))
         coerce_stack_top!(b, tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype, ctx; from_julia=E)
     end
     struct_new!(b, tinfo.wasm_type_idx)
@@ -1603,7 +1603,8 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         local reg = ctx.type_registry
         local bare = bare_array_partition(ctx.mod, reg, arg_type).told
         if arg_type !== nothing && typeintersect(arg_type, Union{Type, TypeVar}) === Union{} && isempty(bare)
-            emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
+            emit_class_id!(_tofb, ctx, arg_type)
+            emit_type_lookup!(_tofb, reg, temp_local)
         else
             local konst!(K) = (g = get_type_constant_global!(ctx.mod, reg, K);
                                global_get!(_tofb, g, ctx.mod.globals[Int(g) + 1].valtype))
@@ -1631,7 +1632,8 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
                 if_!(_tofb); konst!(C); br!(_tofb, kdone); end_block!(_tofb)
             end
             local_get!(_tofb, v)
-            emit_typeof_struct_with_local!(_tofb, base_idx, reg, temp_local)
+            emit_class_id!(_tofb, ctx, arg_type; arrays=false)   # the bare arrays answered above
+            emit_type_lookup!(_tofb, reg, temp_local)
             end_block!(_tofb)
         end
         if nullable
@@ -1714,20 +1716,37 @@ end
 
 The classId of the erased value on the stack, whose static type is `T`: a classed value's
 header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
-header), the id of the one closed-world class whose array type it is (bare_array_partition).
+header), the id of the one closed-world class whose array type it is (bare_array_partition),
+or, for a closure held as its captured-fields context (no header either, MARCH 13.17 A7S1),
+the classId at the context's field 0.
 parity(code_generator.dart:6076 loadClassId)
 """
-function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
+function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T);
+                        arrays::Bool=true)::InstrBuilder
     local reg = ctx.type_registry
     local base_idx = reg.base_struct_idx
-    local bare = bare_array_partition(ctx.mod, reg, T).told
-    isempty(bare) && return emit_typeof!(b, base_idx)
+    local bare = arrays ? bare_array_partition(ctx.mod, reg, T).told : Tuple{Type,UInt32}[]
+    local contexts = UInt32[]
+    local S = T === nothing ? Any : T
+    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
+                                C -> C isa DataType && is_closure_type(C) && typeintersect(C, S) !== Union{})
+        local info = register_closure_type!(ctx.mod, reg, C)
+        info.field_offset == 1 && !(info.wasm_type_idx in contexts) && push!(contexts, info.wasm_type_idx)
+    end
+    isempty(bare) && isempty(contexts) && return emit_typeof!(b, base_idx)
     local v = allocate_local!(ctx, AnyRef)
     local_set!(b, v)
     local done = block!(b; results=WasmValType[I32])
     for (C, arr) in bare
         local_get!(b, v); ref_test!(b, Int64(arr), false)
         if_!(b); i32_const!(b, Int64(ensure_type_id!(reg, C))); br!(b, done); end_block!(b)
+    end
+    for cx in contexts
+        local_get!(b, v); ref_test!(b, Int64(cx), false)
+        if_!(b)
+        local_get!(b, v); ref_cast!(b, Int64(cx), false); struct_get!(b, cx, UInt32(0), I32)
+        br!(b, done)
+        end_block!(b)
     end
     local_get!(b, v)
     emit_typeof!(b, base_idx)

@@ -248,9 +248,6 @@ end
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Union{Nothing, StructInfo}
     # Already registered, or being registered (its entry holds a pending id)
     haskey(registry.structs, T) && return registry.structs[T]
-    # a closure type has one layout, its captured-fields context, whichever registrar reaches
-    # it first (MARCH 13.17 A7S1: a field, tuple, constant or local registered it as a class)
-    is_closure_type(T) && return register_closure_type!(mod, registry, T)
     return _register_struct_type_inner!(mod, registry, T)
 end
 
@@ -687,6 +684,10 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             # 128-bit integers are WasmGC structs — use concrete ref
             int128_info = register_int128_type!(mod, registry, ft)
             ConcreteRef(int128_info.wasm_type_idx, true)
+        elseif is_string_codeunits(ft)
+            # a String's CodeUnits is the String's byte array, as its values are held
+            # (get_concrete_wasm_type); a class struct here trapped building the tuple (A8C4)
+            ConcreteRef(get_string_array_type!(mod, registry), true)
         elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
             # Nested struct - register and use concrete ref
             nested_info = register_struct_type!(mod, registry, ft)

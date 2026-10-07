@@ -56,6 +56,13 @@ gdiv(n::Int64) = (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2
 # a closure row taking a Type{X} whose values are not one pointer (type equality, jl_isa)
 gte(n::Int64) = (k = n; h(::Type{Tuple{Int64,Integer}}) = 1 + 0k; h(x) = 2 + 0k; f = hide(h)[];
                  f(hide(Tuple{Int64,T} where T<:Integer)[])::Int64)
+# a held UnionAll reaching a `Type{S}` method: jl_isa tests it by type equality (A10C1)
+gtu(n::Int64) = (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = hide(h)[]; g(hide(Vector)[])::Int64)
+# the ambiguity search asks about each type object a value may be: a type object the program
+# holds, under an abstract overlap that no numbered class is in (dev/AUDIT.md A9S1, A10C3,
+# A10P8: without it the search had no candidate there and rejected the call as ambiguous)
+gtn(n::Int64) = (k = n; h(x::Union{Type{Int64},Type{UInt8}}, y) = 1 + 0k; h(x, y::Int64) = 2 + 0k;
+                 h(x::Type{Int64}, y::Int64) = 3 + 0k; f = hide(h)[]; f(hide(Int64)[], hide(n)[])::Int64)
 gab(n::Int64) = (k = n; g = hide(x -> length(x) + k)[]; w = hide(WV([1, 2]))[]::WV;
                  m = Memory{Int64}(undef, 2); g([1, 2, 3])::Int64 + g(w.v)::Int64 + length(m))
 end
@@ -160,7 +167,7 @@ end
     # with its own message (dev/AUDIT.md A3E6, A9P2)
     @test M.gdiv(9) == 7
     let e = try; WasmTarget.compile(M.gdiv, (Int64,)); nothing; catch err; err; end
-        @test e isa WasmTarget.WasmCompileError && occursin("its class is known only at run time", sprint(showerror, e))
+        @test e isa WasmTarget.WasmCompileError && occursin("on an operand held as any value", sprint(showerror, e))
     end
     # an ambiguity at a Type{Int64} position rejects (dev/AUDIT.md A8C1: the search found no
     # candidate there and ran a row, native -7, wasm 1)
@@ -173,5 +180,18 @@ end
     @test M.gte(3) == 1
     let e = try; WasmTarget.compile(M.gte, (Int64,)); nothing; catch err; err; end
         @test e isa WasmTarget.WasmCompileError && occursin("admits a type object or a bare array", sprint(showerror, e))
+    end
+    # Julia selects h(::Type{Int64}, ::Int64) for the one type object that reaches the call: no
+    # ambiguity; the callable rejects for its Type-union row instead (A5C4)
+    @test M.gtn(3) == 3
+    let e = try; WasmTarget.compile(M.gtn, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && !occursin("ambiguous", sprint(showerror, e)) &&
+              occursin("admits a type object or a bare array", sprint(showerror, e))
+    end
+    # a type object held as a value is a candidate whether or not its values are one pointer: a
+    # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)
+    @test M.gtu(3) == 1
+    let e = try; WasmTarget.compile(M.gtu, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("candidate taking Type{Vector}", sprint(showerror, e))
     end
 end

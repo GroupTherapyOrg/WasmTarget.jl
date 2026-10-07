@@ -900,3 +900,77 @@ closure type to register_closure_type!, where a struct field, a tuple element, a
 Fix2 and the like) or a local could register it as an ordinary class struct first (a third
 layout, decided by registration order). Probes 225/225 and smoke 730/730 unchanged: no case
 reached the third layout, so no case pins it.
+
+## 2026-10-07 — audited through f95a1aa6 (d9433740..f95a1aa6: batches 95–98)
+
+The tenth audit, of the ninth audit's fix batches and the first A7S1 stage: 37 findings. Each
+prediction was measured (native, then wasm, at f95a1aa6 and at the batch before each change):
+seven wrong answers and five traps today. Batch 96's runtime egal read a closure object as its
+context before comparing classes, and every function used as a value holds the one dummy context,
+so two of them answered equal (A10B1 = A10E1 = A10P1: native 18, wasm 118); its closure list was
+taken when the egal function was first built, before a later body registered its context
+(A10B3 = A10E2: native 1, wasm 2); it compared a mutable callable's fields (A10B2: native 2,
+wasm 1); and a closure captured by another, compared statically, was cast from its object to its
+context (A10E3: trap). Batch 98 left an erased closure with no vtable as a context with no class
+header, which typeof and the class switch cast (A10C2: native 1, wasm trap), and `isa(x, Fix2)`
+of it answered 0 (native 1, before the range). Batch 95's held set took only literal operands
+whose values are one pointer: a type object a `typeof` made, a phi or return held, a constant
+tuple held, or one tested by type equality was no candidate (A10C1 = A10P2: native 1, wasm 2 or a
+trap). Batch 95's narrowing read a Bool element with a signedness of its own rule, which the
+builder refused (A10B4 = A10E5), and batch 97's arm built the runtime-length tuple only from a
+concrete struct, so a value of any class asserted into one was cast and trapped (A10E4: native 3).
+
+Area: builder — (A10B1–A10B4) above. (A10B5) EgalDispatch.tla had no function used as a value
+and no shared context. (A10B6) convert_type!'s new arm decides by type index and builds where
+Coercion.tla casts. (A10B7) the egal docstring omitted its closure arm, which had no quarantine.
+(A10B8) types.jl's closure comment. (A10B9) struct_get!'s unused signedness.
+
+Area: collection and planning — (A10C1, A10C2) above. (A10C3) no test fails without the held set
+in the ambiguity search. (A10C4) the generic-function switch's `Type{X}` row (measured: answers 1
+as native does, the held literal enrolling it). (A10C5) Enrollment.tla took every type object as
+held, its StaticOnly instance had no static type of one type object, and Cand read the state's
+`s`. (A10C6) branches batch 98 made redundant. (A10C7) required `held`, prose, docstrings.
+
+Area: emission and diagnostics — (A10E1–A10E5) above. (A10E6 = A10P7) a phi edge with no Julia
+type gets its NTuple from the struct's layout. (A10E7) prose. (A10E8 = A10P5) batch 98 had no pin.
+
+Area: enforcement and prose — (A10P1, A10P2) above. (A10P3) the CodeUnits selector program (A9C3
+= A9P4, A8C4's remainder) had no lane case. (A10P4) 13.17's A7S1 stage 2 misstated dart. (A10P6)
+isa_narrowed_int8_fields read the same value signed or not. (A10P8) A9S1 stated without evidence.
+(A10P9) Enrollment.tla and trimcollect prose. (A10P10) A9P7, cited by C9 and 13.17, was never
+named here: it is is_string_codeunits' quarantine reason, which names WT's own representation
+(A8E4); A9E7 was resolved with A9B4; A9P5's open parts are A8P8, A8P12 and A8P7's second half.
+(A10P11) smoke's comment order. (A10P12) gdiv's message pin matched the externref arm too.
+(A10P13) batch 96's probe re-record kept no diff.
+
+Resolution: batch 99 (this commit) — models first. EgalDispatch.tla gains two functions used as
+values sharing the dummy context and the Broken instance UnwrapFirst; Enrollment.tla a constant
+of the type objects held as literals (the rest a `typeof` makes), the Broken instance
+LiteralsOnly, a static type of one type object, and Cand over its own S; Coercion.tla a fixed
+tuple and the runtime-length tuple, their build and narrowing arms, the claim NoTupleCast and the
+Broken instance CastTuple. TLC rejects each new Broken instance and passes each model. A10B1: a
+closure object whose context is the dummy stays whole, compared by its classId. A10B2: a mutable
+callable by identity. A10B3 = A10E2: `fill_egal_function!` fills the egal body after codegen,
+refilling until the registries stop growing; a use after the fill raises. A10E3: a closure held
+in a wider slot goes to the runtime egal. A10C2: batch 98's redirect is reverted (two layouts
+again, A7S1); the class read (`emit_class_id!`, which typeof now reads through) and the abstract
+isa test a closure context's field 0. A10C1 = A10P2: the held set takes every type object a
+literal or constant global holds (in a statement, phi, π, upsilon or return, and inside a
+constant tuple or immutable struct) and the `Type{C}` of each class a `typeof` operand may be; a
+`Type{X}` tested by type equality then rejects the callable. A10B4 = A10E5:
+packed_array_signedness. A10E4: `_narrow_ref!` builds the runtime-length tuple from whichever
+fixed NTuple class the value is. Found while measuring: the CodeUnits selector program trapped
+because a tuple field of CodeUnits type had a class-struct layout and the narrowing read an erased
+CodeUnits as a String (A8C4's remainder: now native 100, wasm 100); and an abstract Vararg tuple
+(`Tuple`) raised a WasmInternalError registering a layout, and now has none, so its statement
+rejects. Smoke gains closure_values (11 cases), codeunits_values (3), type_object_rows' typeof,
+unsigned and constant-tuple rows, runtime_length_tuple's Bool, value-edge and erased-assert cases,
+and the xfail abstract_tuple_values; test/dispatch_method_error.jl
+gtu (a held UnionAll rejects) and gtn (A10C3 = A10P8: without the held set the search rejects the
+call as ambiguous, measured). Negative tests: the old egal answers 118, 2 and 1 and traps; the
+held set without typeof results and composites answers 2, 2 and traps; the mutable rule removed
+answers 1. Probes: five string probes change, the same types renumbered and the egal function's
+dummy-context test (diff kept, resume-notes/b99). A10B6, A10B7, A10B8, A10B9, A10C5, A10C7, A10E7,
+A10P4, A10P6, A10P9, A10P10, A10P11, A10P12, A10P13: as found. A10C4: measured right. A10C6:
+batch 98 reverted, the branches are A7S1's. A10E8 = A10P5: smoke closure_in_field. Everything
+else (A10E6): MARCH 13.17.

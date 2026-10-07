@@ -31,7 +31,9 @@
 (*    abstract GC kinds any/eq/struct/array/i31; the extern, func and exn      *)
 (*    hierarchies; two concrete structs S2 <: S1 <: struct; one concrete      *)
 (*    array; the four numeric box structs (the boxing arm's targets); and the  *)
-(*    classed string Str and its byte array StrArr (the string arms). Each ref *)
+(*    classed string Str and its byte array StrArr (the string arms); a fixed  *)
+(*    tuple Tf (an NTuple{k,E}) and the runtime-length tuple Tv               *)
+(*    (Tuple{Vararg{E}}), whose arms build Tv from Tf. Each ref               *)
 (*    kind appears nullable and non-null. Every branch of convert_type! is a   *)
 (*    predicate over kind, hierarchy, nullability and the declared supertype  *)
 (*    chain — never over the type INDEX — so one representative per kind      *)
@@ -55,12 +57,14 @@ CONSTANTS
     DropNarrowingArm,       \* Broken: the ladder has no i64→i32 arm and no reject
                             \* (the silent fallthrough fixed in 752ad55e)
     CastBeforeUpcastCheck,  \* Broken: ref→ref downcasts before asking wasm_subtype
-    IgnoreNullability       \* Broken: wasm_subtype ignores nullability (the P2 bug)
+    IgnoreNullability,      \* Broken: wasm_subtype ignores nullability (the P2 bug)
+    CastTuple               \* Broken: a value bound for the runtime-length tuple is cast to
+                            \* it, never built (batches 97 and 99: an NTuple trapped, A9E4, A10E4)
 
 NumKinds == {"i32", "i64", "f32", "f64"}
 
 Kinds == {"any", "eq", "struct", "array", "i31", "extern", "func", "exn",
-          "S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr"}
+          "S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr", "Tf", "Tv"}
 
 \* every type is a record [k, n]; numerics carry n = FALSE (they are never nullable)
 Ref(k, n) == [k |-> k, n |-> n]
@@ -74,7 +78,7 @@ IsNum(t) == t \in Num
 
 \* Heap kind of a ref (wasm_subtype's _wt_heap_kind): concrete structs collapse
 \* to :concrete_struct, the array to :concrete_array.
-Concrete == {"S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr"}
+Concrete == {"S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr", "Tf", "Tv"}
 ConcreteStructs == Concrete \ {"A1", "StrArr"}
 ConcreteArrays == {"A1", "StrArr"}
 AbstractGC == {"any", "eq", "struct", "array", "i31"}
@@ -124,6 +128,10 @@ DropNull(t) == IF IsRef(t) THEN Ref(t.k, FALSE) ELSE t
 \*   <<"str_data">>          ref.cast $Str + struct.get data → (ref null StrArr)
 \*   <<"str_wrap">>          the one string producer: (ref null StrArr) → (ref Str)
 \*   <<"num", n>>            a numeric conversion opcode whose result is n
+\*   <<"tuple_build">>       emit_fixed_to_vararg_tuple!: an NTuple's fields into a fresh
+\*                           runtime-length tuple: (ref null? Tf) → (ref Tv)
+\*   <<"tuple_narrow", n>>   the narrowing to the runtime-length tuple (_narrow_ref!): the
+\*                           value is Tv, or an NTuple built into it: any-hierarchy → (ref null? Tv)
 INVALID == [k |-> "INVALID", n |-> FALSE]   \* an opcode whose operand is outside its hierarchy: not valid wasm
 
 \* Every cast-family op (ref.cast, the unbox cast, the string data cast) casts WITHIN
@@ -138,6 +146,8 @@ StepOK(t, op) ==
       [] op[1] = "str_wrap"                       -> IsRef(t) /\ t.k = "StrArr"
       [] op[1] = "box"                            -> IsNum(t)
       [] op[1] = "num"                            -> IsNum(t)
+      [] op[1] = "tuple_build"                    -> IsRef(t) /\ t.k = "Tf"
+      [] op[1] = "tuple_narrow"                   -> IsRef(t) /\ t.k \in {"any", "eq", "struct"}
 
 Step(t, op) ==
     IF t = INVALID \/ ~StepOK(t, op) THEN INVALID ELSE
@@ -150,6 +160,8 @@ Step(t, op) ==
       [] op[1] = "str_data"           -> Ref("StrArr", TRUE)
       [] op[1] = "str_wrap"           -> Ref("Str", FALSE)
       [] op[1] = "num"                -> op[2]
+      [] op[1] = "tuple_build"        -> Ref("Tv", FALSE)
+      [] op[1] = "tuple_narrow"       -> Ref("Tv", op[2])
 
 RECURSIVE Fold(_, _)
 Fold(t, ops) == IF ops = << >> THEN t ELSE Fold(Step(t, Head(ops)), Tail(ops))
@@ -184,6 +196,8 @@ Ladder(from, to) ==
 Narrow(cur, to) ==
     IF AlgoSub(cur, to) THEN << >>
     ELSE IF AlgoSub(DropNull(cur), to) THEN <<<<"as_non_null">>>>
+    ELSE IF to.k = "Tv" /\ cur.k \in {"any", "eq", "struct"} /\ ~CastTuple
+         THEN <<<<"tuple_narrow", to.n>>>>
     ELSE <<<<"cast", to.k, to.n>>>>
 
 \* the extern hierarchy is bridged to/from any by exactly two ops; func and exn have
@@ -206,8 +220,14 @@ Emit(from, to, conc) ==
         ELSE IF Hier(from.k) # "any" THEN REJECT      \* a func/exn ref holds no box
         ELSE <<<<"unbox", to>>>>
     ELSE IF IsRef(from) /\ IsRef(to) THEN
+        \* the runtime-length tuple arms: widened to a slot of any class it rejects (its class
+        \* is an NTuple{n,E} for its run-time n); a concrete struct bound for it is built into
+        \* it when it is an NTuple of its element (Tf), else rejects
+        IF from.k = "Tv" /\ to.k \in {"any", "eq", "struct", "extern"} THEN REJECT
+        ELSE IF to.k = "Tv" /\ from.k \in Concrete /\ from.k # "Tv" /\ ~CastTuple THEN
+            IF from.k = "Tf" THEN <<<<"tuple_build">>>> ELSE REJECT
         \* the string arms
-        IF to.k = "StrArr" /\ from.k # "StrArr" THEN
+        ELSE IF to.k = "StrArr" /\ from.k # "StrArr" THEN
             IF ~Bridgeable(from, to) THEN REJECT ELSE
             (IF from.k = "extern" THEN <<<<"any_convert_extern">>>> ELSE << >>)
             \o (IF from.k = "Str" THEN << >> ELSE <<<<"cast", "Str", FALSE>>>>)
@@ -245,7 +265,14 @@ NoRedundantCastOK(f, t, c, out) == out = REJECT
     \/ f.k = "StrArr" \/ t.k = "StrArr"
     \/ out = << >>
 
-\* The funnel rejects only what the wasm type system cannot express.
+\* A value of a type whose values may be a fixed tuple (an NTuple, or any value) is never cast
+\* to the runtime-length tuple, a struct an NTuple is not: the cast traps (A9E4, A10E4).
+NoTupleCastOK(f, t, c, out) == out = REJECT \/ ~IsRef(f) \/
+    f.k \notin {"Tf", "any", "eq", "struct", "extern"} \/
+    \A i \in 1..Len(out) : ~(out[i][1] = "cast" /\ out[i][2] = "Tv")
+
+\* The funnel rejects only what the wasm type system cannot express, and the runtime-length
+\* tuple's own two rejections.
 RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
     \/ (IsNum(f) /\ IsRef(t) /\ ~c)                          \* boxing without a concrete Julia type
     \/ (IsNum(f) /\ IsNum(t))                                 \* a pair Julia never converts implicitly
@@ -255,6 +282,8 @@ RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
         /\ ~(f.k = "extern" /\ Hier(t.k) = "any")
         /\ ~(t.k = "extern" /\ Hier(f.k) = "any"))            \* cross-hierarchy, no bridge op
     \/ (IsRef(f) /\ IsNum(t) /\ Hier(f.k) # "any" /\ f.k # "extern")   \* unboxing a func/exn ref
+    \/ (IsRef(f) /\ f.k = "Tv" /\ t.k \in {"any", "eq", "struct", "extern"})   \* its class is known only at run time
+    \/ (t.k = "Tv" /\ (IsNum(f) \/ f.k \in Concrete \ {"Tf", "Tv"}))       \* only an NTuple of its element converts
 
 Init == /\ todo = Triples
         /\ checked = {}
@@ -267,6 +296,7 @@ Next == /\ todo # {}
                ok == /\ TotalOK(tr[1], tr[2], tr[3], out)
                      /\ NoRedundantCastOK(tr[1], tr[2], tr[3], out)
                      /\ RejectsOnlyInexpressibleOK(tr[1], tr[2], tr[3], out)
+                     /\ NoTupleCastOK(tr[1], tr[2], tr[3], out)
            IN /\ todo' = todo \ {tr}
               /\ checked' = checked \cup {tr}
               /\ last' = <<tr[1], tr[2], tr[3], out>>
@@ -282,6 +312,7 @@ TypeOK == /\ todo \subseteq Triples
 Total == last = << >> \/ TotalOK(last[1], last[2], last[3], last[4])
 NoRedundantCast == last = << >> \/ NoRedundantCastOK(last[1], last[2], last[3], last[4])
 RejectsOnlyInexpressible == last = << >> \/ RejectsOnlyInexpressibleOK(last[1], last[2], last[3], last[4])
+NoTupleCast == last = << >> \/ NoTupleCastOK(last[1], last[2], last[3], last[4])
 
 \* … and the whole-lattice claim: at the end of the walk nothing was flagged. Checked
 \* on its own (without the per-step invariants) it lists EVERY offending triple at once.

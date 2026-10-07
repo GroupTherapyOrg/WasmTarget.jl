@@ -381,6 +381,8 @@ mutable struct TypeRegistry
     unicode_property_func_idx::Union{Nothing, UInt32}
     # The runtime egal function (`get_egal_function!`, dart's `identical` member intrinsic).
     egal_func_idx::Union{Nothing, UInt32}
+    # whether fill_egal_function! has filled its body (a later first use raises)
+    egal_filled::Bool
     # utf8proc case-record table helper, shared by the case-mapping/predicate calls.
     unicode_case_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
@@ -447,6 +449,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
     nothing,  # egal_func_idx
+    false,    # egal_filled
     nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Tuple{Type,Symbol}, Type}(),  # box_contents_types (record_capture_contents)
@@ -2654,15 +2657,13 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)::I
     return b
 end
 
-"""Resolve a value's classId through the module's canonical type-object table.
+"""Replace the classId on the stack (emit_class_id!) with its type object, through the module's
+canonical type-object table.
 
 parity(quarantine: the canonical typeof table, see create_type_lookup_table!.)"""
-function emit_typeof_struct_with_local!(b::InstrBuilder, base_idx::UInt32,
-                                         registry::TypeRegistry, temp_local::UInt32)::InstrBuilder
+function emit_type_lookup!(b::InstrBuilder, registry::TypeRegistry, temp_local::UInt32)::InstrBuilder
     registry.type_lookup_global === nothing && error("Type lookup table global is unavailable")
     registry.type_lookup_array_idx === nothing && error("Type lookup table array is unavailable")
-    # Extract typeId: ref.cast $JlBase + struct.get → i32
-    emit_typeof!(b, base_idx)
     # Save typeId to scratch local; look it up in the type table
     local_set!(b, temp_local)
     global_get!(b, registry.type_lookup_global, AnyRef)
@@ -2819,19 +2820,11 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
     elseif !for_local && is_closure_type(T)
-        # Closure types are structs with captured variables. NOT a deliberate asymmetry —
-        # a DISCOVERED pre-existing gap between the two former chains, preserved here rather
-        # than fixed (out of scope for a byte-identical fold; probe_bytes' string_uppercase
-        # caught the attempt to ungate this). The former ctx-taking twin (the for_local=true /
-        # SSA-local-phi-slot chain) never checked is_closure_type at all — an
-        # unregistered closure reaching the local allocator fell to the `is_struct_type` arm
-        # below and got `register_struct_type!`'s generic layout instead of
-        # `register_closure_type!`'s Object/vtable-prefixed one. In practice this is FIRST
-        # reached in the for_local=false chain (function parameter/return-type registration,
-        # compile.jl's arg_types loop) before any closure-typed local is ever allocated, so
-        # the gap is believed latent, not live — but that belief is unverified here. Flag for
-        # a follow-up: either prove it unreachable for_local=true, or route it through
-        # register_closure_type! there too (a real behavior change, not a fold).
+        # a closure type's captured-fields context {classId, captures} (register_closure_type!).
+        # A local of it (for_local) takes the `is_struct_type` arm below, so a closure type a
+        # local, a field, a tuple or a constant registers first has the class layout instead:
+        # two layouts by registration order, MARCH 13.17 A7S1 (batch 98 sent every route to the
+        # context; an erased context with no vtable then had no class header, A10C2).
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
@@ -2864,6 +2857,11 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         if for_local && T isa UnionAll
             return StructRef
         end
+        # a Vararg tuple whose element is not concrete (`Tuple`, `Tuple{Int64,Vararg}`) is an
+        # abstract type: its values are tuples of many classes, no one layout (a registration
+        # raised a WasmInternalError where it should be no layout at all)
+        T isa DataType && is_vararg_tuple_type(T) && !is_runtime_vararg_tuple_type(T) &&
+            return StructRef
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)

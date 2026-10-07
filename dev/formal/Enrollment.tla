@@ -46,7 +46,10 @@
 (* parametric method fixed by a `Type{X}` had no row, native 1, wasm 2,    *)
 (* A8C1, A8C2); and a type object a candidate only where the static type   *)
 (* is its `Type{X}` (StaticOnly, batch 91: one reaching an erased position  *)
-(* found its parametric method without a row, native 1, wasm 2, A9C1).     *)
+(* found its parametric method without a row, native 1, wasm 2, A9C1); and *)
+(* a type object a candidate only when the program holds it as a literal   *)
+(* or a constant (LiteralsOnly, batch 99: one a `typeof` made found its    *)
+(* parametric method without a row, native 1, wasm 2, A10C1).              *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes and methods are opaque; a method's   *)
 (* parameter type is the set of classes it admits; specificity is a       *)
@@ -54,7 +57,8 @@
 (* elements; a row's specialization is the pairs it admits; `PFix[m]` is   *)
 (* the positions a method's static parameters mention, which a candidate   *)
 (* must fix for it to be one signature; an element outside `Numbered` is a *)
-(* type object, a candidate only as the dispatch type `Type{X}`.           *)
+(* type object, a candidate only as the dispatch type `Type{X}`, held as a *)
+(* literal (`Literals`) or made by a `typeof` of a value of its class.     *)
 (*                                                                         *)
 (* formal(src/codegen/trimcollect.jl _dynamic_dispatch_candidate_mis): a   *)
 (* dynamic call enrolls, for every class that may reach it, the body Julia *)
@@ -72,9 +76,10 @@ CONSTANTS X, Numbered, Methods, Callables,
           More,         \* SUBSET (Methods \X Methods): <<m, n>> = m is more specific than n
           POrd,         \* [Methods -> Nat]: program order
           PFix,         \* [Methods -> SUBSET {1, 2}]: positions its static parameters mention
-          Statics,      \* SUBSET (SUBSET (X \X X)): the numbered pairs a call site's static type admits
+          Statics,      \* SUBSET (SUBSET (X \X X)): the pairs (classes, type objects) a call site's static type admits
           SubsetRule, ProgramOrder, SpecOrder, IgnoreAmbig, SkipParametric, PerPosition, AllTypesAmbig,
-          ClassesOnly, StaticOnly
+          Literals,     \* SUBSET X: the type objects the program holds as literals (the rest a `typeof` makes)
+          ClassesOnly, StaticOnly, LiteralsOnly
 
 Values == X \X X
 VARIABLES f, s, v, outcome, done
@@ -98,12 +103,14 @@ Matched(g, S) == {m \in Of(g) : IF SubsetRule THEN S \subseteq Param[m] ELSE S \
 \* Numbered here); under ClassesOnly (broken) only a numbered class; under StaticOnly (broken,
 \* batch 91) a type object only where S's elements at that position are that one type object
 Proj(S, p) == {u[p] : u \in S}
-Cand(t, ps) == \A p \in ps : t[p] \in Numbered \/
-                    (~ClassesOnly /\ (~StaticOnly \/ Proj(s, p) = {t[p]}))
+\* under LiteralsOnly (broken, before batch 99) only a type object held as a literal or constant
+Cand(t, ps, S) == \A p \in ps : t[p] \in Numbered \/
+                    (~ClassesOnly /\ (~LiteralsOnly \/ t[p] \in Literals) /\
+                     (~StaticOnly \/ Proj(S, p) = {t[p]}))
 RowsOf(m, S) == IF PFix[m] = {} THEN {<<m, Param[m] \cap S>>}
                 ELSE IF SkipParametric \/ (PerPosition /\ Cardinality(PFix[m]) = 2) THEN {}
                 ELSE {<<m, {u \in Param[m] \cap S : \A p \in PFix[m] : u[p] = t[p]}>> :
-                      t \in {x \in Param[m] \cap S : Cand(x, PFix[m])}}
+                      t \in {x \in Param[m] \cap S : Cand(x, PFix[m], S)}}
 Rows(g, S) == UNION {RowsOf(m, S) : m \in Matched(g, S)}
 
 \* row r is tried before row q
@@ -112,7 +119,7 @@ Before(r, q) == IF ProgramOrder THEN POrd[r[1]] < POrd[q[1]]
                 ELSE <<r[1], q[1]>> \in More \/
                      (<<q[1], r[1]>> \notin More /\ POrd[r[1]] < POrd[q[1]])
 
-\* the compile-time ambiguity check: WT asks Julia's dispatch for each pair of numbered classes
+\* the compile-time ambiguity check: WT asks Julia's dispatch for each pair of candidates
 \* of S (the closed world numbers every class a value can have, and more: MARCH 13.17, A3S3);
 \* the rule before (AllTypesAmbig) took two methods neither more specific, whose overlap
 \* anywhere no method more specific than both covers (Base.isambiguous)
@@ -121,7 +128,7 @@ AmbiguousOver(g, S) ==
     THEN \E m, n \in Of(g) : m # n /\ <<m, n>> \notin More /\ <<n, m>> \notin More /\
              LET ov == Param[m] \cap Param[n] IN
              ov # {} /\ ~\E p \in Of(g) : <<p, m>> \in More /\ <<p, n>> \in More /\ ov \subseteq Param[p]
-    ELSE \E x \in S : Cand(x, {1, 2}) /\ Julia(g, x) = Ambig
+    ELSE \E x \in S : Cand(x, {1, 2}, S) /\ Julia(g, x) = Ambig
 
 Entry(g, S, x) ==
     IF ~IgnoreAmbig /\ AmbiguousOver(g, S) THEN Reject
