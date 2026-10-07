@@ -880,4 +880,12 @@ isa_narrowed_int8_fields, test/dispatch_method_error.jl gdiv (A9P2: the A3E6 arm
 test/module_builder_validation.jl the packed-read check; batch 94's code answers 2 and builds the
 refused module, and batch 82's ambiguity rule rejects the unreached-class program. A9B4, A9B7 =
 A9E8, A9B8 = A9P8, A9B9, A9C5, A9E5, A9P6's prose: as found. A8P5's A7C4 citation is withdrawn
-(A9P3); A8P2 is closed by gdiv. Everything else: MARCH 13.17.
+(A9P3); A8P2 is closed by gdiv. Everything else: MARCH 13.17. Batch 96 — found while mapping
+A7S1 (A9S2): `===` on closures compared references. Two closures of one type with equal captures,
+erased, answered 2 where native answers 1, and two erasures of one closure with a vtable trapped
+(native 1), the per-class rule having no representation for a closure. Model first:
+EgalDispatch.tla gains a closure class (two contexts with equal captures, an object wrapping one,
+one with other captures) and the Broken instance ClosureByIdentity, which TLC rejects. The runtime
+egal unwraps a closure object to its context, retries identity, and compares a closure's classId
+and captures field by field; a closure whose type is known is compared as the immutable struct of
+its captures. Smoke closure_egal (four cases): the old egal answers 2 and traps twice.

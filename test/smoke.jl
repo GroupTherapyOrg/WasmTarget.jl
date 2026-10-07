@@ -1611,6 +1611,16 @@ _g("narrowed_union_arithmetic", Any[
 _xf("erased_operand_arithmetic", Any[
     ("erased_div_any", (n::Int64) -> (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2)))), Int64(9)),
 ])
+# `===` on closures compares their type and captures, as jl_egal compares an immutable struct,
+# whichever of WT's two representations each operand is (its captured-fields context, or the
+# closure object holding it once erased; dev/AUDIT.md A7S1: two equal closures answered 2, and
+# two erasures of one closure trapped)
+_g("closure_egal", Any[
+    ("equal_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n))[]; a === b ? 1 : 2), Int64(3)),
+    ("one_closure_erased_twice", (n::Int64) -> (c = x -> x + n; a = _sm_dh(c)[]; b = _sm_dh(c)[]; a(1); a === b ? 1 : 2), Int64(3)),
+    ("other_captures_erased", (n::Int64) -> (mk = k -> (y -> y + k); a = _sm_dh(mk(n))[]; b = _sm_dh(mk(n + 1))[]; a === b ? 1 : 2), Int64(3)),
+    ("equal_captures_static", (n::Int64) -> (mk = k -> (y -> y + k); mk(n) === mk(n) ? 1 : 2), Int64(3)),
+])
 _g("dynamic_enrollment", Any[
     ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
     ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),

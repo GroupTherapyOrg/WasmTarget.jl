@@ -1536,10 +1536,12 @@ function _egal_rep(@nospecialize(T), mod::WasmModule, registry::TypeRegistry)::W
     (T === String || T === Symbol) &&
         return ConcreteRef(UInt32(get_string_struct_type!(mod, registry)), true)
     if T isa DataType && isconcretetype(T) && isstructtype(T) && !ismutabletype(T) &&
-       !(T <: Type) && !Base.issingletontype(T) && !is_closure_type(T) &&
-       (T <: Tuple || is_struct_type(T))
+       !(T <: Type) && !Base.issingletontype(T) &&
+       (T <: Tuple || is_struct_type(T) || is_closure_type(T))
+        # a closure whose type is known is its captured fields, compared as an immutable struct's
         local info = T <: Tuple ? register_tuple_type!(mod, registry, T) :
-                                  register_struct_type!(mod, registry, T)
+                     is_closure_type(T) ? register_closure_type!(mod, registry, T) :
+                                          register_struct_type!(mod, registry, T)
         info isa StructInfo && info.field_offset > 0 &&
             return ConcreteRef(info.wasm_type_idx, true)
     end
@@ -1570,7 +1572,7 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
     elseif T === String || T === Symbol
         _emit_string_egal!(b, mod, registry, alloc, p1, p2)
     elseif concrete && _egal_needs_value_compare(T) && !isprimitivetype(T) &&
-           !any(s -> s === T, seen) && !is_closure_type(T) &&
+           !any(s -> s === T, seen) &&
            haskey(registry.structs, T) && registry.structs[T].field_offset > 0
         _emit_fields_egal!(b, mod, registry, alloc, T, p1, p2, seen)
     elseif concrete && ismutabletype(T) && !(T <: Type)
@@ -1765,6 +1767,53 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
         end_block!(b)
         local_get!(b, 1); ref_test!(b, Int64(sv), false)
         ret!(() -> i32_const!(b, 0))
+    end
+    # closures: a closure value is its captured-fields context or a closure object holding it
+    # (two representations, MARCH 13.17 A7S1); jl_egal compares it as the immutable struct it
+    # is, its type and then its captures (formal(dev/formal/EgalDispatch.tla): ClosureByIdentity
+    # is the reference comparison that answered 2 for two equal closures and trapped on two
+    # erasures of one)
+    local cb = registry.closure_base_idx
+    local closures = Any[(C, id) for (C, id) in ordered_pairs(registry.type_ids, type_order_key,
+                                                               C -> C isa DataType && is_closure_type(C))
+                         if get(registry.structs, C, nothing) isa StructInfo &&
+                            registry.structs[C].field_offset == 1]
+    if cb !== nothing || !isempty(closures)
+        if cb !== nothing
+            for l in (0, 1)   # a closure object is its context
+                local_get!(b, l); ref_test!(b, Int64(cb), false)
+                if_!(b)
+                local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2), AnyRef)
+                local_set!(b, l)
+                end_block!(b)
+            end
+            local_get!(b, 0); ref_test!(b, _HEAP_EQ, false)
+            local_get!(b, 1); ref_test!(b, _HEAP_EQ, false)
+            num!(b, Opcode.I32_AND)
+            if_!(b)
+            local_get!(b, 0); ref_cast!(b, EqRef, true)
+            local_get!(b, 1); ref_cast!(b, EqRef, true)
+            num!(b, Opcode.REF_EQ)
+            ret!(() -> i32_const!(b, 1))
+            end_block!(b)
+        end
+        for (C, id) in closures
+            local cx = registry.structs[C].wasm_type_idx
+            local is_c(l) = (local_get!(b, l); ref_test!(b, Int64(cx), false);
+                             if_!(b; results=WasmValType[I32]);
+                             local_get!(b, l); ref_cast!(b, Int64(cx), false); struct_get!(b, cx, UInt32(0), I32);
+                             i32_const!(b, Int64(id)); num!(b, Opcode.I32_EQ);
+                             else_!(b); i32_const!(b, 0); end_block!(b))
+            is_c(0)
+            ret!(() -> begin
+                is_c(1)
+                if_!(b; results=WasmValType[I32])
+                _emit_fields_egal!(b, mod, registry, alloc, C, () -> local_get!(b, 0), () -> local_get!(b, 1), Any[])
+                else_!(b)
+                i32_const!(b, 0)
+                end_block!(b)
+            end)
+        end
     end
     # classed values: one classId, then that class's rule
     local_get!(b, 0); ref_test!(b, Int64(top), false)

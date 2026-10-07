@@ -15,19 +15,25 @@
 (* applies the same per-class rule.                                        *)
 (*                                                                         *)
 (* THE CLAIM. For every pair of values the static types admit, the answer  *)
-(* is Julia's `===` (Agrees). Three Broken variants are the classic        *)
-(* mistakes the arms exist to avoid: floats compared by value (0.0 === -0.0 *)
-(* would be true, NaN === NaN false), Strings by identity (two equal       *)
+(* is Julia's `===` (Agrees). Four Broken variants are the classic         *)
+(* mistakes the arms exist to avoid: floats compared by value (0.0 ===     *)
+(* -0.0 would be true, NaN === NaN false), Strings by identity (two equal  *)
 (* strings built apart would differ), immutable structs by identity (two   *)
-(* equal-field values would differ).                                       *)
+(* equal-field values would differ), and closures by reference (the code   *)
+(* before 2026-10-07: two closures of one type with equal captures         *)
+(* differed, native 1, wasm 2, and two erasures of one closure trapped;    *)
+(* dev/AUDIT.md A7S1).                                                     *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. A value universe with one representative of  *)
 (* every distinction the rules draw: Int64 0 and 1; Float64 0.0, -0.0 and  *)
 (* two NaN payloads; two "a" Strings built apart and one "b"; two mutable  *)
 (* objects with equal contents; two immutable structs with equal fields    *)
-(* and one with another; `nothing`. Static types are classes, `Any`, and   *)
-(* Union{Nothing, Mut}. An operand held in a numeric register under a      *)
-(* non-concrete type rejects at compile time (loud) and is left out.       *)
+(* and one with another; `nothing`; closures of one type: two contexts     *)
+(* with equal captures built apart, a closure object wrapping the first    *)
+(* (WT's two representations, A7S1), and one with other captures. Static   *)
+(* types are classes, `Any`, and Union{Nothing, Mut}. An operand held in a *)
+(* numeric register under a non-concrete type rejects at compile time      *)
+(* (loud) and is left out.                                                 *)
 (*                                                                         *)
 (* formal(src/codegen/calls.jl emit_egal!): the arm the static types pick  *)
 (* answers Julia's `===` for every pair of values they admit.              *)
@@ -38,11 +44,12 @@
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS FloatByValue, StringByIdentity, ImmutableByIdentity   \* TRUE = a broken rule
+CONSTANTS FloatByValue, StringByIdentity, ImmutableByIdentity,  \* TRUE = a broken rule
+          ClosureByIdentity
 
 \* value -> [class, bits/content/fields, object identity]
 Values == {"i0", "i1", "f0", "fn0", "nan1", "nan2", "sa1", "sa2", "sb",
-           "m1", "m2", "k0", "k0b", "k1", "nothing"}
+           "m1", "m2", "k0", "k0b", "k1", "nothing", "c0", "c0b", "c0o", "c1"}
 Class(v) ==
     CASE v \in {"i0", "i1"} -> "Int64"
       [] v \in {"f0", "fn0", "nan1", "nan2"} -> "Float64"
@@ -50,18 +57,20 @@ Class(v) ==
       [] v \in {"m1", "m2"} -> "Mut"
       [] v \in {"k0", "k0b", "k1"} -> "Imm"
       [] v = "nothing" -> "Nothing"
+      [] v \in {"c0", "c0b", "c0o", "c1"} -> "Clo"
 Payload(v) ==   \* bits (Int, Float), content (String), fields (Imm), none otherwise
     CASE v = "i0" -> "0"  [] v = "i1" -> "1"
       [] v = "f0" -> "+0" [] v = "fn0" -> "-0" [] v = "nan1" -> "nanA" [] v = "nan2" -> "nanB"
       [] v \in {"sa1", "sa2"} -> "a" [] v = "sb" -> "b"
       [] v \in {"k0", "k0b"} -> "0" [] v = "k1" -> "1"
+      [] v \in {"c0", "c0b", "c0o"} -> "0" [] v = "c1" -> "1"
       [] OTHER -> v
 FloatValue(v) == CASE v \in {"f0", "fn0"} -> "zero" [] OTHER -> "nan"   \* by value: NaN never equal
 
 \* Julia's `===`
 JuliaEgal(a, b) ==
     /\ Class(a) = Class(b)
-    /\ CASE Class(a) \in {"Int64", "Float64", "String", "Imm"} -> Payload(a) = Payload(b)
+    /\ CASE Class(a) \in {"Int64", "Float64", "String", "Imm", "Clo"} -> Payload(a) = Payload(b)
          [] Class(a) = "Mut" -> a = b
          [] OTHER -> TRUE
 
@@ -74,9 +83,10 @@ SameClass(a, b) ==
       [] Class(a) = "String" -> IF StringByIdentity THEN a = b ELSE Payload(a) = Payload(b)
       [] Class(a) = "Imm" -> IF ImmutableByIdentity THEN a = b ELSE Payload(a) = Payload(b)
       [] Class(a) = "Mut" -> a = b
+      [] Class(a) = "Clo" -> IF ClosureByIdentity THEN a = b ELSE Payload(a) = Payload(b)
       [] OTHER -> TRUE
 
-Classes == {"Int64", "Float64", "String", "Mut", "Imm", "Nothing"}
+Classes == {"Int64", "Float64", "String", "Mut", "Imm", "Nothing", "Clo"}
 StaticTypes == Classes \cup {"Any", "NothingOrMut"}
 Members(T) == IF T = "Any" THEN Values
               ELSE IF T = "NothingOrMut" THEN {"nothing", "m1", "m2"}
