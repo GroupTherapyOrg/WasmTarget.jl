@@ -83,7 +83,7 @@ with the per-clause status. A clause is never closed by argument.
   case; a new entry without one fails; no known failure hides behind a skipped test or a
   missing wasm runtime. Checks: `L16` `L94` `L134` `R33` `R36`. Planned: dev/MARCH.md 13.3,
   13.16, 13.17 — a paused downstream job and the checks the audits found pinning text
-  (dev/AUDIT.md M6, A2P9, A4B6, A4C7, A4P4, A4P6, A4P9, A5B6, A5P4, A7P8, A8B4, A8P2, A8P5).
+  (dev/AUDIT.md M6, A2P9, A4B6, A4C7, A4P4, A4P6, A4P9, A5B6, A5P4, A7P8, A8P10).
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`

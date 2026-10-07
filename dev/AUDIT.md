@@ -818,3 +818,14 @@ tuple a PiNode narrows to the NTuple its isa tested it to be is built as that NT
 representation's data array), where a cast between the two structs trapped (native 6). Smoke
 runtime_length_tuple's isa_narrowed_fields: the old code traps. A typeassert on one still
 rejects, its failure's TypeError carrying the value as any value (xfail typeassert_got).
+Batch 94 — A8B4 = A8P10: test/module_builder_validation.jl records one group where a module has
+two and asks the writer to write it; it refuses (with the comparison planted out, the test
+fails). The comparison still skips a module whose types were pushed past the builder, whose
+record is incomplete (MARCH 13.17). A8P2: no case can fail without batch 90, since no program
+reaches the arm it turned into a rejection: planted to reject every operand, it left the smoke
+corpus passing (batch 90's resolution), and the arm it replaced unboxed only operands that reach
+it. A8P5: A7C4's change is not observable while the numbered classes include every class a
+method's signature names (the A7C4 remainder, with A3S3), and A7C6's is not observable by a
+differential case, since the native run creates the MethodInstance with Julia's static parameter
+values first and the method cache returns it (audit #8, A8C3); smoke generic_parametric_candidate
+documents the call shape.

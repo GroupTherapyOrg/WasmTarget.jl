@@ -82,6 +82,15 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.ModuleValidationError MBV.add_type_group!(m, MBV.CompositeType[
             MBV.StructType(MBV.FieldType[]),
             MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(length(m.types)), true), true)])])
+        # the writer checks the groups the builder recorded against the section's components
+        # (dev/AUDIT.md A8B4: a record that disagrees is refused when the module is written)
+        let w = MBV.WasmModule()
+            MBV.add_type!(w, MBV.StructType(MBV.FieldType[]))
+            MBV.add_type!(w, MBV.StructType([MBV.FieldType(MBV.I64, true)]))
+            @test length(MBV.to_bytes(w)) > 0
+            w.type_groups = UnitRange{Int}[0:1]          # one group recorded where there are two
+            @test_throws MBV.ModuleValidationError MBV.to_bytes(w)
+        end
         # formal(dev/formal/TypeIdentity.tla): a group equal to one in the section is that group
         # (wasm canonicalizes iso-recursive groups, so two indices would be one runtime type)
         local selfref(i, extra...) = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(i), true), true), extra...])
