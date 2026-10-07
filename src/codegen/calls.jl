@@ -2197,8 +2197,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
             # a class whose values are objects (a struct, a numeric box, the classed string
             # layout, a MemoryRef box, a closure) is its header's classId, as dart's is checker
-            # loads it; a bare array, which has no header, is its array type (one path, A8E3)
-            if !is_bare_array_class(check_type)
+            # loads it; a bare array, which has no header, is its array type (one path, A8E3); a
+            # class whose values are host references has no test here, as in the externref arm
+            # (dev/AUDIT.md A9E1)
+            if target_wasm_isa === ExternRef
+                _isa_reject!(bld, ctx, "isa(x, $(check_type)) of a value held as any value: $(check_type)'s values are host references, which carry no class")
+            elseif !is_bare_array_class(check_type)
                 emit_isa_class_header!(bld, ctx, check_type)
             elseif target_wasm_isa isa ConcreteRef
                 ref_test!(bld, Int64(target_wasm_isa.type_idx), false)

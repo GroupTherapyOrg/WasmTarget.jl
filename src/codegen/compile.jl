@@ -645,13 +645,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                               Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)], _mi.def))
         end
         for _T in _cv_types
-            # a candidate taking a Memory whose wasm array type another class shares has no
-            # trampoline row a call could be routed by: the callable rejects where its call
-            # would trap on that candidate (dev/AUDIT.md A3S2)
-            # a tuple of the closed world's classes for which Julia's dispatch over two rows'
-            # methods is ambiguous is a call Julia rejects: no row order answers it, so the
-            # callable rejects (formal(dev/formal/Enrollment.tla): RejectOnlyWhenAmbiguous; an
-            # ambiguity no class of the program reaches is no reason, AllTypesAmbig)
+            # a tuple of candidates (the numbered classes and the type objects the program holds)
+            # for which Julia's dispatch over two rows' methods is ambiguous is a call Julia
+            # rejects: no row order answers it, so the callable rejects (formal(dev/formal/
+            # Enrollment.tla): RejectOnlyWhenAmbiguous; an ambiguity no candidate reaches is no
+            # reason, AllTypesAmbig)
             local _bs = _cv_bodies[_T]
             local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
@@ -659,13 +657,16 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 (_ma !== _mb && Base.isambiguous(_ma, _mb)) || continue
                 local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
                 _ov === Union{} && continue
-                local _amb = ambiguous_class_tuple(type_registry, _T, _ov)
+                local _amb = ambiguous_class_tuple(type_registry, _T, _ov, plan.held_type_objects)
                 _amb === false && continue
                 throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                     "a dynamic call of $(_T) reaches $(_ma) and $(_mb), which are ambiguous" *
                     (_amb === nothing ? " over values both admit" : " for ($(join(_amb, ", ")))") *
                     ": Julia throws MethodError there", nothing, nothing)))
             end
+            # a candidate taking a bare array whose wasm array type another class shares has no
+            # trampoline row a call could be routed by: the callable rejects where its call
+            # would trap on that candidate (dev/AUDIT.md A3S2)
             local _shared = bare_array_partition(mod, type_registry, nothing).shared
             for _c in _cv_bodies[_T], _Tj in _c.julia_params
                 (_Tj isa DataType && is_bare_array_class(_Tj) &&

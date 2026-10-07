@@ -2486,7 +2486,7 @@ const LOCKS = [
                         "reasons[cmi] = \"the body of the closure",
                         "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
                         "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by)",
-                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by)"]
+                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types)"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is
             # located too: at the module's entries, or at the function and why it is there

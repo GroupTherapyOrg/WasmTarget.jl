@@ -798,6 +798,17 @@ end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1735 InstructionsBuilder.array_get)
 function array_get!(b::InstrBuilder, type_idx::Integer, elem_type::WasmValType; signed::Union{Nothing,Bool}=nothing)::InstrBuilder
+    # a packed i8/i16 element is read signed or unsigned (array.get_s/_u), any other plainly
+    # (dart's array_get asserts a value type, array_get_s/_u a packed one; dev/AUDIT.md A9B3)
+    local m = b.v.mod
+    if m !== nothing && 0 <= type_idx < length(m.types) && m.types[type_idx + 1] isa ArrayType
+        local ft = m.types[type_idx + 1].elem.valtype
+        local packed = ft isa UInt8 && ft in (0x78, 0x77)
+        packed && signed === nothing &&
+            _module_invalid(:array_get, "array type $type_idx has packed elements: array.get_s or array.get_u reads them")
+        !packed && signed !== nothing &&
+            _module_invalid(:array_get, "array type $type_idx has unpacked elements: array.get reads them")
+    end
     op = signed === nothing ? Opcode.ARRAY_GET : (signed ? Opcode.ARRAY_GET_S : Opcode.ARRAY_GET_U)
     validate_gc_instruction!(b.v, op, (type_idx, _true_elem_type(b, type_idx, elem_type)))
     _emit!(b, InstrIR.ArrayGet(UInt32(type_idx), op))

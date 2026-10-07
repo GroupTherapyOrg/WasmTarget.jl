@@ -829,3 +829,55 @@ method's signature names (the A7C4 remainder, with A3S3), and A7C6's is not obse
 differential case, since the native run creates the MethodInstance with Julia's static parameter
 values first and the method cache returns it (audit #8, A8C3); smoke generic_parametric_candidate
 documents the call shape.
+
+## 2026-10-07 — audited through d9433740 (b62cc656..d9433740: batches 91–94)
+
+The ninth audit, of the eighth audit's fix batches: 36 findings. Each prediction was measured
+(native, then wasm): one wrong answer and one invalid module today. Batch 91 gave a position its
+`Type{X}` candidate only when its static type was that `Type{X}`, so a type object reaching an
+erased argument found its parametric method without a row (A9C1 = A9P1: native 1, wasm 2), and
+batch 93's narrowing read Int8 elements with a plain `array.get`, which the engine refused
+(A9B3 = A9E2: native 6, wasm a module that does not instantiate). Enrollment.tla's candidate rule
+ignored the static type, so it checked a candidate set the code did not build.
+
+Area: builder — (A9B1) a runtime-length tuple held in a Union slot is tested by its header class
+(measured: rejected at its statement). (A9B2 = A9E1) batch 92 dropped the AnyRef arm's rejection
+for a class whose values are host references, which then answered 0. (A9B3 = A9E2) the wrong
+module above; WT's array_get! did not assert dart's packed rule. (A9B4) julia_numeric_tier's
+docstring claimed a rejection those ops never reach. (A9B5, A9B6) quarantine reasons naming WT's
+own open defects. (A9B7) a docstring named `_lower_arith!`. (A9B8 = A9P8) an unreachable error().
+(A9B9) the type_groups comment.
+
+Area: collection and planning — (A9C1) the wrong answer above. (A9C2) the parametric product is
+unbounded beside the bounded ambiguity search. (A9C3 = A9P4) batch 91 turned the CodeUnits
+selector-table program's plan failure into a run-time trap (native 100). (A9C4) A7C6 and A8C3 can
+be pinned by a test that compiles before the native run. (A9C5 = A9P5) compile.jl's comment was
+unchanged. (A9C6) two rules for "one signature". (A9C7) prose.
+
+Area: emission and diagnostics — (A9E3) a PiNode with no local is not built as the NTuple.
+(A9E4) a fixed tuple into a slot typed as a runtime-length tuple casts (predates the range).
+(A9E5) emit_isa_class_header!'s quarantine was false about dart's type objects. (A9E6) flow.jl's
+class test is a second path. (A9E7–A9E9) prose.
+
+Area: enforcement and prose — (A9P2) A8P2's "no program reaches the arm" contradicted batch 90's
+xfail, and the xfail lane checks only that a case is loud. (A9P3) A8P5's citation for A7C4 was
+false: a program whose ambiguity sits at an unreached subclass compiles today and was rejected by
+batch 82's rule (measured: native 3, wasm 3). (A9P6) prose. (A9P9) gtam's message also matches
+the empty-candidate rejection. (A9P10) R14 counts placement. (A9P11) a name used twice.
+
+Resolution: batch 95 (this commit) — model first: Enrollment.tla's Broken instance StaticOnly
+keeps batch 91's rule (a type object a candidate only where the static type is its `Type{X}`),
+and TLC rejects it with the eight others. A9C1 = A9P1: the collector records each type object the
+program holds as a value (a literal or constant-global operand whose values are one pointer) and
+offers its `Type{X}` at every position that admits it; found while fixing (A9S1), the vtable
+pre-pass's ambiguity search had the same blind spot, and the held type objects now reach it
+through ClosedWorld and ClosedWorldPlan (L146 restated on the call that passes them). A9B3 =
+A9E2: the narrowing reads a packed element signed or unsigned, and array_get! refuses a plain read
+of a packed array or a signed read of an unpacked one. A9E1 = A9B2: the AnyRef arm rejects a
+host-reference class. Smoke dynamic_enrollment gains closure_type_object_erased and
+closure_ambiguity_unreached_class (A9P3, the A7C4 pin), runtime_length_tuple
+isa_narrowed_int8_fields, test/dispatch_method_error.jl gdiv (A9P2: the A3E6 arm's own message),
+test/module_builder_validation.jl the packed-read check; batch 94's code answers 2 and builds the
+refused module, and batch 82's ambiguity rule rejects the unreached-class program. A9B4, A9B7 =
+A9E8, A9B8 = A9P8, A9B9, A9C5, A9E5, A9P6's prose: as found. A8P5's A7C4 citation is withdrawn
+(A9P3); A8P2 is closed by gdiv. Everything else: MARCH 13.17.

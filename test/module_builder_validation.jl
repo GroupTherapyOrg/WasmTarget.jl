@@ -82,6 +82,14 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.ModuleValidationError MBV.add_type_group!(m, MBV.CompositeType[
             MBV.StructType(MBV.FieldType[]),
             MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(length(m.types)), true), true)])])
+        # a packed array's element is read signed or unsigned, never plainly (dev/AUDIT.md A9B3:
+        # a plain array.get of an i8 array made a module the engine refused)
+        let pm = MBV.WasmModule()
+            local i8arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(0x78, true)))
+            local i64arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(MBV.I64, true)))
+            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i8arr, MBV.I32)
+            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i64arr, MBV.I64; signed=true)
+        end
         # the writer checks the groups the builder recorded against the section's components
         # (dev/AUDIT.md A8B4: a record that disagrees is refused when the module is written)
         let w = MBV.WasmModule()

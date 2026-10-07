@@ -18,9 +18,9 @@
 (* (Base._methods_by_ftype), at the method's intersection with S; a method *)
 (* with static parameters at each tuple of candidates over the positions   *)
 (* its static parameters fix, the other positions kept as S has them. A    *)
-(* position's candidates are the numbered classes under it and, for a      *)
-(* static type that is one dispatch type (a `Type{X}`, whose one value is  *)
-(* a type object of no numbered class of its own), that type. The entry    *)
+(* position's candidates are the numbered classes under it and the        *)
+(* `Type{X}` of each type object the program holds that it admits (a type  *)
+(* object has no numbered class of its own). The entry                     *)
 (* tries the rows in the methods' specificity order, each testing the      *)
 (* value; a body reached only by `invoke` is no row. A tuple of candidates *)
 (* for which Julia's dispatch is ambiguous rejects the callable at compile *)
@@ -44,7 +44,9 @@
 (* from the numbered classes alone, so a `Type{X}` position had none        *)
 (* (ClassesOnly, batch 87: an ambiguity ran a row, native -7, wasm 1, and a *)
 (* parametric method fixed by a `Type{X}` had no row, native 1, wasm 2,    *)
-(* A8C1, A8C2).                                                            *)
+(* A8C1, A8C2); and a type object a candidate only where the static type   *)
+(* is its `Type{X}` (StaticOnly, batch 91: one reaching an erased position  *)
+(* found its parametric method without a row, native 1, wasm 2, A9C1).     *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes and methods are opaque; a method's   *)
 (* parameter type is the set of classes it admits; specificity is a       *)
@@ -72,7 +74,7 @@ CONSTANTS X, Numbered, Methods, Callables,
           PFix,         \* [Methods -> SUBSET {1, 2}]: positions its static parameters mention
           Statics,      \* SUBSET (SUBSET (X \X X)): the numbered pairs a call site's static type admits
           SubsetRule, ProgramOrder, SpecOrder, IgnoreAmbig, SkipParametric, PerPosition, AllTypesAmbig,
-          ClassesOnly
+          ClassesOnly, StaticOnly
 
 Values == X \X X
 VARIABLES f, s, v, outcome, done
@@ -92,8 +94,12 @@ Julia(g, x) == LET ms == {m \in Of(g) : x \in Param[m]} IN
 
 \* the rows WT builds for a call of g at static type S
 Matched(g, S) == {m \in Of(g) : IF SubsetRule THEN S \subseteq Param[m] ELSE S \cap Param[m] # {}}
-\* a candidate of S: under ClassesOnly (broken) only a pair whose fixed elements are numbered
-Cand(t, ps) == ~ClassesOnly \/ \A p \in ps : t[p] \in Numbered
+\* a candidate of S: a numbered class, or a type object the program holds (every element outside
+\* Numbered here); under ClassesOnly (broken) only a numbered class; under StaticOnly (broken,
+\* batch 91) a type object only where S's elements at that position are that one type object
+Proj(S, p) == {u[p] : u \in S}
+Cand(t, ps) == \A p \in ps : t[p] \in Numbered \/
+                    (~ClassesOnly /\ (~StaticOnly \/ Proj(s, p) = {t[p]}))
 RowsOf(m, S) == IF PFix[m] = {} THEN {<<m, Param[m] \cap S>>}
                 ELSE IF SkipParametric \/ (PerPosition /\ Cardinality(PFix[m]) = 2) THEN {}
                 ELSE {<<m, {u \in Param[m] \cap S : \A p \in PFix[m] : u[p] = t[p]}>> :

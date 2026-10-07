@@ -148,18 +148,23 @@ _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
     ambiguous_class_tuple(registry, F, overlap) -> Union{Bool, Nothing, Tuple}
 
 A tuple of candidates, one per argument of `overlap` (the argument types two methods both
-admit), for which Julia's dispatch of callable type `F` is ambiguous (`Base._which` finds no one
+admit; a position's candidates are the numbered classes and the `Type{X}` of each type object
+the program holds, `held`), for which Julia's dispatch of callable type `F` is ambiguous (`Base._which` finds no one
 method), or false when there is none; nothing when the tuples cannot all be asked about
 (overlap not one tuple type, a Vararg or candidate-less position, or more than 4096 tuples),
 which the caller reads as ambiguous. A position's candidates are dispatch_candidates'.
 parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
 ambiguity; a dart closure has one body.)
 """
-function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospecialize(overlap))::Union{Bool, Nothing, Tuple}
+function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospecialize(overlap),
+                               held::Set{DataType}=Set{DataType}())::Union{Bool, Nothing, Tuple}
     overlap isa DataType || return nothing
     any(P -> P isa Core.TypeofVararg, overlap.parameters) && return nothing
-    local classes = Any[C for (C, _) in ordered_pairs(registry.type_ids, type_order_key,
-                                                      C -> C isa DataType && isconcretetype(C))]
+    # the numbered classes and the dispatch type of each type object the program holds
+    # (formal(dev/formal/Enrollment.tla): a type object is no numbered class, StaticOnly)
+    local classes = Any[Any[C for (C, _) in ordered_pairs(registry.type_ids, type_order_key,
+                                                          C -> C isa DataType && isconcretetype(C))];
+                        sort!(collect(held); by=type_order_key)]
     local choices = Vector{Any}[dispatch_candidates(P, classes) for P in overlap.parameters]
     # a position with no candidate is one this search cannot ask about (formal(dev/formal/
     # Enrollment.tla): ClassesOnly); a tuple too many to ask about, likewise

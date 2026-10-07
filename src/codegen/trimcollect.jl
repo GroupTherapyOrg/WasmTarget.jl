@@ -373,7 +373,8 @@ its front end's whole-program type flow analysis.)
 """
 function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[];
-                                         reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}())::Vector{Any}
+                                         reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}(),
+                                         held::Set{DataType}=Set{DataType}())::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -383,6 +384,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # abstract slot pulled unrelated BigFloat/MPFR code into integer-only modules and
     # forced the now-deleted trap-repair policy.
     runtime_types = Set{DataType}()
+    # the type objects the program holds as values (a literal or a constant global operand),
+    # each a candidate by its dispatch type `Type{X}` (formal(dev/formal/Enrollment.tla):
+    # a type object is no numbered class, StaticOnly)
+    held_type_objects = held   # the caller keeps it for the vtable pre-pass's ambiguity search
     observed_type_nodes = Set{Any}()
     # One NIR per collected CodeInfo — this pass walks each body twice (runtime-class
     # observation, then candidate discovery). Call-local: `_missing_explicit_invoke_mis`
@@ -425,9 +430,16 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # than an inferred SSA type, because it IS the value the collected
         # program stores/passes. An SSA/argument/slot/global operand carries no
         # value here, so only literals are observed.
-        node isa NirLiteral || return
-        node.value isa Expr && return
-        observe_type!(Core.Typeof(node.value))
+        local v = node isa NirLiteral ? node.value :
+                  (node isa NirGlobalRef && node.bound && isconst(node.mod, node.name)) ? node.value : nothing
+        (node isa NirLiteral || v !== nothing) || return
+        v isa Expr && return
+        local VT = Core.Typeof(v)
+        # a type object held as a value is the candidate Type{X} (when its values are one
+        # pointer, jl_pointer_egal); its own parameters are classes the program names
+        VT isa DataType && VT.name === Type.body.name && is_pointer_egal_type_type(VT) &&
+            push!(held_type_objects, VT)
+        node isa NirLiteral && observe_type!(VT)
         return
     end
     # The operands one statement carries. Every node's `args` hold exactly the
@@ -697,8 +709,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             local param(p) = Base.unwrapva(msig.parameters[min(p + 1, length(msig.parameters))])
             local mentions(p) = (P = param(p); P isa TypeVar || Base.has_free_typevars(P))
             local admits(C, p) = (P = param(p); P isa TypeVar && (P = P.ub); typeintersect(C, P) !== Union{})
-            local observed = sort!(Any[C for C in runtime_types
-                                       if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))]; by=type_order_key)
+            local observed = sort!(Any[Any[C for C in runtime_types
+                                           if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
+                                       collect(held_type_objects)]; by=type_order_key)
             local choices = [!mentions(p) ? Any[ds[p]] :
                              Any[C for C in dispatch_candidates(ds[p], observed) if admits(C, p)] for p in eachindex(ds)]
             for cs in Iterators.product(choices...)
@@ -754,6 +767,7 @@ struct ClosedWorld
     dynamic_roots::Set{Core.MethodInstance}          # enrolled as selector candidates
     callable_types::Set{DataType}                    # callable types whose bodies the candidate fixpoint enrolled
     enrolled_as::IdDict{Core.MethodInstance,String}  # why each entered the closed world
+    held_type_objects::Set{DataType}                 # the Type{X} of each type object the program holds
 end
 
 """Keep only code reachable from roots over the invoke edges as they stand, never the body of
@@ -852,6 +866,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())::ClosedWorld
     local callable_types = Set{DataType}()
     local dynamic_roots = Set{Core.MethodInstance}()
+    local held_types = Set{DataType}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -990,7 +1005,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             pruned_superseded = length(superseded_invokes)
         end
 
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by)
+        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types)
         extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
         union!(dynamic_roots, extra)
         for mi in extra
@@ -1026,7 +1041,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end
-    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by)
+    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, held_types)
 end
 
 """
@@ -1060,6 +1075,7 @@ struct ClosedWorldPlan
     invoke_only::Set{Core.MethodInstance}
     callable_types::Set{DataType}
     enrolled_as::IdDict{Core.MethodInstance,String}
+    held_type_objects::Set{DataType}   # the Type{X} of each type object the program holds
 end
 
 """
@@ -1299,7 +1315,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             ErrorException("no enrollment reason for $(fn[4])"), Base.StackTraces.StackFrame[]))
     end
     return ClosedWorldPlan(functions, ir_cache, dispatch_candidates, invoke_only,
-                           world.callable_types, enrolled_as)
+                           world.callable_types, enrolled_as, world.held_type_objects)
 end
 
 # ============================================================================
@@ -1462,7 +1478,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # every length one {Object, data, size} representation (register_vararg_tuple_type!)
         # whose header names this class, which no value has: typeof rejects, an isa against a
         # tuple type tests the lengths it admits, and a widening of it to a slot of any class
-        # rejects, at its statement or in convert_type! (its narrowing is MARCH 13.17's, A6E3)
+        # rejects, at its statement or in convert_type!, and a PiNode narrowing it to its NTuple
+        # builds that NTuple (emit_vararg_to_fixed_tuple!)
         if is_runtime_vararg_tuple_type(T)
             push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return

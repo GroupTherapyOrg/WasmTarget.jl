@@ -1370,8 +1370,7 @@ function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     local E = vararg_tuple_eltype(V)
     local arr = get_array_type!(ctx.mod, reg, E)
     local elem_w = julia_to_wasm_type(E)
-    local tinfo = register_tuple_type!(ctx.mod, reg, T)
-    tinfo === nothing && error("the NTuple $(T) has no struct")
+    local tinfo = register_tuple_type!(ctx.mod, reg, T)::StructInfo   # an NTuple is one struct
     local tdef = ctx.mod.types[Int(tinfo.wasm_type_idx) + 1]
     local data = allocate_local!(ctx, ConcreteRef(arr, true))
     ref_cast!(b, Int64(vinfo.wasm_type_idx), false)
@@ -1381,7 +1380,8 @@ function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     for i in 1:length(T.parameters)
         local_get!(b, data)
         i32_const!(b, Int64(i - 1))
-        array_get!(b, arr, elem_w)
+        # an element narrower than 32 bits is a packed i8/i16, read with its signedness
+        array_get!(b, arr, elem_w; signed=(E <: Integer && sizeof(E) < 4) ? (E <: Signed) : nothing)
         coerce_stack_top!(b, tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype, ctx; from_julia=E)
     end
     struct_new!(b, tinfo.wasm_type_idx)

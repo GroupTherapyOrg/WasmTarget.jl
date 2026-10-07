@@ -873,8 +873,9 @@ Anything else (a type object, a bare array, a host value) is not. dart's is chec
 top struct and compares it, whichever struct the class's own values are.
 parity(types.dart:907 IsCheckerCodeGenerator.generate): loadClassId, then the classId compare.
 The `ref.test \$JlBase` before it and the closure-context alternative: parity(quarantine: a
-Julia value held as any value may be a type object, a bare array or a closure's context, none
-of them a dart object; dart's every value of a top type is an object with the header.)
+value WT holds as any value may be a type object (a `\$JlType` without the class header), a bare
+array or a closure's context, none of them a header-carrying object; dart's every value of a top
+type, its type objects included, is one.)
 """
 function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
     local base = ctx.type_registry.base_struct_idx
@@ -1099,7 +1100,7 @@ end
 True when `arg` arrives in a physically `AnyRef` local and its refined type is not one of the
 machine numerics (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool): a numeric operation on
 it rejects in compile_call! (its class is known only at run time, dev/AUDIT.md A3E6), and
-`_lower_arith!` unboxes it at the width its node states. An SSA whose refined type is a machine
+`_lower_operator!` unboxes it at the width its node states. An SSA whose refined type is a machine
 numeric is not included: its load is the one unbox (translator.dart:2099
 translateTypeOfLocalVariable).
 parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)

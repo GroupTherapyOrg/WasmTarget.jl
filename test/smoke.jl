@@ -661,7 +661,7 @@ end
 #   single opcode" at `+(%16, 0.5)` (the phi is Any once VERIFY bans its Int64 seed).
 # - numeric_join_dropped_phi: rejects located at `+(%26, 1)` (was a runtime "illegal cast"
 #   trap).
-# - box_value_literal_phi: rejects located at the closure's `s += 1` (same message).
+# - box_value_literal_phi: rejects located at the closure's `s += 1`.
 _xf("box_type_recovery", Any[
     ("numeric_join_seeded_phi", (n::Int64) -> (s = 0; foreach(i -> (s += 0.5), 1:n); s isa Float64 ? 1 : 2), Int64(4)),
     ("numeric_join_dropped_phi", (n::Int64) -> (v = Any[1.5]; p = n > 0 ? v[1] : 0; q = p + 1; q isa Int64 ? 1 : 2), Int64(1)),
@@ -1596,6 +1596,9 @@ struct _SmEA; x::Int64; end
 struct _SmEB; x::Int64; end
 _sm_wf(x::T) where {T<:Integer} = (T === Int64 ? 1 : 3)
 _sm_wf(x) = 2
+abstract type _SmQAB end
+struct _SmQB1 <: _SmQAB; x::Int64; end
+struct _SmQB2 <: _SmQAB; x::Int64; end
 _sm_kd(::DataType) = 1
 _sm_kd(::Int64) = 2
 # Arithmetic on a value narrowed out of a Union (its class stated by Julia's IR) answers, and
@@ -1639,6 +1642,13 @@ _g("dynamic_enrollment", Any[
     # 1, wasm 2), and one a match leaves a TypeVar (A8C6: it rejected the static_parameter node)
     ("closure_parametric_type_position", (n::Int64) -> (k = n; h(x::T, ::Type{S}) where {T<:Integer,S} = 1 + 0k; h(x, y) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[], Int64)::Int64), Int64(3)),
     ("closure_unbounded_parameter", (n::Int64) -> (k = n; h(x::T) where {T} = (T === Int64 ? 1 : 3) + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
+    # an ambiguity only at a class no value has (QB2) rejected under the rule that asked
+    # Base.isambiguous over every type; Julia's dispatch at the classes that reach runs h(::QB1,
+    # ::QB1) (dev/AUDIT.md A7C4, A9P3: native 3)
+    ("closure_ambiguity_unreached_class", (n::Int64) -> (k = n; h(x::_SmQAB, y) = 1 + 0k; h(x, y::_SmQAB) = 2 + 0k; h(x::_SmQB1, y::_SmQB1) = 3 + 0k; f = _sm_dh(h)[]; f(_sm_dh(_SmQB1(n))[], _sm_dh(_SmQB1(n))[])::Int64), Int64(3)),
+    # a type object reaching an erased argument fixes a Type{S} method's static parameter
+    # (A9C1: it had no row, native 1, wasm 2)
+    ("closure_type_object_erased", (n::Int64) -> (k = n; h(::Type{S}) where {S<:Integer} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_sm_dh(Int64)[])::Int64), Int64(3)),
     ("closure_invoke_only_body", (n::Int64) -> (k = n; @noinline h(x::Int64) = 1 + 0k; @noinline h(x::Integer) = 2 + 0k; a = invoke(h, Tuple{Integer}, n); f = _sm_dh(h)[]; a + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     # a function with a DataType method and an Int64 method, called on an erased type object
     # and an erased Int64 (A5E10, A5B4: measured 21)
@@ -1661,6 +1671,7 @@ _g("kind_isa", Any[
 # typeof, `===` and an erased slot answered for that class (dev/AUDIT.md A5E3: native 1, wasm
 # 2). isa tests its size; the rest reject at their statement
 @noinline _sm_mk(v::Vector{Int64}) = Core.tuple(v...)
+@noinline _sm_mk8(v::Vector{Int8}) = Core.tuple(v...)
 struct _SmMT; m::Memory{Int64}; t::Tuple{Int64}; end
 _g("runtime_length_tuple", Any[
     ("isa_ntuple_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
@@ -1673,6 +1684,7 @@ _g("runtime_length_tuple", Any[
     ("isa_union_of_lengths", (n::Int64) -> _sm_mk([n, 2, 3]) isa Union{Tuple{Int64},NTuple{3,Int64}} ? 1 : 2, Int64(3)),
     # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
     # two structs trapped where native answers 6)
+    ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[n, 2, 3]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
     ("isa_narrowed_fields", (n::Int64) -> (t = _sm_mk([n, 2, 3]); t isa NTuple{3,Int64} ? t[1] + t[3] : 0), Int64(3)),
     # a struct whose layout is the representation's widens to Any as any struct does
     ("same_layout_struct_erased", (n::Int64) -> (m = Memory{Int64}(undef, 1); m[1] = n; v = Any[_SmMT(m, (n,))]; (v[1]::_SmMT).t[1]), Int64(3)),
