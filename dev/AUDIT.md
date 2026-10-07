@@ -989,4 +989,8 @@ row, no object), and the trampoline cast the argument's object to its context. T
 observes a function held as a literal or constant operand as it observes one an SSA type names,
 and the trampoline reads an object's context (field 2), as dart's direct closure call does.
 Smoke closure_values gains closure_argument_erased_call and fix2_argument_erased_call; with the
-trampoline unwrap removed both trap, and batch 95 and 99 trap on both.
+trampoline unwrap removed both trap, and batch 95 and 99 trap on both. Batch 102 — A10E6 = A10P7:
+a constant tuple states its type at a phi edge (_value_julia_type), as Julia's IR does, and
+convert_type!'s fixed-to-runtime-length arm takes the edge's type only; the guess from the
+struct's layout is gone, and an edge with no type rejects. Without the stated type, smoke
+varargs/splat_vararg_nonempty rejects.

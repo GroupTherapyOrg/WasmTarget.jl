@@ -24,6 +24,9 @@ function _value_julia_type(val::NirNode, ctx::AbstractCompilationContext)::Union
         (lit isa Symbol || lit isa Core.SSAValue || lit isa Core.Argument ||
          lit isa Core.SlotNumber || lit isa Union{Bool, Signed, Unsigned, AbstractFloat, Char}) &&
             return typeof(lit)
+        # a constant tuple: its type is its elements' (a phi joining it with a runtime-length
+        # tuple builds that representation from it, convert_type!; A10E6)
+        lit isa Tuple && return typeof(lit)
     end
     return nothing
 end

@@ -469,14 +469,10 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
         local vt_to = vararg_tuple_of_struct(ctx.type_registry, to.type_idx)
         if vt_to !== nothing && vararg_tuple_of_struct(ctx.type_registry, from.type_idx) === nothing
             local E = vararg_tuple_eltype(vt_to)
-            # a value Julia admits in a Tuple{Vararg{E}} slot is an NTuple{k,E}: its type when
-            # the edge states it, else k is its struct's fields past the object prefix
+            # a value Julia admits in a Tuple{Vararg{E}} slot is an NTuple{k,E}, its type the one
+            # the edge states (a struct of another type may share the layout, A10E6)
             local T = from_julia
-            if !(T isa DataType && T <: Tuple && isconcretetype(T))
-                local fdef = ctx.mod.types[Int(from.type_idx) + 1]
-                T = fdef isa StructType ? NTuple{length(fdef.fields) - 2, E} : nothing
-            end
-            (T isa DataType && all(P -> P === E, T.parameters) &&
+            (T isa DataType && T <: Tuple && isconcretetype(T) && all(P -> P === E, T.parameters) &&
              get(ctx.type_registry.structs, T, nothing) isa StructInfo &&
              ctx.type_registry.structs[T].wasm_type_idx == from.type_idx) ||
                 return emit_unsupported_stub!(ctx, b, :unsupported_type,
