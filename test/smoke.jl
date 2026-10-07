@@ -1605,9 +1605,18 @@ _g("dynamic_enrollment", Any[
     # inner(::Int64) (A5C1)
     ("closure_overlapping_rows", (n::Int64) -> (k = n; h(x) = 2 + 0k; h(x::Int64) = 1 + 0k; a = h(n); g = _sm_dh(h)[]; a + 10 * g(_sm_dh(n)[])::Int64), Int64(3)),
     ("closure_overlapping_any_vector", (n::Int64) -> (inner(x::Int64) = x + n; inner(x) = -1; f = _sm_dh(inner)[]; v = Any[n, "s"]; f(v[1])::Int64), Int64(3)),
+    # a method with static parameters is enrolled at each observed class it admits (its
+    # intersection with an erased argument is a UnionAll; A6C1: native 1, wasm 2), and a body
+    # reached only by `invoke` is no row (A6C2: it tied with the dispatch target, native 12,
+    # wasm 22)
+    ("closure_parametric_method", (n::Int64) -> (k = n; h(x::T) where {T<:Integer} = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
+    ("closure_invoke_only_body", (n::Int64) -> (k = n; @noinline h(x::Int64) = 1 + 0k; @noinline h(x::Integer) = 2 + 0k; a = invoke(h, Tuple{Integer}, n); f = _sm_dh(h)[]; a + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     # a function with a DataType method and an Int64 method, called on an erased type object
     # and an erased Int64 (A5E10, A5B4: measured 21)
     ("kind_and_class_rows", (n::Int64) -> (v = Any[Int64, n]; _sm_kd(v[1]) + 10 * _sm_kd(v[2])), Int64(3)),
+    # the same with a tuple of a type built in the program, whose DataType element the
+    # collector observes (A5C3: measured 1)
+    ("kind_row_beside_type_tuple", (n::Int64) -> (v = Any[Int64, n]; _sm_kd(v[1]) + _sm_tt(n)[2] - n), Int64(3)),
 ])
 # isa against a kind (DataType, UnionAll, …): Julia folds S <: T only where its subtyping of
 # kinds is sound (jl_is_not_broken_subtype), and tests the type object's kind elsewhere
@@ -1618,10 +1627,6 @@ _g("kind_isa", Any[
     ("unionall_isa_datatype", (x::Int64) -> (T = _sm_kv(x); T isa DataType ? 1 : 2), Int64(3)),
     ("unionall_isa_unionall", (x::Int64) -> (T = _sm_kv(x); T isa UnionAll ? 1 : 2), Int64(3)),
 ])
-# isa against `Type{X}` of an erased value, as Julia's emit_isa tests it: X's one type object
-# by identity where its values are pointer-unique (jl_pointer_egal); any other test that meets
-# `Type{…}` is type equality at run time (jl_isa), which rejects at its statement (dev/AUDIT.md
-# A5E2: the type-object arm kept a kind only when the kind is under T, so it answered 2 and -7)
 # A runtime-length tuple (`Core.tuple(v...)`) is an NTuple{n,E} for its run-time n
 # (jl_f_tuple); its representation's header names Tuple{Vararg{E}}, which no value has, so
 # typeof, `===` and an erased slot answered for that class (dev/AUDIT.md A5E3: native 1, wasm
@@ -1648,6 +1653,10 @@ _g("isomorphic_recursive_classes", Any[
     ("isa_own_class", (n::Int64) -> (xs = Any[_SmLA(nothing, n), _SmLB(nothing, n)]; xs[n - 2] isa _SmLA ? 1 : 2), Int64(3)),
     ("field_through_other", (n::Int64) -> (b = _SmLB(_SmLB(nothing, n), 7); a = _SmLA(nothing, 1); b.next.v + a.v), Int64(3)),
 ])
+# isa against `Type{X}` of an erased value, as Julia's emit_isa tests it: X's one type object
+# by identity where its values are pointer-unique (jl_pointer_egal); any other test that meets
+# `Type{…}` is type equality at run time (jl_isa), which rejects at its statement (dev/AUDIT.md
+# A5E2: the type-object arm kept a kind only when the kind is under T, so it answered 2 and -7)
 _g("type_isa", Any[
     ("type_identity_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
     ("type_identity_isa_other_value", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(2)),

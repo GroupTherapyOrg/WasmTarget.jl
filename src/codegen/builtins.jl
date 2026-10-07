@@ -1576,8 +1576,8 @@ end
 The numbered classes a value of static type `T` may be (every one when `T` is `nothing`)
 that are bare wasm arrays — a Memory, a SimpleVector — each with its array type (`all`),
 partitioned by whether a test tells it apart: `told` holds each class whose array type no
-other of them is, which `ref.test` answers (a CodeUnits sharing Memory{UInt8}'s array type,
-and two isomorphic recursion groups' types, are not yet counted: MARCH 13.17, A5B2 A5B3);
+other of them is, which `ref.test` answers (a CodeUnits sharing Memory{UInt8}'s array type is
+not yet counted: MARCH 13.17, A5B2);
 `shared` the classes whose array type another of
 them is too (Memory{Int64} and Memory{UInt64}), which no test tells apart, so a class read
 over `T` rejects rather than trap or answer for the wrong class. The array types are decided

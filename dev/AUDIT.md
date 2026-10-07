@@ -522,7 +522,8 @@ prose says what WT does. A5E7: `julia_params` is required and its `nothing` arms
 A5E6: the refusal is a WasmCompileError naming the callable, raised before the vtable is built
 by the one predicate `_closure_param_untestable` (e6 measured), the entry keeping only an
 internal guard; rows per observed class are on 13.17. A5B7: the guard's message says what it
-found. A5B4, A5C3, A5E10: measured correct; smoke kind_and_class_rows pins it. A5B5: the anchor.
+found. A5B4, A5C3, A5E10: measured correct; smoke kind_and_class_rows pins A5B4 and A5E10, and
+kind_row_beside_type_tuple (batch 82) pins A5C3. A5B5: the anchor.
 A5B8, A5E11: the prose. A5P6: ClassIdSwitch.tla states what it leaves to Enrollment.tla and the
 refusal. A5P7: rows now come most specific first, so with the argument tests removed gq answers
 13 (test/dispatch_method_error.jl:129 fails) and closure_erased_argument answers 13; gq
@@ -555,3 +556,78 @@ native answers 2. dart instead brands the equal groups so each class keeps its o
 (A5B3 remainder, MARCH 13.17). Smoke group type_isa: the old
 lowering answers 2 and -7 where native answers 1; xfail type_or_nothing_isa, which the old
 lowering answered wrong, rejects.
+
+## 2026-10-06 — audited through 5a3e1604 (e225334d..5a3e1604: batches 77–81)
+
+The sixth audit, of the fifth audit's fix batches: 37 findings. Each predicted wrong answer was
+measured (native, then wasm): seven are wrong answers today, and batch 78 caused three of them
+(A6C1, A6C2, A6C3 = A6P3 = A6B5 = A6E5, in the enrollment and row order it introduced). Batch
+78's resolution claimed that "for every class that may reach a dynamic call the body Julia
+selects runs"; Enrollment.tla modeled specificity as a total order, so it could not see an
+ambiguity, a tie or a missing row (A6C4). Batch 80's "no class read sees that header" is false
+(A6E1, A6E2).
+
+Area: builder — (A6B1 = A6P2) WRONG ANSWER: is_shared_wasm_type reads the structs registered
+when the isa compiles, and registration is lazy, so an isa compiled before the class that shares
+its index registers is a bare ref.test (native 2, wasm 1, for two one-field structs PA/PB, which
+predates batch 81, and for LA/LB in either call order). (A6B2) batch 81 anchored the group merge
+to dart's _areGroupsStructurallyEqual, which compares heap types by identity to decide which
+groups to brand; dart leaves LA and LB one runtime type and tells the classes by classId.
+(A6B3 = A6P5) TypeIdentity.tla never recorded which index a request got back, so an
+over-merging equality passed it, and its group guard was not a strongly connected component;
+checking the served index found add_type! handing a lone type the index of a recursion group's
+member whose fields read equal. (A6B4 = A6E7 = A6C6) the closure row's `Type{X}` identity test
+is a second, looser predicate beside batch 79's jl_pointer_egal (c6: an internal error where
+Julia answers 1). (A6B6) prose on finish_pending!, RecGroup.tla and is_shared_wasm_type.
+(A6B7) every add_type_group! reran Tarjan over the whole section. (A6B8) emit_isa swaps
+Type{Union{}} for typeof(Union{}) before its pointer test.
+
+Area: collection and planning — (A6C1) WRONG ANSWER: a method with static parameters intersects
+an erased argument to a UnionAll; its MethodInstance was planned as no function, silently, so a
+less specific row ran (native 1, wasm 2). (A6C2) WRONG ANSWER: a body reached only by `invoke`
+became a row and tied with the dispatch target, rows being ranked by their specialized types
+(native 12, wasm 22). (A6C3) WRONG ANSWER: an ambiguous pair of methods ran the first row where
+Julia throws MethodError (native -1, wasm 1). (A6C4) the model. (A6C5) enrollment asks Base's
+method table at the latest world, the plan the WasmInterpreter's overlay table. (A6C7) the box
+walk's "complete" covers only captors invoked in the scanned body. Prose: the candidate
+collector's docstring, `_most_specific_first`'s.
+
+Area: emission and diagnostics — (A6E1 = A6P1) WRONG ANSWER: an isa against an abstract tuple
+type of a runtime-length tuple reads its header class (native 1, wasm 2). (A6E2) WRONG ANSWER: a
+failed typeassert puts the tuple in TypeError.got unchecked (native 1, wasm 2). (A6E3) a passing
+isa's narrowed value is cast to the NTuple struct (a trap where native answers 6). (A6E4) the
+statement check and the emit_value! check are two partial paths for one fact. (A6E6) a Vararg
+tail in a callee's specTypes made the statement check raise a MethodError. (A6E8) no test pinned
+the untestable-parameter rejection. Prose: the vararg collector comment, bare_array_partition's.
+
+Area: enforcement and prose — (A6P4) A5P4 = A5E9 on no Planned list. (A6P6) the group merge
+needs its quarantine. (A6P7) MCEnrollment.tla described a callable it never defined. (A6P8)
+Enrollment.tla's quarantine contradicted dart's dynamic call type check. (A6P9) a "program
+order" comment in build_closure_vtable!. (A6P10) batches 80 and 81 put their smoke groups
+between type_isa's comment and its group. (A6P11) kind_and_class_rows was said to pin A5C3.
+
+Resolution: batch 82 (this commit) — model first: Enrollment.tla ranks methods by a strict
+partial order and lets Julia answer MethodError for an ambiguity; its rows are (method,
+specialization) pairs; it claims the entry runs Julia's method, traps only where Julia has no
+method, and rejects only where a call over S is ambiguous; six Broken instances keep each rule WT
+had (SubsetRule, ProgramOrder, SpecOrder, IncludeInvoke with SpecOrder, IgnoreAmbig,
+SkipParametric), and TLC rejects each. A6C1: a method whose intersection is a UnionAll is enrolled
+at each observed class it admits (Julia's own matching per class; a method no observed class
+fixes is reached by no value of the closed world and has no row, as the candidate loop reads
+it), and the plan raises on a MethodInstance that is not one signature. A6C2: an invoke-only body is no row,
+and rows are ranked by Julia's method specificity (Base.morespecific on Methods), two rows of one
+method by their specializations. A6C3: two enrolled methods Julia finds ambiguous
+(Base.isambiguous) over values both rows admit reject the callable with a WasmCompileError.
+Smoke dynamic_enrollment gains closure_parametric_method and closure_invoke_only_body;
+test/dispatch_method_error.jl pins the ambiguity rejection (gam) and the untestable-parameter
+rejection (gab, A6E8). With batch 81's collector, row order and pre-pass planted back, the two
+smoke cases answer 2 and 22 where native answers 1 and 12, and gam runs a body. A6B3, A6B7:
+TypeIdentity.tla records the index each request is served and claims it is the runtime type
+requested; Broken instances LengthOnly and AnyMember (the old add_type!) fail it; the builder
+keeps its recursion groups as it adds them (WasmModule.type_groups) and add_type! takes an
+existing index only for a lone type with no inside reference; test/module_builder_validation.jl
+pins the lone type. A6B4, A6C6: the closure row's identity test asks jl_pointer_egal, and any
+other `Type{X}` parameter is untestable. A6B2, A6P6: the merge is quarantined as wasm's
+iso-recursive equivalence, which WT needs because it numbers a type when it adds it. A6B6, A6B8,
+A6E6, A6P1, A6P4, A6P7 to A6P11 and the prose: as found. Everything else (A6B1, A6E1 to A6E4,
+A6C5, A6C7): MARCH 13.17.

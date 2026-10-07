@@ -196,9 +196,10 @@ end
 The pending type `id` translated to `ct`. Its lowlink is the least lowlink among the pending
 types `ct` refers to (Tarjan's search, each reference an edge). A type whose lowlink is its own
 id is the root of a strongly connected component: it and every type pending above it are
-added at consecutive indices with their pending references resolved (a type in no cycle is
-added as any type is, deduplicated), and their registry entries take the real indices, which
-this returns for `id`. Otherwise the type waits for its root and `id` is returned.
+added at consecutive indices with their pending references resolved, or take the indices of
+an equal group already in the section (add_type_group!, dev/formal/TypeIdentity.tla; a type
+in no cycle is added as any type is, deduplicated), and their registry entries take the real
+indices, which this returns for `id`. Otherwise the type waits for its root and `id` is returned.
 formal(dev/formal/RecGroup.tla): Valid, Exact, Minimal — every reference is backward or within
 its group, no field loses its type, and a group is exactly a cycle.
 parity(pkg/wasm_builder/lib/src/builder/types.dart:240 _RecGroupBuilder._createAllRecursiveGroups):

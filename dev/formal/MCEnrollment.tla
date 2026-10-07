@@ -1,14 +1,27 @@
 ---------------------------- MODULE MCEnrollment ----------------------------
-(* Classes I (Int64), S (String), F (Float64). hI admits I; hA admits every class *)
-(* (`h(x)`), listed first in program order; gI admits I only (a closure with one  *)
-(* Int64 method). Static types: Any (all classes), {I}. The positive instance     *)
-(* runs hI for an I and hA for the rest. SubsetRule: an erased I runs hA (w2) and *)
-(* gI is never enrolled; ProgramOrder: an I runs hA.                              *)
+(* Classes I (Int64), S (String), F (Float64). Callable h: hA admits every class *)
+(* (`h(x)`), hP admits I and has a static parameter (`h(x::T) where T<:Integer`).*)
+(* Callable g: gI admits I (`g(x::Int64)`), gN admits I too (`g(x::Integer)`,    *)
+(* listed first), gI more specific; gN's body at {I} is also reached by invoke.  *)
+(* Callable a: aS admits I and S, aF admits I and F (`a(x::Union{Int64,String})`,*)
+(* `a(x::Union{Int64,Float64})`), neither more specific: an I is ambiguous.      *)
+(* Callable k: kI admits I only (a closure with one Int64 method; SubsetRule     *)
+(* gives it no row). Static types: Any (all classes), {I}, {S}.                  *)
 EXTENDS Enrollment
 MCClasses == {"I", "S", "F"}
-MCMethods == {"hA", "hI"}
-MCParam == [m \in MCMethods |-> IF m = "hI" THEN {"I"} ELSE MCClasses]
-MCSpec == [m \in MCMethods |-> IF m = "hI" THEN 1 ELSE 2]
-MCPOrd == [m \in MCMethods |-> IF m = "hA" THEN 1 ELSE 2]
-MCStatics == {MCClasses, {"I"}}
+MCCallables == {"h", "g", "a", "k"}
+MCMethods == {"hA", "hP", "gI", "gN", "aS", "aF", "kI"}
+MCOwner == [m \in MCMethods |-> CASE m \in {"hA", "hP"} -> "h"
+                                  [] m \in {"gI", "gN"} -> "g"
+                                  [] m \in {"aS", "aF"} -> "a"
+                                  [] OTHER -> "k"]
+MCParam == [m \in MCMethods |-> CASE m = "hA" -> MCClasses
+                                  [] m = "aS" -> {"I", "S"}
+                                  [] m = "aF" -> {"I", "F"}
+                                  [] OTHER -> {"I"}]
+MCMore == {<<"hP", "hA">>, <<"gI", "gN">>}
+MCPOrd == [m \in MCMethods |-> CASE m \in {"hA", "gN", "aS", "kI"} -> 1 [] OTHER -> 2]
+MCParametric == {"hP"}
+MCInvokeRows == {<<"gN", {"I"}>>}
+MCStatics == {MCClasses, {"I"}, {"S"}}
 =============================================================================

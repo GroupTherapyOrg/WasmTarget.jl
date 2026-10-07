@@ -42,6 +42,13 @@ struct SB; x::Int64; end
 @noinline hide(@nospecialize(x)) = Ref{Any}(x)
 gq(n::Int64) = (k = n; f = hide(s -> (s isa SA ? 10 : 20) + k)[]; f(SA(n)); f(hide(SB(n))[])::Int64)
 gu(x::Int64)::Int32 = (v = Any[x, "s", 1.5]; try; u(v[x]); catch e; e isa MethodError ? Int32(7) : Int32(8); end)
+# a closure whose two methods are ambiguous over an Int64, called with an erased Int64
+gam(n::Int64) = (k = n; h(x::Union{Int64,String}) = 1 + 0k; h(x::Union{Int64,Float64}) = 2 + 0k;
+                 g = hide(h)[]; try; g(hide(n)[])::Int64; catch; -1; end)
+# a closure called with an AbstractVector{Int64} while a Memory{Int64} class is numbered
+struct WV; v::AbstractVector{Int64}; end
+gab(n::Int64) = (k = n; g = hide(x -> length(x) + k)[]; w = hide(WV([1, 2]))[]::WV;
+                 m = Memory{Int64}(undef, 2); g([1, 2, 3])::Int64 + g(w.v)::Int64 + length(m))
 end
 
 @testset "dispatch: MethodError receivers trap through the ONE table" begin
@@ -127,5 +134,17 @@ end
     @test M.gq(3) == 23
     let r = WasmRunner.run_wasm_single(WasmTarget.compile(M.gq, (Int64,)), "gq", "3n")
         @test r[1] === :ok && unmarshal_result(r[2]) == 23
+    end
+    # a call Julia rejects as ambiguous rejects at compile time, never a row order that runs one
+    # method (dev/AUDIT.md A6C3, Enrollment.tla RejectOnlyWhenAmbiguous)
+    @test M.gam(3) == -1
+    let e = try; WasmTarget.compile(M.gam, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("ambiguous over values both admit", sprint(showerror, e))
+    end
+    # an abstract parameter admitting a bare array has no entry row: a WasmCompileError naming
+    # the callable, never a WasmInternalError (dev/AUDIT.md A5C4, A6E8)
+    @test M.gab(3) == 13
+    let e = try; WasmTarget.compile(M.gab, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("admits a type object or a bare array", sprint(showerror, e))
     end
 end

@@ -364,7 +364,9 @@ end
 The MethodInstances the program's dynamic dispatch sites can reach: for each site, the methods
 of its function applicable to its argument types whose dispatch classes the collected program
 instantiates (in its signatures or allocations), as dart builds dispatch rows only for the
-classes of its closed component.
+classes of its closed component; and for a callable constructed and called dynamically, every
+method Julia's matching gives the call's static signature, at its intersection (a method with
+static parameters at each observed class it admits).
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
 its front end's whole-program type flow analysis.)
 """
@@ -665,16 +667,33 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # Julia selects is enrolled: Julia's own matching of the call's static signature
     # (Base._methods_by_ftype) gives every method whose parameter types intersect it, each
     # specialized at the intersection (a method narrower than an erased argument included;
-    # the entry tries them most specific first, closures.jl)
+    # the entry tries them in Julia's specificity order, closures.jl). A method with static
+    # parameters intersects to a UnionAll, which Julia specializes at each argument's class
+    # when it runs: it is enrolled at each observed class it admits
     for (_T, ds) in callable_invocations
+        local enroll_closure!(cmi, at) = (cmi === nothing || cmi in seen) ? nothing :
+            (push!(seen, cmi); push!(out, cmi);
+             reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))" * at;
+             nothing)
         local _mms2 = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
-            local cmi = CC.specialize_method(mm.method, mm.spec_types, mm.sparams)
-            cmi === nothing && continue
-            cmi in seen && continue
-            push!(seen, cmi)
-            push!(out, cmi)
-            reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))"
+            if mm.spec_types isa DataType
+                enroll_closure!(CC.specialize_method(mm.method, mm.spec_types, mm.sparams), "")
+                continue
+            end
+            # the classes the program instantiates are every class a value can have (the
+            # closed world, as the candidate loop above reads it): a method no observed class
+            # fixes is reached by no value
+            for p in eachindex(ds), C in runtime_types
+                (isconcretetype(C) && (isstructtype(C) || isprimitivetype(C)) && C <: ds[p]) || continue
+                local cs = ntuple(j -> j == p ? C : ds[j], length(ds))
+                local cms = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                for cm in (cms === nothing ? () : cms)
+                    (cm.method === mm.method && cm.spec_types isa DataType) || continue
+                    enroll_closure!(CC.specialize_method(cm.method, cm.spec_types, cm.sparams),
+                                    ", at the observed class $(C)")
+                end
+            end
         end
     end
     return out
@@ -1132,7 +1151,14 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         (ci isa Core.CodeInstance && src isa Core.CodeInfo) || continue
         mi = ci.def isa Core.MethodInstance ? ci.def : ci.def.def
         sig = mi.specTypes
-        (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) || continue
+        # a collected body whose specialization is not one signature (a UnionAll, left by a
+        # method with static parameters) would be planned as no function: a call reaching it
+        # would run another
+        (sig isa DataType && sig <: Tuple && length(sig.parameters) >= 1) ||
+            throw(WasmInternalError(string(mi), 0, "",
+                String["planning the closed world: $(mi) was collected at $(sig), not one signature"],
+                ErrorException("a collected MethodInstance whose specTypes is not a DataType"),
+                Base.StackTraces.StackFrame[]))
         ftyp = sig.parameters[1]
         f = get(entry_values, mi, nothing)
         if f !== nothing
@@ -1419,8 +1445,9 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # is_runtime_vararg_tuple_type (structs.jl): `Tuple{Vararg{E}}` with a concrete
         # element E is not a Julia value's type (a value is an NTuple{n,E}), but WT gives
         # every length one {Object, data, size} representation (register_vararg_tuple_type!)
-        # whose header names this class. No class read sees it: typeof rejects, isa tests its
-        # size, and it never enters a slot of any class (emit_value!)
+        # whose header names this class, which no value has: typeof rejects, an isa against a
+        # concrete tuple type tests its size, and a statement that widens it rejects (the
+        # routes still open are MARCH 13.17's, A6E1-A6E4)
         if is_runtime_vararg_tuple_type(T)
             push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return

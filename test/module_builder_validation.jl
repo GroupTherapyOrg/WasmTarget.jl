@@ -85,6 +85,12 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         local lb_at = UInt32(length(m.types))
         @test MBV.add_type_group!(m, MBV.CompositeType[selfref(lb_at, MBV.FieldType(MBV.I64, true))]) == la_at
         @test length(m.types) == lb_at                       # nothing added
+        # a lone type whose fields read like LA's (a reference to LA, an i64) is not LA: LA's
+        # reference is inside its group (dev/formal/TypeIdentity.tla AnyMemberEqual)
+        local w_at = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(la_at, true), true), MBV.FieldType(MBV.I64, true)]))
+        @test w_at != la_at
+        @test MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(la_at, true), true), MBV.FieldType(MBV.I64, true)])) == w_at
+        lb_at = UInt32(length(m.types))
         # another field: another type
         @test MBV.add_type_group!(m, MBV.CompositeType[selfref(lb_at, MBV.FieldType(MBV.I32, true))]) == lb_at
         # an outside reference into the equal group's range is not an inside reference

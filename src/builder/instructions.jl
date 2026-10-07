@@ -442,10 +442,14 @@ mutable struct WasmModule
     # the URL a `sourceMappingURL` section names; set, every builder of this module records
     # its source mappings (dart ModuleBuilder.sourceMapUrl, module.dart:28)
     source_map_url::Union{Nothing, String}
+    # the recursion groups add_type! and add_type_group! added, 0-based index ranges in section
+    # order (dart's _RecGroupBuilder keeps its groups; recursion_groups recomputes and checks them
+    # when the section is written)
+    type_groups::Vector{UnitRange{Int}}
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing)
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, UnitRange{Int}[])
 
 # ============================================================================
 # Module Building API
@@ -519,14 +523,17 @@ new type every time and deduplicate only function types, types.dart:406 _Functio
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
     _check_refs_defined(mod, ct, length(mod.types))
     ct isa StructType && _validate_struct_subtype!(mod, ct)
-    # Check if type already exists (structural deduplication)
-    for (i, existing) in enumerate(mod.types)
-        if types_equal(existing, ct)
-            return UInt32(i - 1)
-        end
+    # an existing type with equal fields that is its own recursion group, referring to no type
+    # in it, is the same runtime type (a member of a recursion group is not, however equal its
+    # fields read: wasm compares a group's inside references by position)
+    for g in mod.type_groups
+        length(g) == 1 || continue
+        local existing = mod.types[first(g) + 1]
+        types_equal(existing, ct) && !(UInt32(first(g)) in type_refs(existing)) && return UInt32(first(g))
     end
     push!(mod.types, ct)
     idx = UInt32(length(mod.types) - 1)
+    push!(mod.type_groups, Int(idx):Int(idx))
     return idx
 end
 
@@ -621,9 +628,13 @@ recursion group already in the section that is equal to them, member by member (
 inside the group by its position, one outside it by its index), is the same runtime type under
 wasm's iso-recursive canonicalization, so its first index is returned and nothing is added: an
 index is a runtime type, as add_type! keeps it for a single type.
-formal(dev/formal/TypeIdentity.tla): two distinct indices are never one runtime type.
+formal(dev/formal/TypeIdentity.tla): two distinct indices are never one runtime type, and an
+index handed back is the runtime type requested.
 parity(pkg/wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct): the types
-are defined, and their recursion group follows from the graph (recursion_groups).
+are defined, and their recursion group follows from the graph (recursion_groups). Returning an
+equal group's index: parity(quarantine: WT numbers a type when it adds it, since function
+bodies are bytes before the module is written, so an addition wasm would canonicalize into an
+existing group must be that group's index; dart numbers its groups at the end.)
 """
 function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
     local base = length(mod.types)
@@ -631,12 +642,13 @@ function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
         _check_refs_defined(mod, ct, base + length(types))
     end
     local n = length(types)
-    for g in recursion_groups(mod)
+    for g in mod.type_groups
         length(g) == n || continue
         all(_group_member_equal(mod.types[first(g) + k + 1], first(g), types[k + 1], base, n)
             for k in 0:n-1) && return UInt32(first(g))
     end
     append!(mod.types, types)
+    push!(mod.type_groups, base:base + n - 1)
     for ct in types
         ct isa StructType && _validate_struct_subtype!(mod, ct)
     end
@@ -650,7 +662,9 @@ Whether member `a` of the recursion group at `abase` and member `b` of the group
 both `n` long, are the same type under wasm's iso-recursive canonicalization: the same kind,
 mutability and value types, a reference inside its group matching only the one at the same
 position inside the other, a reference outside it only the same index.
-parity(pkg/wasm_builder/lib/src/builder/types.dart:106 _RecGroupBuilder._areGroupsStructurallyEqual)
+parity(quarantine: wasm's iso-recursive type equivalence, which WT must apply when it adds a
+group (add_type_group!); dart's _areGroupsStructurallyEqual, types.dart:106, compares heap
+types by identity, to decide which groups to brand.)
 """
 function _group_member_equal(a::CompositeType, abase::Integer, b::CompositeType, bbase::Integer, n::Integer)::Bool
     local inside(r, base) = base <= r < base + n

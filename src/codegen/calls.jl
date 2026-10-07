@@ -2041,6 +2041,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # emit_isa calls jl_isa at run time. Against a kind or `Type` itself jl_isa answers by the
     # value's kind, the test the arms below make; against a type that meets `Type{…}` it tests
     # type equality, which WT has no run-time subtyping for: the isa rejects at its statement
+    # emit_isa first swaps the abstract Type{Union{}} for the concrete typeof(Union{})
+    isa_isect === Type{Union{}} && (isa_isect = Core.TypeofBottom; check_type = Core.TypeofBottom)
     if isa_isect isa Type && isa_isect !== Any
         if is_pointer_egal_type_type(isa_isect)
             check_type = isa_isect

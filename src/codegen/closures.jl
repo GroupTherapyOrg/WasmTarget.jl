@@ -18,12 +18,12 @@ function is_callable_julia_type(@nospecialize(T))::Bool
 end
 
 """
-    ClosureBody(body_idx, params, results, return_type, julia_params)
+    ClosureBody(body_idx, params, results, return_type, julia_params, method)
 
 One compiled specialization of a callable type, as the layouter sees it: the body's
 function index, its physical signature, its inferred Julia return type (the trampoline
-re-boxes a numeric result with that type's classId) and its Julia parameter types (what an
-entry tests each argument against).
+re-boxes a numeric result with that type's classId), its Julia parameter types (what an
+entry tests each argument against) and the method it specializes.
 parity(closures.dart:31 ClosureImplementation.functions)
 """
 struct ClosureBody
@@ -32,6 +32,7 @@ struct ClosureBody
     results::Vector{WasmValType}
     return_type::Type
     julia_params::Vector{Type}   # the specialization's Julia parameter types (self included for capturing closures)
+    method::Method               # the method it specializes (Julia's dispatch ranks methods)
 end
 
 """
@@ -78,7 +79,7 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     # arity → trampoline: the body's own entry, or — a Julia generic function as a value
     # (parity(quarantine: dart has one body per closure; `string` as a value has every
     # reachable specialization)) — a dispatching entry that tests the erased arguments'
-    # classIds against each specialization's parameter types in program order
+    # classIds against each specialization's parameter types, in Julia's specificity order
     local tramps = Dict{Int, UInt32}()
     for arity in arities
         local cands = _most_specific_first(by_arity[arity])
@@ -110,39 +111,44 @@ end
 """
     _most_specific_first(bodies) -> Vector{ClosureBody}
 
-The bodies in the order a vtable entry tries them: a body whose parameter types are more
-specific (Base.morespecific) before every body it is more specific than, program order
-otherwise, so the first row that matches a value runs the method Julia selects for it.
-formal(dev/formal/Enrollment.tla): rows are tried most specific first.
+The bodies in the order a vtable entry tries them: a body of a method more specific than
+another's (Julia's dispatch ranks methods, jl_method_morespecific) before it, and of two
+specializations of one method the more specific first; program order otherwise. The first row
+that matches a value runs the method Julia selects for it: two methods neither more specific,
+over values both admit, rejected the callable before (compile.jl, Base.isambiguous).
+formal(dev/formal/Enrollment.tla): rows are tried in the methods' specificity order.
 parity(quarantine: a Julia callable's methods are selected by specificity; a dart closure has
 one body.)
 """
 function _most_specific_first(bodies::Vector{ClosureBody})::Vector{ClosureBody}
     local sig(c) = Tuple{c.julia_params...}
+    local precedes(d, c) = d.method !== c.method ? Base.morespecific(d.method, c.method) :
+                                                   Base.morespecific(sig(d), sig(c))
     local rest = copy(bodies)
     local out = ClosureBody[]
     while !isempty(rest)
         local k = findfirst(rest) do c
-            !any(d -> d !== c && Base.morespecific(sig(d), sig(c)), rest)
+            !any(d -> d !== c && precedes(d, c), rest)
         end
         push!(out, popat!(rest, something(k, 1)))
     end
     return out
 end
 
-# a `Type{X}` parameter of a known X: an entry tests the operand's identity against X's one
-# type object (`_emit_closure_arg_tests!`)
-# parity(quarantine: a Julia `Type{X}` parameter admits one type object; a dart parameter is a class.)
-_is_type_identity_param(@nospecialize(T))::Bool =
-    T isa DataType && T <: Type && length(T.parameters) == 1 && T.parameters[1] isa Type
+# a `Type{X}` parameter whose values are one pointer (jl_pointer_egal, the rule emit_isa
+# tests by identity): an entry tests the operand's identity against X's type object
+# (`_emit_closure_arg_tests!`); any other `Type{X}` is tested by type equality, which an entry
+# cannot make (`_closure_param_untestable`)
+# parity(quarantine: a Julia `Type{X}` parameter admits type objects equal to X; a dart parameter is a class.)
+_is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
 
 """
     _closure_param_untestable(mod, registry, T) -> Bool
 
 Whether an abstract parameter type `T` other than Any (which an entry does not test)
-admits a value no entry row tells by its classId: a
-type object (a kind or a TypeVar, which carry no class header) or a bare array (a Memory or
-SimpleVector, represented without one). A callable with such a candidate rejects
+admits a value no entry row tells by its classId: a type object (a kind or a TypeVar, which
+carry no class header, or the values of a `Type{X}` that jl_isa tests by type equality) or a
+bare array (a Memory or SimpleVector, represented without one). A callable with such a candidate rejects
 (compile.jl) until rows are enrolled per observed class (MARCH 13.17, A5C4).
 parity(quarantine: Julia type objects and bare arrays have no dart class header; a dart
 closure's parameter is a class.)
@@ -150,6 +156,7 @@ closure's parameter is a class.)
 function _closure_param_untestable(mod::WasmModule, registry::TypeRegistry, @nospecialize(T))::Bool
     (T === Any || isconcretetype(T)) && return false     # an Any parameter is not tested
     _is_type_identity_param(T) && return false            # X's one type object, by identity
+    T isa DataType && T.name === Type.body.name && return true   # type equality (jl_isa)
     any(K -> typeintersect(K, T) !== Union{}, (DataType, Union, UnionAll, Core.TypeofBottom, TypeVar)) && return true
     return any(p -> typeintersect(p[1], T) !== Union{}, bare_array_partition(mod, registry, nothing).all)
 end

@@ -459,7 +459,10 @@ function _erased_vararg_tuple_operand(ctx::AbstractCompilationContext, rec::NirS
         local sig = node.mi === nothing ? nothing : node.mi.specTypes
         sig isa DataType || return first_hit((v, Any) for v in node.operands)
         local ps = sig.parameters
-        return first_hit((v, length(ps) >= i + 1 ? ps[i + 1] : Any) for (i, v) in enumerate(node.operands))
+        # a parameter at or after a Vararg tail is the tail's element type (Base.unwrapva)
+        local slot(i) = (k = min(i + 1, length(ps));
+                         k < i + 1 && !(k >= 1 && ps[k] isa Core.TypeofVararg) ? Any : Base.unwrapva(ps[k]))
+        return first_hit((v, slot(i)) for (i, v) in enumerate(node.operands))
     elseif node isa NirCall
         local f = node.callee
         if f === Core.memoryrefset! && length(node.operands) >= 2

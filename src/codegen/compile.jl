@@ -626,6 +626,13 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         local _cv_ctx = Dict{DataType, Bool}()
         for (_i, _T, _takes_context) in _cvp
             local _entry = function_data[_i]
+            # a body reached only by `invoke` is no row: dispatch never selects it
+            # (formal(dev/formal/Enrollment.tla): IncludeInvoke is a Broken variant)
+            local _mi = _entry[9]
+            _mi in plan.invoke_only && continue
+            _mi isa Core.MethodInstance && _mi.def isa Method ||
+                throw(WasmInternalError(string(_T), 0, "", String["building the vtable of $(_T)"],
+                    ErrorException("a callable body with no Method: $(_mi)"), Base.StackTraces.StackFrame[]))
             local _ats, _rt, _gas = _entry[2], _entry[5], _entry[6]
             # fullstrict reorder: the placeholders occupy the body indices ALREADY —
             # the standard formula reads them; trampolines append after.
@@ -635,12 +642,24 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             local _bps, _brs = function_wasm_signature(_ats, _rt, _gas, mod, type_registry)
             haskey(_cv_bodies, _T) || (push!(_cv_types, _T); _cv_bodies[_T] = ClosureBody[]; _cv_ctx[_T] = _takes_context)
             push!(_cv_bodies[_T], ClosureBody(_body_idx, _bps, _brs, _rt,
-                                              Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)]))
+                                              Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)], _mi.def))
         end
         for _T in _cv_types
             # a candidate taking a Memory whose wasm array type another class shares has no
             # trampoline row a call could be routed by: the callable rejects where its call
             # would trap on that candidate (dev/AUDIT.md A3S2)
+            # two methods neither more specific than the other, over values both rows admit and
+            # no method more specific than both covers, are a call Julia rejects as ambiguous:
+            # no row order answers it (formal(dev/formal/Enrollment.tla): RejectOnlyWhenAmbiguous)
+            local _bs = _cv_bodies[_T]
+            for _a in 1:length(_bs), _b in _a+1:length(_bs)
+                local _ma, _mb = _bs[_a].method, _bs[_b].method
+                (_ma !== _mb && Base.isambiguous(_ma, _mb) &&
+                 typeintersect(Tuple{_bs[_a].julia_params...}, Tuple{_bs[_b].julia_params...}) !== Union{}) &&
+                    throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
+                        "a dynamic call of $(_T) reaches $(_ma) and $(_mb), which are ambiguous over values both admit: Julia throws MethodError there",
+                        nothing, nothing)))
+            end
             local _shared = bare_array_partition(mod, type_registry, nothing).shared
             for _c in _cv_bodies[_T], _Tj in _c.julia_params
                 (_Tj isa DataType && (_Tj <: GenericMemory || _Tj === Core.SimpleVector) &&
