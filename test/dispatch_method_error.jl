@@ -139,7 +139,7 @@ end
     # method (dev/AUDIT.md A6C3, Enrollment.tla RejectOnlyWhenAmbiguous)
     @test M.gam(3) == -1
     let e = try; WasmTarget.compile(M.gam, (Int64,)); nothing; catch err; err; end
-        @test e isa WasmTarget.WasmCompileError && occursin("ambiguous over values both admit", sprint(showerror, e))
+        @test e isa WasmTarget.WasmCompileError && occursin("which are ambiguous for (Int64)", sprint(showerror, e))
     end
     # an abstract parameter admitting a bare array has no entry row: a WasmCompileError naming
     # the callable, never a WasmInternalError (dev/AUDIT.md A5C4, A6E8)

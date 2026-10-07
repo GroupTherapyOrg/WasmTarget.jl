@@ -1593,6 +1593,8 @@ _g("tuple_runtime_types", Any[
 @noinline _sm_dh(@nospecialize(x)) = Ref{Any}(x)
 struct _SmEA; x::Int64; end
 struct _SmEB; x::Int64; end
+_sm_wf(x::T) where {T<:Integer} = (T === Int64 ? 1 : 3)
+_sm_wf(x) = 2
 _sm_kd(::DataType) = 1
 _sm_kd(::Int64) = 2
 _g("dynamic_enrollment", Any[
@@ -1614,6 +1616,14 @@ _g("dynamic_enrollment", Any[
     # reached only by `invoke` is no row (A6C2: it tied with the dispatch target, native 12,
     # wasm 22)
     ("closure_parametric_method", (n::Int64) -> (k = n; h(x::T) where {T<:Integer} = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[])::Int64), Int64(3)),
+    # a method whose static parameters two erased arguments fix is enrolled at each tuple of
+    # observed classes (A7C1: rowed one position at a time it had no row, native 1, wasm 2), and
+    # it covers the ambiguity of two less specific methods (native 3, wasm 1)
+    ("closure_two_position_parametric", (n::Int64) -> (k = n; h(x::T, y::S) where {T<:Integer,S<:Integer} = 1 + 0k; h(x, y) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[], _sm_dh(n)[])::Int64), Int64(3)),
+    ("closure_parametric_covers_ambiguity", (n::Int64) -> (k = n; h(x::Integer, y) = 1 + 0k; h(x, y::Integer) = 2 + 0k; h(x::T, y::S) where {T<:Integer,S<:Integer} = 3 + 0k; f = _sm_dh(h)[]; f(_sm_dh(n)[], _sm_dh(n)[])::Int64), Int64(3)),
+    # a generic function's method with a static parameter, a dispatch candidate for an erased
+    # Int64, specialized with Julia's static parameter values (A7C6)
+    ("generic_parametric_candidate", (n::Int64) -> (v = Any[n, "s"]; _sm_wf(v[1]) + 10 * _sm_wf(v[2])), Int64(3)),
     ("closure_invoke_only_body", (n::Int64) -> (k = n; @noinline h(x::Int64) = 1 + 0k; @noinline h(x::Integer) = 2 + 0k; a = invoke(h, Tuple{Integer}, n); f = _sm_dh(h)[]; a + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     # a function with a DataType method and an Int64 method, called on an erased type object
     # and an erased Int64 (A5E10, A5B4: measured 21)

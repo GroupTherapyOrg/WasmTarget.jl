@@ -560,7 +560,8 @@ lowering answered wrong, rejects.
 ## 2026-10-06 — audited through 5a3e1604 (e225334d..5a3e1604: batches 77–81)
 
 The sixth audit, of the fifth audit's fix batches: 37 findings. Each predicted wrong answer was
-measured (native, then wasm): seven are wrong answers today, and batch 78 caused three of them
+measured (native, then wasm): six are wrong answers today (A6B1 measured on two programs), and
+batch 78 caused three of them
 (A6C1, A6C2, A6C3 = A6P3 = A6B5 = A6E5, in the enrollment and row order it introduced). Batch
 78's resolution claimed that "for every class that may reach a dynamic call the body Julia
 selects runs"; Enrollment.tla modeled specificity as a total order, so it could not see an
@@ -658,3 +659,68 @@ Memory{UInt8}'s array type, and bare_array_partition now counts it with the Memo
 SimpleVector classes, so a class read over both rejects at its statement (smoke xfails
 codeunits_isa_memory, codeunits_typeof; the old partition traps on both, illegal cast, where
 native answers 2). A Memory as a classed object, A3S2, tells them apart.
+
+## 2026-10-06 — audited through 18a25734 (5a3e1604..18a25734: batches 82–86)
+
+The seventh audit, of the sixth audit's fix batches: 28 findings. Each predicted wrong answer
+was measured (native, then wasm): four are wrong answers today, with three roots. Batch 82 left
+one of them (A7C1, the fix for A6C1 covering one erased position), batch 86 another (A7C2, its
+CodeUnits counted at one of five sites), and one predates batch 83, which kept it (A7E2).
+
+Area: builder — (A7B1) the recursion groups live in two records nothing compares: the builder's
+type_groups, which deduplication reads, and recursion_groups, which the section is written from;
+add_type_group! never checks that its members are one component (a builder-only program gives
+two indices for one runtime type; finish_pending! always passes a component). (A7B2 = A7P2)
+batch 82 dropped A5B3 with no resolution; dart brands equal flat class structs at -O2
+(`uniqueTypes`, class_info.dart:435), and TypeIdentity.tla's header still said dart brands the
+equal groups. (A7B3 = A7E2) classed_struct_idx misses String, Symbol and the boxes, which carry
+the class prefix outside registry.structs. (A7B4) the type_groups comment misdescribes dart.
+(A7B5) eager numbering, a WT choice (A3B16), is what forces the equal-group merge. (A7B6) prose:
+add_type!'s docstring, "the old add_type!" for LengthOnly, tuple_lengths_admitting's reason (jl_isa
+of a tuple is jl_subtype of its type, subtype.c).
+
+Area: collection and planning — (A7C1) WRONG ANSWER: a method whose static parameters two
+erased arguments fix was rowed one position at a time and so never (native 1, wasm 2), and it
+then failed to cover an ambiguity of two less specific methods (native 3, wasm 1). (A7C2 = A7E1 =
+A7P3) WRONG ANSWER: four sites decide "a bare-array class" by Memory or SimpleVector alone, so a
+closure row taking a String's CodeUnits never matches (native 1, wasm 2) and an isa against one
+traps. (A7C3) Enrollment.tla modeled one position and rowed a parametric method whole. (A7C4)
+the ambiguity check asked Base.isambiguous over every type, rejecting a program Julia runs.
+(A7C5) `something(k, 1)` hid a cycle in the specificity order. (A7C6) the generic-function
+candidate loop specialized with empty static parameter values.
+
+Area: emission and diagnostics — (A7E2) WRONG ANSWER: an isa of a closure type tested the
+captured-fields struct, which a closure value is not (native 16, wasm 26). (A7E3) a vararg
+method's packed tail is classed by its slot types (measured: rejected at its statement). (A7E4)
+convert_type!'s widening check trusts a from_julia some callers give as the sink's type. (A7E5,
+A7E6) prose: batch 85's "instructions unchanged" (a tee became set and get in an arm no probe
+reaches), emit_isa_classid!'s and _emit_isa_type_object_kinds!'s docstrings.
+
+Area: enforcement and prose — (A7P4) A6E4 was recorded resolved, but the statement check still
+stands beside convert_type!'s. (A7P5) the IncludeInvoke Broken instance failed only through
+SpecOrder. (A7P6 = A7B1, A7B4) (A7P7) TypeIdentity.tla's parity text, add_type! description and
+Broken list. (A7P8) four behavior changes of batches 82–83 have no test. (A7P9) jl_egal reads a
+kind without testing TypeVar (right because a TypeVar is mutable, so egal is identity). (A7P10)
+prose: the audit #6 entry's "seven" (six), type_object_rows' place in smoke.
+
+Resolution: batch 87 (this commit) — model first: Enrollment.tla has two dispatch positions,
+values are pairs, and a method with static parameters needs Fix[m] positions fixed; its rows are
+at each tuple of the call's pairs it admits, and the ambiguity check asks Julia per pair of
+numbered classes. Broken instances PerPosition (A7C1) and AllTypesAmbig (A7C4) join the five kept
+(IncludeInvoke goes, A7P5); TLC rejects each, and the positive passes. A7C1: the collector enrolls a
+parametric method at each tuple of observed classes over the erased positions, each limited to
+the classes the method's signature admits there, in one sorted order. A7C4: an ambiguous pair
+rejects only when Julia's dispatch (Base._which) is ambiguous for a tuple of numbered classes in
+their overlap (`ambiguous_class_tuple`; over 4096 tuples, or an overlap that is not one tuple type,
+it rejects as before); the numbered classes include classes no value reaches, so a program whose
+only ambiguity is over an unreached Int32 still rejects (MARCH 13.17, with A3S3). A7C5: a cycle
+raises. A7C6: the candidate loop takes the static parameters' values from Julia's intersection
+environment (smoke generic_parametric_candidate documents it; the empty svec happened not to
+change that program's answer). Smoke dynamic_enrollment gains closure_two_position_parametric and
+closure_parametric_covers_ambiguity: batch 86's code answers 2 and 1 where native answers 1 and 3.
+A7B2 = A7P2: A5B3's premise was half true; dart brands equal flat class structs only with
+`uniqueTypes` (-O2), and without it equal structs are one type and classes are told by classId,
+which WT follows; dart's group comparison treats LA and LB as different, so it brands neither,
+and they are one wasm type in dart too; the quarantine on _group_member_equal and TypeIdentity.tla
+say so. A7B4, A7P7, A7P10's count: as found. Everything else (A7B1, A7B3 = A7E2, A7B5, A7B6, A7C2,
+A7E3, A7E4 = A6E4 remainder, A7E5, A7E6, A7P8, A7P9, A7P10's smoke place): MARCH 13.17.

@@ -130,7 +130,8 @@ function _most_specific_first(bodies::Vector{ClosureBody})::Vector{ClosureBody}
         local k = findfirst(rest) do c
             !any(d -> d !== c && precedes(d, c), rest)
         end
-        push!(out, popat!(rest, something(k, 1)))
+        k === nothing && throw(ArgumentError("the specificity order of $(length(rest)) closure bodies has a cycle"))
+        push!(out, popat!(rest, k))
     end
     return out
 end
@@ -141,6 +142,29 @@ end
 # cannot make (`_closure_param_untestable`)
 # parity(quarantine: a Julia `Type{X}` parameter admits type objects equal to X; a dart parameter is a class.)
 _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
+
+"""
+    ambiguous_class_tuple(registry, F, overlap) -> Union{Bool, Nothing, Tuple}
+
+A tuple of the closed world's numbered classes, one per argument of `overlap` (the argument
+types two methods both admit), for which Julia's dispatch of callable type `F` is ambiguous
+(`Base._which` finds no one method), or false when there is none; nothing when the tuples are
+not few enough to ask about (overlap not one tuple type, or more than 4096 tuples), which the
+caller reads as ambiguous.
+parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
+ambiguity; a dart closure has one body.)
+"""
+function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospecialize(overlap))::Union{Bool, Nothing, Tuple}
+    overlap isa DataType || return nothing
+    local classes = Any[C for (C, _) in ordered_pairs(registry.type_ids, type_order_key,
+                                                      C -> C isa DataType && isconcretetype(C))]
+    local choices = Vector{Any}[Any[C for C in classes if C <: Base.unwrapva(P)] for P in overlap.parameters]
+    prod(length, choices; init=1) > 4096 && return nothing
+    for cs in Iterators.product(choices...)
+        Base._which(Tuple{F, cs...}; raise=false) === nothing && return cs
+    end
+    return false
+end
 
 """
     _closure_param_untestable(mod, registry, T) -> Bool

@@ -648,7 +648,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 m = which(g, concrete_args)
                 ssig = Tuple{Core.Typeof(g), spec...}
                 ssig <: m.sig || continue
-                cmi = CC.specialize_method(m, ssig, Core.svec())
+                # the static parameters' values at ssig, as Julia's match computes them
+                cmi = CC.specialize_method(m, ssig,
+                    ccall(:jl_type_intersection_with_env, Any, (Any, Any), ssig, m.sig)[2])
                 cmi in seen && continue
                 push!(seen, cmi)
                 push!(out, cmi)
@@ -682,16 +684,24 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 continue
             end
             # the classes the program instantiates are every class a value can have (the
-            # closed world, as the candidate loop above reads it): a method no observed class
+            # closed world, as the candidate loop above reads it): the method is enrolled at
+            # each tuple of observed classes over the erased positions that it admits (a
+            # static parameter may need several positions fixed); a method no observed tuple
             # fixes is reached by no value
-            for p in eachindex(ds), C in runtime_types
-                (isconcretetype(C) && (isstructtype(C) || isprimitivetype(C)) && C <: ds[p]) || continue
-                local cs = ntuple(j -> j == p ? C : ds[j], length(ds))
+            local msig = Base.unwrap_unionall(mm.method.sig)
+            local admits(C, p) = (local P = msig.parameters[min(p + 1, length(msig.parameters))];
+                                  P = Base.unwrapva(P); P isa TypeVar && (P = P.ub);
+                                  typeintersect(C, P) !== Union{})
+            local observed = sort!([C for C in runtime_types
+                                    if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))]; by=string)
+            local choices = [isconcretetype(ds[p]) ? Any[ds[p]] :
+                             Any[C for C in observed if C <: ds[p] && admits(C, p)] for p in eachindex(ds)]
+            for cs in Iterators.product(choices...)
                 local cms = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
                 for cm in (cms === nothing ? () : cms)
                     (cm.method === mm.method && cm.spec_types isa DataType) || continue
                     enroll_closure!(CC.specialize_method(cm.method, cm.spec_types, cm.sparams),
-                                    ", at the observed class $(C)")
+                                    ", at the observed classes ($(join(cs, ", ")))")
                 end
             end
         end
