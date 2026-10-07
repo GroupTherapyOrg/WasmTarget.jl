@@ -168,7 +168,7 @@ Branch to `lbl` unless every erased argument is a value of `c`'s Julia parameter
 Julia's dispatch of the call on its arguments' classes requires: an `Any` parameter takes
 anything; a `Type{X}` parameter X's one type object; a bare-array class (a Memory, a
 SimpleVector) the array type only it is (`bare_array_partition`; a shared one was rejected
-before any vtable is built); a type object's kind its `\$kind`; any other concrete type the
+before any vtable is built); a type object its kind, a TypeVar first (emit_type_object_test!); any other concrete type the
 value's header classId; an abstract type the classIds of its numbered classes (`nothing`
 too, when it admits Nothing). An abstract parameter that also admits a type object or a bare
 array has no such test here, and the callable rejects before its vtable is built
@@ -193,14 +193,12 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
     for j in 1:arity
         local Tj = c.julia_params[j + (takes_context ? 1 : 0)]
         Tj === Any && continue       # accepts anything
-        if _is_type_identity_param(Tj)
-            # a `Type{X}` parameter: the operand is X's one type object — identity against
-            # its global (a type object's class is its kind, not X)
-            local tg = get_type_constant_global!(mod, registry, Tj.parameters[1])
+        if _is_type_identity_param(Tj) || Tj === TypeVar || any(K -> K[1] === Tj, kinds)
+            # a type object: X's identity for a `Type{X}`, else its kind (a TypeVar first, whose
+            # `$kind` is never written), the one test isa makes (emit_type_object_test!)
             local_get!(tb, UInt32(j))
-            ref_cast!(tb, EqRef, true)          # ref.eq takes eqref operands
-            global_get!(tb, tg, mod.globals[Int(tg) + 1].valtype)
-            num!(tb, Opcode.REF_EQ)
+            local_set!(tb, tmp)
+            emit_type_object_test!(tb, mod, registry, tmp, Tj, () -> itmp)
             num!(tb, Opcode.I32_EQZ)
             br_if!(tb, lbl)
             continue
@@ -213,23 +211,6 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
             local_get!(tb, UInt32(j))
             ref_test!(tb, Int64(told[k][2]), false)
             num!(tb, Opcode.I32_EQZ)
-            br_if!(tb, lbl)
-            continue
-        end
-        local kc = findfirst(p -> p[1] === Tj, kinds)
-        if kc !== nothing
-            # a type object: a $JlType whose $kind names it
-            local jt = registry.jl_type_idx
-            local_get!(tb, UInt32(j))
-            local_tee!(tb, tmp)
-            ref_test!(tb, Int64(jt), false)
-            num!(tb, Opcode.I32_EQZ)
-            br_if!(tb, lbl)
-            local_get!(tb, tmp)
-            ref_cast!(tb, Int64(jt), false)
-            struct_get!(tb, jt, UInt32(0), I32)
-            i32_const!(tb, Int64(kinds[kc][2]))
-            num!(tb, Opcode.I32_NE)
             br_if!(tb, lbl)
             continue
         end

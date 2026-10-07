@@ -646,4 +646,11 @@ the layout), in place of emit_value!'s; it also rejects the failed typeassert's 
 The statement check stays for the widenings Julia's IR shows. Smoke runtime_length_tuple gains
 isa_least_length, isa_least_length_fails, isa_union_of_lengths and same_layout_struct_erased, and
 xfail typeassert_got: the old code answers 2 for the least-length and union tests where native
-answers 1, and compiles typeassert_got to a wrong answer. A6E3 stays on 13.17.
+answers 1, and compiles typeassert_got to a wrong answer. A6E3 stays on 13.17. Batch 85 — A5B1, and A6B4's
+two emitters: one emitter, `emit_type_object_test!`, answers whether a value is a type object
+of T (X's identity for a pointer-unique `Type{X}`, else its kind, a TypeVar first, since its
+`$kind` is never written and reads as DataType's); isa's type-object arm and identity arm and
+a closure entry's `Type{X}`, kind and TypeVar rows all use it (a TypeVar row read a class header
+it lacks, and a TypeVar passed the DataType row). Smoke group type_object_rows: the old rows trap
+on typevar_row where native answers 22. typeof and jl_has_typevar read a kind, not test one, and
+already test $JlTypeVar first.

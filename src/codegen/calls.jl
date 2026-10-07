@@ -2305,19 +2305,9 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             if is_pointer_egal_type_type(check_type)
                 # `Type{X}`: X's one type object, by identity (cgutils.cpp emit_isa's
                 # pointer comparison); a value that is not a type object is not X
-                local _tg = get_type_constant_global!(ctx.mod, ctx.type_registry, check_type.parameters[1])
-                local _jt = ctx.type_registry.jl_type_idx
                 local _tl = allocate_local!(ctx, AnyRef)
-                local_tee!(bld, _tl)
-                ref_test!(bld, Int64(_jt), false)
-                if_!(bld; results=WasmValType[I32])
-                local_get!(bld, _tl)
-                ref_cast!(bld, Int64(_jt), false)
-                global_get!(bld, _tg, ctx.mod.globals[Int(_tg) + 1].valtype)
-                num!(bld, Opcode.REF_EQ)
-                else_!(bld)
-                i32_const!(bld, 0)
-                end_block!(bld)
+                local_set!(bld, _tl)
+                emit_type_object_test!(bld, ctx.mod, ctx.type_registry, _tl, check_type, () -> allocate_local!(ctx, I32))
             elseif !isempty(_ids)
                 local _base_idx = ctx.type_registry.base_struct_idx
                 # Guard against JlType hierarchy refs.
@@ -2438,46 +2428,80 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
         _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
         return nothing
     end
-    # a type object: a TypeVar is its own struct; a DataType, Union, UnionAll or Union{} is a
-    # $JlType whose $kind names it (Union and UnionAll share one wasm struct)
+    # a value that is no type object is one of the bare arrays under check_type, or not a T
+    emit_type_object_test!(bld, ctx.mod, reg, local_idx, check_type, () -> allocate_local!(ctx, I32);
+        otherwise = b -> if isempty(kinds)
+            i32_const!(b, 0)
+        else
+            for (i, idx) in enumerate(kinds)
+                local_get!(b, UInt32(local_idx))
+                ref_test!(b, Int64(idx), false)
+                i > 1 && num!(b, Opcode.I32_OR)
+            end
+        end)
+    return nothing
+end
+
+"""
+    emit_type_object_test!(b, mod, reg, v, T, scratch; otherwise) -> b
+
+Push the i32 answer to whether the value in anyref local `v` is a type object of `T`, for `T`
+a `Type{X}` whose values are one pointer (jl_pointer_egal: X's identity, as emit_isa tests it)
+or a type whose type objects its kinds tell (DataType, Union, UnionAll, typeof(Union{}),
+TypeVar, `Type`, a union of them): a TypeVar is its own struct, tested first, since its
+`\$kind` is never written; any other type object is a `\$JlType` whose `\$kind` names it. A
+value that is no type object answers `otherwise(b)` (0 when not given). `scratch()` gives the
+i32 local the kind is read into, asked for only when a kind is read. The one type-object test
+of isa and of a closure entry's rows.
+parity(quarantine: Julia type objects are values without a class header; WT represents them
+as a `\$JlType` hierarchy, so their kind, not a classId, tells them.)
+"""
+function emit_type_object_test!(b::InstrBuilder, mod::WasmModule, reg::TypeRegistry, v::Integer,
+                                @nospecialize(T), scratch::Function; otherwise=nothing)::InstrBuilder
+    local tv, jt = reg.jl_typevar_idx, reg.jl_type_idx
+    if is_pointer_egal_type_type(T)
+        local tg = get_type_constant_global!(mod, reg, T.parameters[1])
+        local_get!(b, UInt32(v))
+        ref_test!(b, Int64(jt), false)
+        if_!(b; results=WasmValType[I32])
+        local_get!(b, UInt32(v))
+        ref_cast!(b, Int64(jt), false)
+        global_get!(b, tg, mod.globals[Int(tg) + 1].valtype)
+        num!(b, Opcode.REF_EQ)
+        else_!(b)
+        otherwise === nothing ? i32_const!(b, 0) : otherwise(b)
+        end_block!(b)
+        return b
+    end
     local codes = Int32[code for (K, code) in ((DataType, JL_TYPE_KIND_DATATYPE),
                         (Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
-                        (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM)) if K <: check_type]
-    local tv, jt = reg.jl_typevar_idx, reg.jl_type_idx
-    local_get!(bld, UInt32(local_idx))
-    ref_test!(bld, Int64(tv), false)
-    if_!(bld; results=WasmValType[I32])
-    i32_const!(bld, TypeVar <: check_type ? 1 : 0)
-    else_!(bld)
-    local_get!(bld, UInt32(local_idx))
-    ref_test!(bld, Int64(jt), false)
-    if_!(bld; results=WasmValType[I32])
+                        (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM)) if K <: T]
+    local_get!(b, UInt32(v))
+    ref_test!(b, Int64(tv), false)
+    if_!(b; results=WasmValType[I32])
+    i32_const!(b, TypeVar <: T ? 1 : 0)
+    else_!(b)
+    local_get!(b, UInt32(v))
+    ref_test!(b, Int64(jt), false)
+    if_!(b; results=WasmValType[I32])
     if isempty(codes)
-        i32_const!(bld, 0)
+        i32_const!(b, 0)
     else
-        local k = allocate_local!(ctx, I32)
-        local_get!(bld, UInt32(local_idx))
-        ref_cast!(bld, Int64(jt), false)
-        struct_get!(bld, jt, UInt32(0), I32)
-        local_set!(bld, k)
+        local k = scratch()
+        local_get!(b, UInt32(v))
+        ref_cast!(b, Int64(jt), false)
+        struct_get!(b, jt, UInt32(0), I32)
+        local_set!(b, k)
         for (i, code) in enumerate(codes)
-            local_get!(bld, k); i32_const!(bld, Int64(code)); num!(bld, Opcode.I32_EQ)
-            i > 1 && num!(bld, Opcode.I32_OR)
+            local_get!(b, k); i32_const!(b, Int64(code)); num!(b, Opcode.I32_EQ)
+            i > 1 && num!(b, Opcode.I32_OR)
         end
     end
-    else_!(bld)
-    if isempty(kinds)
-        i32_const!(bld, 0)
-    else
-        for (i, idx) in enumerate(kinds)
-            local_get!(bld, UInt32(local_idx))
-            ref_test!(bld, Int64(idx), false)
-            i > 1 && num!(bld, Opcode.I32_OR)
-        end
-    end
-    end_block!(bld)
-    end_block!(bld)
-    return nothing
+    else_!(b)
+    otherwise === nothing ? i32_const!(b, 0) : otherwise(b)
+    end_block!(b)
+    end_block!(b)
+    return b
 end
 
 # WASMTARGET dynamic dispatch (typeId switch). When a `dynamic` :call to a generic

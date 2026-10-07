@@ -1689,6 +1689,15 @@ _g("type_isa", Any[
     ("type_identity_typeassert", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch; -7; end), Int64(1)),
     ("type_identity_typeassert_throws", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch e; e isa TypeError ? -7 : -8; end), Int64(2)),
 ])
+# A closure entry tests a type-object argument as isa does (emit_type_object_test!): a
+# TypeVar first, whose `$kind` is never written and read as DataType's (dev/AUDIT.md A5B1: a
+# TypeVar passed the DataType row, and a TypeVar row read a class header it lacks, native 22,
+# wasm trap)
+const _SM_TV = TypeVar(:T)
+_g("type_object_rows", Any[
+    ("typevar_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(2)),
+    ("datatype_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(1)),
+])
 _xf("type_isa_equality", Any[
     ("type_or_nothing_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Union{Nothing,Type{Int64}} ? 1 : 2), Int64(1)),
 ])
