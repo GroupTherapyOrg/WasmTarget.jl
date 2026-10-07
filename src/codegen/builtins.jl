@@ -1351,6 +1351,43 @@ function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{I
     return append_builder!(b, fb)
 end
 
+"""
+    emit_vararg_to_fixed_tuple!(b, ctx, V, T) -> b
+
+Replace the runtime-length tuple of type `V` (`Tuple{Vararg{E}}`'s representation) on the stack
+with the NTuple `T` it is, `T` an `NTuple{k,E}` its run-time length was tested to be (an isa's
+narrowing, a PiNode; a typeassert on one rejects, its failure's TypeError carrying it as any
+value): the fixed tuple struct, its header classed `T`, its fields read from
+the representation's data array. A narrowing of the value, which a cast between the two structs
+cannot be (dev/AUDIT.md A6E3).
+parity(quarantine: Julia's runtime-length tuple is an NTuple{n,E} for its run-time n; a dart
+record's shape is static.)
+"""
+function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                     V::DataType, T::DataType)::InstrBuilder
+    local reg = ctx.type_registry
+    local vinfo = register_vararg_tuple_type!(ctx.mod, reg, V)
+    local E = vararg_tuple_eltype(V)
+    local arr = get_array_type!(ctx.mod, reg, E)
+    local elem_w = julia_to_wasm_type(E)
+    local tinfo = register_tuple_type!(ctx.mod, reg, T)
+    tinfo === nothing && error("the NTuple $(T) has no struct")
+    local tdef = ctx.mod.types[Int(tinfo.wasm_type_idx) + 1]
+    local data = allocate_local!(ctx, ConcreteRef(arr, true))
+    ref_cast!(b, Int64(vinfo.wasm_type_idx), false)
+    struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1), ConcreteRef(arr, true))
+    local_set!(b, data)
+    emit_struct_prefix!(b, reg, T, tinfo)
+    for i in 1:length(T.parameters)
+        local_get!(b, data)
+        i32_const!(b, Int64(i - 1))
+        array_get!(b, arr, elem_w)
+        coerce_stack_top!(b, tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype, ctx; from_julia=E)
+    end
+    struct_new!(b, tinfo.wasm_type_idx)
+    return b
+end
+
 # Special case for Core.tuple - tuple creation
 # parity(code_generator.dart:3239 visitRecordLiteral)
 function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}

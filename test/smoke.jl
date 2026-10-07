@@ -1671,6 +1671,9 @@ _g("runtime_length_tuple", Any[
     ("isa_least_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
     ("isa_least_length_fails", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Int64,Int64,Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
     ("isa_union_of_lengths", (n::Int64) -> _sm_mk([n, 2, 3]) isa Union{Tuple{Int64},NTuple{3,Int64}} ? 1 : 2, Int64(3)),
+    # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
+    # two structs trapped where native answers 6)
+    ("isa_narrowed_fields", (n::Int64) -> (t = _sm_mk([n, 2, 3]); t isa NTuple{3,Int64} ? t[1] + t[3] : 0), Int64(3)),
     # a struct whose layout is the representation's widens to Any as any struct does
     ("same_layout_struct_erased", (n::Int64) -> (m = Memory{Int64}(undef, 1); m[1] = n; v = Any[_SmMT(m, (n,))]; (v[1]::_SmMT).t[1]), Int64(3)),
 ])

@@ -812,4 +812,9 @@ class test and is a located rejection, as A3E6's twin was. A8E3: the AnyRef isa 
 layout tests (MemoryRef box, numeric box, the classed string layout) are the one header test, as
 in the externref arm; every one of those classes carries the object header. A8C5: one predicate,
 `is_string_codeunits`, by Base's typename, answers the four sites that matched `:CodeUnits` by
-bare name; the representation itself (A8E4) stays on 13.17.
+bare name; the representation itself (A8E4) stays on 13.17. Batch 93 — A6E3: a runtime-length
+tuple a PiNode narrows to the NTuple its isa tested it to be is built as that NTuple
+(`emit_vararg_to_fixed_tuple!`: the fixed struct, its header classed, its fields read from the
+representation's data array), where a cast between the two structs trapped (native 6). Smoke
+runtime_length_tuple's isa_narrowed_fields: the old code traps. A typeassert on one still
+rejects, its failure's TypeError carrying the value as any value (xfail typeassert_got).

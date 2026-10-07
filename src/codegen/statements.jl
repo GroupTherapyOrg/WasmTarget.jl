@@ -622,6 +622,14 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             end
             actual = only(value_builder.v.stack)
             append_builder!(b, value_builder)
+            local src_T = get_ssa_type(ctx, node.value)
+            if src_T isa DataType && is_runtime_vararg_tuple_type(src_T) && pi_type isa DataType &&
+               pi_type <: Tuple && isconcretetype(pi_type)
+                # a runtime-length tuple narrowed to the NTuple it was tested to be is built as
+                # that NTuple (A6E3: a cast between the two structs trapped)
+                emit_vararg_to_fixed_tuple!(b, ctx, src_T, pi_type)
+                actual = b.v.stack[end]
+            end
             actual === expected || coerce_stack_top!(b, expected, ctx;
                 from_julia=(pi_type isa DataType ? pi_type : nothing))
             local_set!(b, local_idx)
