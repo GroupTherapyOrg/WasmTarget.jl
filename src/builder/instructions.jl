@@ -515,7 +515,11 @@ end
 """
     add_type!(mod, composite_type) -> type_idx
 
-Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index.
+Add a composite type (FuncType, StructType, or ArrayType) to the module and return its index:
+an existing type with equal fields that is its own recursion group and refers to no type in it
+is the same runtime type, and its index is returned (a recursion group's member is not, however
+equal its fields read); otherwise a new index, its own group.
+formal(dev/formal/TypeIdentity.tla): an index handed back is the runtime type requested.
 parity(quarantine: WT's validator identifies a type by its index, so an addition structurally
 identical to a type already defined returns that type's index, as wasm's iso-recursive
 canonicalization identifies the two at run time; dart's defineStruct and defineArray define a
@@ -643,6 +647,14 @@ function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
         _check_refs_defined(mod, ct, base + length(types))
     end
     local n = length(types)
+    # the members are one strongly connected component: each reaches every other through
+    # references inside the group (one member refers to itself), as wasm's recursion groups
+    # and the equality below assume
+    local inside = [Int[Int(r) - base + 1 for r in type_refs(ct) if base <= r < base + n] for ct in types]
+    local reach(a) = (seen = falses(n); stack = copy(inside[a]);
+                      while !isempty(stack); x = pop!(stack); seen[x] && continue; seen[x] = true; append!(stack, inside[x]); end; seen)
+    all(a -> all(reach(a)), 1:n) ||
+        _module_invalid(:add_type_group, "the types of a recursion group must each reach every other through references inside it")
     for g in mod.type_groups
         length(g) == n || continue
         all(_group_member_equal(mod.types[first(g) + k + 1], first(g), types[k + 1], base, n)
@@ -1183,6 +1195,10 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
     if !isempty(mod.types)
         write_section!(w, SECTION_TYPE) do section
             local groups = recursion_groups(mod)
+            # the groups the builder recorded as it added them are the section's (a module whose
+            # types were pushed past add_type!/add_type_group! has no complete record to compare)
+            sum(length, mod.type_groups; init=0) == length(mod.types) && groups != mod.type_groups &&
+                _module_invalid(:type_section, "the recursion groups the builder recorded differ from the section's strongly connected components")
             # the types some struct declares as its supertype (dart's hasAnySubtypes)
             local subtyped = Set{UInt32}(ct.supertype_idx for ct in mod.types
                                          if ct isa StructType && ct.supertype_idx !== nothing)

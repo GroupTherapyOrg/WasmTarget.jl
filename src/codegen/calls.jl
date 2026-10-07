@@ -2362,8 +2362,8 @@ has_intersect_type_not_kind(@nospecialize(T))::Bool = ccall(:jl_has_intersect_ty
 
 The lengths n for which NTuple{n,E}, E concrete, is a `T`: a list of `(:eq, k)` (n == k) and
 `(:ge, k)` (n >= k), empty when none; nothing when they are not such a list (a UnionAll over a
-length). A value of a concrete E is a `P` exactly when E <: P, so each parameter of a tuple
-type decides.
+length). jl_isa of a tuple is jl_subtype of its type (subtype.c), and NTuple{n,E} <: T is
+decided parameter by parameter, E <: P for each.
 parity(quarantine: Julia's runtime-length tuple is an NTuple{n,E} chosen by its length at run
 time; a dart record's shape is static.)
 """
@@ -2397,12 +2397,12 @@ function _isa_reject!(bld::InstrBuilder, ctx::AbstractCompilationContext, constr
 end
 
 """The i32 answer to `isa(x, check_type)` for a value in `local_idx` that is not a numbered
-class (not `\$JlBase`): a Julia type object, whose kind — DataType, Union, UnionAll,
-TypeVar — is its own wasm struct, or a `Memory`, which is a bare wasm array. OR of
-`ref.test` over the representations of the kinds and closed-world Memory classes that are
-subtypes of `check_type`; `0` when none is. When a Memory class under `check_type` shares
-its wasm array with one that is not (`Memory{Int64}`/`Memory{UInt64}` under
-`AbstractVector{Int64}`), no test can tell them apart and the `isa` rejects.
+class (not `\$JlBase`): a Julia type object, tested by emit_type_object_test! (X's identity
+for a pointer-unique `Type{X}`, else its kind, a TypeVar first), or a bare array (a Memory, a
+SimpleVector, a String's CodeUnits), tested by its array type; `0` when it is none under
+`check_type`. When a bare-array class under `check_type` shares its wasm array with one that is
+not (`Memory{Int64}`/`Memory{UInt64}` under `AbstractVector{Int64}`), no test can tell them
+apart and the `isa` rejects.
 parity(quarantine: Julia's type objects and Memory are values; WT represents a type
 object's kind as its own struct under \$JlType and a Memory as a wasm array, outside the
 numbered class hierarchy.)"""

@@ -98,7 +98,7 @@ with the per-clause status. A clause is never closed by argument.
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
   Planned: dev/MARCH.md 13.17 — a function's results checked at every return, casts, nulls,
   struct.new and conversions typed by the module, no raw byte as a value type, one subtype
-  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5, A4B1–A4B5, A5B9, A7B1).
+  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5, A4B1–A4B5, A5B9).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
@@ -113,7 +113,7 @@ with the per-clause status. A clause is never closed by argument.
   the docs site, by path or by the loader that walks its directory — and none records finished
   work. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `L130` `R35` `R3` `R5` `R7`
   `R14` `R15` `R27`. Planned: dev/MARCH.md 13.4, 13.5, 13.17 — the stale code and prose the
-  audits found (dev/AUDIT.md B6, S6, L8, A2P10, A4B7, A4B8, A4C8, A4E7, A4P7, A7P9).
+  audits found (dev/AUDIT.md B6, S6, L8, A2P10, A4B7, A4B8, A4C8, A4E7, A4P7).
 - **C10 · Fast, precise feedback.** `bash dev/lanes.sh` gives one verdict in minutes; the full
   CI matrix runs on every march branch and is the landing gate (`dev/land.sh merge`); a
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its

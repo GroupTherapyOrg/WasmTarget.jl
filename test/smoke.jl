@@ -1707,7 +1707,13 @@ _g("type_isa", Any[
     ("type_identity_isa_other_value", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(2)),
     ("type_identity_isa_other_type", (n::Int64) -> (v = Any[Float64, Int64]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
     ("type_identity_typeassert", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch; -7; end), Int64(1)),
+    # Type{Union{}} is tested as typeof(Union{}), as emit_isa swaps it first (A6B8)
+    ("type_bottom_isa", (n::Int64) -> (v = Any[Union{}, Int64]; v[n - 2] isa Type{Union{}} ? 1 : 2), Int64(3)),
+    ("type_bottom_isa_other", (n::Int64) -> (v = Any[Union{}, Int64]; v[n - 1] isa Type{Union{}} ? 1 : 2), Int64(3)),
     ("type_identity_typeassert_throws", (n::Int64) -> (v = Any[Int64, 2.5]; try; (v[n]::Type{Int64}) === Int64 ? 1 : 3; catch e; e isa TypeError ? -7 : -8; end), Int64(2)),
+])
+_xf("type_isa_equality", Any[
+    ("type_or_nothing_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Union{Nothing,Type{Int64}} ? 1 : 2), Int64(1)),
 ])
 # A closure entry tests a type-object argument as isa does (emit_type_object_test!): a
 # TypeVar first, whose `$kind` is never written and read as DataType's (dev/AUDIT.md A5B1: a
@@ -1716,10 +1722,9 @@ _g("type_isa", Any[
 const _SM_TV = TypeVar(:T)
 _g("type_object_rows", Any[
     ("typevar_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(2)),
+    # a closure row taking Type{Int64}: Int64's identity (A6B4 = A6C6)
+    ("type_identity_row", (n::Int64) -> (k = n; h(::Type{Int64}) = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(Int64)[])::Int64 + 10 * f(_sm_dh(n)[])::Int64), Int64(3)),
     ("datatype_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(1)),
-])
-_xf("type_isa_equality", Any[
-    ("type_or_nothing_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Union{Nothing,Type{Int64}} ? 1 : 2), Int64(1)),
 ])
 # getfield(x::T, f) with a Symbol known only at run time (a dispatch candidate of
 # getproperty(x, f::Symbol)): jl_f_getfield compares f with each field name in order and reads

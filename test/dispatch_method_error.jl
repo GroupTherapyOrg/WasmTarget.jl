@@ -47,6 +47,9 @@ gam(n::Int64) = (k = n; h(x::Union{Int64,String}) = 1 + 0k; h(x::Union{Int64,Flo
                  g = hide(h)[]; try; g(hide(n)[])::Int64; catch; -1; end)
 # a closure called with an AbstractVector{Int64} while a Memory{Int64} class is numbered
 struct WV; v::AbstractVector{Int64}; end
+# a closure row taking a Type{X} whose values are not one pointer (type equality, jl_isa)
+gte(n::Int64) = (k = n; h(::Type{Tuple{Int64,Integer}}) = 1 + 0k; h(x) = 2 + 0k; f = hide(h)[];
+                 f(hide(Tuple{Int64,T} where T<:Integer)[])::Int64)
 gab(n::Int64) = (k = n; g = hide(x -> length(x) + k)[]; w = hide(WV([1, 2]))[]::WV;
                  m = Memory{Int64}(undef, 2); g([1, 2, 3])::Int64 + g(w.v)::Int64 + length(m))
 end
@@ -145,6 +148,12 @@ end
     # the callable, never a WasmInternalError (dev/AUDIT.md A5C4, A6E8)
     @test M.gab(3) == 13
     let e = try; WasmTarget.compile(M.gab, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("admits a type object or a bare array", sprint(showerror, e))
+    end
+    # a Type{X} parameter jl_isa tests by type equality has no entry row: a WasmCompileError
+    # naming the callable (A6B4 = A6C6: it raised a WasmInternalError)
+    @test M.gte(3) == 1
+    let e = try; WasmTarget.compile(M.gte, (Int64,)); nothing; catch err; err; end
         @test e isa WasmTarget.WasmCompileError && occursin("admits a type object or a bare array", sprint(showerror, e))
     end
 end

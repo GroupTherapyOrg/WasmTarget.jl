@@ -77,6 +77,11 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test (Int(nxt):Int(nxt) + 1) in MBV.recursion_groups(m)
         @test_throws MBV.ModuleValidationError MBV.add_type_group!(m,
             MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(99), true), true)])])
+        # a recursion group's members are one strongly connected component (dev/AUDIT.md A7B1:
+        # a struct{} added as a group's member and again alone got two indices for one type)
+        @test_throws MBV.ModuleValidationError MBV.add_type_group!(m, MBV.CompositeType[
+            MBV.StructType(MBV.FieldType[]),
+            MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(length(m.types)), true), true)])])
         # formal(dev/formal/TypeIdentity.tla): a group equal to one in the section is that group
         # (wasm canonicalizes iso-recursive groups, so two indices would be one runtime type)
         local selfref(i, extra...) = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(i), true), true), extra...])

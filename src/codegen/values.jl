@@ -836,10 +836,11 @@ end
 """
     emit_isa_classid!(b, ctx, box_idx, check_type)
 
-`isa`/`typeof`/`===` discriminator for a boxed numeric: is the value the box AND is its
-classId (field 0) == `check_type`'s DFS id? Guarded by `ref.test` so a non-box value yields
-0 (no trap). Same-wasm-rep types SHARE `box_idx`, so this classId read — NOT `ref.test` of
-the struct — is what distinguishes Bool/Int8/Int16/Int32/Char. THE single discriminator.
+Is the value a `box_idx` struct (a numeric box, the classed string layout, a MemoryRef box,
+a closure's context) AND is its classId (field 0) `check_type`'s? Guarded by `ref.test`, so
+another value answers 0 (no trap). Classes sharing one layout (Bool/Int8/Int16/Int32/Char in
+the i32 box; String and Symbol) are told by the classId read, not the layout. A class whose
+values carry the object header is tested through the header (emit_isa_class_header!).
 parity(pkg/dart2wasm/lib/types.dart:434 Types.emitIsTest)
 """
 function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,

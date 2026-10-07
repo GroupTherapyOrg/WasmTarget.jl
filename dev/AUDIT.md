@@ -736,4 +736,12 @@ answers 16 and 1, and traps on the xfail. Found while fixing: (A7S1) a closure v
 representations, its captured-fields context while its type is known (outside the class
 hierarchy) and its closure object once erased; the header test alone answered false for the
 context, which smoke closures/erased_nested_mul caught (native 112, wasm -12), so a closure
-type's test accepts either; one representation is on MARCH 13.17.
+type's test accepts either; one representation is on MARCH 13.17. Batch 89 — A7B1:
+add_type_group! rejects members that are not one strongly connected component, and the writer
+compares the recorded groups with the section's (test/module_builder_validation.jl: the builder
+counterexample now raises). A7P8: smoke type_bottom_isa and type_bottom_isa_other (A6B8),
+type_identity_row (A6B4), and test/dispatch_method_error.jl gte (A6C6, a WasmCompileError where a
+WasmInternalError was); A6E6's Vararg tail and the externref arm's rejection stay untested (no
+Int64 program reaches either, MARCH 13.17). A7P9, A7B6, A7E6: the comment and docstrings say what
+the code does; A7E5's commit message stays as written (this entry corrects it). A7P10:
+type_object_rows follows type_isa's xfail.
