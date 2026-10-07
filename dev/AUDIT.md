@@ -894,4 +894,9 @@ between the two structs and trapped where native answers 7; convert_type! now bu
 runtime-length representation from the tuple's fields (`emit_fixed_to_vararg_tuple!`, the inverse
 of batch 93's narrowing), and any other value into such a slot rejects. Smoke runtime_length_tuple
 gains fixed_joins_runtime_length and runtime_length_joins_fixed; the old code traps on the first.
-A9E3 measured: the audit's program answers 5 as native does.
+A9E3 measured: the audit's program answers 5 as native does. Batch 98 — A7S1, stage 1: a
+closure type has one registration, its captured-fields context; register_struct_type! hands a
+closure type to register_closure_type!, where a struct field, a tuple element, a constant (Base's
+Fix2 and the like) or a local could register it as an ordinary class struct first (a third
+layout, decided by registration order). Probes 225/225 and smoke 730/730 unchanged: no case
+reached the third layout, so no case pins it.

@@ -248,6 +248,9 @@ end
 function register_struct_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Union{Nothing, StructInfo}
     # Already registered, or being registered (its entry holds a pending id)
     haskey(registry.structs, T) && return registry.structs[T]
+    # a closure type has one layout, its captured-fields context, whichever registrar reaches
+    # it first (MARCH 13.17 A7S1: a field, tuple, constant or local registered it as a class)
+    is_closure_type(T) && return register_closure_type!(mod, registry, T)
     return _register_struct_type_inner!(mod, registry, T)
 end
 
