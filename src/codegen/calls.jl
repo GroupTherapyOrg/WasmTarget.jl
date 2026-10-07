@@ -2195,33 +2195,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # anyref/structref value — use ref.test to check concrete box type.
             # This handles Union{Int32, Float64} where the value is boxed in anyref.
             local target_wasm_isa = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-            local _ck_box_wasm = julia_to_wasm_type(check_type)
-            if check_type <: Core.GenericMemoryRef
-                # a MemoryRef held as any value is its single-value struct, classed MemoryRef{T}
-                emit_isa_classid!(bld, ctx, register_memoryref_box!(ctx.mod, ctx.type_registry, check_type), check_type)
-            elseif (_ck_box_wasm === I32 || _ck_box_wasm === I64 || _ck_box_wasm === F32 || _ck_box_wasm === F64) &&
-               !(check_type <: Int128) && !(check_type <: UInt128)
-                # Numeric-box rep (Number subtypes AND Char etc.): route through the SINGLE-SOURCE
-                # discriminator (was ref.test of the box struct, which same-wasm-rep types share —
-                # emit_isa_classid! reads the classId field to distinguish Bool/Int8/Int16/Int32/Char).
-                local _box_wasm = _ck_box_wasm
-                local _box_idx = get(ctx.type_registry.numeric_boxes, _box_wasm,
-                                     get_numeric_box_type!(ctx.mod, ctx.type_registry, _box_wasm))
-                emit_isa_classid!(bld, ctx, _box_idx, check_type)
-            elseif check_type === String || check_type === Symbol
-                # String and Symbol share the classed string layout under their own classes
-                # (constants.dart:1556 visitSymbolConstant): isa tests the layout, then the classId
-                local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
-                emit_isa_classid!(bld, ctx, _str_idx, check_type)
+            # a class whose values are objects (a struct, a numeric box, the classed string
+            # layout, a MemoryRef box, a closure) is its header's classId, as dart's is checker
+            # loads it; a bare array, which has no header, is its array type (one path, A8E3)
+            if !is_bare_array_class(check_type)
+                emit_isa_class_header!(bld, ctx, check_type)
             elseif target_wasm_isa isa ConcreteRef
-                # a class is its classId, as dart's emitIsTest tests it: its wasm type index is a
-                # runtime type other classes may share, whichever are registered when this
-                # statement compiles; a bare array, which has no header, is its array type
-                if !is_bare_array_class(check_type)
-                    emit_isa_class_header!(bld, ctx, check_type)
-                else
-                    ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
-                end
+                ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
             else
                 _isa_reject!(bld, ctx, "isa(x, $(check_type)): $(check_type) has no runtime test for a $(isa2_val_wasm) value")
             end
@@ -3331,10 +3311,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
         # numeric (UInt32, Int64, etc.), unbox: any_convert_extern → ref.cast → struct.get
+        # an operand held as an externref has a class known only at run time: the arm that unboxed
+        # it at the operator's width with no class test is a rejection (dev/AUDIT.md A8E6, A3E6's
+        # twin: planted to raise, the smoke corpus still passed)
         if is_numeric_intrinsic && _is_externref_value(arg, ctx)
-            target_wasm = is_32bit ? I32 : I64
-            any_convert_extern!(fb)
-            emit_classid_unbox!(fb, ctx, target_wasm; nullable=true)
+            emit_unsupported_stub!(ctx, fb, :unsupported_method,
+                "`$(func)` on an operand held as an externref: its class is known only at run time";
+                idx=idx)
+            return append_builder!(b, fb)
         end
     end
 

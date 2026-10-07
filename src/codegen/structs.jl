@@ -32,7 +32,7 @@ are dart classes whose storage its runtime supplies.)
 function has_dedicated_representation(T::DataType)::Bool
     return T <: Tuple || T <: Array || T <: Core.GenericMemory || T <: Core.GenericMemoryRef ||
            T === Nothing ||
-           (T <: Base.CodeUnits && T.parameters[1] === UInt8 && T.parameters[2] === String)
+           is_string_codeunits(T)
 end
 
 """

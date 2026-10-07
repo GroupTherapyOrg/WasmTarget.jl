@@ -986,9 +986,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
     # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
     # array (same representation contract as Memory) — %new(CodeUnits, s)
     # compiles to s itself. Trim-collected string internals construct these.
-    if struct_type isa DataType && struct_type.name.name === :CodeUnits &&
-       length(struct_type.parameters) >= 2 && struct_type.parameters[1] === UInt8 &&
-       struct_type.parameters[2] === String && length(field_values) >= 1
+    if is_string_codeunits(struct_type) && length(field_values) >= 1
         emit_value!(b, field_values[1], ctx,
                     ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
         return b

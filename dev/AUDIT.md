@@ -806,4 +806,10 @@ A8E5 = A8P4: as found. Smoke dynamic_enrollment gains closure_parametric_type_po
 closure_unbounded_parameter, and test/dispatch_method_error.jl gtam: batch 90's code answers 2,
 rejects, and runs a body where native answers 1, 1 and -7. A8P6: A7B5 is on C7's Planned list
 (the A7C4 remainder stays with A3S3). Everything else (A8B4 = A8P10, A8B5, A8C4's trap, A8C5 =
-A8E4, A8C8, A8E3, A8E6, A8P2, A8P5): MARCH 13.17.
+A8E4, A8C8, A8E3, A8E6, A8P2, A8P5): MARCH 13.17. Batch 92 — A8E6: the externref intrinsic
+arm, planted to raise, left the smoke corpus passing; it unboxed at the operator's width with no
+class test and is a located rejection, as A3E6's twin was. A8E3: the AnyRef isa arm's three
+layout tests (MemoryRef box, numeric box, the classed string layout) are the one header test, as
+in the externref arm; every one of those classes carries the object header. A8C5: one predicate,
+`is_string_codeunits`, by Base's typename, answers the four sites that matched `:CodeUnits` by
+bare name; the representation itself (A8E4) stays on 13.17.

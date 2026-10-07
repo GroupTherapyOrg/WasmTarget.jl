@@ -48,7 +48,7 @@ with the per-clause status. A clause is never closed by argument.
   dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's six remaining inference questions answered by the plan (dev/AUDIT.md P3, E3,
   E4, E5, A2C3, A2C4, A2E4, A3C1, A3C3, A3C4, A3C6, A3C8, A4C4, A4C5, A4C6, A4E5, A5E5,
-  A5E8, A6C5, A6C7, A6E4, A8C5).
+  A5E8, A6C5, A6C7, A6E4, A8E4).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
@@ -92,7 +92,7 @@ with the per-clause status. A clause is never closed by argument.
   and then answers wrong, traps, or returns what the harness cannot read). Planned:
   dev/MARCH.md 13.0, 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
   the traps where Julia answers, and the audits' unlocated and lossy paths (dev/AUDIT.md A4E6, A3S1, A3S2, A3S3, A3P3, A3C7, M7, E9, A2C1,
-  A2C2, A2E5, A4P2, A6E3, A7E3, A7S1, A8C4, A8E3, A8E6, A7E4, A5C4).
+  A2C2, A2E5, A4P2, A6E3, A7E3, A7S1, A8C4, A7E4, A5C4).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).

@@ -2875,8 +2875,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
             end
         end
         return StructRef
-    elseif T isa DataType && T.name.name === :CodeUnits && length(T.parameters) >= 2 &&
-           T.parameters[1] === UInt8 && T.parameters[2] === String
+    elseif is_string_codeunits(T)
         # P6-trim: CodeUnits{UInt8,String} ≡ the byte array (identity wrapper).
         type_idx = get_string_array_type!(mod, registry)
         return ConcreteRef(type_idx, true)
