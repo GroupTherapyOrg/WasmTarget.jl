@@ -75,7 +75,7 @@
 (* type check passes); a differently-shaped one traps; an empty slot traps.  *)
 (* A wrapper's downcast of the receiver is modeled as succeeding: WT shares  *)
 (* one wasm struct type between Julia types of identical layout              *)
-(* (is_shared_wasm_type), so this is the reachable worst case.               *)
+(* (add_type!, add_type_group!), so this is the reachable worst case.       *)
 (*                                                                           *)
 (* Julia's dynamic call on a receiver tuple with NO matching method must     *)
 (* trap (MethodError).  dart never guards its virtual call -- static typing  *)

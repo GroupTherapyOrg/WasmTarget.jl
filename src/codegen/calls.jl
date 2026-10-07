@@ -2174,11 +2174,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 num!(bld, Opcode.I32_EQ)
             else
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                if target_wasm isa ConcreteRef &&
-                   is_shared_wasm_type(ctx.type_registry, target_wasm.type_idx, check_type)
-                    # a layout several classes share: the layout, then the classId
+                local _classed = classed_struct_idx(ctx.type_registry, check_type)
+                if _classed !== nothing
+                    # a class is its classId, as dart's emitIsTest tests it: its wasm type index
+                    # is a runtime type other classes may share
                     any_convert_extern!(bld)
-                    emit_isa_classid!(bld, ctx, target_wasm.type_idx, check_type)
+                    emit_isa_classid!(bld, ctx, _classed, check_type)
                 elseif target_wasm isa ConcreteRef
                     any_convert_extern!(bld)
                     # Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
@@ -2191,9 +2192,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                     any_convert_extern!(bld)
                     emit_isa_classid!(bld, ctx, box_type_idx, check_type)
                 else
-                    # Fallback: non-null check for non-concrete wasm types
-                    ref_is_null!(bld)
-                    num!(bld, Opcode.I32_EQZ)
+                    _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an externref value: $(check_type) has no class test (wasm type $(target_wasm))")
                 end
             end
         elseif isa2_val_wasm === AnyRef || isa2_val_wasm isa ConcreteRef || isa2_val_wasm === StructRef
@@ -2219,35 +2218,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 local _str_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
                 emit_isa_classid!(bld, ctx, _str_idx, check_type)
             elseif target_wasm_isa isa ConcreteRef
-                # Struct type: test against the concrete struct type.
-                # When multiple Julia types share the same WasmGC type index
-                # (due to identical field layouts), ref.test can't distinguish them.
-                # Use typeId field comparison: save value → ref.test layout → if match,
-                # reload → ref.cast → struct.get typeId → compare with target's ID.
-                if is_shared_wasm_type(ctx.type_registry, target_wasm_isa.type_idx, check_type)
-                    local _tid = ensure_type_id!(ctx.type_registry, check_type)
-                    # Also ensure all types sharing this index get IDs
-                    for (_ot, _oi) in registered_structs(ctx.type_registry)
-                        if _oi.wasm_type_idx == target_wasm_isa.type_idx && _ot !== check_type
-                            ensure_type_id!(ctx.type_registry, _ot)
-                        end
-                    end
-                    # Allocate temp anyref local for saving the value
-                    local _tmp_idx = UInt32(length(ctx.locals) + ctx.n_params)
-                    push!(ctx.locals, AnyRef)
-                    # Emit: local.tee $tmp → ref.test → if (i32) → reload+cast+typeId check → else 0 → end
-                    local_tee!(bld, _tmp_idx)
-                    ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
-                    if_!(bld; results=WasmValType[I32])  # result type i32
-                    # Inside if-true: reload, cast, get typeId, compare
-                    local_get!(bld, _tmp_idx)
-                    ref_cast!(bld, Int64(target_wasm_isa.type_idx), false)
-                    struct_get!(bld, target_wasm_isa.type_idx, UInt32(0), I32)  # field 0 = typeId
-                    i32_const!(bld, Int64(_tid))
-                    num!(bld, Opcode.I32_EQ)
-                    else_!(bld)
-                    i32_const!(bld, 0)  # false
-                    end_block!(bld)
+                # a class is its classId, as dart's emitIsTest tests it: its wasm type index is a
+                # runtime type other classes may share, whichever are registered when this
+                # statement compiles; a bare array, which has no header, is its array type
+                local _classed = classed_struct_idx(ctx.type_registry, check_type)
+                if _classed !== nothing
+                    emit_isa_classid!(bld, ctx, _classed, check_type)
                 else
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end

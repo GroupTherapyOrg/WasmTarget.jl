@@ -1653,6 +1653,21 @@ _g("isomorphic_recursive_classes", Any[
     ("isa_own_class", (n::Int64) -> (xs = Any[_SmLA(nothing, n), _SmLB(nothing, n)]; xs[n - 2] isa _SmLA ? 1 : 2), Int64(3)),
     ("field_through_other", (n::Int64) -> (b = _SmLB(_SmLB(nothing, n), 7); a = _SmLA(nothing, 1); b.next.v + a.v), Int64(3)),
 ])
+# A class test reads the classId, as dart's emitIsTest does: a struct's wasm type index is a
+# runtime type other classes may share, and which of them are registered when an isa compiles
+# depends on the order bodies compile (dev/AUDIT.md A6B1 = A6P2: a bare ref.test answered 1
+# where native answers 2, for one-field structs and for recursive ones, in either order)
+struct _SmPA; x::Int64; end
+struct _SmPB; x::Int64; end
+@noinline _sm_mkpb(n::Int64) = Any[_SmPB(n)]
+@noinline _sm_mkpa(n::Int64) = Any[_SmPA(n)]
+@noinline _sm_isla(@nospecialize(x)) = x isa _SmLA ? 1 : 2
+@noinline _sm_mklb(n::Int64) = (v = Any[nothing]; v[1] = _SmLB(nothing, n); v[1])
+_g("class_test_any_order", Any[
+    ("isa_before_sharer", (n::Int64) -> _sm_mkpb(n)[1] isa _SmPA ? 1 : 2, Int64(3)),
+    ("isa_both_orders", (n::Int64) -> (a = _sm_mkpa(n)[1] isa _SmPB ? 10 : 20; a + (_sm_mkpb(n)[1] isa _SmPA ? 1 : 2)), Int64(3)),
+    ("recursive_isa_in_callee", (n::Int64) -> _sm_isla(_sm_mklb(n)), Int64(3)),
+])
 # isa against `Type{X}` of an erased value, as Julia's emit_isa tests it: X's one type object
 # by identity where its values are pointer-unique (jl_pointer_egal); any other test that meets
 # `Type{…}` is type equality at run time (jl_isa), which rejects at its statement (dev/AUDIT.md

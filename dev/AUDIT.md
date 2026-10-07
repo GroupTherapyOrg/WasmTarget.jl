@@ -630,4 +630,10 @@ pins the lone type. A6B4, A6C6: the closure row's identity test asks jl_pointer_
 other `Type{X}` parameter is untestable. A6B2, A6P6: the merge is quarantined as wasm's
 iso-recursive equivalence, which WT needs because it numbers a type when it adds it. A6B6, A6B8,
 A6E6, A6P1, A6P4, A6P7 to A6P11 and the prose: as found. Everything else (A6B1, A6E1 to A6E4,
-A6C5, A6C7): MARCH 13.17.
+A6C5, A6C7): MARCH 13.17. Batch 83 — A6B1 = A6P2: an isa of a class whose values carry the
+class prefix tests its classId (emit_isa_classid!, through `classed_struct_idx`), as dart's is
+checker loads the classId and range-checks it; a bare array, which has no header, keeps its
+`ref.test`; is_shared_wasm_type, whose answer depended on which classes were registered when the
+isa compiled, is gone, and so is the externref arm's fallback that answered "not null" for a
+type with no class test (it rejects at its statement). Smoke group class_test_any_order: the old
+arms answer 1, 12 and 1 where native answers 2, 22 and 2.
