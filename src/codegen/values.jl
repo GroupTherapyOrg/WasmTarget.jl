@@ -444,6 +444,18 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
+    # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
+    # representation's header names Tuple{Vararg{E}}, a class no Julia value has: widened to a
+    # slot of any class, a class read would answer for that class, so it rejects here (the
+    # widenings Julia's IR shows reject at their statement, _erased_vararg_tuple_operand)
+    # (a known Julia source type decides: another struct may share the representation's layout)
+    if from isa ConcreteRef && (to === AnyRef || to === EqRef || to === StructRef || to === ExternRef) &&
+       (from_julia === nothing || (from_julia isa DataType && is_runtime_vararg_tuple_type(from_julia)))
+        local vt = vararg_tuple_of_struct(ctx.type_registry, from.type_idx)
+        vt === nothing || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "a runtime-length tuple ($(vt)) held as a value of any class: its class is " *
+            "NTuple{n,$(vararg_tuple_eltype(vt))} for the n it has at run time, which its representation does not carry")
+    end
     if !_wt_is_ref(from) && _wt_is_ref(to)
         # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
         # canonical {classId,value} struct (real classId when from_julia is known), then upcast
@@ -1124,18 +1136,6 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
         if mr_T isa DataType && mr_T <: Core.GenericMemoryRef && isconcretetype(mr_T)
             emit_memoryref_box!(b, ctx, val, mr_T)
             expected === ExternRef && extern_convert_any!(b)
-            return expected
-        end
-    end
-    # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
-    # representation's header names Tuple{Vararg{E}}, a class no Julia value has: held where
-    # any class may be, a class read would answer for that class, so it rejects here
-    if expected === AnyRef || expected === EqRef || expected === StructRef || expected === ExternRef
-        local vt_T = get_ssa_type(ctx, val)
-        if vt_T isa DataType && is_runtime_vararg_tuple_type(vt_T)
-            emit_unsupported_stub!(ctx, b, :unsupported_type,
-                "a runtime-length tuple ($(vt_T)) held as a value of any class: its class is " *
-                "NTuple{n,$(vararg_tuple_eltype(vt_T))} for the n it has at run time, which its representation does not carry")
             return expected
         end
     end

@@ -1446,8 +1446,8 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         # element E is not a Julia value's type (a value is an NTuple{n,E}), but WT gives
         # every length one {Object, data, size} representation (register_vararg_tuple_type!)
         # whose header names this class, which no value has: typeof rejects, an isa against a
-        # concrete tuple type tests its size, and a statement that widens it rejects (the
-        # routes still open are MARCH 13.17's, A6E1-A6E4)
+        # tuple type tests the lengths it admits, and a widening of it to a slot of any class
+        # rejects, at its statement or in convert_type! (its narrowing is MARCH 13.17's, A6E3)
         if is_runtime_vararg_tuple_type(T)
             push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return

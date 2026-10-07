@@ -1632,15 +1632,25 @@ _g("kind_isa", Any[
 # typeof, `===` and an erased slot answered for that class (dev/AUDIT.md A5E3: native 1, wasm
 # 2). isa tests its size; the rest reject at their statement
 @noinline _sm_mk(v::Vector{Int64}) = Core.tuple(v...)
+struct _SmMT; m::Memory{Int64}; t::Tuple{Int64}; end
 _g("runtime_length_tuple", Any[
     ("isa_ntuple_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
     ("isa_ntuple_other_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{2,Int64} ? 1 : 2, Int64(3)),
     ("isa_empty", (n::Int64) -> _sm_mk(Int64[]) isa Tuple{} ? n : 2, Int64(3)),
+    # against an abstract tuple type or a union, the lengths it admits (A6E1: the header's
+    # class answered 2 where native answers 1)
+    ("isa_least_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
+    ("isa_least_length_fails", (n::Int64) -> _sm_mk([n, 2, 3]) isa Tuple{Int64,Int64,Int64,Int64,Vararg{Int64}} ? 1 : 2, Int64(3)),
+    ("isa_union_of_lengths", (n::Int64) -> _sm_mk([n, 2, 3]) isa Union{Tuple{Int64},NTuple{3,Int64}} ? 1 : 2, Int64(3)),
+    # a struct whose layout is the representation's widens to Any as any struct does
+    ("same_layout_struct_erased", (n::Int64) -> (m = Memory{Int64}(undef, 1); m[1] = n; v = Any[_SmMT(m, (n,))]; (v[1]::_SmMT).t[1]), Int64(3)),
 ])
 _xf("runtime_length_tuple_class", Any[
     ("typeof_ntuple", (n::Int64) -> typeof(_sm_mk([n, 2, 3])) === Tuple{Int64,Int64,Int64} ? 1 : 2, Int64(3)),
     ("egal_ntuple", (n::Int64) -> _sm_mk([n, 2, 3]) === (3, 2, 3) ? 1 : 2, Int64(3)),
     ("erased_isa_ntuple", (n::Int64) -> Any[_sm_mk([n, 2, 3])][1] isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
+    # a failed typeassert's TypeError carries the value as `got`, a slot of any class (A6E2)
+    ("typeassert_got", (n::Int64) -> (try; _sm_mk([n, 2, 3])::NTuple{2,Int64}; 0; catch e; e isa TypeError && e.got isa NTuple{3,Int64} ? 1 : 2; end), Int64(3)),
 ])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId

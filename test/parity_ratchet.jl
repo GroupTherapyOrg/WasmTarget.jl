@@ -1896,7 +1896,7 @@ const LOCKS = [
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples, and isa of one against a concrete tuple type (Tuple{} included) tests its runtime arity; it never fabricates an empty tuple (restated 2026-10-06 when the Tuple{} test became every length's, A5E3)",
+    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples, and isa of one against a tuple type (Tuple{} included) tests its runtime arity against the lengths that type admits; it never fabricates an empty tuple (restated 2026-10-06 when the Tuple{} test became every length's, A5E3, and every tuple type's, A6E1)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
@@ -1905,7 +1905,7 @@ const LOCKS = [
                         "is_runtime_vararg_tuple_type",
                         "unsupported Vararg tuple layout",
                         "result_type=result_type",
-                        "it is one exactly when its size is that"]
+                        "so it is a T exactly for the lengths T admits"]
             forbidden = ["produces a Tuple{Vararg{Symbol}} which is checked",
                          "must emit a struct.new of the actual Tuple{} type"]
             all_src = calls_src * structs_src

@@ -577,6 +577,21 @@ function register_vararg_tuple_type!(mod::WasmModule, registry::TypeRegistry, T:
     return info
 end
 
+"""
+    vararg_tuple_of_struct(registry, idx) -> Union{Nothing, DataType}
+
+The runtime-length tuple type (`Tuple{Vararg{E}}`) whose representation is the wasm struct
+`idx`, or nothing: a widening of that representation to a slot of any class rejects
+(convert_type!).
+parity(quarantine: Julia's runtime-length Vararg tuple, see is_vararg_tuple_type.)
+"""
+function vararg_tuple_of_struct(registry::TypeRegistry, idx::Integer)::Union{Nothing, DataType}
+    for (T, info) in registered_structs(registry)
+        (T isa DataType && is_runtime_vararg_tuple_type(T) && info.wasm_type_idx == idx) && return runtime_vararg_canonical(T)
+    end
+    return nothing
+end
+
 # parity(class_info.dart:510 _createStructForRecordClass): a Julia tuple is dart's record.
 function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<:Tuple})::Union{Nothing, StructInfo}
     # Already registered?

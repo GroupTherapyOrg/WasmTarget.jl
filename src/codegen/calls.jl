@@ -2080,22 +2080,36 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         else
             ref_is_null!(bld)
         end
-    elseif check_type isa DataType && check_type <: Tuple && isconcretetype(check_type) &&
-           is_runtime_vararg_tuple_type(value_type) && check_type <: value_type
-        # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple): of a
-        # concrete tuple type under its static type, it is one exactly when its size is that
-        # type's length (its header's class, Tuple{Vararg{E}}, is no value's type)
-        local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
-        local size_info = ctx.type_registry.structs[Tuple{Int64}]
-        ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
-        struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2),
-                    ConcreteRef(size_info.wasm_type_idx, true))
-        struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
-        if isempty(check_type.parameters)
-            num!(bld, Opcode.I64_EQZ)
+    elseif check_type isa Type && is_runtime_vararg_tuple_type(value_type)
+        # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), E concrete,
+        # so it is a T exactly for the lengths T admits (its header's class, Tuple{Vararg{E}},
+        # is no value's type): a test of its size, or a rejection where T's lengths are not
+        # a list of exact and least lengths
+        local lens = tuple_lengths_admitting(check_type, vararg_tuple_eltype(value_type))
+        if lens === nothing
+            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): the lengths of a runtime-length tuple $(check_type) admits are not a list of exact and least lengths")
+        elseif isempty(lens)
+            drop!(bld)
+            i32_const!(bld, 0)
         else
-            i64_const!(bld, Int64(length(check_type.parameters)))
-            num!(bld, Opcode.I64_EQ)
+            local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
+            local size_info = ctx.type_registry.structs[Tuple{Int64}]
+            ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
+            struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2),
+                        ConcreteRef(size_info.wasm_type_idx, true))
+            struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+            local n_local = length(lens) > 1 ? allocate_local!(ctx, I64) : nothing
+            n_local === nothing || local_set!(bld, n_local)
+            for (i, (kind, k)) in enumerate(lens)
+                n_local === nothing || local_get!(bld, n_local)
+                if kind === :eq && k == 0
+                    num!(bld, Opcode.I64_EQZ)
+                else
+                    i64_const!(bld, Int64(k))
+                    num!(bld, kind === :eq ? Opcode.I64_EQ : Opcode.I64_GE_S)
+                end
+                i > 1 && num!(bld, Opcode.I32_OR)
+            end
         end
     elseif check_type isa DataType && (check_type <: GenericMemory || check_type === Core.SimpleVector) &&
            check_type in bare_array_partition(ctx.mod, ctx.type_registry, value_type).shared
@@ -2362,6 +2376,32 @@ parity(quarantine: Julia type objects are values compared by type equality; dart
 is a class test.)
 """
 has_intersect_type_not_kind(@nospecialize(T))::Bool = ccall(:jl_has_intersect_type_not_kind, Cint, (Any,), T) != 0
+
+"""
+    tuple_lengths_admitting(T, E) -> Union{Nothing, Vector{Tuple{Symbol, Int}}}
+
+The lengths n for which NTuple{n,E}, E concrete, is a `T`: a list of `(:eq, k)` (n == k) and
+`(:ge, k)` (n >= k), empty when none; nothing when they are not such a list (a UnionAll over a
+length). A value of a concrete E is a `P` exactly when E <: P, so each parameter of a tuple
+type decides.
+parity(quarantine: Julia's runtime-length tuple is an NTuple{n,E} chosen by its length at run
+time; a dart record's shape is static.)
+"""
+function tuple_lengths_admitting(@nospecialize(T), @nospecialize(E))::Union{Nothing, Vector{Tuple{Symbol, Int}}}
+    if T isa Union
+        local a, b = tuple_lengths_admitting(T.a, E), tuple_lengths_admitting(T.b, E)
+        return (a === nothing || b === nothing) ? nothing : vcat(a, b)
+    end
+    (T isa DataType && T <: Tuple) || return T === Any ? [(:ge, 0)] : (T isa DataType ? Tuple{Symbol, Int}[] : nothing)
+    local ps = collect(T.parameters)
+    if !isempty(ps) && ps[end] isa Core.TypeofVararg
+        local v = pop!(ps)
+        isdefined(v, :N) && return nothing      # Vararg{P,N} with N fixed normalizes away; a TypeVar N is not a list
+        all(P -> E <: P, ps) && E <: Base.unwrapva(v) || return Tuple{Symbol, Int}[]
+        return [(:ge, length(ps))]
+    end
+    return all(P -> E <: P, ps) ? [(:eq, length(ps))] : Tuple{Symbol, Int}[]
+end
 
 """A located rejection of an `isa` codegen cannot answer — never a constant false. The
 statement's operands are on `bld`; the trap after the recorded diagnostic makes the rest

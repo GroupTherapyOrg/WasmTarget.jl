@@ -636,4 +636,14 @@ checker loads the classId and range-checks it; a bare array, which has no header
 `ref.test`; is_shared_wasm_type, whose answer depended on which classes were registered when the
 isa compiled, is gone, and so is the externref arm's fallback that answered "not null" for a
 type with no class test (it rejects at its statement). Smoke group class_test_any_order: the old
-arms answer 1, 12 and 1 where native answers 2, 22 and 2.
+arms answer 1, 12 and 1 where native answers 2, 22 and 2. Batch 84 — A6E1: an isa of a
+runtime-length tuple against any tuple type tests the lengths that type admits (an NTuple{n,E}
+with E concrete is a T exactly for those lengths: a list of exact and least lengths,
+`tuple_lengths_admitting`, or a rejection where it is not one). A6E4, A6E2: the WT-internal
+widening check is one check in the coercion funnel (convert_type!, keyed on the
+representation's struct and trusting a known Julia source type, since another struct may share
+the layout), in place of emit_value!'s; it also rejects the failed typeassert's TypeError.got.
+The statement check stays for the widenings Julia's IR shows. Smoke runtime_length_tuple gains
+isa_least_length, isa_least_length_fails, isa_union_of_lengths and same_layout_struct_erased, and
+xfail typeassert_got: the old code answers 2 for the least-length and union tests where native
+answers 1, and compiles typeassert_got to a wrong answer. A6E3 stays on 13.17.
