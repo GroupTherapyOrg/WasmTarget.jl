@@ -1598,6 +1598,16 @@ _sm_wf(x::T) where {T<:Integer} = (T === Int64 ? 1 : 3)
 _sm_wf(x) = 2
 _sm_kd(::DataType) = 1
 _sm_kd(::Int64) = 2
+# Arithmetic on a value narrowed out of a Union (its class stated by Julia's IR) answers, and
+# an erased operand whose class only the run time knows rejects at its statement: the arm that
+# unboxed it at the operator's width with no class test is gone (dev/AUDIT.md A3E6)
+_g("narrowed_union_arithmetic", Any[
+    ("narrowed_uint64_rem", (n::Int64) -> (x = n > 0 ? UInt64(n) : nothing; x === nothing ? 0 : Int64(x % UInt64(3))), Int64(7)),
+    ("narrowed_int32_mul", (n::Int64) -> (x = n > 0 ? Int32(n) : nothing; x === nothing ? 0 : Int64(x * Int32(5))), Int64(3)),
+])
+_xf("erased_operand_arithmetic", Any[
+    ("erased_div_any", (n::Int64) -> (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2)))), Int64(9)),
+])
 _g("dynamic_enrollment", Any[
     ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
     ("tuple_getindex_erased", (n::Int64) -> (v = Any[(Float64(n),)]; Int64(v[1][1]::Float64)), Int64(3)),

@@ -744,4 +744,9 @@ type_identity_row (A6B4), and test/dispatch_method_error.jl gte (A6C6, a WasmCom
 WasmInternalError was); A6E6's Vararg tail and the externref arm's rejection stay untested (no
 Int64 program reaches either, MARCH 13.17). A7P9, A7B6, A7E6: the comment and docstrings say what
 the code does; A7E5's commit message stays as written (this entry corrects it). A7P10:
-type_object_rows follows type_isa's xfail.
+type_object_rows follows type_isa's xfail. Batch 90 — A3E6 (reopened by audit #5, A5P5): the arm
+in compile_call! that unboxed an operand held as any value at the operator's width, with no class
+test, is a located rejection; planted to reject every operand, it leaves the whole smoke corpus
+passing, so no case reached it with a class Julia's IR states, and the tail rebox it fed, dead with
+it, goes. Smoke narrowed_union_arithmetic pins arithmetic on a value narrowed out of a Union, and
+xfail erased_div_any the rejection.

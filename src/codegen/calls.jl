@@ -2741,7 +2741,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # 1.13 escaping-closure arithmetic emits valid operand bytes but the validator
     # sees an empty fragment stack and reports a false underflow.
     isempty(b.v.stack) || seed_input!(fb, copy(b.v.stack))
-    _boxed_operand_unboxed = false   # FUNCTION-TOP scope (a mid-function init sat in a closed scope — the tail arm read @isdefined=false on every call)
     # The callee the NIR boundary resolved ONCE (frontend/nir.jl): a function object when
     # the IR named it statically — through a global, an SSA alias of one, a `Core.Const`,
     # or a singleton-typed argument — a `GlobalRef` when that global is unbound, else the
@@ -3340,9 +3339,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # everything typed Any (e.g. `4 - %foldl` in Random.hash_seed) default
         # to the i64 opcodes but consume raw anyref.
         if (is_numeric_intrinsic || is_generic_arithmetic) && _is_boxed_numeric_operand(arg, ctx)
-            local _aa_target = is_32bit ? I32 : I64
-            emit_classid_unbox!(fb, ctx, _aa_target; nullable=true)
-            _boxed_operand_unboxed = true   # function-scoped (the tail rebox keys on this)
+            # an operand held as any value (an anyref local) whose class Julia's IR states as no
+            # one machine type: its class is known only at run time, and this arm unboxed it at
+            # the operator's width with no class test (dev/AUDIT.md A3E6); no smoke or lane case
+            # reaches it with a stated class
+            emit_unsupported_stub!(ctx, fb, :unsupported_method,
+                "`$(func)` on an operand held as any value ($(arg isa NirSSA ? arg.julia_type : "unknown")): its class is known only at run time";
+                idx=idx)
+            return append_builder!(b, fb)
         end
         # Unbox externref args for numeric intrinsics.
         # When a param/SSA has Wasm type externref but Julia IR uses it as
@@ -4301,26 +4305,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         unreachable!(_urb)  # structural trap after recorded unsupported
         fb = _urb   # discard-and-replace
         ctx.last_stmt_was_stub = true
-    end
-
-    # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT side of the anyref-OPERAND unbox above — a numeric
-    # arith result flowing into a ref-typed SSA local boxes through THE one producer (the
-    # scalar-replaced Core.Box accumulator cycle: unbox → op → BOX → store; dart convertType).
-    # Keyed on the FUNCTION-scoped flag — the old @isdefined-guarded read of a
-    # LOOP-scoped variable made this arm silently dead for every call since introduction.
-    if (@isdefined _boxed_operand_unboxed) && _boxed_operand_unboxed && !ctx.last_stmt_was_stub
-        local _dl = get(ctx.ssa_locals, idx, nothing)
-        if _dl !== nothing
-            local _doff = _dl - ctx.n_params
-            if _doff >= 0 && _doff < length(ctx.locals) && ctx.locals[_doff + 1] === AnyRef
-                local _boxed_result_jt = get(ctx.ssa_types, idx, arg_type)
-                (_boxed_result_jt isa Type && isconcretetype(_boxed_result_jt)) ||
-                    record_unsupported!(ctx, :unsupported_type,
-                        "boxed arithmetic result lacks a concrete Julia source type";
-                        idx=idx, detail=node)
-                emit_classid_box!(fb, ctx, is_32bit ? I32 : I64, _boxed_result_jt)
-            end
-        end
     end
 
     return append_builder!(b, fb)
