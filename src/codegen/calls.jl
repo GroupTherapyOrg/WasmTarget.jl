@@ -2111,7 +2111,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 i > 1 && num!(bld, Opcode.I32_OR)
             end
         end
-    elseif check_type isa DataType && (check_type <: GenericMemory || check_type === Core.SimpleVector) &&
+    elseif check_type isa DataType && is_bare_array_class(check_type) &&
            check_type in bare_array_partition(ctx.mod, ctx.type_registry, value_type).shared
         # a bare-array class is told only by an array type no other class the value may be
         # is; this one's is another's too (Memory{Int64} and Memory{UInt64})
@@ -2188,23 +2188,14 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 num!(bld, Opcode.I32_EQ)
             else
                 local target_wasm = get_concrete_wasm_type(check_type, ctx.mod, ctx.type_registry)
-                local _classed = classed_struct_idx(ctx.type_registry, check_type)
-                if _classed !== nothing
-                    # a class is its classId, as dart's emitIsTest tests it: its wasm type index
-                    # is a runtime type other classes may share
+                if !is_bare_array_class(check_type)
+                    # a class is its header's classId, as dart's is checker loads it
                     any_convert_extern!(bld)
-                    emit_isa_classid!(bld, ctx, _classed, check_type)
+                    emit_isa_class_header!(bld, ctx, check_type)
                 elseif target_wasm isa ConcreteRef
+                    # a bare array, which has no header, is its array type
                     any_convert_extern!(bld)
-                    # Use REF_TEST (non-nullable) instead of REF_TEST_NULL.
                     ref_test!(bld, Int64(target_wasm.type_idx), false)
-                elseif haskey(ctx.type_registry.numeric_boxes, target_wasm)
-                    local box_type_idx = ctx.type_registry.numeric_boxes[target_wasm]
-                    # F-ii: route through the SINGLE-SOURCE discriminator (was ref.test of the
-                    # box struct, which can't distinguish same-wasm-rep types that share it —
-                    # emit_isa_classid! reads the classId field instead).
-                    any_convert_extern!(bld)
-                    emit_isa_classid!(bld, ctx, box_type_idx, check_type)
                 else
                     _isa_reject!(bld, ctx, "isa(x, $(check_type)) of an externref value: $(check_type) has no class test (wasm type $(target_wasm))")
                 end
@@ -2235,9 +2226,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 # a class is its classId, as dart's emitIsTest tests it: its wasm type index is a
                 # runtime type other classes may share, whichever are registered when this
                 # statement compiles; a bare array, which has no header, is its array type
-                local _classed = classed_struct_idx(ctx.type_registry, check_type)
-                if _classed !== nothing
-                    emit_isa_classid!(bld, ctx, _classed, check_type)
+                if !is_bare_array_class(check_type)
+                    emit_isa_class_header!(bld, ctx, check_type)
                 else
                     ref_test!(bld, Int64(target_wasm_isa.type_idx), false)
                 end
@@ -2552,7 +2542,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         # a bare-array class (a Memory, a SimpleVector) is told apart only by an array type
         # no other class shares (emit_class_id!); a call with a candidate whose array type is
         # shared has no switch, and rejects at its statement where the switch would trap
-        (Tc <: GenericMemory || Tc === Core.SimpleVector) &&
+        is_bare_array_class(Tc) &&
             Tc in bare_array_partition(ctx.mod, ctx.type_registry, call_arg_types[dpos]).shared && return nothing
         cw = _function_type(ctx.mod, c.wasm_idx).params[dpos]
         (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing

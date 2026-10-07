@@ -92,7 +92,7 @@ with the per-clause status. A clause is never closed by argument.
   and then answers wrong, traps, or returns what the harness cannot read). Planned:
   dev/MARCH.md 13.0, 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
   the traps where Julia answers, and the audits' unlocated and lossy paths (dev/AUDIT.md A4E6, A3S1, A3S2, A3S3, A3P3, A3C7, M7, E9, A2C1,
-  A2C2, A2E5, A3E6, A4P2, A6E3, A7C2, A7E2, A7E3, A7E4, A5C4).
+  A2C2, A2E5, A3E6, A4P2, A6E3, A7E3, A7S1, A7E4, A5C4).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).

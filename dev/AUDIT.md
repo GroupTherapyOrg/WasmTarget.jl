@@ -723,4 +723,17 @@ A7B2 = A7P2: A5B3's premise was half true; dart brands equal flat class structs 
 which WT follows; dart's group comparison treats LA and LB as different, so it brands neither,
 and they are one wasm type in dart too; the quarantine on _group_member_equal and TypeIdentity.tla
 say so. A7B4, A7P7, A7P10's count: as found. Everything else (A7B1, A7B3 = A7E2, A7B5, A7B6, A7C2,
-A7E3, A7E4 = A6E4 remainder, A7E5, A7E6, A7P8, A7P9, A7P10's smoke place): MARCH 13.17.
+A7E3, A7E4 = A6E4 remainder, A7E5, A7E6, A7P8, A7P9, A7P10's smoke place): MARCH 13.17. Batch
+88 — A7C2 = A7E1 = A7P3: one predicate, `is_bare_array_class` (a Memory, a SimpleVector, a String's
+CodeUnits), answers every site that asks whether a class is a bare array: bare_array_partition,
+isa's shared-array arm, the closure rows, the vtable pre-pass, the candidate switch. A7E2 = A7B3: a
+class test reads the classId through the object header (`emit_isa_class_header!`: `$JlBase`, then
+its classId), as dart's is checker does, for every concrete class that is not a bare array, in both
+isa arms; `classed_struct_idx` and the externref arm's numeric-box branch, which it subsumes, go.
+Smoke class_test_any_order gains closure_isa_own_type and closure_codeunits_row, and
+shared_bare_arrays the xfail codeunits_isa_codeunits: the old code answers 26 and 2 where native
+answers 16 and 1, and traps on the xfail. Found while fixing: (A7S1) a closure value has two
+representations, its captured-fields context while its type is known (outside the class
+hierarchy) and its closure object once erased; the header test alone answered false for the
+context, which smoke closures/erased_nested_mul caught (native 112, wasm -12), so a closure
+type's test accepts either; one representation is on MARCH 13.17.

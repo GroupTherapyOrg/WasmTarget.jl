@@ -227,7 +227,7 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
             br_if!(tb, lbl)
             continue
         end
-        if Tj isa DataType && (Tj <: GenericMemory || Tj === Core.SimpleVector)
+        if Tj isa DataType && is_bare_array_class(Tj)
             local told = bare_array_partition(mod, registry, nothing).told
             local k = findfirst(p -> p[1] === Tj, told)
             k === nothing && throw(_closure_layout_error(closure_type, bodies,

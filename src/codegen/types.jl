@@ -986,21 +986,6 @@ ordered_type_constants(registry::TypeRegistry)::Vector{<:Pair} =
 # parity(quarantine: the program-derived order key for a Core.TypeName, see type_order_key.)
 typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))
 
-"""
-    classed_struct_idx(registry, T) -> Union{Nothing, UInt32}
-
-The wasm struct index of `T` when `T` is a registered struct whose values carry the class
-prefix (its classId at field 0), else nothing: an isa of such a class tests the classId
-(emit_isa_classid!), since its index is a runtime type other classes may share (add_type! and
-add_type_group! give a runtime type one index).
-parity(types.dart:907 IsCheckerCodeGenerator.generate): dart tests a class by its classId (loadClassId,
-emitClassIdRangeCheck).
-"""
-function classed_struct_idx(registry::TypeRegistry, @nospecialize(T))::Union{Nothing, UInt32}
-    local info = get(registry.structs, T, nothing)
-    (info isa StructInfo && info.field_offset >= 1) || return nothing
-    return info.wasm_type_idx
-end
 
 """
     ensure_type_id!(registry, T) -> Int32

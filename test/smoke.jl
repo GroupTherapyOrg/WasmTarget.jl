@@ -1572,6 +1572,7 @@ _xf("shared_bare_arrays", Any[
     # a String's CodeUnits is the String's byte array, Memory{UInt8}'s array type (dev/AUDIT.md
     # A5B2: both trapped, illegal cast, where native answers 2)
     ("codeunits_isa_memory", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; v[n - 2] isa Memory{UInt8} ? 1 : 2), Int64(3)),
+    ("codeunits_isa_codeunits", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; v[n - 1] isa Base.CodeUnits{UInt8,String} ? 1 : 2), Int64(3)),
     ("codeunits_typeof", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; typeof(v[n - 2]) === Memory{UInt8} ? 1 : 2), Int64(3)),
 ])
 # A tuple is typed by its elements' runtime types (jl_f_tuple): a type element is its kind, so
@@ -1688,6 +1689,11 @@ struct _SmPB; x::Int64; end
 @noinline _sm_isla(@nospecialize(x)) = x isa _SmLA ? 1 : 2
 @noinline _sm_mklb(n::Int64) = (v = Any[nothing]; v[1] = _SmLB(nothing, n); v[1])
 _g("class_test_any_order", Any[
+    # a closure value is not its captured-fields struct: its header's classId is its class
+    # (dev/AUDIT.md A7E2: native 16, wasm 26)
+    ("closure_isa_own_type", (n::Int64) -> (k = n; c = x -> x + k; g = _sm_dh(c)[]; (g isa typeof(c) ? 10 : 20) + g(n)::Int64), Int64(3)),
+    # a closure row taking a String's CodeUnits, a bare array (A7C2: it never matched, native 1, wasm 2)
+    ("closure_codeunits_row", (n::Int64) -> (k = n; h(x::Base.CodeUnits{UInt8,String}) = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(codeunits("ab"))[])::Int64), Int64(3)),
     ("isa_before_sharer", (n::Int64) -> _sm_mkpb(n)[1] isa _SmPA ? 1 : 2, Int64(3)),
     ("isa_both_orders", (n::Int64) -> (a = _sm_mkpa(n)[1] isa _SmPB ? 10 : 20; a + (_sm_mkpb(n)[1] isa _SmPA ? 1 : 2)), Int64(3)),
     ("recursive_isa_in_callee", (n::Int64) -> _sm_isla(_sm_mklb(n)), Int64(3)),

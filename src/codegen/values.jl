@@ -863,6 +863,44 @@ function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
 end
 
 """
+    emit_isa_class_header!(b, ctx, T) -> b
+
+Replace the reference on the stack with the i32 answer to whether it is a value of the concrete
+class `T`: an object (`\$JlBase`) whose header classId is `T`'s, or, for a closure type, its
+captured-fields context, which carries the classId at field 0 outside the class hierarchy.
+Anything else (a type object, a bare array, a host value) is not. dart's is checker loads the classId from the
+top struct and compares it, whichever struct the class's own values are.
+parity(types.dart:907 IsCheckerCodeGenerator.generate): loadClassId, then the classId compare.
+"""
+function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
+    local base = ctx.type_registry.base_struct_idx
+    base === nothing && error("a class test needs the class base struct")
+    local tid = ensure_type_id!(ctx.type_registry, T)
+    local tmp = allocate_local!(ctx, AnyRef)
+    local_set!(b, tmp)
+    # an object (`$JlBase`) whose header classId is T's
+    local_get!(b, tmp)
+    ref_test!(b, Int64(base), false)
+    if_!(b; results=WasmValType[I32])
+    local_get!(b, tmp)
+    emit_typeof!(b, base)
+    i32_const!(b, Int64(tid))
+    num!(b, Opcode.I32_EQ)
+    else_!(b)
+    i32_const!(b, 0)
+    end_block!(b)
+    if is_closure_type(T)
+        # a closure whose type is known is held as its captured-fields context, outside the
+        # class hierarchy (register_closure_type!), and as its closure object once erased:
+        # either carries T's classId at field 0 (MARCH 13.17, A7S1: one representation)
+        local_get!(b, tmp)
+        emit_isa_classid!(b, ctx, register_closure_type!(ctx.mod, ctx.type_registry, T).wasm_type_idx, T)
+        num!(b, Opcode.I32_OR)
+    end
+    return b
+end
+
+"""
     emit_return_coerced!(b, val, ctx)
 
 Emit a ReturnNode value `val` coerced to the function's wasm return type. Extracted from ~9
