@@ -543,6 +543,15 @@ IR types otherwise (a return, a phi, a callee's parameter, a dynamic call, a Mem
 field: `_erased_vararg_tuple_operand`) rejects, and so does WT's own widening of it to a slot of
 any class (emit_value!). Smoke group runtime_length_tuple and xfails runtime_length_tuple_class:
 the old code answers isa_ntuple_length 2 where native answers 1, and compiles the three xfails
-to wrong answers (typeof, `===`, an Any vector's isa). Smoke group type_isa: the old
+to wrong answers (typeof, `===`, an Any vector's isa). Batch 81 — A5E4 = A5B3: model first,
+TypeIdentity.tla claims two distinct type indices are never one runtime type under wasm's
+iso-recursive canonicalization; its Broken instance (a group added without looking for an
+equal one) is the old code, and TLC's counterexample is two self-referential single-member
+groups. add_type_group! returns the first index of an equal recursion group already in the
+section (`_group_member_equal`, dart's _areGroupsStructurallyEqual: a reference inside the
+group by position, outside by index), and finish_pending! takes its members' indices from
+it. Smoke group isomorphic_recursive_classes: the old builder answers isa_other_class 1 where
+native answers 2. dart instead brands the equal groups so each class keeps its own type
+(A5B3 remainder, MARCH 13.17). Smoke group type_isa: the old
 lowering answers 2 and -7 where native answers 1; xfail type_or_nothing_isa, which the old
 lowering answered wrong, rejects.

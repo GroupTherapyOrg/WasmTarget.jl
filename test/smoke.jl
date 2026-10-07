@@ -1637,6 +1637,17 @@ _xf("runtime_length_tuple_class", Any[
     ("egal_ntuple", (n::Int64) -> _sm_mk([n, 2, 3]) === (3, 2, 3) ? 1 : 2, Int64(3)),
     ("erased_isa_ntuple", (n::Int64) -> Any[_sm_mk([n, 2, 3])][1] isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
 ])
+# Two structurally equal self-referential structs are one wasm type (iso-recursive
+# canonicalization): the builder gives them one index, so an isa tells them by classId
+# (dev/AUDIT.md A5E4 = A5B3: two indices for one type, and `ref.test` answered 1 where native
+# answers 2)
+mutable struct _SmLA; next::Union{Nothing,_SmLA}; v::Int64; end
+mutable struct _SmLB; next::Union{Nothing,_SmLB}; v::Int64; end
+_g("isomorphic_recursive_classes", Any[
+    ("isa_other_class", (n::Int64) -> (xs = Any[_SmLA(nothing, n), _SmLB(nothing, n)]; xs[n - 1] isa _SmLA ? 1 : 2), Int64(3)),
+    ("isa_own_class", (n::Int64) -> (xs = Any[_SmLA(nothing, n), _SmLB(nothing, n)]; xs[n - 2] isa _SmLA ? 1 : 2), Int64(3)),
+    ("field_through_other", (n::Int64) -> (b = _SmLB(_SmLB(nothing, n), 7); a = _SmLA(nothing, 1); b.next.v + a.v), Int64(3)),
+])
 _g("type_isa", Any[
     ("type_identity_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
     ("type_identity_isa_other_value", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(2)),

@@ -77,6 +77,23 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test (Int(nxt):Int(nxt) + 1) in MBV.recursion_groups(m)
         @test_throws MBV.ModuleValidationError MBV.add_type_group!(m,
             MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(99), true), true)])])
+        # formal(dev/formal/TypeIdentity.tla): a group equal to one in the section is that group
+        # (wasm canonicalizes iso-recursive groups, so two indices would be one runtime type)
+        local selfref(i, extra...) = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(i), true), true), extra...])
+        local la_at = UInt32(length(m.types))
+        @test MBV.add_type_group!(m, MBV.CompositeType[selfref(la_at, MBV.FieldType(MBV.I64, true))]) == la_at
+        local lb_at = UInt32(length(m.types))
+        @test MBV.add_type_group!(m, MBV.CompositeType[selfref(lb_at, MBV.FieldType(MBV.I64, true))]) == la_at
+        @test length(m.types) == lb_at                       # nothing added
+        # another field: another type
+        @test MBV.add_type_group!(m, MBV.CompositeType[selfref(lb_at, MBV.FieldType(MBV.I32, true))]) == lb_at
+        # an outside reference into the equal group's range is not an inside reference
+        local lc_at = UInt32(length(m.types))
+        @test MBV.add_type_group!(m, MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(length(m.types)), true), true),
+                                                                     MBV.FieldType(MBV.ConcreteRef(UInt32(length(m.types)), true), true)])]) == lc_at
+        local ld_at = UInt32(length(m.types))
+        @test MBV.add_type_group!(m, MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(lc_at, true), true),
+                                                                     MBV.FieldType(MBV.ConcreteRef(ld_at, true), true)])]) == ld_at
         # a section whose cycle is split by another type, or that refers forward outside a
         # cycle, has no valid recursion groups
         split = MBV.WasmModule()

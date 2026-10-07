@@ -226,7 +226,10 @@ function finish_pending!(mod::WasmModule, registry::TypeRegistry, id::UInt32, ct
         for (i, m) in enumerate(members)
             real[m] = base + UInt32(i - 1)
         end
-        add_type_group!(mod, CompositeType[_resolve_pending(p.types[m], real) for m in members])
+        local got = add_type_group!(mod, CompositeType[_resolve_pending(p.types[m], real) for m in members])
+        for (i, m) in enumerate(members)
+            real[m] = got + UInt32(i - 1)   # an equal group already in the section is that group
+        end
     end
     for m in members
         for (field, key) in p.slots[m]

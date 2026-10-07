@@ -616,8 +616,12 @@ end
     add_type_group!(mod, types) -> first index
 
 Add types that refer to one another (a strongly connected component of the type graph) at
-consecutive indices, without structural deduplication: each may refer to any of them and to
-every type defined before them.
+consecutive indices: each may refer to any of them and to every type defined before them. A
+recursion group already in the section that is equal to them, member by member (a reference
+inside the group by its position, one outside it by its index), is the same runtime type under
+wasm's iso-recursive canonicalization, so its first index is returned and nothing is added: an
+index is a runtime type, as add_type! keeps it for a single type.
+formal(dev/formal/TypeIdentity.tla): two distinct indices are never one runtime type.
 parity(pkg/wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct): the types
 are defined, and their recursion group follows from the graph (recursion_groups).
 """
@@ -626,11 +630,48 @@ function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
     for ct in types
         _check_refs_defined(mod, ct, base + length(types))
     end
+    local n = length(types)
+    for g in recursion_groups(mod)
+        length(g) == n || continue
+        all(_group_member_equal(mod.types[first(g) + k + 1], first(g), types[k + 1], base, n)
+            for k in 0:n-1) && return UInt32(first(g))
+    end
     append!(mod.types, types)
     for ct in types
         ct isa StructType && _validate_struct_subtype!(mod, ct)
     end
     return UInt32(base)
+end
+
+"""
+    _group_member_equal(a, abase, b, bbase, n) -> Bool
+
+Whether member `a` of the recursion group at `abase` and member `b` of the group at `bbase`,
+both `n` long, are the same type under wasm's iso-recursive canonicalization: the same kind,
+mutability and value types, a reference inside its group matching only the one at the same
+position inside the other, a reference outside it only the same index.
+parity(pkg/wasm_builder/lib/src/builder/types.dart:106 _RecGroupBuilder._areGroupsStructurallyEqual)
+"""
+function _group_member_equal(a::CompositeType, abase::Integer, b::CompositeType, bbase::Integer, n::Integer)::Bool
+    local inside(r, base) = base <= r < base + n
+    local idx_eq(ra, rb) = inside(ra, abase) ? (inside(rb, bbase) && ra - abase == rb - bbase) :
+                                               (!inside(rb, bbase) && ra == rb)
+    local vt_eq(x, y) = (x isa ConcreteRef && y isa ConcreteRef) ?
+        (x.nullable == y.nullable && idx_eq(x.type_idx, y.type_idx)) :
+        (!(x isa ConcreteRef) && !(y isa ConcreteRef) && x == y)
+    local f_eq(x, y) = x.mutable_ == y.mutable_ && vt_eq(x.valtype, y.valtype)
+    if a isa StructType && b isa StructType
+        (a.supertype_idx === nothing) == (b.supertype_idx === nothing) || return false
+        a.supertype_idx === nothing || idx_eq(a.supertype_idx, b.supertype_idx) || return false
+        return length(a.fields) == length(b.fields) && all(f_eq(x, y) for (x, y) in zip(a.fields, b.fields))
+    elseif a isa ArrayType && b isa ArrayType
+        return f_eq(a.elem, b.elem)
+    elseif a isa FuncType && b isa FuncType
+        return length(a.params) == length(b.params) && length(a.results) == length(b.results) &&
+               all(vt_eq(x, y) for (x, y) in zip(a.params, b.params)) &&
+               all(vt_eq(x, y) for (x, y) in zip(a.results, b.results))
+    end
+    return false
 end
 
 """
