@@ -973,4 +973,13 @@ answers 1. Probes: five string probes change, the same types renumbered and the 
 dummy-context test (diff kept, resume-notes/b99). A10B6, A10B7, A10B8, A10B9, A10C5, A10C7, A10E7,
 A10P4, A10P6, A10P9, A10P10, A10P11, A10P12, A10P13: as found. A10C4: measured right. A10C6:
 batch 98 reverted, the branches are A7S1's. A10E8 = A10P5: smoke closure_in_field. Everything
-else (A10E6): MARCH 13.17.
+else (A10E6): MARCH 13.17. Batch 100 — A7S1, stages 2 and 3 as Julia's
+value semantics allow: every closure context erased into a slot of any class becomes its object
+(maybe_wrap_closure!; a closure no dynamic call reaches gets the empty vtable,
+get_empty_closure_vtable!), including a heterogeneous tuple's field read at a run-time index,
+which pushed the context bare; a narrowing to a context unwraps an object whether or not the
+module has vtables. With no context left at an erased position, the class read, typeof, isa and
+the class-header test lose their context alternatives, and register_struct_type! sends a closure
+type to its context again (batch 98's one registration, now safe). Smoke 750/750 and probes
+225/225 unchanged; with the context wrap removed, closure_values' typeof_erased_fix2,
+typeof_erased_fix2_held and isa_erased_fix2 trap or answer 2.

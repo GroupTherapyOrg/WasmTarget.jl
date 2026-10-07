@@ -617,10 +617,9 @@ nothing on an upcast; `ref.as_non_null` when only nullability blocks it; otherwi
 `ref.cast` to `to`'s heap type with `to`'s nullability — a concrete index, or an abstract
 GC kind (`ref.cast null` for the nullable shorthand, `ref.cast` for a NonNullAbstractRef).
 A downcast to a CLOSURE's captured struct may receive the closure OBJECT (the erasure seam
-wrapped it): unwrap via `.context` when the runtime value is the object, cast directly
-otherwise. The unwrap exists only where wrapping exists — no vtable globals in the module
-means no closure object can flow, so the plain cast keeps Base-internal closure structs'
-emission unchanged.
+wraps every context, maybe_wrap_closure!): unwrap via `.context` when the runtime value is the
+object, cast directly otherwise (dart reads a closure value's context, field 2, at a direct
+call, code_generator.dart:2656 _generateDirectClosureCall).
 parity(translator.dart:1597 convertType): the ref→ref arm — ref.as_non_null when only
 nullability blocks the upcast (:1614-1616), else ref.cast (:1619).
 """
@@ -661,18 +660,17 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
         local_get!(b, v); ref_cast!(b, Int64(to.type_idx), to.nullable)
         end_block!(b)
     elseif to isa ConcreteRef
-        local _cbase = ctx.type_registry.closure_base_idx
-        local _cvg = ctx.type_registry.closure_vtable_globals
-        local _to_closure = _cbase !== nothing && _cvg !== nothing && !isempty(_cvg) && begin
+        local _to_closure = begin
             local _tcj = nothing
             for (T, info) in registered_structs(ctx.type_registry)
-                if info.wasm_type_idx == to.type_idx && is_closure_type(T)
+                if info.wasm_type_idx == to.type_idx && is_closure_type(T) && info.field_offset == 1
                     _tcj = T; break
                 end
             end
             _tcj !== nothing
         end
         if _to_closure
+            local _cbase = get_closure_base_struct!(ctx.mod, ctx.type_registry)
             # if (ref.test base) → base.context → cast; else → cast direct
             local _uw = allocate_local!(ctx, AnyRef)
             local_tee!(b, UInt32(_uw))
@@ -923,15 +921,14 @@ end
     emit_isa_class_header!(b, ctx, T) -> b
 
 Replace the reference on the stack with the i32 answer to whether it is a value of the concrete
-class `T`: an object (`\$JlBase`) whose header classId is `T`'s, or, for a closure type, its
-captured-fields context, which carries the classId at field 0 outside the class hierarchy.
-Anything else (a type object, a bare array, a host value) is not. dart's is checker loads the classId from the
+class `T`: an object (`\$JlBase`) whose header classId is `T`'s (a closure of any class is its
+closure object, maybe_wrap_closure!). Anything else (a type object, a bare array, a host value)
+is not. dart's is checker loads the classId from the
 top struct and compares it, whichever struct the class's own values are.
 parity(types.dart:907 IsCheckerCodeGenerator.generate): loadClassId, then the classId compare.
-The `ref.test \$JlBase` before it and the closure-context alternative: parity(quarantine: a
-value WT holds as any value may be a type object (a `\$JlType` without the class header), a bare
-array or a closure's context, none of them a header-carrying object; dart's every value of a top
-type, its type objects included, is one.)
+The `ref.test \$JlBase` before it: parity(quarantine: a value WT holds as any value may be a
+type object (a `\$JlType` without the class header) or a bare array, neither a header-carrying
+object; dart's every value of a top type, its type objects included, is one.)
 """
 function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
     local base = ctx.type_registry.base_struct_idx
@@ -950,14 +947,6 @@ function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext
     else_!(b)
     i32_const!(b, 0)
     end_block!(b)
-    if is_closure_type(T)
-        # a closure whose type is known is held as its captured-fields context, outside the
-        # class hierarchy (register_closure_type!), and as its closure object once erased:
-        # either carries T's classId at field 0 (MARCH 13.17, A7S1: one representation)
-        local_get!(b, tmp)
-        emit_isa_classid!(b, ctx, register_closure_type!(ctx.mod, ctx.type_registry, T).wasm_type_idx, T)
-        num!(b, Opcode.I32_OR)
-    end
     return b
 end
 

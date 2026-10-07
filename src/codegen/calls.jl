@@ -2496,29 +2496,15 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
         _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
         return nothing
     end
-    # a closure of a class under check_type held as its captured-fields context, outside the
-    # class hierarchy, carries its classId at field 0 (MARCH 13.17 A7S1: until a closure is one
-    # object, as in emit_isa_class_header!); a closure type registered as a class is a `$JlBase`
-    local contexts = Tuple{UInt32,Any}[]
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
-                                C -> C isa DataType && is_closure_type(C) && C <: check_type)
-        local info = register_closure_type!(ctx.mod, reg, C)
-        info.field_offset == 1 && push!(contexts, (info.wasm_type_idx, C))
-    end
-    # a value that is no type object is a closure context or bare array under check_type, or not a T
+    # a value that is no type object is one of the bare arrays under check_type, or not a T
     emit_type_object_test!(bld, ctx.mod, reg, local_idx, check_type, () -> allocate_local!(ctx, I32);
-        otherwise = b -> if isempty(kinds) && isempty(contexts)
+        otherwise = b -> if isempty(kinds)
             i32_const!(b, 0)
         else
             for (i, idx) in enumerate(kinds)
                 local_get!(b, UInt32(local_idx))
                 ref_test!(b, Int64(idx), false)
                 i > 1 && num!(b, Opcode.I32_OR)
-            end
-            for (i, (idx, C)) in enumerate(contexts)
-                local_get!(b, UInt32(local_idx))
-                emit_isa_classid!(b, ctx, idx, C)
-                (i > 1 || !isempty(kinds)) && num!(b, Opcode.I32_OR)
             end
         end)
     return nothing

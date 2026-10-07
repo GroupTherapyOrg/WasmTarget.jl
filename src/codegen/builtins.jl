@@ -1716,9 +1716,8 @@ end
 
 The classId of the erased value on the stack, whose static type is `T`: a classed value's
 header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
-header), the id of the one closed-world class whose array type it is (bare_array_partition),
-or, for a closure held as its captured-fields context (no header either, MARCH 13.17 A7S1),
-the classId at the context's field 0.
+header), the id of the one closed-world class whose array type it is (bare_array_partition).
+A closure of any class is its object (maybe_wrap_closure!), whose header names its class.
 parity(code_generator.dart:6076 loadClassId)
 """
 function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T);
@@ -1726,27 +1725,13 @@ function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospe
     local reg = ctx.type_registry
     local base_idx = reg.base_struct_idx
     local bare = arrays ? bare_array_partition(ctx.mod, reg, T).told : Tuple{Type,UInt32}[]
-    local contexts = UInt32[]
-    local S = T === nothing ? Any : T
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key,
-                                C -> C isa DataType && is_closure_type(C) && typeintersect(C, S) !== Union{})
-        local info = register_closure_type!(ctx.mod, reg, C)
-        info.field_offset == 1 && !(info.wasm_type_idx in contexts) && push!(contexts, info.wasm_type_idx)
-    end
-    isempty(bare) && isempty(contexts) && return emit_typeof!(b, base_idx)
+    isempty(bare) && return emit_typeof!(b, base_idx)
     local v = allocate_local!(ctx, AnyRef)
     local_set!(b, v)
     local done = block!(b; results=WasmValType[I32])
     for (C, arr) in bare
         local_get!(b, v); ref_test!(b, Int64(arr), false)
         if_!(b); i32_const!(b, Int64(ensure_type_id!(reg, C))); br!(b, done); end_block!(b)
-    end
-    for cx in contexts
-        local_get!(b, v); ref_test!(b, Int64(cx), false)
-        if_!(b)
-        local_get!(b, v); ref_cast!(b, Int64(cx), false); struct_get!(b, cx, UInt32(0), I32)
-        br!(b, done)
-        end_block!(b)
     end
     local_get!(b, v)
     emit_typeof!(b, base_idx)
@@ -2705,10 +2690,16 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                                         emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
                                     elseif fw === ExternRef
                                         any_convert_extern!(_hetb)
+                                    elseif is_closure_type(elem_types[i + 1])
+                                        # a closure's captured-fields context (no class header)
+                                        # becomes its object (maybe_wrap_closure!); a function's
+                                        # singleton is a classed object already
+                                        coerce_stack_top!(_hetb, AnyRef, ctx; from_julia=elem_types[i + 1])
                                     end
-                                    # ConcreteRef/StructRef field is already anyref-compatible
+                                elseif union_wasm === StructRef && is_closure_type(elem_types[i + 1])
+                                    coerce_stack_top!(_hetb, StructRef, ctx; from_julia=elem_types[i + 1])
                                 end
-                                # union_wasm === StructRef / numeric: push as-is.
+                                # union_wasm numeric: push as-is.
                             end
                             # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
                             for i in 0:(n_fields - 2)

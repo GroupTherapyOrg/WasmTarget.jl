@@ -511,6 +511,27 @@ function closure_vtable(mod::WasmModule, registry::TypeRegistry, closure_type::T
 end
 
 """
+    get_empty_closure_vtable!(mod, registry) -> UInt32
+
+The vtable global of a closure whose type no dynamic call reaches (the pre-pass built it no
+vtable): the arity-0 vtable struct with its one entry null. Its object is still the closure's
+value of any class, carrying the class header; a dynamic call of it traps at the entry's cast,
+as one of a value that is no closure does (A3S1).
+parity(closures.dart:209 ClosureLayouter): dart builds every closure's vtable, each
+closure being callable; a Julia callable a dynamic call never reaches has none in the closed
+world, so its entries are null.
+"""
+function get_empty_closure_vtable!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.empty_closure_vtable_global !== nothing && return registry.empty_closure_vtable_global
+    local vt_struct = get_closure_vtable_struct!(mod, registry, 0)
+    local init = UInt8[0xD0, 0x70, Opcode.GC_PREFIX, 0x00]    # ref.null func; struct.new
+    append!(init, encode_leb128_unsigned(UInt64(vt_struct)))
+    local g = add_global_ref!(mod, vt_struct, false, init; nullable=false)
+    registry.empty_closure_vtable_global = g
+    return g
+end
+
+"""
     emit_closure_wrap!(b, ctx, closure_type, body_idx, body_params, body_results)
 
 The captured struct is ON THE STACK; wraps it into the closure OBJECT
@@ -525,9 +546,17 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
     # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
     # would add functions mid-body-compile (the index-freeze skew).
     local cache = ctx.type_registry.closure_vtable_globals
-    (cache !== nothing && haskey(cache, closure_type)) || return nothing
-    g, _ = closure_vtable(ctx.mod, ctx.type_registry, closure_type,
-                          length(body_params) - (takes_context ? 1 : 0))
+    local g
+    if cache !== nothing && haskey(cache, closure_type)
+        g, _ = closure_vtable(ctx.mod, ctx.type_registry, closure_type,
+                              length(body_params) - (takes_context ? 1 : 0))
+    elseif takes_context
+        # a closure no dynamic call reaches is still an object once erased: its class header
+        # is what every class read of a value of any class reads (MARCH 13.17 A7S1)
+        g = get_empty_closure_vtable!(ctx.mod, ctx.type_registry)
+    else
+        return nothing   # a function's singleton is a classed object already
+    end
     # stack: [captured] → {classId, identityHash=0, context, vtable, functionType}
     local ctx_scratch = allocate_local!(ctx, AnyRef)
     if takes_context
@@ -625,7 +654,14 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     from_julia <: Function || return false
     haskey(ctx.type_registry.structs, from_julia) || return false
     local body = _closure_body_for(ctx, from_julia)
-    body === nothing && return false
+    if body === nothing
+        # no compiled body: a closure's captured-fields context (no class header) still becomes
+        # its object; a closure type registered as a class, or a function's singleton, is one
+        (is_closure_type(from_julia) && ctx.type_registry.structs[from_julia].field_offset == 1) ||
+            return false
+        return emit_closure_wrap!(b, ctx, from_julia, UInt32(0), WasmValType[], WasmValType[];
+                                  takes_context=true) !== nothing
+    end
     return emit_closure_wrap!(b, ctx, from_julia, body[1], body[2], body[3];
                               takes_context=body[4]) !== nothing
 end

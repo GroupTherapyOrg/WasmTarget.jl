@@ -421,6 +421,8 @@ mutable struct TypeRegistry
     closure_base_idx::Union{Nothing, UInt32}
     closure_vtable_struct_idxs::Dict{Int, UInt32}      # max_arity -> vtable struct
     closure_vtable_globals::Dict{Type, UInt32}         # closure type -> vtable global
+    # the vtable of a closure no dynamic call reaches: no entry (get_empty_closure_vtable!)
+    empty_closure_vtable_global::Union{Nothing, UInt32}
     # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
@@ -459,6 +461,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{Union{String,Symbol}, UInt32}(),  # string_constant_globals (census F3)
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Type, UInt32}(),  # closure layouter
+    nothing,                                            # empty_closure_vtable_global
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
@@ -2820,11 +2823,8 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         type_idx = get_string_struct_type!(mod, registry)
         return ConcreteRef(type_idx, true)
     elseif !for_local && is_closure_type(T)
-        # a closure type's captured-fields context {classId, captures} (register_closure_type!).
-        # A local of it (for_local) takes the `is_struct_type` arm below, so a closure type a
-        # local, a field, a tuple or a constant registers first has the class layout instead:
-        # two layouts by registration order, MARCH 13.17 A7S1 (batch 98 sent every route to the
-        # context; an erased context with no vtable then had no class header, A10C2).
+        # a closure type's captured-fields context {classId, captures} (register_closure_type!,
+        # where register_struct_type! also sends it); erased, it is its closure object
         if haskey(registry.structs, T)
             info = registry.structs[T]
             return ConcreteRef(info.wasm_type_idx, true)
