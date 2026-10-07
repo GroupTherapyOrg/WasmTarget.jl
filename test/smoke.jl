@@ -1622,6 +1622,21 @@ _g("kind_isa", Any[
 # by identity where its values are pointer-unique (jl_pointer_egal); any other test that meets
 # `Type{…}` is type equality at run time (jl_isa), which rejects at its statement (dev/AUDIT.md
 # A5E2: the type-object arm kept a kind only when the kind is under T, so it answered 2 and -7)
+# A runtime-length tuple (`Core.tuple(v...)`) is an NTuple{n,E} for its run-time n
+# (jl_f_tuple); its representation's header names Tuple{Vararg{E}}, which no value has, so
+# typeof, `===` and an erased slot answered for that class (dev/AUDIT.md A5E3: native 1, wasm
+# 2). isa tests its size; the rest reject at their statement
+@noinline _sm_mk(v::Vector{Int64}) = Core.tuple(v...)
+_g("runtime_length_tuple", Any[
+    ("isa_ntuple_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
+    ("isa_ntuple_other_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{2,Int64} ? 1 : 2, Int64(3)),
+    ("isa_empty", (n::Int64) -> _sm_mk(Int64[]) isa Tuple{} ? n : 2, Int64(3)),
+])
+_xf("runtime_length_tuple_class", Any[
+    ("typeof_ntuple", (n::Int64) -> typeof(_sm_mk([n, 2, 3])) === Tuple{Int64,Int64,Int64} ? 1 : 2, Int64(3)),
+    ("egal_ntuple", (n::Int64) -> _sm_mk([n, 2, 3]) === (3, 2, 3) ? 1 : 2, Int64(3)),
+    ("erased_isa_ntuple", (n::Int64) -> Any[_sm_mk([n, 2, 3])][1] isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
+])
 _g("type_isa", Any[
     ("type_identity_isa", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(1)),
     ("type_identity_isa_other_value", (n::Int64) -> (v = Any[Int64, 2.5]; v[n] isa Type{Int64} ? 1 : 2), Int64(2)),

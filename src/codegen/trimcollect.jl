@@ -1417,9 +1417,10 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         end
         T isa DataType || return
         # is_runtime_vararg_tuple_type (structs.jl): `Tuple{Vararg{E}}` with a concrete
-        # element E is Julia-NON-concrete (unbounded length) but WT gives it ONE
-        # registrable {Object, data, size} representation (register_vararg_tuple_type!)
-        # — a genuine exception to "classId means concrete leaf", not a gap.
+        # element E is not a Julia value's type (a value is an NTuple{n,E}), but WT gives
+        # every length one {Object, data, size} representation (register_vararg_tuple_type!)
+        # whose header names this class. No class read sees it: typeof rejects, isa tests its
+        # size, and it never enters a slot of any class (emit_value!)
         if is_runtime_vararg_tuple_type(T)
             push!(out, runtime_vararg_canonical(T))   # a non-empty narrowing shares the layout
             return

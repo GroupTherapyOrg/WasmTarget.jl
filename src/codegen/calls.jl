@@ -2078,17 +2078,23 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         else
             ref_is_null!(bld)
         end
-    elseif check_type === Tuple{} && is_runtime_vararg_tuple_type(value_type)
-        # A runtime-length tuple is empty iff its immutable size tuple says zero.
-        # This is the semantic `isa Tuple{}` test; classId alone cannot encode a
-        # runtime arity.
+    elseif check_type isa DataType && check_type <: Tuple && isconcretetype(check_type) &&
+           is_runtime_vararg_tuple_type(value_type) && check_type <: value_type
+        # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple): of a
+        # concrete tuple type under its static type, it is one exactly when its size is that
+        # type's length (its header's class, Tuple{Vararg{E}}, is no value's type)
         local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
         local size_info = ctx.type_registry.structs[Tuple{Int64}]
         ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
         struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2),
                     ConcreteRef(size_info.wasm_type_idx, true))
         struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
-        num!(bld, Opcode.I64_EQZ)
+        if isempty(check_type.parameters)
+            num!(bld, Opcode.I64_EQZ)
+        else
+            i64_const!(bld, Int64(length(check_type.parameters)))
+            num!(bld, Opcode.I64_EQ)
+        end
     elseif check_type isa DataType && (check_type <: GenericMemory || check_type === Core.SimpleVector) &&
            check_type in bare_array_partition(ctx.mod, ctx.type_registry, value_type).shared
         # a bare-array class is told only by an array type no other class the value may be

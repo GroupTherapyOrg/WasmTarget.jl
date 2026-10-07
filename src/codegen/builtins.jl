@@ -1487,6 +1487,15 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             error("closed-world typeof is missing the static type global for $arg_type")
         dt_global = ctx.type_registry.type_constant_globals[arg_type]
         global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
+    elseif arg_type isa DataType && is_runtime_vararg_tuple_type(arg_type)
+        # its type is NTuple{n,E} for the n it has at run time (jl_f_tuple): a type object WT
+        # does not build at run time (MARCH 13.14), and its header names no Julia type
+        record_unsupported!(ctx, :unsupported_method,
+            "typeof of a runtime-length tuple ($(arg_type)): its type is NTuple{n,$(vararg_tuple_eltype(arg_type))} for the n it has at run time";
+            idx=idx)
+        unreachable!(_tofb)
+        append_builder!(fb, _tofb)
+        return append_builder!(b, fb)
     else
         local _shared = bare_array_partition(ctx.mod, ctx.type_registry, arg_type).shared
         if !isempty(_shared)

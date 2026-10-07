@@ -535,6 +535,14 @@ are pointer-unique (jl_pointer_egal) is X's identity (ref.eq against X's type co
 intersection `Type` and a kind stay the kind test (jl_isa answers by the kind there), and a
 tested type that meets `Type{…}` otherwise (jl_has_intersect_type_not_kind) is jl_isa's type
 equality at run time, which rejects at its statement (smoke kind_isa's UnionAll case, whose
-intersection is `Type{Vector}`, keeps its kind test). Smoke group type_isa: the old
+intersection is `Type{Vector}`, keeps its kind test). Batch 80 — A5E3: a runtime-length tuple
+is an NTuple{n,E} for its run-time n, but its representation's header names Tuple{Vararg{E}},
+which no value has. No class read sees that class now: isa against a concrete tuple type under
+its static type tests its size; its typeof rejects; a statement that puts it in a slot Julia's
+IR types otherwise (a return, a phi, a callee's parameter, a dynamic call, a Memory element, a
+field: `_erased_vararg_tuple_operand`) rejects, and so does WT's own widening of it to a slot of
+any class (emit_value!). Smoke group runtime_length_tuple and xfails runtime_length_tuple_class:
+the old code answers isa_ntuple_length 2 where native answers 1, and compiles the three xfails
+to wrong answers (typeof, `===`, an Any vector's isa). Smoke group type_isa: the old
 lowering answers 2 and -7 where native answers 1; xfail type_or_nothing_isa, which the old
 lowering answered wrong, rejects.

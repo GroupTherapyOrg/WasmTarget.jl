@@ -431,6 +431,53 @@ function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationC
     end
 end
 
+"""
+    _erased_vararg_tuple_operand(ctx, rec) -> Union{Nothing, Tuple{Type, Type}}
+
+The first operand of statement `rec` that is a runtime-length tuple (`Tuple{Vararg{E}}`, its
+static type in Julia's IR) and that the statement puts in a slot of another type, with that
+slot's type: a return, a phi, an invoked callee's parameter, a dynamic call's argument, a
+Memory element, a field (setfield!, %new). A runtime-length tuple has an NTuple{n,E} class
+chosen by its length at run time; WT's representation carries Tuple{Vararg{E}}, so it never
+leaves slots typed by it.
+parity(quarantine: Julia's runtime-length tuple is typed by its length at run time; a dart
+record's shape is static.)
+"""
+function _erased_vararg_tuple_operand(ctx::AbstractCompilationContext, rec::NirStmt)::Union{Nothing, Tuple{Type, Type}}
+    local node = rec.node
+    local vt(v) = v isa NirNode ? get_ssa_type(ctx, v) : nothing
+    local isvt(T) = T isa DataType && is_runtime_vararg_tuple_type(T)
+    local check(v, slot) = (T = vt(v); (isvt(T) && !(slot isa DataType && is_runtime_vararg_tuple_type(slot))) ? (T, slot) : nothing)
+    local first_hit(pairs) = (for (v, slot) in pairs; h = check(v, slot); h === nothing || return h; end; nothing)
+    if node isa NirReturn
+        return node.value === nothing ? nothing : check(node.value, ctx.return_type)
+    elseif node isa NirPhi
+        return first_hit((v, rec.julia_type) for v in node.values if v !== nothing)
+    elseif node isa NirNew
+        return first_hit(zip(node.operands, node.field_types))
+    elseif node isa NirInvoke
+        local sig = node.mi === nothing ? nothing : node.mi.specTypes
+        sig isa DataType || return first_hit((v, Any) for v in node.operands)
+        local ps = sig.parameters
+        return first_hit((v, length(ps) >= i + 1 ? ps[i + 1] : Any) for (i, v) in enumerate(node.operands))
+    elseif node isa NirCall
+        local f = node.callee
+        if f === Core.memoryrefset! && length(node.operands) >= 2
+            local R = vt(node.operands[1])
+            return check(node.operands[2], (R isa DataType && R <: Core.GenericMemoryRef) ? eltype(R) : Any)
+        elseif (f === Core.setfield! || f === Base.setfield!) && length(node.operands) >= 3
+            local O, name = vt(node.operands[1]), nir_const(node.operands[2])
+            local has = O isa DataType && isconcretetype(O) &&
+                        (name isa Symbol ? hasfield(O, name) : (name isa Int && 1 <= name <= fieldcount(O)))
+            local slot = has ? fieldtype(O, name) : Any
+            return check(node.operands[3], slot)
+        elseif f isa NirNode || (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction))
+            # a call Julia's inference did not resolve: its arguments are erased
+            return first_hit((v, Any) for v in node.operands)
+        end
+    end
+    return nothing
+end
 # parity(pkg/dart2wasm/lib/code_generator.dart:717 Statement.accept)
 function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     rec = ctx.nir[idx]     # THE statement's node — the visitor never re-reads the raw IR
@@ -465,6 +512,17 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     # opcodes. Emit unreachable (not empty) so the validator stays in polymorphic stack mode.
     if ctx.last_stmt_was_stub
         unreachable!(b)   # structural trap (dead-block continuation; keeps stack polymorphic)
+        return b
+    end
+    # a runtime-length tuple widened, by this statement, to a slot Julia's IR types otherwise:
+    # its header class is Tuple{Vararg{E}}, no value's type, so where any class may be a class
+    # read would answer for it
+    local erased = _erased_vararg_tuple_operand(ctx, rec)
+    if erased !== nothing
+        emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "a runtime-length tuple ($(erased[1])) stored where a $(erased[2]) is held: its class is " *
+            "NTuple{n,$(vararg_tuple_eltype(erased[1]))} for the n it has at run time, which its representation does not carry";
+            idx=idx)
         return b
     end
 

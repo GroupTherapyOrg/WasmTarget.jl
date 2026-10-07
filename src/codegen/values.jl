@@ -1127,6 +1127,18 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
             return expected
         end
     end
+    # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
+    # representation's header names Tuple{Vararg{E}}, a class no Julia value has: held where
+    # any class may be, a class read would answer for that class, so it rejects here
+    if expected === AnyRef || expected === EqRef || expected === StructRef || expected === ExternRef
+        local vt_T = get_ssa_type(ctx, val)
+        if vt_T isa DataType && is_runtime_vararg_tuple_type(vt_T)
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a runtime-length tuple ($(vt_T)) held as a value of any class: its class is " *
+                "NTuple{n,$(vararg_tuple_eltype(vt_T))} for the n it has at run time, which its representation does not carry")
+            return expected
+        end
+    end
     ty = emit_value!(b, val, ctx)  # parity(code_generator.dart:676 accept1): the one visitor call; convertType below
     ty === nothing && return expected
     if ty !== expected
