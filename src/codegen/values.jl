@@ -456,6 +456,29 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             "a runtime-length tuple ($(vt)) held as a value of any class: its class is " *
             "NTuple{n,$(vararg_tuple_eltype(vt))} for the n it has at run time, which its representation does not carry")
     end
+    # a fixed tuple flowing into a slot Julia types as a runtime-length tuple (a phi joining an
+    # NTuple{k,E} with one: Tuple{E} <: Tuple{Vararg{E}}) is that runtime-length tuple, its
+    # representation built from the tuple's fields; a cast between the two structs trapped
+    # (dev/AUDIT.md A9E4)
+    if from isa ConcreteRef && to isa ConcreteRef && from.type_idx != to.type_idx
+        local vt_to = vararg_tuple_of_struct(ctx.type_registry, to.type_idx)
+        if vt_to !== nothing && vararg_tuple_of_struct(ctx.type_registry, from.type_idx) === nothing
+            local E = vararg_tuple_eltype(vt_to)
+            # a value Julia admits in a Tuple{Vararg{E}} slot is an NTuple{k,E}: its type when
+            # the edge states it, else k is its struct's fields past the object prefix
+            local T = from_julia
+            if !(T isa DataType && T <: Tuple && isconcretetype(T))
+                local fdef = ctx.mod.types[Int(from.type_idx) + 1]
+                T = fdef isa StructType ? NTuple{length(fdef.fields) - 2, E} : nothing
+            end
+            (T isa DataType && all(P -> P === E, T.parameters) &&
+             get(ctx.type_registry.structs, T, nothing) isa StructInfo &&
+             ctx.type_registry.structs[T].wasm_type_idx == from.type_idx) ||
+                return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                    "a $(something(from_julia, "value")) into a slot of the runtime-length tuple $(vt_to): only an NTuple of its element converts")
+            return emit_fixed_to_vararg_tuple!(b, ctx, T, vt_to)
+        end
+    end
     if !_wt_is_ref(from) && _wt_is_ref(to)
         # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
         # canonical {classId,value} struct (real classId when from_julia is known), then upcast

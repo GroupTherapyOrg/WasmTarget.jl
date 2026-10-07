@@ -888,4 +888,10 @@ EgalDispatch.tla gains a closure class (two contexts with equal captures, an obj
 one with other captures) and the Broken instance ClosureByIdentity, which TLC rejects. The runtime
 egal unwraps a closure object to its context, retries identity, and compares a closure's classId
 and captures field by field; a closure whose type is known is compared as the immutable struct of
-its captures. Smoke closure_egal (four cases): the old egal answers 2 and traps twice.
+its captures. Smoke closure_egal (four cases): the old egal answers 2 and traps twice. Batch 97 —
+A9E4: a fixed tuple joining a runtime-length one at a phi (Tuple{E} <: Tuple{Vararg{E}}) was cast
+between the two structs and trapped where native answers 7; convert_type! now builds the
+runtime-length representation from the tuple's fields (`emit_fixed_to_vararg_tuple!`, the inverse
+of batch 93's narrowing), and any other value into such a slot rejects. Smoke runtime_length_tuple
+gains fixed_joins_runtime_length and runtime_length_joins_fixed; the old code traps on the first.
+A9E3 measured: the audit's program answers 5 as native does.

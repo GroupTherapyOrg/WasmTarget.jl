@@ -1388,6 +1388,45 @@ function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     return b
 end
 
+"""
+    emit_fixed_to_vararg_tuple!(b, ctx, T, V) -> b
+
+Replace the fixed tuple `T`, an `NTuple{k,E}`, on the stack with the runtime-length tuple
+representation of type `V` (`Tuple{Vararg{E}}`) it is in a slot Julia types that way: a fresh
+array of its k fields and its size, the representation `_emit_apply_iterate_vect!` builds. The
+inverse of emit_vararg_to_fixed_tuple! (dev/AUDIT.md A9E4).
+parity(quarantine: Julia's runtime-length tuple is an NTuple{n,E} for its run-time n; a dart
+record's shape is static.)
+"""
+function emit_fixed_to_vararg_tuple!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                                     T::DataType, V::DataType)::InstrBuilder
+    local reg = ctx.type_registry
+    local vinfo = register_vararg_tuple_type!(ctx.mod, reg, V)
+    local E = vararg_tuple_eltype(V)
+    local arr = get_array_type!(ctx.mod, reg, E)
+    local elem_w = julia_to_wasm_type(E)
+    local tinfo = register_tuple_type!(ctx.mod, reg, T)::StructInfo
+    local tdef = ctx.mod.types[Int(tinfo.wasm_type_idx) + 1]
+    local size_info = haskey(reg.structs, Tuple{Int64}) ? reg.structs[Tuple{Int64}] :
+                      register_tuple_type!(ctx.mod, reg, Tuple{Int64})::StructInfo
+    local k = length(T.parameters)
+    local tup = allocate_local!(ctx, ConcreteRef(tinfo.wasm_type_idx, false))
+    ref_cast!(b, Int64(tinfo.wasm_type_idx), false)
+    local_set!(b, tup)
+    emit_struct_prefix!(b, reg, V, vinfo)
+    for i in 1:k
+        local_get!(b, tup)
+        struct_get!(b, tinfo.wasm_type_idx, wasm_field_idx(tinfo, i), tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype)
+        coerce_stack_top!(b, elem_w, ctx; from_julia=E)
+    end
+    array_new_fixed!(b, arr, k, elem_w)
+    emit_struct_prefix!(b, reg, Tuple{Int64}, size_info)
+    i64_const!(b, Int64(k))
+    struct_new!(b, size_info.wasm_type_idx)
+    struct_new!(b, vinfo.wasm_type_idx)
+    return b
+end
+
 # Special case for Core.tuple - tuple creation
 # parity(code_generator.dart:3239 visitRecordLiteral)
 function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}

@@ -1694,6 +1694,10 @@ _g("runtime_length_tuple", Any[
     ("isa_union_of_lengths", (n::Int64) -> _sm_mk([n, 2, 3]) isa Union{Tuple{Int64},NTuple{3,Int64}} ? 1 : 2, Int64(3)),
     # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
     # two structs trapped where native answers 6)
+    # a fixed tuple joining a runtime-length one at a phi is that runtime-length tuple (A9E4:
+    # a cast between the two structs trapped where native answers 7)
+    ("fixed_joins_runtime_length", (n::Int64) -> (u = n == 3 ? (7,) : _sm_mk([n, 2]); u[1]), Int64(3)),
+    ("runtime_length_joins_fixed", (n::Int64) -> (u = n == 3 ? (7,) : _sm_mk([n, 2]); u[1]), Int64(4)),
     ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[n, 2, 3]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
     ("isa_narrowed_fields", (n::Int64) -> (t = _sm_mk([n, 2, 3]); t isa NTuple{3,Int64} ? t[1] + t[3] : 0), Int64(3)),
     # a struct whose layout is the representation's widens to Any as any struct does
