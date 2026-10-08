@@ -26,10 +26,26 @@
 (* for which Julia's dispatch is ambiguous rejects the callable at compile *)
 (* time (WT asks Julia per tuple).                                         *)
 (*                                                                         *)
+(* THE BOUND. The compile-time check (compile.jl, the vtable pre-pass)     *)
+(* takes each two rows whose methods are distinct and Base.isambiguous,    *)
+(* and asks Julia over the candidate tuples of their overlap               *)
+(* (`ambiguous_class_tuple`, closures.jl). When the product of the         *)
+(* overlap's per-position candidate counts exceeds `Bound` (4096 in the    *)
+(* code) the pair cannot be asked about: the helper returns `nothing` and  *)
+(* the callable rejects whether or not a tuple is ambiguous (Unaskable,    *)
+(* A8C8). The helper's other `nothing` answers (an overlap that is not one *)
+(* tuple type, a Vararg position, a position with no candidate) are not    *)
+(* modeled: overlaps here are sets of pairs whose every element is a       *)
+(* candidate. NOT MODELED either: the no-method args-tuple product of      *)
+(* `_dynamic_dispatch_candidate_mis` (trimcollect.jl:802), which skips a   *)
+(* product past 4096 tuples silently, with no rejection (A11C2, A9C2).     *)
+(*                                                                         *)
 (* THE CLAIM. For every class that may reach the call, the entry runs the  *)
 (* method Julia selects (NoWrongMethod), traps only where Julia has no     *)
 (* method (TrapOnlyWhenNoMethod), and rejects only where Julia would find  *)
-(* a call over S ambiguous (RejectOnlyWhenAmbiguous). Broken variants,     *)
+(* a call over S ambiguous or an ambiguous pair's overlap is past the      *)
+(* bound (RejectOnlyWhenAmbiguous), and always rejects past the bound      *)
+(* (BoundIsLoud). Broken variants,                                         *)
 (* each code WT had: a method enrolled only when its parameter type        *)
 (* contains S (SubsetRule, batch 75); rows in program order (ProgramOrder);*)
 (* rows ordered by their specialized types, ties in program order          *)
@@ -49,7 +65,10 @@
 (* found its parametric method without a row, native 1, wasm 2, A9C1); and *)
 (* a type object a candidate only when the program holds it as a literal   *)
 (* or a constant (LiteralsOnly, batch 99: one a `typeof` made found its    *)
-(* parametric method without a row, native 1, wasm 2, A10C1).              *)
+(* parametric method without a row, native 1, wasm 2, A10C1). One Broken  *)
+(* variant is a mistake the code could make, not code it had: a pair past  *)
+(* the bound read as having no ambiguous tuple, as a `false` answer would  *)
+(* be (BoundAccepts: an ambiguity in that overlap runs a row).             *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes and methods are opaque; a method's   *)
 (* parameter type is the set of classes it admits; specificity is a       *)
@@ -79,7 +98,9 @@ CONSTANTS X, Numbered, Methods, Callables,
           Statics,      \* SUBSET (SUBSET (X \X X)): the pairs (classes, type objects) a call site's static type admits
           SubsetRule, ProgramOrder, SpecOrder, IgnoreAmbig, SkipParametric, PerPosition, AllTypesAmbig,
           Literals,     \* SUBSET X: the type objects the program holds as literals (the rest a `typeof` makes)
-          ClassesOnly, StaticOnly, LiteralsOnly
+          ClassesOnly, StaticOnly, LiteralsOnly,
+          Bound,        \* Nat: the most candidate tuples one overlap is asked about (4096)
+          BoundAccepts
 
 Values == X \X X
 VARIABLES f, s, v, outcome, done
@@ -119,19 +140,40 @@ Before(r, q) == IF ProgramOrder THEN POrd[r[1]] < POrd[q[1]]
                 ELSE <<r[1], q[1]>> \in More \/
                      (<<q[1], r[1]>> \notin More /\ POrd[r[1]] < POrd[q[1]])
 
-\* the compile-time ambiguity check: WT asks Julia's dispatch for each pair of candidates
-\* of S (the closed world numbers every class a value can have, and more: MARCH 13.17, A3S3);
-\* the rule before (AllTypesAmbig) took two methods neither more specific, whose overlap
-\* anywhere no method more specific than both covers (Base.isambiguous)
+\* two methods neither more specific, whose overlap anywhere no method more specific than
+\* both covers (Base.isambiguous)
+IsAmbiguous(g, m, n) ==
+    m # n /\ <<m, n>> \notin More /\ <<n, m>> \notin More /\
+    LET ov == Param[m] \cap Param[n] IN
+    ov # {} /\ ~\E p \in Of(g) : <<p, m>> \in More /\ <<p, n>> \in More /\ ov \subseteq Param[p]
+
+\* the pairs of rows the check asks about (compile.jl): distinct methods, Base.isambiguous,
+\* their specializations overlapping (typeintersect not Union{})
+AmbigPairs(g, S) == {pr \in Rows(g, S) \X Rows(g, S) :
+                       pr[1][1] # pr[2][1] /\ IsAmbiguous(g, pr[1][1], pr[2][1]) /\
+                       pr[1][2] \cap pr[2][2] # {}}
+Overlap(pr) == pr[1][2] \cap pr[2][2]
+\* the number of candidate tuples of an overlap: the product of its positions' candidate
+\* counts (`prod(length, choices)`, closures.jl); a position's candidates are the elements
+\* the overlap admits there, each a numbered class or a type object the program holds
+Width(ov) == Cardinality(Proj(ov, 1)) * Cardinality(Proj(ov, 2))
+\* an ambiguous pair whose overlap has more candidate tuples than the check asks about:
+\* ambiguous_class_tuple returns `nothing` (A8C8)
+Unaskable(g, S) == \E pr \in AmbigPairs(g, S) : Width(Overlap(pr)) > Bound
+
+\* the compile-time ambiguity check: for each pair within the bound, WT asks Julia's dispatch
+\* for each tuple of candidates of the overlap (the closed world numbers every class a value
+\* can have, and more: MARCH 13.17, A3S3); a pair past the bound is not asked (Unaskable, which
+\* Entry rejects; BoundAccepts, broken, reads it as no ambiguity); the rule before
+\* (AllTypesAmbig) took Base.isambiguous over every type
 AmbiguousOver(g, S) ==
     IF AllTypesAmbig
-    THEN \E m, n \in Of(g) : m # n /\ <<m, n>> \notin More /\ <<n, m>> \notin More /\
-             LET ov == Param[m] \cap Param[n] IN
-             ov # {} /\ ~\E p \in Of(g) : <<p, m>> \in More /\ <<p, n>> \in More /\ ov \subseteq Param[p]
-    ELSE \E x \in S : Cand(x, {1, 2}, S) /\ Julia(g, x) = Ambig
+    THEN \E m, n \in Of(g) : IsAmbiguous(g, m, n)
+    ELSE \E pr \in AmbigPairs(g, S) : Width(Overlap(pr)) <= Bound /\
+             \E x \in Overlap(pr) : Cand(x, {1, 2}, S) /\ Julia(g, x) = Ambig
 
 Entry(g, S, x) ==
-    IF ~IgnoreAmbig /\ AmbiguousOver(g, S) THEN Reject
+    IF ~IgnoreAmbig /\ (AmbiguousOver(g, S) \/ (~BoundAccepts /\ Unaskable(g, S))) THEN Reject
     ELSE LET hit == {r \in Rows(g, S) : x \in r[2]} IN
          IF hit = {} THEN Trap
          ELSE (CHOOSE r \in hit : \A q \in hit \ {r} : ~Before(q, r) /\ (Before(r, q) \/ r[1] = q[1]))[1]
@@ -143,5 +185,6 @@ Spec_ == Init /\ [][Step]_vars
 TypeOK == outcome \in Methods \cup {Trap, Reject} /\ done \in BOOLEAN
 NoWrongMethod == done /\ outcome \in Methods => outcome = Julia(f, v)
 TrapOnlyWhenNoMethod == done /\ outcome = Trap => Julia(f, v) = Trap
-RejectOnlyWhenAmbiguous == done /\ outcome = Reject => \E x \in s : Julia(f, x) = Ambig
+RejectOnlyWhenAmbiguous == done /\ outcome = Reject => (\E x \in s : Julia(f, x) = Ambig) \/ Unaskable(f, s)
+BoundIsLoud == done /\ Unaskable(f, s) => outcome = Reject
 =============================================================================

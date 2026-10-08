@@ -100,7 +100,7 @@ with the per-clause status. A clause is never closed by argument.
   `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
   its model or states why it has none). Planned: dev/MARCH.md 13.17 — the exception stack's
   model across calls, the operand stack's if/else, and the closed-world model's pruning and
-  hidden edges, the models' Broken instances and bounds the audits named.
+  hidden edges.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
