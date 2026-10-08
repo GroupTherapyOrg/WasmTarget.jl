@@ -32,6 +32,18 @@ trap 'rm -rf "$meta"' EXIT
 # models one directory up.
 cfgs=(MC*.cfg)
 [ "${TLC_NIGHTLY:-0}" = "1" ] && [ -d nightly ] && cfgs+=(nightly/MC*.cfg)
+# TLC_SHARD=i/N (formal.yml's push matrix) checks every N-th instance from the i-th, i in 0..N-1,
+# of the same sorted list: the N shards together check every instance exactly once.
+if [ -n "${TLC_SHARD:-}" ]; then
+  si=${TLC_SHARD%/*}; sn=${TLC_SHARD#*/}
+  if ! [[ $si =~ ^[0-9]+$ && $sn =~ ^[1-9][0-9]*$ ]] || [ "$si" -ge "$sn" ]; then
+    echo "TLC_SHARD=$TLC_SHARD: expected i/N with 0 <= i < N" >&2; exit 1
+  fi
+  shard=()
+  for k in "${!cfgs[@]}"; do [ $((k % sn)) -eq "$si" ] && shard+=("${cfgs[$k]}"); done
+  cfgs=("${shard[@]}")
+  echo "  shard $si of $sn: ${#cfgs[@]} instances"
+fi
 for cfg in "${cfgs[@]}"; do
   [ -e "$cfg" ] || continue
   if [ "${TLC_FAST:-0}" = "1" ] && [[ " $DEEP " == *" $cfg "* ]]; then printf '  skip %-28s (deep; run without TLC_FAST)\n' "$cfg"; continue; fi
