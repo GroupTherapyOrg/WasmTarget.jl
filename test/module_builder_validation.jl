@@ -553,6 +553,30 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test MBV.FieldType(MBV.FuncRef, false).valtype === MBV.FuncRef
     end
 
+    @testset "an if without else is typed by its implicit else: inputs that are subtypes of its results" begin
+        # the spec types the implicit else [t1*] -> [t2*] as the empty sequence: valid iff the lengths
+        # agree and each t1 <: t2 (A3B11; the equality rule rejected the first case)
+        m = MBV.WasmModule()
+        a = MBV.add_type!(m, MBV.StructType([MBV.FieldType(MBV.I32, false)]))
+        nonnull, nullable = MBV.ConcreteRef(UInt32(a), false), MBV.ConcreteRef(UInt32(a), true)
+        elseless(inputs, results) = (b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[]; mod=m);
+            for t in inputs
+                t === nonnull ? (MBV.i32_const!(b, 1); MBV.struct_new!(b, a)) : MBV.ref_null!(b, Int64(a), nullable)
+            end;
+            MBV.i32_const!(b, 1);
+            MBV.if_!(b; inputs=MBV.WasmValType[inputs...], results=MBV.WasmValType[results...]);
+            length(results) < length(inputs) && MBV.drop!(b);
+            (results == [nonnull] && inputs == [nullable]) && MBV.ref_as_non_null!(b);
+            b)
+        rejection(b) = try; MBV.end_block!(b); ""; catch e; sprint(showerror, e); end
+        # (i) a strict subtype passes through
+        @test MBV.end_block!(elseless([nonnull], [nullable])) isa MBV.InstrBuilder
+        # (ii) a supertype input does not: the implicit else would leave a nullable ref
+        @test occursin("needs an else", rejection(elseless([nullable], [nonnull])))
+        # (iii) unequal lengths
+        @test occursin("needs an else", rejection(elseless([nullable], [])))
+    end
+
     @testset "an if's then-branch is typed against the if's results at else" begin
         # dart else_ → _verifyEndOfBlock → _checkStackTypes(label.outputs): only the height was
         # checked, and a then-arm leaving a value of an unrelated type reached the module

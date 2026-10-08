@@ -487,9 +487,13 @@ function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
         return
     end
     label = pop!(v.labels)
-    # an if without else passes its inputs through its implicit else, so it is valid only when
-    # its results are its inputs (the Wasm spec; dart does not check it, the engine does)
-    (label.kind === :if && !label.has_else && label.input_types != label.result_types) &&
+    # an if without else passes its inputs through its implicit empty else, so it is valid only
+    # when that else is: as many inputs as results, each input a subtype of its result (the Wasm
+    # spec; dart does not check it, the engine does). formal(dev/formal/OperandStack.tla):
+    # ElseLessExact is the equality rule, which rejected a valid if
+    (label.kind === :if && !label.has_else &&
+     !(length(label.input_types) == length(label.result_types) &&
+       all(wasm_subtype(i, r, v.mod) for (i, r) in zip(label.input_types, label.result_types)))) &&
         push!(v.errors, "$(v.func_name): an if with results $(label.result_types) needs an else " *
                         "(its inputs are $(label.input_types))")
 
