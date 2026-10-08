@@ -6,12 +6,12 @@
 # committed baseline (dev/parity_baseline.toml).
 #
 #   RATCHET metrics may only go DOWN.  count > baseline  ⇒  FAIL.
-#   LOCK    metrics must match EXACTLY. count != locked  ⇒  FAIL.
+#   LOCKS pass only at 0.               count != 0       ⇒  FAIL (A3P9).
 #
 # When a commit legitimately lowers a count, tighten the baseline IN THE SAME COMMIT:
 #     WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
-# (update mode still FAILS on any increase — a ratchet never loosens; flipping a
-# metric from ratchet to lock is done by hand in the baseline = "phase done").
+# (update mode still FAILS on any increase — a ratchet never loosens; a ratchet at 0 becomes a
+# lock by moving its definition from METRICS to LOCKS, and the baseline records ratchets only).
 #
 # Run standalone (seconds, exit 0/1):   julia --project=. test/parity_ratchet.jl
 # Also included by runtests.jl on shard 0 as a @testset.
@@ -49,12 +49,13 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
     return out
 end
 
-function _write_baseline(path::String, metrics::Dict{String,Int}, locks::Dict{String,Int})
+# the ratchets' values only: a lock's value is 0 by definition (A3P9), so none is recorded
+function _write_baseline(path::String, metrics::Dict{String,Int})
     open(path, "w") do io
         println(io, "# dev/parity_baseline.toml — enforced by test/parity_ratchet.jl.")
-        println(io, "# RATCHET: counts may only DECREASE. LOCKS: must match exactly.")
+        println(io, "# RATCHETS only: counts may only DECREASE. A lock passes only at 0 and is not recorded.")
         println(io, "# Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl")
-        for (name, d) in (("locks", locks), ("metrics", metrics))
+        for (name, d) in (("metrics", metrics),)
             println(io, "\n[", name, "]")
             for k in sort!(collect(keys(d)))
                 println(io, k, " = ", d[k])
@@ -2566,7 +2567,48 @@ const LOCKS = [
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
                       occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents)])
         end),
-    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): dev/AUDIT.md's last entry names the commit it audited through — an ancestor of HEAD at most 5 commits behind it — and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
+    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
+        () -> begin
+            local rx = r"\b(A\d+[A-Z]\d+|[BEHMPS]\d+)\b"
+            local charter = read(joinpath(ROOT, "dev", "CHARTER.md"), String)
+            local plan = read(joinpath(ROOT, "dev", "MARCH.md"), String)
+            local rows = Dict{String,Set{String}}()
+            local row1317 = ""
+            for l in split(plan, '\n')
+                local m = match(r"^\| (13\.\d+) \| ([^|]*) \|", l)
+                m === nothing && continue
+                rows[m.captures[1]] = Set(String[x.match for x in eachmatch(r"C\d+", m.captures[2])])
+                m.captures[1] == "13.17" && (row1317 = String(l))
+            end
+            local v = 0
+            local cites = Dict{String,Set{String}}()
+            for blk in split(charter, r"\n(?=- \*\*C\d+)")
+                local h = match(r"^- \*\*(C\d+)", blk)
+                h === nothing && continue
+                local i = findfirst("Planned:", blk)
+                i === nothing && continue
+                local seg = blk[first(i):end]
+                local j = findfirst("\n## ", seg)
+                j === nothing || (seg = seg[1:first(j)])
+                v += length(collect(eachmatch(rx, seg)))
+                for r in eachmatch(r"13\.\d+", seg)
+                    haskey(rows, r.match) || (v += 1)
+                    push!(get!(cites, r.match, Set{String}()), h.captures[1])
+                end
+            end
+            for (r, cs) in rows
+                r == "13.17" && continue
+                cs == get(cites, r, Set{String}()) || (v += 1)
+            end
+            # 13.17: each ID after a label, and labels' clauses == the clauses citing 13.17
+            local labels = collect(eachmatch(r"[A-Za-z][^:;()]{1,60} \((C\d+(?: C\d+)*)[^()]*\):", row1317))
+            local first_label = isempty(labels) ? lastindex(row1317) + 1 : labels[1].offset
+            v += length(collect(m for m in eachmatch(rx, row1317) if m.offset < first_label))
+            local label_clauses = Set(String[c.match for l in labels for c in eachmatch(r"C\d+", l.captures[1])])
+            label_clauses == get(cites, "13.17", Set{String}()) || (v += 1)
+            v
+        end),
+    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted; and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")
             isfile(audit) || return 1
@@ -2581,12 +2623,27 @@ const LOCKS = [
                 end
                 occursin("Resolution:", e) || (v += 1)
             end
-            local m = match(r"audited through ([0-9a-f]{8,40})", entries[end])
-            m === nothing && return v + 1
-            local sha = m.captures[1]
-            success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v + 1
-            # the commits since the audited one (a pull request's merge checkout adds only itself)
-            local behind = parse(Int, readchomp(`git -C $ROOT rev-list --count --ancestry-path $sha..HEAD`))
+            # the entries chain: each one's range starts where the one before it was audited
+            # through, and every audited-through commit is an ancestor of HEAD (a rewritten
+            # history fails, never skips: A2P5)
+            local prev = nothing
+            local sha = nothing
+            for e in entries
+                local m = match(r"audited through ([0-9a-f]{8,40})", e)
+                m === nothing && (v += 1; continue)
+                sha = m.captures[1]
+                success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || (v += 1)
+                if prev !== nothing
+                    local r = match(r"\(([0-9a-f]{7,40})(?:~1)?\.\.", e)
+                    (r !== nothing && (startswith(prev, r.captures[1]) || startswith(r.captures[1], prev))) || (v += 1)
+                end
+                prev = sha
+            end
+            sha === nothing && return v + 1
+            success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v   # counted above
+            # the commits since the last audited one, merges not counted: a pull request's
+            # merge checkout and a landed march branch count the same
+            local behind = parse(Int, readchomp(`git -C $ROOT rev-list --count --no-merges $sha..HEAD`))
             return v + (behind > 5 ? 1 : 0)
         end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
@@ -2723,7 +2780,6 @@ const LOCKS = [
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     baseline = _read_baseline(BASELINE_PATH)
     bm = get(baseline, "metrics", Dict{String,Int}())
-    bl = get(baseline, "locks", Dict{String,Int}())
 
     ok = true
     current_m = Dict{String,Int}()
@@ -2748,10 +2804,10 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     for (id, (desc, thunk)) in LOCKS
         c = thunk()
         current_l[id] = c
-        want = get(bl, id, 0)
-        good = (c == want)
+        # a lock passes only at 0, whatever the baseline holds (A3P9)
+        good = (c == 0)
         good || (ok = false)
-        println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want $want)", "   # ", desc)
+        println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want 0)", "   # ", desc)
     end
 
 
@@ -2770,7 +2826,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
             # a cited ratchet keeps its clause open until it is a lock: "reached 0 and been
             # converted to a lock" (dev/CHARTER.md), not merely at 0
             haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
-            haskey(current_l, k) && current_l[k] != get(bl, k, 0) && push!(open_, "$i BROKEN")
+            haskey(current_l, k) && current_l[k] != 0 && push!(open_, "$i BROKEN")
         end
         occursin("Planned:", body) && push!(open_, "planned check")
         println(rpad(cid, 4), rpad(first(title, 42), 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
@@ -2779,7 +2835,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
         if !ok
             println("refusing WT_RATCHET_UPDATE: a ratchet/lock is BROKEN (ratchets never loosen).")
         else
-            _write_baseline(BASELINE_PATH, current_m, current_l)
+            _write_baseline(BASELINE_PATH, current_m)
             println("baseline tightened → ", BASELINE_PATH)
         end
     end

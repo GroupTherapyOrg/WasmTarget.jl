@@ -67,7 +67,7 @@ change since the last entry in four areas (builder; collection and planning; emi
 diagnostics; enforcement and prose) against every clause: dart anchors checked by what the
 dart code does, quarantines a real Julia necessity, no layering leak, no process-global
 state, no second path, correct or loud, locks that guarantee behavior, prose that is true.
-Fix the findings before new work, and record the entry.
+Fix what the audited range broke before new work; every other finding joins its MARCH row.
 
 ## Spec-first for algorithms
 

@@ -152,9 +152,9 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
   library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
 - Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed);
   Core.sizeof answers Julia's size of a Memory, and two lookups that matched by name went.
+- Codegen reads Julia's typed IR only through the NIR (R29a, R29b locked; plan row 13.0 closed).
 
 ## Why the archive was consolidated
-
 Searches of the old campaign files surfaced stale `NEXT` and `RESUME HERE` sections as if they
 were current. Here finished architecture is locked in `test/parity_ratchet.jl`, an open boundary
 needs a present reproducer or census, and exact historical prose lives in Git.

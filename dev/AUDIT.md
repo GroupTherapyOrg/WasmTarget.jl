@@ -22,9 +22,11 @@ The method:
    code does at the pinned commit (not only by the symbol's name); a quarantine's Julia
    necessity is real; no layering leak; no process-global state; no second path; correct
    or loud; a new lock negative-tested.
-4. Fix the findings before new work. Record the entry: the range, one `Area:` paragraph per
-   area with its findings, and a `Resolution:` for each finding (the commit that fixed it,
-   or the MARCH item and ratchet that now carry it).
+4. Fix what the audited range broke (a wrong answer, a trap, an invalid module, an internal
+   error, one-line prose) before new work, at about 150 src lines at most and with no new
+   mechanism; every other finding joins its MARCH row. Record the entry: the range, one
+   `Area:` paragraph per area with its findings, and a `Resolution:` for each finding (the
+   commit that fixed it, or the MARCH item and ratchet that now carry it).
 
 ## 2026-09-29 — audited through 7acc21c9 (4fc785d2~1..7acc21c9: batches 51–59)
 

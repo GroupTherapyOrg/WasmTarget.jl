@@ -44,11 +44,9 @@ with the per-clause status. A clause is never closed by argument.
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
   an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
-  `R29b` `R37` `L152` (codegen reads a function's IR from the plan, not from `get_typed_ir`). Planned:
-  dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits found computed twice,
-  and codegen's six remaining inference questions answered by the plan (dev/AUDIT.md P3, E3,
-  E4, E5, A2C3, A2C4, A2E4, A3C1, A3C3, A3C4, A3C6, A3C8, A4C4, A4C5, A4C6, A4E5, A5E5,
-  A5E8, A6C5, A6C7, A6E4, A8E4, A9C6, A9E6, A9P11, A9C2, A11E4, A11B8, A11E7).
+  `R29b` `R37` `L152` (codegen reads a function's IR from the plan, not from `get_typed_ir`).
+  Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
+  and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
@@ -59,7 +57,7 @@ with the per-clause status. A clause is never closed by argument.
   fetches the pinned sources and a missing checkout fails, never skips) `L149` (the builder
   holds no Julia compiler object) `R32` `R40` (no process-global compile state: one
   compilation's state lives on its Translator). Planned: dev/MARCH.md 13.7, 13.17 — inventions
-  without a Julia necessity (dev/AUDIT.md A2B6, A2B8, A2C3).
+  without a Julia necessity.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
   approximated; Julia's own bodies compile instead of bespoke re-implementations. Checks:
@@ -70,9 +68,8 @@ with the per-clause status. A clause is never closed by argument.
   routine) `L140` (an overlay's BLAS/LAPACK reason is verified against Julia's own method)
   `L141` (a constant is interned by `===`, never by `isequal`) `R38` (each `@overlay` states
   why Julia's body cannot compile, or goes). Planned: dev/MARCH.md 13.3, 13.7, 13.14, 13.17 —
-  the SimpleDiffEq tolerance answered by a native reference that rounds each muladd once
-  (dev/AUDIT.md H3), the index test Julia makes (A2E6), a tuple's `Type{X}` element typed as
-  tuple_tfunc types it (A5P1).
+  the SimpleDiffEq tolerance answered by a native reference that rounds each muladd once, the
+  index test Julia makes, a tuple's `Type{X}` element typed as tuple_tfunc types it.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
@@ -81,31 +78,29 @@ with the per-clause status. A clause is never closed by argument.
   the edit site (load-time typing, the enforcing builder, the locks) or by the minute-scale
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
-  missing wasm runtime. Checks: `L16` `L94` `L134` `R33` `R36`. Planned: dev/MARCH.md 13.3,
-  13.16, 13.17 — a paused downstream job and the checks the audits found pinning text
-  (dev/AUDIT.md M6, A2P9, A4B6, A4C7, A4P4, A4P6, A4P9, A5B6, A5P4, A7P8, A8P10, A9C4, A9P9, A9P10).
+  missing wasm runtime. Checks: `L16` `L94` `L134` `R33` `R36`.
+  Planned: dev/MARCH.md 13.3, 13.14, 13.17 — the checks the audits found pinning text.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `R34` `R39` (no smoke xfail compiles
-  and then answers wrong, traps, or returns what the harness cannot read). Planned:
-  dev/MARCH.md 13.0, 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
-  the traps where Julia answers, and the audits' unlocated and lossy paths (dev/AUDIT.md A4E6, A3S1, A3S2, A3S3, A3P3, A3C7, M7, E9, A2C1,
-  A2C2, A2E5, A4P2, A7E3, A7S1, A9E3, A9B1, A7E4, A5C4, A11E1, A11C2, A11C3, A11C6).
+  and then answers wrong, traps, or returns what the harness cannot read).
+  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
+  the traps where Julia answers, and the audits' unlocated and lossy paths.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
   Planned: dev/MARCH.md 13.17 — a function's results checked at every return, casts, nulls,
   struct.new and conversions typed by the module, no raw byte as a value type, one subtype
-  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5, A4B1–A4B5, A5B9, A7B5, A11E6).
+  relation in the builder, a validating initializer.
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
   `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
   its model or states why it has none). Planned: dev/MARCH.md 13.17 — the exception stack's
   model across calls, the operand stack's if/else, and the closed-world model's pruning and
-  hidden edges (dev/AUDIT.md A3B11, P4, A2C1, A8B5, A8C8, A11P7).
+  hidden edges, the models' Broken instances and bounds the audits named.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
@@ -113,21 +108,21 @@ with the per-clause status. A clause is never closed by argument.
   the docs site, by path or by the loader that walks its directory — and none records finished
   work. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `L130` `R35` `R3` `R5` `R7`
   `R14` `R15` `R27`. Planned: dev/MARCH.md 13.4, 13.5, 13.17 — the stale code and prose the
-  audits found (dev/AUDIT.md B6, S6, L8, A2P10, A4B7, A4B8, A4C8, A4E7, A4P7, A9B5, A9B6, A9P7, A9E9, A9C7, A11B6).
+  audits found.
 - **C10 · Fast, precise feedback.** `bash dev/lanes.sh` gives one verdict in minutes; the full
   CI matrix runs on every march branch and is the landing gate (`dev/land.sh merge`); a
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
-  throw site) `L153` (the gate before a push runs every test family CI runs). Planned: dev/MARCH.md 13.15, 13.17 — an exception's type, every function named;
-  one compile entry (dev/AUDIT.md A2C6); every throw's stack checked by its callers (A4B9 = A4P5); a check that `bash dev/lanes.sh` gives its verdict in
-  minutes.
+  throw site) `L153` (the gate before a push runs every test family CI runs).
+  Planned: dev/MARCH.md 13.15, 13.17 — an exception's type, every function named; one compile
+  entry; every throw's stack checked by its callers; a check that `bash dev/lanes.sh` gives its
+  verdict in minutes.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
-  charter within 5 commits, `dev/AUDIT.md`). Planned: dev/MARCH.md 13.17 — L148 chains its
-  entries and counts over the head that lands, and a check that every open finding is on the
-  row its clause names (dev/AUDIT.md A2P5, A3P4).
+  charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
+  rows, and every finding sits on a row).
 
 ## Rules that keep the goal from drifting
 
