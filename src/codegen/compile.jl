@@ -811,6 +811,17 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     fill_egal_function!(mod, type_registry)
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
+    # an exception that escapes an export leaves Julia's stack as the call found it: in a module
+    # that has the stack, each export calls through its entry, and the inner keeps its name
+    if global_named(mod, "\$exc_top") !== nothing
+        for (k, e) in enumerate(mod.exports)
+            (e.kind == 0x00 && e.idx >= num_imported_funcs(mod)) || continue
+            local slot = Int(e.idx) - num_imported_funcs(mod) + 1
+            local f = mod.functions[slot]
+            mod.functions[slot] = WasmFunction(f.type_idx, f.locals, f.body, f.mappings, e.name)
+            mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, e.idx, e.name))
+        end
+    end
 
     # Clear module-level state after compilation
     clear_rng_globals!()

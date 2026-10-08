@@ -306,9 +306,9 @@ end
 # ============================================================================
 
 """
-Represents a WebAssembly function definition: its type, locals, body bytes, and the body's
+Represents a WebAssembly function definition: its type, locals, body bytes, the body's
 source mappings (byte offsets into `body`; empty for a compiler-generated function that no
-statement emitted).
+statement emitted), and the name the name section gives it ("" for none: an export names it).
 parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
@@ -316,10 +316,15 @@ struct WasmFunction
     locals::Vector{WasmValType}
     body::Vector{UInt8}
     mappings::Vector{SourceMapping}
+    name::String
 end
+# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a function with no name of its own.
+WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8},
+             mappings::Vector{SourceMapping})::WasmFunction =
+    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, mappings, "")
 # parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a body with no source mappings.
 WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8})::WasmFunction =
-    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, SourceMapping[])
+    WasmFunction(type_idx, locals, body, SourceMapping[])
 
 """
 Represents an export entry.
@@ -840,10 +845,11 @@ function add_function!(mod::WasmModule,
                        params::Vector{<:WasmValType},
                        results::Vector{<:WasmValType},
                        locals::Vector{<:WasmValType},
-                       body::Vector{UInt8})::UInt32
+                       body::Vector{UInt8}; name::String="")::UInt32
     ft = FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
     type_idx = add_type!(mod, ft)
-    push!(mod.functions, WasmFunction(type_idx, WasmValType[l for l in locals], body))
+    push!(mod.functions, WasmFunction(type_idx, WasmValType[l for l in locals], body,
+                                      SourceMapping[], name))
     # Function index = number of imported functions + local function index
     return UInt32(num_imported_funcs(mod) + length(mod.functions) - 1)
 end
@@ -1452,6 +1458,10 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         if exp.kind == 0x00  # function export
             func_names[exp.idx] = exp.name
         end
+    end
+    # a defined function's own name (dart's NameSection names every function it defines)
+    for (k, f) in enumerate(mod.functions)
+        isempty(f.name) || (func_names[UInt32(num_imported_funcs(mod) + k - 1)] = f.name)
     end
     if !isempty(func_names)
         # Custom section (section id 0)

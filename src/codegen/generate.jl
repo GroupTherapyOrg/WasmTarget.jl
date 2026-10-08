@@ -479,6 +479,42 @@ function ensure_exception_top_global!(mod::WasmModule)::UInt32
 end
 
 """
+    emit_export_entry!(mod, inner_idx, name) -> func_idx
+
+The function an export calls in place of `inner_idx`: it keeps the top of Julia's exception
+stack at entry and, when a Julia exception escapes, restores that top and throws it again, as
+the host is the catching frame whose JL_CATCH restores the depth its JL_TRY saved
+(jl_restore_excstack). The inner keeps the export's name; this one is "<name> (export)", as dart
+names an import "<name> (import)" (functions.dart:141).
+formal(dev/formal/ExceptionStack.tla): an escape leaves the stack as the call found it.
+parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. A foreign (JS) exception passes the entry without a restore, as every Julia catch region catches only the tag (L101); the handler's throw is L145's second throw site.)
+"""
+function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::UInt32
+    local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
+    local top = ensure_exception_top_global!(mod)
+    local cell = ConcreteRef(exc_cell_type!(mod), true)
+    ensure_exception_tag!(mod)
+    local tag = 0   # the module's one tag, as emit_throw_value! throws it
+    local b = InstrBuilder(copy(ft.params), copy(ft.results); func_name="emit_export_entry!", mod=mod)
+    local saved = builder_add_local!(b, cell)
+    global_get!(b, top, cell); local_set!(b, saved)
+    # the typed tag catches every Julia exception (L101): restore the top, then throw its payload,
+    # the exception and the stack its first throw captured, again (L145's second throw site)
+    local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])
+    try_table!(b, [catch_clause(tag, escaped)]; results=copy(ft.results))
+    for i in 0:length(ft.params) - 1; local_get!(b, i); end
+    call!(b, inner_idx, ft.params, ft.results)
+    end_block!(b)
+    return_!(b)
+    end_block!(b)
+    local_get!(b, saved); global_set!(b, top)
+    throw_!(b, tag)
+    finish_function!(b)
+    return add_function!(mod, ft.params, ft.results, b.locals[length(ft.params) + 1:end],
+                         builder_code(b); name=name * " (export)")
+end
+
+"""
     exc_saved_local!(ctx, enter_idx) -> local
 
 The local where try region `enter_idx` keeps the top of the exception stack when it is
