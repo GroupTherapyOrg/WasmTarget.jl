@@ -364,6 +364,7 @@ read by no class header, trap.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
 parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
 call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
+parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes (methoderror_args_types), so the tuple is chosen by class among those numbered at compile time; dart builds its Invocation at run time from whatever arguments arrive.)
 """
 function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                                        @nospecialize(closure_type), arity::Int)::InstrBuilder

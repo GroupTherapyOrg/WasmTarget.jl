@@ -20,14 +20,18 @@
 (* `rethrow()` in a function called from a catch raises the caller's        *)
 (* exception). The host is the catching frame of the call it makes: its     *)
 (* JL_TRY records jl_excstack_state at the call's entry and its JL_CATCH    *)
-(* ends in jl_restore_excstack (julia.h:2532, :2541), so after an escape    *)
+(* ends in jl_restore_excstack (julia.h:2548 and :2555, the compiled       *)
+(* JL_TRY and JL_CATCH, Julia 1.12.7), so after an escape                  *)
 (* the stack is what it was when the call began: empty from the top        *)
 (* level, the caller's entries in a re-entrant callback (the host calls an  *)
 (* export while an outer export's call is open, in a catch or not). A call  *)
 (* that returns normally has popped every region it entered.                *)
 (*                                                                         *)
-(* WT (Impl = "cells"). The stack is a linked list of cells {exn, prev}    *)
-(* whose top is one global, `$exc_top`: a throw pushes a cell and raises    *)
+(* WT (Impl = "cells"). An entry of the stack is a cell (exn, stack): its   *)
+(* exception and the stack trace its throw captured, with no link to the    *)
+(* entry below; nothing reads below the top except through a top an enter  *)
+(* saved (exc_cell_type!, generate.jl). The top is one global,             *)
+(* `$exc_top`: a throw pushes a cell and raises                            *)
 (* the tag with (exn, stack); a rethrow raises the top cell's without       *)
 (* pushing; an enter saves the top pointer; a pop_exception restores it;    *)
 (* the_exception reads the top cell; `rethrow(e)` writes the top cell's     *)
@@ -41,6 +45,9 @@
 (* each a program of nested try, catch and rethrow (bounded by MaxFrames   *)
 (* and MaxSteps), every `the_exception` read and every raised value is      *)
 (* Julia's (Agrees, read in every state of the run, so over every call).    *)
+(* The claim covers tag escapes only; a non-tag escape (a foreign          *)
+(* exception, a trap) and H5 are open on dev/MARCH.md 13.17 (A12B1, H5,    *)
+(* A12P2).                                                                 *)
 (* The Broken instances: the value-save lowering (Impl = "values": an       *)
 (* enter saves `$current_exn`, a catch sets it, a pop restores it, a        *)
 (* rethrow throws it: `rethrow(e)` inside a region nested in a catch is     *)
@@ -58,14 +65,14 @@
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Two exception values; a stack trace is the   *)
 (* value's companion and is carried wherever the value is, so it is left   *)
-(* out. Control flow is the frame stack the lowering sees: an open try      *)
+(* out, and a cell is its exn alone. Control flow is the frame stack the lowering sees: an open try      *)
 (* body, an open catch body; `return`/`break` out of a catch is its        *)
 (* pop_exception (Julia's lowering emits one), a finally is a catch that   *)
 (* ends in rethrow(). The host is a catching frame: an escape from a call   *)
 (* returns to the host, which resumes its caller (or the top level); a      *)
 (* host that lets an escape unwind on into the calling export's handler is  *)
-(* outside the claim until H5 (dev/MARCH.md 13.17), a regression the entry *)
-(* introduced, modeled and fixed next. Calls inside the module are direct  *)
+(* outside the claim (H5, open on dev/MARCH.md 13.17), a regression the    *)
+(* entry introduced. Calls inside the module are direct                    *)
 (* calls of the inner functions, which share the frame stack and need no *)
 (* entry.                                                                  *)
 (*                                                                         *)
@@ -75,8 +82,8 @@
 (* emit_current_exception!, ensure_exception_top_global!, exc_saved_local! *)
 (* in generate.jl; the region's enter and pop_exception in statements.jl). *)
 (* formal(src/codegen/generate.jl emit_export_entry!; the export repoint   *)
-(* in src/codegen/compile.jl after fill_egal_function!): an escape from an *)
-(* export leaves `$exc_top` as the call found it.                          *)
+(* in src/codegen/compile.jl after fill_egal_function!): a tag escape from *)
+(* an export leaves `$exc_top` as the call found it.                       *)
 (*                                                                         *)
 (* parity(quarantine: Julia's per-task exception stack outlives a call;    *)
 (* the host is the catching frame that restores its depth,                 *)
@@ -100,7 +107,7 @@ AllVals == Vals \cup {Nothing, ErrR, ErrO}
 VARIABLES frames,   \* the open try and catch bodies of every open call, innermost last
           calls,    \* the host's open calls, innermost last
           spec,     \* Julia's exception stack
-          cells,    \* WT's cells: a sequence of [exn, prev]; a pointer is an index, 0 is null
+          cells,    \* WT's cells: a sequence of [exn] (no link); a pointer is an index, 0 is null
           top,      \* WT's top pointer
           cur,      \* Impl = "values": the one `$current_exn`
           obsS, obsI,  \* the last observation, Julia's and WT's
@@ -113,7 +120,7 @@ Frame == [kind : {"try", "catch"}, depth : Nat, ptr : Nat, val : AllVals]
 Call == [depth : Nat, ptr : Nat, val : AllVals, base : Nat]
 
 TypeOK == /\ frames \in Seq(Frame) /\ calls \in Seq(Call) /\ spec \in Seq(AllVals)
-          /\ cells \in Seq([exn : AllVals, prev : Nat]) /\ top \in Nat /\ cur \in AllVals
+          /\ cells \in Seq([exn : AllVals]) /\ top \in Nat /\ cur \in AllVals
           /\ steps \in Nat
 
 \* the run begins inside the host's first call
@@ -160,7 +167,7 @@ Raise(sv, iv, spec2, c2, t2) ==
         /\ IF Impl = "values"
            THEN /\ cur' = iv /\ cells' = c2 /\ top' = t2
            ELSE IF PushAtLanding
-           THEN /\ cells' = Append(c2, [exn |-> iv, prev |-> t2]) /\ top' = Len(c2) + 1
+           THEN /\ cells' = Append(c2, [exn |-> iv]) /\ top' = Len(c2) + 1
                 /\ cur' = cur
            ELSE /\ cells' = c2 /\ top' = t2 /\ cur' = cur
 
@@ -203,7 +210,7 @@ Read == /\ InCall
         /\ UNCHANGED <<frames, calls, spec, cells, top, cur>>
 
 \* a throw's push (Impl = "cells", unless the landing pushes)
-Pushed(v) == IF Impl = "cells" /\ ~PushAtLanding THEN Append(cells, [exn |-> v, prev |-> top]) ELSE cells
+Pushed(v) == IF Impl = "cells" /\ ~PushAtLanding THEN Append(cells, [exn |-> v]) ELSE cells
 PushedTop == IF Impl = "cells" /\ ~PushAtLanding THEN Len(cells) + 1 ELSE top
 
 Throw(v) == InCall /\ Raise(v, v, Append(spec, v), Pushed(v), PushedTop)

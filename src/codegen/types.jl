@@ -1740,8 +1740,7 @@ translator.dart:344 builtinTypes.)
 
 # parity(quarantine: the Julia signedness of a packed i8/i16 element load, see packed_array_storage.)
 @inline packed_array_signedness(@nospecialize(T))::Union{Nothing,Bool} =
-    T === Int8 || T === Int16 ? true :
-    T === UInt8 || T === UInt16 ? false : nothing
+    packed_array_storage(T) === nothing ? nothing : T <: Signed
 
 # parity(translator.dart:1205 arrayTypeForDartType): one cached array type per element type.
 function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Type)::UInt32

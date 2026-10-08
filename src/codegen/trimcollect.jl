@@ -448,7 +448,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # a type object held as a value is the candidate Type{X}, whether its values are one
     # pointer or are told by type equality (a Type{X} row that tests type equality rejects,
     # _closure_param_untestable; left out, a value of it ran another method, A10C1)
-    local held_seen = Base.IdSet{Any}()   # constants already walked (a cycle walks once)
+    # each heap object a constant reaches, by its address: `===` and objectid recurse through an
+    # immutable object's fields, so a shared immutable child would be walked once per path
+    local held_seen = Set{Ptr{Cvoid}}()
+    local held_alive = Any[]   # each visited object, kept alive so no address is reused mid-walk
+    local held_site = Ref{Any}(nothing)   # the statement whose operand is being walked
     function observe_held!(node::NirNode)
         local v = node isa NirLiteral ? node.value :
                   (node isa NirGlobalRef && node.bound && isconst(node.mod, node.name)) ? node.value : nothing
@@ -456,36 +460,46 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         return
     end
     # every value a constant reaches: an array's or a Memory's elements, a struct's or tuple's
-    # fields, a mutable one's included, each object once (A11C1). A module and exactly these
+    # fields, a mutable one's included, each heap object once (a worklist, so neither a shared
+    # child nor a long chain multiplies the walk or deepens the stack; a fresh box getfield makes is
+    # kept alive, so its address is not reused for another). A module and exactly these
     # runtime structures of Core (a TypeName, a method table and its entries, a Method, a
     # MethodInstance, a CodeInstance, a CodeInfo, a binding, a SimpleVector) are not values a
     # program reads out of a constant (a NamedTuple, a Box are walked): walking them reached the
-    # whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11
-    # svec). A walk past 10^6 objects raises rather than stopping silently.
-    function hold!(@nospecialize(v))
-        if v isa Type
-            local VT = Core.Typeof(v)
-            VT isa DataType && VT.name === Type.body.name && push!(held_type_objects, VT)
-            return
-        end
-        v isa Module && return
-        (v isa Core.TypeName || v isa Core.MethodTable || v isa Core.TypeMapEntry ||
-         v isa Core.TypeMapLevel || v isa Method || v isa Core.MethodInstance ||
-         v isa Core.CodeInstance || v isa Core.CodeInfo || v isa Core.Binding ||
-         v isa Core.SimpleVector) && return
-        if ismutable(v) || v isa AbstractArray
-            v in held_seen && return
-            push!(held_seen, v)
-            length(held_seen) > 1_000_000 &&
-                error("the held type objects' walk of the program's constants passed 10^6 objects")
-        end
-        if v isa Array || v isa GenericMemory
-            for i in eachindex(v)
-                isassigned(v, i) && hold!(v[i])
+    # whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11C9).
+    # Past 10^6 heap objects (type objects, bits values and the skipped kinds are not counted) the
+    # walk raises, a WasmInternalError at the module naming the statement whose constant it walked.
+    function hold!(@nospecialize(root))
+        local work = Any[root]
+        while !isempty(work)
+            local v = pop!(work)
+            if v isa Type
+                local VT = Core.Typeof(v)
+                VT isa DataType && VT.name === Type.body.name && push!(held_type_objects, VT)
+                continue
             end
-        elseif isstructtype(typeof(v))
-            for i in 1:nfields(v)
-                isdefined(v, i) && hold!(getfield(v, i))
+            (isbits(v) || v isa Module) && continue
+            (v isa Core.TypeName || v isa Core.MethodTable || v isa Core.TypeMapEntry ||
+             v isa Core.TypeMapLevel || v isa Method || v isa Core.MethodInstance ||
+             v isa Core.CodeInstance || v isa Core.CodeInfo || v isa Core.Binding ||
+             v isa Core.SimpleVector) && continue
+            local addr = ccall(:jl_value_ptr, Ptr{Cvoid}, (Any,), v)
+            addr in held_seen && continue
+            push!(held_seen, addr)
+            push!(held_alive, v)
+            if length(held_seen) > 1_000_000
+                local site = held_site[]
+                error("the walk of the program's constants for the type objects they hold passed " *
+                      "10^6 objects" * (site === nothing ? "" : ", at " * _enrollment_text("the constant", site...)))
+            end
+            if v isa Array || v isa GenericMemory
+                for i in eachindex(v)
+                    isassigned(v, i) && push!(work, v[i])
+                end
+            elseif isstructtype(typeof(v))
+                for i in 1:nfields(v)
+                    isdefined(v, i) && push!(work, getfield(v, i))
+                end
             end
         end
         return
@@ -514,8 +528,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j] isa Core.CodeInstance &&
          codeinfos[j + 1] isa Core.CodeInfo) || continue
-        for s0 in nir_for(codeinfos[j + 1])
+        for (sidx, s0) in enumerate(nir_for(codeinfos[j + 1]))
             local node0 = s0.node
+            held_site[] = (codeinfos[j], codeinfos[j + 1], sidx, node0)
             node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)
             # the builtins that allocate a class without a %new instantiate it as surely:
             # a MemoryRef (memoryrefnew), a Memory (jl_alloc_genericmemory), and a tuple

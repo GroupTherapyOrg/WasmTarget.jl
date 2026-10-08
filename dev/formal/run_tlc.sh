@@ -5,7 +5,11 @@
 # instance with concrete constants and its INVARIANT/PROPERTY list). A model may also ship
 # MC<Name>Broken.cfg — an instance that deliberately violates the claim; TLC MUST report a
 # violation for it, or the model is vacuous (the same discipline as the ratchet's negative
-# tests). Exit 1 on any unexpected result.
+# tests). A Broken cfg's first line names the claim it violates, `\* expect: <Name>`: an
+# INVARIANT of the cfg, a PROPERTY of it (TLC's temporal form names none), or Deadlock. It
+# passes only when TLC reports that violation; a violation of any other claim (TypeOK
+# included) fails, and so does a Broken cfg with no expect line. Exit 1 on any unexpected
+# result.
 set -euo pipefail
 cd "$(dirname "$0")"
 JAR="${TLA2TOOLS_JAR:-$HOME/.cache/wasmtarget/tla2tools.jar}"
@@ -41,13 +45,42 @@ for cfg in "${cfgs[@]}"; do
     [ -n "$base" ] && tla="$base.tla"
   fi
   if [ ! -e "$tla" ]; then printf '  FAIL %-28s no instance module %s\n' "$cfg" "$tla"; fail=1; continue; fi
-  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$WORKERS" -metadir "$meta/${cfg//\//_}" -config "$cfg" -deadlock "$tla" 2>&1) || true
+  if [ "$expect" = violation ]; then
+    want=$(head -1 "$cfg" | sed -n 's/^\\\* expect: \([A-Za-z0-9_]*\)[[:space:]]*$/\1/p')
+    if [ -z "$want" ]; then printf '  FAIL %-28s no first line "\\* expect: <Name>"\n' "$cfg"; fail=1; continue; fi
+    # the kind of claim it names: an INVARIANT or a PROPERTY the cfg lists (one per line
+    # or under INVARIANTS/PROPERTIES), or Deadlock
+    kind=$(awk -v w="$want" '/^[[:space:]]*\\\*/ { next }
+      /^[A-Z_]+/ { sec = $1; $1 = "" } { for (i = 1; i <= NF; i++) if ($i == w) {
+        if (sec ~ /^INVARIANTS?$/) k = "invariant"; else if (sec ~ /^PROPERT(Y|IES)$/) k = "temporal" } }
+      END { print (w == "Deadlock" ? "Deadlock" : k) }' "$cfg")
+    if [ -z "$kind" ]; then printf '  FAIL %-28s expects %s, which the cfg does not check\n' "$cfg" "$want"; fail=1; continue; fi
+  fi
+  # A Broken cfg runs on one worker: TLC's breadth-first search is then deterministic, so
+  # the first violation it reports, the one its expect line names, is the same on every
+  # run and machine (MCConstantsSkipChildBroken reported NoPartialIntern on two workers
+  # and MutableNeverAliases on one and on `auto`).
+  w="$WORKERS"; [ "$expect" = violation ] && w=1
+  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$w" -metadir "$meta/${cfg//\//_}" -config "$cfg" -deadlock "$tla" 2>&1) || true
   # Classified with shell pattern matches, not `echo | grep -q`: under pipefail a
   # multi-megabyte counterexample trace makes `echo` die of SIGPIPE when grep -q
   # exits early, which misreported a real violation as "error" (found on Coercion).
-  if [[ "$out" == *"Error: Invariant "*" is violated"* || "$out" == *"Error: Temporal properties were violated"* || "$out" == *"Error: Deadlock reached"* ]]; then result=violation
+  # a violation is named by the claim TLC reports: the invariant, "temporal" (TLC's
+  # temporal form names no property), or Deadlock
+  if [[ $out =~ Error:\ Invariant\ ([A-Za-z0-9_]+)\ is\ violated ]]; then result=violation; got=${BASH_REMATCH[1]}
+  elif [[ "$out" == *"Error: Temporal properties were violated"* ]]; then result=violation; got=temporal
+  elif [[ "$out" == *"Error: Deadlock reached"* ]]; then result=violation; got=Deadlock
   elif [[ "$out" == *"Model checking completed. No error has been found"* ]]; then result=ok
   else result=error; fi
+  # a Broken cfg passes only on its own claim: the invariant by name, else the form
+  if [ "$expect" = violation ]; then
+    expect="violation of $want"
+    if [ "$result" = violation ]; then
+      if [ "$kind" = invariant ]; then [ "$got" = "$want" ] && got_claim=$want || got_claim=$got
+      else [ "$got" = "$kind" ] && got_claim=$want || got_claim=$got; fi
+      result="violation of $got_claim"
+    fi
+  fi
   # the LAST count is the final one (TLC prints progress counts on long runs); `|| true`
   # keeps a parse error (no count at all) on the FAIL path instead of aborting under set -e
   states=$(grep -oE "[0-9]+ distinct states found" <<< "$out" | tail -1 || true)

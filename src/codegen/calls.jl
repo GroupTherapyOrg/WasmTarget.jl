@@ -3052,9 +3052,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local_get!(_prbb, _prb_lb)
             i32_const!(_prbb, Int64(trailing_zeros(_prb_s)))
             num!(_prbb, Opcode.I32_SHR_U)
-            # packed or not by the one rule (packed_array_signedness, A11B11); a packed element is
+            # packed or not by the one rule (packed_array_storage, A11B11); a packed element is
             # read unsigned, the byte extraction below masking it
-            array_get!(_prbb, _prb_arr, I32; signed=(packed_array_signedness(_prb_te) === nothing ? nothing : false))
+            array_get!(_prbb, _prb_arr, I32; signed=(packed_array_storage(_prb_te) === nothing ? nothing : false))
             # shift = 8 * (b & (s-1))
             local_get!(_prbb, _prb_lb)
             i32_const!(_prbb, Int64(_prb_s - 1))
@@ -4688,6 +4688,7 @@ call's static types; the class in `tid_local` selects it. Another class traps.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
 parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
 call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
+parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes (methoderror_args_types), so the tuple is chosen by class among those numbered at compile time; dart builds its Invocation at run time from whatever arguments arrive.)
 """
 function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(f),
                                    args, arg_locals::Vector{Int}, call_arg_types, dpos::Int,
@@ -4740,6 +4741,7 @@ and the throw builds that tuple and the MethodError. A class with no numbered tu
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
 parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
 call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
+parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes (methoderror_args_types), so the tuple is chosen by class among those numbered at compile time; dart builds its Invocation at run time from whatever arguments arrive.)
 """
 function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVector, ea,
                                            ctx::AbstractCompilationContext)::InstrBuilder

@@ -15,7 +15,7 @@ further and gates on it.
 | `<Name>.tla` | the model of the ACTUAL Julia algorithm, read from source; its header says what is abstracted and why that suffices, names the modeled function, and cites the dart anchor (or the quarantine reason) |
 | `MC<Name>.tla` / `MC<Name>.cfg` | a small instance: `TypeOK`, the claim invariants/properties, a deadlock check |
 | `MC<Name>[Variant]Broken.cfg` | a deliberately wrong variant (a CONSTANT flag mirroring a realistic bug class) that TLC MUST reject — a model no wrong variant can violate proves nothing |
-| `run_tlc.sh` | runs every `MC*.cfg`; fails if a Broken instance passes or a positive one fails; fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
+| `run_tlc.sh` | runs every `MC*.cfg`; fails if a positive instance fails or a Broken one does not violate exactly the claim its first line names (`\* expect: <Invariant>`, checked on one worker so the first violation TLC reports is fixed); fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
 
 The modeled Julia function carries a one-line `formal(dev/formal/<Name>.tla): <claim>` anchor —
 inside its docstring when it has one (a comment line between a docstring and its definition
@@ -52,9 +52,9 @@ anchor in `src/` has a row.)
 | Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
 | External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
 | Inline classId switch | `_try_inline_typeid_dispatch`, `_emit_switch_methoderror!`, `_emit_throw_methoderror_by_class!` (calls.jl), `_emit_closure_arg_tests!`, `_closure_dispatch_trampoline!`, `_closure_trampoline!`, `_emit_trampoline_methoderror!` (closures.jl), `bare_array_partition` (builtins.jl), the no-method args tuples (`_dynamic_dispatch_candidate_mis`, `methoderror_args_types`, trimcollect.jl) | ClassIdSwitch |
-| Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` (trimcollect.jl), `_most_specific_first`, `ambiguous_class_tuple` (closures.jl), the vtable pre-pass's invoke-only and ambiguity rules (compile.jl) | Enrollment |
+| Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` and its walk of the held constants `hold!` (trimcollect.jl), `_most_specific_first`, `ambiguous_class_tuple` (closures.jl), the vtable pre-pass's invoke-only and ambiguity rules (compile.jl) | Enrollment |
 | Type identity under iso-recursive canonicalization | `add_type!`, `add_type_group!`, `_group_member_equal` (instructions.jl), `finish_pending!` (structs.jl) | TypeIdentity |
-| `===` over representations | `emit_egal!`, `get_egal_function!`, `fill_egal_function!` (calls.jl) | EgalDispatch |
+| `===` over representations | `emit_egal!`, `get_egal_function!`, `fill_egal_function!`, `_fill_egal_body!` (calls.jl) | EgalDispatch |
 | Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |

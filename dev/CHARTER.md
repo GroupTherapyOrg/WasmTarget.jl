@@ -78,7 +78,7 @@ with the per-clause status. A clause is never closed by argument.
   the edit site (load-time typing, the enforcing builder, the locks) or by the minute-scale
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
-  missing wasm runtime. Checks: `L16` `L94` `L134` `R33` `R36`.
+  missing wasm runtime. Checks: `L16` `L94` `L134` `L155` `R33` `R36`.
   Planned: dev/MARCH.md 13.3, 13.14, 13.17 — the checks the audits found pinning text.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain

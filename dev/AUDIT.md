@@ -3,7 +3,10 @@
 The locks check what they measure; drift hides in what none of them counts. So the work
 pauses at every session start and at most every 5 commits for a full audit against
 `dev/CHARTER.md` (AGENTS.md, "The anti-drift audit"), and records it here. L148 fails when
-the last entry is more than 5 commits behind HEAD or an entry leaves out an area.
+the entries do not chain (an entry's range must start at the commit the entry before it was
+audited through, and every audited-through commit must be an ancestor of HEAD), when the
+last entry is more than 5 commits behind HEAD (merges not counted), or when an entry leaves
+out an area or a `Resolution:`.
 
 The method:
 
@@ -1052,10 +1055,11 @@ result goes through the funnel, and _emit_closure_object! is the one constructio
 (emit_closure_wrap! uses it; closure_vtable_global the one vtable lookup). A11B1 = A11E3: `===` on a
 mutable callable takes the runtime egal (its contexts by identity). A11C5: a mutable callable's
 context fields are mutable. A11C1: the held set follows every value a constant reaches through an
-array, a Memory or a struct's or tuple's fields, mutable ones included, each object once. It skips a module and Core's
+array, a Memory or a struct's or tuple's fields, mutable ones included, each mutable object or array once (an
+immutable one once per path, recursively, until batch 109's worklist; A12C1). It skips a module and Core's
 TypeName, MethodTable, TypeMapEntry, TypeMapLevel, Method, MethodInstance, CodeInstance, CodeInfo,
 Binding and SimpleVector: none is a value a program reads out of a constant, walking them reached
-the whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11 svec); a
+the whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11C9); a
 walk past 10^6 objects raises. It holds the kind of each type object a value may be where a `typeof`
 can return one. A11E2 = A11C4: emit_class_id! reads Nothing's id for a null where the static
 type admits Nothing (dart's null branch before loadClassId), and the closure entry's MethodError
@@ -1083,3 +1087,61 @@ field_write, held_in_closure), method_error's two
 Everything else (A11E1's dynamic call of a closure created elsewhere, A11C2, A11C3, A11C6, the
 c1b-class kind rows, A11P7, A11E4 = A11B7 = A11C7, A11B8, A11E7, A11E6 = A11B5, A11B6, Nothing's
 three layouts): MARCH 13.17.
+
+## 2026-10-08 — audited through eb412a31 (623f19dc..eb412a31: batches 104–108)
+
+The twelfth audit, of the eleventh audit's fixes, C0's locks, three models brought to the code,
+the else-less if, and the export entry: 31 findings. Each predicted wrong answer was measured,
+native then wasm, at eb412a31 and again at 623f19dc. None is new to the range: an undefined
+element read as `nothing` (A12E1: native -1, wasm 2), a function singleton crossing a vtable
+result seam (A12E2: trap, native 18), and an escape that is not the tag leaving a catch's entry
+(A12B1 = A12C4 = A12E3 = A12P1: after a stack exhaustion inside a catch, the next export's
+`rethrow()` answers 1, native 2) answer the same at both commits. What the range did break:
+batch 104's walk of the constants recursed per path and without a depth bound (A12C1: a 10^6
+chain overflowed the stack inside it), batch 106 weakened a positive claim to fit the code
+(A12P4), batch 108 dropped half of A3B15 unfixed (A12B2 = A12P3), and the range's prose claimed
+more than its code does (A12C2, A12E6 = A12P11, the export entry's scope). H5, which batch 108
+introduced and recorded, is not reachable from WT's own imports; A12P2 shows its planned fix
+unsound.
+
+Area: builder — (A12B1) above. (A12B2) above. (A12B3) a function's name has three sources and
+the export is decided twice. (A12B4) the MethodError builders' anchors lack the quarantine of
+their per-class tuple selection. (A12B5) signedness and storage spell the packed types twice.
+(A12B6) the packed-storage test is spelled five times.
+
+Area: collection and planning — (A12C1) above. (A12C2) P4's restatement says "unreachable" where
+the evidence shows "not observed". (A12C3) the walk's arms have no case. (A12C4) above. (A12C5)
+the export repoint is a post-hoc rewrite of every export.
+
+Area: emission and diagnostics — (A12E1) above. (A12E2) above. (A12E3) above. (A12E4) the
+export decided twice (with A12B3, A12C5). (A12E5) the export-escape test pins half the claim.
+(A12E6) ExceptionStack.tla's header states a linked cell and julia.h's analyzer lines. (A12E7) a
+null is `nothing` by two rules. (A12E8) maybe_wrap_closure!'s rejection is reached by no case.
+
+Area: enforcement and prose — (A12P1) above. (A12P2) the planned H5 landing push by `ref.eq` is
+unsound. (A12P3) above. (A12P4) RejectOnlyWhenAmbiguous was weakened by `\/ Unaskable`, and the
+bound's message says Julia throws MethodError where no tuple need be ambiguous. (A12P5) a
+ratchet missing from the baseline passed at any count. (A12P6) the gate passed green while it
+skipped the formal, probe and coverage lanes. (A12P7) no case calls an export re-entrantly.
+(A12P8) a Broken instance passed on any violated invariant, TypeOK included. (A12P9) L154's ID
+regex missed L8, L11 and three unnumbered findings. (A12P10) A11P3's iterate fix had no case.
+(A12P11) stale prose. (A12P12, the report's note) L129 counts lines, and 13.17 is one line.
+
+Resolution: batch 109 fixes what the range broke. Found by CI after the audit, and first: batch
+108's export entry trapped in every shard on Node 22 (V8 12.4 traps entering a try_table with a
+reference result); its try_table is result-less now, L155 keeps every one so, and the gate runs
+CI's Node (lanes.sh reads ci.yml's node-version; L153). A12C1: the walk is a worklist over addresses,
+each heap object once and kept alive for the walk, counting every heap object it visits but the
+skipped kinds, raising past 10^6 a WasmInternalError that names the statement holding the constant; the 10^6+1 chain now rejects there, and the DAG's remaining
+hang sits in _collect_reachable_ir_types (value!, contents!), which hung at 623f19dc too (13.17). A12C3: cases for
+the field, Memory and cycle arms and for the bound, each negative-tested. A12P4: the claim is
+restored; today's code past the bound is MCEnrollmentBoundOverRejectBroken.cfg (module MCEnrollmentBoundOverReject.tla), pinned to A8C8
+(13.17), and the message names the overlap it cannot ask about. A12P5, A12P6, A12P8, A12P9: the
+locks fail on each hole (negative-tested). A12P10: smoke iterate_held (623f19dc: an internal
+error). A12B4, A12B5, A12C2, A12B2 = A12P3, A12E6 = A12P11 and the export entry's scope: the
+prose and the one rule. Everything else is on MARCH 13.17: the export boundary for every escape,
+model first, as batch 110 (A12B1 = A12C4 = A12E3 = A12P1, A12P2, A12P7 = A12E5, A12B3 = A12E4 =
+A12C5, H5); A12E1, A12E2, A8C8 and A12C1's remainder (C3 C6); A12E7 and A12B6 (C1); A12E8 (C5);
+A12P12 (C9); A3B15's global names. Found writing A12C3's cases and measured at batch 109: a
+constant Memory{Any} the program indexes raises a WasmInternalError (A12C6), and a cyclic mutable
+constant rejects at its statement (A12C7): both on 13.17 (C3 C6).

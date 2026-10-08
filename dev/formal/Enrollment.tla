@@ -43,9 +43,12 @@
 (* THE CLAIM. For every class that may reach the call, the entry runs the  *)
 (* method Julia selects (NoWrongMethod), traps only where Julia has no     *)
 (* method (TrapOnlyWhenNoMethod), and rejects only where Julia would find  *)
-(* a call over S ambiguous or an ambiguous pair's overlap is past the      *)
-(* bound (RejectOnlyWhenAmbiguous), and always rejects past the bound      *)
-(* (BoundIsLoud). Broken variants,                                         *)
+(* a call over S ambiguous (RejectOnlyWhenAmbiguous), and always rejects   *)
+(* past the bound (BoundIsLoud). Today's code past the bound breaks        *)
+(* RejectOnlyWhenAmbiguous: it rejects a callable none of whose tuples is  *)
+(* ambiguous (the over-rejection A8C8, open on dev/MARCH.md 13.17), which  *)
+(* MCEnrollmentBoundOverRejectBroken pins; MCEnrollmentBound checks the    *)
+(* claims the code keeps past the bound. Broken variants,                  *)
 (* each code WT had: a method enrolled only when its parameter type        *)
 (* contains S (SubsetRule, batch 75); rows in program order (ProgramOrder);*)
 (* rows ordered by their specialized types, ties in program order          *)
@@ -185,6 +188,6 @@ Spec_ == Init /\ [][Step]_vars
 TypeOK == outcome \in Methods \cup {Trap, Reject} /\ done \in BOOLEAN
 NoWrongMethod == done /\ outcome \in Methods => outcome = Julia(f, v)
 TrapOnlyWhenNoMethod == done /\ outcome = Trap => Julia(f, v) = Trap
-RejectOnlyWhenAmbiguous == done /\ outcome = Reject => (\E x \in s : Julia(f, x) = Ambig) \/ Unaskable(f, s)
+RejectOnlyWhenAmbiguous == done /\ outcome = Reject => \E x \in s : Julia(f, x) = Ambig
 BoundIsLoud == done /\ Unaskable(f, s) => outcome = Reject
 =============================================================================

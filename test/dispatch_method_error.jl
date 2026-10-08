@@ -66,6 +66,20 @@ gtn(n::Int64) = (k = n; h(x::Union{Type{Int64},Type{UInt8}}, y) = 1 + 0k; h(x, y
 # a type object a constant NamedTuple's field holds joins the held set
 const HNT = (a = SA, b = 2)
 ghn(n::Int64) = (hide(HNT)[] === nothing ? 0 : n)
+# a constant past the walk's bound: 10^6 + 1 immutable nodes in a chain (A12C1: the recursive
+# walk overflowed the stack, unlocated)
+struct DN; l::Any; r::Any; end
+const CHN = foldl((t, _) -> DN(t, nothing), 1:1_000_001; init = SA)
+gchn(n::Int64) = (hide(CHN)[] === nothing ? 0 : n)
+# a type object a constant Memory's element holds, and one a cyclic constant holds (A12C3: the
+# walk's Memory arm, and its visiting each object once)
+struct HM; v::Int64; end
+struct HC; v::Int64; end
+const CHM = (m = Memory{Any}(undef, 2); m[1] = HM; m[2] = 1; m)
+mutable struct Cyc; next::Any; t::Any; end
+const CHC = (c = Cyc(nothing, HC); c.next = c; c)
+ghm(n::Int64) = (hide(CHM)[] === nothing ? 0 : n)
+ghc(n::Int64) = (hide(CHC)[] === nothing ? 0 : n)
 gab(n::Int64) = (k = n; g = hide(x -> length(x) + k)[]; w = hide(WV([1, 2]))[]::WV;
                  m = Memory{Int64}(undef, 2); g([1, 2, 3])::Int64 + g(w.v)::Int64 + length(m))
 end
@@ -192,6 +206,13 @@ end
               occursin("admits a type object or a bare array", sprint(showerror, e))
     end
     @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.ghn, (Int64,), "ghn")]).held_type_objects
+    @test Type{M.HM} in WasmTarget.trim_compile_plan(Any[(M.ghm, (Int64,), "ghm")]).held_type_objects
+    @test Type{M.HC} in WasmTarget.trim_compile_plan(Any[(M.ghc, (Int64,), "ghc")]).held_type_objects
+    # the walk of the constants raises past 10^6 heap objects, naming the statement holding the constant
+    let e = try; WasmTarget.compile(M.gchn, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmInternalError && occursin("passed 10^6 objects", sprint(showerror, e)) &&
+              occursin("the constant", sprint(showerror, e))
+    end
     # a type object held as a value is a candidate whether or not its values are one pointer: a
     # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)
     @test M.gtu(3) == 1

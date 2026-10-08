@@ -337,6 +337,8 @@ _g("filtered_fold", Any[
 
 # ---- higher-order / reduce ------------------------------------------------
 _g("higherorder", Any[
+    # a generic function held as a value, called on an Int64 (A11P3: iterate(::Int64))
+    ("iterate_held", (n::Int64) -> (f = Any[iterate][1]; t = f(n); t === nothing ? 0 : t[1]), Int64(3)),
     ("reduce_max", (n::Int64) -> reduce(max, 1:n), Int64(7)),
     ("foldl_sum", (n::Int64) -> foldl(+, 1:n; init = 0), Int64(6)),
     ("filter_count", (n::Int64) -> count(iseven, 1:n), Int64(10)),
@@ -1766,6 +1768,10 @@ const _SM_TV = TypeVar(:T)
 const _SM_CT = (Int64, UInt8)
 struct _SmHb; v::Int64; end
 const _SM_HV = Any[_SmHb, 1]
+# a type object a constant mutable struct's field holds (A12C3; the Memory and cycle arms are
+# pinned on the plan in test/dispatch_method_error.jl: neither constant compiles yet)
+struct _SmHr; v::Int64; end
+const _SM_HR = Ref{Any}(_SmHr)
 _g("type_object_rows", Any[
     ("typevar_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(2)),
     # a closure row taking Type{Int64}: Int64's identity (A6B4 = A6C6)
@@ -1781,6 +1787,7 @@ _g("type_object_rows", Any[
     # (A11C1: native 1, wasm 2 or a trap)
     ("mutable_constant_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_SM_HV[n - 2])::Int64), Int64(3)),
     ("typeof_kind_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(typeof(_sm_dh(Int64)[]))::Int64), Int64(3)),
+    ("ref_field_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_SM_HR[])::Int64), Int64(3)),
 ])
 # `===` on closures compares their type and captures, as jl_egal compares an immutable struct,
 # whichever of WT's two representations each operand is (its captured-fields context, or the

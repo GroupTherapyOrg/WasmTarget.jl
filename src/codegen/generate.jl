@@ -486,8 +486,12 @@ stack at entry and, when a Julia exception escapes, restores that top and throws
 the host is the catching frame whose JL_CATCH restores the depth its JL_TRY saved
 (jl_restore_excstack). The inner keeps the export's name; this one is "<name> (export)", as dart
 names an import "<name> (import)" (functions.dart:141).
-formal(dev/formal/ExceptionStack.tla): an escape leaves the stack as the call found it.
-parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. A foreign (JS) exception passes the entry without a restore, as every Julia catch region catches only the tag (L101); the handler's throw is L145's second throw site.)
+Only a tag escape is restored: an escape that is not the tag (a JS exception, the engine's
+RangeError for a stack Julia would raise StackOverflowError on, a trap) leaves a catch's entry
+on the stack, and a re-entrant export's restore can drop the entry its caller's catch reads;
+both are open (dev/MARCH.md 13.17: A12B1, H5, A12P2).
+formal(dev/formal/ExceptionStack.tla): a tag escape leaves the stack as the call found it.
+parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Every Julia catch region catches only the tag (L101), so no other escape is restored here; the handler's throw is L145's second throw site.)
 """
 function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::UInt32
     local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
@@ -500,11 +504,16 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     global_get!(b, top, cell); local_set!(b, saved)
     # the typed tag catches every Julia exception (L101): restore the top, then throw its payload,
     # the exception and the stack its first throw captured, again (L145's second throw site)
+    # the try_table has no results: the call's results go to locals, as every try_table WT emits
+    # (V8 12.4, Node 22, traps on entering a try_table whose result is a reference)
+    local result_locals = Int[builder_add_local!(b, r) for r in ft.results]
     local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])
-    try_table!(b, [catch_clause(tag, escaped)]; results=copy(ft.results))
+    try_table!(b, [catch_clause(tag, escaped)])
     for i in 0:length(ft.params) - 1; local_get!(b, i); end
     call!(b, inner_idx, ft.params, ft.results)
+    for l in reverse(result_locals); local_set!(b, l); end
     end_block!(b)
+    for l in result_locals; local_get!(b, l); end
     return_!(b)
     end_block!(b)
     local_get!(b, saved); global_set!(b, top)

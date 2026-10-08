@@ -1,5 +1,6 @@
 # ============================================================================
-# parity_ratchet.jl — structural enforcement for dev/PARITY_MASTER.md.
+# parity_ratchet.jl — the machine checks of dev/CHARTER.md, the definition of done: every
+# lock and ratchet, and the per-clause status the run prints last.
 #
 # Makes "clean up as you go" MECHANICAL: every structural-disease metric from the
 # 2026-07-01 census is counted here with a precise pattern and compared against the
@@ -7,11 +8,15 @@
 #
 #   RATCHET metrics may only go DOWN.  count > baseline  ⇒  FAIL.
 #   LOCKS pass only at 0.               count != 0       ⇒  FAIL (A3P9).
+#   The baseline holds exactly the ratchets: a ratchet with no baseline line, or a
+#   baseline key that names no ratchet                   ⇒  FAIL (A12P5).
 #
 # When a commit legitimately lowers a count, tighten the baseline IN THE SAME COMMIT:
 #     WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 # (update mode still FAILS on any increase — a ratchet never loosens; a ratchet at 0 becomes a
-# lock by moving its definition from METRICS to LOCKS, and the baseline records ratchets only).
+# lock by moving its definition from METRICS to LOCKS, and the baseline records ratchets only:
+# update mode rewrites it with every ratchet's count, recording a new one and dropping a key
+# that names none, a reviewable diff).
 #
 # Run standalone (seconds, exit 0/1):   julia --project=. test/parity_ratchet.jl
 # Also included by runtests.jl on shard 0 as a @testset.
@@ -41,9 +46,10 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
             section = m.captures[1]
             out[section] = get(out, section, Dict{String,Int}())
         # Accept TOML inline comments.  Without this, an annotated baseline entry is
-        # silently omitted and reported as NEW(baseline), which disables its ratchet.
-        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing && !isempty(section)
-            out[section][m.captures[1]] = parse(Int, m.captures[2])
+        # omitted and its ratchet reported MISSING. A key before any `[section]` is kept
+        # under "" so that run() reports it as naming no ratchet (A12P5).
+        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing
+            get!(out, section, Dict{String,Int}())[m.captures[1]] = parse(Int, m.captures[2])
         end
     end
     return out
@@ -2476,7 +2482,7 @@ const LOCKS = [
                               (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    source_map_url === nothing"),
                               (runner, "const st = e.getArg(tag, 1);"),
                               (runner, "    \$HOST_RUNTIME_MERGE_JS"),
-                              (gen, "    local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])\n    try_table!(b, [catch_clause(tag, escaped)]; results=copy(ft.results))\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    end_block!(b)\n    return_!(b)\n    end_block!(b)\n    local_get!(b, saved); global_set!(b, top)\n    throw_!(b, tag)")]
+                              (gen, "    local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])\n    try_table!(b, [catch_clause(tag, escaped)])\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    for l in reverse(result_locals); local_set!(b, l); end\n    end_block!(b)\n    for l in result_locals; local_get!(b, l); end\n    return_!(b)\n    end_block!(b)\n    local_get!(b, saved); global_set!(b, top)\n    throw_!(b, tag)")]
             abs(throws - 2) + count(((text, needle),) -> !occursin(needle, text), required)
         end),
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: the call, the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
@@ -2553,7 +2559,7 @@ const LOCKS = [
             n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
         () -> begin
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
             local lanes = join(filter(l -> !startswith(lstrip(l), "#"), split(read(joinpath(ROOT, "dev", "lanes.sh"), String), '\n')), '\n')
@@ -2566,7 +2572,58 @@ const LOCKS = [
                       occursin("WT_VALIDATE=1 WT_SHARD=\"1,2\" \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
-                      occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents)])
+                      occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents),
+                      # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
+                      occursin(join([
+                          raw"  if $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                          raw"    lane probes $JULIA --project=. test/probe_bytes.jl",
+                          raw"    lane coverage $JULIA --project=. test/registry_coverage.jl",
+                          raw"  else",
+                          raw"    printf '  FAIL probes         (the default julia is not 1.12: probes, coverage and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
+                          raw"  fi"], '\n'), gated),
+                      # ... no working java ...
+                      occursin(join([
+                          raw"  if java -version >/dev/null 2>&1; then lane formal bash dev/formal/run_tlc.sh; rm -rf dev/formal/states",
+                          raw"  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
+                      # ... and a JULIA= override or no julia +1.13
+                      occursin(join([
+                          raw"  if [ \"$JULIA\" != \"julia\" ]; then",
+                          raw"    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
+                          raw"  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
+                          raw"    lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
+                          raw"  else",
+                          raw"    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
+                          raw"  fi"], '\n'), gated),
+                      # the wasm engine is CI's: ci.yml's node-version, a Node of another major fails
+                      occursin(join([
+                          raw"NODE_MAJOR=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)",
+                          raw"ci_node=\"$(brew --prefix \"node@$NODE_MAJOR\" 2>/dev/null)/bin\"",
+                          raw"[ -x \"$ci_node/node\" ] && export PATH=\"$ci_node:$PATH\"",
+                          raw"node_major=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')",
+                          raw"printf '  node %s (CI: %s)\n' \"$(node --version 2>/dev/null)\" \"$NODE_MAJOR\"",
+                          raw"if [ -z \"$NODE_MAJOR\" ] || [ \"$node_major\" != \"$NODE_MAJOR\" ]; then",
+                          raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
+                          raw"fi"], '\n'), lanes)])
+        end),
+    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, emit_export_entry!). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard (dev/CHARTER.md C5)",
+        () -> begin
+            # each `try_table!(` call, read to its closing paren across lines: a `results=` or a
+            # splatted keyword in it counts
+            local n = 0
+            for (dir, _, fs) in walkdir(CODEGEN), f in fs
+                endswith(f, ".jl") || continue
+                local s = read(joinpath(dir, f), String)
+                for m in findall("try_table!(", s)
+                    local j = last(m); local k = j; local depth = 0
+                    while k <= lastindex(s)
+                        s[k] == '(' && (depth += 1)
+                        s[k] == ')' && (depth -= 1; depth == 0 && break)
+                        k = nextind(s, k)
+                    end
+                    occursin(r"\bresults\s*=|\.\.\.", s[j:min(k, lastindex(s))]) && (n += 1)
+                end
+            end
+            n
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin
@@ -2791,14 +2848,18 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     _fbl_check = function_body_lines(joinpath(CODEGEN, "calls.jl"), "function compile_call!(")
     _fbl_check > 1000 || (println("⚠ function_body_lines sanity check: got $_fbl_check (expected > 1000)"); ok = false)
 
-    println("── parity ratchet (dev/PARITY_MASTER.md) ──")
+    println("── parity ratchet (dev/CHARTER.md's locks and ratchets) ──")
     for (id, (desc, thunk)) in METRICS
         c = thunk()
         current_m[id] = c
         b = get(bm, id, nothing)
-        status = b === nothing ? "NEW(baseline)" :
+        # a ratchet with no baseline line bounds nothing: outside update mode it fails, and only
+        # WT_RATCHET_UPDATE=1 records it, a reviewable diff of the baseline (A12P5)
+        status = b === nothing ? (update ? "NEW(baseline): recorded by this update" :
+                                  "❌ MISSING from dev/parity_baseline.toml (record it with WT_RATCHET_UPDATE=1)") :
                  c > b ? "❌ RATCHET BROKEN (+$(c - b))" :
                  c < b ? "▼ improved ($b→$c — tighten with WT_RATCHET_UPDATE=1)" : "= holding"
+        b === nothing && !update && (ok = false)
         b !== nothing && c > b && (ok = false)
         println(rpad(id, 28), lpad(string(c), 6), "  ", status, "   # ", desc)
     end
@@ -2810,10 +2871,23 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
         good || (ok = false)
         println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want 0)", "   # ", desc)
     end
+    # a baseline key that names no METRICS ratchet fails outside update mode: a lock is not
+    # recorded (A3P9), and a key left by a renamed or deleted ratchet bounds nothing (A12P5)
+    metric_ids = Set{String}(first(p) for p in METRICS)
+    for sec in sort!(collect(keys(baseline))), k in sort!(collect(keys(baseline[sec])))
+        (sec == "metrics" && k in metric_ids) && continue
+        if update
+            println("baseline key [", sec, "] ", k, " names no METRICS ratchet: dropped by this update")
+        else
+            println("❌ STRAY baseline key [", sec, "] ", k, ": names no METRICS ratchet, FAIL (delete the line; a lock is not recorded, A3P9)")
+            ok = false
+        end
+    end
 
 
     # dev/CHARTER.md: the per-clause verdict. A clause is CLOSED only when every check it
-    # cites is a passing lock or a ratchet at 0, and it names no planned check.
+    # cites is a passing lock (a cited ratchet keeps it open, at 0 too, until it moves to
+    # LOCKS) and it names no planned check.
     println("── charter (dev/CHARTER.md) ──")
     allc = merge(current_m, current_l)
     byshort = Dict(_short_id(k) => k for k in keys(allc))
