@@ -693,6 +693,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         end
     end
 
+    # the exports a link_roots hook adds belong to this compile too (a framework's host-facing
+    # functions): each is exported through its entry below, as the compiler's own are
+    local hook_exports_from = length(mod.exports) + 1
     if link_roots !== nothing
         # the linker runs after function indices exist, so add_import! refuses an import from it
         root_indices = Dict{String,UInt32}(
@@ -715,6 +718,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Track export names to avoid duplicates (WASM requires unique export names)
     export_name_counts = Dict{String, Int}()
+    # the exports this compile makes, (name, function index), one per function it defines:
+    # added once, after codegen, where whether the module has Julia's exception stack is known
+    local compile_exports = Tuple{String,UInt32}[]
 
     # Second pass: compile function bodies
     for (i, (f, arg_types, name, _, return_type, global_args, is_closure, fn_nir)) in enumerate(function_data)
@@ -787,18 +793,18 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                                              mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
-        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body,
-                                            body_mappings)
-        actual_idx = func_idx
-
-        # Export the function with a unique name
+        # its name, unique among this compile's functions, is given where it is defined, the
+        # name it is exported under
+        # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
         export_name = name
         count = get(export_name_counts, name, 0)
         if count > 0
             export_name = "$(name)_$(count)"
         end
         export_name_counts[name] = count + 1
-        add_codegen_export!(mod, export_name, 0, actual_idx)
+        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body,
+                                            body_mappings, export_name)
+        push!(compile_exports, (export_name, func_idx))
     end
 
     # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
@@ -814,16 +820,25 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     fill_egal_function!(mod, type_registry)
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
-    # an exception that escapes an export leaves Julia's stack as the call found it: in a module
-    # that has the stack, each export calls through its entry, and the inner keeps its name
-    if global_named(mod, "\$exc_top") !== nothing
-        for (k, e) in enumerate(mod.exports)
+    # each function this compile defines is exported once, here: an exception that escapes an
+    # export leaves Julia's stack as the call found it, so in a module that has the stack the
+    # export is its entry ("<name> (export)"), and the function itself otherwise. A function
+    # export this compile's link_roots hook made goes through its entry too; an existing_module's
+    # exports, made before this compile, are left as they were made.
+    # parity(pkg/dart2wasm/lib/functions.dart:178 exports.export): `module.exports.export(exportName, function)`, once per exported function
+    # (whether the module has the stack is read by the global's name: dev/MARCH.md 13.17
+    # A3B15 = A2B6, globals by handle)
+    local exc_top = global_named(mod, "\$exc_top")
+    if exc_top !== nothing
+        for k in hook_exports_from:length(mod.exports)
+            local e = mod.exports[k]
             (e.kind == 0x00 && e.idx >= num_imported_funcs(mod)) || continue
-            local slot = Int(e.idx) - num_imported_funcs(mod) + 1
-            local f = mod.functions[slot]
-            mod.functions[slot] = WasmFunction(f.type_idx, f.locals, f.body, f.mappings, e.name)
             mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, e.idx, e.name))
         end
+    end
+    for (export_name, inner_idx) in compile_exports
+        add_codegen_export!(mod, export_name, 0,
+            exc_top === nothing ? inner_idx : emit_export_entry!(mod, inner_idx, export_name))
     end
 
     # Clear module-level state after compilation

@@ -92,6 +92,7 @@ end
 # try_table: a block opener (blocktype: 0x40 byte or a WasmValType) plus the catch vec.
 struct TryTable <: WasmInstr; blocktype::BlockTypeArg; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
 struct Throw    <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1032 Throw)
+struct ThrowRef <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1058 ThrowRef)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 
@@ -148,7 +149,7 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, Return, Call, CallIndirect,
     CallRef, BrOnNull, BrOnNonNull,
-    TryCatch, TryTable, Throw,
+    TryCatch, TryTable, Throw, ThrowRef,
     RefNullAbstract, RefNullConcrete, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
     ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
@@ -227,6 +228,7 @@ function encode!(c::Vector{UInt8}, i::TryTable)::Nothing
     for k in i.catches; _encode_catch!(c, k); end
 end
 encode!(c::Vector{UInt8}, i::Throw)::Vector{UInt8}   = (push!(c, Opcode.THROW); _u!(c, i.tag))
+encode!(c::Vector{UInt8}, ::ThrowRef)::Vector{UInt8} = push!(c, Opcode.THROW_REF)  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1064 ThrowRef.serialize)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::RefNullAbstract)::Vector{UInt8} = (push!(c, Opcode.REF_NULL); push!(c, i.heaptype_byte))
@@ -310,6 +312,7 @@ mnemonic(i::BrOnNonNull)::String = "br_on_non_null $(i.depth)"
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::TryTable)::String = "try_table"
 mnemonic(i::Throw)::String   = "throw $(i.tag)"
+mnemonic(::ThrowRef)::String = "throw_ref"  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1069 ThrowRef.name)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
 mnemonic(i::RefNullAbstract)::String = "ref.null 0x$(string(i.heaptype_byte, base=16))"

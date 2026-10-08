@@ -502,7 +502,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         isempty(params) && isempty(results) || throw(ArgumentError(
             "root entry call $target_idx must have signature () -> (); got " *
             "$(params) -> $(results) while compiling $(ctx.func_ref)"))
-        call!(b, target_idx, WasmValType[], WasmValType[])
+        emit_direct_call!(b, ctx.mod, target_idx)
     end
 
     # For very complex functions, use a dispatcher-style approach
@@ -1133,11 +1133,16 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 if !isempty(label_stack) && label_stack[end][1] === :landing
                     pop!(label_stack)
                     end_block!(b)          # end landing — the catch payload arrives here
-                    # The caught exception and its stack are already the top of Julia's
-                    # exception stack, which its throw pushed (the handler reads it there,
-                    # as Julia's landing leaves the stack as it is): the payload is dropped.
+                    # The payload's entry, which its throw pushed, is Julia's top here (Julia's
+                    # landing leaves the stack as it is): it becomes the top by identity, also
+                    # when a re-entrant export's restore dropped it on the way (ExceptionStack.tla,
+                    # Landing = "identity"). The exception and its stack are read from the entry.
+                    global_set!(b, ensure_exception_top_global!(ctx.mod))
                     drop!(b)   # stackTrace
                     drop!(b)   # exception
+                    # the open host-declared imports are those open at the region's enter
+                    local _count = host_imports_open_global!(ctx.mod)
+                    _count === nothing || (local_get!(b, exc_saved_local!(ctx, r.enter_idx; count=true)); global_set!(b, _count))
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end
@@ -1591,10 +1596,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
                 # Slice D: the TYPED catch — the landing block carries the tag
-                # payload (exn, stackTrace) as its results; catch_clause retains
+                # payload (exn, stackTrace, entry) as its results; catch_clause retains
                 # the landing label identity until the builder serializes it
                 # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
-                local landing_label = block!(b; results=WasmValType[AnyRef, ExternRef])
+                local landing_label = block!(b; results=WasmValType[AnyRef, ExternRef,
+                                                                   ConcreteRef(exc_cell_type!(ctx.mod), true)])
                 push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0), landing_label))
                 local try_label = try_table!(b, [catch_clause(0, landing_label)])
                 push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))

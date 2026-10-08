@@ -469,6 +469,28 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             bad_catch, [MBV.catch_clause(tag, wrong)])
     end
 
+    @testset "throw_ref takes an exnref; a catch_all_ref's target takes exactly one (dart throw_ref, CatchAllRef)" begin
+        # instructions.dart:836 throw_ref and :153 CatchAllRef; the spec types throw_ref's
+        # operand as exnref and a catch's target as exactly what it catches (dart checks a suffix)
+        m = MBV.WasmModule()
+        b = MBV.InstrBuilder(; mod=m); MBV.ref_null!(b, MBV.AnyRef)
+        @test_throws MBV.StackImbalanceError MBV.throw_ref!(b)
+        b = MBV.InstrBuilder(; mod=m)
+        none = MBV.block!(b)
+        @test_throws MBV.StackImbalanceError MBV.try_table!(b, [MBV.catch_all_ref_clause(none)])
+        # the export entry's shape: block (result exnref), a result-less try_table, throw_ref
+        b = MBV.InstrBuilder(; mod=m)
+        escaped = MBV.block!(b; results=MBV.WasmValType[MBV.ExnRef])
+        MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)])
+        MBV.end_block!(b)
+        MBV.return_!(b)
+        MBV.end_block!(b)
+        @test MBV.throw_ref!(b) isa MBV.InstrBuilder
+        MBV.finish_function!(b)
+        @test b.instrs[2].catches == [MBV.InstrIR.TryCatch(MBV.Opcode.CATCH_ALL_REF, 0xffffffff, 0)]
+        @test count(i -> i isa MBV.InstrIR.ThrowRef, b.instrs) == 1
+    end
+
     @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin
         # A caller names only the frame's inputs and results and the builder derives the
         # encoding (instructions.dart:707), so the encoded type and the tracked frame are one

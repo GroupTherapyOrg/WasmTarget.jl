@@ -136,7 +136,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             emit_value!(bii, arg, ctx, expected;
                         from_julia=(jt isa Type && isconcretetype(jt)) ? jt : nothing)
         end
-        call!(bii, target_idx, WasmValType[], WasmValType[])
+        emit_direct_call!(bii, ctx.mod, target_idx)
         return append_builder!(b, bii)
     end
 
@@ -177,7 +177,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
                     emit_convert_to_f64!(bss2, global_type)
                     # Call the DOM import function
-                    call!(bss2, import_idx, WasmValType[], WasmValType[])
+                    emit_direct_call!(bss2, ctx.mod, import_idx)
                 end
             end
 
@@ -715,7 +715,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         tracing(:cc) && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
                         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
-                        call!(bcc, target_info.wasm_idx, WasmValType[], WasmValType[])
+                        emit_direct_call!(bcc, ctx.mod, target_info.wasm_idx)
                         cross_call_handled = true
                         # If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.

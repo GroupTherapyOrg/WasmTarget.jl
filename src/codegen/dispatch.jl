@@ -390,7 +390,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             end
 
             # call $target — target_idx is correct because actual functions were added first
-            call!(b, entry.target_idx, WasmValType[], WasmValType[])
+            emit_direct_call!(b, mod, entry.target_idx)
 
             # Box numeric results when dispatch table uses anyref return
             # tag-run: key on the TRACKED actual — the call's derived (placeholder)

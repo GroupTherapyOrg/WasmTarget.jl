@@ -2687,7 +2687,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                 coerce_stack_top!(eb, cw, ctx; from_julia=c.arg_types[dpos])
             end
         end
-        call!(eb, c.wasm_idx, WasmValType[], WasmValType[])
+        emit_direct_call!(eb, ctx.mod, c.wasm_idx)
         rj = c.return_type
         local _c_results = _function_type(ctx.mod, c.wasm_idx).results
         rw = isempty(_c_results) ? nothing : _c_results[1]
@@ -2888,7 +2888,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
                     emit_convert_to_f64!(_ssgb, global_type)
                     # Call the DOM import function
-                    call!(_ssgb, import_idx, WasmValType[], WasmValType[])
+                    emit_direct_call!(_ssgb, ctx.mod, import_idx)
                 end
             end
 
@@ -4168,7 +4168,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # on that same authoritative builder stack. A detached fragment
                 # here used to hide the call's parameter pops from validation.
                 local _xcb = fb
-                call!(_xcb, target_info.wasm_idx, WasmValType[], WasmValType[])
+                emit_direct_call!(_xcb, ctx.mod, target_info.wasm_idx)
                 # If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
@@ -4475,7 +4475,7 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
     end
     local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, container_type)
     emit_value!(bld, container_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
-    call!(bld, target.wasm_idx, WasmValType[], WasmValType[])
+    emit_direct_call!(bld, ctx.mod, target.wasm_idx)
     if want === Union{}
         # The callee always throws, so its Wasm type has no result and everything
         # after the call is dead: a structural trap on a path Julia proves dead.

@@ -2156,8 +2156,18 @@ const LOCKS = [
     "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
-    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause: the typed (exn, stackTrace) tag catches every exception (march 6, 2026-09-01), and the catch_all/catch_all_ref/catch_ref clause constructors, left without a caller, are deleted (2026-09-29)",
-        () -> count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause")),
+    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause but one exact site: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors, left without a caller, were deleted on 2026-09-29. Batch 110 ported one back, catch_all_ref_clause (dart's CatchAllRef, instructions.dart:153), for an exact per-site allowlist of one, each site pinned by its needle with its reason (dev/CHARTER.md rule 2): emit_export_entry!'s `try_table (catch_all_ref)` (generate.jl), because catch_all is the only wasm construct that observes a foreign unwind; Julia's host frame restores its stack on every escape (jl_restore_excstack). Every other catch_all or catch_ref counts, by constructor anywhere in src or by opcode or raw clause in codegen, and so does a site whose needle is gone (dev/CHARTER.md C6)",
+        () -> begin
+            # the exact per-site allowlist: its needle in generate.jl => its reason
+            local allowed = ["    try_table!(b, [catch_all_ref_clause(escaped)])" =>
+                "catch_all is the only wasm construct that observes a foreign unwind; Julia's host frame restores its stack on every escape (jl_restore_excstack)"]
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local uses = count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause";
+                                     exclude_line=r"^catch_all_ref_clause\(label::ControlLabel\)")
+            # a clause built from its opcode or raw passes the constructors by
+            local raw = count_sites(r"Opcode\.CATCH_ALL|Opcode\.CATCH_REF|SymbolicTryCatch\(|TryCatch\("; roots=[CODEGEN])
+            abs(uses - length(allowed)) + raw + count(((needle, _),) -> length(findall(needle, gen)) != 1, allowed)
+        end),
     "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
@@ -2472,9 +2482,9 @@ const LOCKS = [
                 count(p -> occursin(p, all_src), forbidden) +
                 isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
-    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly two throw sites: _emit_throw_top!, which throws the top entry of Julia's exception stack, and the export entry's handler (emit_export_entry!), which restores the top it saved and throws the escaped exception's own payload, the exception and the stack its first throw captured, again; emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
+    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); the export entry's handler (emit_export_entry!) restores what it saved and rethrows an escaped exception with throw_ref, which keeps its payload, the exception and the stack its throw captured, exactly (batch 110; until then the handler was a second throw site); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
         () -> begin
-            local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])
+            local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])   # _emit_throw_top!'s, alone
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
             local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod)"),
@@ -2482,8 +2492,9 @@ const LOCKS = [
                               (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    source_map_url === nothing"),
                               (runner, "const st = e.getArg(tag, 1);"),
                               (runner, "    \$HOST_RUNTIME_MERGE_JS"),
-                              (gen, "    local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])\n    try_table!(b, [catch_clause(tag, escaped)])\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    for l in reverse(result_locals); local_set!(b, l); end\n    end_block!(b)\n    for l in result_locals; local_get!(b, l); end\n    return_!(b)\n    end_block!(b)\n    local_get!(b, saved); global_set!(b, top)\n    throw_!(b, tag)")]
-            abs(throws - 2) + count(((text, needle),) -> !occursin(needle, text), required)
+                              (gen, "    global_get!(b, top, ConcreteRef(cell, true))\n    struct_get!(b, cell, 1, ExternRef)\n    global_get!(b, top, ConcreteRef(cell, true))\n    throw_!(b, 0)"),
+                              (gen, "    local_get!(b, saved); global_set!(b, top)\n    count === nothing || (local_get!(b, saved_count); global_set!(b, count))\n    throw_ref!(b)")]
+            abs(throws - 1) + count(((text, needle),) -> !occursin(needle, text), required)
         end),
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: the call, the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin

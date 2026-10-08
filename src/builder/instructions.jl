@@ -308,7 +308,8 @@ end
 """
 Represents a WebAssembly function definition: its type, locals, body bytes, the body's
 source mappings (byte offsets into `body`; empty for a compiler-generated function that no
-statement emitted), and the name the name section gives it ("" for none: an export names it).
+statement emitted), and the name it is defined with, which the name section gives it ("" for
+none).
 parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
@@ -337,7 +338,8 @@ struct WasmExport
 end
 
 """
-Represents an import entry.
+Represents an import entry, and for an imported function the name the name section gives it,
+given where it is imported.
 parity(pkg/wasm_builder/lib/src/ir/imports.dart:39 Import)
 """
 struct WasmImport
@@ -345,6 +347,8 @@ struct WasmImport
     field_name::String
     kind::UInt8  # 0=func, 1=table, 2=memory, 3=global
     type_idx::UInt32  # For functions, the type index
+    # parity(pkg/wasm_builder/lib/src/ir/function.dart:37 BaseFunction.functionName): an imported function's name
+    function_name::String
 end
 
 """
@@ -780,7 +784,8 @@ end
 """
     add_import!(mod, module_name, field_name, params, results) -> func_idx
 
-Add an imported function to the module and return its function index.
+Add an imported function to the module and return its function index, named
+"<module>.<field> (import)", as dart2wasm names a host import (functions.dart:141).
 Imported functions come before local functions in the function index space, and WT numbers a
 function when it is defined (dart finalizes every index when the module is built, a
 FinalizableIndex): an import after a definition would renumber every defined function under
@@ -795,7 +800,8 @@ function add_import!(mod::WasmModule,
     _check_import_precedes_definitions(mod, module_name, field_name)
     ft = FuncType(params, results)
     type_idx = add_type!(mod, ft)
-    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx))
+    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx,
+                                  _import_function_name(module_name, field_name)))
     return UInt32(length(mod.imports) - 1)  # Import function indices
 end
 
@@ -812,9 +818,15 @@ function add_import!(mod::WasmModule,
     result_vec = WasmValType[r for r in results]
     ft = FuncType(param_vec, result_vec)
     type_idx = add_type!(mod, ft)
-    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx))
+    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx,
+                                  _import_function_name(module_name, field_name)))
     return UInt32(length(mod.imports) - 1)
 end
+
+# the name of a host import, "<module>.<field> (import)" (ImportName.toString, util.dart:94)
+# parity(pkg/dart2wasm/lib/functions.dart:141 importName)
+_import_function_name(module_name::String, field_name::String)::String =
+    "$(module_name).$(field_name) (import)"
 
 # parity(quarantine: WT numbers a function when it is defined, where dart's FinalizableIndex
 # numbers it when the module is built, so a late import is refused instead of renumbered.)
@@ -1442,26 +1454,20 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         end
     end
 
-    # Name section (custom section) for stack trace readability
-    # Includes function names from exports so stack traces show meaningful names
-    func_names = Dict{UInt32, String}()
-    # Collect names from imports
+    # Name section (custom section): each function's own name, the one it was imported or
+    # defined with, in index order; a function with none ("") is not named. An export's name
+    # names no function (dart's NameSection reads `functions[i].functionName` only)
+    # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:844 NameSection)
+    func_names = Pair{UInt32, String}[]
     func_idx = UInt32(0)
     for imp in mod.imports
-        if imp.kind == 0x00  # function import
-            func_names[func_idx] = "$(imp.module_name).$(imp.field_name)"
-            func_idx += 1
-        end
+        imp.kind == 0x00 || continue  # a function import
+        isempty(imp.function_name) || push!(func_names, func_idx => imp.function_name)
+        func_idx += 1
     end
-    # Collect names from exports (overrides import names if both exist)
-    for exp in mod.exports
-        if exp.kind == 0x00  # function export
-            func_names[exp.idx] = exp.name
-        end
-    end
-    # a defined function's own name (dart's NameSection names every function it defines)
-    for (k, f) in enumerate(mod.functions)
-        isempty(f.name) || (func_names[UInt32(num_imported_funcs(mod) + k - 1)] = f.name)
+    for f in mod.functions
+        isempty(f.name) || push!(func_names, func_idx => f.name)
+        func_idx += 1
     end
     if !isempty(func_names)
         # Custom section (section id 0)
@@ -1471,9 +1477,8 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         write_name!(custom_section, "name")
         # Subsection 1: function names
         subsection = WasmWriter()
-        sorted_names = sort(collect(func_names), by=first)
-        write_u32!(subsection, length(sorted_names))
-        for (idx, name) in sorted_names
+        write_u32!(subsection, length(func_names))
+        for (idx, name) in func_names
             write_u32!(subsection, idx)
             write_name!(subsection, name)
         end

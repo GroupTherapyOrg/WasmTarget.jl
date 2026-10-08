@@ -58,7 +58,7 @@ anchor in `src/` has a row.)
 | Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
 | Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
-| Julia's exception stack | `emit_throw_value!`, `emit_rethrow!`, `emit_current_exception!`, `exc_saved_local!`, `emit_export_entry!` (generate.jl), the export repoint after codegen (compile.jl), a region's enter and pop_exception (statements.jl), the catch landing (stackified.jl) | ExceptionStack |
+| Julia's exception stack | `emit_throw_value!`, `emit_rethrow!`, `emit_current_exception!`, `exc_saved_local!`, `emit_export_entry!` and its catch_all_ref handler (generate.jl), the host-declared import call sites (the count), the one-time export of each function in `_compile_closed_world_plan` (compile.jl), a region's enter and pop_exception (statements.jl), the catch landing (stackified.jl) | ExceptionStack |
 | SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
 | Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
 | `isa` and typeassert lowering | `_compile_call_isa` (calls.jl) | — a per-statement port of emit_isa's case order (cgutils.cpp), not an algorithm |

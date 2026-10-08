@@ -211,19 +211,22 @@ end
     ensure_exception_tag!(mod)
 
 The module's one exception tag, index 0 (idempotent), whose payload is the exception and the
-stack trace of its throw, as dart's exception tag carries (exception, stackTrace). A try
-region's `try_table` catches it with `catch 0` (stackified.jl), landing the payload in its
-handler.
+stack trace of its throw, as dart's exception tag carries (exception, stackTrace), and a third
+value, the entry of Julia's exception stack its throw pushed (exc_cell_type!), so the entry
+travels with the unwind and the catch that lands it makes it the top by identity
+(stackified.jl). A try region's `try_table` catches it with `catch 0`, landing the payload in
+its handler. A host reads the first two values (getArg(tag, 0) and 1).
 parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
+parity(quarantine: Julia's stack entries have identity and outlive an unwind (one object thrown twice is two entries); dart's tag carries (exception, stackTrace) alone, tags.dart:37.)
 """
 function ensure_exception_tag!(mod::WasmModule)::Union{Nothing, UInt32}
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
     # Payload: (anyref exn, externref stackTrace — the JS stack its throw captured,
-    # emit_throw_value!, which a rethrow throws again).
+    # emit_throw_value!, which a rethrow throws again; ref null $cell — its entry).
     if isempty(mod.tags)
-        tag_ft = FuncType(WasmValType[AnyRef, ExternRef], WasmValType[])
+        tag_ft = FuncType(WasmValType[AnyRef, ExternRef, ConcreteRef(exc_cell_type!(mod), true)], WasmValType[])
         add_tag!(mod, add_type!(mod, tag_ft))
     end
 end
@@ -234,8 +237,8 @@ end
 Throw the Julia exception on the stack: capture the stack trace at the throw (the imported
 `wasmtarget.stack_trace` answers `new Error()`), push it and the exception as a new entry of
 Julia's exception stack (task.c throw_internal, jl_push_excstack), and throw the tag with the
-entry's exception and stack. The one throw every raise ends in, as every dart throw captures
-`StackTrace.current` into the tag's stack slot (`errorThrowWithCurrentStackTrace`).
+entry's exception and stack, and the entry. The one throw every raise ends in, as every dart
+throw captures `StackTrace.current` into the tag's stack slot (`errorThrowWithCurrentStackTrace`).
 formal(dev/formal/ExceptionStack.tla): a throw pushes, a rethrow does not, an enter's saved top
 is its depth, and every read and raised value is Julia's.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
@@ -251,8 +254,8 @@ function emit_throw_value!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     return b
 end
 
-# throw the tag with the top entry's exception and stack, pushing nothing (jl_rethrow's
-# throw_internal(ct, NULL))
+# throw the tag with the top entry's exception and stack and the entry, pushing nothing
+# (jl_rethrow's throw_internal(ct, NULL))
 # parity(pkg/dart2wasm/lib/code_generator.dart:2966 CodeGenerator.visitRethrow)
 function _emit_throw_top!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     local cell = exc_cell_type!(mod)
@@ -261,6 +264,7 @@ function _emit_throw_top!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     struct_get!(b, cell, 0, AnyRef)
     global_get!(b, top, ConcreteRef(cell, true))
     struct_get!(b, cell, 1, ExternRef)
+    global_get!(b, top, ConcreteRef(cell, true))
     throw_!(b, 0)
     return b
 end
@@ -481,34 +485,43 @@ end
 """
     emit_export_entry!(mod, inner_idx, name) -> func_idx
 
-The function an export calls in place of `inner_idx`: it keeps the top of Julia's exception
-stack at entry and, when a Julia exception escapes, restores that top and throws it again, as
-the host is the catching frame whose JL_CATCH restores the depth its JL_TRY saved
-(jl_restore_excstack). The inner keeps the export's name; this one is "<name> (export)", as dart
-names an import "<name> (import)" (functions.dart:141).
-Only a tag escape is restored: an escape that is not the tag (a JS exception, the engine's
-RangeError for a stack Julia would raise StackOverflowError on, a trap) leaves a catch's entry
-on the stack, and a re-entrant export's restore can drop the entry its caller's catch reads;
-both are open (dev/MARCH.md 13.17: A12B1, H5, A12P2).
-formal(dev/formal/ExceptionStack.tla): a tag escape leaves the stack as the call found it.
-parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Every Julia catch region catches only the tag (L101), so no other escape is restored here; the handler's throw is L145's second throw site.)
+The function an export calls in place of `inner_idx`, as the host is the catching frame whose
+JL_TRY records the depth of Julia's exception stack and whose JL_CATCH restores it
+(jl_restore_excstack) on every escape. A call made with no host-declared import open is
+top-level and starts with an empty stack (Julia's host call does, whatever the previous call
+did); a re-entrant one, from inside a host-declared import, starts with its caller's. The entry
+saves the top and the count of open host-declared imports (host_imports_open_global!), calls
+the inner inside a result-less `try_table (catch_all_ref)`, and when anything catchable escapes,
+a Julia exception or a foreign one (a JS exception from an import, the engine's RangeError),
+restores both and rethrows it with `throw_ref`, its payload unchanged. Between a host-import
+call site and this entry every frame is Julia's, which catches only the tag, so this is the one
+observer of a foreign unwind. A trap is not catchable and restores nothing: the host contract
+says an instance that trapped is discarded (dev/MARCH.md 13.17, H6 and H7). The inner keeps the
+export's name; this one is "<name> (export)", as dart names an import "<name> (import)"
+(functions.dart:141).
+formal(dev/formal/ExceptionStack.tla): every escape leaves the stack as Julia's host leaves it, except H6 and H7 (traps).
+parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth on every escape, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Its catch_all_ref is L101's one allowed site: catch_all is the only wasm construct that observes a foreign unwind.)
 """
 function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::UInt32
     local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
     local top = ensure_exception_top_global!(mod)
     local cell = ConcreteRef(exc_cell_type!(mod), true)
-    ensure_exception_tag!(mod)
-    local tag = 0   # the module's one tag, as emit_throw_value! throws it
+    local count = host_imports_open_global!(mod)
     local b = InstrBuilder(copy(ft.params), copy(ft.results); func_name="emit_export_entry!", mod=mod)
     local saved = builder_add_local!(b, cell)
+    # a top-level call (no host-declared import open; every call, in a module with none) starts
+    # with an empty stack
+    count === nothing || (global_get!(b, count, I32); num!(b, Opcode.I32_EQZ); if_!(b))
+    ref_null!(b, cell.type_idx, cell); global_set!(b, top)
+    count === nothing || end_block!(b)
     global_get!(b, top, cell); local_set!(b, saved)
-    # the typed tag catches every Julia exception (L101): restore the top, then throw its payload,
-    # the exception and the stack its first throw captured, again (L145's second throw site)
+    local saved_count = count === nothing ? nothing : builder_add_local!(b, I32)
+    count === nothing || (global_get!(b, count, I32); local_set!(b, saved_count))
     # the try_table has no results: the call's results go to locals, as every try_table WT emits
     # (V8 12.4, Node 22, traps on entering a try_table whose result is a reference)
     local result_locals = Int[builder_add_local!(b, r) for r in ft.results]
-    local escaped = block!(b; results=WasmValType[AnyRef, ExternRef])
-    try_table!(b, [catch_clause(tag, escaped)])
+    local escaped = block!(b; results=WasmValType[ExnRef])
+    try_table!(b, [catch_all_ref_clause(escaped)])
     for i in 0:length(ft.params) - 1; local_get!(b, i); end
     call!(b, inner_idx, ft.params, ft.results)
     for l in reverse(result_locals); local_set!(b, l); end
@@ -517,10 +530,52 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     return_!(b)
     end_block!(b)
     local_get!(b, saved); global_set!(b, top)
-    throw_!(b, tag)
+    count === nothing || (local_get!(b, saved_count); global_set!(b, count))
+    throw_ref!(b)
     finish_function!(b)
     return add_function!(mod, ft.params, ft.results, b.locals[length(ft.params) + 1:end],
                          builder_code(b); name=name * " (export)")
+end
+
+"""
+    host_imports_open_global!(mod) -> Union{Nothing, UInt32}
+
+`\$host_imports_open`, the count of open calls of host-declared imports (emit_direct_call!),
+defined once and found by its name; `nothing` in a module with no host-declared import, where
+every export call is top-level. WT's own runtime imports (HOST_RUNTIME, a traced compile's
+`wasmtarget.trace_*`) never call an export back and count nothing.
+parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which wasm cannot observe but by counting; dart has no exception stack.)
+"""
+function host_imports_open_global!(mod::WasmModule)::Union{Nothing,UInt32}
+    local g = global_named(mod, "\$host_imports_open")
+    g === nothing || return g
+    any(imp -> _is_host_declared_import(imp), mod.imports) || return nothing
+    return add_global!(mod, I32, true, 0; name="\$host_imports_open")
+end
+
+# an imported function the host declared, not one of WT's own runtime imports
+# parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; only a host-declared import can call an export back.)
+_is_host_declared_import(imp)::Bool =
+    imp.kind == 0x00 && imp.module_name != "wasmtarget" &&
+    !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, HOST_RUNTIME)
+
+"""
+    emit_direct_call!(b, mod, func_idx) -> b
+
+A direct call of the function a registry or a host binding names, its arguments on the stack.
+A call of a host-declared import counts itself open in `\$host_imports_open` while it runs, so
+an export the host calls from inside it is re-entrant (emit_export_entry!).
+formal(dev/formal/ExceptionStack.tla): ImportCall and ImportReturn.
+parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which wasm cannot observe but by counting; dart's call, instructions.dart:947, counts nothing.)
+"""
+function emit_direct_call!(b::InstrBuilder, mod::WasmModule, func_idx::Integer)::InstrBuilder
+    local imports = filter(imp -> imp.kind == 0x00, mod.imports)
+    local count = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1]) ?
+                  host_imports_open_global!(mod) : nothing
+    count === nothing || (global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_ADD); global_set!(b, count))
+    call!(b, func_idx, WasmValType[], WasmValType[])
+    count === nothing || (global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_SUB); global_set!(b, count))
+    return b
 end
 
 """
@@ -528,12 +583,13 @@ end
 
 The local where try region `enter_idx` keeps the top of the exception stack when it is
 entered, its depth: its pop_exception restores it, as Julia's enter records
-jl_excstack_state and pop_exception calls jl_restore_excstack.
+jl_excstack_state and pop_exception calls jl_restore_excstack. With `count`, the local where
+it keeps `\$host_imports_open`, which its catch landing restores (keyed by `-enter_idx`).
 parity(quarantine: Julia's exception stack is task state that a region's enter and pop_exception save and restore; dart binds each catch's exception to its own locals (code_generator.dart:958 visitTryCatch).)
 """
-function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int)::Int
-    return get!(ctx.exc_saved_locals, enter_idx) do
-        allocate_local!(ctx, ConcreteRef(exc_cell_type!(ctx.mod), true))
+function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int; count::Bool=false)::Int
+    return get!(ctx.exc_saved_locals, count ? -enter_idx : enter_idx) do
+        allocate_local!(ctx, count ? I32 : ConcreteRef(exc_cell_type!(ctx.mod), true))
     end
 end
 

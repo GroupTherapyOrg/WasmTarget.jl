@@ -639,6 +639,10 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:116 Catch)
 catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
     SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
+# catch_all_ref: every exception, Julia's or foreign, delivered as its exnref (no tag)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:153 CatchAllRef)
+catch_all_ref_clause(label::ControlLabel)::SymbolicTryCatch =
+    SymbolicTryCatch(Opcode.CATCH_ALL_REF, 0xffffffff, label)
 
 # try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type
 # derived from its inputs and results (_block_type!). Each catch branches out to its target
@@ -663,6 +667,11 @@ function try_table!(b::InstrBuilder, catches::Vector; inputs::Vector{<:Any}=Wasm
         end
         (c.opcode === Opcode.CATCH_REF || c.opcode === Opcode.CATCH_ALL_REF) &&
             push!(caught, ExnRef)
+        # the spec types the target as exactly the caught values; dart's _verifyBranchTypes
+        # checks only their suffix, so a target of another arity is rejected here
+        local targets = b.v.labels[i].kind === :loop ? b.v.labels[i].input_types : b.v.labels[i].result_types
+        length(targets) == length(caught) ||
+            push!(b.v.errors, "a catch delivers $(caught) to a target that takes $(targets)")
         # the catch carries exactly what it caught to its target (dart: _verifyBranchTypes(
         # catch_.label, 0, catch_.caughtValues()))
         validate_branch_types!(b.v, length(b.v.labels) - i, 0, caught)
@@ -689,6 +698,14 @@ function throw_!(b::InstrBuilder, tag::Integer)::InstrBuilder
     end
     b.v.reachable = false
     _emit!(b, InstrIR.Throw(UInt32(tag)))
+end
+# throw_ref: pop an exnref and throw the exception it holds, payload and all; what follows
+# is unreachable. dart's throw_ref checks no operand; the spec's is exnref.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:836 InstructionsBuilder.throw_ref)
+function throw_ref!(b::InstrBuilder)::InstrBuilder
+    validate_pop!(b.v, ExnRef)
+    b.v.reachable = false
+    _emit!(b, InstrIR.ThrowRef())
 end
 
 # ── Reference ───────────────────────────────────────────────────────────────────

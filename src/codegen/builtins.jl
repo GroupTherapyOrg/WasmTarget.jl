@@ -2108,7 +2108,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{Instr
                 # Convert to f64 for DOM imports (all DOM imports expect f64)
                 emit_convert_to_f64!(_setb, global_type)
                 # Call the DOM import function
-                call!(_setb, import_idx, WasmValType[], WasmValType[])
+                emit_direct_call!(_setb, ctx.mod, import_idx)
             end
         end
 
