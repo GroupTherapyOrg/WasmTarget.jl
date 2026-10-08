@@ -398,7 +398,12 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             # (the julia-derived width lied for Any-erased returns).
             local _wr_actual = isempty(b.v.stack) ? nothing : b.v.stack[end]
             if is_anyref_return && _wr_actual !== nothing && _wt_is_ref(_wr_actual)
-                # already a ref — anyref-compatible, pass through
+                # already a ref — anyref-compatible, pass through; a closure's context is
+                # its object at the anyref result (emit_context_object!, A11E1)
+                if is_context_type(type_registry, entry.return_type)
+                    builder_set_local_type!(b, Int(dt.arity), AnyRef)
+                    emit_context_object!(b, mod, type_registry, entry.return_type, dt.arity)
+                end
             elseif is_anyref_return
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
                 if entry.return_type === Nothing || entry.return_type === Union{}
@@ -436,6 +441,8 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
                 if entry_wasm_type in (I32, I64, F32, F64)
                     push!(wrapper_locals, entry_wasm_type)
+                elseif is_context_type(type_registry, entry.return_type)
+                    push!(wrapper_locals, AnyRef)   # the closure object's context scratch
                 end
             end
 

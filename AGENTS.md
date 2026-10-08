@@ -54,7 +54,7 @@ null to get past a gap.
 | one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
 | full gate | CI on every `march/**` push; `bash dev/land.sh merge <branch>` lands only on green |
 
-A batch is pushed only after the full `bash dev/lanes.sh` is green: it runs what CI runs (L153).
+A batch is pushed only after the full `bash dev/lanes.sh` is green (CI's families, L153).
 A pure restructuring is byte-identical on the probes; a semantic change is differential with
 its cases added to smoke first; every new lock is negative-tested (break it, watch it fire,
 restore) before it counts; `WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.

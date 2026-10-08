@@ -1579,7 +1579,9 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         # object: the runtime egal tells the two forms (A10E3: a cast of the object to its
         # context trapped where native answers 1; MARCH 13.17 A7S1)
         _emit_fields_egal!(b, mod, registry, alloc, T, p1, p2, seen)
-    elseif concrete && ismutabletype(T) && !(T <: Type)
+    elseif concrete && ismutabletype(T) && !(T <: Type) && !is_closure_type(T)
+        # (a mutable callable may be its context or its object, one value: the runtime egal
+        # unwraps both and compares the contexts by identity, A11B1)
         p1(); _to_eqref!(b, mod, w1)
         p2(); _to_eqref!(b, mod, w2)
         num!(b, Opcode.REF_EQ)
@@ -2644,7 +2646,10 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                 emit_classid_box!(cb, ctx, from, from_julia)
             elseif from === ExternRef
                 any_convert_extern!(cb)
-            end  # ConcreteRef/StructRef already anyref-compatible
+            elseif from isa ConcreteRef
+                # through the funnel: a closure's context becomes its object (A11E1)
+                coerce_stack_top!(cb, to, ctx; from_julia=from_julia)
+            end
         elseif to isa ConcreteRef && (from isa ConcreteRef || from === StructRef || from === AnyRef || from === EqRef)
             ref_cast!(cb, Int64(to.type_idx), true)
         end
@@ -3047,7 +3052,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local_get!(_prbb, _prb_lb)
             i32_const!(_prbb, Int64(trailing_zeros(_prb_s)))
             num!(_prbb, Opcode.I32_SHR_U)
-            array_get!(_prbb, _prb_arr, I32; signed=(_prb_s <= 2 ? false : nothing))
+            # packed or not by the one rule (packed_array_signedness, A11B11); a packed element is
+            # read unsigned, the byte extraction below masking it
+            array_get!(_prbb, _prb_arr, I32; signed=(packed_array_signedness(_prb_te) === nothing ? nothing : false))
             # shift = 8 * (b & (s-1))
             local_get!(_prbb, _prb_lb)
             i32_const!(_prbb, Int64(_prb_s - 1))
@@ -4679,7 +4686,8 @@ The class switch of a dynamic call with no row for the value's class: Julia's Me
 numbered for a no-method call of `f` (registry.method_error_args) whose other elements are the
 call's static types; the class in `tid_local` selects it. Another class traps.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
-parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
+call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
 """
 function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(f),
                                    args, arg_locals::Vector{Int}, call_arg_types, dpos::Int,
@@ -4730,7 +4738,8 @@ time: the value's classId selects the numbered tuple class `Tuple{…C…}` its 
 (methoderror_args_types; the collector numbers one for each class under the static type S),
 and the throw builds that tuple and the MethodError. A class with no numbered tuple traps.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
-parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
+call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
 """
 function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVector, ea,
                                            ctx::AbstractCompilationContext)::InstrBuilder

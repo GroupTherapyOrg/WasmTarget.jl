@@ -4,7 +4,8 @@
 (* Memory{Int64}, M2 a Memory{Any} and SV a SimpleVector, bare arrays made by    *)
 (* builtins, each its own array type. mAbs's abstract parameter admits S2 and MR. *)
 (* S3 has no method. The positive instance runs each method for its classes and  *)
-(* traps for S3. The Broken instances: a collector that misses builtins traps    *)
+(* throws S3's MethodError (MCClassIdSwitchUnnumberedBroken: with S3's args tuple *)
+(* numbered no class, it traps, which ThrowWhereJuliaThrows rejects). The Broken instances: a collector that misses builtins traps    *)
 (* for MR; a cast-only row runs mS1 for an S3 (its layout is S1's).              *)
 EXTENDS ClassIdSwitch
 
@@ -21,5 +22,7 @@ MCMOrd == [m \in MCMethods |->
 MCParam == [m \in MCMethods |->
     IF m = "mS1" THEN {"S1"} ELSE IF m = "mAbs" THEN {"S2", "MR"} ELSE IF m = "mM1" THEN {"M1"}
     ELSE IF m = "mM2" THEN {"M2"} ELSE {"SV"}]
-MCStatic == "S1"   \* the call's static type names S1
+MCStatic == "Any"   \* the call's static type, no class of its own
+MCUnnumbered == {}
+MCUnnumberedS3 == {"S3"}   \* S3's args tuple numbered no class: it traps
 =============================================================================

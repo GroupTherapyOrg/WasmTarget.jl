@@ -1469,6 +1469,18 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
                 emit_value!(_tupb, arg, ctx, struct_type_def.fields[_mr_fi].valtype)
                 continue
             end
+            # a `nothing` field holds Julia's one `nothing`, the module's Nothing singleton
+            # (compiled bare it pushed a numeric no conversion could type: a WasmInternalError,
+            # A11 c4)
+            if is_nothing_value(arg, ctx)
+                local _nf = fi + Int(info.field_offset)
+                (struct_type_def isa StructType && _nf <= length(struct_type_def.fields)) ||
+                    error("tuple field $fi has no physical Wasm type")
+                local _ng = get_nothing_global!(ctx.mod, ctx.type_registry)
+                global_get!(_tupb, _ng, ctx.mod.globals[Int(_ng) + 1].valtype)
+                coerce_stack_top!(_tupb, struct_type_def.fields[_nf].valtype, ctx; from_julia=Nothing)
+                continue
+            end
             # (Typed): the first-byte const scans + LOCAL_GET LEB decodes are
             # gone — arg_ty (the tracked emission type) decides; const-vs-local is an
             # ir/-level kind test (dart looks at node kinds, never at bytes).
@@ -1716,7 +1728,8 @@ end
 
 The classId of the erased value on the stack, whose static type is `T`: a classed value's
 header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
-header), the id of the one closed-world class whose array type it is (bare_array_partition).
+header), the id of the one closed-world class whose array type it is (bare_array_partition);
+for a null `nothing` where the static type admits Nothing, Nothing's id.
 A closure of any class is its object (maybe_wrap_closure!), whose header names its class.
 parity(code_generator.dart:6076 loadClassId)
 """
@@ -1725,10 +1738,19 @@ function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospe
     local reg = ctx.type_registry
     local base_idx = reg.base_struct_idx
     local bare = arrays ? bare_array_partition(ctx.mod, reg, T).told : Tuple{Type,UInt32}[]
-    isempty(bare) && return emit_typeof!(b, base_idx)
+    # `nothing` may be the null reference, which has no header: its class is Nothing's, read
+    # before the header as dart branches on null before loadClassId (A11E2: the read trapped
+    # where Julia throws a MethodError)
+    local nid = get_type_id(reg, Nothing)
+    local nullable = nid > 0 && (T === nothing || Nothing <: T)
+    isempty(bare) && !nullable && return emit_typeof!(b, base_idx)
     local v = allocate_local!(ctx, AnyRef)
     local_set!(b, v)
     local done = block!(b; results=WasmValType[I32])
+    if nullable
+        local_get!(b, v); ref_is_null!(b)
+        if_!(b); i32_const!(b, Int64(nid)); br!(b, done); end_block!(b)
+    end
     for (C, arr) in bare
         local_get!(b, v); ref_test!(b, Int64(arr), false)
         if_!(b); i32_const!(b, Int64(ensure_type_id!(reg, C))); br!(b, done); end_block!(b)
@@ -2698,6 +2720,16 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                                     end
                                 elseif union_wasm === StructRef && is_closure_type(elem_types[i + 1])
                                     coerce_stack_top!(_hetb, StructRef, ctx; from_julia=elem_types[i + 1])
+                                elseif union_wasm isa ConcreteRef
+                                    # a nullable single representation (a Union{T,Nothing}'s box):
+                                    # `nothing` is its null, a T converts through the funnel (a raw
+                                    # i64 here did not validate, a WasmInternalError, A11 c4)
+                                    if elem_types[i + 1] === Nothing
+                                        drop!(_hetb)
+                                        ref_null!(_hetb, Int64(union_wasm.type_idx), union_wasm)
+                                    else
+                                        coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=elem_types[i + 1])
+                                    end
                                 end
                                 # union_wasm numeric: push as-is.
                             end

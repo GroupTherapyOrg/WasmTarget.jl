@@ -2551,14 +2551,18 @@ const LOCKS = [
             n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs, so CI confirms rather than discovers: dev/lanes.sh's default run (not --fast) has the whole Pkg.test suite in one process (WT_NO_SHARD=1, every family the CI shards split) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
         () -> begin
-            local lanes = read(joinpath(ROOT, "dev", "lanes.sh"), String)
+            # the script's code, its comment lines dropped (a commented-out lane runs nothing)
+            local lanes = join(filter(l -> !startswith(lstrip(l), "#"), split(read(joinpath(ROOT, "dev", "lanes.sh"), String), '\n')), '\n')
             local i = findfirst("if [ \$fast -eq 0 ]; then", lanes)
             i === nothing && return 3
             local gated = lanes[last(i):end]
             local agents = read(joinpath(ROOT, "AGENTS.md"), String)
-            count(!, [occursin("lane suite env WT_NO_SHARD=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", gated),
+            count(!, [occursin("lane suite suite", gated),
+                      occursin("WT_VALIDATE=1 WT_SHARD=\"0,2\" \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
+                      occursin("WT_VALIDATE=1 WT_SHARD=\"1,2\" \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
+                      occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
                       occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents)])
         end),

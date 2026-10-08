@@ -113,7 +113,9 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
         else
             wasm_vt = julia_to_wasm_type(ft)
         end
-        push!(wasm_fields, FieldType(wasm_vt, false))  # immutable for closures
+        # a closure's captures are immutable; a mutable callable struct's fields are its own
+        # (A11C5: a field it sets was immutable, and the module did not validate)
+        push!(wasm_fields, FieldType(wasm_vt, ismutabletype(T)))
     end
 
     # This is the captured-fields CONTEXT, not the user-visible closure object.
@@ -688,6 +690,11 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             # 128-bit integers are WasmGC structs — use concrete ref
             int128_info = register_int128_type!(mod, registry, ft)
             ConcreteRef(int128_info.wasm_type_idx, true)
+        elseif ft === Nothing
+            # Julia's one `nothing`, the module's Nothing singleton (get_nothing_global!): a
+            # Nothing class struct here was a type no value has, and building the tuple cast the
+            # singleton to it and trapped (dev/AUDIT.md A11, c4)
+            ConcreteRef(get_nothing_box_type!(mod, registry), true)
         elseif is_string_codeunits(ft)
             # a String's CodeUnits is the String's byte array, as its values are held
             # (get_concrete_wasm_type); a class struct here trapped building the tuple (A8C4)

@@ -1003,3 +1003,81 @@ numbers the args tuple of each no-method call (a union split's open position ove
 under its static type; the candidate tuples a closure or generic dynamic call has no method
 for, and the callee's class), and each no-row path builds `MethodError(f, (args...,), world)`
 from the class it reads. Smoke method_error (7 cases): with the builders removed all trap.
+
+## 2026-10-07 — audited through 623f19dc (f95a1aa6..623f19dc: batches 99–103)
+
+The eleventh audit, of the tenth audit's fixes, A7S1's stages 2–4, A10E6 and A3S1: 36 findings.
+Each prediction was measured (native, then wasm, at 623f19dc): five wrong answers, three traps,
+an invalid module and an internal error. Batch 100 removed the class reads' context alternatives
+on the claim that no bare context reaches an erased position, which is false: a vtable entry's,
+a dispatch wrapper's and the class switch's result passed a closure's context on bare, so an
+erased closure returning a closure answered `isa Function` 2 (native 1) and trapped when called
+(A11E1). Its wrap and redirect also took in mutable callable structs: `===` compared two fresh
+objects (A11B1 = A11E3: native 1, wasm 2, three programs) and a field write built a module that
+does not validate (A11C5). The held set left out a type object a mutable constant holds (A11C1:
+native 1, wasm 2) and the kind a `typeof` of a type object returns (trap). A null `nothing`
+reaching a MethodError arm trapped at the class read (A11E2 = A11B2 = A11C4), and a tuple holding
+`nothing` raised a WasmInternalError (found measuring A11C4; also batch 101's `iterate(::Int64)`).
+
+Area: builder — (A11B1) above. (A11B2) above. (A11B3) a coercion that states no Julia type left
+a context bare. (A11B4) the MethodError builders' anchors. (A11B5 = A11E6) the empty vtable's
+raw-byte initializer. (A11B6) fill_egal_function!'s quarantine names WT's lazy registration.
+(A11B7, A11B8) one consult and second paths. (A11B9) struct_get! did not reject a packed field.
+(A11B10) prose. (A11B11) a second signedness rule (calls.jl, outside the range).
+
+Area: collection and planning — (A11C1) above. (A11C2) the closure no-method product drops its
+tuples past 4096. (A11C3) builtin operands and constant composites are not observed callables.
+(A11C4) above. (A11C5) above. (A11C6) the held set's typeassert operands reject a correct
+program. (A11C7) one fact, several paths.
+
+Area: emission and diagnostics — (A11E1) above. (A11E2) above. (A11E3) above. (A11E4) codegen
+asks the method table again. (A11E5) anchors. (A11E6) the raw initializer. (A11E7) the
+heterogeneous tuple read keeps its own ladder. (A11E8, numbered A11P1 in that report) batch
+103's "each no-row path" and batch 100's "no context left" are false: the selector table and dispatch wrapper still
+trap, and three result seams passed contexts bare.
+
+Area: enforcement and prose — (A11P1) ClassIdSwitch.tla took every args tuple as numbered.
+(A11P2) "the gate runs what CI runs" overstated it: no WT_VALIDATE, a commented-out lane passed
+L153, a `JULIA=` run skipped 1.13 and stayed green. (A11P3) batch 101's internal error was not on
+MARCH. (A11P4) isa_narrowed_int8_fields' answer equalled its else branch. (A11P5) lanes.sh's "~2
+minutes". (A11P6) Enrollment's LiteralsOnly behaved as ClassesOnly. (A11P7) EgalDispatch's correct
+branch is Julia's answer, not the code's rule. (A11P8) anchors. (A11P9) stale MARCH text and an
+order contradiction. (A11P10) ClassIdSwitch's Static was a class with a method.
+
+Resolution: batch 104 (this commit). A11E1: emit_context_object! makes a context its object at
+each result seam outside a body (the vtable entries, the dispatch wrapper), the class switch's
+result goes through the funnel, and _emit_closure_object! is the one construction
+(emit_closure_wrap! uses it; closure_vtable_global the one vtable lookup). A11B1 = A11E3: `===` on a
+mutable callable takes the runtime egal (its contexts by identity). A11C5: a mutable callable's
+context fields are mutable. A11C1: the held set follows every value a constant reaches through an
+array, a Memory or a struct's or tuple's fields, mutable ones included, each object once. It skips a module and Core's
+TypeName, MethodTable, TypeMapEntry, TypeMapLevel, Method, MethodInstance, CodeInstance, CodeInfo,
+Binding and SimpleVector: none is a value a program reads out of a constant, walking them reached
+the whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11 svec); a
+walk past 10^6 objects raises. It holds the kind of each type object a value may be where a `typeof`
+can return one. A11E2 = A11C4: emit_class_id! reads Nothing's id for a null where the static
+type admits Nothing (dart's null branch before loadClassId), and the closure entry's MethodError
+test reads a null as `nothing`. The tuple with `nothing`: a Nothing field holds the Nothing
+singleton (its class struct was a type no value has), `nothing` is built as that singleton, and
+the dynamic tuple read converts into a nullable box. A11B9: struct_get! rejects a packed field.
+A11B11: packed_array_signedness. Models: ClassIdSwitch.tla gains Unnumbered, pinned by the Broken
+instance MCClassIdSwitchUnnumberedBroken (an args tuple numbered no class traps, which the
+unchanged ThrowWhereJuliaThrows rejects: the open A3S1 defect), and a Static outside the classes;
+Enrollment.tla a literal type object U with a method it fixes. A11P2: the suite lane runs
+validated, L153 reads lanes.sh's code without its comments and states what stays CI's (the 1.13
+suite, three platforms, the deep TLC), a `JULIA=` run fails the gate. A11P4: Int8[-n, 2, 5].
+A11P5: lanes.sh's time. A11P8 = A11B4 = A11E5: dynamic_dispatchers.dart:178 _generateMethodCode.
+A11P9: MARCH. A11P3: the internal error is fixed (the tuple with `nothing`). A11E8 = A11B10:
+batch 103's sentence holds only for the union split's throw, the closure entry and the class
+switch (the selector table and the dispatch wrapper still trap, MARCH 13.17 A3S1); batch 100's
+"no context left" was false until this batch's result-seam wrap; A10B3's "a use after the fill
+raises" holds for a first use, a later one reusing the filled index. A11B3: a context with no
+stated Julia type rejects at its statement instead of being guessed from its layout (no program
+reaching it was found). Smoke gains
+closure_values' closure_returned_erased and the four mutable_callable cases (identity, captured,
+field_write, held_in_closure), method_error's two
+`nothing` cases, type_object_rows' mutable-constant and typeof-kind rows; batch 103's code answers
+2, traps, fails validation or raises an internal error on each. Probes 225/225 unchanged.
+Everything else (A11E1's dynamic call of a closure created elsewhere, A11C2, A11C3, A11C6, the
+c1b-class kind rows, A11P7, A11E4 = A11B7 = A11C7, A11B8, A11E7, A11E6 = A11B5, A11B6, Nothing's
+three layouts): MARCH 13.17.

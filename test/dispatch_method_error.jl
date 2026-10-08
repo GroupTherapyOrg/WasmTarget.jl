@@ -63,6 +63,9 @@ gtu(n::Int64) = (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = hide
 # A10P8: without it the search had no candidate there and rejected the call as ambiguous)
 gtn(n::Int64) = (k = n; h(x::Union{Type{Int64},Type{UInt8}}, y) = 1 + 0k; h(x, y::Int64) = 2 + 0k;
                  h(x::Type{Int64}, y::Int64) = 3 + 0k; f = hide(h)[]; f(hide(Int64)[], hide(n)[])::Int64)
+# a type object a constant NamedTuple's field holds joins the held set
+const HNT = (a = SA, b = 2)
+ghn(n::Int64) = (hide(HNT)[] === nothing ? 0 : n)
 gab(n::Int64) = (k = n; g = hide(x -> length(x) + k)[]; w = hide(WV([1, 2]))[]::WV;
                  m = Memory{Int64}(undef, 2); g([1, 2, 3])::Int64 + g(w.v)::Int64 + length(m))
 end
@@ -188,6 +191,7 @@ end
         @test e isa WasmTarget.WasmCompileError && !occursin("ambiguous", sprint(showerror, e)) &&
               occursin("admits a type object or a bare array", sprint(showerror, e))
     end
+    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.ghn, (Int64,), "ghn")]).held_type_objects
     # a type object held as a value is a candidate whether or not its values are one pointer: a
     # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)
     @test M.gtu(3) == 1

@@ -756,7 +756,17 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer, field_type::WasmValType)::InstrBuilder
     # WT declares no packed struct field, so struct.get_s/_u (dart's struct_get_s/_u, asserted
-    # packed, instructions.dart:1675) have no caller (dev/AUDIT.md A10B9)
+    # packed, instructions.dart:1675) have no caller (dev/AUDIT.md A10B9); dart's struct_get
+    # asserts a value-type field, and a packed one rejects here (A11B9)
+    local m = b.v.mod
+    if m !== nothing && 0 <= type_idx < length(m.types) && m.types[type_idx + 1] isa StructType
+        local fs = m.types[type_idx + 1].fields
+        if 0 <= field_idx < length(fs)
+            local ft = fs[field_idx + 1].valtype
+            ft isa UInt8 && ft in (0x78, 0x77) &&
+                _module_invalid(:struct_get, "field $field_idx of struct type $type_idx is packed: struct.get_s or struct.get_u reads it")
+        end
+    end
     validate_gc_instruction!(b.v, Opcode.STRUCT_GET, (type_idx, _true_field_type(b, type_idx, field_idx, field_type)))
     _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), Opcode.STRUCT_GET))
 end

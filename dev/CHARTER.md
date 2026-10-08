@@ -48,7 +48,7 @@ with the per-clause status. A clause is never closed by argument.
   dev/MARCH.md 13.0, 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's six remaining inference questions answered by the plan (dev/AUDIT.md P3, E3,
   E4, E5, A2C3, A2C4, A2E4, A3C1, A3C3, A3C4, A3C6, A3C8, A4C4, A4C5, A4C6, A4E5, A5E5,
-  A5E8, A6C5, A6C7, A6E4, A8E4, A9C6, A9E6, A9P11, A9C2).
+  A5E8, A6C5, A6C7, A6E4, A8E4, A9C6, A9E6, A9P11, A9C2, A11E4, A11B8, A11E7).
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
@@ -92,20 +92,20 @@ with the per-clause status. A clause is never closed by argument.
   and then answers wrong, traps, or returns what the harness cannot read). Planned:
   dev/MARCH.md 13.0, 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
   the traps where Julia answers, and the audits' unlocated and lossy paths (dev/AUDIT.md A4E6, A3S1, A3S2, A3S3, A3P3, A3C7, M7, E9, A2C1,
-  A2C2, A2E5, A4P2, A7E3, A7S1, A9E3, A9B1, A7E4, A5C4).
+  A2C2, A2E5, A4P2, A7E3, A7S1, A9E3, A9B1, A7E4, A5C4, A11E1, A11C2, A11C3, A11C6).
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
   Planned: dev/MARCH.md 13.17 — a function's results checked at every return, casts, nulls,
   struct.new and conversions typed by the module, no raw byte as a value type, one subtype
-  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5, A4B1–A4B5, A5B9, A7B5).
+  relation in the builder, a validating initializer (dev/AUDIT.md A3B1–A3B11, A3B14, B5, A4B1–A4B5, A5B9, A7B5, A11E6).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
   `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
   its model or states why it has none). Planned: dev/MARCH.md 13.17 — the exception stack's
   model across calls, the operand stack's if/else, and the closed-world model's pruning and
-  hidden edges (dev/AUDIT.md A3B11, P4, A2C1, A8B5, A8C8).
+  hidden edges (dev/AUDIT.md A3B11, P4, A2C1, A8B5, A8C8, A11P7).
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
@@ -113,7 +113,7 @@ with the per-clause status. A clause is never closed by argument.
   the docs site, by path or by the loader that walks its directory — and none records finished
   work. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `L130` `R35` `R3` `R5` `R7`
   `R14` `R15` `R27`. Planned: dev/MARCH.md 13.4, 13.5, 13.17 — the stale code and prose the
-  audits found (dev/AUDIT.md B6, S6, L8, A2P10, A4B7, A4B8, A4C8, A4E7, A4P7, A9B5, A9B6, A9P7, A9E9, A9C7).
+  audits found (dev/AUDIT.md B6, S6, L8, A2P10, A4B7, A4B8, A4C8, A4E7, A4P7, A9B5, A9B6, A9P7, A9E9, A9C7, A11B6).
 - **C10 · Fast, precise feedback.** `bash dev/lanes.sh` gives one verdict in minutes; the full
   CI matrix runs on every march branch and is the landing gate (`dev/land.sh merge`); a
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its

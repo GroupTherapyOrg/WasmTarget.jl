@@ -323,6 +323,11 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     # argument tests' anyref and i32 scratch
     tramp_locals = WasmValType[]
     numeric && push!(tramp_locals, body.results[1])
+    local obj_scratch = -1   # a closure result's object scratch, before the tests' last two
+    if is_context_type(registry, body.return_type)
+        push!(tramp_locals, AnyRef)
+        obj_scratch = arity + length(tramp_locals)
+    end
     tested && append!(tramp_locals, WasmValType[AnyRef, I32])
     for (k, t) in enumerate(tramp_locals)
         builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
@@ -333,13 +338,13 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                                  takes_context, UInt32(arity + length(tramp_locals) - 1),
                                  UInt32(arity + length(tramp_locals)), lbl)
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
-                            captured_info, UInt32(1 + arity))
+                            captured_info, UInt32(1 + arity); obj_scratch)
         return_!(tb)
         end_block!(tb)
         _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
     else
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
-                            captured_info, UInt32(1 + arity))
+                            captured_info, UInt32(1 + arity); obj_scratch)
     end
     end_block!(tb)   # the function frame's own end
     tramp_idx = add_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef],
@@ -357,8 +362,8 @@ no-method call of this callable (registry.method_error_args) is tested by its el
 classIds and built from the erased arguments; arguments of a class with no numbered tuple, or
 read by no class header, trap.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
-parity(translator.dart:2787 _ClosureTrampolineGenerator.generate): dart's entry for an argument
-count the closure does not take calls noSuchMethod.
+parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
+call's error from its arguments and throws it (dart calls noSuchMethod with an Invocation).
 """
 function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                                        @nospecialize(closure_type), arity::Int)::InstrBuilder
@@ -384,7 +389,10 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
             if_!(tb; results=WasmValType[I32])
             local_get!(tb, UInt32(j)); emit_typeof!(tb, base)
             i32_const!(tb, Int64(ensure_type_id!(registry, C))); num!(tb, Opcode.I32_EQ)
-            else_!(tb); i32_const!(tb, 0); end_block!(tb)
+            else_!(tb)
+            # a null is `nothing` (A11E2)
+            C === Nothing ? (local_get!(tb, UInt32(j)); ref_is_null!(tb)) : i32_const!(tb, 0)
+            end_block!(tb)
             j > 1 && num!(tb, Opcode.I32_AND)
         end
         if_!(tb)
@@ -450,7 +458,7 @@ end
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                              body::ClosureBody, arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
-                             scratch::UInt32)::InstrBuilder
+                             scratch::UInt32; obj_scratch::Integer=-1)::InstrBuilder
     if takes_context
         local_get!(tb, UInt32(0))
         ref_cast!(tb, Int64(base_idx), false)
@@ -483,6 +491,11 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         i32_const!(tb, Int64(ensure_type_id!(registry, body_return_type)))
         local_get!(tb, scratch)
         struct_new!(tb, box_idx)
+    elseif is_context_type(registry, body.return_type)
+        # a closure result is its object at the entry's anyref result
+        obj_scratch >= 0 || throw(_closure_layout_error(closure_type, ClosureBody[body],
+            "the body returns a closure and the entry has no scratch for its object"))
+        emit_context_object!(tb, mod, registry, body.return_type, obj_scratch)
     end
     return tb
 end
@@ -545,6 +558,11 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     end
     push!(tramp_locals, I32)                              # the argument tests' i32 scratch
     local itmp = UInt32(arity + length(tramp_locals))
+    local obj_scratch = -1
+    if any(c -> is_context_type(registry, c.return_type), cands)
+        push!(tramp_locals, AnyRef)                       # a closure result's object scratch
+        obj_scratch = arity + length(tramp_locals)
+    end
     for (k, t) in enumerate(tramp_locals)
         builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
     end
@@ -552,7 +570,8 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
         local lbl = block!(tb)
         _emit_closure_arg_tests!(tb, mod, registry, closure_type, cands, c, arity, takes_context, tmp, itmp, lbl)
         local c_scratch = isempty(c.results) ? UInt32(0) : get(scratch_of, c.results[1], UInt32(0))
-        _closure_call_body!(tb, mod, registry, closure_type, c, arity, takes_context, base_idx, captured_info, c_scratch)
+        _closure_call_body!(tb, mod, registry, closure_type, c, arity, takes_context, base_idx, captured_info, c_scratch;
+                            obj_scratch)
         return_!(tb)
         end_block!(tb)
     end
@@ -622,17 +641,12 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
     # POST-FREEZE: lookup only — the pre-pass created the vtable; creating here
     # would add functions mid-body-compile (the index-freeze skew).
     local cache = ctx.type_registry.closure_vtable_globals
-    local g
-    if cache !== nothing && haskey(cache, closure_type)
-        g, _ = closure_vtable(ctx.mod, ctx.type_registry, closure_type,
-                              length(body_params) - (takes_context ? 1 : 0))
-    elseif takes_context
-        # a closure no dynamic call reaches is still an object once erased: its class header
-        # is what every class read of a value of any class reads (MARCH 13.17 A7S1)
-        g = get_empty_closure_vtable!(ctx.mod, ctx.type_registry)
-    else
-        return nothing   # a function's singleton is a classed object already
-    end
+    # a closure no dynamic call reaches is still an object once erased (the empty vtable): its
+    # class header is what every class read of a value of any class reads (MARCH 13.17 A7S1);
+    # a function's singleton with no vtable is a classed object already
+    (takes_context || (cache !== nothing && haskey(cache, closure_type))) || return nothing
+    local g = closure_vtable_global(ctx.mod, ctx.type_registry, closure_type,
+                                    length(body_params) - (takes_context ? 1 : 0))
     # stack: [captured] → {classId, identityHash=0, context, vtable, functionType}
     local ctx_scratch = allocate_local!(ctx, AnyRef)
     if takes_context
@@ -646,18 +660,69 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
         global_get!(b, ng, ctx.mod.globals[Int(ng) + 1].valtype)
         local_set!(b, UInt32(ctx_scratch))
     end
-    i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, closure_type)))
+    _emit_closure_object!(b, ctx.mod, ctx.type_registry, closure_type, g, ctx_scratch)
+    return ConcreteRef(base_idx, false)
+end
+
+# the closure object {classId, identityHash, context, vtable, functionType} of `closure_type`,
+# its context in anyref local `scratch` and its vtable global `g`: the one construction
+# parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
+function _emit_closure_object!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                               @nospecialize(closure_type), g::Integer, scratch::Integer)::InstrBuilder
+    local base_idx = get_closure_base_struct!(mod, registry)
+    i32_const!(b, Int64(ensure_type_id!(registry, closure_type)))
     i32_const!(b, 0)
-    local_get!(b, UInt32(ctx_scratch))
-    global_get!(b, g, ctx.mod.globals[Int(g) + 1].valtype)   # the vtable's declared type, not a re-derivation
-    local type_globals = ctx.type_registry.type_constant_globals
+    local_get!(b, UInt32(scratch))
+    global_get!(b, g, mod.globals[Int(g) + 1].valtype)   # the vtable's declared type, not a re-derivation
+    local type_globals = registry.type_constant_globals
     (type_globals !== nothing && haskey(type_globals, closure_type)) ||
         error("closed-world type object missing for closure $closure_type")
     local type_global = type_globals[closure_type]
-    global_get!(b, type_global, ctx.mod.globals[Int(type_global) + 1].valtype)
+    global_get!(b, type_global, mod.globals[Int(type_global) + 1].valtype)
     struct_new!(b, base_idx)
-    return ConcreteRef(base_idx, false)
+    return b
 end
+
+"""
+    emit_context_object!(b, mod, registry, T, scratch) -> Bool
+
+The captured-fields context of closure type `T` on the stack, meeting a slot of any class
+outside a compiled body (a vtable entry's or a dispatch wrapper's result): its closure object,
+as maybe_wrap_closure! makes it inside one (A11E1: an entry returned the bare context, and
+`isa(g, Function)` answered 2 where native answers 1). `scratch` is an anyref local. False,
+emitting nothing, when `T`'s values are not contexts.
+parity(code_generator.dart:2560 AstCodeGenerator._pushClosure)
+"""
+function emit_context_object!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                              @nospecialize(T), scratch::Integer)::Bool
+    is_context_type(registry, T) || return false
+    local_set!(b, UInt32(scratch))
+    _emit_closure_object!(b, mod, registry, T, closure_vtable_global(mod, registry, T, nothing), scratch)
+    return true
+end
+
+"""
+    closure_vtable_global(mod, registry, T, arity) -> UInt32
+
+The vtable global a closure object of type `T` holds: the pre-pass's (closure_vtable, checked
+to hold an entry for `arity` when one is given), or the empty vtable for a closure type no
+dynamic call reaches. The one lookup for every construction.
+parity(closures.dart:40 ClosureImplementation.vtable)
+"""
+function closure_vtable_global(mod::WasmModule, registry::TypeRegistry, @nospecialize(T),
+                               arity::Union{Nothing,Int})::UInt32
+    local cache = registry.closure_vtable_globals
+    (cache !== nothing && haskey(cache, T)) ||
+        return get_empty_closure_vtable!(mod, registry)
+    arity === nothing && return cache[T]
+    return closure_vtable(mod, registry, T, arity)[1]
+end
+
+# whether `T`'s values are held as a closure's captured-fields context
+# parity(quarantine: a Julia closure is an ordinary struct of its captures, MARCH 13.17 A7S1)
+is_context_type(registry::TypeRegistry, @nospecialize(T))::Bool =
+    T isa DataType && is_closure_type(T) && get(registry.structs, T, nothing) isa StructInfo &&
+    registry.structs[T].field_offset == 1
 
 
 """
@@ -725,6 +790,18 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
     if base_idx !== nothing && !isempty(b.v.stack)
         local actual = b.v.stack[end]
         actual isa ConcreteRef && actual.type_idx == base_idx && return true
+    end
+    # a closure's context reaching a slot of any class with no Julia type stated rejects: its
+    # class cannot be guessed from a layout another type may share (A11B3; no program reaching
+    # this was found, every erasure site measured states its type)
+    if from_julia === nothing && !isempty(b.v.stack) && b.v.stack[end] isa ConcreteRef
+        local idx = b.v.stack[end].type_idx
+        if any(((T, info),) -> T isa DataType && info.wasm_type_idx == idx && is_context_type(ctx.type_registry, T),
+               registered_structs(ctx.type_registry))
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a closure context erased into a slot of any class with no Julia type stated")
+            return true
+        end
     end
     from_julia isa DataType || return false
     from_julia <: Function || return false

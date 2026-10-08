@@ -448,20 +448,44 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # a type object held as a value is the candidate Type{X}, whether its values are one
     # pointer or are told by type equality (a Type{X} row that tests type equality rejects,
     # _closure_param_untestable; left out, a value of it ran another method, A10C1)
+    local held_seen = Base.IdSet{Any}()   # constants already walked (a cycle walks once)
     function observe_held!(node::NirNode)
         local v = node isa NirLiteral ? node.value :
                   (node isa NirGlobalRef && node.bound && isconst(node.mod, node.name)) ? node.value : nothing
-        hold!(v, 0)
+        hold!(v)
         return
     end
-    function hold!(@nospecialize(v), depth::Int)
+    # every value a constant reaches: an array's or a Memory's elements, a struct's or tuple's
+    # fields, a mutable one's included, each object once (A11C1). A module and exactly these
+    # runtime structures of Core (a TypeName, a method table and its entries, a Method, a
+    # MethodInstance, a CodeInstance, a CodeInfo, a binding, a SimpleVector) are not values a
+    # program reads out of a constant (a NamedTuple, a Box are walked): walking them reached the
+    # whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11
+    # svec). A walk past 10^6 objects raises rather than stopping silently.
+    function hold!(@nospecialize(v))
         if v isa Type
             local VT = Core.Typeof(v)
             VT isa DataType && VT.name === Type.body.name && push!(held_type_objects, VT)
-        elseif depth < 8 && !(v isa Module) && isstructtype(typeof(v)) && !ismutable(v)
-            # a constant tuple's or immutable struct's fields are values the program reads out
+            return
+        end
+        v isa Module && return
+        (v isa Core.TypeName || v isa Core.MethodTable || v isa Core.TypeMapEntry ||
+         v isa Core.TypeMapLevel || v isa Method || v isa Core.MethodInstance ||
+         v isa Core.CodeInstance || v isa Core.CodeInfo || v isa Core.Binding ||
+         v isa Core.SimpleVector) && return
+        if ismutable(v) || v isa AbstractArray
+            v in held_seen && return
+            push!(held_seen, v)
+            length(held_seen) > 1_000_000 &&
+                error("the held type objects' walk of the program's constants passed 10^6 objects")
+        end
+        if v isa Array || v isa GenericMemory
+            for i in eachindex(v)
+                isassigned(v, i) && hold!(v[i])
+            end
+        elseif isstructtype(typeof(v))
             for i in 1:nfields(v)
-                isdefined(v, i) && hold!(getfield(v, i), depth + 1)
+                isdefined(v, i) && hold!(getfield(v, i))
             end
         end
         return
@@ -523,8 +547,22 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     end
     # a `typeof` returns the type object of its operand's class: each class a value of the
     # operand's static type can have
-    for T in typeof_operand_types, C in runtime_types
-        isconcretetype(C) && C <: T && push!(held_type_objects, Type{C})
+    for T in typeof_operand_types
+        for C in runtime_types
+            isconcretetype(C) && C <: T && push!(held_type_objects, Type{C})
+        end
+    end
+    # a type object's type is its kind (A11C1: `typeof(x)` of a type object x): the kind of each
+    # type object a value may be, a held one or a `typeof` result (a DataType)
+    if !isempty(typeof_operand_types)
+        local kinds = Set{Any}([DataType])
+        for H in held_type_objects
+            local X = H.parameters[1]
+            X isa Type && push!(kinds, typeof(X))
+        end
+        for K in kinds, T in typeof_operand_types
+            typeintersect(T, K) !== Union{} && push!(held_type_objects, Type{K})
+        end
     end
     # OBSERVED dynamic-call signatures (SSA callee, inferred arg types) —
     # closure bodies specialize against these (dart's typed vtable entries; Julia's

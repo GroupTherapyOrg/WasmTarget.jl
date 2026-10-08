@@ -1691,8 +1691,9 @@ _g("runtime_length_tuple", Any[
     ("value_joins_runtime_length", (n::Int64) -> (u = n == 3 ? (n,) : _sm_mk([n, 2]); u[1]), Int64(3)),
     # narrowed to the NTuple it was tested to be, it is that NTuple (A6E3: a cast between the
     # two structs trapped where native answers 6)
-    # a packed element is read with its sign: -3 read unsigned is 253 (A9B3, A10P6)
-    ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[-n, 2, 3]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
+    # a packed element is read with its sign: -3 read unsigned is 253 (A9B3, A10P6); the
+    # answer, 2, is not the else branch's 0 (A11P4)
+    ("isa_narrowed_int8_fields", (n::Int64) -> (t = _sm_mk8(Int8[-n, 2, 5]); t isa NTuple{3,Int8} ? Int64(t[1]) + Int64(t[3]) : 0), Int64(3)),
     ("isa_narrowed_fields", (n::Int64) -> (t = _sm_mk([n, 2, 3]); t isa NTuple{3,Int64} ? t[1] + t[3] : 0), Int64(3)),
     # a Bool element is unpacked, read plainly (A10E5: a signed read of it was refused)
     ("isa_narrowed_bool_fields", (n::Int64) -> (t = _sm_mkbool([true, false, n > 2]); t isa NTuple{3,Bool} ? (t[3] ? 2 : 1) : 0), Int64(3)),
@@ -1763,6 +1764,8 @@ _xf("type_isa_equality", Any[
 # wasm trap)
 const _SM_TV = TypeVar(:T)
 const _SM_CT = (Int64, UInt8)
+struct _SmHb; v::Int64; end
+const _SM_HV = Any[_SmHb, 1]
 _g("type_object_rows", Any[
     ("typevar_row", (n::Int64) -> (k = n; g = _sm_dh(x -> (x isa TypeVar ? 20 : 10) + k)[]; n == 1 ? g(DataType[Int64][1])::Int64 : g(TypeVar[_SM_TV][1])::Int64), Int64(2)),
     # a closure row taking Type{Int64}: Int64's identity (A6B4 = A6C6)
@@ -1774,6 +1777,10 @@ _g("type_object_rows", Any[
     ("typeof_made_unsigned_row", (n::Int64) -> (k = n; h(::Type{S}) where {S<:Unsigned} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(typeof(_sm_dh(0x03)[]))::Int64), Int64(3)),
     # a type object a constant tuple holds, read out at run time (A10C1)
     ("constant_tuple_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S<:Unsigned} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_SM_CT[n - 1])::Int64), Int64(3)),
+    # a type object a mutable constant holds, and the kind a `typeof` of a type object returns
+    # (A11C1: native 1, wasm 2 or a trap)
+    ("mutable_constant_type_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(_SM_HV[n - 2])::Int64), Int64(3)),
+    ("typeof_kind_row", (n::Int64) -> (k = n; h(::Type{S}) where {S} = 1 + 0k; h(x) = 2 + 0k; g = _sm_dh(h)[]; g(typeof(_sm_dh(Int64)[]))::Int64), Int64(3)),
 ])
 # `===` on closures compares their type and captures, as jl_egal compares an immutable struct,
 # whichever of WT's two representations each operand is (its captured-fields context, or the
@@ -1794,6 +1801,11 @@ _sm_cv_a(x::Int64) = x + 3
 _sm_cv_m(x::Int64) = x * 4
 @noinline _sm_cv_mk(n::Int64) = Ref{Any}(y -> y + n)[]
 mutable struct _SmMC <: Function; n::Int64; end
+(m::_SmMC)(x::Int64) = x + m.n
+@noinline _sm_idmc(m::_SmMC) = m
+@noinline _sm_mkmc(m::_SmMC) = () -> m.n
+@noinline _sm_newmc(n::Int64) = _SmMC(n)
+@noinline _sm_holdmc(m::_SmMC) = () -> m
 struct _SmHF; f::Base.Fix2{typeof(+),Int64}; end
 _sm_cv_k(::Base.Fix2) = 1
 _sm_cv_k(x) = 2
@@ -1818,6 +1830,15 @@ _g("closure_values", Any[
     # whose context the body takes (MARCH 13.17 A7S1 stage 4: native 4, wasm trap)
     ("closure_argument_erased_call", (n::Int64) -> (k = n; c = x -> x + k; f = _sm_dh(y -> y(1))[]; f(c)::Int64), Int64(3)),
     ("fix2_argument_erased_call", (n::Int64) -> (f = _sm_dh(y -> y(1))[]; f(Base.Fix2(+, n))::Int64), Int64(3)),
+    # a closure an erased closure returns is its object at the entry's result (A11E1: the bare
+    # context answered `isa Function` 2 where native answers 1)
+    ("closure_returned_erased", (n::Int64) -> (h = Any[y -> (z -> z + y)][1]; g = h(n); g isa Function ? 1 : 2), Int64(3)),
+    # a mutable callable is one object with identity, whichever form it is held in (A11B1,
+    # A11E3: native 1, wasm 2), and its fields are its own (A11C5: an invalid module)
+    ("mutable_callable_identity", (n::Int64) -> (m = _SmMC(n); _sm_idmc(m) === m ? 1 : 2), Int64(3)),
+    ("mutable_callable_captured", (n::Int64) -> (m = _SmMC(n); _sm_mkmc(m) === _sm_mkmc(m) ? 1 : 2), Int64(3)),
+    ("mutable_callable_field_write", (n::Int64) -> (m = _sm_newmc(n); m.n += 1; m(1)), Int64(3)),
+    ("mutable_callable_held_in_closure", (n::Int64) -> (m = _SmMC(n); h = _sm_holdmc(m); h() === m ? 1 : 2), Int64(3)),
 ])
 # a dynamic call with no method for its argument's class throws Julia's MethodError, `f` the
 # callee and `args` the tuple of the arguments' classes, which the program can catch: through
@@ -1837,6 +1858,10 @@ _g("method_error", Any[
     ("union_split_two_args", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_r(n, v[n])::Int64; catch e; (e isa MethodError && e.args === (n, 1.5)) ? 1 : 2; end), Int64(2)),
     ("closure_entry_caught", (n::Int64) -> (k = n; f = _sm_dh(x::Int64 -> x + k)[]; f(1); try; f(_sm_dh(1.5)[])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(3)),
     ("closure_entry_fields", (n::Int64) -> (k = n; g = x::Int64 -> x + k; f = _sm_dh(g)[]; f(1); try; f(_sm_dh(1.5)[])::Int64; catch e; (e isa MethodError && e.f === g && e.args === (1.5,)) ? 1 : 2; end), Int64(3)),
+    # `nothing` reaching a call with no method: its class is Nothing's (A11E2, A11C4: the class
+    # read trapped on the null; a tuple holding `nothing` raised a WasmInternalError)
+    ("nothing_union_split", (n::Int64) -> (x = n > 0 ? n : nothing; try; _sm_me_q(x)::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(-1)),
+    ("nothing_in_any_vector", (n::Int64) -> (v = Any[n, nothing]; try; _sm_me_q(v[n])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(2)),
     ("class_switch_caught", (n::Int64) -> (v = Any[n, "s", Int32(2), 0x01, 'c', 1.5]; s = _sm_me_5(v[1])::Int64 + _sm_me_5(v[2])::Int64 + _sm_me_5(v[3])::Int64 + _sm_me_5(v[4])::Int64 + _sm_me_5(v[5])::Int64; try; _sm_me_5(v[n])::Int64; catch e; (e isa MethodError && e.args === (1.5,)) ? s + 100 : s; end), Int64(6)),
 ])
 # a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct

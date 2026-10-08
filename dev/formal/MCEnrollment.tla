@@ -18,19 +18,20 @@
 (* first position only (`h(x::T, y) where T<:Integer`).                      *)
 (* Static types: every pair, (I, I), and (I, T) (`h(x::Int64, ::Type{T})`,  *)
 (* whose second position is one type object). T is made by a               *)
-(* `typeof`; the program holds no type object as a literal.                *)
+(* `typeof`; the type object U is held as a literal, and pU (`h(x::T,       *)
+(* ::Type{S}) where {T<:Integer, S}` at U) is fixed by it.                   *)
 EXTENDS Enrollment
-MCX == {"I", "J", "S", "F", "T"}
+MCX == {"I", "J", "S", "F", "T", "U"}
 MCNumbered == {"I", "J", "S", "F"}
 MCCallables == {"h", "a", "g", "q", "b", "k", "t", "p", "o"}
-MCMethods == {"hA", "hP", "aX", "aY", "aP", "gI", "gN", "q1", "q2", "q3", "b1", "b2", "kI", "t1", "t2", "pA", "pP", "oA", "oP"}
+MCMethods == {"hA", "hP", "aX", "aY", "aP", "gI", "gN", "q1", "q2", "q3", "b1", "b2", "kI", "t1", "t2", "pA", "pP", "pU", "oA", "oP"}
 MCOwner == [m \in MCMethods |-> CASE m \in {"hA", "hP"} -> "h"
                                   [] m \in {"aX", "aY", "aP"} -> "a"
                                   [] m \in {"gI", "gN"} -> "g"
                                   [] m \in {"q1", "q2", "q3"} -> "q"
                                   [] m \in {"b1", "b2"} -> "b"
                                   [] m \in {"t1", "t2"} -> "t"
-                                  [] m \in {"pA", "pP"} -> "p"
+                                  [] m \in {"pA", "pP", "pU"} -> "p"
                                   [] m \in {"oA", "oP"} -> "o"
                                   [] OTHER -> "k"]
 Row(xs) == xs \X MCX
@@ -38,6 +39,7 @@ MCParam == [m \in MCMethods |-> CASE m \in {"hA", "pA", "oA"} -> MCX \X MCX
                                   [] m = "t1" -> Row({"T"})
                                   [] m = "t2" -> MCX \X {"I"}
                                   [] m = "pP" -> {<<"I", "T">>}
+                                  [] m = "pU" -> {<<"I", "U">>}
                                   [] m = "oP" -> Row({"I"})
                                   [] m \in {"hP", "aP", "kI"} -> {<<"I", "I">>}
                                   [] m = "aX" -> Row({"I"})
@@ -49,14 +51,14 @@ MCParam == [m \in MCMethods |-> CASE m \in {"hA", "pA", "oA"} -> MCX \X MCX
                                   [] m = "q3" -> Row({"I"})
                                   [] m = "b1" -> Row({"I", "S"})
                                   [] OTHER -> Row({"I", "F"})]
-MCMore == {<<"pP", "pA">>, <<"oP", "oA">>, <<"hP", "hA">>, <<"aP", "aX">>, <<"aP", "aY">>, <<"gI", "gN">>, <<"q3", "q1">>, <<"q3", "q2">>}
+MCMore == {<<"pP", "pA">>, <<"pU", "pA">>, <<"oP", "oA">>, <<"hP", "hA">>, <<"aP", "aX">>, <<"aP", "aY">>, <<"gI", "gN">>, <<"q3", "q1">>, <<"q3", "q2">>}
 MCPOrd == [m \in MCMethods |-> CASE m \in {"hA", "aX", "gN", "q1", "b1", "kI", "t1", "pA", "oA"} -> 1
                                   [] m \in {"aY", "q2", "b2", "t2"} -> 2
                                   [] OTHER -> 3]
-MCPFix == [m \in MCMethods |-> CASE m \in {"hP", "aP", "pP"} -> {1, 2}
+MCPFix == [m \in MCMethods |-> CASE m \in {"hP", "aP", "pP", "pU"} -> {1, 2}
                                  [] m = "oP" -> {1}
                                  [] OTHER -> {}]
 MCStatics == {MCX \X MCX, {<<"I", "I">>}, {<<"I", "T">>}}
-\* T is made by a `typeof` (`h(typeof(x))`), held as no literal
-MCLiterals == {}
+\* T is made by a `typeof` (`h(typeof(x))`), held as no literal; U is held as a literal
+MCLiterals == {"U"}
 =============================================================================

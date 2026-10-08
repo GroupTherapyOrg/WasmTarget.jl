@@ -75,7 +75,9 @@ CONSTANTS
     ObserveBuiltins,  \* BOOLEAN: the collector counts builtin allocations (FALSE = broken)
     RejectShared,     \* BOOLEAN: a shared candidate class rejects the call (FALSE = the old rule)
     CastOnly,         \* BOOLEAN: a row tests only the value's layout (TRUE = broken)
-    Static,           \* Classes: the class the call's static type names (an args tuple at it is wrong)
+    Static,           \* the call's static type, outside Classes (an args tuple at it is no value's class)
+    Unnumbered,       \* SUBSET Classes: no-method classes whose args tuple the collector numbers no
+                      \* class for (MARCH 13.17 A3S1: one made for another throw, two open positions)
     TrapNoMethod,     \* BOOLEAN: no row traps (TRUE = broken, before batch 103)
     StaticArgs        \* BOOLEAN: the MethodError's args built at the static type (TRUE = broken)
 
@@ -86,7 +88,7 @@ vars == <<v, outcome, done>>
 Trap == "trap"
 Reject == "reject"
 Err(a) == "MethodError:" \o a
-Errors == {Err(a) : a \in Classes}
+Errors == {Err(a) : a \in Classes \cup {Static}}
 
 \* the classes the collector numbers
 Observed == {c \in Classes : c \notin ByBuiltin \/ ObserveBuiltins}
@@ -98,7 +100,7 @@ Candidates == UNION {Param[m] : m \in Methods}
 
 \* the args-tuple classes the collector numbers: Tuple{c} for each observed class c the call
 \* has no method for
-ArgsNumbered == {c \in Observed : ~\E m \in Methods : c \in Param[m]}
+ArgsNumbered == {c \in Observed : ~\E m \in Methods : c \in Param[m]} \ Unnumbered
 
 \* the class a row can read for an erased value of class c: a header's classId, or a bare
 \* array's class when its array type is its own; else no class (the read fails)
@@ -142,7 +144,9 @@ NoMethod(c) == ~\E m \in Methods : c \in Param[m]
 \* a MethodError only where Julia has no method, carrying the value's own class
 ErrorIsJulias == done \in BOOLEAN /\ (done /\ outcome \in Errors => NoMethod(v) /\ outcome = Err(v))
 
-\* wherever Julia throws a MethodError for a class the entry reads, the entry throws it
+\* wherever Julia throws a MethodError for a class the entry reads, the entry throws it (an
+\* args tuple the collector numbered no class for violates it: MCClassIdSwitchUnnumberedBroken
+\* pins that open defect, MARCH 13.17 A3S1)
 ThrowWhereJuliaThrows ==
     done \in BOOLEAN /\ (done /\ NoMethod(v) /\ ReadClass(v) # Trap /\ outcome # Reject => outcome = Err(v))
 

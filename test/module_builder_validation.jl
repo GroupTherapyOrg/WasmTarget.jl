@@ -89,6 +89,9 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             local i64arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(MBV.I64, true)))
             @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i8arr, MBV.I32)
             @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i64arr, MBV.I64; signed=true)
+            # a packed struct field is never read by struct.get (A11B9: dart asserts a value type)
+            local i8st = MBV.add_type!(pm, MBV.StructType([MBV.FieldType(0x78, false)]))
+            @test_throws MBV.ModuleValidationError MBV.struct_get!(MBV.InstrBuilder(; mod=pm), i8st, 0, MBV.I32)
         end
         # the writer checks the groups the builder recorded against the section's components
         # (dev/AUDIT.md A8B4: a record that disagrees is refused when the module is written)
