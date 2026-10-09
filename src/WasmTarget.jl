@@ -101,27 +101,16 @@ parity(compile.dart:216 compile)
 function compile(f, arg_types::Tuple; optimize=false, optimize_ir::Bool=true,
                  validate::Bool=_wt_default_validate(),
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
-    OPTIONS[] = options_from_env()
-    # Get function name for export
-    func_name = string(nameof(f))
-
-    # Caller-facing diagnostics ledger: mirror every recorded WasmDiagnostic (fatal AND
-    # non-fatal downgraded dependency stubs) into the caller's vector. On WasmCompileError
-    # the same ledger also rides the exception (`err.all`).
-    _prev_sink = DIAGNOSTICS_SINK[]
-    diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
-    mod = try
-        compile_function(f, arg_types, func_name; optimize_ir=optimize_ir)
-    finally
-        DIAGNOSTICS_SINK[] = _prev_sink
-    end
-    return first(_emit_module(mod; optimize=optimize, validate=validate))
+    return _compile(Any[(f, arg_types, string(nameof(f)))];
+                    optimize, optimize_ir, validate, diagnostics_sink).bytes
 end
 
 """
-    compile_with_sourcemap(f, arg_types; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
+    compile_with_sourcemap(f, arg_types; sourcemap_url="module.wasm.map", optimize, optimize_ir, validate,
+                           diagnostics_sink, existing_module, import_stubs, root_bindings, link_roots) -> (bytes, source_map_json)
 
-`compile`, with the module's source map: every statement's instructions map to the Julia
+`compile`, with the module's source map, and compile_multi's diagnostics ledger and framework
+keywords: every statement's instructions map to the Julia
 source they were compiled from (its innermost frame's file and line, named by its inline
 chain), and the module's `sourceMappingURL` section names `sourcemap_url`. An engine reports
 a trap as a module byte offset; the map resolves it to the statement that trapped.
@@ -129,15 +118,20 @@ parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with sou
 """
 function compile_with_sourcemap(f, arg_types::Tuple; sourcemap_url::String="module.wasm.map",
                                 optimize=false, optimize_ir::Bool=true,
-                                validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
-    OPTIONS[] = options_from_env()
-    mod = compile_function(f, arg_types, string(nameof(f)); optimize_ir=optimize_ir,
-                           source_map_url=sourcemap_url)
-    return _emit_module(mod; optimize=optimize, validate=validate)
+                                validate::Bool=_wt_default_validate(),
+                                diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
+                                existing_module::Union{WasmModule,Nothing}=nothing,
+                                import_stubs::Vector=Any[],
+                                root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                                link_roots::Union{Nothing,Function}=nothing)::Tuple{Vector{UInt8},String}
+    local r = _compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url=sourcemap_url,
+                       optimize, optimize_ir, validate, diagnostics_sink,
+                       existing_module, import_stubs, root_bindings, link_roots)
+    return r.bytes, something(r.source_map)
 end
 
 """
-    compile_with_statement_trace(f, arg_types; validate) -> (bytes, trace)
+    compile_with_statement_trace(f, arg_types; validate, diagnostics_sink) -> (bytes, trace)
 
 `compile`, with every function compiled from Julia IR traced: on entry it reports
 `wasmtarget.trace_enter(id)`, and each statement whose value has a traced type — Int64, UInt64,
@@ -150,13 +144,69 @@ and the first event where the two runs differ is where a wrong value first appea
 parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 """
 function compile_with_statement_trace(f, arg_types::Tuple;
-                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},StatementTrace}
-    OPTIONS[] = options_from_env()
+                                      validate::Bool=_wt_default_validate(),
+                                      diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Tuple{Vector{UInt8},StatementTrace}
     local name = string(nameof(f))
-    local trace = StatementTrace(name)
-    local mod = compile_module([(f, arg_types, name)]; trace)
-    trace.entry > 0 || throw(ArgumentError("$(name)$(arg_types) compiled to no traceable body"))
-    return first(_emit_module(mod; optimize=false, validate=validate)), trace
+    local r = _compile(Any[(f, arg_types, name)]; optimize=false, validate, diagnostics_sink,
+                       trace=StatementTrace(name))
+    return r.bytes, something(r.trace)
+end
+
+"""
+    CompileResult
+
+What the one compile entry (`_compile`) returns: the module's bytes; its source map, for a
+compile with a `source_map_url`, else `nothing`; the registries a framework reads back
+(`return_registries`), else `nothing`; and a traced compile's record (`trace`), else `nothing`.
+Each exported entry projects the part its callers take.
+parity(pkg/dart2wasm/lib/compile.dart:88 CodegenResult)
+"""
+struct CompileResult
+    bytes::Vector{UInt8}
+    source_map::Union{Nothing,String}
+    registries::Union{Nothing,Tuple{TypeRegistry,FunctionRegistry,DispatchTableRegistry}}
+    trace::Union{Nothing,StatementTrace}
+end
+
+"""
+    _compile(functions; keywords...) -> CompileResult
+
+The one compile entry: every exported entry (compile, compile_multi, compile_with_sourcemap,
+compile_multi_with_sourcemap, compile_with_statement_trace) is one call of it, projecting its
+result. It reads the environment's options once (OPTIONS[]), routes the caller's diagnostics
+ledger for the compile and restores the previous one after it (`diagnostics_sink`, as dart's
+diagnostics handler is a parameter of its one entry), collects and compiles the closed world
+(compile_module) and serializes the module (_emit_module). A source map is an option of it
+(`source_map_url`, as dart's `generateSourceMaps` is read once inside its one compile), and so
+is the statement trace (`trace`). It takes every public entry's keywords, typed, and nothing
+else: an unknown keyword raises.
+parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+"""
+function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validate::Bool=_wt_default_validate(),
+                  optimize_ir::Bool=true, register_ir_types::Bool=false,
+                  existing_module::Union{WasmModule,Nothing}=nothing, import_stubs::Vector=Any[],
+                  root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                  link_roots::Union{Nothing,Function}=nothing,
+                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
+                  return_registries::Bool=false,
+                  source_map_url::Union{Nothing,String}=nothing,
+                  trace::Union{Nothing,StatementTrace}=nothing)::CompileResult
+    OPTIONS[] = options_from_env()
+    # the caller's ledger mirrors every recorded WasmDiagnostic (fatal and the non-fatal
+    # downgraded dependency stubs); on WasmCompileError the same ledger rides the exception
+    local prev_sink = DIAGNOSTICS_SINK[]
+    diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
+    local result = try
+        compile_module(functions; existing_module, import_stubs, root_bindings, link_roots,
+                       return_registries, optimize_ir, register_ir_types, source_map_url, trace)
+    finally
+        DIAGNOSTICS_SINK[] = prev_sink
+    end
+    trace === nothing || trace.entry > 0 ||
+        throw(ArgumentError("$(trace.entry_name)$(functions[1][2]) compiled to no traceable body"))
+    local mod = return_registries ? result[1] : result
+    local bytes, source_map = _emit_module(mod; optimize, validate)
+    return CompileResult(bytes, source_map, return_registries ? (result[2], result[3], result[4]) : nothing, trace)
 end
 
 """
@@ -183,8 +233,9 @@ end
 
 # Convenience method for single argument type
 # parity(compile.dart:216 compile): the same entry, one argument type spelled without the tuple.
-compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate()) =
-    compile(f, (arg_type,); optimize=optimize, optimize_ir=optimize_ir, validate=validate)
+compile(f, arg_type::Type; optimize=false, optimize_ir::Bool=true, validate::Bool=_wt_default_validate(),
+        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing) =
+    compile(f, (arg_type,); optimize, optimize_ir, validate, diagnostics_sink)
 
 """
     compile_multi(functions; optimize=false) -> Vector{UInt8}
@@ -232,39 +283,30 @@ function compile_multi(functions::Vector; optimize=false,
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                        link_roots::Union{Nothing,Function}=nothing,
                        diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)
-    OPTIONS[] = options_from_env()
-    _prev_sink = DIAGNOSTICS_SINK[]
-    diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
-    result = try
-        compile_module(functions; return_registries=return_registries,
-                       optimize_ir=optimize_ir, register_ir_types=register_ir_types,
-                       existing_module=existing_module,
-                       import_stubs=import_stubs, root_bindings=root_bindings,
-                       link_roots=link_roots)
-    finally
-        DIAGNOSTICS_SINK[] = _prev_sink
-    end
-    if return_registries
-        mod, type_registry, func_registry, dispatch_registry = result
-        bytes = first(_emit_module(mod; optimize=optimize, validate=validate))
-        return (bytes, type_registry, func_registry, dispatch_registry)
-    else
-        return first(_emit_module(result; optimize=optimize, validate=validate))
-    end
+    local r = _compile(functions; optimize, return_registries, optimize_ir, register_ir_types, validate,
+                       existing_module, import_stubs, root_bindings, link_roots, diagnostics_sink)
+    return return_registries ? (r.bytes, r.registries...) : r.bytes
 end
 
 """
-    compile_multi_with_sourcemap(functions; sourcemap_url="module.wasm.map", kwargs...) -> (bytes, source_map_json)
+    compile_multi_with_sourcemap(functions; sourcemap_url="module.wasm.map", optimize, optimize_ir, validate,
+                                 diagnostics_sink, existing_module, import_stubs, root_bindings, link_roots) -> (bytes, source_map_json)
 
-`compile_multi`, with the module's source map (see `compile_with_sourcemap`).
+`compile_multi`, with the module's source map (see `compile_with_sourcemap`): the same compile,
+its bytes those compile_multi answers plus the `sourceMappingURL` section.
 parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with source maps on.
 """
 function compile_multi_with_sourcemap(functions::Vector; sourcemap_url::String="module.wasm.map",
                                       optimize=false, optimize_ir::Bool=true,
-                                      validate::Bool=_wt_default_validate())::Tuple{Vector{UInt8},String}
-    OPTIONS[] = options_from_env()
-    mod = compile_module(functions; optimize_ir=optimize_ir, source_map_url=sourcemap_url)
-    return _emit_module(mod; optimize=optimize, validate=validate)
+                                      validate::Bool=_wt_default_validate(),
+                                      diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
+                                      existing_module::Union{WasmModule,Nothing}=nothing,
+                                      import_stubs::Vector=Any[],
+                                      root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
+                                      link_roots::Union{Nothing,Function}=nothing)::Tuple{Vector{UInt8},String}
+    local r = _compile(functions; source_map_url=sourcemap_url, optimize, optimize_ir, validate,
+                       diagnostics_sink, existing_module, import_stubs, root_bindings, link_roots)
+    return r.bytes, something(r.source_map)
 end
 
 # ============================================================================
@@ -299,7 +341,6 @@ parity(quarantine: WT links a prebuilt base module into a host framework's modul
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
                            optimize=false)::Vector{UInt8}
-    OPTIONS[] = options_from_env()
     # Check tools
     wasm_merge = Sys.which("wasm-merge")
     if wasm_merge === nothing
@@ -427,6 +468,12 @@ function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,Stri
             append!(flags, ["-ism", joinpath(dir, "input.wasm.map"),
                             "-osm", joinpath(dir, "output.wasm.map"), "-osu", source_map_url])
         end
+        # One strip decision for every optimized build, plain or mapped, as dart's is one option
+        # (io_util.dart:185 passes `-g` exactly when it does not strip): WT keeps the name
+        # section, so a mapped build stays the plain build plus its URL section, and a trap's
+        # frame that no statement maps is named by its function (L157, located_frames). dart
+        # strips by default (compiler_options.dart:62 stripWasm); WT never does.
+        push!(flags, "-g")
 
         # Binaryen_jll supplies a platform-correct executable plus its required
         # library environment. Optimization therefore has no ambient PATH or

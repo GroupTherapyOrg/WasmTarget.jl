@@ -113,9 +113,16 @@ with the per-clause status. A clause is never closed by argument.
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
-  throw site) `L153` (the gate before a push runs every test family CI runs).
-  Planned: dev/MARCH.md 13.15, 13.17 — an exception's type, every function named; one compile
-  entry; every throw's stack checked by its callers; a check that `bash dev/lanes.sh` gives its
+  throw site) `L153` (the gate before a push runs every test family CI runs) `L157` (every
+  function is named where it is defined, so a trap in code the compiler generated names its
+  function and construct) `L158` (one compile entry: every exported compile entry is one call
+  of it, which alone reads the options and routes the caller's diagnostics ledger; compile_module
+  below it is internal) `L159` (every byte
+  of a function compiled from Julia IR maps to its statement or its definition, except a
+  statement Julia gives no location of its own, which is unmapped, so a trap outside a statement
+  names its function's definition).
+  Planned: dev/MARCH.md 13.15 — an exception's type; the statement-generator lane strict; a
+  wrong value located in every traced callee; a check that `bash dev/lanes.sh` gives its
   verdict in minutes.
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one

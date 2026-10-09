@@ -153,8 +153,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed);
   Core.sizeof answers Julia's size of a Memory, and two lookups that matched by name went.
 - Codegen reads Julia's typed IR only through the NIR (R29a, R29b locked; plan row 13.0 closed).
+- A trap names each frame: its statement, outside statements its definition (L159), in a generated
+  function its construct (L157); one compile entry (L158); rethrow(e) keeps its stack (L145).
 
 ## Why the archive was consolidated
-Searches of the old campaign files surfaced stale `NEXT` and `RESUME HERE` sections as if they
-were current. Here finished architecture is locked in `test/parity_ratchet.jl`, an open boundary
-needs a present reproducer or census, and exact historical prose lives in Git.
+Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

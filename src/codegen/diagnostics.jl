@@ -222,32 +222,30 @@ _ctx_nir(ctx)::Vector{NirStmt} = ctx.nir
 # parity(code_generator.dart:190 setSourceMapFileOffset): the DebugInfo a located report decodes.
 _ctx_debuginfo(ctx)::Union{Core.DebugInfo,Nothing} = ctx.debuginfo
 
-# Per-statement line — the NIR boundary's `NirStmt.line` (frontend/nir.jl `_nir_lines`:
-# a position whose own DebugInfo entry is ≤ 0 takes the nearest earlier concrete line);
-# `nothing` when the IR carries no line for it.
-# parity(code_generator.dart:190 setSourceMapFileOffset): the line recorded on the node, read once.
-function _stmt_line(ctx, idx::Int)::Union{Nothing,Int}
-    nir = _ctx_nir(ctx)
-    1 <= idx <= length(nir) || return nothing
-    ln = Int(nir[idx].line)
-    return ln > 0 ? ln : nothing
-end
-
 # The statement as a located report prints it: its NIR record.
 # parity(code_generator.dart:726 _printLocation): the failing node a located report names.
 _stmt_text(ctx, idx::Int)::String =
     (nir = _ctx_nir(ctx); 1 <= idx <= length(nir) ? first(nir_text(nir[idx]), 160) : "")
 
-# Method definition "(file, line)" — the always-available anchor.
+# The Method a function's MethodInstance (or its DebugInfo's `def`) names; `nothing` for none.
 # parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
-function _method_loc(di)::Union{Nothing,Tuple{String,Int}}
-    di isa Core.DebugInfo || return nothing
-    mi = di.def
-    if mi isa Core.MethodInstance && mi.def isa Method
-        m = mi.def
-        return (string(m.file), Int(m.line))
-    end
-    return nothing
+_definition_method(def)::Union{Nothing,Method} =
+    def isa Core.MethodInstance ? (def.def isa Method ? def.def : nothing) : def isa Method ? def : nothing
+
+"""
+    definition_source_info(def) -> Union{SourceInfo,Nothing}
+
+The source a function's code outside its statements maps to — its entry, the code between and
+after its statements, a body that replaces it whole: its method's definition, file and line
+(0-based), named as one frame of a statement's chain is, `Module.f @ file:line`. `def` is the
+function's MethodInstance or its DebugInfo's `def`; `nothing` when it names no Method.
+parity(pkg/dart2wasm/lib/code_generator.dart:3623 SynchronousProcedureCodeGenerator.generateInternal): `setSourceMapSourceAndFileOffset(source, member.fileOffset)` before any instruction.
+"""
+function definition_source_info(def)::Union{SourceInfo,Nothing}
+    local m = _definition_method(def)
+    m === nothing && return nothing
+    local file = string(m.file)
+    return SourceInfo(file, max(Int(m.line) - 1, 0), 0, string(m.module, ".", m.name, " @ ", file, ":", m.line))
 end
 
 """
@@ -255,14 +253,27 @@ end
 
 The inline chain of SSA statement `idx`, innermost first — `"method @ file:line"` per
 frame — decoded from the function's DebugInfo edges (Julia 1.12+: `Core.DebugInfo`).
-A statement with no location of its own (a synthesized one) takes the nearest earlier
-statement's chain. Empty when the IR carries no debug info at all.
+A statement with no location of its own — its own debug index is 0, or its index is set and its
+line-info nodes are empty — has no chain: it names the method's definition, saying so, never
+another statement's location. Empty when the IR carries
+no debug info at all.
 
 parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
 function stmt_frames(di, idx::Int)::Vector{String}
     frames = String[]
-    for n in Iterators.reverse(_stmt_line_nodes(di, idx))
+    local nodes = _stmt_line_nodes(di, idx)
+    if isempty(nodes)
+        di isa Core.DebugInfo || return frames
+        local m = _definition_method(di.def)
+        m === nothing && return frames
+        local name = di.def isa Core.MethodInstance ?
+            replace(sprint(show, di.def), "MethodInstance for " => "") : string(m.name)
+        push!(frames, string(name, " @ ", m.file, ":", m.line,
+                             " (its definition: the statement has no source location in Julia's IR)"))
+        return frames
+    end
+    for n in Iterators.reverse(nodes)
         m = n.method
         name = m isa Core.MethodInstance ? sprint(show, m) :
                m isa Method ? string(m.name) : string(m)
@@ -273,19 +284,14 @@ function stmt_frames(di, idx::Int)::Vector{String}
 end
 
 # The line-info nodes of statement `idx`, outermost first — the one decoding of a function's
-# DebugInfo that stmt_frames and stmt_source_info share; a statement with no location of its
-# own takes the nearest earlier statement's.
-# parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
+# DebugInfo that stmt_frames and stmt_source_info share; none for a statement with no location
+# of its own — its own debug index is 0, or the index is set and its line-info nodes are empty —
+# which takes no other statement's.
+# parity(pkg/dart2wasm/lib/code_generator.dart:190 CodeGenerator.setSourceMapFileOffset): a node with `TreeNode.noOffset` stops mapping, it does not borrow an offset.
 function _stmt_line_nodes(di, idx::Int)::Vector{Any}
     di isa Core.DebugInfo || return Any[]
-    i = idx
-    while i >= 1
-        t = Base.IRShow.getdebugidx(di, i)
-        Int(t[1]) > 0 && break
-        i -= 1
-    end
-    i >= 1 || return Any[]
-    return Any[Base.IRShow.buildLineInfoNode(di, di.def, i)...]
+    Int(Base.IRShow.getdebugidx(di, idx)[1]) > 0 || return Any[]
+    return Any[Base.IRShow.buildLineInfoNode(di, di.def, idx)...]
 end
 
 """
@@ -294,7 +300,8 @@ end
 The source a statement's instructions map to: its innermost frame's file and line (0-based,
 the source map's convention; Julia records no column), named by its inline chain innermost
 first — the provenance a compile-time rejection prints, carried into the module so a trap is
-located the same way. `nothing` for a statement with no location.
+located the same way. `nothing` for a statement with no location of its own, whose code is
+then unmapped, as dart stops mapping at a node with no offset.
 parity(pkg/dart2wasm/lib/code_generator.dart:190 CodeGenerator.setSourceMapFileOffset)
 """
 function stmt_source_info(ctx, idx::Int)::Union{SourceInfo,Nothing}
@@ -317,27 +324,16 @@ end
     julia_loc(ctx, idx) -> Union{Nothing,String}
 
 `"file:line"` of SSA statement `idx`'s innermost source frame (the Base method it was
-inlined from, when it was); the method's own definition line when the statement has
-no location.
+inlined from, when it was); for a statement with no location of its own, the method's
+definition line, saying so (stmt_frames); `nothing` when the IR carries no debug info.
 
 parity(quarantine: Julia source positions live in the CodeInfo's compressed Core.DebugInfo (per-statement codelocs plus inline edges), not on the node as a Kernel fileOffset)
 """
 function julia_loc(ctx, idx::Int)::Union{Nothing,String}
-    di = _ctx_debuginfo(ctx)
-    frames = stmt_frames(di, idx)
-    if !isempty(frames)
-        at = findlast(" @ ", frames[1])
-        at !== nothing && return frames[1][at.stop+1:end]
-    end
-    ml = _method_loc(di)
-    sl = _stmt_line(ctx, idx)
-    if ml !== nothing
-        file, mline = ml
-        return string(file, ":", sl === nothing ? mline : sl)
-    elseif sl !== nothing
-        return string("line ", sl)
-    end
-    return nothing
+    frames = stmt_frames(_ctx_debuginfo(ctx), idx)
+    isempty(frames) && return nothing
+    at = findlast(" @ ", frames[1])
+    return at === nothing ? nothing : frames[1][at.stop+1:end]
 end
 
 """
@@ -456,3 +452,153 @@ function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
     return nothing
 end
 
+
+# ============================================================================
+# Generated functions, each named by its construct
+# ============================================================================
+# Every function is named where it is defined (add_function!'s required `name`, L157), so the
+# name section names every frame of a trap. A function codegen compiles from Julia IR takes its
+# Julia name; one it generates takes its construct's name from generated_function_name, in the
+# one vocabulary below, which located_frames reads back (generated_function_construct).
+
+"""
+    GeneratedConstruct(construct, prefix, suffix, takes_subject)
+
+A kind of function the compiler generates rather than compiles from a Julia statement: what a
+trap inside it calls it (`construct`), and its name, `prefix * subject * suffix` for a construct
+built for a subject (a closure type, a selector, a constant, a global), or the fixed `prefix`
+for one a module holds once. The name text is dart2wasm's for the same construct where dart
+has it, and what the construct ports where it is Julia's alone.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define): a function is named where it is defined.
+"""
+struct GeneratedConstruct
+    construct::String
+    prefix::String
+    suffix::String
+    takes_subject::Bool
+end
+
+"""
+The constructs codegen generates functions for, each with its one name format.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define): dart2wasm names the functions it defines; each entry cites the dart text it copies, or the Julia necessity its construct ports.
+"""
+const GENERATED_CONSTRUCTS = (
+    # parity(pkg/dart2wasm/lib/translator.dart:1360 Translator.getClosure): its local makeTrampoline
+    # (:1461) names a trampoline "$name trampoline" (:1468), `name` the function's own short name
+    # (here the closure type's, nameof): a closure's vtable entry for one arity, which converts
+    # each argument and calls the body (_closure_trampoline!)
+    closure_trampoline = GeneratedConstruct("closure trampoline", "", " trampoline", true),
+    # parity(quarantine: a Julia generic function used as a value has several specializations of
+    # one arity, so its vtable entry tests the arguments' classes and calls the one Julia selects,
+    # _closure_dispatch_trampoline!; a dart closure has one body per FunctionNode, one entry each)
+    closure_dispatching_trampoline = GeneratedConstruct("closure trampoline over several specializations",
+                                                        "", " trampoline (dispatching)", true),
+    # parity(quarantine: a Julia specialization is compiled against its own concrete parameter
+    # types, so each selector-table entry adapts the selector's signature to it and checks the
+    # class of every other classed slot, emit_dispatch_wrappers!; dart's table holds the
+    # overriding member itself, compiled against the selector's signature)
+    dispatch_wrapper = GeneratedConstruct("dispatch wrapper", "", " (dispatch wrapper)", true),
+    # parity(pkg/dart2wasm/lib/translator.dart:3734 PolymorphicDispatcherCallTarget.name):
+    # "${selector.name} (polymorphic dispatcher)", a selector's dispatch on a class id (the
+    # second axis of Julia's cascade, fill_selector_table_elements!, whose quarantine is
+    # DispatchTableRegistry.selector_cascades')
+    polymorphic_dispatcher = GeneratedConstruct("polymorphic dispatcher", "", " (polymorphic dispatcher)", true),
+    # parity(pkg/dart2wasm/lib/constants.dart:2137 _ConstantAccessor._createLazyGlobalInitializer):
+    # "$name (lazy initializer)" (:2149), the function that builds a lazy constant and stores
+    # its global
+    lazy_initializer = GeneratedConstruct("lazy initializer", "", " (lazy initializer)", true),
+    # parity(pkg/dart2wasm/lib/functions.dart:331 FunctionCollector.getFunctionName):
+    # "$memberName field initializer" (:360), the function that computes a static field's
+    # initial value
+    field_initializer = GeneratedConstruct("field initializer", "", " field initializer", true),
+    # parity(pkg/wasm_builder/lib/src/builder/module.dart:79 ModuleBuilder.startFunction): "#init"
+    start_function = GeneratedConstruct("start function", "#init", "", false),
+    # parity(quarantine: WT materializes a runtime type object for every numbered type when the
+    # module starts, an invention on dev/MARCH.md 13.7; dart builds a type object on demand,
+    # types.dart:349 makeType)
+    type_objects = GeneratedConstruct("type objects initializer", "#init type objects", "", false),
+    # parity(quarantine: Julia's `===` over values of classes only the run time knows is its C
+    # runtime's jl_egal, builtins.c, ported over WT's classes; dart's identical is ref.eq with a
+    # boxed-number compare inline, intrinsics.dart:2974)
+    jl_egal = GeneratedConstruct("runtime egal", "jl_egal", "", false),
+    # parity(quarantine: jl_has_typevar is Julia's C runtime, jltypes.c, its walk ported over WT's
+    # type objects; dart's type objects have no free type variables to search)
+    jl_has_typevar = GeneratedConstruct("runtime type-variable search", "jl_has_typevar", "", false),
+    # parity(quarantine: dart's int is one i64; Julia lowers 128-bit `udiv`/`urem` to compiler-rt's
+    # __udivti3/__umodti3, both __udivmodti4, which returns the quotient and the remainder)
+    udivmodti4 = GeneratedConstruct("128-bit unsigned division", "__udivmodti4", "", false),
+    # parity(quarantine: Julia's Random.__init__ seeds the task RNG's four state words from
+    # RandomDevice when Random loads; dart's Random holds no state a module seeds at start)
+    rng_seed = GeneratedConstruct("RNG seed", "Random.__init__", "", false),
+    # parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia
+    # foreigncalls; the tables are their own answers, read at precompile, as target Wasm
+    # performs no FFI)
+    foreigncall_table = GeneratedConstruct("foreigncall table", "", " (foreigncall table)", true),
+    # parity(quarantine: Julia's per-task exception stack outlives a call, and the host is the
+    # catching frame that starts a top-level call with an empty stack and a re-entrant one with
+    # its caller's, julia.h:2548 jl_excstack_state, emit_export_entry!; dart's catch state is
+    # lexical, code_generator.dart:2966)
+    export_entry = GeneratedConstruct("export entry", "", " (export)", true),
+    # parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack
+    # at the open host import's call, which import_tops_save! stores; dart's call counts
+    # nothing, instructions.dart:947)
+    import_tops_save = GeneratedConstruct("host import's exception-stack save", "import_tops save", "", false),
+)
+
+"""
+    generated_function_name(kind, subject="") -> String
+
+The name a function codegen generates for construct `kind` (a key of GENERATED_CONSTRUCTS) is
+defined with: `subject` in the construct's format, or the construct's fixed name. An unknown
+kind, a subject given to a fixed name, or none given to a format, raises at the definition,
+never a name that misnames its construct.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)
+"""
+function generated_function_name(kind::Symbol, subject::AbstractString="")::String
+    local c = getfield(GENERATED_CONSTRUCTS, kind)
+    c.takes_subject == !isempty(subject) ||
+        throw(ArgumentError(c.takes_subject ? "a $(c.construct)'s name needs its subject" :
+                                              "a $(c.construct)'s name is fixed, given the subject \"$subject\""))
+    return c.prefix * subject * c.suffix
+end
+
+"""
+    generated_function_construct(name) -> Union{Nothing,String}
+
+The construct a function named `name` was generated for, or `nothing` for a function compiled
+from Julia IR: the GENERATED_CONSTRUCTS entry whose format `name` has, the most specific when
+two do (" trampoline (dispatching)" over " trampoline"). located_frames prints it for a trap's
+frame that no statement maps.
+parity(quarantine: a trap's frame carries only its function's name, from the name section, and
+WT prints the construct beside it; dart's tooling prints the name alone, sections.dart:844)
+"""
+function generated_function_construct(name::AbstractString)::Union{Nothing,String}
+    local best::Union{Nothing,String} = nothing
+    local best_len = -1
+    for c in GENERATED_CONSTRUCTS
+        local affix = ncodeunits(c.prefix) + ncodeunits(c.suffix)
+        local matched = c.takes_subject ?
+            (ncodeunits(name) > affix && startswith(name, c.prefix) && endswith(name, c.suffix)) :
+            name == c.prefix
+        if matched && affix > best_len
+            best = c.construct
+            best_len = affix
+        end
+    end
+    return best
+end
+
+"""
+    constant_name(s) -> String
+
+The name of string constant `s`, as dart names a constant's global and its lazy initializer:
+its first line, quoted, cut after 30 characters with `<...>`. A byte that is not UTF-8 (a
+Julia String may hold one; a dart string cannot) reads as U+FFFD, as a wasm name is UTF-8.
+parity(pkg/dart2wasm/lib/constants.dart:2235 _ConstantAccessor._constantName)
+"""
+function constant_name(s::String)::String
+    local nl = findfirst('\n', s)
+    local v = map(c -> isvalid(c) ? c : '�', nl === nothing ? s : s[1:prevind(s, nl)])
+    length(v) > 30 && (v = first(v, 30) * "<...>")
+    return "\"" * v * "\""
+end

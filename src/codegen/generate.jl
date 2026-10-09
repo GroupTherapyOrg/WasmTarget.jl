@@ -44,10 +44,15 @@ function generate_body(ctx::AbstractCompilationContext)::Tuple{Vector{UInt8},Vec
     # Analyze control flow to find basic block structure
     blocks = analyze_blocks(ctx.nir)
 
+    # the function's entry, before any instruction, maps to its definition, as dart sets the
+    # member's offset before it generates the body (code_generator.dart:3625)
+    b = _ctx_builder(ctx, "generate_structured")
+    map_to_definition!(b, ctx)
+
     # The finalized typed instruction stream is authoritative. In particular,
     # post-return code is already stack-polymorphic in the builder; no serialized
     # opcode may be inspected or rewritten after this point.
-    return generate_structured(ctx, blocks)
+    return generate_structured(b, ctx, blocks)
 end
 
 
@@ -536,7 +541,7 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
     local top = ensure_exception_top_global!(mod)
     local cell = ConcreteRef(exc_cell_type!(mod), true)
-    local count = host_imports_open_global!(mod)
+    local count = host_imports_open_global(mod)
     local b = InstrBuilder(copy(ft.params), copy(ft.results); func_name="emit_export_entry!", mod=mod)
     if count === nothing
         ref_null!(b, cell.type_idx, cell)
@@ -556,7 +561,7 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     for i in 0:length(ft.params) - 1; local_get!(b, i); end
     call!(b, inner_idx, ft.params, ft.results)
     finish_function!(b)
-    return add_function!(mod, ft.params, ft.results, WasmValType[], builder_code(b); name=name * " (export)")
+    return add_function!(mod, ft.params, ft.results, WasmValType[], builder_code(b); name=generated_function_name(:export_entry, name))
 end
 
 """
@@ -586,7 +591,7 @@ function ensure_host_imports_open!(mod::WasmModule)::Nothing
 end
 
 """
-    host_imports_open_global!(mod) -> Union{Nothing, UInt32}
+    host_imports_open_global(mod) -> Union{Nothing, UInt32}
 
 `\$host_imports_open`, the imported count of open calls of host-declared imports, found by its
 name (ensure_host_imports_open! imports it at compile setup); `nothing` in a module with no
@@ -595,7 +600,7 @@ host-declared import, where every export call is top-level. WT's own runtime imp
 counted. A host-declared import added after the setup has no count, and is refused.
 parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
 """
-function host_imports_open_global!(mod::WasmModule)::Union{Nothing,UInt32}
+function host_imports_open_global(mod::WasmModule)::Union{Nothing,UInt32}
     local g = global_named(mod, "\$host_imports_open")
     g === nothing || return g
     local host = findfirst(_is_host_declared_import, mod.imports)
@@ -641,9 +646,9 @@ first such call, and found by its name, "import_tops save".
 parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
 """
 function import_tops_save!(mod::WasmModule)::UInt32
-    local i = findfirst(f -> f.name == "import_tops save", mod.functions)
+    local i = findfirst(f -> f.name == generated_function_name(:import_tops_save), mod.functions)
     i === nothing || return UInt32(num_imported_funcs(mod) + i - 1)
-    local count = something(host_imports_open_global!(mod))
+    local count = something(host_imports_open_global(mod))
     local top = ensure_exception_top_global!(mod)
     local tops = ensure_import_tops_global!(mod)
     local arr = import_tops_type!(mod)
@@ -678,7 +683,7 @@ function import_tops_save!(mod::WasmModule)::UInt32
     array_set!(b, arr, ConcreteRef(exc_cell_type!(mod), true))
     finish_function!(b)
     return add_function!(mod, WasmValType[], WasmValType[], WasmValType[arr_ref], builder_code(b);
-                         name="import_tops save")
+                         name=generated_function_name(:import_tops_save))
 end
 
 """
@@ -702,7 +707,7 @@ function emit_direct_call!(b::InstrBuilder, mod::WasmModule, func_idx::Integer):
         local cell = ConcreteRef(exc_cell_type!(mod), true)
         local tops = ensure_import_tops_global!(mod)
         global_get!(b, tops, ConcreteRef(import_tops_type!(mod), true))
-        global_get!(b, something(host_imports_open_global!(mod)), I32)
+        global_get!(b, something(host_imports_open_global(mod)), I32)
         array_get!(b, import_tops_type!(mod), cell)
         global_set!(b, ensure_exception_top_global!(mod))
     end

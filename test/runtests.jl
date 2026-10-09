@@ -163,6 +163,7 @@ include("utils.jl")
 _wt_qa_include("diagnostic_attribution.jl")
 _wt_qa_include("no_undefined_globals.jl")
 _wt_qa_include("source_maps.jl")
+_wt_qa_include("generated_names.jl")
 _wt_qa_include("wrong_value_locator.jl")
 _wt_qa_include("fold_rule.jl")
 # formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
@@ -1465,7 +1466,7 @@ begin
                 [WasmTarget.I32, WasmTarget.I32],
                 [WasmTarget.I32],
                 WasmTarget.NumType[],
-                body
+                body; name="add"
             )
 
             WasmTarget.add_export!(mod, "add", 0, func_idx)
@@ -1492,7 +1493,7 @@ begin
                 [WasmTarget.I64, WasmTarget.I64],
                 [WasmTarget.I64],
                 WasmTarget.NumType[],
-                body
+                body; name="add64"
             )
 
             WasmTarget.add_export!(mod, "add64", 0, func_idx)
@@ -1515,7 +1516,7 @@ begin
             ]
             add_idx = WasmTarget.add_function!(
                 mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], add_body
+                WasmTarget.NumType[], add_body; name="add"
             )
 
             # Subtract function
@@ -1527,7 +1528,7 @@ begin
             ]
             sub_idx = WasmTarget.add_function!(
                 mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], sub_body
+                WasmTarget.NumType[], sub_body; name="sub"
             )
 
             WasmTarget.add_export!(mod, "add", 0, add_idx)
@@ -1862,7 +1863,7 @@ begin
             # End function
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field0")
             add_export!(mod, "get_field0", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1896,7 +1897,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field1")
             add_export!(mod, "get_field1", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1933,7 +1934,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="create_and_get_y")
             add_export!(mod, "create_and_get_y", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1979,7 +1980,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_first")
             add_export!(mod, "tuple_first", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2009,7 +2010,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_second")
             add_export!(mod, "tuple_second", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2047,7 +2048,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="tuple_third")
             add_export!(mod, "tuple_third", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2097,7 +2098,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_len")
             add_export!(mod, "arr_len", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2131,7 +2132,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_get")
             add_export!(mod, "arr_get", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2169,7 +2170,7 @@ begin
 
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_fixed_get")
             add_export!(mod, "arr_fixed_get", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2196,7 +2197,7 @@ begin
                 0x10, 0x00,  # call 0 (the imported function)
                 0x0B         # end
             ]
-            func_idx = add_function!(mod, NumType[I32], NumType[], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32], NumType[], NumType[], body; name="test")
             # func_idx should be 1 (after the imported function)
             @test func_idx == 1
 
@@ -2223,7 +2224,7 @@ begin
             append!(body, encode_leb128_unsigned(0))  # call import at index 0
             push!(body, Opcode.END)
 
-            func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body; name="call_double")
             add_export!(mod, "call_double", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2766,7 +2767,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,  # push 2
                     WasmTarget.Opcode.I32_MUL,          # multiply
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func2_idx = WasmTarget.add_function!(
@@ -2779,7 +2780,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,  # push 3
                     WasmTarget.Opcode.I32_MUL,          # multiply
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Export them for testing
@@ -2812,7 +2813,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func_triple = WasmTarget.add_function!(
@@ -2825,7 +2826,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Initialize table with element segment
@@ -2886,7 +2887,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func_triple = WasmTarget.add_function!(
@@ -2899,7 +2900,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Initialize table: [func_double, func_triple]
@@ -2919,7 +2920,7 @@ begin
                     type_idx % UInt8,                   # type index
                     0x00,                               # table index
                     WasmTarget.Opcode.END
-                ]
+                ]; name="dispatch"
             )
 
             WasmTarget.add_export!(mod, "dispatch", 0, dispatcher)
@@ -2955,7 +2956,7 @@ begin
                     WasmTarget.Opcode.LOCAL_GET, 0x01,  # value
                     WasmTarget.Opcode.I32_STORE, 0x02, 0x00,  # store (align=4, offset=0)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="store"
             )
             WasmTarget.add_export!(mod, "store", 0, func_idx)
 
@@ -2969,7 +2970,7 @@ begin
                     WasmTarget.Opcode.LOCAL_GET, 0x00,  # address
                     WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # load (align=4, offset=0)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="load"
             )
             WasmTarget.add_export!(mod, "load", 0, load_idx)
 
@@ -3022,7 +3023,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x00,  # address 0
                     WasmTarget.Opcode.I32_LOAD, 0x00, 0x00,  # load (unaligned)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="read_first"
             )
             WasmTarget.add_export!(mod, "read_first", 0, func_idx)
 
@@ -3055,7 +3056,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x10,    # 16
                     WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # align=4, offset=0
                     WasmTarget.Opcode.END
-                ]
+                ]; name="read_data"
             )
             WasmTarget.add_export!(mod, "read_data", 0, func_idx)
 

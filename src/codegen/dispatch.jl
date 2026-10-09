@@ -446,7 +446,10 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 end
             end
 
-            wrapper_idx = add_function!(mod, param_types, result_types, wrapper_locals, body)
+            # named by the specialization it adapts, the function the selector table reaches
+            local _target_name = mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].name
+            wrapper_idx = add_function!(mod, param_types, result_types, wrapper_locals, body;
+                                        name=generated_function_name(:dispatch_wrapper, _target_name))
             push!(wrapper_indices, wrapper_idx)
 
             dt.entries[entry_i] = DispatchEntry(

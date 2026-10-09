@@ -104,7 +104,8 @@ function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
         global_set!(b, g)
     end
     end_block!(b)
-    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b))
+    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b);
+                         name=generated_function_name(:rng_seed))
 end
 
 """

@@ -30,14 +30,25 @@ end
     SourceMapping(offset, info)
 
 A mapping from `offset` — an instruction index while a builder records it, a byte offset
-once serialized — to `info`; `info === nothing` unmaps the code from `offset` on
-(compiler-generated code that no statement emitted).
+once serialized — to `info`; `info === nothing` unmaps the code from `offset` on (a
+statement with no source location, a body's end, a function the compiler generated).
 parity(pkg/wasm_builder/lib/source_map.dart:7 SourceMapping)
 """
 struct SourceMapping
     offset::Int
     info::Union{Nothing,SourceInfo}
 end
+
+"""
+    body_end_mapping(code) -> SourceMapping
+
+The mapping that ends a body's mappings: the code after the body is unmapped, so no function
+borrows the last segment of the one before it. Every recorded body ends with it, a serialized
+builder's (builder_code_mapped) and a body codegen maps whole, as dart's serializer ends every
+body with `addMapping(s.offset, null)` (instructions.dart:78).
+parity(pkg/wasm_builder/lib/src/ir/instructions.dart:47 Instructions.serialize)
+"""
+body_end_mapping(code::Vector{UInt8})::SourceMapping = SourceMapping(length(code), nothing)
 
 # parity(pkg/wasm_builder/lib/source_map.dart:30 SourceMapping.shiftBy)
 shift_by(m::SourceMapping, shift::Int)::SourceMapping =

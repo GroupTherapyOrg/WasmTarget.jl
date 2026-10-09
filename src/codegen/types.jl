@@ -1,7 +1,7 @@
 # Code Generation - Julia IR to Wasm instructions
 # Maps Julia SSA statements to WebAssembly bytecode
 
-export compile_function, compile_module, FunctionRegistry
+export compile_module, FunctionRegistry
 
 """
     StatementTrace(entry_name)
@@ -507,7 +507,8 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     global_set!(b, g)
     local_get!(b, 1)
     end_block!(b)
-    fidx = add_function!(mod, WasmValType[], results, init_locals, builder_code(b))
+    fidx = add_function!(mod, WasmValType[], results, init_locals, builder_code(b);
+                         name=generated_function_name(:lazy_initializer, constant_name(s)))
     registry.lazy_string_globals[s] = (g, fidx)
     return (g, fidx)
 end
@@ -1886,7 +1887,8 @@ end
 
 A helper `(i32 cp, i32 field) -> i32` returning field `field` of `cp`'s record in
 `tables` (see `_utf8proc_two_stage_tables`), over two lazy module-global arrays built
-from passive data segments on first use.
+from passive data segments on first use. `name` lists the foreigncalls the table answers,
+and the function is named by them (generated_function_name's foreigncall table).
 parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjulia foreigncalls; the tables are their own answers, read at precompile — target Wasm performs no FFI)
 """
 function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables, name::String)::UInt32
@@ -1941,7 +1943,8 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     return_!(b)
     end_block!(b)
     return add_function!(mod, WasmValType[I32, I32], WasmValType[I32],
-                         WasmValType[stage_ref, I32], builder_code(b))
+                         WasmValType[stage_ref, I32], builder_code(b);
+                         name=generated_function_name(:foreigncall_table, name))
 end
 
 """
@@ -1955,7 +1958,8 @@ parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjuli
 function get_or_create_unicode_property_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.unicode_property_func_idx === nothing &&
         (registry.unicode_property_func_idx =
-            _two_stage_lookup_func!(mod, registry, _UTF8PROC_PROPERTY_DATA, "unicode_property"))
+            _two_stage_lookup_func!(mod, registry, _UTF8PROC_PROPERTY_DATA,
+                                    "utf8proc_category/utf8proc_charwidth/jl_id_start_char/jl_id_char"))
     return registry.unicode_property_func_idx
 end
 
@@ -1969,7 +1973,8 @@ parity(quarantine: Julia's Char classes and case mapping are libutf8proc/libjuli
 function get_or_create_unicode_case_func!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.unicode_case_func_idx === nothing &&
         (registry.unicode_case_func_idx =
-            _two_stage_lookup_func!(mod, registry, _UTF8PROC_CASE_DATA, "unicode_case"))
+            _two_stage_lookup_func!(mod, registry, _UTF8PROC_CASE_DATA,
+                                    "utf8proc_toupper/utf8proc_tolower/utf8proc_totitle/utf8proc_isupper/utf8proc_islower"))
     return registry.unicode_case_func_idx
 end
 
@@ -2216,7 +2221,8 @@ function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry):
         call!(b, func_idx, WasmValType[], WasmValType[])
     end
     end_block!(b)
-    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b))
+    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b);
+                             name=generated_function_name(:start_function))
     add_start_function!(mod, func_idx)
     return
 end
@@ -2544,7 +2550,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
     body = builder_code(b)
     func_idx = add_function!(mod, WasmValType[], WasmValType[],
                              _pop_str_used[] ? WasmValType[ConcreteRef(get_string_array_type!(mod, registry), true)] : WasmValType[],
-                             body)
+                             body; name=generated_function_name(:type_objects))
     add_start_function!(mod, func_idx)
 end
 

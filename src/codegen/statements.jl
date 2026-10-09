@@ -394,17 +394,32 @@ end
 """
     map_to_statement!(b, ctx, idx) -> b
 
-Map the instructions `b` emits from here on to statement `idx`'s source (stmt_source_info),
-or leave them unmapped when the statement has none. Every emission on a statement's behalf —
-the statement itself (compile_statement!), a block's terminator, the phi stores on an edge —
-maps through here.
+Map the instructions `b` emits from here on to statement `idx`'s source (stmt_source_info), or
+leave them unmapped when the statement has no location of its own, as dart stops mapping at a
+node with no offset. Statement 0 is the function's entry: its method's definition, which the
+compile loop derives once from the plan's MethodInstance (definition_source_info) and seeds in
+ctx.stmt_sources before the body is generated (map_to_definition!). Every emission on a statement's behalf — the
+statement itself (compile_statement!), a block's terminator, the phi stores on an edge — maps
+through here, each source decoded once per function (ctx.stmt_sources).
 parity(pkg/dart2wasm/lib/code_generator.dart:190 CodeGenerator.setSourceMapFileOffset)
 """
 function map_to_statement!(b::InstrBuilder, ctx::AbstractCompilationContext, idx::Int)::InstrBuilder
     records_source_maps(b) || return b
-    local info = get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)
+    local info = idx == 0 ? ctx.stmt_sources[0] : get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)
     return info === nothing ? stop_source_mapping!(b) : start_source_mapping!(b, info)
 end
+
+"""
+    map_to_definition!(b, ctx) -> b
+
+Map the instructions `b` emits from here on to the function's definition, its method's file
+and line: the function's entry before any instruction (generate_body), and, after each
+statement, the code the stackifier emits between statements, after the last and every
+structural unreachable, as dart's translateStatement restores the enclosing member's offset
+after a statement.
+parity(pkg/dart2wasm/lib/code_generator.dart:3623 SynchronousProcedureCodeGenerator.generateInternal)
+"""
+map_to_definition!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder = map_to_statement!(b, ctx, 0)
 
 """
 Compile a single IR statement — dart's ONE code generator, ONE builder (Phase C): THE visitor emits directly into the caller's builder; the byte era's
@@ -417,17 +432,19 @@ parity(pkg/dart2wasm/lib/code_generator.dart:714 CodeGenerator.translateStatemen
 """
 function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     ctx.current_stmt_idx = idx   # diagnostics attribute to this statement by default
-    # the statement's instructions map to its source; the code the stackifier emits between
-    # statements (branches, phi stores) is left unmapped, as dart restores the enclosing
-    # node's offset after a subtree
-    map_to_statement!(b, ctx, idx)
     try
+        # the statement's instructions map to its source. Inside the located try, where dart
+        # sets the offset before its try (code_generator.dart:715):
+        # parity(quarantine: stmt_source_info decodes Julia's compressed DebugInfo (Base.IRShow.getdebugidx, buildLineInfoNode), which can raise; inside the try a raise there is attributed to its statement, where dart's offset is a field read)
+        map_to_statement!(b, ctx, idx)
         return _compile_statement_located!(b, idx, ctx)
     catch err
         (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
         throw(located_internal_error(ctx, idx, err, catch_backtrace()))
     finally
-        stop_source_mapping!(b)
+        # the code after the statement maps to the function's definition again, as dart's
+        # `finally` restores the enclosing member's offset (code_generator.dart:721)
+        map_to_definition!(b, ctx)
     end
 end
 

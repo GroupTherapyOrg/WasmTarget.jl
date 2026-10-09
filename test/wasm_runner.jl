@@ -256,7 +256,7 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     if haskey(r, "trap")
         local msg = String(r["trap"])
         if source_map !== nothing && haskey(r, "stack")
-            local frames = located_frames(String(r["stack"]), source_map)
+            local frames = located_frames(String(r["stack"]), source_map, bytes)
             isempty(frames) || (msg *= "\n" * join(("  at " * f for f in frames), "\n"))
         end
         return (:trap, msg)
@@ -265,9 +265,10 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
 end
 
 # ---- A trap's frames, located through the module's source map ---------------------------
-# V8 prints a wasm frame as `wasm://wasm/<id>:wasm-function[<i>]:0x<byte offset in the module>`;
-# the source map (Source Map v3, one generated line whose columns are module byte offsets)
-# names the statement whose instructions cover that offset.
+# V8 prints a wasm frame as `<name> (wasm://wasm/<id>:wasm-function[<i>]:0x<byte offset in the
+# module>)`, the name from the module's name section; the source map (Source Map v3, one
+# generated line whose columns are module byte offsets) names the statement whose instructions
+# cover that offset.
 
 # the Source Map v3 segments of `mappings`: [offset, source, line, column(, name)] absolute
 function _source_map_segments(mappings::AbstractString)::Vector{Vector{Int}}
@@ -296,26 +297,68 @@ function _source_map_segments(mappings::AbstractString)::Vector{Vector{Int}}
     return out
 end
 
+# each defined function's body in the module, [start, stop) module byte offsets, read from the
+# code section
+function _code_entries(bytes::Vector{UInt8})::Vector{UnitRange{Int}}
+    leb(p) = (v = 0; s = 0; while true; b = bytes[p]; p += 1; v |= Int(b & 0x7f) << s; s += 7; b & 0x80 == 0 && break; end; (v, p))
+    local out = UnitRange{Int}[]
+    local p = 9
+    while p <= length(bytes)
+        local id = bytes[p]
+        local size, q = leb(p + 1)
+        if id == 0x0a
+            local n, r = leb(q)
+            for _ in 1:n
+                local esz, r2 = leb(r)
+                push!(out, (r2 - 1):(r2 - 1 + esz - 1))   # 0-based offsets of the entry
+                r = r2 + esz
+            end
+        end
+        p = q + size
+    end
+    return out
+end
+
 """
-    located_frames(stack, source_map) -> Vector{String}
+    located_frames(stack, source_map, bytes) -> Vector{String}
 
 Each wasm frame of a JS `stack`, innermost first, as the Julia statement its offset maps to —
-the statement's inline chain — or `wasm-function[i] +0x… (compiler-generated)` for unmapped
-code; a frame repeated in a row (recursion) prints once with its count.
+the statement's inline chain, or, outside its statements, the function's definition — or, at
+an offset nothing maps, the frame's function by its name (the name section's, which V8 prints)
+and why: "`<name>`: <construct>" for a function the compiler generated
+(WasmTarget.generated_function_construct); "`<name>`: a statement with no source location in
+Julia's IR" inside a function compiled from Julia IR, which the map marks (every other byte of
+it maps to its statement or its definition, so a segment starts inside its body); and
+"`<name>`: a function not compiled from Julia IR" for one no segment starts in, a function the
+host built into its module. `bytes` is the module, whose code section gives each body's range.
+A frame with no name, or the engine's
+`wasm-function[i]` for none, is a defect, as every function is named where it is defined
+(L157): it raises, never prints a fallback. A frame repeated in a row (recursion) prints once
+with its count.
 """
-function located_frames(stack::AbstractString, source_map::AbstractString)::Vector{String}
+function located_frames(stack::AbstractString, source_map::AbstractString, bytes::Vector{UInt8})::Vector{String}
     local sm = JSON.parse(source_map)
+    local entries = _code_entries(bytes)
     local segs = _source_map_segments(sm["mappings"])
     local names = sm["names"]
     local sources = sm["sources"]
     local out = String[]
     local counts = Int[]
-    for m in eachmatch(r"at (?:(\S+) \()?wasm://wasm/[0-9a-f]+:wasm-function\[(\d+)\]:0x([0-9a-f]+)", stack)
+    # the function's name is everything before " (wasm://" (names hold spaces: "f (export)")
+    for m in eachmatch(r"at (?:(.+?) \()?wasm://wasm/[0-9a-f]+:wasm-function\[(\d+)\]:0x([0-9a-f]+)", stack)
         local offset = parse(Int, m.captures[3]; base=16)
         local k = findlast(s -> s[1] <= offset, segs)
         local text = if k === nothing || length(segs[k]) < 4
-            local fn = m.captures[1] === nothing ? "wasm-function[$(m.captures[2])]" : "`$(m.captures[1])`"
-            "$fn at 0x$(m.captures[3]): no statement (the function's entry, or code the compiler generated)"
+            local fname = m.captures[1]
+            (fname === nothing || isempty(fname) || occursin(r"^wasm-function\[\d+\]$", fname)) &&
+                error("a trap's frame, function $(m.captures[2]) at 0x$(m.captures[3]), has no name: " *
+                      "every function is named where it is defined (L157)\n$stack")
+            local construct = WasmTarget.generated_function_construct(fname)
+            local e = findfirst(r -> offset in r, entries)
+            e === nothing && error("a trap's frame at 0x$(m.captures[3]) lies in no function body of the module\n$stack")
+            construct !== nothing ? "`$fname`: $construct" :
+                any(s -> s[1] in entries[e], segs) ? "`$fname`: a statement with no source location in Julia's IR" :
+                "`$fname`: a function not compiled from Julia IR"
         elseif length(segs[k]) >= 5
             names[segs[k][5] + 1]
         else

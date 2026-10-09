@@ -2442,7 +2442,7 @@ const LOCKS = [
             uncited = count(h -> h ∉ Set(cited), have)
             missing_ + dup + uncited
         end),
-    "L127_one_inference_path_keeps_source_lines" => ("dev/CHARTER.md C6: every inference call in ir.jl (the one inference path) asks for debuginfo=:source, so IR it returns carries statement lines and inline chains — code_typed's default dropped them and every NirStmt.line read 0 (behavioral twin: test/diagnostic_attribution.jl 'the one inference path keeps source lines')",
+    "L127_one_inference_path_keeps_source_lines" => ("dev/CHARTER.md C6: every inference call in ir.jl (the one inference path) asks for debuginfo=:source, so IR it returns carries its statements' locations and inline chains — code_typed's default dropped them, and every statement then read no location (behavioral twin: test/diagnostic_attribution.jl 'the one inference path keeps source lines')",
         () -> begin
             ir_lines = readlines(joinpath(CODEGEN, "ir.jl"))
             count(l -> !_iscomment(l) && occursin(r"Base\.code_typed(_by_type)?\(", l) &&
@@ -2480,14 +2480,13 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
-    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) and unmaps after it; the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
+    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) inside its located try and maps the code after it back to the function's definition (L159); the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
         () -> begin
             src(f) = read(joinpath(CODEGEN, f), String)
             bsrc(f) = read(joinpath(SRC, "builder", f), String)
             tsrc(f) = read(joinpath(ROOT, "test", f), String)
             required = [
-                (src("statements.jl"), "    map_to_statement!(b, ctx, idx)\n    try"),
-                (src("statements.jl"), "    finally\n        stop_source_mapping!(b)"),
+                (src("statements.jl"), "        map_to_statement!(b, ctx, idx)\n        return _compile_statement_located!(b, idx, ctx)"),
                 (src("stackified.jl"), "        map_to_statement!(b, ctx, terminator_idx)\n"),
                 (src("stackified.jl"), "map_to_statement!(b, ctx, i)   # this edge's store maps to its phi"),
                 (src("stackified.jl"), "                map_to_statement!(bb, ctx, i)\n"),
@@ -2496,7 +2495,7 @@ const LOCKS = [
                 (bsrc("instructions.jl"), "push!(module_mappings, shift_by(m, contents_start))"),
                 (src("compile.jl"), "body, body_mappings = generate_body(ctx)"),
                 (tsrc("utils.jl"), "bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)"),
-                (tsrc("wasm_runner.jl"), "located_frames(String(r[\"stack\"]), source_map)"),
+                (tsrc("wasm_runner.jl"), "located_frames(String(r[\"stack\"]), source_map, bytes)"),
             ]
             forbidden = ["collect_source_info", "update_function_offsets!"]
             all_src = join((read(joinpath(dir, f), String) for (dir, _, fs) in walkdir(SRC) for f in fs if endswith(f, ".jl")))
@@ -2504,7 +2503,7 @@ const LOCKS = [
                 count(p -> occursin(p, all_src), forbidden) +
                 isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
-    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); no throw_ref is anywhere in src, and the export entry (emit_export_entry!) is a prologue that calls its inner last, so an escape passes it untouched, its payload (the exception and the stack its throw captured) exact (until batch 110 the entry's handler was a second throw site, and until batch 112b-1 it rethrew with throw_ref); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
+    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); no throw_ref is anywhere in src, and the export entry (emit_export_entry!) is a prologue that calls its inner last, so an escape passes it untouched, its payload (the exception and the stack its throw captured) exact (until batch 110 the entry's handler was a second throw site, and until batch 112b-1 it rethrew with throw_ref); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. _emit_throw_top!'s callers are exactly those two, emit_throw_value! and emit_rethrow!, read by the function each call sits in, so a third that throws the top without pushing fires it. test/source_maps.jl runs it: an escaped exception, rethrown, rethrown with `rethrow(e)` or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
         () -> begin
             local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])   # _emit_throw_top!'s, alone
             local throw_refs = count_sites(r"throw_ref|ThrowRef|THROW_REF")
@@ -2516,8 +2515,24 @@ const LOCKS = [
                               (runner, "const st = e.getArg(tag, 1);"),
                               (runner, "    \$HOST_RUNTIME_MERGE_JS"),
                               (gen, "    global_get!(b, top, ConcreteRef(cell, true))\n    struct_get!(b, cell, 1, ExternRef)\n    global_get!(b, top, ConcreteRef(cell, true))\n    throw_!(b, 0)"),
-                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    finish_function!(b)")]
-            abs(throws - 1) + throw_refs + count(((text, needle),) -> !occursin(needle, text), required)
+                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    finish_function!(b)"),
+                              (gen, "        struct_set!(b, cell, 0, AnyRef)\n    end\n    return _emit_throw_top!(b, mod)\nend")]
+            # _emit_throw_top!'s callers, exactly: the throw that pushes (emit_throw_value!) and
+            # the rethrow that does not (emit_rethrow!); a call from any other function, one that
+            # throws the top without pushing it, fires
+            local callers = String[]
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local enclosing = ""
+                for line in eachline(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    (_iscomment(line) || d !== nothing) && continue
+                    occursin("_emit_throw_top!(", line) && push!(callers, enclosing)
+                end
+            end
+            abs(throws - 1) + throw_refs + count(((text, needle),) -> !occursin(needle, text), required) +
+                (sort(callers) == ["emit_rethrow!", "emit_throw_value!"] ? 0 : 1)
         end),
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, at each caller that enrolls by it — the collector and the plan — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
@@ -2794,6 +2809,106 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local asserted = ["@test unsaved_host_import_calls(m) == 0" => ["real_bottom_exceptions.jl", "host_imports.jl"],
                               "@test wasm_boundary_sites(m) == 0" => ["real_bottom_exceptions.jl"]]
             missing_ + sum(count(f -> length(findall(a, t(f))) != 1, fs) for (a, fs) in asserted)
+        end),
+    "L157_every_function_named" => ("every function codegen defines is named where it is defined, so the name section names every frame of a trap: add_function!'s `name` is a required keyword (no default), and every `add_function!(` call in src and ext passes `name=` (read to its closing paren across lines; the definition, comment lines and a docstring's signature line are not calls). A function compiled from Julia IR takes its Julia name; one the compiler generates takes its construct's, from generated_function_name's one vocabulary (GENERATED_CONSTRUCTS, diagnostics.jl): dart's text where dart has the construct (\"\$name trampoline\", \"\${selector.name} (polymorphic dispatcher)\", \"\$name (lazy initializer)\", \"\$memberName field initializer\", \"#init\"), what it ports where it is Julia's alone (jl_egal, jl_has_typevar, __udivmodti4, Random.__init__). Julia raises UndefKeywordError only when a call runs, so this lock carries the requirement to the edit site; a body rebuilt into a defined slot passes the slot's name on (WasmFunction's `name` keyword, no default); an empty name, which the name section cannot carry, is refused with an ArgumentError naming the call by add_function! and by WasmFunction's inner constructor (every construction, positional or keyword), and the name-section writer writes every function's name, skipping none. 18 sites once defined an unnamed function, and a trap there printed \"no statement (the function's entry, or code the compiler generated)\" (test/generated_names.jl; dev/CHARTER.md C10)",
+        () -> begin
+            local n = 0
+            for root in (SRC, joinpath(ROOT, "ext")), (dir, _, fs) in walkdir(root), f in fs
+                endswith(f, ".jl") || continue
+                local s = read(joinpath(dir, f), String)
+                for m in findall("add_function!(", s)
+                    local ls = something(findprev('\n', s, first(m)), 0) + 1
+                    local nl = findnext('\n', s, first(m))
+                    local line = s[ls:(nl === nothing ? lastindex(s) : prevind(s, nl))]
+                    _iscomment(line) && continue
+                    occursin(r"\bfunction\s+add_function!\(", line) && continue
+                    occursin(r"^\s*add_function!\(.*\)\s*->", line) && continue   # a docstring's signature
+                    local j = last(m); local k = j; local depth = 0
+                    while k <= lastindex(s)
+                        s[k] == '(' && (depth += 1)
+                        s[k] == ')' && (depth -= 1; depth == 0 && break)
+                        k = nextind(s, k)
+                    end
+                    occursin(r"\bname\s*=", s[j:min(k, lastindex(s))]) || (n += 1)
+                end
+            end
+            # the keyword itself carries no default, and an empty name is refused at both definitions
+            local def = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            n + !occursin("body::Vector{UInt8}; name::String)::UInt32", def) +
+                !occursin("    isempty(name) && throw(ArgumentError(\"add_function!(…; name=\\\"\\\"): ", def) +
+                !occursin("        isempty(name) && throw(ArgumentError(\"WasmFunction(type \$type_idx; name=\\\"\\\"): ", def) +
+                occursin("isempty(f.name) || push!(func_names", def)
+        end),
+    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone sets OPTIONS[] (exactly one `OPTIONS[] =` in src) and sets and restores DIAGNOSTICS_SINK[]; among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_statement_trace — is one call of it, so the source-map and trace entries take diagnostics_sink and the source-map entries the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: it sets no options and routes no ledger, which its docstring says. test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
+        () -> begin
+            local api = read(joinpath(SRC, "WasmTarget.jl"), String)
+            local body(name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), api); m === nothing ? "" : m.match)
+            local entry = body("_compile")
+            local v = isempty(entry) ? 1 : 0
+            # every keyword of the one entry is typed: `name::T=default`
+            local sig = match(r"(?s)\nfunction _compile\(functions::Vector;(.*?)\)::CompileResult\n", api)
+            if sig === nothing
+                v += 1
+            else
+                local parts = String[]; local depth = 0; local cur = IOBuffer()
+                for c in sig.captures[1]   # the keywords, split at top-level commas
+                    c in "({[" && (depth += 1); c in ")}]" && (depth -= 1)
+                    c == ',' && depth == 0 ? push!(parts, String(take!(cur))) : write(cur, c)
+                end
+                push!(parts, String(take!(cur)))
+                v += count(k -> !occursin(r"^\s*\w+::", k), parts)
+            end
+            # exactly one OPTIONS[] write in src, inside the one entry
+            v += abs(count_sites(r"\bOPTIONS\[\]\s*=[^=]") - 1) + (occursin(r"\bOPTIONS\[\]\s*=[^=]", entry) ? 0 : 1)
+            # DIAGNOSTICS_SINK[] written only inside the one entry (twice: set, restore)
+            v += abs(count_sites(r"\bDIAGNOSTICS_SINK\[\]\s*=[^=]") - 2) +
+                 abs(length(collect(eachmatch(r"\bDIAGNOSTICS_SINK\[\]\s*=[^=]", entry))) - 2)
+            # compile_module( and _emit_module( called in src/WasmTarget.jl only inside the one entry
+            local outside = replace(api, entry => "")
+            for l in split(outside, '\n')
+                _iscomment(l) && continue
+                occursin(r"^function\s", l) && continue
+                occursin(r"^\s*_emit_module\(.*\)\s*->", l) && continue   # a docstring's signature
+                v += length(collect(eachmatch(r"\b(compile_module|_emit_module)\(", l)))
+            end
+            # each exported entry is one call of the one entry
+            for name in ("compile", "compile_multi", "compile_with_sourcemap",
+                         "compile_multi_with_sourcemap", "compile_with_statement_trace")
+                local b = body(name)
+                v += (!isempty(b) && length(collect(eachmatch(r"\b_compile\(", b))) == 1) ? 0 : 1
+            end
+            # compile_function is gone from src and test
+            v + count_sites(r"\bcompile_function\b"; roots=[SRC, joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+        end),
+    "L159_every_julia_offset_mapped" => ("every byte of a function compiled from Julia IR maps to its statement or to its definition, and only a statement Julia gives no location of its own is unmapped, as dart2wasm maps a member: map_to_definition! (statement 0: the method's definition, derived once per function from the plan's MethodInstance by definition_source_info in the compile loop, which the whole-body arms use too) maps the entry before any instruction (generate_body; code_generator.dart:3625), compile_statement!'s `finally` and the stackifier's return and block ends map the code after a statement back to it (translateStatement's `finally` restores the member's offset, :721), and a body that replaces a whole compiled function — a selector caller or a standalone intrinsic body — is mapped whole to its definition (`SourceMapping(0, definition)`, both arms of the compile loop; :3627-3634); stop_source_mapping! is called in codegen exactly once, map_to_statement!'s arm for a statement with no location of its own (code_generator.dart:196 noOffset); _stmt_line_nodes takes no earlier statement's location (no backward walk), so the source map, stmt_frames and julia_loc share one decoding that names the definition for such a statement; and every recorded body's mappings end at its end through one builder-layer rule, body_end_mapping (instructions.dart:78): builder_code_mapped appends it to a serialized builder's and the compile loop to a body it maps whole, and the code-section writer only shifts mappings, so no function borrows another's segment. test/source_maps.jl measures it over straight-line code, a loop with phis, a try/catch, a closure, a selector caller and a standalone rethrow body: no byte borrowed across functions, and unmapped bytes only in a function with a statement Julia gives no location, the exact per-function counts pinned on Julia 1.12 (dev/CHARTER.md C10)",
+        () -> begin
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local stk = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local diag = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            local ins = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            # exactly one stop in codegen, in map_to_statement!'s no-location arm
+            local v = abs(count_sites(r"\bstop_source_mapping!\("; roots=[CODEGEN]) - 1) +
+                      (occursin("return info === nothing ? stop_source_mapping!(b) : start_source_mapping!(b, info)",
+                                fbody(stm, "map_to_statement!")) ? 0 : 1)
+            local required = [(stm, "map_to_definition!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder = map_to_statement!(b, ctx, 0)"),
+                              (stm, "local info = idx == 0 ? ctx.stmt_sources[0] : get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)"),
+                              (comp, "            ctx.stmt_sources[0] = definition\n            body, body_mappings = generate_body(ctx)"),
+                              (stm, "    finally\n        # the code after the statement maps to the function's definition again, as dart's\n        # `finally` restores the enclosing member's offset (code_generator.dart:721)\n        map_to_definition!(b, ctx)\n    end"),
+                              (gen, "    b = _ctx_builder(ctx, \"generate_structured\")\n    map_to_definition!(b, ctx)\n"),
+                              (stk, "map_to_definition!(bb, ctx)   # the code after the return is the function's again"),
+                              (stk, "        map_to_definition!(b, ctx)\n"),
+                              (read(joinpath(SRC, "builder", "instr_builder.jl"), String), "records_source_maps(b) && push!(mapped, body_end_mapping(code))")]
+            v += count(((text, needle),) -> !occursin(needle, text), required)
+            # both whole-body arms map to the definition and end through the same rule
+            v += abs(length(collect(eachmatch(r"body_mappings = definition === nothing \? SourceMapping\[\] : \[SourceMapping\(0, definition\), body_end_mapping\(body\)\]", comp))) - 2)
+            # one writer of a body's end: the code-section writer appends no mapping of its own
+            v += length(collect(eachmatch(r"push!\(code_mappings, SourceMapping\(", ins)))
+            # no backward walk in the one decoding
+            local nodes = fbody(diag, "_stmt_line_nodes")
+            v + (isempty(nodes) || occursin(r"-=\s*1|\bwhile\b|\bfor\b", nodes) ? 1 : 0)
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin

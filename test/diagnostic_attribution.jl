@@ -39,13 +39,16 @@ catch e
 end
 
 # dev/CHARTER.md C6: IR retrieved through the one inference path (get_typed_ir, when the
-# closed-world cache does not already hold it) keeps its DebugInfo, so every NIR statement
-# carries a source line and an inlined statement's chain names its callee and its caller.
+# closed-world cache does not already hold it) keeps its DebugInfo, so its statements carry
+# their locations (a statement Julia gives none names the definition) and an inlined statement's
+# chain names its callee and its caller.
 # Before 2026-09-22 get_typed_ir asked code_typed for no debuginfo: every line was 0.
 @testset "the one inference path keeps source lines and inline chains" begin
     ci, _ = WasmTarget.get_typed_ir(DiagAttrib.c6_outer, (Int64,))
     nir = WasmTarget.build_nir(ci)
-    @test !isempty(nir) && all(s -> s.line > 0, nir)
+    @test !isempty(nir) && ci.debuginfo isa Core.DebugInfo &&
+          all(i -> !isempty(WasmTarget.stmt_frames(ci.debuginfo, i)), eachindex(ci.code)) &&
+          any(i -> !isempty(WasmTarget._stmt_line_nodes(ci.debuginfo, i)), eachindex(ci.code))
     # the multiply inside c6_mid, inlined into c6_outer: innermost first — Base's `*`, then
     # c6_mid, then the compiled function c6_outer
     k = findfirst(i -> any(f -> occursin("c6_mid", f), WasmTarget.stmt_frames(ci.debuginfo, i)), eachindex(ci.code))

@@ -128,7 +128,7 @@ function builder_code_mapped(b::InstrBuilder)::Tuple{Vector{UInt8},Vector{Source
         end
         encode!(code, b.instrs[i])
     end
-    records_source_maps(b) && push!(mapped, SourceMapping(length(code), nothing))
+    records_source_maps(b) && push!(mapped, body_end_mapping(code))
     return code, mapped
 end
 

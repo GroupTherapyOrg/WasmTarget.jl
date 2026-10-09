@@ -75,6 +75,8 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
     global_def = mod.globals[Int(global_idx) + 1]
     global_def.mutable_ || throw(ArgumentError("framework global $global_idx is immutable"))
     root_type = _function_type(mod, root_idx)
+    root_idx >= num_imported_funcs(mod) ||
+        throw(ArgumentError("framework initializer root $root_idx is an imported function, not a compiled root"))
     isempty(root_type.params) ||
         throw(ArgumentError("framework initializer root $root_idx must take no parameters"))
     length(root_type.results) == 1 ||
@@ -85,8 +87,12 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
     call!(b, root_idx, WasmValType[], root_type.results)
     global_set!(b, global_idx)
     end_block!(b)
+    # named by the root that computes the value, as dart names a static field's initializer by
+    # its member (functions.dart:360); a framework global itself carries no name
     init_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[],
-                             builder_code(b))
+                             builder_code(b);
+                             name=generated_function_name(:field_initializer,
+                                 mod.functions[Int(root_idx) - num_imported_funcs(mod) + 1].name))
     push!(registry.module_init_functions, init_idx)
     return init_idx
 end
@@ -120,20 +126,6 @@ function boundary_wasm_type(@nospecialize(T), mod::WasmModule, type_registry::Ty
     (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) &&
         return ConcreteRef(register_memoryref_box!(mod, type_registry, T), true)
     return get_concrete_wasm_type(T, mod, type_registry)
-end
-
-"""
-    compile_function(f, arg_types, func_name) -> WasmModule
-
-Compile a Julia function to a WebAssembly module.
-parity(pkg/dart2wasm/lib/compile.dart:216 compile)
-"""
-function compile_function(f, arg_types::Tuple, func_name::String; optimize_ir::Bool=true,
-                          source_map_url::Union{Nothing,String}=nothing)::WasmModule
-    # Use compile_module for single functions too, enabling auto-discovery of dependencies
-    # This ensures that cross-function calls work correctly
-    return compile_module([(f, arg_types, func_name)]; optimize_ir=optimize_ir,
-                          source_map_url=source_map_url)
 end
 
 # ============================================================================
@@ -626,7 +618,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 err, _raised_frames(catch_backtrace(), :_compile_closed_world_plan)))
         end
         local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
-        push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END]))
+        # the placeholder carries the function's Julia name until the compile loop fills its slot,
+        # where a later function of the same name takes a `_<k>` suffix
+        push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END];
+                                          name=string(name)))
     end
 
     # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
@@ -762,10 +757,17 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 (dispatch_dt = nothing)
         end
 
-        # a dispatcher or standalone body is compiler-generated: no statement emitted it
+        # a selector caller's or a standalone intrinsic's body is the body of a Julia method's
+        # function, emitted in place of its statements: mapped whole to the method's definition,
+        # as dart emits an intrinsic body under its member's offset (code_generator.dart:3625-3634)
         local body_mappings = SourceMapping[]
+        # the function's definition, derived once from the plan's MethodInstance for every arm:
+        # a whole body maps to it, and a body compiled from IR maps its code outside statements
+        # to it (statement 0, map_to_definition!)
+        local definition = mod.source_map_url === nothing ? nothing : definition_source_info(function_data[i][9])
         if standalone_body !== nothing
             body, locals = standalone_body
+            body_mappings = definition === nothing ? SourceMapping[] : [SourceMapping(0, definition), body_end_mapping(body)]
         elseif dispatch_dt !== nothing
             # Generate dispatch-only body (probe + call_indirect + return)
             n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
@@ -773,6 +775,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             body, locals = generate_selector_caller_body(
                 dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
                 caller_return_type=return_type, mod=mod, type_registry=type_registry)
+            body_mappings = definition === nothing ? SourceMapping[] : [SourceMapping(0, definition), body_end_mapping(body)]
         else
             # Generate function body from Julia IR
             bindings = get(root_bindings, name, nothing)
@@ -802,6 +805,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # diagnostic ledgers. The context already carries the root function
             # and source location; converting failures to ErrorException here
             # erased the machine-readable contract used by framework callers.
+            ctx.stmt_sources[0] = definition
             body, body_mappings = generate_body(ctx)
             locals = ctx.locals
         end
@@ -811,8 +815,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                                              mod, type_registry)
         local _slot = Int(func_idx) - n_imports + 1
         local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
-        # its name, unique among this compile's functions, is given where it is defined, the
-        # name it is exported under
+        # its name is given where it is defined: its Julia name, with a `_<k>` suffix for the k-th
+        # earlier compiled function of that name, the name the compile asks to export it under
+        # (codegen_export_name may rename the export in a host's module; a generated function
+        # may share the text)
         # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
         export_name = name
         count = get(export_name_counts, name, 0)
@@ -875,7 +881,7 @@ end
 # The sole module pipeline: collect one closed world, install its paired typed-IR
 # cache for the duration of codegen, then compile that immutable plan. Public
 # entry points may normalize inputs, but none may bypass this collector.
-# parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+# parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
 function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     normalized = Any[]
     for entry in functions
@@ -919,22 +925,18 @@ _module_entries_label(entries::Vector)::String =
 """
     compile_module(functions::Vector) -> WasmModule
 
-Compile multiple Julia functions into a single WebAssembly module.
+Compile multiple Julia functions into a single WebAssembly module, unserialized: the closed-world
+compile the one compile entry (`_compile`, src/WasmTarget.jl) calls. It is internal to that
+entry: it reads the options without setting them and routes no diagnostics ledger, and tests
+call it to inspect the module. A compile a caller runs goes through an exported entry
+(compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap,
+compile_with_statement_trace), each one call of `_compile`.
 
 Each element of `functions` should be a tuple of (function, arg_types) or
-(function, arg_types, name). If name is omitted, the function's name is used.
-
-# Example
-```julia
-mod = compile_module([
-    (add, (Int32, Int32)),
-    (sub, (Int32, Int32)),
-    (mul, (Int32, Int32), "multiply"),
-])
-```
-
-Functions can call each other within the module.
-parity(pkg/dart2wasm/lib/compile.dart:216 compile)
+(function, arg_types, name). If name is omitted, the function's name is used. Functions can call
+each other within the module. It stays exported for the test suite, which inspects the module it
+returns; a caller compiles through an exported entry.
+parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
 """
 function compile_module(functions::Vector;
                         existing_module::Union{WasmModule, Nothing}=nothing,

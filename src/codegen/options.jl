@@ -48,8 +48,9 @@ function options_from_env()::CompilerOptions
     )
 end
 
-# The active options, set once per public compile call (see compile/compile_multi/
-# compile_with_base in WasmTarget.jl) — never read piecemeal.
+# The active options, set once per compile by the one compile entry (`_compile`, WasmTarget.jl),
+# whose call every exported compile entry is — never read piecemeal. compile_module, the step
+# below it, sets none: called directly, it reads what the last entry set.
 # parity(pkg/dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions)
 const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
 

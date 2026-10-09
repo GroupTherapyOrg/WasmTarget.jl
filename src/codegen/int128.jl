@@ -923,7 +923,8 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local params = WasmValType[I64, I64, I64, I64]
     local results = WasmValType[I64, I64, I64, I64]
     local fidx = add_function!(mod, params, results, WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END])
+                               UInt8[Opcode.UNREACHABLE, Opcode.END];
+                               name=generated_function_name(:udivmodti4))
     registry.u128_divrem_func_idx = fidx
     local b = InstrBuilder(params, results; func_name="u128_divrem", mod=mod)
     local extra = WasmValType[]
@@ -989,7 +990,8 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local_get!(b, q_lo); local_get!(b, q_hi); local_get!(b, r_lo); local_get!(b, r_hi)
     end_block!(b)
     local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
+    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
+                                       name=mod.functions[slot].name)
     return fidx
 end
 

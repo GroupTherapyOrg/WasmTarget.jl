@@ -1695,7 +1695,8 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     (top === nothing || jt === nothing) &&
         error("the runtime egal function needs the class hierarchy and the JlType hierarchy")
     local fidx = add_function!(mod, WasmValType[AnyRef, AnyRef], WasmValType[I32], WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END])
+                               UInt8[Opcode.UNREACHABLE, Opcode.END];
+                               name=generated_function_name(:jl_egal))
     registry.egal_func_idx = fidx
     return fidx
 end
@@ -1890,7 +1891,8 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
     i32_const!(b, 0)   # identity classes: ref.eq above already said no
     end_block!(b)
     local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
+    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
+                                       name=mod.functions[slot].name)
     return
 end
 
@@ -1914,7 +1916,8 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local params = WasmValType[AnyRef, AnyRef, I32]
     local results = WasmValType[I32]
     local fidx = add_function!(mod, params, results, WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END])
+                               UInt8[Opcode.UNREACHABLE, Opcode.END];
+                               name=generated_function_name(:jl_has_typevar))
     registry.has_typevar_func_idx = fidx
     local b = InstrBuilder(params, results; func_name="jl_has_typevar", mod=mod)
     local extra = WasmValType[]
@@ -1988,7 +1991,8 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     i32_const!(b, 0)
     end_block!(b)
     local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b))
+    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
+                                       name=mod.functions[slot].name)
     return fidx
 end
 

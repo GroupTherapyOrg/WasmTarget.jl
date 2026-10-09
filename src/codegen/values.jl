@@ -1553,7 +1553,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 global_set!(init_b, global_idx)
                 end_block!(init_b)
                 init_func = add_function!(ctx.mod, WasmValType[], WasmValType[],
-                                          init_locals, builder_code(init_b))
+                                          init_locals, builder_code(init_b);
+                                          name=generated_function_name(:field_initializer,
+                                                                       "$(node.mod).$(node.name)"))
                 push!(ctx.type_registry.module_init_functions, init_func)
                 globals[actual_val] = (global_idx, init_type.type_idx)
                 global_get!(b, global_idx, ConcreteRef(init_type.type_idx, true))

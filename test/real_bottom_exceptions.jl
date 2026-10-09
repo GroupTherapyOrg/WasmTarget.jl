@@ -101,6 +101,10 @@ end
 _wt_eb_r(x::Int64) = (try; rethrow(); catch e; e isa ArgumentError ? 1 : e isa DomainError ? 3 : e isa DivideError ? 4 : e isa ErrorException ? 2 : 5; end) + x
 @noinline _wt_eb_rec(n::Int64) = n == 0 ? 0 : 1 + _wt_eb_rec(n - 1)
 _wt_eb_s(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_rec(x); end
+# each native stack exhaustion runs on a task of its own, a fresh stack and guard page: repeated
+# overflows on one Windows thread crashed the process (0xC0000005, Julia 1.13 on CI). Compiled in
+# a closure, a direct call's try is elided (stack exhaustion is not an effect): invokelatest
+_wt_own_task(f) = fetch(schedule(Task(f)))
 _wt_eb_b(x::Int64) = x > 0 ? throw(DomainError(x)) : x
 _wt_eb_d(x::Int64) = x > 0 ? throw(DivideError()) : x
 @noinline _wt_eb_cb(x::Int64) = (_wt_eb_b(x); nothing)
@@ -135,7 +139,7 @@ _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_
 
 @testset "the export boundary restores Julia's stack for every catchable escape" begin
     native = Dict("h5" => _wt_eb_h5(1), "p2" => _wt_eb_p2(1),
-                  "s_then_r" => (try; _wt_eb_s(10^8); catch; end; _wt_eb_r(0)),
+                  "s_then_r" => _wt_own_task(() -> (try; Base.invokelatest(_wt_eb_s, 10^8); catch; end; _wt_eb_r(0))),
                   "it_then_r" => (try; _wt_eb_it(1); catch; end; _wt_eb_r(0)),
                   "trap_then_r" => _wt_eb_r(0), "lc_trap_then_r" => (_wt_eb_lc(1); _wt_eb_r(0)),
                   "o" => _wt_eb_o(0), "o2" => _wt_eb_o2(1), "o2_trap_then_r" => (_wt_eb_o2(1); _wt_eb_r(0)))
@@ -217,8 +221,8 @@ _wt_hb_o6(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb6(x); try;
 _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; end
 
 @testset "the export boundary is the host's: stack exhaustion and traps leave Julia's stack" begin
-    native = Dict("a_then_r" => (try; _wt_hb_a(1); catch; end; _wt_eb_r(0)), "o" => _wt_hb_o(1),
-                  "o_again" => _wt_hb_og(1), "h6" => _wt_hb_o6(1), "h7_then_r" => (try; _wt_hb_o7(1); catch; end; _wt_eb_r(0)))
+    native = Dict("a_then_r" => (try; _wt_hb_a(1); catch; end; _wt_eb_r(0)), "o" => _wt_own_task(() -> _wt_hb_o(1)),
+                  "o_again" => _wt_own_task(() -> _wt_hb_og(1)), "h6" => _wt_hb_o6(1), "h7_then_r" => (try; _wt_hb_o7(1); catch; end; _wt_eb_r(0)))
     @test native == Dict("a_then_r" => 2, "o" => 1, "o_again" => 1, "h6" => 1, "h7_then_r" => 2)
     mod = WasmTarget.WasmModule()
     v = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
@@ -322,7 +326,7 @@ _wt_hb_err(f) = (try; f(); nothing; catch err; err; end)
     # a host-declared import with no count (added after setup) is refused where the count is read
     m3 = WasmTarget.WasmModule()
     WasmTarget.add_import!(m3, "host", "late", sig...)
-    e3 = _wt_hb_err(() -> WasmTarget.host_imports_open_global!(m3))
+    e3 = _wt_hb_err(() -> WasmTarget.host_imports_open_global(m3))
     @test e3 isa ArgumentError && occursin("host.late", e3.msg) && occursin("wasmtarget.host_imports_open", e3.msg)
     # a global index naming the imported count, at each entry that takes one
     counted() = (m = WasmTarget.WasmModule(); WasmTarget.add_import!(m, "host", "cb", sig...);

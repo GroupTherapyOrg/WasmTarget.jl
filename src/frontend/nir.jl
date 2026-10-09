@@ -300,17 +300,17 @@ struct NirUnsupported <: NirNode
 end
 
 """One statement's NIR record. `julia_type` is the type of the VALUE this statement
-produces (`widenconst(code_info.ssavaluetypes[i])`, `Any` when absent). `line` is its
-source line decoded from the CodeInfo's DebugInfo (0 when the IR carries none). `slot` is
+produces (`widenconst(code_info.ssavaluetypes[i])`, `Any` when absent). Its source location is
+not copied here: the context keeps the CodeInfo's DebugInfo, which diagnostics.jl decodes
+(`_stmt_line_nodes`, the one decoding). `slot` is
 the SlotNumber id when the statement is unoptimized IR's `Expr(:(=), SlotNumber(n), rhs)`
 assignment and 0 otherwise — in that case `node` classifies the RHS, so a consumer sees
 the value-producing operation directly and the assignment is one integer beside it.
-parity(quarantine: Julia's CodeInfo is a flat statement vector whose type, debug line and
-slot assignment are stored per position; a Kernel node carries its own fileOffset.)"""
+parity(quarantine: Julia's CodeInfo is a flat statement vector whose type and slot assignment
+are stored per position; a Kernel node carries its own fileOffset.)"""
 struct NirStmt
     node::NirNode
     julia_type::Type
-    line::Int32
     slot::Int
 end
 
@@ -348,37 +348,6 @@ end
 # type's `fieldtype`), so nothing here catches: a query that throws is an internal error and
 # surfaces as one.
 # ============================================================================
-
-"""Raw per-position DebugInfo line, 0 when that position carries none. Julia 1.12+ replaced
-the flat `codelocs` array with a compressed `Core.DebugInfo`; this is the one decode.
-parity(code_generator.dart:190 setSourceMapFileOffset): the source position dart reads from
-TreeNode.fileOffset (pkg/kernel/lib/src/ast/misc.dart:71); Julia stores it in Core.DebugInfo."""
-_debug_line(di::Core.DebugInfo, i::Int)::Int = Int(Base.IRShow.getdebugidx(di, i)[1])
-
-"""Per-statement source lines for one CodeInfo, in ONE forward pass: a statement whose own
-DebugInfo entry is ≤ 0 (a synthesized one) inherits the nearest earlier statement that
-carries a concrete line — the same rule diagnostics.jl's per-query `_stmt_line` walks
-backward for, computed once here so a consumer reads `ctx.nir[idx].line`.
-
-MEASURED (2026-09-08): every line is 0 for the IR WT actually compiles, because
-`get_typed_ir` calls `Base.code_typed` with the DEFAULT `debuginfo=:none`, whose CodeInfo
-carries an empty `Core.DebugInfo` (no codelocs, no linetable, no edges). The same input
-starves diagnostics.jl's `_stmt_line`/`stmt_frames`, so a located diagnostic falls back to
-the method's definition line and its inline chain is empty. Asking for `debuginfo=:source`
-in ir.jl restores both (verified: 7/7 statements lined, a real 3-frame chain) — a change to
-the one inference path, not to this decode.
-parity(code_generator.dart:190 setSourceMapFileOffset): one source line per node, read once."""
-function _nir_lines(code_info::Core.CodeInfo, n::Int)::Vector{Int32}
-    out = zeros(Int32, n)
-    di = code_info.debuginfo
-    carried = Int32(0)
-    for i in 1:n
-        ln = _debug_line(di, i)
-        ln > 0 && (carried = Int32(ln))
-        out[i] = carried
-    end
-    return out
-end
 
 """Julia inference's own type for every SSA id, widened to a plain Julia type. Unoptimized
 IR (may_optimize=false) keeps `Core.Const`/`Core.PartialStruct` lattice elements in
@@ -726,7 +695,6 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
     n = length(code)
     types = _widened_ssa_types(code_info, n)
     slot_types = nir_slot_types(code_info)
-    lines = _nir_lines(code_info, n)
     out = Vector{NirStmt}(undef, n)
     for i in 1:n
         stmt = code[i]
@@ -742,7 +710,7 @@ function build_nir(code_info::Core.CodeInfo)::Vector{NirStmt}
             classified = stmt.args[2]
         end
         out[i] = NirStmt(_nir_classify(classified, i, code_info, types, slot_types),
-                         types[i], lines[i], slot)
+                         types[i], slot)
     end
     return out
 end
@@ -957,7 +925,7 @@ function nir_retarget_invoke!(code_info::Core.CodeInfo, nir::Vector{NirStmt}, i:
     s.slot > 0 && (stmt = stmt.args[2])   # a slot assignment's right-hand side
     stmt.args[1] = mi
     nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), nothing, node.callee, node.operands),
-                     s.julia_type, s.line, s.slot)
+                     s.julia_type, s.slot)
     return nothing
 end
 

@@ -307,8 +307,9 @@ end
 """
 Represents a WebAssembly function definition: its type, locals, body bytes, the body's
 source mappings (byte offsets into `body`; empty for a compiler-generated function that no
-statement emitted), and the name it is defined with, which the name section gives it ("" for
-none).
+statement emitted), and the name it is defined with, which the name section gives it: every
+function has one, and an empty name, which the name section could not carry, is refused at
+construction (L157).
 parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
@@ -317,14 +318,17 @@ struct WasmFunction
     body::Vector{UInt8}
     mappings::Vector{SourceMapping}
     name::String
+    function WasmFunction(type_idx::UInt32, locals::Vector{WasmValType}, body::Vector{UInt8},
+                          mappings::Vector{SourceMapping}, name::String)::WasmFunction
+        isempty(name) && throw(ArgumentError("WasmFunction(type $type_idx; name=\"\"): a function is named where it is defined, and the name section drops an empty name"))
+        return new(type_idx, locals, body, mappings, name)
+    end
 end
-# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a function with no name of its own.
-WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8},
-             mappings::Vector{SourceMapping})::WasmFunction =
-    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, mappings, "")
-# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a body with no source mappings.
-WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8})::WasmFunction =
-    WasmFunction(type_idx, locals, body, SourceMapping[])
+# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a body with no source
+# mappings, named as every function is where it is defined (functions.dart:31 define's name):
+# a body rebuilt into a defined slot passes the slot's name on.
+WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8}; name::String)::WasmFunction =
+    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, SourceMapping[], name)
 
 """
 Represents an export entry.
@@ -877,9 +881,12 @@ function num_imported_funcs(mod::WasmModule)::Int
 end
 
 """
-    add_function!(mod, params, results, locals, body) -> func_idx
+    add_function!(mod, params, results, locals, body; name) -> func_idx
 
-Add a function to the module and return its index.
+Add a function named `name` to the module and return its index. dart's `define(type, [name])`
+takes the name optionally and dart2wasm passes one at its definitions (functions.dart:171
+getFunctionName, each generator's own text); here it is required, so no definition goes
+unnamed and a trap inside a function the compiler generates names it by its construct (L157).
 Note: Local function indices start after imported functions.
 Params and results can be NumType or WasmValType vectors.
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)
@@ -888,7 +895,8 @@ function add_function!(mod::WasmModule,
                        params::Vector{<:WasmValType},
                        results::Vector{<:WasmValType},
                        locals::Vector{<:WasmValType},
-                       body::Vector{UInt8}; name::String="")::UInt32
+                       body::Vector{UInt8}; name::String)::UInt32
+    isempty(name) && throw(ArgumentError("add_function!(…; name=\"\"): a function is named where it is defined, and the name section drops an empty name"))
     ft = FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
     type_idx = add_type!(mod, ft)
     push!(mod.functions, WasmFunction(type_idx, WasmValType[l for l in locals], body,
@@ -1530,7 +1538,7 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         func_idx += 1
     end
     for f in mod.functions
-        isempty(f.name) || push!(func_names, func_idx => f.name)
+        push!(func_names, func_idx => f.name)   # never empty (WasmFunction refuses one)
         func_idx += 1
     end
     if !isempty(func_names)

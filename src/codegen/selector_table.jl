@@ -250,7 +250,9 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
             call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
                            copy(dt.slot_types), res)
             end_block!(tb)
-            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[I32], builder_code(tb))
+            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[I32], builder_code(tb);
+                                      name=generated_function_name(:polymorphic_dispatcher,
+                                                                   "$(func_ref), axis $(c.axis2)"))
             push!(entries, (c.l1_pos, tramp_idx))
             for (pos2, entry_i) in c.rows2
                 push!(entries, (pos2, dt.entries[entry_i].wrapper_idx))

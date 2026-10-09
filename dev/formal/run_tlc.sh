@@ -36,17 +36,33 @@ trap 'rm -rf "$meta"' EXIT
 cfgs=(MC*.cfg)
 [ "${TLC_NIGHTLY:-0}" = "1" ] && [ -d nightly ] && cfgs+=(nightly/MC*.cfg)
 # TLC_SHARD=i/N (formal.yml's push matrix) checks every N-th instance from the i-th, i in 0..N-1,
-# of the same sorted list: the N shards together check every instance exactly once.
+# of one list: the N shards together check every instance exactly once. The list deals the HEAVY
+# instances first, round-robin, then the rest in sorted order, so no shard holds two of the
+# slowest by the coincidence of their names. HEAVY is every instance measured over ~60 s on a CI
+# runner (formal.yml run 37900951923: 321, 145, 452, 77, 137, 76, 138 and 125 s, in this order),
+# ordered so that, with the rest's measured times, formal.yml's three shards (N = 3) come to
+# ~685 s each; any other N deals the same list the same way, its loads not tuned. A name here that
+# is no instance fails every run, sharded or not. This is the one statement of the dealing.
+HEAVY="${TLC_HEAVY:-MCExceptionStackValueIdentityBroken.cfg MCOperandStackIf.cfg MCExceptionStackDeep.cfg MCClassIdDispatchCascade.cfg MCExceptionStack.cfg MCCoercionNullabilityBroken.cfg MCClassIdDispatchTotal.cfg MCExceptionStackPlain.cfg}"
+for h in $HEAVY; do
+  [[ " ${cfgs[*]} " == *" $h "* ]] || { echo "TLC_HEAVY names $h, which is no instance" >&2; exit 1; }
+done
 if [ -n "${TLC_SHARD:-}" ]; then
   si=${TLC_SHARD%/*}; sn=${TLC_SHARD#*/}
   if ! [[ $si =~ ^[0-9]+$ && $sn =~ ^[1-9][0-9]*$ ]] || [ "$si" -ge "$sn" ]; then
     echo "TLC_SHARD=$TLC_SHARD: expected i/N with 0 <= i < N" >&2; exit 1
   fi
+  dealt=()
+  for h in $HEAVY; do dealt+=("$h"); done
+  for c in "${cfgs[@]}"; do [[ " $HEAVY " == *" $c "* ]] || dealt+=("$c"); done
   shard=()
-  for k in "${!cfgs[@]}"; do [ $((k % sn)) -eq "$si" ] && shard+=("${cfgs[$k]}"); done
+  for k in "${!dealt[@]}"; do [ $((k % sn)) -eq "$si" ] && shard+=("${dealt[$k]}"); done
   cfgs=("${shard[@]}")
   echo "  shard $si of $sn: ${#cfgs[@]} instances"
 fi
+# TLC_LIST=1 prints the instances this run would check, one per line, and checks none (the
+# shards' partition is read from it)
+if [ "${TLC_LIST:-0}" = "1" ]; then printf '%s\n' "${cfgs[@]}"; exit 0; fi
 for cfg in "${cfgs[@]}"; do
   [ -e "$cfg" ] || continue
   if [ "${TLC_FAST:-0}" = "1" ] && [[ " $DEEP " == *" $cfg "* ]]; then printf '  skip %-28s (deep; run without TLC_FAST)\n' "$cfg"; continue; fi

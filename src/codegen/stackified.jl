@@ -192,13 +192,13 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{N
                 for p in preds[s]
                     push!(edges, blocks[p].end_idx); push!(values, v)
                 end
-                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.line, rec.slot)
+                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.slot)
             end
             for p in preds[s]
                 pb = blocks[p]; pt = pb.terminator
                 nt = pt isa NirGoto ? NirGoto(t.target) : NirGotoIfNot(pt.cond, t.target)
                 prec = nir[pb.end_idx]
-                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.line, prec.slot)
+                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.slot)
                 blocks[p] = BasicBlock(pb.start_idx, pb.end_idx, nt)
             end
             threaded = true
@@ -1034,8 +1034,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                                     phi_count += 1
                                 elseif !isempty(pv_b.instrs)
                                     append_builder!(b, pv_b)
-                                    # a recomputed value statement ends unmapped: the
-                                    # coercion and store are the phi's again
+                                    # a recomputed value statement ends mapped to the
+                                    # function's definition: the coercion and store map back
+                                    # to the phi
                                     map_to_statement!(b, ctx, i)
                                     if pv_ty !== nothing && pv_ty !== phi_local_type
                                         local _edge_julia = _value_julia_type(val, ctx)
@@ -1245,7 +1246,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # one). dart: unimplemented/throw paths end in unreachable.
                     unreachable!(bb)   # structural trap (dart-legit dead path)
                 end
-                stop_source_mapping!(bb)
+                map_to_definition!(bb, ctx)   # the code after the return is the function's again
 
             elseif stmt isa NirGotoIfNot
                 # GotoIfNot: handled by control flow structure
@@ -1586,7 +1587,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 set_phi_locals_for_edge!(b, next_block_idx, terminator_idx)
             end
         end
-        stop_source_mapping!(b)
+        # the code after the terminator's — a try region's opening, the blocks' ends, the
+        # trailing unreachable — maps to the function's definition (code_generator.dart:721)
+        map_to_definition!(b, ctx)
 
         # Slice B: this block ends with an EnterNode (post-split guarantee) →
         # open the region: landing block (the catch's br target ends at the handler)

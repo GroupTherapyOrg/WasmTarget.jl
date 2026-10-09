@@ -36,9 +36,9 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
         m = MBV.WasmModule()
-        good = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        good = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="good")
         MBV.add_start_function!(m, good)
-        bad = MBV.add_function!(m, MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        bad = MBV.add_function!(m, MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="bad")
         @test_throws MBV.ModuleValidationError MBV.add_start_function!(m, bad)
         @test_throws MBV.ModuleValidationError MBV.add_start_function!(m, 99)
     end
@@ -47,7 +47,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         m = MBV.WasmModule()
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "missing", 0, 0)
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "bad-kind", 4, 0)
-        f = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        f = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="f")
         MBV.add_export!(m, "f", 0, f)
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "f", 0, f)
         @test_throws MBV.ModuleValidationError MBV.add_table!(m, MBV.FuncRef, 2, 1)
@@ -374,13 +374,13 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
 
         # a framework's module declares WT's runtime imports before its own definitions
         late = MBV.WasmModule()
-        MBV.add_function!(late, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+        MBV.add_function!(late, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="f")
         @test_throws ArgumentError MBV.compile_multi(Any[(constant_root, (Int64,), "late")];
             existing_module=late, root_bindings=Dict("late" => constant_bindings))
         entry_module = MBV.WasmModule()
         MBV.ensure_provenance_imports!(entry_module)
         entry_idx = MBV.add_function!(entry_module, MBV.WasmValType[],
-            MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END])
+            MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="entry")
         with_entry = MBV.RootBindings(
             captured_constants=Dict(:offset => Int64(7)),
             entry_calls=UInt32[entry_idx], elide_closure_context=true)
@@ -413,6 +413,16 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
                 MBV.add_global_export!(linked_mod, "eager_string", eager)
             end)
         @test init_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+        # the initializer is named by the root that computes the value; an imported root is refused
+        init_mod = MBV.compile_module(Any[(_mbv_string_init, (), "string_init")];
+            link_roots=(linked_mod, roots, registry) -> begin
+                g = MBV.add_uninitialized_ref_global!(linked_mod, MBV.get_string_struct_type!(linked_mod, registry))
+                @test MBV.num_imported_funcs(linked_mod) >= 1
+                err = try; MBV.add_root_global_initializer!(linked_mod, registry, g, 0); nothing; catch e; e; end
+                @test err isa ArgumentError && occursin("is an imported function", err.msg)
+                MBV.add_root_global_initializer!(linked_mod, registry, g, roots["string_init"])
+            end)
+        @test count(f -> f.name == "string_init field initializer", init_mod.functions) == 1
         # an import from the linker would renumber the defined functions: the builder refuses it
         @test_throws MBV.ModuleValidationError MBV.compile_multi(
             Any[(leaf, (Int64,), "bad_linker")];
@@ -499,7 +509,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.global_get!(b, mine, MBV.I64); MBV.global_set!(b, mine)
         MBV.global_get!(b, count, MBV.I32)
         MBV.finish_function!(b)
-        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b))
+        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b); name="f")
         bytes = MBV.to_bytes(m)
         @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(bytes)))
         printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
