@@ -199,6 +199,38 @@ macro test_wasm_output(wasm_bytes, func_name, args, expected)
 end
 
 # ============================================================================
+# The export boundary's import count
+# ============================================================================
+
+"""
+    uncounted_host_import_calls(mod) -> Int
+
+The calls of a host-declared import in `mod` that are not counted open in `\$host_imports_open`.
+Each `call` of one must sit directly after the count's increment and directly before its
+decrement (emit_direct_call!), the premise of the export boundary's claim
+(dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an uncounted call makes a
+re-entrant export top-level, which resets the stack its caller's catch reads. Which imports
+are host-declared is the compiler's own rule (_is_host_declared_import). Read from the module's
+code as wasm-tools prints it, its name section stripped so every index is a number (L156).
+"""
+function uncounted_host_import_calls(mod::WasmTarget.WasmModule)::Int
+    local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
+    local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
+    local g = WasmTarget.global_named(mod, "\$host_imports_open")
+    local text = read(pipeline(pipeline(`wasm-tools strip --all`; stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String)
+    local lines = String[strip(l) for l in split(text, '\n')]
+    local inc = ["global.get $g", "i32.const 1", "i32.add", "global.set $g"]
+    local dec = ["global.get $g", "i32.const 1", "i32.sub", "global.set $g"]
+    local n = 0
+    for (k, l) in enumerate(lines)
+        local c = match(r"^call (\d+)$", l)
+        (c !== nothing && parse(Int, c.captures[1]) in host) || continue
+        (g !== nothing && k > 4 && lines[k-4:k-1] == inc && k + 4 <= length(lines) && lines[k+1:k+4] == dec) || (n += 1)
+    end
+    return n
+end
+
+# ============================================================================
 # Wasm Validation
 # ============================================================================
 

@@ -137,7 +137,8 @@ Init == /\ edges \in SUBSET (Nodes \X Nodes)
         /\ st = Empty /\ done = FALSE
 Step == ~done /\ st' = Run([i \in 1..N |-> requests[i]], Empty) /\ done' = TRUE
         /\ UNCHANGED <<edges, requests>>
-Spec == Init /\ [][Step]_vars
+Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run, not a deadlock
+Spec == Init /\ [][Step \/ Terminal]_vars
 
 \* ---- the claims, on the finished section ----
 Index(s, n) == CHOOSE i \in 1..Len(s.order) : s.order[i] = n

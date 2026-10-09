@@ -49,7 +49,11 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
         # omitted and its ratchet reported MISSING. A key before any `[section]` is kept
         # under "" so that run() reports it as naming no ratchet (A12P5).
         elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing
-            get!(out, section, Dict{String,Int}())[m.captures[1]] = parse(Int, m.captures[2])
+            local d = get!(out, section, Dict{String,Int}())
+            # a key twice would keep its last line, so a second, larger line would loosen its
+            # ratchet silently (TOML forbids it): refused, as the run refuses a STRAY key (A13P18)
+            haskey(d, m.captures[1]) && error("$(path): [$(section)] $(m.captures[1]) appears twice; delete one line")
+            d[m.captures[1]] = parse(Int, m.captures[2])
         end
     end
     return out
@@ -2168,17 +2172,24 @@ const LOCKS = [
     "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
-    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause but one exact site: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors, left without a caller, were deleted on 2026-09-29. Batch 110 ported one back, catch_all_ref_clause (dart's CatchAllRef, instructions.dart:153), for an exact per-site allowlist of one, each site pinned by its needle with its reason (dev/CHARTER.md rule 2): emit_export_entry!'s `try_table (catch_all_ref)` (generate.jl), because catch_all is the only wasm construct that observes a foreign unwind; Julia's host frame restores its stack on every escape (jl_restore_excstack). Every other catch_all or catch_ref counts, by constructor anywhere in src or by opcode or raw clause in codegen, and so does a site whose needle is gone (dev/CHARTER.md C6)",
+    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause but one exact site: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors, left without a caller, were deleted on 2026-09-29. Batch 110 ported one back, catch_all_ref_clause (dart's CatchAllRef, instructions.dart:153), for an exact per-site allowlist of one, each site pinned by its needle with its reason (dev/CHARTER.md rule 2): emit_export_entry!'s `try_table (catch_all_ref)` (generate.jl), because Julia's host frame restores its stack on every escape (jl_restore_excstack); catch_all_ref observes every catchable unwind, where dart observes a JS unwind by catching the imported JSTag (tags.dart:45), not yet ported (dev/MARCH.md 13.17). Every other catch_all or catch_ref counts, by constructor anywhere in src, by opcode or raw clause in codegen, or by a clause built from its opcode in src/builder, where the one allowed site is catch_all_ref_clause's own body (audit #13 A13B3: a builder constructor of another name passed the count), and so does a site whose needle is gone (dev/CHARTER.md C6)",
         () -> begin
             # the exact per-site allowlist: its needle in generate.jl => its reason
-            local allowed = ["    try_table!(b, [catch_all_ref_clause(escaped)])" =>
-                "catch_all is the only wasm construct that observes a foreign unwind; Julia's host frame restores its stack on every escape (jl_restore_excstack)"]
+            local reason = "Julia's host frame restores its stack on every escape (jl_restore_excstack); catch_all_ref observes every catchable unwind, where dart observes a JS unwind by catching the imported JSTag (tags.dart:45), not yet ported (13.17)"
+            local allowed = ["    try_table!(b, [catch_all_ref_clause(escaped)])" => reason]
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local uses = count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause";
                                      exclude_line=r"^catch_all_ref_clause\(label::ControlLabel\)")
             # a clause built from its opcode or raw passes the constructors by
             local raw = count_sites(r"Opcode\.CATCH_ALL|Opcode\.CATCH_REF|SymbolicTryCatch\(|TryCatch\("; roots=[CODEGEN])
-            abs(uses - length(allowed)) + raw + count(((needle, _),) -> length(findall(needle, gen)) != 1, allowed)
+            # in the builder, a catch_all/catch_ref clause is built only by catch_all_ref_clause's body
+            local builder_allowed = ["    SymbolicTryCatch(Opcode.CATCH_ALL_REF, 0xffffffff, label)" => reason]
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local in_builder = count_sites(r"SymbolicTryCatch\(Opcode\.(CATCH_ALL|CATCH_REF|CATCH_ALL_REF)\b";
+                                           roots=[joinpath(SRC, "builder")])
+            abs(uses - length(allowed)) + raw + count(((needle, _),) -> length(findall(needle, gen)) != 1, allowed) +
+                abs(in_builder - length(builder_allowed)) +
+                count(((needle, _),) -> length(findall(needle, ib)) != 1, builder_allowed)
         end),
     "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
@@ -2311,9 +2322,17 @@ const LOCKS = [
             end
             n
         end),
-    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions (locked 2026-09-02)",
-        () -> count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
-                          exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])),
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with two exact sites, each pinned by its needle with its reason: the export entry's rejection of a result that is not defaultable (generate.jl emit_export_entry!), made after codegen at no statement and naming the export, and the walk of the constants past its bound (trimcollect.jl _held_bound_rejection), made while planning and located at the statement holding the constant with its source line and inline chain (audit #13 A13B1, A13C7) (locked 2026-09-02)",
+        () -> begin
+            local allowed = [("generate.jl", "        defaultable(r) || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, name,") =>
+                                 "the export entry is built after codegen, at no statement; the rejection names the export",
+                             ("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),") =>
+                                 "the walk of the constants runs while planning, before codegen; the rejection is located at the statement holding the constant"]
+            local n = count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
+                                  exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])
+            abs(n - length(allowed)) +
+                count((((f, needle), _),) -> length(findall(needle, read(joinpath(CODEGEN, f), String))) != 1, allowed)
+        end),
     "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement, its inline chain, and the compiler frames it was raised through (its catch_backtrace(), dart's CFECrashError.stackTrace), whose innermost WT frame heads the message; _compile_statement_located! has no other caller (locked 2026-09-02; the raising frames since 2026-09-29, when finding a codegen bug still meant patching a stack print into the compiler)",
         () -> begin
             src = read(joinpath(CODEGEN, "statements.jl"), String)
@@ -2640,11 +2659,15 @@ const LOCKS = [
                           raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
                           raw"fi"], '\n'), lanes)])
         end),
-    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, emit_export_entry!). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard (dev/CHARTER.md C5)",
+    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, emit_export_entry!). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a concrete reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard. The builder refuses a try_table with inputs or results however the keyword is spelled (try_table!'s check, pinned here; the shorthand `try_table!(b, cs; results)` passed the text scan, A13B7), codegen builds no InstrIR.TryTable past it, and the scan of codegen's calls counts a `results` or `inputs` keyword or a splat (A13P16). This keeps a workaround for a form dart does not emit: dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy), whose try runs with a concrete-reference result on Node 22.23.3 (measured in batch 112: `try (result (ref null \$s))` with catch \$t, catch_all and rethrow); porting WT's exception lowering to it is dev/MARCH.md 13.17 A13E7 (dev/CHARTER.md C5)",
         () -> begin
-            # each `try_table!(` call, read to its closing paren across lines: a `results=` or a
-            # splatted keyword in it counts
-            local n = 0
+            # the builder's refusal, exactly once
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local n = length(findall("    (isempty(inputs) && isempty(results)) || throw(ArgumentError(", ib)) == 1 ? 0 : 1
+            # a try_table built in codegen past the builder's try_table! passes its check by
+            n += count_sites(r"InstrIR\.TryTable\("; roots=[CODEGEN])
+            # each `try_table!(` call, read to its closing paren across lines: a `results` or an
+            # `inputs` keyword (with `=` or the shorthand) or a splatted keyword in it counts
             for (dir, _, fs) in walkdir(CODEGEN), f in fs
                 endswith(f, ".jl") || continue
                 local s = read(joinpath(dir, f), String)
@@ -2655,10 +2678,37 @@ const LOCKS = [
                         s[k] == ')' && (depth -= 1; depth == 0 && break)
                         k = nextind(s, k)
                     end
-                    occursin(r"\bresults\s*=|\.\.\.", s[j:min(k, lastindex(s))]) && (n += 1)
+                    occursin(r"\b(results|inputs)\b|\.\.\.", s[j:min(k, lastindex(s))]) && (n += 1)
                 end
             end
             n
+        end),
+    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted open in `\$host_imports_open` while it runs (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an uncounted call makes an export the host calls back from inside it top-level, and its reset discards the stack its caller's catch reads (Julia's J2: native 1, 2). It is checked on the code itself, not on its text: test/utils.jl's uncounted_host_import_calls reads a module as wasm-tools prints it, its name section stripped, and counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) that does not sit directly after the count's increment and directly before its decrement; test/real_bottom_exceptions.jl asserts 0 on the export boundary's module and test/host_imports.jl on its module whose import a later round's dispatch candidate calls. This lock requires both assertions and the helper's body as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
+        () -> begin
+            local t(f) = read(joinpath(ROOT, "test", f), String)
+            local norm(x) = filter(!isempty, map(strip, split(x, '\n')))
+            local helper = raw"""
+function uncounted_host_import_calls(mod::WasmTarget.WasmModule)::Int
+    local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
+    local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
+    local g = WasmTarget.global_named(mod, "\$host_imports_open")
+    local text = read(pipeline(pipeline(`wasm-tools strip --all`; stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String)
+    local lines = String[strip(l) for l in split(text, '\n')]
+    local inc = ["global.get $g", "i32.const 1", "i32.add", "global.set $g"]
+    local dec = ["global.get $g", "i32.const 1", "i32.sub", "global.set $g"]
+    local n = 0
+    for (k, l) in enumerate(lines)
+        local c = match(r"^call (\d+)$", l)
+        (c !== nothing && parse(Int, c.captures[1]) in host) || continue
+        (g !== nothing && k > 4 && lines[k-4:k-1] == inc && k + 4 <= length(lines) && lines[k+1:k+4] == dec) || (n += 1)
+    end
+    return n
+end
+"""
+            local m = match(r"(?s)\nfunction uncounted_host_import_calls\(.*?\nend\n", t("utils.jl"))
+            local asserted = "@test uncounted_host_import_calls(m) == 0"
+            (m === nothing || norm(m.match) != norm(helper)) +
+                count(f -> length(findall(asserted, t(f))) != 1, ["real_bottom_exceptions.jl", "host_imports.jl"])
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin

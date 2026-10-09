@@ -491,19 +491,28 @@ JL_TRY records the depth of Julia's exception stack and whose JL_CATCH restores 
 top-level and starts with an empty stack (Julia's host call does, whatever the previous call
 did); a re-entrant one, from inside a host-declared import, starts with its caller's. The entry
 saves the top and the count of open host-declared imports (host_imports_open_global!), calls
-the inner inside a result-less `try_table (catch_all_ref)`, and when anything catchable escapes,
-a Julia exception or a foreign one (a JS exception from an import, the engine's RangeError),
-restores both and rethrows it with `throw_ref`, its payload unchanged. Between a host-import
-call site and this entry every frame is Julia's, which catches only the tag, so this is the one
-observer of a foreign unwind. A trap is not catchable and restores nothing: the host contract
-says an instance that trapped is discarded (dev/MARCH.md 13.17, H6 and H7). The inner keeps the
-export's name; this one is "<name> (export)", as dart names an import "<name> (import)"
-(functions.dart:141).
-formal(dev/formal/ExceptionStack.tla): every escape leaves the stack as Julia's host leaves it, except H6 and H7 (traps).
-parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth on every escape, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Its catch_all_ref is L101's one allowed site: catch_all is the only wasm construct that observes a foreign unwind.)
+the inner inside a result-less `try_table (catch_all_ref)`, and when a Julia exception or a JS
+exception a host-declared import throws escapes, restores both and rethrows it with
+`throw_ref`, its payload unchanged. Between a host-import call site and this entry every frame
+is Julia's, which catches only the tag, so a JS exception unwinds every Julia region to here
+(dev/MARCH.md 13.17: a Julia `catch` or `finally` does not see it). Stack exhaustion, which V8
+makes uncatchable by wasm as a trap is, restores nothing: the next top-level call's reset clears
+it; inside an import or a re-entrant call it is dev/MARCH.md 13.17 A13E1. A trap restores
+nothing: the host contract says an instance that trapped is discarded (13.17, H6 and H7). The
+inner keeps its own name; this one is "<export name> (export)", as dart names an import
+"<name> (import)" (functions.dart:141). An inner whose result is not defaultable rejects: the
+results stay in locals across the try_table (dev/MARCH.md 13.17 A13B1).
+formal(dev/formal/ExceptionStack.tla): every escape leaves the stack as Julia's host leaves it, except H6, H7 and A13E1.
+parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth on every escape, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Its catch_all_ref, L101's one allowed site, observes the tag, a JS exception and any other module's tag; dart observes a JS unwind by catching the imported WebAssembly.JSTag beside its own tag (tags.dart:45 _importJsExceptionTag; code_generator.dart:1156-1162 visitTryFinally), which WT does not import yet (dev/MARCH.md 13.17, C2). The rejection of a non-defaultable result stands in for the local-initialization tracking WT's builder lacks, dart's local_get check (instructions.dart:1018; dev/MARCH.md 13.17 A13B1).)
 """
 function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::UInt32
     local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
+    for r in ft.results
+        defaultable(r) || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, name,
+            "the export \"$(name)\" returns $(r), which is not defaultable: an export entry keeps the " *
+            "results in locals across its try_table, and a non-defaultable local is unset after the " *
+            "block's end (dev/MARCH.md 13.17 A13B1)", nothing, r)))
+    end
     local top = ensure_exception_top_global!(mod)
     local cell = ConcreteRef(exc_cell_type!(mod), true)
     local count = host_imports_open_global!(mod)
@@ -518,7 +527,7 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     local saved_count = count === nothing ? nothing : builder_add_local!(b, I32)
     count === nothing || (global_get!(b, count, I32); local_set!(b, saved_count))
     # the try_table has no results: the call's results go to locals, as every try_table WT emits
-    # (V8 12.4, Node 22, traps on entering a try_table whose result is a reference)
+    # (V8 12.4, Node 22, traps on entering a try_table whose result is a concrete reference)
     local result_locals = Int[builder_add_local!(b, r) for r in ft.results]
     local escaped = block!(b; results=WasmValType[ExnRef])
     try_table!(b, [catch_all_ref_clause(escaped)])

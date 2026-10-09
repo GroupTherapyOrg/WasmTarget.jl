@@ -8,8 +8,11 @@
 # tests). A Broken cfg's first line names the claim it violates, `\* expect: <Name>`: an
 # INVARIANT of the cfg, a PROPERTY of it (TLC's temporal form names none), or Deadlock. It
 # passes only when TLC reports that violation; a violation of any other claim (TypeOK
-# included) fails, and so does a Broken cfg with no expect line. Exit 1 on any unexpected
-# result.
+# included) fails, and so does a Broken cfg with no expect line. TypeOK is never an expect
+# line: a Broken instance must break a claim, not the type invariant. TLC checks deadlock
+# unless a cfg says CHECK_DEADLOCK FALSE (there is no `-deadlock` flag, which switches the
+# check off for every cfg and ignores the cfg's entry): a model whose run ends gives its
+# terminal states an explicit stutter. Exit 1 on any unexpected result.
 set -euo pipefail
 cd "$(dirname "$0")"
 JAR="${TLA2TOOLS_JAR:-$HOME/.cache/wasmtarget/tla2tools.jar}"
@@ -60,6 +63,8 @@ for cfg in "${cfgs[@]}"; do
   if [ "$expect" = violation ]; then
     want=$(head -1 "$cfg" | sed -n 's/^\\\* expect: \([A-Za-z0-9_]*\)[[:space:]]*$/\1/p')
     if [ -z "$want" ]; then printf '  FAIL %-28s no first line "\\* expect: <Name>"\n' "$cfg"; fail=1; continue; fi
+    # a Broken instance breaks a claim; violating only the type invariant is a malformed model
+    if [ "$want" = TypeOK ]; then printf '  FAIL %-28s expects TypeOK: a Broken cfg must break a claim, not the type invariant\n' "$cfg"; fail=1; continue; fi
     # the kind of claim it names: an INVARIANT or a PROPERTY the cfg lists (one per line
     # or under INVARIANTS/PROPERTIES), or Deadlock
     kind=$(awk -v w="$want" '/^[[:space:]]*\\\*/ { next }
@@ -73,7 +78,7 @@ for cfg in "${cfgs[@]}"; do
   # run and machine (MCConstantsSkipChildBroken reported NoPartialIntern on two workers
   # and MutableNeverAliases on one and on `auto`).
   w="$WORKERS"; [ "$expect" = violation ] && w=1
-  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$w" -metadir "$meta/${cfg//\//_}" -config "$cfg" -deadlock "$tla" 2>&1) || true
+  out=$(java -XX:+UseParallelGC -cp "$JAR" tlc2.TLC -workers "$w" -metadir "$meta/${cfg//\//_}" -config "$cfg" "$tla" 2>&1) || true
   # Classified with shell pattern matches, not `echo | grep -q`: under pipefail a
   # multi-megabyte counterexample trace makes `echo` die of SIGPIPE when grep -q
   # exits early, which misreported a real violation as "error" (found on Coercion).

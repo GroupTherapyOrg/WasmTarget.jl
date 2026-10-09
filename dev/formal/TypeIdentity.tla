@@ -162,10 +162,20 @@ AddGroup(ms) == /\ NoComponentCheck \/ IsComponent(ms)
 
 Init == types = <<>> /\ nreq = 0 /\ served = {}
 \* any single type, or any group of one or two members over the section so far
-Next == /\ nreq < MaxReq /\ nreq' = nreq + 1
-        /\ \/ \E fs \in Members(Len(types), 1) : AddType(fs)
-           \/ \E len \in 1..2 : \E ms \in [1..len -> Members(Len(types), len)] : AddGroup(ms)
+Request == /\ nreq < MaxReq /\ nreq' = nreq + 1
+           /\ \/ \E fs \in Members(Len(types), 1) : AddType(fs)
+              \/ \E len \in 1..2 : \E ms \in [1..len -> Members(Len(types), len)] : AddGroup(ms)
+\* MaxReq requests made: the bound, not a deadlock
+Stop == nreq = MaxReq /\ UNCHANGED vars
+Next == Request \/ Stop
 Spec == Init /\ [][Next]_vars
+
+\* the variables' types: the section a sequence of entries, each at the index its group's base
+\* and position name; nreq within the bound; every served pair names an existing index
+TypeOK == /\ nreq \in 0..MaxReq
+          /\ \A i \in DOMAIN types : /\ types[i].len \in 1..2 /\ types[i].pos \in 1..types[i].len
+                                    /\ types[i].base + types[i].pos - 1 = i
+          /\ \A x \in served : x[2] \in DOMAIN types
 
 IndexTellsType == \A i, j \in DOMAIN types : i # j => Canon(i) # Canon(j)
 \* an existing index handed back for a request is the runtime type requested

@@ -108,8 +108,12 @@ end
     mod = WasmTarget.WasmModule()
     idx = WasmTarget.add_import!(mod, "host", "late", WasmTarget.WasmValType[WasmTarget.I64],
                                  WasmTarget.WasmValType[WasmTarget.I64])
-    bytes = WasmTarget.compile_multi(Any[(_hi_late_entry, (Int64,), "late_entry")];
+    m = WasmTarget.compile_module(Any[(_hi_late_entry, (Int64,), "late_entry")];
         existing_module=mod, import_stubs=Any[(_hi_late_import, "late", (Int64,), idx, Int64)])
+    # the import is called from a dispatch candidate's body, enrolled in a later round: every
+    # call of it is counted open, as the export boundary's claim needs (L156)
+    @test uncounted_host_import_calls(m) == 0
+    bytes = WasmTarget.to_bytes(m)
     driver = """
     const importObject = $(WasmTarget.host_runtime_js());
     importObject.host = { late: (x) => x * 2n };

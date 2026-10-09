@@ -84,8 +84,9 @@ with the per-clause status. A clause is never closed by argument.
   result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
   `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
-  `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `R34` `R39` (no smoke xfail compiles
-  and then answers wrong, traps, or returns what the harness cannot read).
+  `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `L156` (every call of a host-declared
+  import is counted) `R34` `R39` (no smoke xfail compiles and then answers wrong, traps, or
+  returns what the harness cannot read).
   Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
   the traps where Julia answers, and the audits' unlocated and lossy paths.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at

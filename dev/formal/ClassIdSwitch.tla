@@ -135,7 +135,8 @@ Outcome(c) ==
 
 Init == v \in Classes /\ outcome = Trap /\ done = FALSE
 Step == ~done /\ outcome' = Outcome(v) /\ done' = TRUE /\ UNCHANGED v
-Spec == Init /\ [][Step]_vars
+Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run, not a deadlock
+Spec == Init /\ [][Step \/ Terminal]_vars
 
 TypeOK == v \in Classes /\ outcome \in Methods \cup Errors \cup {Trap, Reject} /\ done \in BOOLEAN
 

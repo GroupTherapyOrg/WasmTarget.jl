@@ -302,7 +302,11 @@ Next == /\ todo # {}
               /\ last' = <<tr[1], tr[2], tr[3], out>>
               /\ bad' = IF ok THEN bad ELSE bad \cup {<<tr[1], tr[2], tr[3], out>>}
 
-Spec == Init /\ [][Next]_vars
+\* every triple checked: the end of the walk, not a deadlock
+Done == todo = {}
+Terminal == Done /\ UNCHANGED vars
+
+Spec == Init /\ [][Next \/ Terminal]_vars
 
 TypeOK == /\ todo \subseteq Triples
           /\ checked \subseteq Triples
@@ -317,6 +321,4 @@ NoTupleCast == last = << >> \/ NoTupleCastOK(last[1], last[2], last[3], last[4])
 \* … and the whole-lattice claim: at the end of the walk nothing was flagged. Checked
 \* on its own (without the per-step invariants) it lists EVERY offending triple at once.
 AllPairsOK == todo # {} \/ bad = {}
-
-Done == todo = {}
 =============================================================================

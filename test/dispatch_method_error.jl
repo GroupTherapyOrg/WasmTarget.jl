@@ -51,6 +51,11 @@ struct WV; v::AbstractVector{Int64}; end
 # position has no numbered class of its own)
 gtam(n::Int64) = (k = n; h(::Type{Int64}, y) = 1 + 0k; h(x, ::Type{Int64}) = 2 + 0k; f = hide(h)[];
                   try; f(hide(Int64)[], hide(Int64)[])::Int64; catch; -7; end)
+# two closure methods ambiguous where no numbered class reaches the overlap (Fl has none): Julia
+# answers by the third method, WT over-rejects (dev/MARCH.md 13.17 A8C8), naming why
+abstract type Fl end
+gamn(n::Int64) = (k = n; h(x::Fl, y) = 1 + 0k; h(x, y::Fl) = 2 + 0k; h(x::Int64, y::Int64) = 3 + 0k;
+                  g = hide(h)[]; g(hide(n)[], hide(n)[])::Int64)
 # arithmetic on an operand held as any value whose class only the run time knows
 gdiv(n::Int64) = (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2))))
 # a closure row taking a Type{X} whose values are not one pointer (type equality, jl_isa)
@@ -174,6 +179,14 @@ end
     let e = try; WasmTarget.compile(M.gam, (Int64,)); nothing; catch err; err; end
         @test e isa WasmTarget.WasmCompileError && occursin("which are ambiguous for (Int64)", sprint(showerror, e))
     end
+    # an overlap WT does not enumerate rejects with the reason it does not (dev/AUDIT.md A13C8:
+    # the message listed three causes, none of which need hold)
+    @test M.gamn(3) == 3
+    let e = try; WasmTarget.compile(M.gamn, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError &&
+              occursin("WT does not enumerate: a position of the overlap Tuple{", sprint(showerror, e)) &&
+              occursin("has no candidate (dev/MARCH.md 13.17 A8C8)", sprint(showerror, e))
+    end
     # an abstract parameter admitting a bare array has no entry row: a WasmCompileError naming
     # the callable, never a WasmInternalError (dev/AUDIT.md A5C4, A6E8)
     @test M.gab(3) == 13
@@ -208,10 +221,14 @@ end
     @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.ghn, (Int64,), "ghn")]).held_type_objects
     @test Type{M.HM} in WasmTarget.trim_compile_plan(Any[(M.ghm, (Int64,), "ghm")]).held_type_objects
     @test Type{M.HC} in WasmTarget.trim_compile_plan(Any[(M.ghc, (Int64,), "ghc")]).held_type_objects
-    # the walk of the constants raises past 10^6 heap objects, naming the statement holding the constant
+    # past 10^6 objects the walk of the constants rejects, located at the statement holding the
+    # constant as a codegen rejection is: its host, its statement and the inline chain (dev/AUDIT.md
+    # A13C7, A13P19: it was a WasmInternalError at the module, "no statement was being compiled")
     let e = try; WasmTarget.compile(M.gchn, (Int64,)); nothing; catch err; err; end
-        @test e isa WasmTarget.WasmInternalError && occursin("passed 10^6 objects", sprint(showerror, e)) &&
-              occursin("the constant", sprint(showerror, e))
+        local msg = sprint(showerror, e)
+        @test e isa WasmTarget.WasmCompileError && occursin("passed 10^6", msg)
+        @test e isa WasmTarget.WasmCompileError && occursin("gchn(::Int64)", e.diag.func_name) &&
+              e.diag.stmt_idx > 0 && occursin("CHN", e.diag.stmt) && occursin("statement %$(e.diag.stmt_idx)", msg)
     end
     # a type object held as a value is a candidate whether or not its values are one pointer: a
     # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)

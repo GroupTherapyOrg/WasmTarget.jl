@@ -489,6 +489,14 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.finish_function!(b)
         @test b.instrs[2].catches == [MBV.InstrIR.TryCatch(MBV.Opcode.CATCH_ALL_REF, 0xffffffff, 0)]
         @test count(i -> i isa MBV.InstrIR.ThrowRef, b.instrs) == 1
+        # a try_table with results or inputs is refused by the builder, however the keyword is
+        # spelled (V8 12.4 traps entering one with a concrete-reference result; L155, A13B7)
+        b = MBV.InstrBuilder(; mod=m)
+        escaped = MBV.block!(b; results=MBV.WasmValType[MBV.ExnRef])
+        results = MBV.WasmValType[MBV.I32]
+        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)]; results)
+        inputs = MBV.WasmValType[MBV.I32]
+        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)]; inputs)
     end
 
     @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin

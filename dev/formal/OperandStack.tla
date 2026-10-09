@@ -238,7 +238,8 @@ vars == <<prog, done>>
 \* enumerates each lazily (a UNION of them is materialized, capped at 10^6 elements)
 Init == (\E n \in 0..MaxLen : prog \in [1..n -> Instrs]) /\ done = FALSE
 Step == ~done /\ done' = TRUE /\ UNCHANGED prog
-Spec == Init /\ [][Step]_vars
+Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run, not a deadlock
+Spec == Init /\ [][Step \/ Terminal]_vars
 
 Complete == done \in BOOLEAN /\ (SpecAccepts(prog) => WtAccepts(prog))
 SoundWhereReachable == done \in BOOLEAN /\ ((WtAccepts(prog) /\ AllReachable(prog)) => SpecAccepts(prog))

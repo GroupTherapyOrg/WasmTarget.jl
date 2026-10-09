@@ -120,28 +120,51 @@ _wt_eb_tp(x::Int64) = try; throw(ArgumentError("q")); catch; (v = Int64[1]; @inb
 # a callback's tag escape into the caller's catch: the import's decrement never runs, so the
 # landing restores the count the region's enter saved (else the next call is taken as re-entrant)
 _wt_eb_lc(x::Int64) = try; _wt_eb_cb(x); 1; catch; 0; end
+# Julia's J2: a re-entrant callee reads its caller's stack. `cbr` calls the export `r` back from
+# inside `o`'s catch, so r's `rethrow()` rethrows o's ArgumentError (native 1); counted as
+# top-level, r's entry would reset the stack and answer 2 (dev/AUDIT.md A13E2)
+@noinline _wt_eb_cbr(x::Int64) = _wt_eb_r(x)
+_wt_eb_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_cbr(x); end
+# a region entered inside a re-entrant call lands a nested callback's escape: `lc`'s landing
+# restores the count its enter saved (1, not 0), so the `cbr` after `cb2` is counted re-entrant
+# and `r` reads o2's ArgumentError (native 1). With the enter's save reverted the landing read
+# a fresh local, 0: `cbr`'s call was taken as top-level, r's entry reset the stack and answered
+# 2 (A13E2). The next landing of any region restores its own save, so the count heals before a
+# later top-level call: only a call inside the same catch observes it. The stub keeps lc's call
+# (donotdelete): lc catches everything, so Julia infers the stub effect-free and deletes its call
+@noinline _wt_eb_cb2(x::Int64) = (Base.donotdelete(_wt_eb_lc(x)); nothing)
+_wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_eb_cbr(0); end
 
 @testset "the export boundary restores Julia's stack for every catchable escape" begin
     native = Dict("h5" => _wt_eb_h5(1), "p2" => _wt_eb_p2(1),
                   "s_then_r" => (try; _wt_eb_s(10^8); catch; end; _wt_eb_r(0)),
                   "it_then_r" => (try; _wt_eb_it(1); catch; end; _wt_eb_r(0)),
-                  "trap_then_r" => _wt_eb_r(0), "lc_trap_then_r" => (_wt_eb_lc(1); _wt_eb_r(0)))
+                  "trap_then_r" => _wt_eb_r(0), "lc_trap_then_r" => (_wt_eb_lc(1); _wt_eb_r(0)),
+                  "o" => _wt_eb_o(0), "o2" => _wt_eb_o2(1), "o2_trap_then_r" => (_wt_eb_o2(1); _wt_eb_r(0)))
     @test native == Dict("h5" => 1, "p2" => 1, "s_then_r" => 2, "it_then_r" => 2, "trap_then_r" => 2,
-                         "lc_trap_then_r" => 2)
+                         "lc_trap_then_r" => 2, "o" => 1, "o2" => 1, "o2_trap_then_r" => 2)
     mod = WasmTarget.WasmModule()
     sig = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
-    ids = [WasmTarget.add_import!(mod, "host", n, sig...) for n in ("cb", "cbd", "cbt")]
-    bytes = WasmTarget.compile_multi(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_s, (Int64,), "s"), (_wt_eb_b, (Int64,), "b"),
-                                         (_wt_eb_d, (Int64,), "d"), (_wt_eb_h5, (Int64,), "h5"), (_wt_eb_p2, (Int64,), "p2"),
-                                         (_wt_eb_it, (Int64,), "it"), (_wt_eb_tp, (Int64,), "tp"),
-                                         (_wt_eb_lc, (Int64,), "lc")];
+    ids = [WasmTarget.add_import!(mod, "host", n, sig...) for n in ("cb", "cbd", "cbt", "cb2")]
+    push!(ids, WasmTarget.add_import!(mod, "host", "cbr", WasmTarget.WasmValType[WasmTarget.I64],
+                                      WasmTarget.WasmValType[WasmTarget.I64]))
+    m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_s, (Int64,), "s"), (_wt_eb_b, (Int64,), "b"),
+                                      (_wt_eb_d, (Int64,), "d"), (_wt_eb_h5, (Int64,), "h5"), (_wt_eb_p2, (Int64,), "p2"),
+                                      (_wt_eb_it, (Int64,), "it"), (_wt_eb_tp, (Int64,), "tp"),
+                                      (_wt_eb_lc, (Int64,), "lc"), (_wt_eb_o, (Int64,), "o"), (_wt_eb_o2, (Int64,), "o2")];
         existing_module=mod,
         import_stubs=Any[(_wt_eb_cb, "cb", (Int64,), ids[1], Nothing), (_wt_eb_cbd, "cbd", (Int64,), ids[2], Nothing),
-                         (_wt_eb_cbt, "cbt", (Int64,), ids[3], Nothing)])
+                         (_wt_eb_cbt, "cbt", (Int64,), ids[3], Nothing), (_wt_eb_cb2, "cb2", (Int64,), ids[4], Nothing),
+                         (_wt_eb_cbr, "cbr", (Int64,), ids[5], Int64)])
+    # every call of a host-declared import is counted open (L156; dev/formal/ExceptionStack.tla
+    # ImportCall and ImportReturn): the premise of every answer below
+    @test uncounted_host_import_calls(m) == 0
+    bytes = WasmTarget.to_bytes(m)
     driver = """
     const importObject = $(WasmTarget.host_runtime_js());
     let inst;
-    importObject.host = { cb: (x) => inst.exports.b(x), cbd: (x) => inst.exports.d(x), cbt: (x) => { throw new TypeError('dom'); } };
+    importObject.host = { cb: (x) => inst.exports.b(x), cbd: (x) => inst.exports.d(x), cbt: (x) => { throw new TypeError('dom'); },
+                          cb2: (x) => inst.exports.lc(x), cbr: (x) => inst.exports.r(x) };
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     inst = instance; const ex = instance.exports;
     const call = (f, a) => { try { return String(ex[f](a)); } catch (e) { return (e instanceof WebAssembly.Exception) ? 'julia' : (e instanceof WebAssembly.RuntimeError) ? 'trap' : ('js:' + e.constructor.name); } };
@@ -149,19 +172,27 @@ _wt_eb_lc(x::Int64) = try; _wt_eb_cb(x); 1; catch; 0; end
     const it = call('it', 1n); const r2 = call('r', 0n);
     const tp = call('tp', 3n); const r3 = call('r', 0n);
     const lc = call('lc', 1n); const tp2 = call('tp', 3n); const r4 = call('r', 0n);
-    return [{ ok: [call('h5', 1n), call('p2', 1n), s, r1, it, r2, tp, r3, lc, tp2, r4] }];
+    const o = call('o', 0n);
+    const o2 = call('o2', 1n); const tp3 = call('tp', 3n); const r5 = call('r', 0n);
+    return [{ ok: [call('h5', 1n), call('p2', 1n), s, r1, it, r2, tp, r3, lc, tp2, r4, o, o2, tp3, r5] }];
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1, deadline=60.0)
     @test status === :ok
+    # `s` slot: stack exhaustion escapes as the engine's RangeError, where Julia raises a
+    # StackOverflowError a Julia `catch` catches (dev/MARCH.md 13.17 H8): WT's current answer,
+    # asserted as such. The `r` after it answers 2 only through the next top-level call's reset;
+    # inside an import or a re-entrant call nothing restores the stack (13.17 A13E1)
     @test results[1]["ok"] == [string(native["h5"]), string(native["p2"]), "js:RangeError", string(native["s_then_r"]),
                                "js:TypeError", string(native["it_then_r"]), "trap", string(native["trap_then_r"]),
-                               "0", "trap", string(native["lc_trap_then_r"])]
+                               "0", "trap", string(native["lc_trap_then_r"]), string(native["o"]),
+                               string(native["o2"]), "trap", string(native["o2_trap_then_r"])]
 end
 
 # Each function this compile defines is exported once, by its entry when the module has the
-# exception stack; a function export the compile's link_roots hook adds takes its entry too; an
-# export the module held before the compile is left as it was (A12B3 = A12E4 = A12C5); a host
-# import is named "<module.field> (import)" (dart functions.dart:141)
+# exception stack; a function export the compile's link_roots hook adds is retargeted to its entry
+# after codegen (dev/MARCH.md 13.17 A13C2); an export the module held before the compile is left
+# as it was (A12B3 = A12E4 = A12C5); a host import is named "<module.field> (import)" (dart
+# functions.dart:141)
 @testset "each export is made once: the compile's and its hook's by their entries, a prior one left alone" begin
     mod = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod)
@@ -177,4 +208,36 @@ end
     @test fname(exported("esc_hook")) == "esc_hook (export)"
     @test count(e -> e.kind == 0x00 && fname(e.idx) == "esc (export)", m.exports) == 1
     @test any(imp -> imp.function_name == "wasmtarget.stack_trace (import)", m.imports)
+
+    # an entry is named by its export's final name: the module already exports "esc", so the
+    # compile's "esc" is exported as "esc_d2", through "esc_d2 (export)" (A13C2: the entry was
+    # named before the export was renamed, "esc (export)")
+    mod2 = WasmTarget.WasmModule()
+    WasmTarget.ensure_provenance_imports!(mod2)
+    pre2 = WasmTarget.add_function!(mod2, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
+                                    WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
+    WasmTarget.add_export!(mod2, "esc", 0, pre2)
+    m2 = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod2)
+    fname2(i) = m2.functions[Int(i) - WasmTarget.num_imported_funcs(m2) + 1].name
+    @test fname2(only(e for e in m2.exports if e.name == "esc_d2").idx) == "esc_d2 (export)"
+    @test fname2(only(e for e in m2.exports if e.name == "esc").idx) == "pre"
+
+    # an export entry keeps its results in locals across its try_table, so a result that is not
+    # defaultable (a hook's export of a function returning `(ref $t)`) rejects, naming the
+    # export, where the builder does not track local initialization (A13B1 = A13B6; dev/MARCH.md
+    # 13.17: without the check the module is invalid, an uninitialized non-defaultable local)
+    mod3 = WasmTarget.WasmModule()
+    WasmTarget.ensure_provenance_imports!(mod3)
+    t3 = WasmTarget.add_type!(mod3, WasmTarget.StructType([WasmTarget.FieldType(WasmTarget.I64, false)]))
+    mk = WasmTarget.add_function!(mod3, WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.ConcreteRef(t3, false)],
+                                  WasmTarget.WasmValType[], UInt8[0x42, 0x00, 0xfb, 0x00, UInt8(t3), 0x0b]; name="mk")
+    e3 = try
+        WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod3,
+            link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk))
+        nothing
+    catch err
+        err
+    end
+    @test e3 isa WasmTarget.WasmCompileError
+    @test occursin("\"mk\"", sprint(showerror, e3)) && occursin("not defaultable", sprint(showerror, e3))
 end

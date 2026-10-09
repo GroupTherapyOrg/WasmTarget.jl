@@ -647,9 +647,15 @@ catch_all_ref_clause(label::ControlLabel)::SymbolicTryCatch =
 # try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type
 # derived from its inputs and results (_block_type!). Each catch branches out to its target
 # label with the values it catches, checked as every branch is (validate_branch_types!).
+# A try_table with inputs or results is refused: CI's wasm engine, V8 12.4 (Node 22), traps
+# entering a try_table whose result is a concrete reference, and its inputs are unmeasured, so a
+# body's values leave through locals (L155). dart2wasm emits no try_table, only legacy try
+# (code_generator.dart:945); WT's try_table lowering is dev/MARCH.md 13.17 A13E7.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:907 InstructionsBuilder.try_table)
 function try_table!(b::InstrBuilder, catches::Vector; inputs::Vector{<:Any}=WasmValType[],
                     results::Vector{<:Any}=WasmValType[])::ControlLabel
+    (isempty(inputs) && isempty(results)) || throw(ArgumentError(
+        "a try_table takes no inputs or results (V8 12.4 traps entering one with a concrete-reference result): its body's values leave through locals"))
     local ins, outs = WasmValType[t for t in inputs], WasmValType[t for t in results]
     for c in catches
         c isa SymbolicTryCatch || throw(ArgumentError(

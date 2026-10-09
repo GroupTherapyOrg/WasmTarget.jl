@@ -13,9 +13,9 @@ further and gates on it.
 | File | Role |
 |---|---|
 | `<Name>.tla` | the model of the ACTUAL Julia algorithm, read from source; its header says what is abstracted and why that suffices, names the modeled function, and cites the dart anchor (or the quarantine reason) |
-| `MC<Name>.tla` / `MC<Name>.cfg` | a small instance: `TypeOK`, the claim invariants/properties, a deadlock check |
+| `MC<Name>.tla` / `MC<Name>.cfg` | a small instance: `TypeOK`, the claim invariants/properties, and TLC's deadlock check (on unless the cfg says `CHECK_DEADLOCK FALSE`; a run that ends gives its terminal states an explicit stutter in the model, e.g. `Terminal == done /\ UNCHANGED vars`) |
 | `MC<Name>[Variant]Broken.cfg` | a variant TLC MUST reject: a deliberately wrong one (a CONSTANT flag mirroring a realistic bug class; a model no wrong variant can violate proves nothing), or a pinned open finding of the code itself (its header names the dev/MARCH.md row) |
-| `run_tlc.sh` | runs every `MC*.cfg`; fails if a positive instance fails or a Broken one does not violate exactly the claim its first line names (`\* expect: <Invariant>`, checked on one worker so the first violation TLC reports is fixed); fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
+| `run_tlc.sh` | runs every `MC*.cfg`; fails if a positive instance fails or a Broken one does not violate exactly the claim its first line names (`\* expect: <Invariant>`, checked on one worker so the first violation TLC reports is fixed; never `TypeOK`, which a Broken cfg must not name: it breaks a claim, not the type invariant); fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
 
 The modeled Julia function carries a one-line `formal(dev/formal/<Name>.tla): <claim>` anchor —
 inside its docstring when it has one (a comment line between a docstring and its definition
@@ -95,6 +95,6 @@ in the budget on a 2-core runner — a job that never finishes proves nothing ei
 
 ```
 bash dev/formal/run_tlc.sh            # every instance
-WORKERS=auto bash dev/formal/run_tlc.sh
-java -cp ~/.cache/wasmtarget/tla2tools.jar tlc2.TLC -workers auto -config MCStackifier.cfg -deadlock MCStackifier.tla
+TLC_WORKERS=auto bash dev/formal/run_tlc.sh
+java -cp ~/.cache/wasmtarget/tla2tools.jar tlc2.TLC -workers auto -config MCStackifier.cfg MCStackifier.tla
 ```

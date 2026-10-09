@@ -167,7 +167,13 @@ EmitUnsupportedBypassed(t) ==
     /\ state' = [state EXCEPT ![t] = "InternalError"]
     /\ UNCHANGED ledger
 
-Next == \E t \in Stmts : EmitNormal(t) \/ RecordDiagnostic(t) \/ ResolveFatal(t) \/ EmitUnsupportedBypassed(t)
+(* Every statement has left the funnel (emitted, rejected, a proven-dead trap, or the   *)
+(* broken variant's internal error): the end of the run, not a deadlock. *)
+Terminal == /\ \A t \in Stmts : state[t] \notin {"Lowering", "UnsupportedSeen"}
+            /\ UNCHANGED vars
+
+Next == \/ \E t \in Stmts : EmitNormal(t) \/ RecordDiagnostic(t) \/ ResolveFatal(t) \/ EmitUnsupportedBypassed(t)
+        \/ Terminal
 
 Spec == Init /\ [][Next]_vars /\ \A t \in Stmts : WF_vars(ResolveFatal(t))
 

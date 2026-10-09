@@ -1129,10 +1129,13 @@ regex missed L8, L11 and three unnumbered findings. (A12P10) A11P3's iterate fix
 
 Resolution: batch 109 fixes what the range broke. Found by CI after the audit, and first: batch
 108's export entry trapped in every shard on Node 22 (V8 12.4 traps entering a try_table with a
-reference result); its try_table is result-less now, L155 keeps every one so, and the gate runs
+concrete reference result); its try_table is result-less now, L155 keeps every one so, and the gate runs
 CI's Node (lanes.sh reads ci.yml's node-version; L153). A12C1: the walk is a worklist over addresses,
-each heap object once and kept alive for the walk, counting every heap object it visits but the
-skipped kinds, raising past 10^6 a WasmInternalError that names the statement holding the constant; the 10^6+1 chain now rejects there, and the DAG's remaining
+each heap object once and kept alive for the walk, counting every heap object it visits but type
+objects and the skipped kinds (and each fresh box getfield or getindex makes of an inline
+immutable), raising past 10^6 an error (hold!'s `error`) that _compile_module_trim reports as a
+WasmInternalError naming the statement holding the constant (a direct collect_closed_world caller
+sees the ErrorException); the 10^6+1 chain now rejects there, and the DAG's remaining
 hang sits in _collect_reachable_ir_types (value!, contents!), which hung at 623f19dc too (13.17). A12C3: cases for
 the field, Memory and cycle arms and for the bound, each negative-tested. A12P4: the claim is
 restored; today's code past the bound is MCEnrollmentBoundOverRejectBroken.cfg (module MCEnrollmentBoundOverReject.tla), pinned to A8C8
@@ -1145,3 +1148,155 @@ A12C5, H5); A12E1, A12E2, A8C8 and A12C1's remainder (C3 C6); A12E7 and A12B6 (C
 A12P12 (C9); A3B15's global names. Found writing A12C3's cases and measured at batch 109: a
 constant Memory{Any} the program indexes raises a WasmInternalError (A12C6), and a cyclic mutable
 constant rejects at its statement (A12C7): both on 13.17 (C3 C6).
+
+## 2026-10-08 — audited through 8bc17d65 (eb412a31..8bc17d65: batches 109–111)
+
+The thirteenth audit covers:
+- batch 109, the twelfth audit's fixes. The first reports left it out, and a second pass audited
+  it (A13P2);
+- batch 110, the export boundary for every escape;
+- cac9d64b, the formal lane sharded;
+- batch 111, the trim deleted and one edge enumerator, and 8bc17d65, the gate stopping at its
+  first red lane (its lanes.sh is the one the reports read).
+
+It made 27 findings on batches 110–111, read at batch 111's staged tree (5ca3f2d0), and 22 on
+batch 109, four of them one finding seen from two areas, plus one outside the range. Batch 111's
+commit took eight fixes before it landed. Two findings broke something:
+- A13C1. Batch 111's rule that every candidate is a dispatch root hid a statically invoked method
+  from its caller. The `:invoke` rejected where native answers 29. This was predicted, then
+  measured with the smoke case.
+- A13E1. Batch 110 claimed A12B1 closed. V8's stack-overflow RangeError is uncatchable by wasm, as a
+  trap is, so the entry's catch_all_ref never runs for it. Only the next top-level call's reset
+  clears the stack, and inside a host-declared import or a re-entrant call the reset does not run.
+  Measured, natively and in wasm on Node 22: the import variant, `a(1)` then `r(0)`, native 2, wasm
+  1 at the head and 1 at c7f0c250; the re-entrant variant, `o(1)`, native 1, wasm 2 at both. So
+  batch 110 regressed nothing: it fixed the top-level shape and claimed the other two.
+
+The rest of the range is prose that claims more than the code does, locks with holes, and one
+invalid module the builder accepts.
+
+Area: builder — (A13B1) The export entry keeps its results in locals across its try_table. A
+non-defaultable result makes a function the engine rejects, and the builder accepts it, because it
+does not track local initialization (dart: instructions.dart:215-219, :382-410). (A13B2) catch_ref
+and catch_all_ref deliver a nullable exnref; dart and the spec deliver `(ref exn)`. (A13B3) L101
+counts a catch clause by its three constructor names only, so a new builder constructor passes it.
+(A13B4) try_table checks a catch's types only in reachable code. (A13B5) "The inner keeps the
+export's name" is false for a hook export. Batch 109: (A13B6) A13B1's origin is batch 109's
+result-less try_table, reachable at c7f0c250 through an existing_module's or a hook's export of a
+function with a `(ref $t)` result. (A13B7) L155 scans text, so `try_table!(b, cs; results)` and
+`inputs=` passed it, and the builder accepted what L155 forbids. (A13B8) Two sites say "a
+reference" where only a concrete reference traps.
+
+Area: collection and planning — (A13C1) above. (A13C2) The post-codegen repoint batch 110 called gone
+still retargets a hook's export, and the entry was named before the export was renamed, so
+"esc (export)" could be exported as "esc_d2". (A13C3) functions.dart:178 was cited as parity for
+exporting every function a compile defines; dart exports only a wasm:export member. (A13C4) Three
+sentences were false: L78's "protected roots", smoke's "on 1.13" for `:invoke_modify`, and entry 12's
+A12C1 sentence (hold! raised an ErrorException that _compile_module_trim wrapped). (A13C5)
+invoke_seen never gains a later round's merged MethodInstances. (A13C6) The `:new` edge is gated on
+a version number. Batch 109: (A13C7) past hold!'s bound, WT's own, the rejection was a compiler
+bug at no statement, and its test was retargeted after its recorded negative. (A13C8) Why
+ambiguous_class_tuple answers nothing had three spellings, and the message named causes that need
+not hold. (A13C9) "10^6 heap objects" also counts fresh boxes. Outside the range: (A13C10)
+`contents!` stops silently past 4096 objects.
+
+Area: emission and diagnostics — (A13E1) above. (A13E2) No test failed when emit_direct_call!'s import
+count or a region enter's save of it was reverted; Julia's J2, a re-entrant callee reading its
+caller's stack, had no case. (A13E3) "catch_all is the only wasm construct that observes a foreign
+unwind" is false: dart catches the imported WebAssembly.JSTag (tags.dart:45; code_generator.dart:1030,
+:1160), and a Julia `finally` does not run on a host import's JS exception, where dart's does.
+(A13E4) The import at a function index is computed a third time. (A13E5) One Dict holds two facts,
+told apart by the key's sign. (A13E6) A function exported under two names gets two entries. Batch
+109: (A13E7) dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy,
+:999 catch_legacy); WT's try_table lowering is a C2 divergence and the root of the Node 22 trap L155
+works around, with no anchor. (A13E8) MARCH stated the trap contract as Julia's behavior ("as
+Julia's task would be dead"); where WT traps, Julia often raises a catchable error. (A13E9)
+get_array_type!'s docstring documented packed_array_storage.
+
+Area: enforcement and prose — (A13P1) H9's row cited the `:new`-built 1.13 bodies, which its model
+counts as reachable. (A13P2) The audit's range started at c7f0c250, leaving batch 109 unaudited.
+(A13P3) No lock held the premise that every host-import call is counted. (A13P4) Batch 111 changed
+the dynamic step before its model. (A13P5) The nightly formal run started three full jobs.
+(A13P6) H10 was not reproduced. (A13P7) The models and 13.17 narrate batches and cite files outside
+the repository. (A13P8) `_closed_world_edge` claimed Julia's queue's operand types but uses WT's
+join, and L49 pins that join as text. (A13P9) The export-boundary test asserts H8's RangeError as a
+pass, with no citation. (A13P10) README's Broken definition and TrimDrops's flags. Batch 109:
+(A13P11) three Broken instances expect a claim other than the one each variant breaks, so
+NoPartialIntern, NoFabrication and FailureIsLoud had no Broken instance. (A13P12) Enrollment's
+BoundIsLoud and RejectOnlyWhenAmbiguous cannot hold together at the bound. (A13P13) run_tlc.sh
+accepts `expect: TypeOK`. (A13P14) run_tlc.sh passes `-deadlock`, which disables deadlock
+checking. (A13P15) H5's sentence describes the ref.eq landing as the fix. (A13P16) L155's scan gaps
+(with A13B7). (A13P17) ExceptionStack.tla says a stack travels with its value, false for
+`rethrow(e)`. (A13P18) _read_baseline keeps the last of two duplicate keys. (A13P19) The gchn test
+does not check that the error names gchn or its statement, and entry 12 says the walk counts type
+objects.
+
+Resolution:
+- In batch 111's commit, before it landed:
+  - A13C1: an `:invoke` takes the function its MethodInstance compiles to when signature lookup
+    misses. Smoke closed_world_edges static_and_dynamic_call_one_method passes on 1.12 and 1.13 and
+    errors without the line. The callee still has two derivations; the one path, the callee from
+    the MethodInstance first, is 13.4's item (A13C1);
+  - A13P1: H9 restated to the widened-original shape its model pins, with the 1.13 bodies named by
+    their edge;
+  - A13P4: the commit message states the order;
+  - A13P6: H10 withdrawn. Four shapes on both versions reject at their statement, and smoke gains
+    finalizer_registered;
+  - A13C4: L78 and smoke's comment;
+  - A13P8: the docstring names `_call_site_arg_type` where Julia reads argextype. The remainder is
+    on 13.17 beside A3C1;
+  - A13P10: README and the TrimDrops header.
+- In cac9d64b, amended: A13P5. A scheduled run has one empty shard.
+- Already fixed when audited: A13P15 (batch 110 removed the ref.eq clause with H5).
+- Batch 112 fixes the rest of what the range broke:
+  - A13E1: the false closure is re-opened as 13.17 A13E1 (C3 C6), model first. ExceptionStack.tla
+    gives stack exhaustion its own kind, uncatchable by wasm, and the host keeps the instance,
+    unlike a trap. MCExceptionStackExhaustImportBroken and MCExceptionStackExhaustReentrantBroken pin
+    the residual, and every positive instance holds top-level exhaustion. The docstring, H8 and the
+    model's header are corrected. The fix, the count kept host-side by the generated glue, is the
+    row's, with A13E7's port;
+  - A13E2: real_bottom_exceptions.jl gains J2 (`o`, native 1: 2 with the count reverted) and the
+    save case (`o2`, native 1: 2 with the enter's save reverted). The planned save case (`cb2`,
+    then `tp` and `r`) could not see the revert: Julia deleted the call of a stub it inferred
+    effect-free, and the next region's landing restores its own save, so the count healed before
+    `r`. The case now calls `cbr` inside the same catch;
+  - A13E3: the quarantine and L101's reason say what catch_all_ref observes and what dart does.
+    Adopting JSTag is 13.17 (C2 C6);
+  - A13C2: the entry is named by the export's final name (`esc_d2 (export)`, tested), and the namer
+    runs before the export and its entry are made. The comment states the hook export's retarget.
+    The hook requesting its exports is 13.17 (C1);
+  - A13C3: the anchor stays on what it supports, and exporting every function is 13.17 (C2);
+  - A13B1 = A13B6: an export whose result is not defaultable rejects, naming the export (tested;
+    without the check the module is invalid, "uninitialized local"). The builder gains
+    `defaultable` (type.dart:233). Dart's local-initialization tracking is 13.17 (C7);
+  - A13B3: L101 counts a clause built from its opcode in src/builder too, catch_all_ref_clause's
+    body the one allowed site;
+  - A13P3: L156 (C6). test/utils.jl's uncounted_host_import_calls reads a module's code and counts
+    each call of a host-declared import that is not counted; the boundary module and host_imports.jl's
+    module assert 0. One call site routed raw reads 7 and 1;
+  - A13B7 = A13P16: try_table! refuses inputs and results however the keyword is spelled; L155
+    pins the check, counts an InstrIR.TryTable built in codegen, and scans for `inputs` and the
+    shorthand;
+  - A13E7: L155's reason names the divergence and 13.17's row (C2 C6). The port to dart's legacy
+    form, model first and with A13E1's fix, is batch 112b, before any C10 batch;
+  - A13C7 and A13P19: past the bound the walk rejects with a WasmCompileError at the statement
+    holding the constant, located as a codegen rejection is (`_held_bound_rejection`; L118 lists
+    it as an exact site). The gchn test asserts the class, gchn and its statement, and fails with
+    the bound raised;
+  - A13C8: ambiguous_class_tuple returns its reason and the message prints it. A new case, gamn,
+    reaches the no-candidate reason (native 3; WT rejects, A8C8);
+  - A13B5, A13B8, A13C9, A13E8, A13E9, A13P9: prose; entry 12's A12C1 sentence (A13C4) and its
+    counting wording (A13P19);
+  - A13P11, A13P12, A13P13, A13P14 and A13P17: the models and run_tlc.sh. Each Broken instance's
+    expect line is its own claim (SkipChild at N = 2; Fabricate and Swallow as dedicated
+    instances). The pinned Enrollment instance says the bound's two claims conflict at an
+    unambiguous pair past the bound, so A8C8's fix must restate BoundIsLoud (on its row).
+    `expect: TypeOK` is refused. run_tlc.sh no longer passes `-deadlock`: 26 instances then
+    reported a deadlock, each a finished state, and each model got a stutter guarded by exactly
+    that state. The stack slot is stated as abstracted. TypeIdentity, the one model with no
+    TypeOK, gains one, checked by its five cfgs (negative recorded);
+  - A13P18: a duplicate baseline key fails loudly;
+  - A13P2: this entry starts at eb412a31, and batch 109 is audited.
+  Each lock and case was negative-tested. Probes 225/225 unchanged.
+- Everything else is on MARCH 13.17: A13B2, A13B4, A13C5, A13C6, A13C10, A13E4, A13E5 (filed
+  under C1; a C4 finding), A13E6, A13P7, and the remainders named above.

@@ -655,8 +655,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # for which Julia's dispatch over two rows' methods is ambiguous is a call Julia
             # rejects: no row order answers it, so the callable rejects (formal(dev/formal/
             # Enrollment.tla): RejectOnlyWhenAmbiguous; an ambiguity no candidate reaches is no
-            # reason, AllTypesAmbig). An overlap it cannot ask about rejects too, ambiguous or not:
-            # the open over-rejection A8C8, BoundIsLoud)
+            # reason, AllTypesAmbig). An overlap WT does not enumerate rejects too, ambiguous or
+            # not, naming why: the open over-rejection A8C8, BoundIsLoud)
             local _bs = _cv_bodies[_T]
             local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
@@ -668,9 +668,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 _amb === false && continue
                 throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                     "a dynamic call of $(_T) reaches $(_ma) and $(_mb), which are ambiguous" *
-                    (_amb === nothing ?
-                     ", over an overlap whose candidate tuples Julia cannot be asked about one by one " *
-                     "(more than 4096, a Vararg, or a position with no candidate; dev/MARCH.md 13.17 A8C8)" :
+                    (_amb isa String ?
+                     ", over an overlap whose candidate tuples WT does not enumerate: $(_amb) (dev/MARCH.md 13.17 A8C8)" :
                      " for ($(join(_amb, ", "))): Julia throws MethodError there"), nothing, nothing)))
             end
             # a candidate taking a bare array whose wasm array type another class shares has no
@@ -821,12 +820,13 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     fill_egal_function!(mod, type_registry)
     populate_type_constant_globals!(mod, type_registry)
     finalize_module_initializers!(mod, type_registry)
-    # each function this compile defines is exported once, here: an exception that escapes an
-    # export leaves Julia's stack as the call found it, so in a module that has the stack the
-    # export is its entry ("<name> (export)"), and the function itself otherwise. A function
-    # export this compile's link_roots hook made goes through its entry too; an existing_module's
-    # exports, made before this compile, are left as they were made.
-    # parity(pkg/dart2wasm/lib/functions.dart:178 exports.export): `module.exports.export(exportName, function)`, once per exported function
+    # an exception that escapes an export leaves Julia's stack as the call found it, so in a
+    # module that has the stack an export is its entry ("<export name> (export)"), and the
+    # function itself otherwise. A function export this compile's link_roots hook made is
+    # retargeted to its entry here, after codegen (dev/MARCH.md 13.17 A13C2, C1); an
+    # existing_module's exports, made before this compile, are left as they were made. WT exports
+    # every function this compile defines, where dart exports only a member with a wasm:export
+    # pragma (functions.dart:154-156): dev/MARCH.md 13.17 A13C3.
     # (whether the module has the stack is read by the global's name: dev/MARCH.md 13.17
     # A3B15 = A2B6, globals by handle)
     local exc_top = global_named(mod, "\$exc_top")
@@ -837,9 +837,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, e.idx, e.name))
         end
     end
+    # an exported function is exported once, under its export name, its entry named by it
+    # parity(pkg/dart2wasm/lib/functions.dart:178 exports.export): `module.exports.export(exportName, function)`, once per exported function
     for (export_name, inner_idx) in compile_exports
-        add_codegen_export!(mod, export_name, 0,
-            exc_top === nothing ? inner_idx : emit_export_entry!(mod, inner_idx, export_name))
+        local final = codegen_export_name(mod, export_name)
+        add_export!(mod, final, 0, exc_top === nothing ? inner_idx : emit_export_entry!(mod, inner_idx, final))
     end
 
     # Clear module-level state after compilation
@@ -934,18 +936,16 @@ end
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
 # trimcollect.jl beside the planner; it reads the NIR bodies in `function_data`.
 
-# Julia may discover several specialized functions with the same source-level name.
-# Name disambiguation is a CODEGEN policy; the low-level module builder, like dart's
-# ExportsBuilder, rejects duplicate names instead of silently repairing the request.
-# parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
-function add_codegen_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
-    final = name
-    if any(e -> e.name == final, mod.exports)
-        local k = 2
-        while any(e -> e.name == string(name, "_d", k), mod.exports)
-            k += 1
-        end
-        final = string(name, "_d", k)
+# The name a compile exports `name` under: `name`, or `name_d<k>` when the module already
+# exports `name` (a host's existing_module or its link_roots hook). Name disambiguation is a
+# CODEGEN policy, decided before the export and its entry are made; the low-level module
+# builder, like dart's ExportsBuilder (exports.dart:14), rejects a duplicate name.
+# parity(quarantine: a WT invention, open on 13.4's one export namer and 13.17 A13C2/A13C3 — a compile into a host's existing module may be asked for a name that module already exports; dart2wasm builds its module whole, each export name from its member's wasm:export pragma)
+function codegen_export_name(mod::WasmModule, name::String)::String
+    any(e -> e.name == name, mod.exports) || return name
+    local k = 2
+    while any(e -> e.name == string(name, "_d", k), mod.exports)
+        k += 1
     end
-    return add_export!(mod, final, kind, idx)
+    return string(name, "_d", k)
 end

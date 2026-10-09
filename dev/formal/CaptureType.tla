@@ -77,7 +77,8 @@ BodyTyping == IF Guess # {} /\ Verified THEN Guess ELSE Types   \* Types = left 
 Init == init \in Types \cup {"none"} /\ ws \in SUBSET Writes /\ ws # {} /\ typing = {} /\ done = FALSE
 Step == ~done /\ typing' = (IF BodyLocalGuess THEN BodyTyping ELSE CreatorJoin)
         /\ done' = TRUE /\ UNCHANGED <<init, ws>>
-Spec == Init /\ [][Step]_vars
+Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run, not a deadlock
+Spec == Init /\ [][Step \/ Terminal]_vars
 
 \* the read's type covers every value the box can hold
 Covered == done \in BOOLEAN /\ (done => Runtime \subseteq typing)

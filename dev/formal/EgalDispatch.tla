@@ -246,8 +246,10 @@ Ask == /\ ended /\ fills > 0 /\ (FilledEarly \/ ~grew) /\ ~done
        /\ done' = TRUE
        /\ UNCHANGED <<numbered, laid, used, ended, fills, grew, body>>
 
+\* the comparison has been asked: the end of the run, not a deadlock
+Terminal == done /\ UNCHANGED vars
 Next == \/ \E C \in ClosureClasses : Number(C) \/ Build(C)
-        \/ Use \/ EndCodegen \/ Fill \/ Ask
+        \/ Use \/ EndCodegen \/ Fill \/ Ask \/ Terminal
 Spec == Init /\ [][Next]_vars
 
 TypeOK == /\ numbered \subseteq ClosureClasses /\ laid \subseteq numbered

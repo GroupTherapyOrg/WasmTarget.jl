@@ -1729,7 +1729,7 @@ function get_func_ref_infos(registry::FunctionRegistry, func_ref)::Union{Vector{
 end
 
 """
-Get or create an array type for a given element type.
+The packed storage of an array whose element type is `T` (0x78 i8 or 0x77 i16), or nothing.
 
 parity(quarantine: Julia's Int8/UInt8/Int16/UInt16 element types have no dart value type;
 their arrays use wasm packed i8/i16 storage, which dart reaches only through WasmI8/WasmI16,
@@ -1743,7 +1743,11 @@ translator.dart:344 builtinTypes.)
 @inline packed_array_signedness(@nospecialize(T))::Union{Nothing,Bool} =
     packed_array_storage(T) === nothing ? nothing : T <: Signed
 
-# parity(translator.dart:1205 arrayTypeForDartType): one cached array type per element type.
+"""
+Get or create an array type for a given element type.
+
+parity(translator.dart:1205 arrayTypeForDartType): one cached array type per element type.
+"""
 function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Type)::UInt32
     if haskey(registry.arrays, elem_type)
         return registry.arrays[elem_type]

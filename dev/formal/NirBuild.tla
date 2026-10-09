@@ -308,7 +308,11 @@ ProcessStmt(s) ==
                     ELSE "EmittedFromNir"]
     /\ ledger' = IF (ck = "Unsupported" /\ ~swallowed) THEN ledger \cup {s} ELSE ledger
 
-Next == \E s \in Stmts : ProcessStmt(s)
+(* Every statement is built and consumed: the end of the run, not a deadlock. *)
+AllDone == \A s \in Stmts : state[s] \in {"EmittedFromNir", "Rejected", "SilentNoOpAtConsume"}
+Terminal == AllDone /\ UNCHANGED vars
+
+Next == (\E s \in Stmts : ProcessStmt(s)) \/ Terminal
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Next)
 
@@ -347,8 +351,7 @@ NoSilentSwallow == \A s \in Stmts :
 LedgerComplete == \A s \in Stmts : state[s] = "Rejected" => s \in ledger
 
 ----------------------------------------------------------------------------
-(* Liveness: every statement eventually reaches a terminal state. *)
-AllDone == \A s \in Stmts : state[s] \in {"EmittedFromNir", "Rejected", "SilentNoOpAtConsume"}
+(* Liveness: every statement eventually reaches a terminal state (AllDone, above Next). *)
 EventuallyAllDone == <>AllDone
 
 =============================================================================

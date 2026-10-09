@@ -418,12 +418,34 @@ and innermost source line — the provenance a collection failure prints.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function _enrollment_text(what::String, ci, src::Core.CodeInfo, idx::Int, node::NirNode)::String
-    local host = ci isa Core.CodeInstance ? ci.def : ci
-    host isa Core.MethodInstance || (host = getfield(host, :def))   # an ABIOverride's instance
     local frames = stmt_frames(src.debuginfo, idx)
     local loc = isempty(frames) ? "" : " @ " * last(split(first(frames), " @ "))
-    local hosttext = replace(sprint(show, host), "MethodInstance for " => "")
-    return string(what, " `", first(_nir_text(node), 100), "` in ", hosttext, " (statement %", idx, loc, ")")
+    return string(what, " `", first(_nir_text(node), 100), "` in ", _collection_host_text(ci), " (statement %", idx, loc, ")")
+end
+
+# the host a collected statement sits in, as a diagnostic names it
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+function _collection_host_text(ci)::String
+    local host = ci isa Core.CodeInstance ? ci.def : ci
+    host isa Core.MethodInstance || (host = getfield(host, :def))   # an ABIOverride's instance
+    return replace(sprint(show, host), "MethodInstance for " => "")
+end
+
+"""
+    _held_bound_rejection(ci, src, idx, rec) -> WasmCompileError
+
+A constant whose objects pass the bound of the walk for the type objects constants hold (10^6,
+WT's own bound, not Julia's), rejected at statement `idx` (its NIR record `rec`) of the host whose
+CodeInstance is `ci`, and located as a codegen rejection is: its statement, source line and inline chain innermost
+first (as values.jl rejects a cyclic struct constant at its statement).
+parity(quarantine: Julia's trim collection (juliac --trim) is the closed world, and the type objects a constant holds are values a program reads; dart's constants are its own front end's, typed by their classes.)
+"""
+function _held_bound_rejection(ci, src::Core.CodeInfo, idx::Int, rec::NirStmt)::WasmCompileError
+    local frames = stmt_frames(src.debuginfo, idx)
+    return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),
+        "a constant whose objects passed 10^6, the bound of the walk for the type objects a constant holds",
+        isempty(frames) ? nothing : String(last(split(first(frames), " @ "))), nothing, idx,
+        first(nir_text(rec), 160), frames))
 end
 
 """
@@ -533,8 +555,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # MethodInstance, a CodeInstance, a CodeInfo, a binding, a SimpleVector) are not values a
     # program reads out of a constant (a NamedTuple, a Box are walked): walking them reached the
     # whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11C9).
-    # Past 10^6 heap objects (type objects, bits values and the skipped kinds are not counted) the
-    # walk raises, a WasmInternalError at the module naming the statement whose constant it walked.
+    # Past 10^6 objects counted (each heap object once, and each fresh box getfield or getindex
+    # makes of an inline immutable; type objects, bits values and the skipped kinds are not
+    # counted) the walk rejects, a WasmCompileError at the statement whose constant it walked.
     function hold!(@nospecialize(root))
         local work = Any[root]
         while !isempty(work)
@@ -554,9 +577,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             push!(held_seen, addr)
             push!(held_alive, v)
             if length(held_seen) > 1_000_000
-                local site = held_site[]
-                error("the walk of the program's constants for the type objects they hold passed " *
-                      "10^6 objects" * (site === nothing ? "" : ", at " * _enrollment_text("the constant", site...)))
+                throw(_held_bound_rejection(held_site[]::Tuple...))
             end
             if v isa Array || v isa GenericMemory
                 for i in eachindex(v)
@@ -596,7 +617,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
          codeinfos[j + 1] isa Core.CodeInfo) || continue
         for (sidx, s0) in enumerate(nir_for(codeinfos[j + 1]))
             local node0 = s0.node
-            held_site[] = (codeinfos[j], codeinfos[j + 1], sidx, node0)
+            held_site[] = (codeinfos[j], codeinfos[j + 1], sidx, s0)
             node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)
             # the builtins that allocate a class without a %new instantiate it as surely:
             # a MemoryRef (memoryrefnew), a Memory (jl_alloc_genericmemory), and a tuple
