@@ -36,6 +36,13 @@ MCDynTargets == [t \in MCTypes |->
 MCSpecializeFails == {"D"}
 MCRoundCeiling    == 0
 MCSwallowFailures == TRUE
+MCRetargets       == [m \in MCMethods |-> {}]
 MCHiddenEdges     == [m \in MCMethods |-> {}]
-MCPrunerSeesHidden == TRUE
+MCFmaEdges        == [m \in MCMethods |-> {}]
+MCExternalLeaves  == {}
+MCLateCut         == TRUE
+MCWidened         == {}
+MCUnmaterialized  == {}
+MCCollectorKinds  == HiddenKinds
+MCTrim            == FALSE
 =============================================================================

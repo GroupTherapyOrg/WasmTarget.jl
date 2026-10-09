@@ -1156,20 +1156,29 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
-    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure; a call a builtin hides (invoke_in_world, a runtime-Vararg splat) is ONE edge relation, _builtin_call_edge_mi, that the collector enrolls its callee by and the pruner keeps it by, resolved in the overlay table (never the native `which`). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and edge discovery share one unconditional fixpoint with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure: the loop only adds, so no collected body is ever dropped (the superseded trim, `unreachable=true` with its `prune_roots`, `pruned_superseded` and `intrinsic_body_roots`, was deleted in batch 111 and may not return), and every compile! output, the first and each later round's, is cut by the declared imports before it merges (an import's native body never enters the plan); every edge of the closed world — an :invoke, a call a builtin hides (invoke_in_world, a runtime-Vararg splat) and each edge Julia's collectinvokes! follows besides :invoke (a finalizer, a :cfunction, 1.13's :new of a Function, an :invoke_modify) — is ONE edge relation, _closed_world_edge, that the collector enrolls its target by, the external-leaf cut keeps it by and the plan names its reason by, resolved in the overlay table (never the native `which`). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
             forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
-                         "try CC.specialize_method", "try collect(methods", "which(f, ats)"]
+                         "try CC.specialize_method", "try collect(methods", "which(f, ats)",
+                         "unreachable=true", "unreachable::Bool", "pruned_superseded",
+                         "superseded_invokes", "prune_roots", "intrinsic_body_roots",
+                         "_builtin_call_edge_mi"]
             required = ["while true",
-                        "mi = _builtin_call_edge_mi(node, src_slot_types,",
-                        "local hidden = _builtin_call_edge_mi(node, pair_slot_types,",
-                        "return _invoke_in_world_target_mi(node, arg_type, lookup_table)",
+                        "local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)",
+                        "local edge = _closed_world_edge(s.node, pair[2], pair_slot_types, arg_type, interp)",
+                        "local edge = _closed_world_edge(n, src, slot_types, arg_type, edge_interp)",
+                        "local table = CC.method_table(interp)",
+                        "if (mi = _apply_iterate_vararg_target_mi(node, slot_types, table)) !== nothing",
+                        "elseif (mi = _invoke_in_world_target_mi(node, arg_type, table)) !== nothing",
+                        "kind = :finalizer", "kind = :cfunction", "kind = :new_function", "kind = :invoke_modify",
                         "matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
-                        "collect_new_pairs!", "original_mi in protected ||",
-                        "append!(prune_roots, dynamic_roots)",
+                        "collect_new_pairs!",
+                        "# the loop only adds: no collected body is ever dropped",
+                        "codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves)",
+                        "fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves)",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
@@ -1654,13 +1663,15 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
+    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types (each operand's call-site type, _edge_arg_type over the body's numeric joins) and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            required = ["ir_arg_type = function", "CC.findall(ftype, lookup_table; limit=-1)",
+            required = ["arg_types = Any[arg_type(a) for a in node.operands]",
+                        "a -> _call_site_arg_type(a, slot_types, get!(() -> propagate_numeric_value_types(nir), joins, src))",
+                        "CC.findall(ftype, lookup_table; limit=-1)",
                         "f isa Function || f isa Type",
                         "param_types = first_explicit <= length(target_info_early.arg_types)",
                         "Push arguments through the resolved target signature",
@@ -1793,12 +1804,13 @@ const LOCKS = [
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; an unspecialized Vararg signature becomes a physical Wasm entry ONLY as the one packed runtime-Vararg-tuple parameter — the {Object, data, size} struct the splat call site already holds (Phase 12 H) — and every other open-ended signature is still skipped",
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint, an invoke whose concrete call-site types select another MethodInstance retargeted in place (nir_retarget_invoke!) so its edge agrees with the overlay dispatch; an unspecialized Vararg signature becomes a physical Wasm entry ONLY as the one packed runtime-Vararg-tuple parameter — the {Object, data, size} struct the splat call site already holds (Phase 12 H) — and every other open-ended signature is still skipped",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["function _missing_explicit_invoke_mis",
                         "changed = collect_new_pairs!(_missing_explicit_invoke_mis(",
-                        "original_mi in protected || push!(superseded, original_mi)",
+                        "if kind === :invoke",
+                        "nir_retarget_invoke!(src, nir, k, mi)",
                         "if any(T -> T isa Core.TypeofVararg, arg_types)",
                         "is_runtime_vararg_tuple_type(packed_vararg) || continue",
                         "arg_types = (packed_vararg,)"]
@@ -2338,7 +2350,11 @@ const LOCKS = [
                        # world, so a redefined callee was answered with stale bytes (2026-09-27)
                        "compile_cached", "compile_multi_cached", "enable_cache!",
                        "disable_cache!", "clear_cache!", "cache_stats", "CompileCache",
-                       "compute_cache_key", "compute_multi_cache_key", "_GLOBAL_CACHE"]
+                       "compute_cache_key", "compute_multi_cache_key", "_GLOBAL_CACHE",
+                       # the superseded trim and the builtin-only edge relation (batch 111):
+                       # _closed_world_edge is the one relation, and the collection only adds
+                       "_builtin_call_edge_mi", "pruned_superseded", "superseded_invokes",
+                       "intrinsic_body_roots", "prune_roots"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
@@ -2496,15 +2512,17 @@ const LOCKS = [
                               (gen, "    local_get!(b, saved); global_set!(b, top)\n    count === nothing || (local_get!(b, saved_count); global_set!(b, count))\n    throw_ref!(b)")]
             abs(throws - 1) + count(((text, needle),) -> !occursin(needle, text), required)
         end),
-    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: the call, the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
+    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, at each caller that enrolls by it — the collector and the plan — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
             trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["reasons[mi] = _enrollment_text(\"the call\", codeinfos[i - 1], src, k, node)",
+            required = ["reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], codeinfos[i - 1], src, k, node)",
+                        "(enrolled_as[edge[2]] = _enrollment_text(_EDGE_ENROLLMENT[edge[1]], codeinfos[j], src, k, n))",
+                        "const _EDGE_ENROLLMENT = (invoke = \"the call\", splat = \"the call\", invoke_in_world = \"the call\",",
                         "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
                         "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
                         "reasons[cmi] = \"the body of the closure",
                         "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
-                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by)",
+                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; reasons=enrolled_by)",
                         "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is

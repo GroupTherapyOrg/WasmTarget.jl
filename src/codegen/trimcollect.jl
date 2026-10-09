@@ -57,11 +57,10 @@ dart call site names a static arity and dart2wasm has no counterpart to this edg
 
 It is a static edge: `f` is named right there in the call, and `t`'s
 `{Object, data, size}` representation IS the callee's one packed parameter. But it
-wears a builtin's clothes, so Julia's own collector does not see it. Both of this
-file's walks (the missing-invoke enrollment and the reachability walk) consult this ONE
-resolver — enrolling the callee without also walking the edge would let the pruner drop
-it straight back out. The container's type is its operand's NIR type (`slot_types` types
-an argument operand).
+wears a builtin's clothes, so Julia's own collector does not see it. It is the `:splat`
+kind of the one edge relation, `_closed_world_edge`, which the collector enrolls by and the
+external-leaf prune keeps by. The container's type is its operand's NIR type (`slot_types`
+types an argument operand).
 
 `nothing` unless every condition holds: the callee resolves to an ordinary function
 (never a builtin/intrinsic — those have no compiled body), the container carries the one
@@ -155,47 +154,121 @@ function _invoke_in_world_target_mi(node::NirCall, arg_type,
     return CC.specialize_method(matches[1])
 end
 
-"""
-    _builtin_call_edge_mi(node, slot_types, arg_type, lookup_table) -> MethodInstance | nothing
+# 1.13's collectinvokes! (Compiler typeinfer.jl:1523) follows the `:new` of a Function type to the
+# constructed callable's body; 1.12's (typeinfer.jl:1336) has no such edge. The running Julia's
+# queue is the ground truth for which edges a closed world follows, so the kind is followed where
+# that queue follows it, and a 1.12 world collects what 1.12's queue collects.
+# parity(quarantine: Julia's trim collection follows these edges, typeinfer.jl:1523 collectinvokes!; dart's closed world comes from its TFA)
+const _FOLLOWS_NEW_FUNCTION_EDGE = VERSION >= v"1.13.0-"
 
-The static call a builtin hides and no `:invoke` records: a runtime-Vararg splat's
-(`_apply_iterate_vararg_target_mi`) or `invoke_in_world`'s (`_invoke_in_world_target_mi`).
-The one relation the collector enrolls these callees by and the pruner keeps them by, so a
-callee one enrolls the other cannot prune.
-formal(dev/formal/ClosedWorld.tla): the collected world is exactly the methods reachable from the roots
-parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+# what each edge kind of `_closed_world_edge` is, for the enrollment reason a failure prints
+# parity(quarantine: Julia's trim collection follows these edges, typeinfer.jl:1477 collectinvokes!; dart's closed world comes from its TFA)
+const _EDGE_ENROLLMENT = (invoke = "the call", splat = "the call", invoke_in_world = "the call",
+                          finalizer = "the finalizer registered by", cfunction = "the function of",
+                          new_function = "the body of the callable built by",
+                          invoke_modify = "the operator of the atomic modify")
+
 """
-function _builtin_call_edge_mi(node::NirCall, slot_types::Vector{Type}, arg_type,
-                               lookup_table)::Union{Core.MethodInstance,Nothing}
-    local mi = _apply_iterate_vararg_target_mi(node, slot_types, lookup_table)
-    mi === nothing || return mi
-    return _invoke_in_world_target_mi(node, arg_type, lookup_table)
+    _closed_world_edge(node, src, slot_types, arg_type, interp) -> (kind, MethodInstance) | nothing
+
+THE edge relation of the closed world: the MethodInstance statement `node` of the body `src`
+needs compiled, and its kind. The collector enrolls by it (`_missing_explicit_invoke_mis`), the
+external-leaf prune keeps by it (`_prune_external_leaf_subgraphs`) and the plan names each
+body's reason by it (`trim_compile_plan`), so a body one of them reaches, the others reach too.
+Every edge `CC.collectinvokes!` follows (Compiler typeinfer.jl:1336 on 1.12, :1477 on 1.13):
+- `:invoke`, the MethodInstance it names (Julia's abstract one included: the collector
+  re-specializes it at the call-site types);
+- `:invoke_modify`, the operator it names;
+- `:finalizer`, a `Core.finalizer(f, o, …)` call's `f(o)`, at Julia's arity, two to four
+  operands (`3 <= length(stmt.args) <= 5`, typeinfer.jl:1353 on 1.12, :1502 on 1.13);
+- `:cfunction`, the function a `:cfunction` makes a pointer to, at its declared argument types;
+- `:new_function` (1.13, `_FOLLOWS_NEW_FUNCTION_EDGE`), the body of a `:new` of a Function type;
+the last three at Julia's own answer, `CC.compileable_specialization_for_call`, as its queue
+enqueues them, over each operand's call-site type: WT's `_call_site_arg_type` where Julia reads
+`argextype` (typeinfer.jl:1503 on 1.13). And the two static calls a builtin hides that WT lowers as direct calls:
+`:splat`, a runtime-Vararg `Core._apply_iterate` (`_apply_iterate_vararg_target_mi`), and
+`:invoke_in_world` (`_invoke_in_world_target_mi`). `arg_type` types an operand at its call
+site (`_call_site_arg_type`). A statement names at most one edge.
+
+`nothing` when the statement has no edge or its target is not one MethodInstance. That skips
+nothing silently: the statement is then lowered or rejected at its own site. A call with no
+static target rejects as a dynamic call. A finalizer, a `:cfunction` and an `:invoke_modify`
+have no lowering and reject at their statements (ConsultChain, `record_unsupported!`). A `:new`
+builds its struct, and a call of the callable has its own edge.
+formal(dev/formal/ClosedWorld.tla): the collector follows every kind of HiddenKinds
+(CollectorKinds = HiddenKinds), so the collected world holds every method reachable from the
+roots (Completeness)
+parity(quarantine: Julia's trim collection follows these edges, typeinfer.jl:1477 collectinvokes!; dart's closed world comes from its TFA)
+"""
+function _closed_world_edge(node::NirNode, src::Core.CodeInfo, slot_types::Vector{Type}, arg_type,
+                            interp)::Union{Tuple{Symbol,Core.MethodInstance},Nothing}
+    local kind, mi = :invoke, nothing
+    local operand_type(a) = (T = arg_type(a); T === nothing ? Any : T)   # argextype's Any
+    if node isa NirInvoke
+        mi = node.mi
+    elseif node isa NirCall
+        local table = CC.method_table(interp)
+        if (mi = _apply_iterate_vararg_target_mi(node, slot_types, table)) !== nothing
+            kind = :splat
+        elseif (mi = _invoke_in_world_target_mi(node, arg_type, table)) !== nothing
+            kind = :invoke_in_world
+        elseif _nir_callee_object(node.callee) === Core.finalizer && 2 <= length(node.operands) <= 4
+            kind = :finalizer
+            mi = CC.compileable_specialization_for_call(interp,
+                Tuple{operand_type(node.operands[1]), operand_type(node.operands[2])})
+        end
+    elseif node isa NirNew
+        kind = :new_function
+        (_FOLLOWS_NEW_FUNCTION_EDGE && node.T <: Function) &&
+            (mi = CC.compileable_specialization_for_call(interp, Tuple{node.T, Vararg}))
+    elseif node isa NirUnsupported
+        # read through the NIR boundary's operands, never the raw Expr (R29a)
+        local ops = node.operands
+        if node.kind === :invoke_modify && !isempty(ops) && ops[1] isa NirLiteral
+            kind = :invoke_modify
+            mi = resolve_invoke_mi(ops[1].value)
+        elseif node.kind === :cfunction && length(ops) == 5 && ops[4] isa NirLiteral &&
+               ops[4].value isa Core.SimpleVector && src.parent isa Core.MethodInstance
+            # (pointer type, f, return type, argument types, calling convention); each
+            # argument type rewrapped over the host's static parameters, as Julia does
+            kind = :cfunction
+            mi = CC.compileable_specialization_for_call(interp, Tuple{operand_type(ops[2]),
+                (CC.sp_type_rewrap(t, src.parent, false) for t in ops[4].value)...})
+        end
+    end
+    return mi isa Core.MethodInstance ? (kind, mi) : nothing
 end
 
-"""Return explicit `:invoke` MethodInstances missing from a collected world.
+# the operand typer `_closed_world_edge` reads in one body: an operand's call-site type, the
+# body's numeric joins computed once (`joins`, per CodeInfo), when an edge first asks
+# parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+_edge_arg_type(src::Core.CodeInfo, nir::Vector{NirStmt}, slot_types::Vector{Type},
+               joins::IdDict{Core.CodeInfo,Dict{Int,Type}})::Function =
+    a -> _call_site_arg_type(a, slot_types, get!(() -> propagate_numeric_value_types(nir), joins, src))
+
+"""Return the targets of the collected bodies' edges (`_closed_world_edge`) missing from a
+collected world, each recorded in `seen` and `reasons`. An explicit `:invoke` whose concrete
+call-site types select another MethodInstance is first retargeted in place to it.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
-function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
-                                      superseded::Set{Any}, protected::Set{Any}=Set{Any}();
+function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                                       reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}())::Vector{Any}
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
-    lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
-    ir_arg_type = function(node, src, nir, slot_types)
-        joins = get!(numeric_types, src) do
-            propagate_numeric_value_types(nir)
-        end
-        return _call_site_arg_type(node, slot_types, joins)
-    end
+    interp = WasmInterpreter(Base.RefValue(0))
+    lookup_table = CC.method_table(interp)
     for i in 2:2:length(codeinfos)
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
         nir = build_nir(src)
         src_slot_types = nir_slot_types(src)
+        arg_type = _edge_arg_type(src, nir, src_slot_types, numeric_types)
         for (k, s) in enumerate(nir)
             local node = s.node
-            mi = nothing
-            if node isa NirInvoke
-                mi = node.mi
+            local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)
+            edge === nothing && continue
+            local kind = edge[1]
+            mi = edge[2]
+            if kind === :invoke
                 original_mi = mi
                 # Explicit invoke records the selected Method, but Julia may leave
                 # its MethodInstance abstract. WT's subset monomorphizes: rebuild
@@ -203,7 +276,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                 # compiler would for an ordinary specialized call.
                 if mi isa Core.MethodInstance && node.callee !== nothing
                     f = node.callee isa NirLiteral ? node.callee.value : node.callee
-                    arg_types = Any[ir_arg_type(a, src, nir, src_slot_types) for a in node.operands]
+                    arg_types = Any[arg_type(a) for a in node.operands]
                     # Constructors are callable Type objects, not subtypes of
                     # Function. They participate in exactly the same overlay
                     # method-table lookup and concrete MethodInstance
@@ -278,24 +351,17 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any},
                    mi !== original_mi
                     # Keep the optimized IR valid Julia while making its edge agree
                     # with the Wasm overlay dispatch selected for the concrete call.
-                    # The superseded abstract/native subtree is pruned below
-                    # unless another site still invokes it.
+                    # Nothing is dropped: the original stays collected wherever Julia's
+                    # queue collected it, live if another site still invokes it, dead
+                    # code otherwise (ClosedWorld.tla NoGarbage, MARCH 13.17 H9).
                     nir_retarget_invoke!(src, nir, k, mi)
-                    original_mi in protected || push!(superseded, original_mi)
                 end
-            elseif node isa NirCall
-                # the static call a builtin hides (_builtin_call_edge_mi)
-                mi = _builtin_call_edge_mi(node, src_slot_types,
-                                           a -> ir_arg_type(a, src, nir, src_slot_types), lookup_table)
-                mi === nothing && continue
-            else
-                continue
             end
             mi isa Core.MethodInstance || continue
             mi in seen && continue
             push!(seen, mi)
             push!(out, mi)
-            reasons[mi] = _enrollment_text("the call", codeinfos[i - 1], src, k, node)
+            reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], codeinfos[i - 1], src, k, node)
         end
     end
     return out
@@ -909,20 +975,18 @@ struct ClosedWorld
     error_args_types::Set{DataType}                  # the args tuple (and `f`) of each MethodError a dynamic call throws
 end
 
-"""Keep only code reachable from roots over the invoke edges as they stand, never the body of
-a declared import (an external leaf). With `unreachable=true` it prunes even when there is
-no import: after `_missing_explicit_invoke_mis` retargets sites, a superseded MethodInstance
-goes only if no remaining site invokes it (another site whose operands are not concrete still
-calls the original — pruning superseded MethodInstances as leaves dropped it).
-
-formal(dev/formal/InvokePrune.tla): after the collector retargets invokes and prunes, every
-invoke in a kept body names a kept body or an import, and every kept body is reachable.
-parity(quarantine: dart's calls name a fixed member; Julia's explicit invokes may name an
-abstract MethodInstance the closed-world subset specializes per site.)"""
+"""Cut the bodies of declared imports (external leaves) out of a collection before it merges:
+keep the code the entries reach over the closed world's edges (`_closed_world_edge`, the
+relation the collector enrolls by), never walking into or keeping an import's body. It runs at
+every merge, on Julia's first collection and on each later round's compile! output, and is the
+collection's only cut: a body an edge of a kept body names is kept, whatever its kind.
+parity(quarantine: Julia's native fallback bodies of a declared import are inferred with its
+callers but are not the Wasm component's; dart's imports have no Dart body.)"""
 function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
-                                        external_leaves::Set{Any}; unreachable::Bool=false)::Vector{Any}
-    isempty(external_leaves) && !unreachable && return codeinfos
-    lookup_table = CC.method_table(WasmInterpreter(Base.RefValue(0)))
+                                        external_leaves::Set{Any})::Vector{Any}
+    isempty(external_leaves) && return codeinfos
+    interp = WasmInterpreter(Base.RefValue(0))
+    joins = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
     for i in 1:2:length(codeinfos)
         (i + 1 <= length(codeinfos) && codeinfos[i] isa Core.CodeInstance &&
@@ -941,20 +1005,12 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
         pair === nothing && continue
         local pair_slot_types = nir_slot_types(pair[2])
         local pair_nir = build_nir(pair[2])
-        local pair_joins = propagate_numeric_value_types(pair_nir)
+        local arg_type = _edge_arg_type(pair[2], pair_nir, pair_slot_types, joins)
+        # every edge, of every kind the collector enrolls by: a kind missing here would cut a
+        # body Julia's queue collected through it (1.13's `:new` of a closure, b107)
         for s in pair_nir
-            local node = s.node
-            if node isa NirInvoke
-                node.mi isa Core.MethodInstance && push!(queue, node.mi)
-            elseif node isa NirCall
-                # The reachability relation must contain EVERY call edge, including those a
-                # builtin hides (_builtin_call_edge_mi, the relation the collector enrolled
-                # them by) — otherwise the callee _missing_explicit_invoke_mis enrolled is
-                # pruned right back out and the call site rejects a lowerable call.
-                local hidden = _builtin_call_edge_mi(node, pair_slot_types,
-                    a -> _call_site_arg_type(a, pair_slot_types, pair_joins), lookup_table)
-                hidden === nothing || push!(queue, hidden)
-            end
+            local edge = _closed_world_edge(s.node, pair[2], pair_slot_types, arg_type, interp)
+            edge === nothing || push!(queue, edge[2])
         end
     end
     out = Any[]
@@ -979,9 +1035,13 @@ end
 const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compile!))) ?
     (; external_linkage = false) : (;)
 
-# formal(dev/formal/ClosedWorld.tla): the shared invoke/dynamic-dispatch fixpoint
-# below always collects exactly the methods reachable from the roots, never stops
-# early, and never silently drops a reachable method whose specialization fails.
+# formal(dev/formal/ClosedWorld.tla): the shared edge/dynamic-dispatch/intrinsic-body
+# fixpoint below collects every method reachable from the roots (Completeness) and no
+# declared import's body at any round (LeavesNeverCollected), never stops early, never
+# drops a collected body, and never silently drops a reachable method whose specialization
+# fails. It does not guarantee minimality: a widened original Julia's queue materialized that
+# no live edge names stays collected as dead code (NoGarbage, MARCH 13.17 H9). Every dynamic
+# candidate is a dispatch root, collected first or not (RootsComplete).
 """
     collect_closed_world(entries::Vector{Any}; verify::Bool=false) -> ClosedWorld
 
@@ -1024,7 +1084,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # Julia's queue may leave an explicit invoke with an abstract callable slot
     # as an IR edge without materializing its body (e.g. Base.with_output_color's
     # `Function` argument). A closed world cannot defer that edge to codegen.
-    # Enroll every explicit invoke to a fixpoint before selector discovery.
+    # Enroll every edge's target (_closed_world_edge) to a fixpoint before selector discovery.
     base_mis = Set{Any}()
     mi_key(mi) = (mi.def, mi.specTypes)
     base_mi_keys = Set{Any}()
@@ -1037,11 +1097,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         end
     end
     invoke_seen = union(copy(base_mis), external_leaves)
-    superseded_invokes = Set{Any}()
-    pruned_superseded = 0
     seen_disp = Set{Any}()
     # why each MethodInstance entered the closed world, for a collection failure to name (the
-    # plan adds each body's :invoke callees, trim_compile_plan)
+    # plan adds each body's edge targets Julia's queue collected, trim_compile_plan)
     enrolled_by = IdDict{Core.MethodInstance,String}(e => "a compilation entry" for e in entries)
 
     # Explicit invokes and dynamic-dispatch candidates form ONE reachability
@@ -1049,8 +1107,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # sequential fixpoints are insufficient. Iterate both collectors together
     # until neither can add a MethodInstance; every collection uses a fresh
     # interpreter/cache partition and only new pairs are merged.
-    function collect_new_pairs!(mis; roots::Union{Nothing,Set{Any}}=nothing,
-                                why::String="a compilation entry")
+    function collect_new_pairs!(mis; why::String="a compilation entry")
         isempty(mis) && return false
         local batch = Tuple{Any,String}[]   # (resolved root, why it was enrolled)
         fresh_interp = WasmInterpreter(Base.RefValue(0))
@@ -1085,12 +1142,12 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                     CC.specialize_method(root_mi.def, root_mi.specTypes, root_mi.sparam_vals) :
                     CC.specialize_method(matches[1])
             # Candidate discovery initially selects with Julia dispatch, then
-            # collection canonicalizes through the Wasm overlay table. Preserve
-            # the canonical MI as a selector root too: identity-only reachability
-            # pruning must not discard the overlay body merely because its native
-            # precursor has the same signature but a different Method object.
+            # collection canonicalizes through the Wasm overlay table. Record the
+            # canonical MI as a selector root too: the collected body is the overlay
+            # one, and the plan keys its dispatch candidates by the collected MI
+            # (`mi in world.dynamic_roots`), not by its native precursor of the
+            # same signature but a different Method object.
             root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)
-            roots === nothing || push!(roots, resolved_mi)
             push!(fresh_wq, resolved_mi)
             push!(batch, (resolved_mi, get(enrolled_by, root_mi, why)))
             haskey(enrolled_by, resolved_mi) || (enrolled_by[resolved_mi] = batch[end][2])
@@ -1103,6 +1160,11 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             (err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
             throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)
         end
+        # Every compile! output is cut by the external leaves before it merges, exactly as the
+        # first collection is (above): a later round's root may call a declared import, and
+        # Julia's queue then infers the import's native fallback body with it. That body is
+        # not the Wasm component's, and merged it would compile in the import's place.
+        fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves)
         for k in 1:2:length(fresh_ci)
             (fresh_ci[k] isa Core.CodeInstance &&
              fresh_ci[k + 1] isa Core.CodeInfo) || continue
@@ -1116,38 +1178,19 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         return added
     end
 
-    # the Julia bodies intrinsic lowerings call: roots no :invoke edge reaches
-    intrinsic_body_roots = Set{Any}()
     fma_scanned = Base.IdSet{Any}()
+    # the loop only adds: no collected body is ever dropped (dart's worklist only adds too)
     while true
         changed = collect_new_pairs!(_missing_explicit_invoke_mis(
-            codeinfos, invoke_seen, superseded_invokes, Set{Any}(entries); reasons=enrolled_by))
-
-        if length(superseded_invokes) != pruned_superseded
-            # Selector candidates are genuine runtime roots even though their
-            # incoming edges are dynamic calls rather than explicit invokes.
-            # Preserve them—and their newly specialized invoke subgraphs—when
-            # pruning what no site invokes any more.
-            prune_roots = Any[entries...]
-            append!(prune_roots, dynamic_roots)
-            append!(prune_roots, intrinsic_body_roots)
-            codeinfos = _prune_external_leaf_subgraphs(
-                codeinfos, prune_roots, external_leaves; unreachable=true)
-            empty!(base_mis)
-            empty!(base_mi_keys)
-            for k in 1:2:length(codeinfos)
-                if codeinfos[k] isa Core.CodeInstance
-                    mi = codeinfos[k].def
-                    push!(base_mis, mi)
-                    push!(base_mi_keys, mi_key(mi))
-                end
-            end
-            pruned_superseded = length(superseded_invokes)
-        end
+            codeinfos, invoke_seen; reasons=enrolled_by))
 
         extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,
                                                 error_args=error_args_types)
-        extra = Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)]
+        # Every candidate is a dispatch root, and its callable type a callable type, whether or
+        # not its body is collected already: on 1.13 Julia's queue collects a closure body by
+        # its `:new` before the dynamic step names it, and the plan's rows must not depend on
+        # which edge reached the body first (ClosedWorld.tla RootsComplete). Only the bodies
+        # still missing are collected.
         union!(dynamic_roots, extra)
         for mi in extra
             local st = mi.specTypes
@@ -1156,10 +1199,10 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
                 ft isa DataType && ft <: Function && push!(callable_types, ft)
             end
         end
-        changed |= collect_new_pairs!(extra)
+        changed |= collect_new_pairs!(Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)])
         fma_mis = Any[mi for mi in _fused_multiply_add_mis(codeinfos, fma_scanned)
                    if !(mi_key(mi) in base_mi_keys)]
-        changed |= collect_new_pairs!(fma_mis; roots=intrinsic_body_roots,
+        changed |= collect_new_pairs!(fma_mis;
                                       why="the Julia body of the fma/muladd intrinsic lowering")
         changed || break
     end
@@ -1175,8 +1218,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # with different IR → order-dependent codegen bugs in unrelated code). A fresh interp
     # (distinct cache_owner) + merge leaves every base pair byte-identical, so enabling
     # discovery cannot change how base functions compile (the COLLECTION layer). Registry
-    # isolation — so candidates don't perturb base get_function cross-call resolution — is
-    # step 2 (FunctionInfo.is_candidate). With layers 1+2 in place, plus discovery yielding
+    # isolation — candidates hidden from get_function's signature lookup, an :invoke still
+    # reaching one by its MethodInstance — is step 2 (FunctionInfo.is_candidate). With layers
+    # 1+2 in place, plus discovery yielding
     # to for megamorphic (≥9-method) functions, the base pass is byte-identical
     # whether or not discovery runs.
     if verify
@@ -1281,27 +1325,27 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     # `_growend!`/`_growbeg!` closures) is a direct call of a known method: its body is
     # compiled like the invoker's, keyed by the closure type (dart: a closure's target is
     # compiled when the closure is created). Dynamic calls of Base closures stay out.
-    # Each :invoke callee Julia's inference collected is enrolled by its first call site, and
-    # each atomic modify's operator (`:invoke_modify` names its CodeInstance, which Julia's
-    # queue collects) by its statement.
+    # Each edge target Julia's queue collected (_closed_world_edge: an :invoke callee, an
+    # atomic modify's operator, 1.13's constructed closure body, ...) is enrolled by the first
+    # statement naming it.
     invoked_closures = Set{DataType}()
     local enrolled_as = world.enrolled_as
+    local edge_interp = WasmInterpreter(Base.RefValue(0))
+    local edge_joins = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     for j in 1:2:length(codeinfos)
         (j + 1 <= length(codeinfos) && codeinfos[j + 1] isa Core.CodeInfo) || continue
-        for (k, s) in enumerate(build_nir(codeinfos[j + 1]))
+        local src = codeinfos[j + 1]
+        local nir = build_nir(src)
+        local slot_types = nir_slot_types(src)
+        local arg_type = _edge_arg_type(src, nir, slot_types, edge_joins)
+        for (k, s) in enumerate(nir)
             local n = s.node
-            if n isa NirUnsupported && n.kind === :invoke_modify && !isempty(n.operands) &&
-               n.operands[1] isa NirLiteral && n.operands[1].value isa Core.CodeInstance
-                local omi = n.operands[1].value.def
-                (omi isa Core.MethodInstance && !haskey(enrolled_as, omi)) &&
-                    (enrolled_as[omi] = _enrollment_text("the operator of the atomic modify",
-                                                         codeinfos[j], codeinfos[j + 1], k, n))
-                continue
-            end
-            (n isa NirInvoke && n.mi isa Core.MethodInstance) || continue
-            haskey(enrolled_as, n.mi) ||
-                (enrolled_as[n.mi] = _enrollment_text("the call", codeinfos[j], codeinfos[j + 1], k, n))
-            local st = n.mi.specTypes
+            local edge = _closed_world_edge(n, src, slot_types, arg_type, edge_interp)
+            edge === nothing && continue
+            haskey(enrolled_as, edge[2]) ||
+                (enrolled_as[edge[2]] = _enrollment_text(_EDGE_ENROLLMENT[edge[1]], codeinfos[j], src, k, n))
+            edge[1] === :invoke || continue
+            local st = edge[2].specTypes
             (st isa DataType && length(st.parameters) >= 1) || continue
             local ft = st.parameters[1]
             ft isa DataType && is_closure_type(ft) && push!(invoked_closures, ft)

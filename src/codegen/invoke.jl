@@ -700,6 +700,12 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                         target_info = get_function(ctx.func_registry, called_func, _sigs[end])
                     end
+                    # A dispatch candidate is also the direct target of the :invoke that names its
+                    # MethodInstance: signature lookup (get_function) hides candidates, but the
+                    # invoke names its callee exactly, as a dart member is both a dispatch-table
+                    # entry and the target of a direct call by its Reference.
+                    # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
+                    target_info === nothing && (target_info = mi_target)
 
                     if target_info !== nothing
                         @debug "Cross-call resolved" name=name idx=idx return_type=target_info.return_type has_ssa_local=haskey(ctx.ssa_locals, idx)

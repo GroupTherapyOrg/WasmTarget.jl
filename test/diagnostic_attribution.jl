@@ -245,3 +245,47 @@ end
         @test occursin(why, sprint(showerror, err))
     end
 end
+
+# Each edge kind of the closed world (_closed_world_edge) enrolls its target by its own
+# statement, with its kind's reason: with the kind gone from the enumerator, Julia's queue may
+# still collect the target, but nothing names the statement that needs it. A finalizer's
+# callback, a `:cfunction`'s function and an atomic modify's operator on both versions; a
+# closure body built by a `:new` and never called, on 1.13 only, as Julia's queue follows that
+# edge only there (typeinfer.jl:1523).
+module DiagEdges
+    const SINK = Ref{Any}(nothing)
+    const LOG = Int64[]
+    mutable struct Obj; v::Int64; end
+    @noinline fin_cb(o::Obj) = (push!(LOG, o.v); nothing)
+    @noinline with_fin(n::Int64) = (o = Obj(n); finalizer(fin_cb, o); SINK[] = o; n + 1)
+    @noinline cf_add(x::Cint) = x + Cint(1)
+    cf(n::Int64) = (p = @cfunction(cf_add, Cint, (Cint,)); p == C_NULL ? Int64(0) : n)
+    mutable struct Atom; @atomic v::Int64; end
+    @noinline atom_op(x::Int64, y::Int64) = x * 10 + y
+    am(n::Int64) = (a = Atom(n); @atomic a.v atom_op n; @atomic a.v)
+    @noinline mknew(n::Int64) = (x::Int64) -> x + n
+    built_only(n::Int64) = (SINK[] = mknew(n); n)
+end
+
+@testset "each closed-world edge kind enrolls its target with its own reason" begin
+    reason_of(f, pick) = begin
+        plan = WasmTarget.trim_compile_plan(Any[(f, (Int64,), "f")])
+        rs = [r for (mi, r) in plan.enrolled_as if mi isa Core.MethodInstance && pick(mi)]
+        length(rs) == 1 ? rs[1] : rs
+    end
+    E = WasmTarget._EDGE_ENROLLMENT
+    r = reason_of(DiagEdges.with_fin, mi -> mi.def === which(DiagEdges.fin_cb, (DiagEdges.Obj,)))
+    @test r isa String && startswith(r, E.finalizer) && occursin("with_fin", r)
+    r = reason_of(DiagEdges.cf, mi -> mi.def === which(DiagEdges.cf_add, (Cint,)))
+    @test r isa String && startswith(r, E.cfunction) && occursin("DiagEdges.cf(", r)
+    r = reason_of(DiagEdges.am, mi -> mi.def === which(DiagEdges.atom_op, (Int64, Int64)))
+    @test r isa String && startswith(r, E.invoke_modify) && occursin("DiagEdges.am(", r)
+    closure_body(mi) = (st = mi.specTypes; st isa DataType && !isempty(st.parameters) &&
+                        WasmTarget.is_closure_type(st.parameters[1]) && parentmodule(st.parameters[1]) === DiagEdges)
+    r = reason_of(DiagEdges.built_only, closure_body)
+    if WasmTarget._FOLLOWS_NEW_FUNCTION_EDGE
+        @test r isa String && startswith(r, E.new_function) && occursin("mknew", r)
+    else
+        @test r == String[]   # 1.12's queue does not follow a :new, and neither does WT
+    end
+end

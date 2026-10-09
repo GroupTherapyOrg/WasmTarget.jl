@@ -14,7 +14,7 @@ further and gates on it.
 |---|---|
 | `<Name>.tla` | the model of the ACTUAL Julia algorithm, read from source; its header says what is abstracted and why that suffices, names the modeled function, and cites the dart anchor (or the quarantine reason) |
 | `MC<Name>.tla` / `MC<Name>.cfg` | a small instance: `TypeOK`, the claim invariants/properties, a deadlock check |
-| `MC<Name>[Variant]Broken.cfg` | a deliberately wrong variant (a CONSTANT flag mirroring a realistic bug class) that TLC MUST reject — a model no wrong variant can violate proves nothing |
+| `MC<Name>[Variant]Broken.cfg` | a variant TLC MUST reject: a deliberately wrong one (a CONSTANT flag mirroring a realistic bug class; a model no wrong variant can violate proves nothing), or a pinned open finding of the code itself (its header names the dev/MARCH.md row) |
 | `run_tlc.sh` | runs every `MC*.cfg`; fails if a positive instance fails or a Broken one does not violate exactly the claim its first line names (`\* expect: <Invariant>`, checked on one worker so the first violation TLC reports is fixed); fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
 
 The modeled Julia function carries a one-line `formal(dev/formal/<Name>.tla): <claim>` anchor —
@@ -35,7 +35,7 @@ anchor in `src/` has a row.)
 | Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `emit_duplicated_terminal!` (stackified.jl) | Stackifier |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
-| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis`, `_builtin_call_edge_mi`, `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
+| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
 | Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
 | Coercion funnel | `convert_type!`, `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
 | Constant interning | `ensure_constant_global!` (types.jl) | Constants |
@@ -50,7 +50,8 @@ anchor in `src/` has a row.)
 | Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
 | Native sidecar protocol | test/sidecar | Sidecar |
 | Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
-| External-leaf pruning | `_prune_external_leaf_subgraphs` (trimcollect.jl) | InvokePrune |
+| External-leaf cut at every merge (ClosedWorld's ExternalLeaves, LeavesNeverCollected) | `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
+| Every dynamic candidate a dispatch root, collected first or not (ClosedWorld's RootsComplete) | `collect_closed_world`'s dynamic step (trimcollect.jl) | ClosedWorld |
 | Inline classId switch | `_try_inline_typeid_dispatch`, `_emit_switch_methoderror!`, `_emit_throw_methoderror_by_class!` (calls.jl), `_emit_closure_arg_tests!`, `_closure_dispatch_trampoline!`, `_closure_trampoline!`, `_emit_trampoline_methoderror!` (closures.jl), `bare_array_partition` (builtins.jl), the no-method args tuples (`_dynamic_dispatch_candidate_mis`, `methoderror_args_types`, trimcollect.jl) | ClassIdSwitch |
 | Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` and its walk of the held constants `hold!` (trimcollect.jl), `_most_specific_first`, `ambiguous_class_tuple` (closures.jl), the vtable pre-pass's invoke-only and ambiguity rules (compile.jl) | Enrollment |
 | Type identity under iso-recursive canonicalization | `add_type!`, `add_type_group!`, `_group_member_equal` (instructions.jl), `finish_pending!` (structs.jl) | TypeIdentity |

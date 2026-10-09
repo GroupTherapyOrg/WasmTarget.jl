@@ -1997,6 +1997,47 @@ _g("overlays", Any[
     ("strip_split_join", (n::Int64) -> length(join(split(strip(n > 0 ? "  hello,world,test  " : "x"), ","), "-")), Int64(1)),
 ])
 
+# The closed world's edges (_closed_world_edge): each edge CC.collectinvokes! follows besides
+# :invoke (Compiler typeinfer.jl:1336 on 1.12, :1477 on 1.13), one case per kind. A closure
+# built by a `:new` in a separately compiled body and called through an `Any` slot: on 1.13
+# Julia's queue collects its body through the `:new` (new_function, :1523), and the dynamic
+# call names the same body.
+@noinline _sm_mknew(n::Int64) = (x::Int64) -> x + n
+@noinline _sm_mknew2(n::Int64) = (x::Int64) -> x * n
+# A method called statically and through an abstract slot: the dynamic step makes it a dispatch
+# candidate though a static :invoke collected it first, and the :invoke still names it.
+abstract type _SmSh end
+for k in 1:6
+    local S = Symbol(:_SmSh, k)
+    @eval struct $S <: _SmSh; v::Int64; end
+    @eval @noinline _sm_shar(s::$S) = s.v + $k
+end
+_g("closed_world_edges", Any[
+    ("static_and_dynamic_call_one_method", (n::Int64) -> (xs = _SmSh[_SmSh1(n), _SmSh2(n), _SmSh3(n), _SmSh4(n), _SmSh5(n), _SmSh6(n)]; s = _sm_shar(_SmSh1(n)); for x in xs; s += _sm_shar(x)::Int64; end; s), Int64(3)),
+    ("new_closure_called_dynamically", (n::Int64) -> (fs = Any[_sm_mknew(n)]; fs[1](2)::Int64), Int64(3)),
+    ("new_closures_two_classes", (n::Int64) -> (fs = Any[_sm_mknew(n), _sm_mknew2(n)]; (fs[1](2)::Int64) * 100 + (fs[2](2)::Int64)), Int64(3)),
+])
+# A finalizer, a `:cfunction` and an `:invoke_modify` have no lowering: the collector enrolls
+# the edge's target, and the statement rejects where it stands (record_unsupported!), never
+# compiled to a plausible value. A finalizer survives Julia's elision only with an object that
+# escapes and a callback with an effect. diagnostic_attribution.jl pins each kind's enrollment.
+@noinline _sm_cf_add(x::Cint) = x + Cint(1)
+const _SM_FIN_SINK = Ref{Any}(nothing)
+const _SM_FIN_LOG = Int64[]
+mutable struct _SmFin; v::Int64; end
+@noinline _sm_fin_cb(o::_SmFin) = (push!(_SM_FIN_LOG, o.v); nothing)
+mutable struct _SmAtom; @atomic v::Int64; end
+@noinline _sm_atom_op(x::Int64, y::Int64) = x * 10 + y
+_xf("closed_world_edge_rejects", Any[
+    # a finalizer: the edge enrolls the callback at the object's type
+    ("finalizer_registered", (n::Int64) -> (o = _SmFin(n); finalizer(_sm_fin_cb, o); _SM_FIN_SINK[] = o; n), Int64(3)),
+    # :cfunction: the edge enrolls the function at its declared argument types
+    ("cfunction_pointer", (n::Int64) -> (p = @cfunction(_sm_cf_add, Cint, (Cint,)); p == C_NULL ? Int64(0) : n), Int64(3)),
+    # an atomic modify of a field with a function: the :invoke_modify head names the
+    # operator, which the edge enrolls
+    ("atomic_modify_operator", (n::Int64) -> (a = _SmAtom(n); @atomic a.v _sm_atom_op n; @atomic a.v), Int64(3)),
+])
+
 # ============================================================================
 
 # A WRONG answer located at its first divergent statement (TraceLocalize.first_divergence);

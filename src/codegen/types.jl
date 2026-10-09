@@ -1664,10 +1664,11 @@ function get_function(registry::FunctionRegistry, func_ref, arg_types::Tuple;
         end
     end
     infos === nothing && return nothing
-    # T1.1 step 2: dynamic-dispatch CANDIDATES are reachable ONLY via the call-site
-    # typeId switch (which reads by_ref directly) — never via normal cross-call
-    # resolution. Filtering them here keeps base function codegen byte-identical
-    # whether or not discovery added candidates (the layer-2 perturbation fix).
+    # T1.1 step 2: dynamic-dispatch CANDIDATES are hidden from this signature lookup:
+    # the call-site typeId switch reads by_ref directly, and an :invoke that names a
+    # candidate reaches it by its MethodInstance (get_function_by_mi). Filtering them here
+    # keeps base function codegen byte-identical whether or not discovery added candidates
+    # (the layer-2 perturbation fix).
     infos = FunctionInfo[i for i in infos if !i.is_candidate && !i.invoke_only]
     isempty(infos) && return nothing
 

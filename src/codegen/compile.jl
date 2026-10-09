@@ -573,9 +573,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # TRUTH for every function from the moment indices exist (the 19 empty-sig call
     # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
     n_existing = length(mod.functions)  # includes pre-created helper functions
-    # T1.1 step 2: discovery-added dynamic-dispatch candidates (beyond the base
-    # collection) register as is_candidate=true → visible to the call-site typeId
-    # switch (by_ref) but invisible to get_function cross-call resolution.
+    # T1.1 step 2: every dynamic-dispatch candidate (a discovery root, collected first or
+    # not) registers as is_candidate=true → visible to the call-site typeId switch (by_ref)
+    # and hidden from get_function's signature lookup; an :invoke that names it still
+    # reaches it by its MethodInstance (get_function_by_mi).
     _disp_cands = plan.dispatch_candidates
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)

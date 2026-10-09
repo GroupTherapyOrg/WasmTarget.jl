@@ -1,11 +1,11 @@
 ---------------------- MODULE MCClosedWorldRoundCeiling --------------------
-(* THE BROKEN VARIANT (round ceiling): same instance as MCClosedWorld, but *)
-(* RoundCeiling = 3 -- the retired `for _round in 1:8`-style outer-loop    *)
-(* cap L78 forbids. Reaching Done here requires 6 discovery steps in every *)
-(* possible interleaving (4 CollectMethod on A/B/C/D + 2 DiscoverDynamic   *)
-(* on B/D, order-independent in COUNT though not in sequence), so a cap of *)
-(* 3 forces ForceStopAtCeiling to fire while the plan is still missing     *)
-(* reachable methods in every behavior -- Completeness must be violated.   *)
+(* THE BROKEN VARIANT (round ceiling): the MCClosedWorldReject shape       *)
+(* without the failure, and RoundCeiling = 1 -- the retired                *)
+(* `for _round in 1:8`-style outer-loop cap L78 forbids. compile! of the    *)
+(* roots collects R1, R2, A and C; reaching Done then needs 2 enrolling     *)
+(* scans in every interleaving (the dynamic candidates B, then D), so a cap *)
+(* of 1 forces ForceStopAtCeiling to fire while D is still missing in every *)
+(* behavior -- Completeness must be violated.                              *)
 EXTENDS ClosedWorld
 
 MCMethods == {"R1", "R2", "A", "B", "C", "D"}
@@ -32,8 +32,15 @@ MCDynTargets == [t \in MCTypes |->
     IF t = "T1" THEN {"B"} ELSE {"D"}]
 
 MCSpecializeFails == {}
-MCRoundCeiling    == 3
+MCRoundCeiling    == 1
 MCSwallowFailures == FALSE
+MCRetargets       == [m \in MCMethods |-> {}]
 MCHiddenEdges     == [m \in MCMethods |-> {}]
-MCPrunerSeesHidden == TRUE
+MCFmaEdges        == [m \in MCMethods |-> {}]
+MCExternalLeaves  == {}
+MCLateCut         == TRUE
+MCWidened         == {}
+MCUnmaterialized  == {}
+MCCollectorKinds  == HiddenKinds
+MCTrim            == FALSE
 =============================================================================
