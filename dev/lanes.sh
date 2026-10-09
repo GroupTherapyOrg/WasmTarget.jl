@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Every lane as ONE command (AGENTS.md, "The enforcement stack"; dev/CHARTER.md C10):
-# structure → behavior → byte identity → formal (the fast TLC set). Exit code = the gate
-# before a push. Measured 2026-10-07 (mostly AC power): the whole run 50 min, smoke 408 s,
-# the suite lane (two shards, then fuzz) 1492 s.
+# structure → behavior (1.12 and 1.13, TLC beside) → byte identity and coverage → the suite;
+# the first red lane ends the run. Exit code = the gate before a push. Measured serially at
+# batch 110 (AC power): ratchet 10 s, smoke 372 s, probes 45 s, coverage 470 s, TLC 455 s,
+# smoke 1.13 374 s, the suite (two shards, then fuzz) 1618 s: 56 min.
 #
 #   bash dev/lanes.sh            # every lane on the default `julia`, which must be 1.12
 #   JULIA="julia +1.13" bash dev/lanes.sh   # not a gate: a JULIA= run fails the gate
@@ -60,26 +61,48 @@ lane() {  # name, command...
     printf '  FAIL %-14s %3ds\n' "$name" $(( $(date +%s) - t0 )); echo "$out" | grep -E "BROKEN|WRONG|ERR|CHANGED|NEW probe|MISSING|FAIL|Error" | head -12; fail=1
   fi
 }
+# The first red lane ends the run (stop): a later lane's verdict cannot turn it green, and a
+# failure shows at its own lane, not at the end. Lanes that need no common state run side by
+# side (bg, then join_bg): smoke on 1.12 and on 1.13, two processes as the suite lane uses, with
+# TLC beside them; then the probes beside registry coverage; then the suite.
+stop() { [ $fail -eq 0 ] || { echo "LANES red"; exit 1; }; }
+d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
+bg() {  # file, lane name command...: the lane in the background, its verdict line to the file
+  local f=$1; shift
+  ( fail=0; "$@"; [ $fail -eq 0 ] || touch "$f.fail" ) > "$f" 2>&1 &
+}
+join_bg() {  # wait for every bg lane, print each verdict in order, fail the gate on any red
+  wait; local f
+  for f in "$@"; do [ -e "$f" ] && cat "$f"; [ -e "$f.fail" ] && fail=1; done; return 0
+}
+stop
 lane ratchet  $JULIA --project=. test/parity_ratchet.jl
-lane smoke    $JULIA --project=. test/smoke.jl
+stop
 if [ $fast -eq 0 ]; then
-  if $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then
-    lane probes $JULIA --project=. test/probe_bytes.jl
-    lane coverage $JULIA --project=. test/registry_coverage.jl
-  else
-    printf '  FAIL probes         (the default julia is not 1.12: probes, coverage and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1
-  fi
-  if java -version >/dev/null 2>&1; then lane formal bash dev/formal/run_tlc.sh; rm -rf dev/formal/states
+  if java -version >/dev/null 2>&1; then bg "$d/formal" lane formal bash dev/formal/run_tlc.sh
   else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi
-  # smoke on Julia 1.13 (CI's second version), then every test family CI runs: two
-  # concurrent shards, then the fuzz pass (suite() above)
+  # smoke on Julia 1.13 (CI's second version) beside smoke on 1.12
   if [ "$JULIA" != "julia" ]; then
     printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
   elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
-    lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
+    bg "$d/s113" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
   else
     printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
   fi
+fi
+lane smoke    $JULIA --project=. test/smoke.jl
+join_bg "$d/s113" "$d/formal"; rm -rf dev/formal/states
+stop
+if [ $fast -eq 0 ]; then
+  if $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then
+    bg "$d/coverage" lane coverage $JULIA --project=. test/registry_coverage.jl
+    lane probes $JULIA --project=. test/probe_bytes.jl
+    join_bg "$d/coverage"
+  else
+    printf '  FAIL probes         (the default julia is not 1.12: probes, coverage and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1
+  fi
+  stop
+  # every test family CI runs: two concurrent shards, then the fuzz pass (suite() above)
   lane suite suite
 fi
 [ $fail -eq 0 ] && echo "LANES green" || { echo "LANES red"; exit 1; }

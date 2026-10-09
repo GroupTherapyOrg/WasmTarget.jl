@@ -2588,7 +2588,7 @@ const LOCKS = [
             n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first, batch 111's 1.13 failure having surfaced at minute 29 of a serial run) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
         () -> begin
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
             local lanes = join(filter(l -> !startswith(lstrip(l), "#"), split(read(joinpath(ROOT, "dev", "lanes.sh"), String), '\n')), '\n')
@@ -2602,24 +2602,30 @@ const LOCKS = [
                       occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
                       occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents),
+                      # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
+                      occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
+                      occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
+                      occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
+                      occursin(join([raw"  stop", raw"  lane suite suite"], '\n'), gated),
                       # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
                       occursin(join([
                           raw"  if $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                          raw"    bg \"$d/coverage\" lane coverage $JULIA --project=. test/registry_coverage.jl",
                           raw"    lane probes $JULIA --project=. test/probe_bytes.jl",
-                          raw"    lane coverage $JULIA --project=. test/registry_coverage.jl",
+                          raw"    join_bg \"$d/coverage\"",
                           raw"  else",
                           raw"    printf '  FAIL probes         (the default julia is not 1.12: probes, coverage and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
                           raw"  fi"], '\n'), gated),
                       # ... no working java ...
                       occursin(join([
-                          raw"  if java -version >/dev/null 2>&1; then lane formal bash dev/formal/run_tlc.sh; rm -rf dev/formal/states",
+                          raw"  if java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
                           raw"  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
                       # ... and a JULIA= override or no julia +1.13
                       occursin(join([
                           raw"  if [ \"$JULIA\" != \"julia\" ]; then",
                           raw"    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
                           raw"  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
-                          raw"    lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
+                          raw"    bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
                           raw"  else",
                           raw"    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
                           raw"  fi"], '\n'), gated),
