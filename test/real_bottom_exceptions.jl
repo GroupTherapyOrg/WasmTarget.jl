@@ -94,10 +94,10 @@ _wt_export_nested(x::Int64) = try; throw(DomainError(1)); catch; try; rethrow();
     @test results[1]["ok"] == [-1, native_rethrow, -1, native_nested]
 end
 
-# The export boundary for every escape (batch 110; dev/formal/ExceptionStack.tla): one instance,
-# a host-declared import `cb` that calls an export back and `cbt` that throws a JS error. Each
-# escape is told apart by `e instanceof WebAssembly.Exception` (a Julia exception) or the JS
-# error's class, never by a bare catch.
+# The export boundary for every escape (dev/formal/ExceptionStack.tla): one instance, instantiated
+# through the glue (host_glue_js), a host-declared import `cb` that calls an export back and `cbt`
+# that throws a JS error. Each escape is told apart by `e instanceof WebAssembly.Exception` (a
+# Julia exception) or the JS error's class, never by a bare catch.
 _wt_eb_r(x::Int64) = (try; rethrow(); catch e; e isa ArgumentError ? 1 : e isa DomainError ? 3 : e isa DivideError ? 4 : e isa ErrorException ? 2 : 5; end) + x
 @noinline _wt_eb_rec(n::Int64) = n == 0 ? 0 : 1 + _wt_eb_rec(n - 1)
 _wt_eb_s(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_rec(x); end
@@ -113,25 +113,23 @@ _wt_eb_p2(x::Int64) = try; throw(DivideError()); catch; try; _wt_eb_cbd(x); catc
 # an import that throws a JS error inside an open catch
 _wt_eb_it(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cbt(x); 0; end
 # a deliberate trap inside an open catch: an @inbounds read past a one-element vector, which wasm
-# traps on (never run natively: it reads past the vector). No wasm construct catches a trap, so only
-# the next top-level entry's reset clears the catch's entry; Julia's stack is empty once the call
+# traps on (never run natively: it reads past the vector). No wasm construct catches a trap: the
+# next top-level entry's reset clears the catch's entry; Julia's stack is empty once the call
 # returns to the host either way
 _wt_eb_tp(x::Int64) = try; throw(ArgumentError("q")); catch; (v = Int64[1]; @inbounds v[x + 10]); end
-# a callback's tag escape into the caller's catch: the import's decrement never runs, so the
-# landing restores the count the region's enter saved (else the next call is taken as re-entrant)
+# a callback's tag escape into the caller's catch: the glue's finally lowers the count as the
+# escape leaves the import (else the next call is taken as re-entrant)
 _wt_eb_lc(x::Int64) = try; _wt_eb_cb(x); 1; catch; 0; end
 # Julia's J2: a re-entrant callee reads its caller's stack. `cbr` calls the export `r` back from
 # inside `o`'s catch, so r's `rethrow()` rethrows o's ArgumentError (native 1); counted as
 # top-level, r's entry would reset the stack and answer 2 (dev/AUDIT.md A13E2)
 @noinline _wt_eb_cbr(x::Int64) = _wt_eb_r(x)
 _wt_eb_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_cbr(x); end
-# a region entered inside a re-entrant call lands a nested callback's escape: `lc`'s landing
-# restores the count its enter saved (1, not 0), so the `cbr` after `cb2` is counted re-entrant
-# and `r` reads o2's ArgumentError (native 1). With the enter's save reverted the landing read
-# a fresh local, 0: `cbr`'s call was taken as top-level, r's entry reset the stack and answered
-# 2 (A13E2). The next landing of any region restores its own save, so the count heals before a
-# later top-level call: only a call inside the same catch observes it. The stub keeps lc's call
-# (donotdelete): lc catches everything, so Julia infers the stub effect-free and deletes its call
+# a region entered inside a re-entrant call lands a nested callback's escape: the count after it
+# is the glue's (1, `cb2` still open), so the `cbr` after `cb2` is re-entrant and `r` reads o2's
+# ArgumentError (native 1); taken as top-level, r's entry would reset the stack and answer 2
+# (A13E2). The stub keeps lc's call (donotdelete): lc catches everything, so Julia infers the
+# stub effect-free and deletes its call
 @noinline _wt_eb_cb2(x::Int64) = (Base.donotdelete(_wt_eb_lc(x)); nothing)
 _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_eb_cbr(0); end
 
@@ -156,16 +154,19 @@ _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_
         import_stubs=Any[(_wt_eb_cb, "cb", (Int64,), ids[1], Nothing), (_wt_eb_cbd, "cbd", (Int64,), ids[2], Nothing),
                          (_wt_eb_cbt, "cbt", (Int64,), ids[3], Nothing), (_wt_eb_cb2, "cb2", (Int64,), ids[4], Nothing),
                          (_wt_eb_cbr, "cbr", (Int64,), ids[5], Int64)])
-    # every call of a host-declared import is counted open (L156; dev/formal/ExceptionStack.tla
-    # ImportCall and ImportReturn): the premise of every answer below
-    @test uncounted_host_import_calls(m) == 0
+    # every call of a host-declared import saves the top at its slot before and restores it after
+    # a normal return (L156; dev/formal/ExceptionStack.tla ImportCall and ImportReturn), and the
+    # boundary is the host's: no wasm code writes the count, and no entry holds a try or a local
+    # (L156): the premises of every answer below
+    @test unsaved_host_import_calls(m) == 0
+    @test wasm_boundary_sites(m) == 0
     bytes = WasmTarget.to_bytes(m)
     driver = """
     const importObject = $(WasmTarget.host_runtime_js());
     let inst;
     importObject.host = { cb: (x) => inst.exports.b(x), cbd: (x) => inst.exports.d(x), cbt: (x) => { throw new TypeError('dom'); },
                           cb2: (x) => inst.exports.lc(x), cbr: (x) => inst.exports.r(x) };
-    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     inst = instance; const ex = instance.exports;
     const call = (f, a) => { try { return String(ex[f](a)); } catch (e) { return (e instanceof WebAssembly.Exception) ? 'julia' : (e instanceof WebAssembly.RuntimeError) ? 'trap' : ('js:' + e.constructor.name); } };
     const s = call('s', 100000000n); const r1 = call('r', 0n);
@@ -180,12 +181,164 @@ _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_
     @test status === :ok
     # `s` slot: stack exhaustion escapes as the engine's RangeError, where Julia raises a
     # StackOverflowError a Julia `catch` catches (dev/MARCH.md 13.17 H8): WT's current answer,
-    # asserted as such. The `r` after it answers 2 only through the next top-level call's reset;
-    # inside an import or a re-entrant call nothing restores the stack (13.17 A13E1)
+    # asserted as such. The `r` after it answers 2 through the next top-level call's reset
     @test results[1]["ok"] == [string(native["h5"]), string(native["p2"]), "js:RangeError", string(native["s_then_r"]),
                                "js:TypeError", string(native["it_then_r"]), "trap", string(native["trap_then_r"]),
                                "0", "trap", string(native["lc_trap_then_r"]), string(native["o"]),
                                string(native["o2"]), "trap", string(native["o2_trap_then_r"])]
+end
+
+# Escapes no wasm construct catches, at the boundary the host owns (dev/formal/ExceptionStack.tla):
+# stack exhaustion inside a host-declared import or a re-entrant call, and a re-entrant trap the
+# host catches or lets propagate. The glue's finally lowers the count on every exit of an import,
+# a call site restores the top from its slot after a normal return, and a re-entrant entry takes
+# the top from the open import's slot. A stub that calls an export back natively does so through
+# invokelatest: Julia infers the callee nothrow (stack exhaustion is not an effect) and would elide
+# a direct call's try. A trapping callee runs natively as one that raises an error the host
+# catches (Julia's J2), as trap_then_r does above.
+@noinline _wt_hb_rec(n::Int64) = n == 0 ? 0 : 1 + _wt_hb_rec(n - 1)
+# the import variant: the import overflows the JS stack (natively its stub raises)
+@noinline _wt_hb_cbo(x::Int64) = (error("dom"); nothing)
+_wt_hb_a(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_hb_cbo(x); 0; end
+# the re-entrant variant: the host's cb calls s2 and catches its exhaustion
+_wt_hb_s2(x::Int64) = try; throw(DomainError(x)); catch; _wt_hb_rec(10^8); end
+@noinline _wt_hb_cb(x::Int64) = (try; Base.invokelatest(_wt_hb_s2, x); catch; end; nothing)
+_wt_hb_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb(x); try; rethrow(); catch e; e isa ArgumentError ? 1 : 2; end; end
+# o_again: then, inside the same import, cb calls r, which reads o's ArgumentError
+@noinline _wt_hb_cbg(x::Int64) = (try; Base.invokelatest(_wt_hb_s2, x); catch; end; Base.invokelatest(_wt_eb_r, 0)::Int64)
+_wt_hb_og(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cbg(x); end
+# h6: cb calls t6, which throws DomainError and traps in its catch; cb catches the trap
+_wt_hb_t6(x::Int64) = try; throw(DomainError(x)); catch; (v = Int64[1]; @inbounds v[x + 10]); end
+_wt_hb_t6n(x::Int64) = try; throw(DomainError(x)); catch; error("trap"); end
+@noinline _wt_hb_cb6(x::Int64) = (try; Base.invokelatest(_wt_hb_t6n, x); catch; end; nothing)
+_wt_hb_o6(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb6(x); try; rethrow(); catch e; e isa ArgumentError ? 1 : 2; end; end
+# h7: cb7 lets t6's trap propagate through the import and out of o7
+@noinline _wt_hb_cb7(x::Int64) = (Base.invokelatest(_wt_hb_t6n, x); nothing)
+_wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; end
+
+@testset "the export boundary is the host's: stack exhaustion and traps leave Julia's stack" begin
+    native = Dict("a_then_r" => (try; _wt_hb_a(1); catch; end; _wt_eb_r(0)), "o" => _wt_hb_o(1),
+                  "o_again" => _wt_hb_og(1), "h6" => _wt_hb_o6(1), "h7_then_r" => (try; _wt_hb_o7(1); catch; end; _wt_eb_r(0)))
+    @test native == Dict("a_then_r" => 2, "o" => 1, "o_again" => 1, "h6" => 1, "h7_then_r" => 2)
+    mod = WasmTarget.WasmModule()
+    v = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
+    ids = Dict(n => WasmTarget.add_import!(mod, "host", n, v...) for n in ("cbo", "cb", "cb6", "cb7"))
+    ids["cbg"] = WasmTarget.add_import!(mod, "host", "cbg", WasmTarget.WasmValType[WasmTarget.I64],
+                                        WasmTarget.WasmValType[WasmTarget.I64])
+    m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_hb_a, (Int64,), "a"), (_wt_hb_s2, (Int64,), "s2"),
+                                      (_wt_hb_o, (Int64,), "o"), (_wt_hb_og, (Int64,), "og"), (_wt_hb_t6, (Int64,), "t6"),
+                                      (_wt_hb_o6, (Int64,), "o6"), (_wt_hb_o7, (Int64,), "o7")];
+        existing_module=mod,
+        import_stubs=Any[(_wt_hb_cbo, "cbo", (Int64,), ids["cbo"], Nothing), (_wt_hb_cb, "cb", (Int64,), ids["cb"], Nothing),
+                         (_wt_hb_cbg, "cbg", (Int64,), ids["cbg"], Int64), (_wt_hb_cb6, "cb6", (Int64,), ids["cb6"], Nothing),
+                         (_wt_hb_cb7, "cb7", (Int64,), ids["cb7"], Nothing)])
+    bytes = WasmTarget.to_bytes(m)
+    host = """
+    importObject.host = { cbo: (x) => { const f = (n) => f(n + 1) + 1; return f(0); },
+                          cb: (x) => { try { inst.exports.s2(x); } catch (e) {} },
+                          cbg: (x) => { try { inst.exports.s2(x); } catch (e) {} return inst.exports.r(0n); },
+                          cb6: (x) => { try { inst.exports.t6(x); } catch (e) {} },
+                          cb7: (x) => { inst.exports.t6(x); } };
+    """
+    driver = """
+    const importObject = $(WasmTarget.host_runtime_js());
+    let inst;
+    $host
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+    inst = instance; const ex = instance.exports;
+    const call = (f, a) => { try { return String(ex[f](a)); } catch (e) { return (e instanceof WebAssembly.Exception) ? 'julia' : (e instanceof WebAssembly.RuntimeError) ? 'trap' : ('js:' + e.constructor.name); } };
+    const a = call('a', 1n); const r1 = call('r', 0n);
+    const o = call('o', 1n); const og = call('og', 1n); const o6 = call('o6', 1n);
+    const o7 = call('o7', 1n); const r2 = call('r', 0n);
+    return [{ ok: [a, r1, o, og, o6, o7, r2] }];
+    """
+    status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1, deadline=60.0)
+    @test status === :ok
+    # `a` and `s2` escape as the engine's RangeError (H8, as the `s` slot above); t6's trap as a trap
+    @test results[1]["ok"] == ["js:RangeError", string(native["a_then_r"]), string(native["o"]), string(native["o_again"]),
+                               string(native["h6"]), "trap", string(native["h7_then_r"])]
+
+    # the glue is the module's runtime too: a module with a host-declared import imports its count,
+    # so a host that instantiates without the glue is refused, by name
+    refused = """
+    const importObject = $(WasmTarget.host_runtime_js());
+    let inst;
+    $host
+    try { await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] }); return [{ ok: 'instantiated' }]; }
+    catch (e) { return [{ ok: e.constructor.name + ': ' + e.message }]; }
+    """
+    status, results = WasmRunner.run_driver_batch(bytes, refused; ninputs=1)
+    @test status === :ok
+    @test startswith(results[1]["ok"], "LinkError: ") && occursin("wasmtarget", results[1]["ok"]) &&
+          occursin("host_imports_open", results[1]["ok"])
+    # the glue wraps exactly the module's host-declared imports (_is_host_declared_import), and the
+    # module imports the count as a global
+    declared = sort!([imp.module_name * "." * imp.field_name for imp in m.imports if WasmTarget._is_host_declared_import(imp)])
+    @test declared == ["host.cb", "host.cb6", "host.cb7", "host.cbg", "host.cbo"]
+    wrapped = """
+    const importObject = $(WasmTarget.host_runtime_js());
+    let inst;
+    $host
+    const glued = ($(WasmTarget.host_glue_js()))(importObject);
+    const imports = WebAssembly.Module.imports(new WebAssembly.Module(bytes, { builtins: ['js-string'] }));
+    const fns = imports.filter(i => i.kind === 'function').map(i => i.module + '.' + i.name);
+    const changed = fns.filter(n => { const [m, f] = n.split('.'); return glued[m][f] !== importObject[m][f]; });
+    const globals = imports.filter(i => i.kind === 'global').map(i => i.module + '.' + i.name);
+    return [{ ok: [changed.sort(), globals, glued.wasmtarget.host_imports_open instanceof WebAssembly.Global] }];
+    """
+    status, results = WasmRunner.run_driver_batch(bytes, wrapped; ninputs=1)
+    @test status === :ok
+    @test results[1]["ok"] == Any[declared, ["wasmtarget.host_imports_open"], true]
+end
+
+# Every refusal the host's count brings names both the items it is between: the count import
+# after a defined global, a host-declared import added after setup, and a global index that names
+# the imported count, at each of the four entries that take one. A framework that defines its own
+# globals before compiling imports the count itself (ensure_host_imports_open!).
+@noinline function _wt_hb_gw(g::WasmGlobal{Int32,0})::Int32
+    g[] = g[] + Int32(1)
+    return g[]
+end
+_wt_hb_err(f) = (try; f(); nothing; catch err; err; end)
+
+@testset "the host's count: each refusal names both its items" begin
+    sig = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
+    roots = Any[(_wt_eb_r, (Int64,), "r")]
+    # a global defined before setup: the count cannot precede it
+    m1 = WasmTarget.WasmModule()
+    WasmTarget.add_import!(m1, "host", "cb", sig...)
+    WasmTarget.add_global!(m1, WasmTarget.I64, true, 0; name="\$mine")
+    e1 = _wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=m1))
+    @test e1 isa ArgumentError && occursin("host.cb", e1.msg) && occursin("\$mine", e1.msg) &&
+          occursin("ensure_host_imports_open!", e1.msg)
+    # the framework's path: the count imported after its host imports, before its own global
+    m2 = WasmTarget.WasmModule()
+    WasmTarget.add_import!(m2, "host", "cb", sig...)
+    WasmTarget.ensure_host_imports_open!(m2)
+    mine = WasmTarget.add_global!(m2, WasmTarget.I64, true, 0; name="\$mine")
+    @test WasmTarget.global_named(m2, "\$host_imports_open") == 0 && mine == 1
+    compiled = WasmTarget.compile_module(roots; existing_module=m2)
+    @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(WasmTarget.to_bytes(compiled))))
+    # a host-declared import with no count (added after setup) is refused where the count is read
+    m3 = WasmTarget.WasmModule()
+    WasmTarget.add_import!(m3, "host", "late", sig...)
+    e3 = _wt_hb_err(() -> WasmTarget.host_imports_open_global!(m3))
+    @test e3 isa ArgumentError && occursin("host.late", e3.msg) && occursin("wasmtarget.host_imports_open", e3.msg)
+    # a global index naming the imported count, at each entry that takes one
+    counted() = (m = WasmTarget.WasmModule(); WasmTarget.add_import!(m, "host", "cb", sig...);
+                 WasmTarget.ensure_host_imports_open!(m); m)
+    names_both(e, what) = e isa ArgumentError && occursin(what, e.msg) && occursin(" 0 ", e.msg) &&
+                          occursin("wasmtarget.host_imports_open", e.msg)
+    @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")];
+                                                                 existing_module=counted())), "WasmGlobal index")
+    @test names_both(_wt_hb_err(() -> WasmTarget.add_root_global_initializer!(counted(), WasmTarget.TypeRegistry(), 0, 0)),
+                     "framework global index")
+    @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=counted(),
+                         root_bindings=Dict("r" => WasmTarget.RootBindings(captured_globals=Dict(:x => (true, UInt32(0))))))),
+                     "captured global index")
+    @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=counted(),
+                         root_bindings=Dict("r" => WasmTarget.RootBindings(dom_bindings=Dict(UInt32(0) => [(UInt32(0), Int32[])]))))),
+                     "DOM binding global index")
 end
 
 # Each function this compile defines is exported once, by its entry when the module has the
@@ -222,22 +375,25 @@ end
     @test fname2(only(e for e in m2.exports if e.name == "esc_d2").idx) == "esc_d2 (export)"
     @test fname2(only(e for e in m2.exports if e.name == "esc").idx) == "pre"
 
-    # an export entry keeps its results in locals across its try_table, so a result that is not
-    # defaultable (a hook's export of a function returning `(ref $t)`) rejects, naming the
-    # export, where the builder does not track local initialization (A13B1 = A13B6; dev/MARCH.md
-    # 13.17: without the check the module is invalid, an uninitialized non-defaultable local)
+    # an export entry is a prologue with no local and no try, so a result that is not defaultable
+    # (a hook's export of a function returning `(ref $t)`) leaves on the stack: the module
+    # compiles, validates and runs (A13B1 = A13B6: the entry kept its results in locals across a
+    # try_table and rejected such a result)
     mod3 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod3)
     t3 = WasmTarget.add_type!(mod3, WasmTarget.StructType([WasmTarget.FieldType(WasmTarget.I64, false)]))
     mk = WasmTarget.add_function!(mod3, WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.ConcreteRef(t3, false)],
                                   WasmTarget.WasmValType[], UInt8[0x42, 0x00, 0xfb, 0x00, UInt8(t3), 0x0b]; name="mk")
-    e3 = try
-        WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod3,
-            link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk))
-        nothing
-    catch err
-        err
-    end
-    @test e3 isa WasmTarget.WasmCompileError
-    @test occursin("\"mk\"", sprint(showerror, e3)) && occursin("not defaultable", sprint(showerror, e3))
+    m3 = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod3,
+        link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk))
+    fname3(i) = m3.functions[Int(i) - WasmTarget.num_imported_funcs(m3) + 1].name
+    @test fname3(only(e for e in m3.exports if e.name == "mk").idx) == "mk (export)"
+    bytes3 = WasmTarget.to_bytes(m3)
+    @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(bytes3)))
+    status, results = WasmRunner.run_driver_batch(bytes3, """
+    const importObject = $(WasmTarget.host_runtime_js());
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+    return [{ ok: typeof instance.exports.mk() }];
+    """; ninputs=1)
+    @test status === :ok && results[1]["ok"] == "object"
 end

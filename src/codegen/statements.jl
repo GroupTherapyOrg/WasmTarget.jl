@@ -644,12 +644,9 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # try_table and catch landing for this EnterNode (stackified.jl: try_open_at), one
         # lowering route, as dart2wasm's visitTryCatch owns its region. Here the region only
         # records the exception stack's depth when it is entered (jl_excstack_state), which
-        # its pop_exception restores, and the count of open host-declared imports, which its
-        # catch landing restores.
+        # its pop_exception restores.
         global_get!(b, ensure_exception_top_global!(ctx.mod), ConcreteRef(exc_cell_type!(ctx.mod), true))
         local_set!(b, exc_saved_local!(ctx, idx))
-        local _count = host_imports_open_global!(ctx.mod)
-        _count === nothing || (global_get!(b, _count, I32); local_set!(b, exc_saved_local!(ctx, idx; count=true)))
 
     elseif node isa NirGlobalRef
         # A bare global read as a statement: straight-line global.get/local.set via typed

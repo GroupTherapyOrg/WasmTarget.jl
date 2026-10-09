@@ -39,6 +39,17 @@ function RootBindings(; captured_globals=Dict{Symbol,Tuple{Bool,UInt32}}(),
                  elide_closure_context, void_return)
 end
 
+# A global index a framework or a WasmGlobal argument names is one the program defines, never an
+# imported global: in a module with a host-declared import, global 0 is the count of its open
+# calls, which only the host's glue writes (host_glue_js).
+# parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
+function _refuse_imported_global(mod::WasmModule, global_idx::Integer, what::String)::Nothing
+    (0 <= global_idx < length(mod.globals) && mod.globals[Int(global_idx) + 1] isa WasmGlobalImport) || return nothing
+    local g = mod.globals[Int(global_idx) + 1]
+    throw(ArgumentError("$what $global_idx names the imported global $(g.module_name).$(g.field_name), " *
+                        "not one the program defines"))
+end
+
 """Add a nullable mutable reference global for initialization by a linked root.
 parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
@@ -60,6 +71,7 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
                                       global_idx::Integer, root_idx::Integer)::UInt32
     0 <= global_idx < length(mod.globals) ||
         throw(ArgumentError("framework global index $global_idx is out of bounds"))
+    _refuse_imported_global(mod, global_idx, "framework global index")
     global_def = mod.globals[Int(global_idx) + 1]
     global_def.mutable_ || throw(ArgumentError("framework global $global_idx is immutable"))
     root_type = _function_type(mod, root_idx)
@@ -288,6 +300,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     (existing_module !== nothing && _stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
         throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
                             "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
+    # a module with a host-declared import imports the count of its open calls, which the host's
+    # glue writes (host_glue_js), before any global it defines
+    ensure_host_imports_open!(mod)
     ensure_provenance_imports!(mod)
     source_map_url === nothing || (mod.source_map_url = source_map_url)
     trace === nothing || ensure_trace_imports!(mod)
@@ -344,8 +359,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         for (_, (_, global_idx)) in bindings.captured_globals
             Int(global_idx) < length(mod.globals) || throw(ArgumentError(
                 "root $root_name references missing global index $global_idx"))
+            _refuse_imported_global(mod, global_idx, "root $root_name's captured global index")
         end
         for (global_idx, updates) in bindings.dom_bindings
+            _refuse_imported_global(mod, global_idx, "root $root_name's DOM binding global index")
             Int(global_idx) < length(mod.globals) || throw(ArgumentError(
                 "root $root_name DOM binding references missing global index $global_idx"))
             for (import_idx, _) in updates
@@ -450,6 +467,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # Add all required globals to the module
     for global_idx in sort(collect(keys(required_globals)))
         wasm_type, elem_type = required_globals[global_idx]
+        _refuse_imported_global(mod, global_idx, "WasmGlobal index")
         while length(mod.globals) <= global_idx
             add_global!(mod, wasm_type, true, zero(elem_type))
         end

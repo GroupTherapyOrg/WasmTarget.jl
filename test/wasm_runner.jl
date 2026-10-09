@@ -22,9 +22,13 @@ using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
 import WasmTarget
 
 # Every import WT's code generator creates, answered by the module's runtime
-# (WasmTarget.host_runtime_js), beside what a test's own importObject answers — its answers win.
+# (WasmTarget.host_runtime_js), beside what a test's own importObject answers — its answers win —
+# then the glue (WasmTarget.host_glue_js): the count of open host-declared import calls, imported
+# by a module that has one, and each host-declared import wrapped to keep it.
 const HOST_RUNTIME_MERGE_JS = "for (const [m, fs] of Object.entries($(WasmTarget.host_runtime_js()))) " *
-                              "importObject[m] = Object.assign({}, fs, importObject[m] || {});"
+                              "importObject[m] = Object.assign({}, fs, importObject[m] || {}); " *
+                              "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
+                              "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"
 
 export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE
 

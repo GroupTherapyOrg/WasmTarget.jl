@@ -199,33 +199,71 @@ macro test_wasm_output(wasm_bytes, func_name, args, expected)
 end
 
 # ============================================================================
-# The export boundary's import count
+# The export boundary, the host's
 # ============================================================================
 
-"""
-    uncounted_host_import_calls(mod) -> Int
+# a module as wasm-tools prints it, its name section stripped so every index is a number
+_printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
+    String[strip(l) for l in split(read(pipeline(pipeline(`wasm-tools strip --all`;
+        stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String), '\n')]
 
-The calls of a host-declared import in `mod` that are not counted open in `\$host_imports_open`.
-Each `call` of one must sit directly after the count's increment and directly before its
-decrement (emit_direct_call!), the premise of the export boundary's claim
-(dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an uncounted call makes a
-re-entrant export top-level, which resets the stack its caller's catch reads. Which imports
-are host-declared is the compiler's own rule (_is_host_declared_import). Read from the module's
-code as wasm-tools prints it, its name section stripped so every index is a number (L156).
 """
-function uncounted_host_import_calls(mod::WasmTarget.WasmModule)::Int
+    unsaved_host_import_calls(mod) -> Int
+
+The calls of a host-declared import in `mod` that do not sit directly between the save of the top
+at the open import's slot and its restore after a normal return (emit_direct_call!): the call of
+the module's one save helper, `import_tops save`, directly before, and `global.get \$import_tops;
+global.get \$host_imports_open; array.get; global.set \$exc_top` directly after. The premise of the
+export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an unsaved
+call leaves a re-entrant export to take a stale top, and an unrestored one leaves its caller the
+callee's. Which imports are host-declared is the compiler's own rule (_is_host_declared_import).
+Read from the module's code as wasm-tools prints it (L156).
+"""
+function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
     local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
     local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
-    local g = WasmTarget.global_named(mod, "\$host_imports_open")
-    local text = read(pipeline(pipeline(`wasm-tools strip --all`; stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String)
-    local lines = String[strip(l) for l in split(text, '\n')]
-    local inc = ["global.get $g", "i32.const 1", "i32.add", "global.set $g"]
-    local dec = ["global.get $g", "i32.const 1", "i32.sub", "global.set $g"]
+    local count = WasmTarget.global_named(mod, "\$host_imports_open")
+    local tops = WasmTarget.global_named(mod, "\$import_tops")
+    local top = WasmTarget.global_named(mod, "\$exc_top")
+    local save = findfirst(f -> f.name == "import_tops save", mod.functions)
+    local lines = _printed_lines(mod)
     local n = 0
     for (k, l) in enumerate(lines)
         local c = match(r"^call (\d+)$", l)
         (c !== nothing && parse(Int, c.captures[1]) in host) || continue
-        (g !== nothing && k > 4 && lines[k-4:k-1] == inc && k + 4 <= length(lines) && lines[k+1:k+4] == dec) || (n += 1)
+        local saved = save !== nothing && k > 1 && lines[k-1] == "call $(length(funcs) + save - 1)"
+        local restored = tops !== nothing && count !== nothing && top !== nothing && k + 4 <= length(lines) &&
+            lines[k+1:k+4] == ["global.get $tops", "global.get $count",
+                               "array.get $(mod.globals[tops + 1].valtype.type_idx)", "global.set $top"]
+        (saved && restored) || (n += 1)
+    end
+    return n
+end
+
+"""
+    wasm_boundary_sites(mod) -> Int
+
+The places where `mod`'s wasm code takes part of the export boundary the host owns: a `global.set`
+of the imported count `\$host_imports_open` (only the glue's finally writes it, host_glue_js), and in
+each export entry (a function named "<name> (export)") a `try`, a `try_table` or a declared local
+(the entry is a prologue that passes every escape untouched, emit_export_entry!). Read from the
+module's code as wasm-tools prints it (L156).
+"""
+function wasm_boundary_sites(mod::WasmTarget.WasmModule)::Int
+    local count = WasmTarget.global_named(mod, "\$host_imports_open")
+    local entries = Set(WasmTarget.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
+                        if endswith(f.name, " (export)"))
+    local n = 0
+    local in_entry = false
+    for l in _printed_lines(mod)
+        local f = match(r"^\(func \(;(\d+);\)", l)
+        if f !== nothing
+            in_entry = parse(Int, f.captures[1]) in entries
+        elseif startswith(l, "(") && !startswith(l, "(local")
+            in_entry = false
+        end
+        count !== nothing && l == "global.set $count" && (n += 1)
+        in_entry && (startswith(l, "(local") || occursin(r"^try(_table)?\b", l)) && (n += 1)
     end
     return n
 end
@@ -257,7 +295,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 async function validate() {
     try {
         const importObject = $(WasmTarget.host_runtime_js());
-        const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+        const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
     } catch (e) {
@@ -749,7 +787,7 @@ function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
     lines = String[]
     push!(lines, "  try {")
     push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
-    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
     # Marshal each argument
@@ -946,7 +984,7 @@ function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_m
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
     push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
-    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
     call_args = String[]
@@ -1057,7 +1095,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     driver = """
     const inputs = $(inputs_js);
     const importObject = $(WasmTarget.host_runtime_js());
-    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
     const desc = $(JSON.json(desc));
@@ -1124,7 +1162,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
     const importObject = $(WasmTarget.host_runtime_js());
-    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
     const adescs = $(JSON.json(adescs));

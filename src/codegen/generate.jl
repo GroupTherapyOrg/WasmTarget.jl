@@ -354,6 +354,38 @@ function host_runtime_js()::String
 end
 
 """
+    host_glue_js() -> String
+
+The glue a host instantiates a WasmTarget module through, as a JavaScript expression: a function
+`(importObject) => importObject'`. It creates the count of open calls of host-declared imports,
+`open`, a mutable i32 `WebAssembly.Global`, and hands it to the module as
+`wasmtarget.host_imports_open` (ensure_host_imports_open!); it wraps every function the import
+object holds that is a host-declared import (_is_host_declared_import: not of module
+`wasmtarget`, not answered by HOST_RUNTIME, whose list it reads) in
+`(...a) => { open.value++; try { return f(...a); } finally { open.value--; } }`. The finally runs
+on every exit of the import's frame, also when stack exhaustion or a trap below it, which no wasm
+catch observes, unwinds it, so the count is exact at every point, and no wasm code writes it. An
+export the host calls while the count is not 0 is re-entrant (emit_export_entry!). A module with
+a host-declared import instantiated without the glue is refused: its count is a missing import.
+formal(dev/formal/ExceptionStack.tla): GlueFinally, the count lowered on every exit of an import.
+parity(quarantine: Julia's host is the catching frame of every call, julia.h:2548/:2555, and the only frame that observes stack exhaustion and traps, which V8 lets no wasm catch observe, legacy or exnref (measured on Node 22.23.3 and 26.11.0); dart generates the JS for each import, js/runtime_generator.dart:60 generateJsMethods, and wraps none in a finally)
+"""
+function host_glue_js()::String
+    local runtime = join(("$(repr(m)): [" * join((repr(f) for (mm, f, _) in HOST_RUNTIME if mm == m), ", ") * "]"
+                          for m in unique(first.(HOST_RUNTIME))), ", ")
+    return "((importObject) => { " *
+           "const open = new WebAssembly.Global({ value: 'i32', mutable: true }, 0); " *
+           "const runtime = { $(runtime) }; const glued = {}; " *
+           "for (const [m, fs] of Object.entries(importObject)) { glued[m] = Object.assign({}, fs); " *
+           "if (m === 'wasmtarget') continue; " *
+           "for (const [f, fn] of Object.entries(fs)) { " *
+           "if (typeof fn !== 'function' || (runtime[m] || []).includes(f)) continue; " *
+           "glued[m][f] = (...a) => { open.value++; try { return fn(...a); } finally { open.value--; } }; } } " *
+           "glued.wasmtarget = Object.assign({}, glued.wasmtarget, { host_imports_open: open }); " *
+           "return glued; })"
+end
+
+"""
     ensure_provenance_imports!(mod)
 
 What every module adds when it is created, before any definition: the import
@@ -486,80 +518,91 @@ end
     emit_export_entry!(mod, inner_idx, name) -> func_idx
 
 The function an export calls in place of `inner_idx`, as the host is the catching frame whose
-JL_TRY records the depth of Julia's exception stack and whose JL_CATCH restores it
-(jl_restore_excstack) on every escape. A call made with no host-declared import open is
-top-level and starts with an empty stack (Julia's host call does, whatever the previous call
-did); a re-entrant one, from inside a host-declared import, starts with its caller's. The entry
-saves the top and the count of open host-declared imports (host_imports_open_global!), calls
-the inner inside a result-less `try_table (catch_all_ref)`, and when a Julia exception or a JS
-exception a host-declared import throws escapes, restores both and rethrows it with
-`throw_ref`, its payload unchanged. Between a host-import call site and this entry every frame
-is Julia's, which catches only the tag, so a JS exception unwinds every Julia region to here
-(dev/MARCH.md 13.17: a Julia `catch` or `finally` does not see it). Stack exhaustion, which V8
-makes uncatchable by wasm as a trap is, restores nothing: the next top-level call's reset clears
-it; inside an import or a re-entrant call it is dev/MARCH.md 13.17 A13E1. A trap restores
-nothing: the host contract says an instance that trapped is discarded (13.17, H6 and H7). The
-inner keeps its own name; this one is "<export name> (export)", as dart names an import
-"<name> (import)" (functions.dart:141). An inner whose result is not defaultable rejects: the
-results stay in locals across the try_table (dev/MARCH.md 13.17 A13B1).
-formal(dev/formal/ExceptionStack.tla): every escape leaves the stack as Julia's host leaves it, except H6, H7 and A13E1.
-parity(quarantine: Julia's per-task exception stack outlives a call; the host is the catching frame that restores its depth on every escape, jl_restore_excstack; dart's catch state is lexical, code_generator.dart:2966 visitRethrow. Its catch_all_ref, L101's one allowed site, observes the tag, a JS exception and any other module's tag; dart observes a JS unwind by catching the imported WebAssembly.JSTag beside its own tag (tags.dart:45 _importJsExceptionTag; code_generator.dart:1156-1162 visitTryFinally), which WT does not import yet (dev/MARCH.md 13.17, C2). The rejection of a non-defaultable result stands in for the local-initialization tracking WT's builder lacks, dart's local_get check (instructions.dart:1018; dev/MARCH.md 13.17 A13B1).)
+JL_TRY records the depth of Julia's exception stack at the call (julia.h:2548). A call made with
+no host-declared import open is top-level and starts with an empty stack (Julia's host call does,
+whatever the previous call did); a re-entrant one, from inside a host-declared import, starts
+with its caller's stack, the top that import's call saved at its slot (emit_direct_call!). The
+entry is a prologue: it sets the top, null when the count of open host-declared imports is 0 or
+the module has no count, else `\$import_tops[count - 1]`, then calls the inner with its
+parameters, the results leaving on the stack. It has no try and no local: an escape passes it
+untouched, its payload exact (L145), and nothing is restored on the way out; a stale top lives
+only until the next point that reads it, the next entry, an import's normal return, or a landing,
+which takes its top by identity. The inner keeps its own name; this one is
+"<export name> (export)", as dart names an import "<name> (import)" (functions.dart:141).
+formal(dev/formal/ExceptionStack.tla): every escape leaves the stack as Julia's host leaves it (TopLevelReset, EntryTakesSlot), except dev/MARCH.md 13.17 H11 (MCExceptionStackReraiseSharedBroken); H8 is outside the model.
+parity(quarantine: Julia's per-task exception stack outlives a call, and the host is the catching frame that starts a top-level call with an empty stack and a re-entrant one with its caller's, julia.h:2548 jl_excstack_state; dart's catch state is lexical, code_generator.dart:2966 visitRethrow.)
 """
 function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::UInt32
     local ft = mod.types[Int(mod.functions[Int(inner_idx) - num_imported_funcs(mod) + 1].type_idx) + 1]::FuncType
-    for r in ft.results
-        defaultable(r) || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, name,
-            "the export \"$(name)\" returns $(r), which is not defaultable: an export entry keeps the " *
-            "results in locals across its try_table, and a non-defaultable local is unset after the " *
-            "block's end (dev/MARCH.md 13.17 A13B1)", nothing, r)))
-    end
     local top = ensure_exception_top_global!(mod)
     local cell = ConcreteRef(exc_cell_type!(mod), true)
     local count = host_imports_open_global!(mod)
     local b = InstrBuilder(copy(ft.params), copy(ft.results); func_name="emit_export_entry!", mod=mod)
-    local saved = builder_add_local!(b, cell)
-    # a top-level call (no host-declared import open; every call, in a module with none) starts
-    # with an empty stack
-    count === nothing || (global_get!(b, count, I32); num!(b, Opcode.I32_EQZ); if_!(b))
-    ref_null!(b, cell.type_idx, cell); global_set!(b, top)
-    count === nothing || end_block!(b)
-    global_get!(b, top, cell); local_set!(b, saved)
-    local saved_count = count === nothing ? nothing : builder_add_local!(b, I32)
-    count === nothing || (global_get!(b, count, I32); local_set!(b, saved_count))
-    # the try_table has no results: the call's results go to locals, as every try_table WT emits
-    # (V8 12.4, Node 22, traps on entering a try_table whose result is a concrete reference)
-    local result_locals = Int[builder_add_local!(b, r) for r in ft.results]
-    local escaped = block!(b; results=WasmValType[ExnRef])
-    try_table!(b, [catch_all_ref_clause(escaped)])
+    if count === nothing
+        ref_null!(b, cell.type_idx, cell)
+    else
+        # a re-entrant call starts with the top at its open import's call
+        global_get!(b, count, I32); num!(b, Opcode.I32_EQZ)
+        if_!(b; results=WasmValType[cell])
+        ref_null!(b, cell.type_idx, cell)
+        else_!(b)
+        local tops = ensure_import_tops_global!(mod)
+        global_get!(b, tops, ConcreteRef(import_tops_type!(mod), true))
+        global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_SUB)
+        array_get!(b, import_tops_type!(mod), cell)
+        end_block!(b)
+    end
+    global_set!(b, top)
     for i in 0:length(ft.params) - 1; local_get!(b, i); end
     call!(b, inner_idx, ft.params, ft.results)
-    for l in reverse(result_locals); local_set!(b, l); end
-    end_block!(b)
-    for l in result_locals; local_get!(b, l); end
-    return_!(b)
-    end_block!(b)
-    local_get!(b, saved); global_set!(b, top)
-    count === nothing || (local_get!(b, saved_count); global_set!(b, count))
-    throw_ref!(b)
     finish_function!(b)
-    return add_function!(mod, ft.params, ft.results, b.locals[length(ft.params) + 1:end],
-                         builder_code(b); name=name * " (export)")
+    return add_function!(mod, ft.params, ft.results, WasmValType[], builder_code(b); name=name * " (export)")
+end
+
+"""
+    ensure_host_imports_open!(mod)
+
+At compile setup, in a module that holds a host-declared import (_is_host_declared_import), the
+import of the count of its open calls, `wasmtarget.host_imports_open`, a mutable i32 the host's
+glue answers and writes (host_glue_js); no wasm code writes it. An imported global precedes every
+defined one (add_global_import!), so a module that already defines a global when it is set up is
+refused here, naming the import and the global. A framework that defines its own globals before
+compiling calls this itself, after declaring its host imports and before its first global, as it
+calls ensure_provenance_imports! before its first definition.
+parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
+"""
+function ensure_host_imports_open!(mod::WasmModule)::Nothing
+    global_named(mod, "\$host_imports_open") === nothing || return nothing
+    local host = findfirst(_is_host_declared_import, mod.imports)
+    host === nothing && return nothing
+    local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
+    defined === nothing || throw(ArgumentError(
+        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) needs the " *
+        "imported count wasmtarget.host_imports_open, which must precede the module's defined global " *
+        "$(defined - 1)$(mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))"): " *
+        "call WasmTarget.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
+    add_global_import!(mod, "wasmtarget", "host_imports_open", I32, true; name="\$host_imports_open")
+    return nothing
 end
 
 """
     host_imports_open_global!(mod) -> Union{Nothing, UInt32}
 
-`\$host_imports_open`, the count of open calls of host-declared imports (emit_direct_call!),
-defined once and found by its name; `nothing` in a module with no host-declared import, where
-every export call is top-level. WT's own runtime imports (HOST_RUNTIME, a traced compile's
-`wasmtarget.trace_*`) never call an export back and count nothing.
-parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which wasm cannot observe but by counting; dart has no exception stack.)
+`\$host_imports_open`, the imported count of open calls of host-declared imports, found by its
+name (ensure_host_imports_open! imports it at compile setup); `nothing` in a module with no
+host-declared import, where every export call is top-level. WT's own runtime imports
+(HOST_RUNTIME, a traced compile's `wasmtarget.trace_*`) never call an export back and are not
+counted. A host-declared import added after the setup has no count, and is refused.
+parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
 """
 function host_imports_open_global!(mod::WasmModule)::Union{Nothing,UInt32}
     local g = global_named(mod, "\$host_imports_open")
     g === nothing || return g
-    any(imp -> _is_host_declared_import(imp), mod.imports) || return nothing
-    return add_global!(mod, I32, true, 0; name="\$host_imports_open")
+    local host = findfirst(_is_host_declared_import, mod.imports)
+    host === nothing || throw(ArgumentError(
+        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) was added " *
+        "after compile setup, which imports their count wasmtarget.host_imports_open (ensure_host_imports_open!)"))
+    return nothing
 end
 
 # an imported function the host declared, not one of WT's own runtime imports
@@ -568,22 +611,101 @@ _is_host_declared_import(imp)::Bool =
     imp.kind == 0x00 && imp.module_name != "wasmtarget" &&
     !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, HOST_RUNTIME)
 
+# `\$import_tops`'s array: a mutable array of exception-stack tops, nullable
+# parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
+import_tops_type!(mod::WasmModule)::UInt32 =
+    add_type!(mod, ArrayType(FieldType(ConcreteRef(exc_cell_type!(mod), true), true)))
+
+"""
+    ensure_import_tops_global!(mod) -> global_idx
+
+`\$import_tops`, the top of Julia's exception stack at each open call of a host-declared import,
+indexed by the count at the call: null until the first such call, then an array grown to hold
+the index (the save helper, import_tops_save!). Defined once and found by its name.
+parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
+"""
+function ensure_import_tops_global!(mod::WasmModule)::UInt32
+    local g = global_named(mod, "\$import_tops")
+    g === nothing || return g
+    local arr = import_tops_type!(mod)
+    return add_global!(mod, ConcreteRef(arr, true), true, nothing; name="\$import_tops")
+end
+
+"""
+    import_tops_save!(mod) -> func_idx
+
+The one helper a call of a host-declared import calls first: it stores the top of Julia's
+exception stack at index count of `\$import_tops`, growing the array to (count + 1) * 2 slots
+(array.new_default and array.copy) when it is null or too short. Defined once per module, at the
+first such call, and found by its name, "import_tops save".
+parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
+"""
+function import_tops_save!(mod::WasmModule)::UInt32
+    local i = findfirst(f -> f.name == "import_tops save", mod.functions)
+    i === nothing || return UInt32(num_imported_funcs(mod) + i - 1)
+    local count = something(host_imports_open_global!(mod))
+    local top = ensure_exception_top_global!(mod)
+    local tops = ensure_import_tops_global!(mod)
+    local arr = import_tops_type!(mod)
+    local arr_ref = ConcreteRef(arr, true)
+    local b = InstrBuilder(WasmValType[], WasmValType[]; func_name="import_tops_save!", mod=mod)
+    local grown = builder_add_local!(b, arr_ref)
+    # the array's length, 0 while it is null
+    global_get!(b, tops, arr_ref); ref_is_null!(b)
+    if_!(b; results=WasmValType[I32])
+    i32_const!(b, 0)
+    else_!(b)
+    global_get!(b, tops, arr_ref); array_len!(b)
+    end_block!(b)
+    # too short for index count: a new array of (count + 1) * 2 slots, the old one copied in
+    global_get!(b, count, I32); num!(b, Opcode.I32_LE_U)
+    if_!(b)
+    global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_ADD); i32_const!(b, 1); num!(b, Opcode.I32_SHL)
+    array_new_default!(b, arr)
+    local_set!(b, grown)
+    global_get!(b, tops, arr_ref); ref_is_null!(b); num!(b, Opcode.I32_EQZ)
+    if_!(b)
+    local_get!(b, grown); i32_const!(b, 0)
+    global_get!(b, tops, arr_ref); i32_const!(b, 0)
+    global_get!(b, tops, arr_ref); array_len!(b)
+    array_copy!(b, arr, arr)
+    end_block!(b)
+    local_get!(b, grown); global_set!(b, tops)
+    end_block!(b)
+    global_get!(b, tops, arr_ref)
+    global_get!(b, count, I32)
+    global_get!(b, top, ConcreteRef(exc_cell_type!(mod), true))
+    array_set!(b, arr, ConcreteRef(exc_cell_type!(mod), true))
+    finish_function!(b)
+    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[arr_ref], builder_code(b);
+                         name="import_tops save")
+end
+
 """
     emit_direct_call!(b, mod, func_idx) -> b
 
-A direct call of the function a registry or a host binding names, its arguments on the stack.
-A call of a host-declared import counts itself open in `\$host_imports_open` while it runs, so
-an export the host calls from inside it is re-entrant (emit_export_entry!).
-formal(dev/formal/ExceptionStack.tla): ImportCall and ImportReturn.
-parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which wasm cannot observe but by counting; dart's call, instructions.dart:947, counts nothing.)
+A direct call of the function a registry or a host binding names, its arguments on the stack. A
+call of a host-declared import first stores the top of Julia's exception stack at its slot, index
+count of `\$import_tops` (import_tops_save!), where an export the host calls back from inside it
+takes it (emit_export_entry!); after a normal return, the glue's finally having brought the count
+back to its value at the call, it sets the top from that slot. The count is the host's glue's
+(host_glue_js): no wasm code writes it.
+formal(dev/formal/ExceptionStack.tla): ImportCall and ImportReturn (ReturnRestores).
+parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
 """
 function emit_direct_call!(b::InstrBuilder, mod::WasmModule, func_idx::Integer)::InstrBuilder
     local imports = filter(imp -> imp.kind == 0x00, mod.imports)
-    local count = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1]) ?
-                  host_imports_open_global!(mod) : nothing
-    count === nothing || (global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_ADD); global_set!(b, count))
+    local host = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1])
+    host && call!(b, import_tops_save!(mod), WasmValType[], WasmValType[])
     call!(b, func_idx, WasmValType[], WasmValType[])
-    count === nothing || (global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_SUB); global_set!(b, count))
+    if host
+        local cell = ConcreteRef(exc_cell_type!(mod), true)
+        local tops = ensure_import_tops_global!(mod)
+        global_get!(b, tops, ConcreteRef(import_tops_type!(mod), true))
+        global_get!(b, something(host_imports_open_global!(mod)), I32)
+        array_get!(b, import_tops_type!(mod), cell)
+        global_set!(b, ensure_exception_top_global!(mod))
+    end
     return b
 end
 
@@ -592,13 +714,12 @@ end
 
 The local where try region `enter_idx` keeps the top of the exception stack when it is
 entered, its depth: its pop_exception restores it, as Julia's enter records
-jl_excstack_state and pop_exception calls jl_restore_excstack. With `count`, the local where
-it keeps `\$host_imports_open`, which its catch landing restores (keyed by `-enter_idx`).
+jl_excstack_state and pop_exception calls jl_restore_excstack.
 parity(quarantine: Julia's exception stack is task state that a region's enter and pop_exception save and restore; dart binds each catch's exception to its own locals (code_generator.dart:958 visitTryCatch).)
 """
-function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int; count::Bool=false)::Int
-    return get!(ctx.exc_saved_locals, count ? -enter_idx : enter_idx) do
-        allocate_local!(ctx, count ? I32 : ConcreteRef(exc_cell_type!(ctx.mod), true))
+function exc_saved_local!(ctx::AbstractCompilationContext, enter_idx::Int)::Int
+    return get!(ctx.exc_saved_locals, enter_idx) do
+        allocate_local!(ctx, ConcreteRef(exc_cell_type!(ctx.mod), true))
     end
 end
 

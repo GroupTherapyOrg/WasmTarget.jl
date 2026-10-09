@@ -111,13 +111,14 @@ end
     m = WasmTarget.compile_module(Any[(_hi_late_entry, (Int64,), "late_entry")];
         existing_module=mod, import_stubs=Any[(_hi_late_import, "late", (Int64,), idx, Int64)])
     # the import is called from a dispatch candidate's body, enrolled in a later round: every
-    # call of it is counted open, as the export boundary's claim needs (L156)
-    @test uncounted_host_import_calls(m) == 0
+    # call of it saves the top at its slot and restores it, as the export boundary's claim needs
+    # (L156)
+    @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     driver = """
     const importObject = $(WasmTarget.host_runtime_js());
     importObject.host = { late: (x) => x * 2n };
-    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     return [{ ok: String(instance.exports.late_entry(3n)) }];
     """
     status, results = WasmRunner.run_driver_batch(bytes, driver; ninputs=1)

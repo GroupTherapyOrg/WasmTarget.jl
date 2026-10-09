@@ -343,7 +343,7 @@ function global_get!(b::InstrBuilder, idx::Integer, typ::WasmValType)::InstrBuil
     # the module's global, whose type is its definition's (dart global_get: [] → [global.type]);
     # a builder with no module (a unit test) has only the caller's type
     local m = b.v.mod
-    local t = m === nothing ? typ : _defined_global(m, idx, :global_get).valtype
+    local t = m === nothing ? typ : _module_global(m, idx, :global_get).valtype
     validate_push!(b.v, t)
     _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
 end
@@ -354,16 +354,16 @@ function global_set!(b::InstrBuilder, idx::Integer)::InstrBuilder
     if m === nothing
         validate_pop_any!(b.v)   # a builder with no module (a unit test) has no global to check
     else
-        local g = _defined_global(m, idx, :global_set)
+        local g = _module_global(m, idx, :global_set)
         g.mutable_ || _module_invalid(:global_set, "global $idx is immutable")
         validate_pop!(b.v, g.valtype)
     end
     _emit!(b, InstrIR.GlobalSet(UInt32(idx)))
 end
 
-# the defined global `idx` (WT imports functions only, so a global's index is its definition's)
+# the global `idx`, imported or defined: one index space, the imported globals first
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get)
-function _defined_global(m::WasmModule, idx::Integer, op::Symbol)::WasmGlobalDef
+function _module_global(m::WasmModule, idx::Integer, op::Symbol)::WasmModuleGlobal
     0 <= idx < length(m.globals) || _module_invalid(op, "global $idx is not defined")
     return m.globals[idx + 1]
 end
@@ -639,10 +639,6 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:116 Catch)
 catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
     SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
-# catch_all_ref: every exception, Julia's or foreign, delivered as its exnref (no tag)
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:153 CatchAllRef)
-catch_all_ref_clause(label::ControlLabel)::SymbolicTryCatch =
-    SymbolicTryCatch(Opcode.CATCH_ALL_REF, 0xffffffff, label)
 
 # try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type
 # derived from its inputs and results (_block_type!). Each catch branches out to its target
@@ -704,14 +700,6 @@ function throw_!(b::InstrBuilder, tag::Integer)::InstrBuilder
     end
     b.v.reachable = false
     _emit!(b, InstrIR.Throw(UInt32(tag)))
-end
-# throw_ref: pop an exnref and throw the exception it holds, payload and all; what follows
-# is unreachable. dart's throw_ref checks no operand; the spec's is exnref.
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:836 InstructionsBuilder.throw_ref)
-function throw_ref!(b::InstrBuilder)::InstrBuilder
-    validate_pop!(b.v, ExnRef)
-    b.v.reachable = false
-    _emit!(b, InstrIR.ThrowRef())
 end
 
 # ── Reference ───────────────────────────────────────────────────────────────────

@@ -1135,14 +1135,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     end_block!(b)          # end landing — the catch payload arrives here
                     # The payload's entry, which its throw pushed, is Julia's top here (Julia's
                     # landing leaves the stack as it is): it becomes the top by identity, also
-                    # when a re-entrant export's restore dropped it on the way (ExceptionStack.tla,
-                    # Landing = "identity"). The exception and its stack are read from the entry.
+                    # when the host caught the escape, called an export and threw it again
+                    # (ExceptionStack.tla, Landing = "identity", HostReraise). The exception and
+                    # its stack are read from the entry; the count is the host's glue's, exact.
                     global_set!(b, ensure_exception_top_global!(ctx.mod))
                     drop!(b)   # stackTrace
                     drop!(b)   # exception
-                    # the open host-declared imports are those open at the region's enter
-                    local _count = host_imports_open_global!(ctx.mod)
-                    _count === nothing || (local_get!(b, exc_saved_local!(ctx, r.enter_idx; count=true)); global_set!(b, _count))
                 end
                 ctx.last_stmt_was_stub = false   # the handler is reachable
             end

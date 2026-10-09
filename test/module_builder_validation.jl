@@ -469,34 +469,47 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             bad_catch, [MBV.catch_clause(tag, wrong)])
     end
 
-    @testset "throw_ref takes an exnref; a catch_all_ref's target takes exactly one (dart throw_ref, CatchAllRef)" begin
-        # instructions.dart:836 throw_ref and :153 CatchAllRef; the spec types throw_ref's
-        # operand as exnref and a catch's target as exactly what it catches (dart checks a suffix)
+    @testset "a try_table with results or inputs is refused, however the keyword is spelled" begin
+        # V8 12.4 (Node 22) traps entering a try_table with a concrete-reference result (L155, A13B7)
         m = MBV.WasmModule()
-        b = MBV.InstrBuilder(; mod=m); MBV.ref_null!(b, MBV.AnyRef)
-        @test_throws MBV.StackImbalanceError MBV.throw_ref!(b)
+        tag = MBV.add_tag!(m, MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.AnyRef], MBV.WasmValType[])))
         b = MBV.InstrBuilder(; mod=m)
-        none = MBV.block!(b)
-        @test_throws MBV.StackImbalanceError MBV.try_table!(b, [MBV.catch_all_ref_clause(none)])
-        # the export entry's shape: block (result exnref), a result-less try_table, throw_ref
-        b = MBV.InstrBuilder(; mod=m)
-        escaped = MBV.block!(b; results=MBV.WasmValType[MBV.ExnRef])
-        MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)])
-        MBV.end_block!(b)
-        MBV.return_!(b)
-        MBV.end_block!(b)
-        @test MBV.throw_ref!(b) isa MBV.InstrBuilder
-        MBV.finish_function!(b)
-        @test b.instrs[2].catches == [MBV.InstrIR.TryCatch(MBV.Opcode.CATCH_ALL_REF, 0xffffffff, 0)]
-        @test count(i -> i isa MBV.InstrIR.ThrowRef, b.instrs) == 1
-        # a try_table with results or inputs is refused by the builder, however the keyword is
-        # spelled (V8 12.4 traps entering one with a concrete-reference result; L155, A13B7)
-        b = MBV.InstrBuilder(; mod=m)
-        escaped = MBV.block!(b; results=MBV.WasmValType[MBV.ExnRef])
+        landing = MBV.block!(b; results=MBV.WasmValType[MBV.AnyRef])
         results = MBV.WasmValType[MBV.I32]
-        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)]; results)
+        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_clause(tag, landing)]; results)
         inputs = MBV.WasmValType[MBV.I32]
-        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_all_ref_clause(escaped)]; inputs)
+        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_clause(tag, landing)]; inputs)
+    end
+
+    @testset "a global import precedes every defined global, in one index space (dart GlobalsBuilder.import)" begin
+        # globals.dart:41 import; the imported globals are numbered first, so an import after a
+        # defined global, which would renumber it under the code already emitted, is refused
+        m = MBV.WasmModule()
+        count = MBV.add_global_import!(m, "wasmtarget", "host_imports_open", MBV.I32, true; name="\$host_imports_open")
+        mine = MBV.add_global!(m, MBV.I64, true, 0; name="\$mine")
+        @test (count, mine) == (0, 1)
+        @test MBV.global_named(m, "\$host_imports_open") == 0 && MBV.global_named(m, "\$mine") == 1
+        late = try; MBV.add_global_import!(m, "host", "late", MBV.I32, false); nothing; catch err; err; end
+        @test late isa MBV.ModuleValidationError &&
+              occursin("host.late", sprint(showerror, late)) && occursin("\$mine", sprint(showerror, late))
+        @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.I32, true, 0; name="\$host_imports_open")
+        # read and written through the one index space, typed by the import
+        b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.I32]; mod=m)
+        MBV.global_get!(b, count, MBV.I32); MBV.global_set!(b, count)
+        MBV.global_get!(b, mine, MBV.I64); MBV.global_set!(b, mine)
+        MBV.global_get!(b, count, MBV.I32)
+        MBV.finish_function!(b)
+        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b))
+        bytes = MBV.to_bytes(m)
+        @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(bytes)))
+        printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
+        @test occursin("(import \"wasmtarget\" \"host_imports_open\" (global (;0;) (mut i32)))", printed)
+        @test occursin("(global (;1;) (mut i64) i64.const 0)", printed)
+        # an immutable imported global is not written
+        m2 = MBV.WasmModule()
+        fixed = MBV.add_global_import!(m2, "host", "fixed", MBV.I32, false)
+        b2 = MBV.InstrBuilder(; mod=m2); MBV.i32_const!(b2, 1)
+        @test_throws MBV.ModuleValidationError MBV.global_set!(b2, fixed)
     end
 
     @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin

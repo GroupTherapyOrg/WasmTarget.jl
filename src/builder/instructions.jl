@@ -34,7 +34,6 @@ module Opcode
     # Exception handling instructions (Wasm 3.0)
     const THROW = 0x08         # throw tag_idx - throw exception with tag
     const RETHROW = 0x09       # rethrow label_idx - re-throw caught exception (legacy)
-    const THROW_REF = 0x0A     # throw_ref - rethrow exception from exnref
     const TRY_TABLE = 0x1F     # try_table blocktype catch* - structured exception handler
 
 # end parity-region
@@ -365,6 +364,26 @@ struct WasmGlobalDef
 end
 
 """
+    WasmGlobalImport
+
+A global the module imports: its module and field, its type and mutability, and the name it is
+found by (dart's Global.globalName).
+parity(pkg/wasm_builder/lib/src/ir/global.dart:88 ImportedGlobal)
+"""
+struct WasmGlobalImport
+    module_name::String
+    field_name::String
+    valtype::WasmValType
+    mutable_::Bool
+    name::Union{Nothing,String}
+end
+
+# a global of the module, imported or defined, in the one global index space: the imported
+# globals first (add_global_import! refuses one after a definition), then the defined ones
+# parity(pkg/wasm_builder/lib/src/ir/global.dart:10 Global)
+const WasmModuleGlobal = Union{WasmGlobalImport, WasmGlobalDef}
+
+"""
     WasmTable
 
 A WebAssembly table for holding references (funcref, externref).
@@ -442,7 +461,7 @@ mutable struct WasmModule
     functions::Vector{WasmFunction}
     tables::Vector{WasmTable}     # Tables for funcref/externref
     memories::Vector{WasmMemory}  # Linear memories
-    globals::Vector{WasmGlobalDef}   # Global variables
+    globals::Vector{WasmModuleGlobal}   # every global by its index: the imported ones, then the defined
     exports::Vector{WasmExport}
     elem_segments::Vector{WasmElemSegment}  # Element segments for table init
     data_segments::Vector{WasmDataSegment}  # Data segments for memory init
@@ -459,7 +478,7 @@ mutable struct WasmModule
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmGlobalDef[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, UnitRange{Int}[])
+WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmModuleGlobal[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, UnitRange{Int}[])
 
 # ============================================================================
 # Module Building API
@@ -835,6 +854,18 @@ _check_import_precedes_definitions(mod::WasmModule, module_name::String, field_n
         "import $(module_name).$(field_name) after $(length(mod.functions)) defined function(s) " *
         "would renumber them: every import precedes the first definition")
 
+# parity(quarantine: WT numbers a global when it is defined, where dart's FinalizableIndex numbers
+# every global when the module is built, the imported ones first (builder/util.dart:28
+# finalizeImportsAndBuilders), so a late global import is refused instead of renumbered.)
+function _check_global_import_precedes_definitions(mod::WasmModule, module_name::String, field_name::String)::Nothing
+    local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
+    defined === nothing && return nothing
+    _module_invalid(:add_global_import,
+        "global import $(module_name).$(field_name) after the defined global $(defined - 1)" *
+        (mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))") *
+        " would renumber it: every global import precedes the first defined global")
+end
+
 """
     num_imported_funcs(mod) -> Int
 
@@ -936,12 +967,35 @@ end
 """
     global_named(mod, name) -> global_idx | nothing
 
-The global defined with `name`, found by its name and never by its type.
+The global defined or imported with `name`, found by its name and never by its type.
 parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
 """
 function global_named(mod::WasmModule, name::String)::Union{Nothing,UInt32}
     local i = findfirst(g -> g.name == name, mod.globals)
     return i === nothing ? nothing : UInt32(i - 1)
+end
+
+"""
+    add_global_import!(mod, module_name, field_name, valtype, mutable; name) -> global_idx
+
+Import a global of type `valtype` (mutable or not) from `module_name.field_name` and return its
+index; `name` names it, so it is found by name (global_named). Imported globals come first in the
+global index space, and WT numbers a global when it is defined (dart's FinalizableIndex numbers it
+when the module is built), so an import after a defined global, which would renumber it under
+the code already emitted, is refused, as add_import! refuses a function import after a defined
+function (_check_import_precedes_definitions).
+parity(pkg/wasm_builder/lib/src/builder/globals.dart:41 GlobalsBuilder.import)
+"""
+function add_global_import!(mod::WasmModule, module_name::String, field_name::String,
+                            valtype::WasmValType, mutable_::Bool;
+                            name::Union{Nothing,String}=nothing)::UInt32
+    _check_global_import_precedes_definitions(mod, module_name, field_name)
+    name === nothing || global_named(mod, name) === nothing ||
+        _module_invalid(:add_global_import, "a global named $(repr(name)) is already defined")
+    valtype isa ConcreteRef && !(Int(valtype.type_idx) < length(mod.types)) &&
+        _module_invalid(:add_global_import, "type $(valtype.type_idx) is not defined")
+    push!(mod.globals, WasmGlobalImport(module_name, field_name, valtype, mutable_, name))
+    return UInt32(length(mod.globals) - 1)
 end
 
 """
@@ -1233,15 +1287,24 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         end
     end
 
-    # Import section
-    if !isempty(mod.imports)
+    # Import section: the functions, then the globals (dart Imports.all, imports.dart:18)
+    local imported_globals = WasmGlobalImport[g for g in mod.globals if g isa WasmGlobalImport]
+    if !isempty(mod.imports) || !isempty(imported_globals)
         write_section!(w, SECTION_IMPORT) do section
-            write_u32!(section, length(mod.imports))
+            write_u32!(section, length(mod.imports) + length(imported_globals))
             for imp in mod.imports
                 write_name!(section, imp.module_name)
                 write_name!(section, imp.field_name)
                 write_byte!(section, imp.kind)
                 write_u32!(section, imp.type_idx)
+            end
+            # an imported global: its names, kind 0x03, its global type (ImportedGlobal.serialize)
+            for g in imported_globals
+                write_name!(section, g.module_name)
+                write_name!(section, g.field_name)
+                write_byte!(section, 0x03)
+                write_valtype!(section, g.valtype)
+                write_byte!(section, g.mutable_ ? 0x01 : 0x00)
             end
         end
     end
@@ -1305,11 +1368,12 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         end
     end
 
-    # Global section
-    if !isempty(mod.globals)
+    # Global section: the defined globals, after the imported ones in the index space
+    local defined_globals = WasmGlobalDef[g for g in mod.globals if g isa WasmGlobalDef]
+    if !isempty(defined_globals)
         write_section!(w, SECTION_GLOBAL) do section
-            write_u32!(section, length(mod.globals))
-            for g in mod.globals
+            write_u32!(section, length(defined_globals))
+            for g in defined_globals
                 # Global type: valtype + mutability
                 write_valtype!(section, g.valtype)
                 write_byte!(section, g.mutable_ ? 0x01 : 0x00)

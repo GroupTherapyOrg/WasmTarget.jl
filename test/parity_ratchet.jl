@@ -2172,25 +2172,10 @@ const LOCKS = [
     "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
-    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause but one exact site: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors, left without a caller, were deleted on 2026-09-29. Batch 110 ported one back, catch_all_ref_clause (dart's CatchAllRef, instructions.dart:153), for an exact per-site allowlist of one, each site pinned by its needle with its reason (dev/CHARTER.md rule 2): emit_export_entry!'s `try_table (catch_all_ref)` (generate.jl), because Julia's host frame restores its stack on every escape (jl_restore_excstack); catch_all_ref observes every catchable unwind, where dart observes a JS unwind by catching the imported JSTag (tags.dart:45), not yet ported (dev/MARCH.md 13.17). Every other catch_all or catch_ref counts, by constructor anywhere in src, by opcode or raw clause in codegen, or by a clause built from its opcode in src/builder, where the one allowed site is catch_all_ref_clause's own body (audit #13 A13B3: a builder constructor of another name passed the count), and so does a site whose needle is gone (dev/CHARTER.md C6)",
-        () -> begin
-            # the exact per-site allowlist: its needle in generate.jl => its reason
-            local reason = "Julia's host frame restores its stack on every escape (jl_restore_excstack); catch_all_ref observes every catchable unwind, where dart observes a JS unwind by catching the imported JSTag (tags.dart:45), not yet ported (13.17)"
-            local allowed = ["    try_table!(b, [catch_all_ref_clause(escaped)])" => reason]
-            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
-            local uses = count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause";
-                                     exclude_line=r"^catch_all_ref_clause\(label::ControlLabel\)")
-            # a clause built from its opcode or raw passes the constructors by
-            local raw = count_sites(r"Opcode\.CATCH_ALL|Opcode\.CATCH_REF|SymbolicTryCatch\(|TryCatch\("; roots=[CODEGEN])
-            # in the builder, a catch_all/catch_ref clause is built only by catch_all_ref_clause's body
-            local builder_allowed = ["    SymbolicTryCatch(Opcode.CATCH_ALL_REF, 0xffffffff, label)" => reason]
-            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
-            local in_builder = count_sites(r"SymbolicTryCatch\(Opcode\.(CATCH_ALL|CATCH_REF|CATCH_ALL_REF)\b";
-                                           roots=[joinpath(SRC, "builder")])
-            abs(uses - length(allowed)) + raw + count(((needle, _),) -> length(findall(needle, gen)) != 1, allowed) +
-                abs(in_builder - length(builder_allowed)) +
-                count(((needle, _),) -> length(findall(needle, ib)) != 1, builder_allowed)
-        end),
+    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause anywhere in src: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors are deleted (2026-09-29). catch_all_ref_clause, ported back for the export entry's handler (2026-10-07), is deleted again: no wasm catch observes stack exhaustion or a trap (legacy catch_all, a catch of the imported JSTag and catch_all_ref alike, measured on Node 22.23.3), so the export boundary is the host's glue (host_glue_js) and the entry has no handler. The allowlist is empty: a constructor anywhere in src, a clause built from its opcode or raw in codegen, and a clause built from a catch_all or catch_ref opcode in src/builder each count (audit #13 A13B3: a builder constructor of another name passed the count; dev/CHARTER.md C6)",
+        () -> count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause") +
+              count_sites(r"Opcode\.CATCH_ALL|Opcode\.CATCH_REF|SymbolicTryCatch\(|TryCatch\("; roots=[CODEGEN]) +
+              count_sites(r"SymbolicTryCatch\(Opcode\.(CATCH_ALL|CATCH_REF|CATCH_ALL_REF)\b"; roots=[joinpath(SRC, "builder")])),
     "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
@@ -2322,11 +2307,9 @@ const LOCKS = [
             end
             n
         end),
-    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with two exact sites, each pinned by its needle with its reason: the export entry's rejection of a result that is not defaultable (generate.jl emit_export_entry!), made after codegen at no statement and naming the export, and the walk of the constants past its bound (trimcollect.jl _held_bound_rejection), made while planning and located at the statement holding the constant with its source line and inline chain (audit #13 A13B1, A13C7) (locked 2026-09-02)",
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the walk of the constants past its bound (trimcollect.jl _held_bound_rejection), made while planning and located at the statement holding the constant with its source line and inline chain (audit #13 A13C7). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02)",
         () -> begin
-            local allowed = [("generate.jl", "        defaultable(r) || throw(WasmCompileError(WasmDiagnostic(:unsupported_type, name,") =>
-                                 "the export entry is built after codegen, at no statement; the rejection names the export",
-                             ("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),") =>
+            local allowed = [("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),") =>
                                  "the walk of the constants runs while planning, before codegen; the rejection is located at the statement holding the constant"]
             local n = count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
                                   exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])
@@ -2373,7 +2356,11 @@ const LOCKS = [
                        # the superseded trim and the builtin-only edge relation (batch 111):
                        # _closed_world_edge is the one relation, and the collection only adds
                        "_builtin_call_edge_mi", "pruned_superseded", "superseded_invokes",
-                       "intrinsic_body_roots", "prune_roots"]
+                       "intrinsic_body_roots", "prune_roots",
+                       # the export entry's handler and the wasm-side count (batch 112b-1): the
+                       # boundary is the host's glue, host_glue_js
+                       "catch_all_ref_clause", "throw_ref!", "ThrowRef", "THROW_REF",
+                       "except H6, H7 and A13E1"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
@@ -2517,9 +2504,10 @@ const LOCKS = [
                 count(p -> occursin(p, all_src), forbidden) +
                 isfile(joinpath(CODEGEN, "sourcemap.jl"))
         end),
-    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); the export entry's handler (emit_export_entry!) restores what it saved and rethrows an escaped exception with throw_ref, which keeps its payload, the exception and the stack its throw captured, exactly (batch 110; until then the handler was a second throw site); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
+    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); no throw_ref is anywhere in src, and the export entry (emit_export_entry!) is a prologue that calls its inner last, so an escape passes it untouched, its payload (the exception and the stack its throw captured) exact (until batch 110 the entry's handler was a second throw site, and until batch 112b-1 it rethrew with throw_ref); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag. test/source_maps.jl runs it: an escaped exception, rethrown or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
         () -> begin
             local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])   # _emit_throw_top!'s, alone
+            local throw_refs = count_sites(r"throw_ref|ThrowRef|THROW_REF")
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
             local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod)"),
@@ -2528,8 +2516,8 @@ const LOCKS = [
                               (runner, "const st = e.getArg(tag, 1);"),
                               (runner, "    \$HOST_RUNTIME_MERGE_JS"),
                               (gen, "    global_get!(b, top, ConcreteRef(cell, true))\n    struct_get!(b, cell, 1, ExternRef)\n    global_get!(b, top, ConcreteRef(cell, true))\n    throw_!(b, 0)"),
-                              (gen, "    local_get!(b, saved); global_set!(b, top)\n    count === nothing || (local_get!(b, saved_count); global_set!(b, count))\n    throw_ref!(b)")]
-            abs(throws - 1) + count(((text, needle),) -> !occursin(needle, text), required)
+                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    finish_function!(b)")]
+            abs(throws - 1) + throw_refs + count(((text, needle),) -> !occursin(needle, text), required)
         end),
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, at each caller that enrolls by it — the collector and the plan — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
@@ -2574,19 +2562,24 @@ const LOCKS = [
     "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context: dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl) (dev/CHARTER.md C2)",
         () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b";
                           roots=[joinpath(SRC, "builder")])),
-    "L150_every_host_import_has_its_runtime" => ("every host import WT's code generator creates (a literal `add_import!(mod, \"<module>\", \"<field>\"` in src) is answered by HOST_RUNTIME (generate.jl), and HOST_RUNTIME answers none that no code creates: a module's imports and its runtime are one list, as dart2wasm generates its runtime's JS methods from what it translated (runtime_generator.dart:128); a traced compile's `wasmtarget.trace_*` imports are its harness's (dev/CHARTER.md C1)",
+    "L150_every_host_import_has_its_runtime" => ("every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src), is answered by HOST_RUNTIME (generate.jl) or by the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and HOST_RUNTIME answers none that no code creates: a module's imports and its runtime are one list, as dart2wasm generates its runtime's JS methods from what it translated (runtime_generator.dart:128); the glue reads its exclusion list, the imports it does not wrap, from HOST_RUNTIME, the list _is_host_declared_import reads; a traced compile's `wasmtarget.trace_*` imports are its harness's (dev/CHARTER.md C1)",
         () -> begin
             local created = Set{Tuple{String,String}}()
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
-                for m in eachmatch(r"add_import!\(mod, \"(\w+)\", \"(\w+)\"", read(joinpath(dir, f), String))
+                for m in eachmatch(r"add_(?:global_)?import!\(mod, \"(\w+)\", \"(\w+)\"", read(joinpath(dir, f), String))
                     startswith(m.captures[2], "trace_") || push!(created, (m.captures[1], m.captures[2]))
                 end
             end
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local answered = Set{Tuple{String,String}}((m.captures[1], m.captures[2])
                                  for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", \"", gen))
-            length(symdiff(created, answered))
+            # the glue answers its count, and reads the imports it leaves alone from HOST_RUNTIME
+            local glue = match(r"(?s)\nfunction host_glue_js\(\)::String\n.*?\nend\n", gen)
+            local glue_ok = glue !== nothing && occursin("for (mm, f, _) in HOST_RUNTIME if mm == m", glue.match) &&
+                            occursin("{ host_imports_open: open }", glue.match)
+            glue_ok && push!(answered, ("wasmtarget", "host_imports_open"))
+            length(symdiff(created, answered)) + (glue_ok ? 0 : 1)
         end),
     "L151_every_builder_has_its_module" => ("every InstrBuilder codegen constructs names its module (`mod=`), as every dart InstructionsBuilder has one: a builder without it cannot resolve a type index, so a subtype check against an abstract reference (an array.len's arrayref, a struct's field) could not be made and a global's initializer went unchecked; the module-less builder remains only for the builder's own unit tests (dev/AUDIT.md A2B7, B5; dev/CHARTER.md C7)",
         () -> begin
@@ -2659,7 +2652,7 @@ const LOCKS = [
                           raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
                           raw"fi"], '\n'), lanes)])
         end),
-    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, emit_export_entry!). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a concrete reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard. The builder refuses a try_table with inputs or results however the keyword is spelled (try_table!'s check, pinned here; the shorthand `try_table!(b, cs; results)` passed the text scan, A13B7), codegen builds no InstrIR.TryTable past it, and the scan of codegen's calls counts a `results` or `inputs` keyword or a splat (A13P16). This keeps a workaround for a form dart does not emit: dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy), whose try runs with a concrete-reference result on Node 22.23.3 (measured in batch 112: `try (result (ref null \$s))` with catch \$t, catch_all and rethrow); porting WT's exception lowering to it is dev/MARCH.md 13.17 A13E7 (dev/CHARTER.md C5)",
+    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, a prologue since batch 112b-1, holds no try_table). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a concrete reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard. The builder refuses a try_table with inputs or results however the keyword is spelled (try_table!'s check, pinned here; the shorthand `try_table!(b, cs; results)` passed the text scan, A13B7), codegen builds no InstrIR.TryTable past it, and the scan of codegen's calls counts a `results` or `inputs` keyword or a splat (A13P16). This keeps a workaround for a form dart does not emit: dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy), whose try runs with a concrete-reference result on Node 22.23.3 (measured in batch 112: `try (result (ref null \$s))` with catch \$t, catch_all and rethrow); porting WT's exception lowering to it is dev/MARCH.md 13.17 A13E7 (dev/CHARTER.md C5)",
         () -> begin
             # the builder's refusal, exactly once
             local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
@@ -2683,32 +2676,66 @@ const LOCKS = [
             end
             n
         end),
-    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted open in `\$host_imports_open` while it runs (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an uncounted call makes an export the host calls back from inside it top-level, and its reset discards the stack its caller's catch reads (Julia's J2: native 1, 2). It is checked on the code itself, not on its text: test/utils.jl's uncounted_host_import_calls reads a module as wasm-tools prints it, its name section stripped, and counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) that does not sit directly after the count's increment and directly before its decrement; test/real_bottom_exceptions.jl asserts 0 on the export boundary's module and test/host_imports.jl on its module whose import a later round's dispatch candidate calls. This lock requires both assertions and the helper's body as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
+    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted, by the host: the glue (host_glue_js) raises the imported count `wasmtarget.host_imports_open` around it and lowers it in a finally, and in wasm the call sits directly between the save of the top at its slot (`import_tops save`, index count of `\$import_tops`) and the restore of the top from that slot after a normal return (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an unsaved call leaves an export the host calls back from inside it a stale top, and an unrestored one leaves its caller the callee's (Julia's J2: native 1, 2). The boundary is the host's: no wasm code writes the count, and no export entry (a function named \"<name> (export)\") holds a try or a try_table or declares a local (a prologue that passes every escape untouched, emit_export_entry!). Both are checked on the code itself, not on its text: test/utils.jl's unsaved_host_import_calls and wasm_boundary_sites read a module as wasm-tools prints it, its name section stripped; the first counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) not directly between the save and the restore, the second each `global.set` of the count and each try, try_table or local of an entry; test/real_bottom_exceptions.jl asserts both 0 on the export boundary's module and test/host_imports.jl the first on its module whose import a later round's dispatch candidate calls. This lock requires the assertions and the helpers' bodies as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
         () -> begin
             local t(f) = read(joinpath(ROOT, "test", f), String)
             local norm(x) = filter(!isempty, map(strip, split(x, '\n')))
-            local helper = raw"""
-function uncounted_host_import_calls(mod::WasmTarget.WasmModule)::Int
+            local helpers = [raw"""
+function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
     local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
     local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
-    local g = WasmTarget.global_named(mod, "\$host_imports_open")
-    local text = read(pipeline(pipeline(`wasm-tools strip --all`; stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String)
-    local lines = String[strip(l) for l in split(text, '\n')]
-    local inc = ["global.get $g", "i32.const 1", "i32.add", "global.set $g"]
-    local dec = ["global.get $g", "i32.const 1", "i32.sub", "global.set $g"]
+    local count = WasmTarget.global_named(mod, "\$host_imports_open")
+    local tops = WasmTarget.global_named(mod, "\$import_tops")
+    local top = WasmTarget.global_named(mod, "\$exc_top")
+    local save = findfirst(f -> f.name == "import_tops save", mod.functions)
+    local lines = _printed_lines(mod)
     local n = 0
     for (k, l) in enumerate(lines)
         local c = match(r"^call (\d+)$", l)
         (c !== nothing && parse(Int, c.captures[1]) in host) || continue
-        (g !== nothing && k > 4 && lines[k-4:k-1] == inc && k + 4 <= length(lines) && lines[k+1:k+4] == dec) || (n += 1)
+        local saved = save !== nothing && k > 1 && lines[k-1] == "call $(length(funcs) + save - 1)"
+        local restored = tops !== nothing && count !== nothing && top !== nothing && k + 4 <= length(lines) &&
+            lines[k+1:k+4] == ["global.get $tops", "global.get $count",
+                               "array.get $(mod.globals[tops + 1].valtype.type_idx)", "global.set $top"]
+        (saved && restored) || (n += 1)
     end
     return n
 end
+""", raw"""
+function wasm_boundary_sites(mod::WasmTarget.WasmModule)::Int
+    local count = WasmTarget.global_named(mod, "\$host_imports_open")
+    local entries = Set(WasmTarget.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
+                        if endswith(f.name, " (export)"))
+    local n = 0
+    local in_entry = false
+    for l in _printed_lines(mod)
+        local f = match(r"^\(func \(;(\d+);\)", l)
+        if f !== nothing
+            in_entry = parse(Int, f.captures[1]) in entries
+        elseif startswith(l, "(") && !startswith(l, "(local")
+            in_entry = false
+        end
+        count !== nothing && l == "global.set $count" && (n += 1)
+        in_entry && (startswith(l, "(local") || occursin(r"^try(_table)?\b", l)) && (n += 1)
+    end
+    return n
+end
+"""]
+            local printed = raw"""
+_printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
+    String[strip(l) for l in split(read(pipeline(pipeline(`wasm-tools strip --all`;
+        stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String), '\n')]
 """
-            local m = match(r"(?s)\nfunction uncounted_host_import_calls\(.*?\nend\n", t("utils.jl"))
-            local asserted = "@test uncounted_host_import_calls(m) == 0"
-            (m === nothing || norm(m.match) != norm(helper)) +
-                count(f -> length(findall(asserted, t(f))) != 1, ["real_bottom_exceptions.jl", "host_imports.jl"])
+            local u = t("utils.jl")
+            local missing_ = count(h -> begin
+                    local name = match(r"function (\w+)\(", h).captures[1]
+                    local m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), u)
+                    m === nothing || norm(m.match) != norm(h)
+                end, helpers)
+            missing_ += occursin(strip(printed), u) ? 0 : 1
+            local asserted = ["@test unsaved_host_import_calls(m) == 0" => ["real_bottom_exceptions.jl", "host_imports.jl"],
+                              "@test wasm_boundary_sites(m) == 0" => ["real_bottom_exceptions.jl"]]
+            missing_ + sum(count(f -> length(findall(a, t(f))) != 1, fs) for (a, fs) in asserted)
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin
