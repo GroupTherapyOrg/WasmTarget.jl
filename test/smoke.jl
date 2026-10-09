@@ -10,6 +10,7 @@
 # Run:   julia --project=. test/smoke.jl
 # Exit:  0 = all pass, 1 = any fail/error (so it is gate-able + CI-able).
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
+# Part:   WT_SMOKE_PART=i/N julia --project=. test/smoke.jl  # one of N parts (i in 0..N-1)
 # ============================================================================
 using WasmTarget
 using Random, SHA   # seeded streams, as the full suite loads them
@@ -19,6 +20,21 @@ include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first dive
 
 const FILTER = lowercase.(ARGS)
 _want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER)
+# WT_SMOKE_PART=i/N (dev/lanes.sh --lane smoke --part i/N, one job of dev/gate.sh's matrix): the
+# groups are dealt round-robin in file order, the k-th of GROUPS (and, separately, of XFAIL) to
+# part (k-1) % N, so the N parts together run every group exactly once. Unset: every group.
+const SMOKE_PART = let s = get(ENV, "WT_SMOKE_PART", "")
+    m = match(r"^([0-9]+)/([1-9][0-9]*)$", s)
+    if isempty(s)
+        (0, 1)
+    elseif m === nothing || parse(Int, m[1]) >= parse(Int, m[2])
+        error("WT_SMOKE_PART=$s: expected i/N with 0 <= i < N")
+    else
+        (parse(Int, m[1]), parse(Int, m[2]))
+    end
+end
+# the entries of `list` (GROUPS or XFAIL) part i of n runs
+_smoke_part(list, i = SMOKE_PART[1], n = SMOKE_PART[2]) = [list[k] for k in eachindex(list) if (k - 1) % n == i]
 
 # Each case: (name, f, args...). Compared native-vs-wasm via compare_julia_wasm.
 const GROUPS = Vector{Pair{String,Vector{Any}}}()
@@ -2065,8 +2081,10 @@ function main()
     t0 = time()
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
-    for (group, cases) in GROUPS
+    ngroups = 0
+    for (group, cases) in _smoke_part(GROUPS)
         _want(group) || continue
+        ngroups += 1
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"
@@ -2087,7 +2105,8 @@ function main()
     # xfail lane: known-pending gaps. A NEWLY-PASSING one is great news (its loop landed) and
     # never fails the gate; a still-failing one must fail the way XFAIL_RUNTIME says it does.
     xf_now_pass = String[]; xf_still = 0; xf_mismatch = String[]; xf_seen = Set{String}()
-    for (group, cases) in XFAIL
+    xf_part = _smoke_part(XFAIL)
+    for (group, cases) in xf_part
         _want(group) || continue
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
@@ -2103,7 +2122,10 @@ function main()
         end
     end
     for tag in keys(XFAIL_RUNTIME)
-        _want(String(first(split(tag, '/')))) && !(tag in xf_seen) &&
+        # checked by the part its group is dealt to; a tag naming no xfail group, by part 0
+        local g = String(first(split(tag, '/')))
+        local k = findfirst(p -> first(p) == g, XFAIL)
+        _want(g) && (k === nothing ? 0 : (k - 1) % SMOKE_PART[2]) == SMOKE_PART[1] && !(tag in xf_seen) &&
             push!(xf_mismatch, "$tag: listed in XFAIL_RUNTIME, but no xfail case has that name")
     end
     dt = round(time() - t0; digits = 1)
@@ -2116,6 +2138,8 @@ function main()
     for m in xf_mismatch; println("  XFAIL OUTCOME ", m); end
     println("xfail: $(length(xf_now_pass)) now-passing, $xf_still still-pending (expected), " *
             "$(length(xf_mismatch)) outcome mismatch(es)")
+    SMOKE_PART[2] > 1 && println("smoke part $(SMOKE_PART[1])/$(SMOKE_PART[2]): $ngroups of $(length(GROUPS)) groups, " *
+                           "$(length(xf_part)) of $(length(XFAIL)) xfail groups")
     println("smoke: $npass passed, $nfail wrong, $nerr errored  ($(dt)s)")
     exit((nfail + nerr + length(xf_mismatch)) == 0 ? 0 : 1)
 end

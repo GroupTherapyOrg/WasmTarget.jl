@@ -1,0 +1,180 @@
+name: Gate
+# The gate before a push, on CI's runners (AGENTS.md; dev/CHARTER.md C10): every lane of
+# `bash dev/lanes.sh`'s default run, one job each, each through `dev/lanes.sh --lane <name>
+# [--part i/N]`, so the commands are the script's: `julia` 1.12 and `julia +1.13` (juliaup, as
+# the script calls them), Node from ci.yml's node-version, wasm-tools, Java 17 for TLC. The
+# first red job cancels the rest (fail-fast), as the script stops at the first red lane.
+# `bash dev/gate.sh` pushes a commit to gate/<name> and prints the verdict; ci.yml and
+# formal.yml do not run on gate/**. The parts are sized from measured job times (each lane's
+# work under ~12 min on ubuntu-latest): smoke in 2 parts per version, registry coverage in 2 (and
+# a merge job for its verdict), TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
+# deals the instances round-robin, and at 5 the two largest, ExceptionStackDeep and
+# ExceptionStackValueIdentityBroken, land apart: measured loads 211/567/226/393/653 s, where 2
+# parts were 598/1453 s), the suite in 5 shards (WT_VALIDATE=1), the fuzz pass in 4: 22 jobs,
+# two past the account's 20 at once. Measured runs: resume notes bgate/runs.md.
+on:
+  push:
+    branches: ['gate/**']
+  workflow_dispatch:
+
+# Only the newest push per gate branch runs; a superseded run is cancelled.
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # julia-actions/cache deletes this branch's superseded caches
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lane:
+    name: ${{ matrix.lane }}${{ matrix.part != '' && format(' {0}', matrix.part) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45   # a hung lane self-kills
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { lane: ratchet, part: '' }
+          - { lane: smoke, part: '0/2' }
+          - { lane: smoke, part: '1/2' }
+          - { lane: smoke-1.13, part: '0/2' }
+          - { lane: smoke-1.13, part: '1/2' }
+          - { lane: probes, part: '' }
+          - { lane: coverage, part: '0/2' }
+          - { lane: coverage, part: '1/2' }
+          - { lane: formal, part: '1/5' }
+          - { lane: formal, part: '3/5' }
+          - { lane: formal, part: '4/5' }
+          - { lane: suite, part: '0/5' }
+          - { lane: suite, part: '1/5' }
+          - { lane: suite, part: '2/5' }
+          - { lane: suite, part: '3/5' }
+          - { lane: suite, part: '4/5' }
+          - { lane: fuzz, part: '0/4' }
+          - { lane: fuzz, part: '1/4' }
+          - { lane: fuzz, part: '2/4' }
+          - { lane: fuzz, part: '3/4' }
+          # the two shortest TLC parts (predicted 211 s and 226 s) last: past the account's 20 at once, they wait for the first free
+          # runners (the ratchet's after ~1 min, then the probes')
+          - { lane: formal, part: '0/5' }
+          - { lane: formal, part: '2/5' }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # L148 checks the audit log against the commit history
+
+      # the wasm engine is CI's: the Node major ci.yml's node-version names (dev/lanes.sh reads
+      # the same line and fails a lane on any other major)
+      - name: CI's Node major
+        id: ci
+        run: |
+          echo "node=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.ci.outputs.node }}
+
+      - uses: actions/setup-java@v4
+        if: matrix.lane == 'formal'
+        with: { distribution: temurin, java-version: '17' }
+
+      # juliaup, so `julia` is 1.12 and `julia +1.13` is 1.13, the two commands dev/lanes.sh runs;
+      # each download retried (a timed-out Julia download failed a whole run, 37890994081)
+      - name: Julia (juliaup)
+        if: matrix.lane != 'formal'
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          if [ "${{ matrix.lane }}" = smoke-1.13 ]; then channel 1.13; fi
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+
+      # one cache per kind of job and runner CPU model: the suite and fuzz jobs precompile
+      # Pkg.test's environment, the others the package alone, smoke-1.13 on its own Julia; a
+      # package image compiled for one CPU model is recompiled on another (GitHub's runners are
+      # of several), so 7 of 9 suite and fuzz jobs rebuilt the restored environment, 136
+      # packages in 326-449 s (37891241960, and with JULIA_CPU_TARGET=haswell 37895633455)
+      - name: Runner CPU model
+        if: matrix.lane != 'formal'
+        id: cpu
+        run: |
+          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/cache@v2
+        if: matrix.lane != 'formal'
+        with:
+          cache-name: gate-${{ (matrix.lane == 'suite' || matrix.lane == 'fuzz') && 'suite' || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes') }}-${{ steps.cpu.outputs.model }}
+          include-matrix: false
+
+      - name: Install wasm-tools
+        if: matrix.lane != 'formal'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+
+      # instantiate only: each lane precompiles in its own configuration (Pkg.test's differs)
+      - name: Install dependencies
+        if: matrix.lane != 'formal'
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: ${{ matrix.lane == 'smoke-1.13' && 'julia +1.13' || 'julia' }} --project=. -e 'using Pkg; Pkg.instantiate()'
+
+      # the dart-lang/sdk files src/ cites, for L132 (the ratchet lane, and the suite shard the
+      # ratchet's family is dealt to)
+      - name: Pinned dart2wasm sources
+        if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
+        run: bash dev/fetch_dart_sdk.sh
+
+      - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
+        run: |
+          # the job's stdout can be a non-blocking pipe, where one large write fails part-way
+          # ("echo: write error: Resource temporarily unavailable": 37893727231 lost a shard's log)
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
+          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}
+
+      # a coverage part's units and hits, for the merge job's verdict
+      - uses: actions/upload-artifact@v4
+        if: matrix.lane == 'coverage'
+        with:
+          name: coverage-part-${{ strategy.job-index }}
+          path: coverage-parts/
+          if-no-files-found: error
+          retention-days: 1
+
+  # registry coverage's verdict on the union of its parts (dev/lanes.sh --lane coverage --merge);
+  # it loads no package, so it needs only the script's Julia and Node
+  coverage-merge:
+    needs: lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: CI's Node major
+        id: ci
+        run: |
+          echo "node=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.ci.outputs.node }}
+      - name: Julia (juliaup)
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-part-*
+          path: coverage-parts
+          merge-multiple: true
+      - name: dev/lanes.sh --lane coverage --merge
+        run: |
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
+          bash dev/lanes.sh --lane coverage --merge

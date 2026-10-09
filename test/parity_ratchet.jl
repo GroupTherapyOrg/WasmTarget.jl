@@ -19,7 +19,7 @@
 # that names none, a reviewable diff).
 #
 # Run standalone (seconds, exit 0/1):   julia --project=. test/parity_ratchet.jl
-# Also included by runtests.jl on shard 0 as a @testset.
+# Also included by runtests.jl as a @testset, on the shard its _wt_qa dealing gives it.
 # ============================================================================
 module ParityRatchet
 
@@ -2600,28 +2600,52 @@ const LOCKS = [
             n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite, its three platforms and the deep TLC instances stay CI's): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first, batch 111's 1.13 failure having surfaced at minute 29 of a serial run) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2) and smoke on Julia 1.13, and AGENTS.md makes a push wait for it. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite and its three platforms stay CI's, and so, for `dev/lanes.sh` without `--all`, do the deep TLC instances, which gate.yml runs): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first, batch 111's 1.13 failure having surfaced at minute 29 of a serial run) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13, and AGENTS.md makes a push wait for it or for its run on CI's runners. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml (dev/gate.sh) is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast (the first red job cancels the rest, as the script stops), every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered only by a gate/** push or workflow_dispatch, ci.yml and formal.yml never by a gate/** push (their push triggers are exactly `branches: [main, 'march/**']`, no branches-ignore) (Dale 2026-10-09: the gate off the local machine). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
         () -> begin
+            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
-            local lanes = join(filter(l -> !startswith(lstrip(l), "#"), split(read(joinpath(ROOT, "dev", "lanes.sh"), String), '\n')), '\n')
+            local lanes = _code(joinpath(ROOT, "dev", "lanes.sh"))
             local i = findfirst("if [ \$fast -eq 0 ]; then", lanes)
             i === nothing && return 3
             local gated = lanes[last(i):end]
             local agents = read(joinpath(ROOT, "AGENTS.md"), String)
+            local wf = joinpath(ROOT, ".github", "workflows")
+            local gate = isfile(joinpath(wf, "gate.yml")) ? _code(joinpath(wf, "gate.yml")) : ""
+            # gate.yml's matrix (lane => its parts) against every lane the default run has: a
+            # lane missing, a lane the script does not have, or a split lane missing a part
+            local runs = Set(m[1] for m in eachmatch(r"(?:^|\s)lane ([a-z][a-z0-9.-]*)\s+(?:\$JULIA|julia|bash|suite|fuzz)\b"m, lanes))
+            local jobs = Dict{String,Vector{String}}()
+            for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, gate)
+                push!(get!(jobs, m[1], String[]), m[2])
+            end
+            local whole = parts -> parts == [""] || (all(p -> occursin(r"^[0-9]+/[1-9][0-9]*$", p), parts) &&
+                length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
+                sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
+            local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
+            local pinned_push = map(("ci.yml", "formal.yml")) do f
+                local c = _code(joinpath(wf, f))
+                occursin("\non:\n  push:\n    branches: [main, 'march/**']\n", c) &&
+                    count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) &&
+                    !occursin(r"^on:[ \t]*\S"m, c)
+            end
             count(!, [occursin("lane suite suite", gated),
-                      occursin("WT_VALIDATE=1 WT_SHARD=\"0,2\" \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
-                      occursin("WT_VALIDATE=1 WT_SHARD=\"1,2\" \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
+                      occursin(raw"shards=\"0,2 1,2\"; [ \"$only\" = suite ] && [ -n \"$part\" ] && shards=\"$pi,$pn\"", lanes),
+                      occursin(raw"  for s in $shards; do" * "\n" * raw"    WT_VALIDATE=1 WT_SHARD=\"$s\" $JULIA --project=. -e 'using Pkg; Pkg.test()' > \"$d/shard$s.log\" 2>&1 &", lanes),
                       occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
-                      occursin("A batch is pushed only after the full `bash dev/lanes.sh` is green", agents),
+                      occursin("A batch is pushed only after the full gate is green: `bash dev/gate.sh` (gate.yml, CI's runners) or `bash dev/lanes.sh` (L153).", replace(agents, r"\s+" => " ")),
                       # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
                       occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
                       occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
                       occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
-                      occursin(join([raw"  stop", raw"  lane suite suite"], '\n'), gated),
+                      occursin(join([raw"  stop", raw"  lane suite suite", raw"  lane fuzz  fuzz"], '\n'), gated),
+                      # --lane runs one lane of the same run: every other lane is a no-op
+                      occursin(raw"want() { [ -z \"$only\" ] || [ \"$only\" = \"$1\" ]; }", lanes),
+                      occursin(join([raw"  local name=$1; shift", raw"  want \"$name\" || return 0"], '\n'), lanes),
                       # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
                       occursin(join([
-                          raw"  if $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                          raw"  if ! want probes && ! want coverage && ! want suite && ! want fuzz; then :",
+                          raw"  elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
                           raw"    bg \"$d/coverage\" lane coverage $JULIA --project=. test/registry_coverage.jl",
                           raw"    lane probes $JULIA --project=. test/probe_bytes.jl",
                           raw"    join_bg \"$d/coverage\"",
@@ -2630,11 +2654,13 @@ const LOCKS = [
                           raw"  fi"], '\n'), gated),
                       # ... no working java ...
                       occursin(join([
-                          raw"  if java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
+                          raw"  if ! want formal; then :",
+                          raw"  elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
                           raw"  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
                       # ... and a JULIA= override or no julia +1.13
                       occursin(join([
-                          raw"  if [ \"$JULIA\" != \"julia\" ]; then",
+                          raw"  if ! want smoke-1.13; then :",
+                          raw"  elif [ \"$JULIA\" != \"julia\" ]; then",
                           raw"    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
                           raw"  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
                           raw"    bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
@@ -2650,7 +2676,39 @@ const LOCKS = [
                           raw"printf '  node %s (CI: %s)\n' \"$(node --version 2>/dev/null)\" \"$NODE_MAJOR\"",
                           raw"if [ -z \"$NODE_MAJOR\" ] || [ \"$node_major\" != \"$NODE_MAJOR\" ]; then",
                           raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
-                          raw"fi"], '\n'), lanes)])
+                          raw"fi"], '\n'), lanes),
+                      # gate.yml: the default run's lanes, each part of each split lane, one job each ...
+                      matrix_ok,
+                      occursin(raw"          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}", gate),
+                      # ... the first red job cancels the rest ...
+                      occursin("      fail-fast: true\n", gate) && !occursin("fail-fast: false", gate),
+                      # ... `julia` 1.12 and `julia +1.13` as the script calls them ...
+                      # (in every job that installs Julia)
+                      count("      - name: Julia (juliaup)\n", gate) >= 1 &&
+                          count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
+                      occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ]; then channel 1.13; fi", gate),
+                      # ... CI's Node major, read from ci.yml's node-version ...
+                      # (every job's: a job of its own Node passed while another kept the line)
+                      let majors = count("      - name: CI's Node major\n", gate),
+                          reads = count(raw"          echo \"node=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)\" >> \"$GITHUB_OUTPUT\"", gate),
+                          versions = filter(l -> occursin(r"^\s*node-version:", l), split(gate, '\n'))
+                          majors >= 1 && reads == majors && length(versions) == majors &&
+                              all(==(raw"          node-version: ${{ steps.ci.outputs.node }}"), versions)
+                      end,
+                      # ... no lane variable set by the workflow (the script sets them) ...
+                      !occursin(r"\b(WT|TLC)_[A-Z_]+", gate),
+                      # ... and split coverage's verdict on the union of every part's hits
+                      get(jobs, "coverage", [""]) == [""] ||
+                          (occursin("  coverage-merge:\n    needs: lane\n", gate) &&
+                           occursin("          bash dev/lanes.sh --lane coverage --merge\n", gate) &&
+                           occursin(raw"  export WT_COVERAGE_MERGE=1 WT_COVERAGE_DIR=\"$PWD/coverage-parts\"", lanes) &&
+                           occursin(raw"    coverage) export WT_COVERAGE_PART=\"$part\" WT_COVERAGE_DIR=\"$PWD/coverage-parts\" ;;", lanes)),
+                      # ... and only on gate/**, where ci.yml and formal.yml never run
+                      occursin("\non:\n  push:\n    branches: ['gate/**']\n  workflow_dispatch:\n\n", gate) &&
+                          !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
+                      # ci.yml's and formal.yml's push triggers are exactly main and march/** (no
+                      # branches-ignore, no unfiltered or inline push), so no gate/** push runs them
+                      pinned_push...])
         end),
     "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, a prologue since batch 112b-1, holds no try_table). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a concrete reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard. The builder refuses a try_table with inputs or results however the keyword is spelled (try_table!'s check, pinned here; the shorthand `try_table!(b, cs; results)` passed the text scan, A13B7), codegen builds no InstrIR.TryTable past it, and the scan of codegen's calls counts a `results` or `inputs` keyword or a splat (A13P16). This keeps a workaround for a form dart does not emit: dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy), whose try runs with a concrete-reference result on Node 22.23.3 (measured in batch 112: `try (result (ref null \$s))` with catch \$t, catch_all and rethrow); porting WT's exception lowering to it is dev/MARCH.md 13.17 A13E7 (dev/CHARTER.md C5)",
         () -> begin
@@ -2843,7 +2901,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 count(m -> !(startswith(m.captures[2], "IdDict{") ||
                              any(k -> startswith(m.captures[2], k), egal_keys)), maps)
         end),
-    "L140_overlay_reasons_are_verified" => ("an overlay's quarantine reason that names a BLAS or LAPACK routine is checked, not believed: test/overlay_reasons.jl (shard 0) finds, for each such overlay, that Julia's own method at the overlay's signature reaches that routine's foreigncall through its invokes, and every such reason in ext/ uses the one form it parses, `parity(quarantine: BLAS gemm: …)`. The first run found a reason naming BLAS trsv where Julia's ldiv! calls LAPACK trtrs (dev/CHARTER.md C3)",
+    "L140_overlay_reasons_are_verified" => ("an overlay's quarantine reason that names a BLAS or LAPACK routine is checked, not believed: test/overlay_reasons.jl (one QA family of runtests.jl) finds, for each such overlay, that Julia's own method at the overlay's signature reaches that routine's foreigncall through its invokes, and every such reason in ext/ uses the one form it parses, `parity(quarantine: BLAS gemm: …)`. The first run found a reason naming BLAS trsv where Julia's ldiv! calls LAPACK trtrs (dev/CHARTER.md C3)",
         () -> begin
             n = isfile(joinpath(ROOT, "test", "overlay_reasons.jl")) ? 0 : 1
             n += occursin("include(\"overlay_reasons.jl\")", read(joinpath(ROOT, "test", "runtests.jl"), String)) ? 0 : 1
@@ -3032,7 +3090,7 @@ end
 end # module
 
 # Standalone: exit 0/1. From runtests, include this file then assert
-# `@test ParityRatchet.run()` inside a @testset (see runtests.jl shard-0 block).
+# `@test ParityRatchet.run()` inside a @testset (see runtests.jl's `_wt_qa("parity_ratchet.jl")` block).
 if get(ENV, "WT_RATCHET_INCLUDED", "0") != "1"
     exit(ParityRatchet.run() ? 0 : 1)
 end

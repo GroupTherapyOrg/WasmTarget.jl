@@ -112,9 +112,10 @@ jobs:
           '
 
       # The dart-lang/sdk files src/ cites, at the pinned commit, for L132 (every parity
-      # anchor resolves). The ratchet runs in the lanes and in shard 0 of Pkg.test.
+      # anchor resolves). The ratchet runs in the lanes and in the Pkg.test shard its QA
+      # family is dealt to (runtests.jl's _wt_qa).
       - name: Pinned dart2wasm sources
-        if: matrix.target.slice == 'lanes' || matrix.target.slice == 'shard-0'
+        if: matrix.target.slice != 'fuzz'
         shell: bash
         run: bash dev/fetch_dart_sdk.sh
 

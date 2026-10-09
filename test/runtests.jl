@@ -112,7 +112,24 @@ const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
     isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
 end
 _wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
-_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == ""   # shard-0-only QA excluded from WT_PHASE runs
+# The QA families (the files included below, before the phases) are dealt round-robin across
+# the shards in file order, the k-th to shard (k-1) % N, so the N shards together run each exactly
+# once (on ubuntu CI they took 616 s, run 37879296900, which alone made shard 0 the slowest job).
+# Not in a WT_PHASE run or the fuzz pass. Each one run prints a WT_QA_TIME line.
+const _WT_QA_DEALT = Ref(0)
+function _wt_qa(name::AbstractString)::Bool
+    _WT_QA_DEALT[] += 1
+    ((_WT_QA_DEALT[] - 1) % _WT_NSHARDS == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
+    println("WT_QA\t", name)
+    return true
+end
+function _wt_qa_include(path::AbstractString)
+    local name = isabspath(path) ? relpath(path, @__DIR__) : path
+    _wt_qa(name) || return nothing
+    local t = @elapsed include(path)
+    println("WT_QA_TIME\t", round(t; digits = 3), "\t", name)
+    return nothing
+end
 # Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
 _wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
@@ -130,103 +147,105 @@ import SHA
 using Dates: Dates, @dateformat_str
 
 # Package-level QA runs first so structural failures surface
-# before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
-_wt_shard0() && include("test_aqua.jl")
-_wt_shard0() && include("test_explicit_imports.jl")
-_wt_shard0() && include("diagnostics_sink.jl")
-_wt_shard0() && include("m8_selector_table.jl")
-_wt_shard0() && include("m11_intrinsics_table.jl")
-_wt_shard0() && include("module_builder_validation.jl")
-_wt_shard0() && include("grapheme_break.jl")
-_wt_shard0() && include("nir_use_index.jl")
-_wt_shard0() && include("host_boundary_types.jl")
+# before the ~hour-long codegen suite spins up. (Each on one shard — it's process-wide.)
+_wt_qa_include("test_aqua.jl")
+_wt_qa_include("test_explicit_imports.jl")
+_wt_qa_include("diagnostics_sink.jl")
+_wt_qa_include("m8_selector_table.jl")
+_wt_qa_include("m11_intrinsics_table.jl")
+_wt_qa_include("module_builder_validation.jl")
+_wt_qa_include("grapheme_break.jl")
+_wt_qa_include("nir_use_index.jl")
+_wt_qa_include("host_boundary_types.jl")
 
 include("utils.jl")
 # a rejection names its statement and inline chain (dev/MARCH.md exit criterion 5)
-_wt_shard0() && include("diagnostic_attribution.jl")
-_wt_shard0() && include("no_undefined_globals.jl")
-_wt_shard0() && include("source_maps.jl")
-_wt_shard0() && include("wrong_value_locator.jl")
-_wt_shard0() && include("fold_rule.jl")
+_wt_qa_include("diagnostic_attribution.jl")
+_wt_qa_include("no_undefined_globals.jl")
+_wt_qa_include("source_maps.jl")
+_wt_qa_include("wrong_value_locator.jl")
+_wt_qa_include("fold_rule.jl")
 # formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
-_wt_shard0() && include("dispatch_method_error.jl")
+_wt_qa_include("dispatch_method_error.jl")
 # formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
-_wt_shard0() && include("lazy_classid_isa.jl")
+_wt_qa_include("lazy_classid_isa.jl")
 include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
 # Native linear-memory sidecar (dev/PARITY_MASTER.md, Scope).
-# Node-differential, run once (shard 0 only) like the other fixture suites above.
-_wt_shard0() && include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
-_wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
-_wt_shard0() && include("recursive_groups.jl")
-_wt_shard0() && include("overlay_reasons.jl")
-_wt_shard0() && include("apply_iterate_soundness.jl")
+# Node-differential, run once (on one shard) like the other fixture suites above.
+_wt_qa_include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
+_wt_qa_include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
+_wt_qa_include("recursive_groups.jl")
+_wt_qa_include("overlay_reasons.jl")
+_wt_qa_include("apply_iterate_soundness.jl")
 
-# Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
+# Cleanup-loop regression guards (one shard each — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
 # for every case the deleted passes addressed). See dev/HISTORY.md#typed-builder-and-cleanup-campaigns.
-_wt_shard0() && include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
-_wt_shard0() && include("cleanup_loop1_backfills.jl")
+_wt_qa_include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
+_wt_qa_include("cleanup_loop1_backfills.jl")
 # Parity Loop A: the WasmGC subtype lattice (wasm_subtype) — supertype-chain + nullability aware,
 # mirroring dart2wasm HeapType.isSubtypeOf. See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
-_wt_shard0() && include("test_wasm_subtype_lattice.jl")
+_wt_qa_include("test_wasm_subtype_lattice.jl")
 # Parity Loop C: F31 heterogeneous-Union value extraction + F-i31 full-width int box (the
 # phi-store now CONSTRUCTS the tagged-union struct instead of dummying to ref.null, and ints
 # are boxed full-width, not via lossy i31). See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
-_wt_shard0() && include("f31_union_value_backfills.jl")
+_wt_qa_include("f31_union_value_backfills.jl")
 # Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
 # a single i64 op on a 128-bit value was invalid wasm). See dev/HISTORY.md#parity-method.
-_wt_shard0() && include("f11_int128_bitcount_backfills.jl")
+_wt_qa_include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
 # overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order.
-_wt_shard0() && include("sort_comparator_backfills.jl")
+_wt_qa_include("sort_comparator_backfills.jl")
 # CFG normalization: shared non-returning bounds-error tails may cross natural
 # loop regions and must be duplicated through the canonical statement compiler.
-_wt_shard0() && include("crossing_terminal_taildup.jl")
+_wt_qa_include("crossing_terminal_taildup.jl")
 # F3 sub-loop L0 (dev/HISTORY.md#closures-and-dynamic-dispatch): Core.Box contents-type inference.
-_wt_shard0() && include("f3_box_capture_l0.jl")
+_wt_qa_include("f3_box_capture_l0.jl")
 # F3 sub-loop L1 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized mutable Box{contents} struct registry.
-_wt_shard0() && include("f3_box_capture_l1.jl")
+_wt_qa_include("f3_box_capture_l1.jl")
 # F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch): cross-function box-field-type pre-pass.
-_wt_shard0() && include("f3_box_capture_l2_prepass.jl")
+_wt_qa_include("f3_box_capture_l2_prepass.jl")
 # F3 sub-loop L2b (dev/HISTORY.md#closures-and-dynamic-dispatch): value-type propagation past Box{Any} erasure.
-_wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
+_wt_qa_include("f3_box_capture_l2b_propagate.jl")
 # Loop C value channel: general numeric value-type propagation (Any-but-really-i64).
-_wt_shard0() && include("value_channel_propagate.jl")
+_wt_qa_include("value_channel_propagate.jl")
 # parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
-_wt_shard0() && include("m1_void_backfills.jl")
+_wt_qa_include("m1_void_backfills.jl")
 # march3: try/catch driver battery (the throw-arm-past-the-leave silent miscompile).
-_wt_shard0() && include("march3_try_backfills.jl")
-_wt_shard0() && include("type_world_bounds.jl")
-_wt_shard0() && include("module_metadata.jl")
-_wt_shard0() && include("layout_read_memo.jl")
-_wt_shard0() && include("ir_one_inference_path.jl")
-_wt_shard0() && include("vararg_fixed_prefix.jl")
-_wt_shard0() && include("symbol_syntax_metadata.jl")
-_wt_shard0() && include("memmove_single_path.jl")
-_wt_shard0() && include("host_imports.jl")
-_wt_shard0() && include("immutable_objectid.jl")
-_wt_shard0() && include("mutable_global_initialization.jl")
+_wt_qa_include("march3_try_backfills.jl")
+_wt_qa_include("type_world_bounds.jl")
+_wt_qa_include("module_metadata.jl")
+_wt_qa_include("layout_read_memo.jl")
+_wt_qa_include("ir_one_inference_path.jl")
+_wt_qa_include("vararg_fixed_prefix.jl")
+_wt_qa_include("symbol_syntax_metadata.jl")
+_wt_qa_include("memmove_single_path.jl")
+_wt_qa_include("host_imports.jl")
+_wt_qa_include("immutable_objectid.jl")
+_wt_qa_include("mutable_global_initialization.jl")
 # Ground-truth string hashing: hash(::String/::SubString{String}) now bit-exact
 # with native Julia (not merely internally consistent) — Dict{String,V}/
 # Set{String} CONSTANTS built natively resolve correctly from wasm.
-_wt_shard0() && include("string_hash_ground_truth.jl")
-_wt_shard0() && include("reinterpret_array_semantics.jl")
-_wt_shard0() && include("storage_relative_pointer_soundness.jl")
-_wt_shard0() && include("real_bottom_exceptions.jl")
-_wt_shard0() && include("no_fabricated_values.jl")
+_wt_qa_include("string_hash_ground_truth.jl")
+_wt_qa_include("reinterpret_array_semantics.jl")
+_wt_qa_include("storage_relative_pointer_soundness.jl")
+_wt_qa_include("real_bottom_exceptions.jl")
+_wt_qa_include("no_fabricated_values.jl")
 # Phase 6.3 (dev/MARCH.md): dart's two-tier diagnostics — a construct WT cannot
 # represent must reject through record_unsupported! (classified WasmCompileError),
 # never leak an internal StackImbalanceError.
-_wt_shard0() && include("capability_negative_controls.jl")
-_wt_shard0() && include("unknown_ir_heads.jl")
+_wt_qa_include("capability_negative_controls.jl")
+_wt_qa_include("unknown_ir_heads.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
-if _wt_shard0()
+if _wt_qa("parity_ratchet.jl")
+    _wt_ratchet_t0 = time()
     ENV["WT_RATCHET_INCLUDED"] = "1"
     include("parity_ratchet.jl")
     @testset "parity ratchet (dev/PARITY_MASTER.md)" begin
         @test ParityRatchet.run()
     end
+    println("WT_QA_TIME\t", round(time() - _wt_ratchet_t0; digits = 3), "\tparity_ratchet.jl")
 end
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
