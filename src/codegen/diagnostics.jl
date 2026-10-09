@@ -543,6 +543,11 @@ const GENERATED_CONSTRUCTS = (
     # at the open host import's call, which import_tops_save! stores; dart's call counts
     # nothing, instructions.dart:947)
     import_tops_save = GeneratedConstruct("host import's exception-stack save", "import_tops save", "", false),
+    # parity(quarantine: WT's export boundary is the host's glue (an export entry holds no try and
+    # no local), so the catch dart's `$invokeMain` makes inside wasm, invoke_main_patch.dart:43-52,
+    # is made by the host, which reads an escaped exception's class through one exported reader,
+    # ensure_class_id_reader!, emit_class_id!'s rule (code_generator.dart:6076 loadClassId))
+    class_id_reader = GeneratedConstruct("class id of an escaped exception", "wasmtarget.class_id", "", false),
 )
 
 """

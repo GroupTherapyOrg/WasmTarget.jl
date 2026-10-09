@@ -150,11 +150,11 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - A type definition carries dart's subtyping prefix: a type nothing extends is final.
 - titlecase is Julia's rule over utf8proc's grapheme breaks, ported and checked against the C
   library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
-- Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed);
-  Core.sizeof answers Julia's size of a Memory, and two lookups that matched by name went.
+- Every definition in src names its dart counterpart or its Julia necessity (R32 0, C2 closed).
 - Codegen reads Julia's typed IR only through the NIR (R29a, R29b locked; plan row 13.0 closed).
-- A trap names each frame: its statement, outside statements its definition (L159), in a generated
-  function its construct (L157); one compile entry (L158); rethrow(e) keeps its stack (L145).
+- C10 closed: a trap names each frame (L159, L157), one compile entry (L158), rethrow(e) keeps
+  its stack (L145), an escaped exception names its type (L160), the statement lane is strict on
+  throws (L161), the locator follows every closure (L147), the gate has a 20-minute budget (L162).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

@@ -349,7 +349,7 @@ const HOST_RUNTIME = [
 The import object a host instantiates a WasmTarget module with, as a JavaScript expression:
 every import WT's code generator creates, answered as HOST_RUNTIME says. A host adds its own
 imports beside it (a framework's, or a test's deterministic clock) and may answer one of these
-differently.
+differently. A host discards an instance that trapped, as policy (host_glue_js).
 parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
 """
 function host_runtime_js()::String
@@ -370,9 +370,17 @@ object holds that is a host-declared import (_is_host_declared_import: not of mo
 `(...a) => { open.value++; try { return f(...a); } finally { open.value--; } }`. The finally runs
 on every exit of the import's frame, also when stack exhaustion or a trap below it, which no wasm
 catch observes, unwinds it, so the count is exact at every point, and no wasm code writes it. An
-export the host calls while the count is not 0 is re-entrant (emit_export_entry!). A module with
-a host-declared import instantiated without the glue is refused: its count is a missing import.
-formal(dev/formal/ExceptionStack.tla): GlueFinally, the count lowered on every exit of an import.
+export the host calls while the count is not 0 is re-entrant (emit_export_entry!). The count is
+the instance's: the glued object hands each wrapped import and the count out once, to the
+instantiation that reads them, and a second read throws, so one glued object serves one
+instance and the host never calls a glued import itself (it calls its own function), either of
+which would count a call no call of this instance made (ExceptionStack.tla HostCallsGlued). A
+module with a host-declared import instantiated without the glue is refused: its count is a
+missing import. A host discards an instance that trapped, as policy: a trap is not a Julia error
+(where WT traps, Julia often raises an error a `catch` catches), so what an instance answers
+after a trap is outside the contract, though its exception stack stays Julia's
+(ExceptionStack.tla HostCatchesTrap, PropagatesTrap).
+formal(dev/formal/ExceptionStack.tla): GlueFinally, the count lowered on every exit of an import; HostCallsGlued = FALSE, each glued import read once.
 parity(quarantine: Julia's host is the catching frame of every call, julia.h:2548/:2555, and the only frame that observes stack exhaustion and traps, which V8 lets no wasm catch observe, legacy or exnref (measured on Node 22.23.3 and 26.11.0); dart generates the JS for each import, js/runtime_generator.dart:60 generateJsMethods, and wraps none in a finally)
 """
 function host_glue_js()::String
@@ -381,12 +389,17 @@ function host_glue_js()::String
     return "((importObject) => { " *
            "const open = new WebAssembly.Global({ value: 'i32', mutable: true }, 0); " *
            "const runtime = { $(runtime) }; const glued = {}; " *
+           "const once = (o, m, f, v) => { let read = false; Object.defineProperty(o, f, { enumerable: true, get: () => { " *
+           "if (read) throw new Error('the glued import ' + m + '.' + f + ' was read twice: a glued import object serves " *
+           "one instance, and the host calls its own function, never the glued one (WasmTarget.host_glue_js)'); " *
+           "read = true; return v; } }); }; " *
            "for (const [m, fs] of Object.entries(importObject)) { glued[m] = Object.assign({}, fs); " *
            "if (m === 'wasmtarget') continue; " *
            "for (const [f, fn] of Object.entries(fs)) { " *
            "if (typeof fn !== 'function' || (runtime[m] || []).includes(f)) continue; " *
-           "glued[m][f] = (...a) => { open.value++; try { return fn(...a); } finally { open.value--; } }; } } " *
-           "glued.wasmtarget = Object.assign({}, glued.wasmtarget, { host_imports_open: open }); " *
+           "once(glued[m], m, f, (...a) => { open.value++; try { return fn(...a); } finally { open.value--; } }); } } " *
+           "glued.wasmtarget = Object.assign({}, glued.wasmtarget); " *
+           "once(glued.wasmtarget, 'wasmtarget', 'host_imports_open', open); " *
            "return glued; })"
 end
 
@@ -408,6 +421,64 @@ function ensure_provenance_imports!(mod::WasmModule)::Nothing
     any(e -> e.name == "wasmtarget.exception", mod.exports) ||
         add_export!(mod, "wasmtarget.exception", 4, 0)
     return nothing
+end
+
+"""
+    ensure_class_id_reader!(mod, registry, translator)
+
+The provenance export beside the exception tag: `wasmtarget.class_id: (anyref) -> i32`, the
+classId of an escaped exception, which a host that catches an escape reads from the tag's payload
+(`getArg(tag, 0)`, host_escape_js) and names as dart prints a type in a minified build,
+`minified:Class<id>` (type.dart:344), resolved through the source map's class names
+(add_minified_class_names). Its body is emit_class_id!'s rule over `Any`, the one rule every class
+read uses: null is Nothing, a bare array whose wasm type one class has answers that class, and a
+value without a header (a type object, a bare array whose wasm type classes share) traps at the
+cast, never a guessed class. Defined at the end of compile_module, over the final numbering, the
+last of the module's functions; in a module compiled into again (existing_module) its body is
+replaced in its slot, the name passed on (L157).
+parity(quarantine: WT's export boundary is the host's glue (L156: an export entry holds no try and no local), so the catch dart's `\$invokeMain` makes inside wasm, invoke_main_patch.dart:43-52, is made by the host, which reads the escaped value's class through this one exported reader, code_generator.dart:6076 loadClassId)
+"""
+function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, translator::Translator)::Nothing
+    local ctx = CompilationContext(NirBody(NirStmt[], Type[Any], nothing), (Any,), Int32, mod, registry;
+                                   translator=translator)
+    local b = InstrBuilder(WasmValType[AnyRef], WasmValType[I32]; func_name="ensure_class_id_reader!", mod=mod)
+    local_get!(b, 0)
+    emit_class_id!(b, ctx, Any)
+    finish_function!(b)
+    local name = generated_function_name(:class_id_reader)
+    local k = findfirst(e -> e.name == "wasmtarget.class_id", mod.exports)
+    if k === nothing
+        add_export!(mod, "wasmtarget.class_id", 0,
+                    add_function!(mod, WasmValType[AnyRef], WasmValType[I32], copy(ctx.locals), builder_code(b); name=name))
+    else
+        local slot = Int(mod.exports[k].idx) - num_imported_funcs(mod) + 1
+        mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, copy(ctx.locals), builder_code(b); name=name)
+    end
+    return nothing
+end
+
+"""
+    host_escape_js() -> String
+
+The host's catch of an escape, as a JavaScript expression: a function `(exports, e) => outcome`
+that a host calling an export runs on what the call threw. An escaped Julia exception (`e.is(tag)`,
+the tag exported as `wasmtarget.exception`) answers `{ throw: 'minified:Class<id>', stack }`: its
+class read by the exported reader from the exception the payload carries (`getArg(tag, 0)`, after
+any `rethrow(e)` replaced it) and the stack its throw captured (`getArg(tag, 1)`). A reader that
+traps answers a trap saying the class could not be read, with the reader's message and stack.
+Anything else (a trap, the engine's stack exhaustion, a JS exception) is a trap with its message.
+parity(quarantine: WT's export boundary is the host's glue (L156), so the catch dart's `\$invokeMain` makes inside wasm, invoke_main_patch.dart:43-52 (`print(e)`, `print(s)`, rethrow), is made by the host; the class prints as type.dart:344 prints it in a minified build, `minified:Class\$index`)
+"""
+function host_escape_js()::String
+    return "((exports, e) => { " *
+           "const tag = exports['wasmtarget.exception']; " *
+           "if (e instanceof WebAssembly.Exception && tag && e.is(tag)) { " *
+           "const st = e.getArg(tag, 1); const stack = String(st && st.stack || ''); " *
+           "let id; try { id = exports['wasmtarget.class_id'](e.getArg(tag, 0)); } " *
+           "catch (r) { return { trap: \"the escaped exception's class could not be read: \" + String(r && r.message || r), " *
+           "stack: String(r && r.stack || '') }; } " *
+           "return { throw: 'minified:Class' + id, stack }; } " *
+           "return { trap: String(e && e.message || e), stack: String(e && e.stack || '') }; })"
 end
 
 # The Julia types whose statements a traced compile reports, and the wasm local each lives in:

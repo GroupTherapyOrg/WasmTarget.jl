@@ -217,31 +217,34 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         host = MBV.WasmModule()
         host_idx = MBV.add_import!(host, "host", "measure", MBV.WasmValType[],
                                    MBV.WasmValType[MBV.F64])
-        bytes = MBV.compile_multi(Any[(_mbv_import_caller, (), "caller")];
+        bytes_mod = MBV.compile_module(Any[(_mbv_import_caller, (), "caller")];
             existing_module=host,
-            import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)],
-            validate=false)
+            import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)])
+        @test unsaved_host_import_calls(bytes_mod) == 0   # every call of the import saved and restored (L156)
+        bytes = MBV.to_bytes(bytes_mod)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 
         mixed = MBV.WasmModule()
         mixed_idx = MBV.add_import!(mixed, "host", "mix",
             MBV.WasmValType[MBV.F64, MBV.I64], MBV.WasmValType[MBV.F64])
-        mixed_bytes = MBV.compile_multi(Any[(_mbv_import_mix_caller, (), "mix_caller")];
+        mixed_bytes_mod = MBV.compile_module(Any[(_mbv_import_mix_caller, (), "mix_caller")];
             existing_module=mixed,
             import_stubs=Any[(_mbv_imported_mix, "mix", (Float64, Int64),
-                              mixed_idx, Float64)],
-            validate=false)
+                              mixed_idx, Float64)])
+        @test unsaved_host_import_calls(mixed_bytes_mod) == 0   # every call of the import saved and restored (L156)
+        mixed_bytes = MBV.to_bytes(mixed_bytes_mod)
         @test mixed_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 
         leafmod = MBV.WasmModule()
         leafidx = MBV.add_import!(leafmod, "host", "external_leaf",
             MBV.WasmValType[MBV.I64], MBV.WasmValType[MBV.I64])
-        leafbytes = MBV.compile_multi(
+        leafbytes_mod = MBV.compile_module(
             Any[(_mbv_external_leaf_caller, (Int64,), "leaf_caller")];
             existing_module=leafmod,
             import_stubs=Any[(_mbv_external_leaf, "external_leaf", (Int64,),
-                              leafidx, Int64)],
-            validate=false)
+                              leafidx, Int64)])
+        @test unsaved_host_import_calls(leafbytes_mod) == 0   # every call of the import saved and restored (L156)
+        leafbytes = MBV.to_bytes(leafbytes_mod)
         @test leafbytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
@@ -418,8 +421,8 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
             link_roots=(linked_mod, roots, registry) -> begin
                 g = MBV.add_uninitialized_ref_global!(linked_mod, MBV.get_string_struct_type!(linked_mod, registry))
                 @test MBV.num_imported_funcs(linked_mod) >= 1
-                err = try; MBV.add_root_global_initializer!(linked_mod, registry, g, 0); nothing; catch e; e; end
-                @test err isa ArgumentError && occursin("is an imported function", err.msg)
+                local e = try; MBV.add_root_global_initializer!(linked_mod, registry, g, 0); nothing; catch err; err; end
+                @test e isa ArgumentError && occursin("is an imported function, not a compiled root", e.msg)
                 MBV.add_root_global_initializer!(linked_mod, registry, g, roots["string_init"])
             end)
         @test count(f -> f.name == "string_init field initializer", init_mod.functions) == 1

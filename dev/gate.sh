@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # The gate on CI's runners (AGENTS.md; dev/CHARTER.md C10): pushes a commit to gate/<name>, where
 # .github/workflows/gate.yml runs every lane of `bash dev/lanes.sh`'s default run as its own job
-# (the first red job cancels the rest), waits for the run, and prints one verdict line per lane
-# and `LANES green` or `LANES red`. Exit 0 only on green. It runs no Julia on this machine.
+# (the first red job cancels the rest), waits for the run, and prints one verdict line per lane,
+# the slowest lane job against the budget gate.yml's lane timeout sets (a job the budget cut off is
+# marked past it), and `LANES green` or `LANES red`. Exit 0 only on green. It runs no Julia on
+# this machine.
 #
 #   bash dev/gate.sh                 # HEAD, on gate/<current branch, / as ->
 #   bash dev/gate.sh <rev> [<name>]  # a branch or commit, on gate/<name>
@@ -40,11 +42,19 @@ done
 [ -n "$id" ] || { echo "gate: no gate.yml run for $sha on $name" >&2; exit 2; }
 echo "gate: run $id  $(gh run view "$id" --json url --jq .url)"
 gh run watch "$id" --interval 30 >/dev/null 2>&1
+# the budget B, minutes per lane job: the lane job's timeout in gate.yml, the one source (L162)
+budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }
+              inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)
+[ -n "$budget" ] || { echo "gate: gate.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
 gh run view "$id" --json jobs --jq '.jobs[] | [.conclusion, .name,
     (if (.startedAt // "") != "" and (.completedAt // "") != "" and .startedAt < .completedAt
-     then ((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601) | tostring) + "s" else "" end)] | @tsv' |
-  awk -F'\t' '{ v = $1 == "success" ? "ok  " : $1 == "failure" ? "FAIL" : "--  ";
-                 printf "  %s %-16s %6s  %s\n", v, $2, $3, ($1 == "success" ? "" : $1) }'
+     then ((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601) | tostring) else "" end)] | @tsv' |
+  awk -F'\t' -v B="$budget" '{ v = $1 == "success" ? "ok  " : $1 == "failure" ? "FAIL" : "--  ";
+                 past = ($3 != "" && $3 + 0 >= B * 60) ? sprintf("  PAST THE %d-MINUTE BUDGET", B) : "";
+                 printf "  %s %-16s %6s  %s%s\n", v, $2, ($3 == "" ? "" : $3 "s"), ($1 == "success" ? "" : $1), past
+                 if ($2 != "coverage-merge" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
+               END { if (slowest != "") printf "gate: slowest lane job %s %d s of the budget %d min (%d s)%s\n",
+                       slowest, slow, B, B * 60, (slow >= B * 60 ? ", PAST IT" : "") }'
 conclusion=$(gh run view "$id" --json conclusion --jq .conclusion)
 echo "gate: wall $(( $(date +%s) - s0 ))s"
 if [ "$conclusion" = success ]; then echo "LANES green"; exit 0; fi

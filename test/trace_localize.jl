@@ -4,8 +4,10 @@
 # every function compiled from Julia IR reports its entry, and each statement of a traced type
 # its value after the store) and runs it in Node. It runs the SAME IR natively: each traced
 # function's typed CodeInfo, as WT compiled it, becomes an OpaqueClosure with the same probes,
-# and every call to a traced callee is routed to the callee's closure — so the native run
-# follows WT's IR all the way down, overlays included. The two runs report the same events in
+# taking the function's own `#self#` as its first argument, and every call to a traced callee is
+# routed to the callee's closure with the callee value the call passed — so the native run
+# follows WT's IR all the way down, overlays included, into every closure, each call reading
+# its own instance's captures. The two runs report the same events in
 # the same order until the first difference, which is where the wrong value first appears; it
 # is named with its function, statement text, inline chain, iteration and both values. The
 # native run's answer is also compared with `f` itself, which tells a codegen fault (WT's IR
@@ -32,7 +34,8 @@ _bits(v::Float32)::String = string(reinterpret(Int32, v))
 
 @noinline _probe(id::Int, i::Int, v)::Nothing = (push!(_NATIVE, (1, id, i, _bits(v))); nothing)
 @noinline _probe_enter(id::Int)::Nothing = (push!(_NATIVE, (0, id, 0, "")); nothing)
-@noinline _run_traced(id::Int, args...) = _OCS[id](args...)
+# a routed call: the callee's IR run with the callee value the call passed as its `#self#`
+@noinline _run_traced(id::Int, self, args...) = _OCS[id](self, args...)
 
 # a traced value's bits shown as the statement's Julia value (a float's bits are its value)
 function _shown(T, bits::String)::String
@@ -46,25 +49,31 @@ function _shown(T, bits::String)::String
     return bits
 end
 
-# does a function's IR read its own `#self#` (a closure's captures)? Its closure cannot stand in
-# for it, so calls to it stay native
-_reads_self(code::Core.CodeInfo)::Bool =
-    any(st -> st isa Expr && any(a -> a isa Core.Argument && a.n == 1, st.args), code.code)
-
 # the MethodInstance an :invoke names
 _invoked(x) = x isa Core.CodeInstance ? x.def : x
 
-# the OpaqueClosure of trace id `id`'s IR: an entry probe, a probe after each statement of a
-# traced type, and each call to a traced (non-self-reading) callee routed to that callee's IR
-function _traced_closure(trace, id::Int, ids::IdDict{Any,Int}, routable::Vector{Bool})
+# the OpaqueClosure of trace id `id`'s IR: its `#self#` an explicit first argument (each
+# Argument(n) becomes Argument(n + 1), phi values included, behind the closure's empty
+# environment), an entry probe, a probe after each statement of a traced type, and each call to
+# a traced callee routed to that callee's IR with the callee value the call passed (a closure
+# type has many instances, each with its own captures, so no environment is fixed)
+function _traced_closure(trace, id::Int, ids::IdDict{Any,Int})
     local ir = CC.inflate_ir(trace.codes[id], trace.mis[id])
     local n = length(ir.stmts)
+    for i in 1:n
+        local urs = CC.userefs(ir.stmts[i][:stmt])
+        for op in urs
+            local v = op[]
+            v isa Core.Argument && (op[] = Core.Argument(v.n + 1))
+        end
+        ir.stmts[i][:stmt] = urs[]
+    end
     for i in 1:n
         local st = ir.stmts[i][:stmt]
         if st isa Expr && st.head === :invoke
             local callee = get(ids, _invoked(st.args[1]), 0)
-            if callee > 0 && routable[callee]
-                ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[3:end]...)
+            if callee > 0
+                ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[2:end]...)
                 ir.stmts[i][:flag] = CC.IR_FLAG_NULL
             end
         end
@@ -85,23 +94,23 @@ function _traced_closure(trace, id::Int, ids::IdDict{Any,Int}, routable::Vector{
     end
     CC.insert_node!(ir, CC.SSAValue(1), CC.NewInstruction(Expr(:call, _probe_enter, id), Nothing), false)
     ir = CC.compact!(ir)
-    ir.argtypes[1] = Tuple{}   # an opaque closure's first argument is its (empty) environment
-    return Core.OpaqueClosure(ir; do_compile=true)
+    pushfirst!(ir.argtypes, Tuple{})   # an opaque closure's first argument is its (empty) environment
+    local m = trace.mis[id].def
+    return Core.OpaqueClosure(ir; isva=m isa Method && m.isva, do_compile=true)
 end
 
-# the native run of WT's IR: its events and its answer
-function native_trace(trace, args::Tuple)
+# the native run of WT's IR, the entry called with `f` itself as its `#self#`: its events and
+# its answer
+function native_trace(trace, f, args::Tuple)
     local ids = IdDict{Any,Int}(mi => id for (id, mi) in enumerate(trace.mis))
-    local routable = Bool[!_reads_self(c) for c in trace.codes]
-    routable[trace.entry] || error("the entry reads its own #self# (a closure): it cannot be run as its IR")
     empty!(_OCS)
     empty!(_NATIVE_PROBED)
     for id in eachindex(trace.codes)
-        routable[id] && (_OCS[id] = _traced_closure(trace, id, ids, routable))
+        _OCS[id] = _traced_closure(trace, id, ids)
     end
     empty!(_NATIVE)
     local r = try
-        (:ok, Base.invokelatest(_OCS[trace.entry], args...))
+        (:ok, Base.invokelatest(_OCS[trace.entry], f, args...))
     catch e
         (:throw, e)
     end
@@ -121,14 +130,15 @@ const importObject = { wasmtarget: {
 HOST_MERGE
 const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
 let outcome = 'returned';
-try { instance.exports[FNAME](ARGS); } catch (e) { outcome = 'trapped: ' + String(e && e.message || e); }
+try { instance.exports[FNAME](ARGS); }
+catch (e) { const o = (HOST_ESCAPE)(instance.exports, e); outcome = o.throw !== undefined ? 'threw ' + o.throw : 'trapped: ' + o.trap; }
 return [{ trace, outcome }];
 """
 
 # the wasm run's events, and how the call ended
 function wasm_trace(bytes::Vector{UInt8}, fname::String, js_args::String)
     local src = replace(_TRACE_JS, "FNAME" => repr(fname), "ARGS" => js_args,
-                        "HOST_MERGE" => WasmRunner.HOST_RUNTIME_MERGE_JS)
+                        "HOST_MERGE" => WasmRunner.HOST_RUNTIME_MERGE_JS, "HOST_ESCAPE" => WasmTarget.host_escape_js())
     local status, results = WasmRunner.run_driver_batch(bytes, src; ninputs=1)
     status === :error && error("the traced module did not run: $(results)")
     local r = results[1]
@@ -158,15 +168,15 @@ format_js_arg of each); `summary` is the report printed on a wrong answer.
 function first_divergence(f, args...; js_args::String)
     local argtypes = Tuple(map(typeof, args))
     local bytes, trace = WasmTarget.compile_with_statement_trace(f, argtypes)
-    local nevents, nres = native_trace(trace, args)
+    local nevents, nres = native_trace(trace, f, args)
     local jres = try (:ok, f(args...)) catch e; (:throw, e) end
     local ir_matches_julia = isequal(nres, jres)
     local wevents, outcome = wasm_trace(bytes, string(nameof(f)), js_args)
     # only the statements both sides report (a statement codegen stores nowhere has no probe,
-    # and one the native run cannot probe has none there), and only the functions whose IR the
-    # native run follows
-    local keep = (e::Event) -> haskey(_OCS, e[2]) &&
-        (e[1] == 0 || (e[3] in trace.probed[e[2]] && e[3] in get(_NATIVE_PROBED, e[2], Set{Int}())))
+    # and one the native run cannot probe has none there); the native run follows every
+    # traced function, so no function's events are dropped
+    local keep = (e::Event) ->
+        e[1] == 0 || (e[3] in trace.probed[e[2]] && e[3] in get(_NATIVE_PROBED, e[2], Set{Int}()))
     filter!(keep, nevents)
     filter!(keep, wevents)
     local seen = Dict{Tuple{Int,Int},Int}()

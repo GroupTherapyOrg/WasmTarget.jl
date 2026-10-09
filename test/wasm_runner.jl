@@ -30,7 +30,7 @@ const HOST_RUNTIME_MERGE_JS = "for (const [m, fs] of Object.entries($(WasmTarget
                               "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
                               "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"
 
-export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE
+export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE, escaped_class_name
 
 const RUNNER_MJS = joinpath(@__DIR__, "runner.mjs")
 
@@ -220,7 +220,9 @@ Instantiate `bytes`, call `fname(js_args)` once, and return the JSON-decoded
 result. `js_args` is a JS argument string (e.g. `BigInt("5"), 3`). `import_js`
 is a JS statement defining `const importObject = {…}`. With the module's
 `source_map` (WasmTarget.compile_with_sourcemap), a trap's message names the Julia
-statement of each wasm frame it unwound through (`located_frames`).
+statement of each wasm frame it unwound through (`located_frames`). An escaped Julia exception
+is `(:trap, "uncaught Julia exception <type>")`, its type named through the map's class names
+(escaped_class_name), and its frames those of its throw.
 """
 function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::AbstractString;
         import_js::AbstractString = "const importObject = {};",
@@ -236,15 +238,8 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
     let v;
     try { v = f($js_args); }
-    catch (e) {
-      const tag = instance.exports['wasmtarget.exception'];
-      if (e instanceof WebAssembly.Exception && tag && e.is(tag)) {
-        // an escaped Julia exception: its stack is the one captured at its throw
-        const st = e.getArg(tag, 1);
-        return [{ trap: 'uncaught Julia exception', stack: String(st && st.stack || '') }];
-      }
-      return [{ trap: String(e && e.message || e), stack: String(e && e.stack || '') }];
-    }
+    // an escaped Julia exception answers its class and the stack captured at its throw
+    catch (e) { return [($(WasmTarget.host_escape_js()))(instance.exports, e)]; }
     // an export with no result answers `undefined`, which is Julia's `nothing`
     if (v === undefined) return [{ ok: null }];
     try { return [{ ok: JSON.parse(JSON.stringify(v, enc)) }]; }
@@ -253,8 +248,9 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     status, results = run_driver(pool, enc_wasm(bytes), src; ninputs = 1)
     status === :error && return (:error, results)
     r = results[1]
-    if haskey(r, "trap")
-        local msg = String(r["trap"])
+    if haskey(r, "trap") || haskey(r, "throw")
+        local msg = haskey(r, "throw") ?
+            "uncaught Julia exception " * escaped_class_name(String(r["throw"]), source_map) : String(r["trap"])
         if source_map !== nothing && haskey(r, "stack")
             local frames = located_frames(String(r["stack"]), source_map, bytes)
             isempty(frames) || (msg *= "\n" * join(("  at " * f for f in frames), "\n"))
@@ -262,6 +258,26 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
         return (:trap, msg)
     end
     return (:ok, r["ok"])
+end
+
+"""
+    escaped_class_name(cls, source_map) -> String
+
+The type of an escaped Julia exception, from the class the host read (`minified:Class<id>`,
+WasmTarget.host_escape_js): with the module's source map, the class's name from its class-name
+table (WasmTarget.minified_class_names), as dart's tooling deobfuscates a minified build's
+`minified:Class<id>`; without one, dart's text itself. A map that names no such class raises.
+"""
+function escaped_class_name(cls::AbstractString, source_map::Union{Nothing,AbstractString})::String
+    source_map === nothing && return String(cls)
+    local m = match(r"^minified:Class(\d+)$", cls)
+    m === nothing && error("an escaped exception's class reads `$cls`, not minified:Class<id>")
+    local names = WasmTarget.minified_class_names(String(source_map))
+    names === nothing && error("the source map carries no class names, so `$cls` cannot be named")
+    local id = parse(Int, m.captures[1])
+    (id + 1 <= length(names) && names[id + 1] !== nothing) ||
+        error("the source map's class names have no class $id")
+    return names[id + 1]
 end
 
 # ---- A trap's frames, located through the module's source map ---------------------------

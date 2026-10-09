@@ -349,3 +349,120 @@ end
     fr = _SMT.stmt_frames(ci.debuginfo, length(ci.code))
     @test length(fr) == 1 && occursin("_smt_line", fr[1]) && occursin("no source location in Julia's IR", fr[1])
 end
+
+# An escaped exception names its type. The host reads the escaped value's class through the
+# module's one exported reader (`wasmtarget.class_id`, emit_class_id!'s rule over `Any`) from
+# the tag's payload, after any rethrow(e) replaced it, and prints it as dart's minified build
+# does, `minified:Class<id>` (type.dart:344); the source map carries the class names
+# (dart's addMinifiedClassNames, source_map_utils.dart:15), so the runner names the type, and
+# wasm-opt's map gets them back (io_util.dart:162-171, :206-211).
+struct _SmtEscErr <: Exception; x::Int; end
+_smt_esc_arg(x::Int64) = x > 0 ? throw(ArgumentError("a")) : x
+_smt_esc_dom(x::Int64) = x > 0 ? throw(DomainError(x)) : x
+_smt_esc_user(x::Int64) = x > 0 ? throw(_SmtEscErr(x)) : x
+_smt_esc_nothing(x::Int64) = x > 0 ? throw(nothing) : x
+function _smt_esc_rethrow(x::Int64)
+    try
+        x > 0 && throw(ArgumentError("first"))                           # the first throw
+        return x
+    catch
+        rethrow(DomainError(1))
+    end
+end
+function _smt_esc_memory(x::Int64)
+    u = Memory{UInt64}(undef, 1); u[1] = UInt64(x)
+    m = Memory{Int64}(undef, 1); m[1] = x
+    x > 5 && throw(u)
+    x > 0 && throw(m)
+    return x
+end
+
+@testset "source maps: an escaped exception names its type" begin
+    # (i) each named through the map; with no map, dart's minified text, whose id the map names
+    for (f, name) in ((_smt_esc_arg, "ArgumentError"), (_smt_esc_dom, "DomainError"),
+                      (_smt_esc_user, string(_SmtEscErr)), (_smt_esc_nothing, "Nothing"))
+        @test try; f(1); false; catch e; string(typeof(e)) == name; end
+        bytes, json = _SMT.compile_with_sourcemap(f, (Int64,))
+        status, msg = WasmRunner.run_wasm_single(bytes, string(nameof(f)), "1n"; source_map=json)
+        @test status === :trap && startswith(msg, "uncaught Julia exception $name\n")
+        status, msg = WasmRunner.run_wasm_single(_SMT.compile(f, (Int64,)), string(nameof(f)), "1n")
+        m = match(r"^uncaught Julia exception (minified:Class\d+)$", msg)
+        @test status === :trap && m !== nothing
+        m === nothing || @test WasmRunner.escaped_class_name(m.captures[1], json) == name
+    end
+    # (ii) rethrow(e) replaces the exception, so the escape is DomainError's, while its stack is
+    # still the first throw's (L145)
+    @test try; _smt_esc_rethrow(1); false; catch e; e isa DomainError; end
+    bytes, json = _SMT.compile_with_sourcemap(_smt_esc_rethrow, (Int64,))
+    status, msg = WasmRunner.run_wasm_single(bytes, "_smt_esc_rethrow", "1n"; source_map=json)
+    @test status === :trap && startswith(msg, "uncaught Julia exception DomainError\n")
+    first_throw = findfirst(l -> occursin("throw(ArgumentError(\"first\"))", l), readlines(@__FILE__))
+    @test occursin(Regex("source_maps\\.jl:$(first_throw)\\b"), msg)
+    # (iii) through wasm-opt: the optimized map carries the class names again
+    bytes, json = _SMT.compile_with_sourcemap(_smt_esc_rethrow, (Int64,); optimize=true)
+    @test _SMT.minified_class_names(json) !== nothing
+    status, msg = WasmRunner.run_wasm_single(bytes, "_smt_esc_rethrow", "1n"; source_map=json)
+    @test status === :trap && startswith(msg, "uncaught Julia exception DomainError\n")
+    # (iv) a bare array whose wasm type two classes share has no class to read: the reader
+    # traps at its cast, and the host says the class could not be read, in the reader's frame
+    bytes, json = _SMT.compile_with_sourcemap(_smt_esc_memory, (Int64,))
+    status, msg = WasmRunner.run_wasm_single(bytes, "_smt_esc_memory", "1n"; source_map=json)
+    @test status === :trap && startswith(msg, "the escaped exception's class could not be read: ")
+    @test occursin("`wasmtarget.class_id`: class id of an escaped exception", msg)
+    @test !occursin("Memory", msg)
+end
+
+# (v) a class the closed world numbers only through a later collection round (a dispatch
+# candidate's body, in a module with a host import): the reader reads the final numbering
+abstract type _SmtLateShape end
+struct _SmtLateErr <: Exception; v::Int64; end
+for (i, S) in enumerate((:_SmtLateA, :_SmtLateB, :_SmtLateC, :_SmtLateD, :_SmtLateE, :_SmtLateF))
+    @eval struct $S <: _SmtLateShape; v::Int64; end
+    i > 1 && @eval @noinline _smt_late_area(s::$S)::Int64 = s.v + $i
+end
+@noinline _smt_late_stub(x::Int64)::Int64 = x + 1
+@noinline _smt_late_area(s::_SmtLateA)::Int64 = s.v > 2 ? throw(_SmtLateErr(_smt_late_stub(s.v))) : s.v
+@noinline _smt_late_shapes(n::Int64) =
+    _SmtLateShape[_SmtLateB(n), _SmtLateC(n), _SmtLateD(n), _SmtLateE(n), _SmtLateF(n), _SmtLateA(n)]
+_smt_late_entry(n::Int64)::Int64 = (s = Int64(0); for x in _smt_late_shapes(n); s += _smt_late_area(x)::Int64; end; s)
+
+@testset "source maps: the class reader reads the last round's classes" begin
+    m = _SMT.WasmModule()
+    idx = _SMT.add_import!(m, "host", "stub", _SMT.WasmValType[_SMT.I64], _SMT.WasmValType[_SMT.I64])
+    bytes, json = _SMT.compile_multi_with_sourcemap([(_smt_late_entry, (Int64,), "late_entry")];
+                      sourcemap_url="m.map", existing_module=m,
+                      import_stubs=Any[(_smt_late_stub, "stub", (Int64,), idx, Int64)])
+    @test try; _smt_late_entry(3); false; catch e; e isa _SmtLateErr; end
+    status, msg = WasmRunner.run_wasm_single(bytes, "late_entry", "3n";
+                      import_js="const importObject = { host: { stub: (x) => x + 1n } };", source_map=json)
+    @test status === :trap && startswith(msg, "uncaught Julia exception $(string(_SmtLateErr))\n")
+    # every call of the import, in the later round's body too, is saved and restored (L156)
+    m2 = _SMT.WasmModule()
+    idx2 = _SMT.add_import!(m2, "host", "stub", _SMT.WasmValType[_SMT.I64], _SMT.WasmValType[_SMT.I64])
+    @test unsaved_host_import_calls(_SMT.compile_module([(_smt_late_entry, (Int64,), "late_entry")]; existing_module=m2,
+              import_stubs=Any[(_smt_late_stub, "stub", (Int64,), idx2, Int64)])) == 0
+end
+
+# The source map's JSON reader (src has no JSON dependency) reads JSON's grammar and nothing else:
+# an escape outside `"\/bfnrtu`, a number token JSON does not allow, a surrogate without its
+# other half, a raw control character in a string and a duplicate key are refused, never read as
+# something else.
+@testset "source maps: the map's JSON reader refuses what JSON does not allow" begin
+    rd(t) = _SMT._json_read(t)
+    @test rd("""{"names":["a\\/b","\\ud83d\\ude00","\\u00e9\\n"],"v":3,"x":-1.5e2}""") ==
+          Pair{String,Any}["names" => Any["a/b", "😀", "é\n"], "v" => 3, "x" => -150.0]
+    refused(t) = try; rd(t); false; catch e; e isa ErrorException && startswith(e.msg, "source map: "); end
+    @test refused("""["\\x41"]""")          # an escape JSON does not have
+    @test refused("""["\\'"]""")
+    @test refused("""[+1]""")               # numbers JSON does not allow
+    @test refused("""[Inf]""")
+    @test refused("""[NaN]""")
+    @test refused("""[01]""")
+    @test refused("""[1.]""")
+    @test refused("""["\\ud800"]""")        # a high surrogate with no low one
+    @test refused("""["\\ud800\\u0041"]""")
+    @test refused("""["\\udc00"]""")        # a low surrogate with no high one
+    @test refused("""["\\u12"]""")          # fewer than four hex digits
+    @test refused("[\"a\tb\"]")             # a raw control character inside a string
+    @test refused("""{"k":1,"k":2}""")       # a duplicate key
+end

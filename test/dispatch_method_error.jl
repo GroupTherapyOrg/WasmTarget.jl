@@ -76,6 +76,11 @@ ghn(n::Int64) = (hide(HNT)[] === nothing ? 0 : n)
 struct DN; l::Any; r::Any; end
 const CHN = foldl((t, _) -> DN(t, nothing), 1:1_000_001; init = SA)
 gchn(n::Int64) = (hide(CHN)[] === nothing ? 0 : n)
+# two constants, 999,995 and 10 nodes: each is within the bound, which counts one constant's own
+# objects (A14C3: the walk counted every constant together and rejected at CB's statement)
+const CA = foldl((t, _) -> DN(t, nothing), 1:999_995; init = SA)
+const CB = foldl((t, _) -> DN(t, nothing), 1:10; init = SA)
+gcab(n::Int64) = (hide(CA)[] === nothing ? 0 : n) + (hide(CB)[] === nothing ? 0 : n)
 # a type object a constant Memory's element holds, and one a cyclic constant holds (A12C3: the
 # walk's Memory arm, and its visiting each object once)
 struct HM; v::Int64; end
@@ -230,6 +235,8 @@ end
         @test e isa WasmTarget.WasmCompileError && occursin("gchn(::Int64)", e.diag.func_name) &&
               e.diag.stmt_idx > 0 && occursin("CHN", e.diag.stmt) && occursin("statement %$(e.diag.stmt_idx)", msg)
     end
+    @test M.gcab(1) == 2
+    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.gcab, (Int64,), "gcab")]).held_type_objects
     # a type object held as a value is a candidate whether or not its values are one pointer: a
     # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)
     @test M.gtu(3) == 1

@@ -305,6 +305,43 @@ end
 end
 _wt_hb_err(f) = (try; f(); nothing; catch err; err; end)
 
+# The count is the instance's: the glued object hands each wrapped import and the count out once,
+# to the instantiation that reads them. A host that called a glued import itself (after o(0n), the
+# host calls the glued cbr, whose r answered 1 where Julia's top-level call answers 2), or two
+# instances of one glued object (A's import calling B's r: B took a slot its own calls saved for
+# another call, answering 1, or trapped on its null array), counted a call no call of the instance
+# made (dev/AUDIT.md A14E1 = A14P1; ExceptionStack.tla HostCallsGlued). Both are refused, loudly.
+_wt_gl_p(x::Int64) = x + 100
+@testset "a glued import object serves one instance, and the host never calls a glued import" begin
+    @test _wt_eb_o(0) == 1 && _wt_eb_r(0) == 2
+    mod = WasmTarget.WasmModule()
+    idx = WasmTarget.add_import!(mod, "host", "cbr", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
+    m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_o, (Int64,), "o"), (_wt_gl_p, (Int64,), "p")];
+                                  existing_module=mod, import_stubs=Any[(_wt_eb_cbr, "cbr", (Int64,), idx, Int64)])
+    bytes = WasmTarget.to_bytes(m)
+    glue = WasmTarget.host_glue_js()
+    status, results = WasmRunner.run_driver_batch(bytes, """
+    const importObject = $(WasmTarget.host_runtime_js());
+    let inst; importObject.host = { cbr: (x) => inst.exports.r(x) };
+    const io = ($glue)(importObject);
+    const { instance } = await WebAssembly.instantiate(bytes, io, { builtins: ['js-string'] });
+    inst = instance;
+    const out = [String(instance.exports.o(0n))];
+    try { out.push(String(io.host.cbr(0n))); } catch (e) { out.push(String(e && e.message || e)); }
+    try { await WebAssembly.instantiate(bytes, io, { builtins: ['js-string'] }); out.push('instantiated twice'); }
+    catch (e) { out.push(String(e && e.message || e)); }
+    out.push(String(instance.exports.r(0n)));
+    return [{ ok: out }];
+    """; ninputs=1)
+    @test status === :ok
+    out = results[1]["ok"]
+    @test out[1] == "1"                                                        # o(0n), re-entrant: Julia's 1
+    @test startswith(out[2], "the glued import host.cbr was read twice")       # the host's own call refused
+    @test startswith(out[3], "the glued import host.cbr was read twice") ||
+          startswith(out[3], "the glued import wasmtarget.host_imports_open was read twice")   # a second instance refused
+    @test out[4] == "2"                                                        # a top-level r: Julia's 2
+end
+
 @testset "the host's count: each refusal names both its items" begin
     sig = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
     roots = Any[(_wt_eb_r, (Int64,), "r")]
@@ -343,6 +380,20 @@ _wt_hb_err(f) = (try; f(); nothing; catch err; err; end)
     @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=counted(),
                          root_bindings=Dict("r" => WasmTarget.RootBindings(dom_bindings=Dict(UInt32(0) => [(UInt32(0), Int32[])]))))),
                      "DOM binding global index")
+    # a global the host imports for itself is not the count: a WasmGlobal names it, and the
+    # program reads and writes the host's global
+    hg = WasmTarget.WasmModule()
+    @test WasmTarget.add_global_import!(hg, "host", "g", WasmTarget.I32, true) == 0
+    hbytes = WasmTarget.to_bytes(WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")]; existing_module=hg))
+    status, results = WasmRunner.run_driver_batch(hbytes, """
+    const importObject = $(WasmTarget.host_runtime_js());
+    const g = new WebAssembly.Global({ value: 'i32', mutable: true }, 5);
+    importObject.host = { g };
+    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const r = instance.exports.gw();
+    return [{ ok: [r, g.value] }];
+    """; ninputs=1)
+    @test status === :ok && results[1]["ok"] == [6, 6]
 end
 
 # Each function this compile defines is exported once, by its entry when the module has the
@@ -350,6 +401,10 @@ end
 # after codegen (dev/MARCH.md 13.17 A13C2); an export the module held before the compile is left
 # as it was (A12B3 = A12E4 = A12C5); a host import is named "<module.field> (import)" (dart
 # functions.dart:141)
+@noinline _wt_c1_x(n::Int64) = n + 1
+@noinline _wt_c1_x_d2(n::Int64) = 10n
+@noinline _wt_c1_inner(n::Int64) = n * 3
+_wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
 @testset "each export is made once: the compile's and its hook's by their entries, a prior one left alone" begin
     mod = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod)
@@ -366,18 +421,38 @@ end
     @test count(e -> e.kind == 0x00 && fname(e.idx) == "esc (export)", m.exports) == 1
     @test any(imp -> imp.function_name == "wasmtarget.stack_trace (import)", m.imports)
 
-    # an entry is named by its export's final name: the module already exports "esc", so the
-    # compile's "esc" is exported as "esc_d2", through "esc_d2 (export)" (A13C2: the entry was
-    # named before the export was renamed, "esc (export)")
+    # a requested name the module already exports is refused, never renamed: a rename could hand
+    # the host another entry's name. With the module exporting "x", the compile's "x" became
+    # "x_d2", and the entry requested as "x_d2" became "x_d2_d2": exports.x_d2(2) answered x(2),
+    # 3, where native x_d2(2) is 20 (dev/AUDIT.md A14C1)
     mod2 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod2)
     pre2 = WasmTarget.add_function!(mod2, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
                                     WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
-    WasmTarget.add_export!(mod2, "esc", 0, pre2)
-    m2 = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod2)
-    fname2(i) = m2.functions[Int(i) - WasmTarget.num_imported_funcs(m2) + 1].name
-    @test fname2(only(e for e in m2.exports if e.name == "esc_d2").idx) == "esc_d2 (export)"
-    @test fname2(only(e for e in m2.exports if e.name == "esc").idx) == "pre"
+    WasmTarget.add_export!(mod2, "x", 0, pre2)
+    @test _wt_c1_x_d2(2) == 20
+    err = try
+        WasmTarget.compile_module(Any[(_wt_c1_x_d2, (Int64,), "x_d2"), (_wt_c1_x, (Int64,), "x")]; existing_module=mod2)
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("already exports \"x\"", err.msg)
+    # two entries asking for one name, and one entry asked under two names, are refused
+    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x_d2, (Int64,), "f")]); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("two entries request the export name \"f\"", err.msg)
+    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x, (Int64,), "g")]); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("requested under two names", err.msg)
+    # a name nobody requested that the module exports is still disambiguated: the module's
+    # "_wt_c1_inner" export stays, the compile's discovered callee takes the next free name
+    mod4 = WasmTarget.WasmModule()
+    WasmTarget.ensure_provenance_imports!(mod4)
+    pre4 = WasmTarget.add_function!(mod4, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
+                                    WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
+    WasmTarget.add_export!(mod4, "_wt_c1_inner", 0, pre4)
+    m4 = WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4)
+    @test count(e -> e.name == "_wt_c1_inner", m4.exports) == 1
+    @test any(e -> e.name == "_wt_c1_inner_d2", m4.exports)
 
     # an export entry is a prologue with no local and no try, so a result that is not defaultable
     # (a hook's export of a function returning `(ref $t)`) leaves on the stack: the module

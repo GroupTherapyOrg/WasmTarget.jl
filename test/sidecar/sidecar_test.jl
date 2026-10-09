@@ -175,13 +175,15 @@ function _build_sidecar_wt_module()
     ]
     append!(func_list, BRIDGE_SPECS_F64)   # _bv_f64_new/set!/get/len — Vector{Float64} marshalling
 
-    bytes = WT.compile_multi(func_list; existing_module=mod, import_stubs=import_stubs)
-    return bytes, (; alloc_idx, reset_idx, store_idx, load_idx, daxpy_idx)
+    m = WT.compile_module(func_list; existing_module=mod, import_stubs=import_stubs)
+    return WT.to_bytes(m), (; alloc_idx, reset_idx, store_idx, load_idx, daxpy_idx), m
 end
 
-const SIDECAR_WT_BYTES, SIDECAR_IMPORT_IDXS = _build_sidecar_wt_module()
+const SIDECAR_WT_BYTES, SIDECAR_IMPORT_IDXS, SIDECAR_WT_MODULE = _build_sidecar_wt_module()
 
 @testset "sidecar: WT wiring" begin
+    # every call of a host-declared import is saved and restored (L156)
+    @test unsaved_host_import_calls(SIDECAR_WT_MODULE) == 0
     # Confirm every import stub firing through translate_external_type/
     # _check_import_stub_external_types! unchanged: all 5 declared import
     # signatures are plain numeric (Int32/Float64), so no coercion happens.

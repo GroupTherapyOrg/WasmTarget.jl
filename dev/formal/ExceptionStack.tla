@@ -47,8 +47,12 @@
 (* open-- }` and hands the module `open` as its imported global            *)
 (* `wasmtarget.host_imports_open`, which no wasm code writes. Its finally  *)
 (* runs on every exit of the import's frame, whatever the escape           *)
-(* (GlueFinally), so the count is exact at every point. At the boundary WT *)
-(* touches the top at three points (emit_direct_call!,                     *)
+(* (GlueFinally), so the count is exact at every point. The glue hands     *)
+(* each wrapped import and the count out once, to the instantiation that   *)
+(* reads them, and a second read throws: one glued object serves one       *)
+(* instance, and the host cannot call a glued import itself, so the count  *)
+(* is this instance's open import calls (HostCallsGlued = FALSE). At the   *)
+(* boundary WT touches the top at three points (emit_direct_call!,         *)
 (* emit_export_entry!): a call of a host-declared import stores the top at *)
 (* index count of `$import_tops` before it (ImportCall), and after a       *)
 (* normal return, the glue's finally having brought the count back, sets   *)
@@ -83,7 +87,7 @@
 (* landing's identity is what makes the top right. An escape from a        *)
 (* top-level call is caught by the host. The host contract discards an     *)
 (* instance that trapped as policy, a trap not being Julia's error         *)
-(* (dev/MARCH.md 13.17 A13E8); the claim holds on the runs where the host  *)
+(* (host_glue_js states it); the claim holds on the runs where the host    *)
 (* goes on.                                                                *)
 (*                                                                         *)
 (* THE CLAIM. On every run of host calls (nested at most MaxCalls deep),   *)
@@ -114,8 +118,12 @@
 (* landing finding its entry by ref.eq on the exception (Landing =         *)
 (* "value", ValueIdentity, A12P2: the same object thrown twice is one      *)
 (* cell); no reset at a top-level entry (NoTopLevelReset, A12B1); every    *)
-(* entry nulling the top (ResetAtEntry); an export with no entry           *)
-(* (KeepsEntry); the value-save lowering (Impl = "values"); a rethrow at   *)
+(* entry nulling the top (ResetAtEntry); a glued import the host calls     *)
+(* itself, or one glued object two instances share, so the count holds a   *)
+(* call no call of this module made (HostCallsGlued, A14E1 = A14P1: the    *)
+(* host calls a glued import after o(0n), native 2, wasm 1); an export     *)
+(* with no entry (KeepsEntry); the value-save lowering (Impl =             *)
+(* "values"); a rethrow at                                                 *)
 (* depth 0 that throws the top (RethrowChecksDepth = FALSE); a push at the *)
 (* catch's landing instead of at the throw (PushAtLanding). ReraiseShared  *)
 (* pins H11 above.                                                         *)
@@ -181,7 +189,8 @@ CONSTANTS Vals, MaxFrames, MaxSteps, MaxCalls,
           PropagatesTrap,     \* the host may let a re-entrant trap propagate through it
           ImportExhausts,     \* a host-declared import may overflow the JS stack
           ExhaustReentrant,   \* a re-entrant call's wasm code may exhaust the stack
-          ReraiseShared       \* the host may re-raise an escape whose cell its caller's stack holds
+          ReraiseShared,      \* the host may re-raise an escape whose cell its caller's stack holds
+          HostCallsGlued      \* the host may call a glued import outside every call of the module
 
 Nothing == "nothing"
 ErrR == "errR"   \* ErrorException("rethrow() not allowed outside a catch block")
@@ -302,6 +311,22 @@ HostCall ==
     /\ calls' = Append(calls, [depth |-> Len(spec), base |-> Len(frames), ncells |-> Len(cells)])
     /\ UNCHANGED <<frames, pending, spec, cells, cnt, slots>>
     /\ obsS' = <<"call">> /\ obsI' = <<"call">>
+
+\* HostCallsGlued: the host calls a glued import itself, outside every call of the module (as a
+\* second instance sharing the glued object does through its own import call): the glue counts it
+\* as an open import no call of this module made, so an export the host calls from inside it is
+\* taken as re-entrant and takes a slot its own calls saved for another call (here one that exists:
+\* the stale top; with none, the code's array read traps). The design's glue hands each import
+\* out once, to the instantiation that reads it, so the host never holds a glued import.
+HostGluedCall == /\ HostCallsGlued /\ calls = <<>> /\ pending.kind = "none" /\ cnt < Len(slots)
+                 /\ cnt' = cnt + 1
+                 /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur>>
+                 /\ obsS' = <<"glued">> /\ obsI' = <<"glued">>
+
+HostGluedReturn == /\ HostCallsGlued /\ calls = <<>> /\ pending.kind = "none" /\ cnt > 0
+                   /\ cnt' = cnt - 1
+                   /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur>>
+                   /\ obsS' = <<"glued return">> /\ obsI' = <<"glued return">>
 
 \* The call returns normally once every region it entered is closed; the results leave on the
 \* stack and the entry touches nothing.
@@ -435,6 +460,7 @@ Step == /\ steps < MaxSteps /\ steps' = steps + 1
         /\ (Rethrow \/ Enter \/ Leave \/ PopException \/ Read \/ HostCall \/ Return
             \/ ImportCall \/ ImportReturn \/ ImportThrow("exhaust") \/ ImportThrow("foreign")
             \/ HostCatch \/ HostPropagate \/ HostReraise \/ Abort("trap") \/ Abort("exhaust")
+            \/ HostGluedCall \/ HostGluedReturn
             \/ \E v \in Vals : Throw(v) \/ RethrowOther(v))
 
 Stop == steps = MaxSteps /\ UNCHANGED vars   \* the bound, not a deadlock

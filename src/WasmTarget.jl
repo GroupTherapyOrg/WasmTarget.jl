@@ -60,7 +60,7 @@ include("bridge.jl")
 # Main API
 export compile, compile_multi, compile_with_base, optimize, WasmModule, to_bytes
 export RootBindings
-export compile_with_sourcemap, compile_multi_with_sourcemap, host_runtime_js, host_glue_js, ensure_provenance_imports!, ensure_host_imports_open!
+export compile_with_sourcemap, compile_multi_with_sourcemap, host_runtime_js, host_glue_js, host_escape_js, ensure_provenance_imports!, ensure_host_imports_open!
 export WasmGlobal, global_index, global_eltype
 # AbstractInterpreter with overlay method table (GPUCompiler pattern)
 export WasmInterpreter, get_wasm_interpreter, WASM_METHOD_TABLE
@@ -198,30 +198,55 @@ function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validat
     diagnostics_sink !== nothing && (DIAGNOSTICS_SINK[] = diagnostics_sink)
     local result = try
         compile_module(functions; existing_module, import_stubs, root_bindings, link_roots,
-                       return_registries, optimize_ir, register_ir_types, source_map_url, trace)
+                       return_registries=true, optimize_ir, register_ir_types, source_map_url, trace)
     finally
         DIAGNOSTICS_SINK[] = prev_sink
     end
     trace === nothing || trace.entry > 0 ||
         throw(ArgumentError("$(trace.entry_name)$(functions[1][2]) compiled to no traceable body"))
-    local mod = return_registries ? result[1] : result
-    local bytes, source_map = _emit_module(mod; optimize, validate)
+    local bytes, source_map = _emit_module(result[1]; optimize, validate, class_names=_class_names(result[2]))
     return CompileResult(bytes, source_map, return_registries ? (result[2], result[3], result[4]) : nothing, trace)
 end
 
 """
-    _emit_module(mod; optimize, validate) -> (bytes, source_map_json)
+    _class_names(registry) -> Vector{Union{Nothing,String}}
+
+The name of every class the compile numbered, `[id + 1]` for classId `id`: `string(T)` as Julia
+prints it (the text serialize_type_ids writes), `nothing` for an id no class has. A source map
+carries them (add_minified_class_names) so an escaped exception's `minified:Class<id>` names its
+type.
+parity(pkg/dart2wasm/lib/compile.dart:617 classNames): one name per classId, `translator.classes[classId].cls?.name` (:621)
+"""
+function _class_names(registry::TypeRegistry)::Vector{Union{Nothing,String}}
+    local names = Union{Nothing,String}[]
+    for (T, id) in ordered_pairs(registry.type_ids, type_order_key)
+        while length(names) <= id
+            push!(names, nothing)
+        end
+        names[id + 1] === nothing || error("classId $id numbers both $(names[id + 1]) and $T")
+        names[id + 1] = string(T)
+    end
+    return names
+end
+
+"""
+    _emit_module(mod; optimize, validate, class_names) -> (bytes, source_map_json)
 
 The one serialization of a compiled module, shared by every compile entry: its bytes —
 validated, or optimized by wasm-opt — and, for a module that records source maps
-(`mod.source_map_url`), its source map (threaded through wasm-opt as dart threads it,
-io_util.dart:133). `nothing` for the map otherwise.
+(`mod.source_map_url`), its source map, with the names of its classes added after
+serialization (WT never carries type names in the module, which is dart's minified build;
+compile.dart:633), threaded through wasm-opt as dart threads it (io_util.dart:133). `nothing`
+for the map otherwise.
 parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
 """
-function _emit_module(mod::WasmModule; optimize, validate::Bool)::Tuple{Vector{UInt8},Union{Nothing,String}}
+function _emit_module(mod::WasmModule; optimize, validate::Bool,
+                      class_names::Vector{Union{Nothing,String}})::Tuple{Vector{UInt8},Union{Nothing,String}}
     local source_map_url = mod.source_map_url
     local bytes, json = source_map_url === nothing ? (to_bytes(mod), nothing) :
                                                      to_bytes_with_source_map(mod)
+    # parity(pkg/dart2wasm/lib/compile.dart:635 addMinifiedClassNames): after serialization (:633)
+    json === nothing || (json = add_minified_class_names(json, class_names))
     if optimize === false
         # Soundness gate: validate the emitted module (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(bytes; label="compiled module")
@@ -463,6 +488,9 @@ function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,Stri
         input_path = joinpath(dir, "input.wasm")
         output_path = joinpath(dir, "output.wasm")
         write(input_path, bytes)
+        # wasm-opt drops the map's class names: read them from the input map, add them to the
+        # output map (io_util.dart:162-171, :206-211)
+        local class_names = source_map_json === nothing ? nothing : minified_class_names(source_map_json)
         if source_map_json !== nothing
             write(joinpath(dir, "input.wasm.map"), source_map_json)
             append!(flags, ["-ism", joinpath(dir, "input.wasm.map"),
@@ -492,8 +520,9 @@ function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,Stri
         # Soundness gate: validate optimized output (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(opt_bytes; label="optimized module")
 
-        return opt_bytes, source_map_json === nothing ? nothing :
-                          read(joinpath(dir, "output.wasm.map"), String)
+        source_map_json === nothing && return opt_bytes, nothing
+        local out_map = read(joinpath(dir, "output.wasm.map"), String)
+        return opt_bytes, class_names === nothing ? out_map : add_minified_class_names(out_map, class_names)
     end
 end
 

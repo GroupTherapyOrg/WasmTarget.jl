@@ -640,9 +640,11 @@ end
 catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
     SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
 
-# try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type
-# derived from its inputs and results (_block_type!). Each catch branches out to its target
-# label with the values it catches, checked as every branch is (validate_branch_types!).
+# try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type the
+# empty one (0x40), as it takes no inputs or results. Each catch branches out to its target
+# label with the values it catches, checked as every branch is (validate_branch_types!). The
+# CATCH_REF and CATCH_ALL_REF arms below type a clause no constructor builds (L101's allowlist is
+# empty); their deletion is dev/MARCH.md 13.17 A13B2, with the port to dart's legacy form (A13E7).
 # A try_table with inputs or results is refused: CI's wasm engine, V8 12.4 (Node 22), traps
 # entering a try_table whose result is a concrete reference, and its inputs are unmeasured, so a
 # body's values leave through locals (L155). dart2wasm emits no try_table, only legacy try

@@ -11,8 +11,9 @@
 (* normal return (NoReturnRestore), the payload dropped at the landing                *)
 (* (NoLandingIdentity, H5), the entry found by ref.eq on the exception                *)
 (* (ValueIdentity, A12P2), no top-level reset (NoTopLevelReset, A12B1), every entry   *)
-(* nulling the top (ResetAtEntry), no entry (KeepsEntry), the value-save lowering, a  *)
-(* rethrow at depth 0 that throws the top, a push at the landing; ReraiseShared pins  *)
-(* the open residual dev/MARCH.md 13.17 H11.                                          *)
+(* nulling the top (ResetAtEntry), a glued import the host calls itself or a glued    *)
+(* object two instances share (HostCallsGlued), no entry (KeepsEntry), the value-save *)
+(* lowering, a rethrow at depth 0 that throws the top, a push at the landing;         *)
+(* ReraiseShared pins the open residual dev/MARCH.md 13.17 H11.                       *)
 EXTENDS ExceptionStack
 =============================================================================

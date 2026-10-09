@@ -8,8 +8,9 @@
 # result per input. That amortizes Node startup across the whole sample batch.
 #
 # Result per input is a tagged tuple:
-#   (:ok,   value)   — function returned `value`
-#   (:trap, message) — the wasm module trapped / threw at runtime
+#   (:ok,    value)   — function returned `value`
+#   (:throw, type)    — a Julia exception escaped, its type named through the source map
+#   (:trap,  message) — the wasm module trapped (or the engine raised: stack exhaustion, timeout)
 
 module FuzzHarness
 
@@ -109,8 +110,8 @@ _norm_inputs(inputs::Vector, argtypes::Tuple) =
 function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFAULT_TIMEOUT, opt=false)
     Char in argtypes && (inputs = _norm_inputs(inputs, argtypes))
     fname = string(nameof(fn))
-    bytes = try
-        WasmTarget.compile(fn, argtypes; validate=true, optimize=opt)
+    bytes, source_map = try
+        WasmTarget.compile_with_sourcemap(fn, argtypes; validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end
@@ -129,12 +130,13 @@ function compile_and_run(fn, argtypes::Tuple, inputs::Vector; timeout::Real=DEFA
     const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, importObject);
     const f = instance.exports['$fname'];
+    const escape = $(WasmTarget.host_escape_js());
     return inputs.map(args => {
         try { return { ok: JSON.parse(JSON.stringify(f(...args), enc)) }; }
-        catch (e) { return { trap: String(e && e.message || e) }; }
+        catch (e) { const o = escape(instance.exports, e); return o.throw !== undefined ? { throw: o.throw } : { trap: o.trap }; }
     });
     """
-    results = _pool_results(bytes, driver, length(inputs); timeout=timeout)
+    results = _pool_results(bytes, driver, length(inputs), source_map; timeout=timeout)
     return results
 end
 
@@ -183,8 +185,8 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=
     funcs = Any[(fn, argtypes, fname)]
     needs_i64 && append!(funcs, _BRIDGE_I64)
     needs_f64 && append!(funcs, _BRIDGE_F64)
-    bytes = try
-        WasmTarget.compile_multi(funcs; validate=true, optimize=opt)
+    bytes, source_map = try
+        WasmTarget.compile_multi_with_sourcemap(funcs; validate=true, optimize=opt)
     catch e
         return (:compile_error => e)
     end
@@ -200,26 +202,31 @@ function compile_and_run_vec(fn, argtypes::Tuple, inputs::Vector; timeout::Real=
     const rdf = v => { const n=Number(e._bv_f64_len(v)); const o=[]; for(let i=0;i<n;i++){const x=e._bv_f64_get(v,BigInt(i+1)); o.push(Number.isNaN(x)?"__NaN__":x===Infinity?"__Inf__":x===-Infinity?"__-Inf__":Object.is(x,-0)?"__-0__":x);} return o; };
     const enc = (k,val)=>{ if(typeof val==='bigint') return {__bigint__:val.toString()}; if(typeof val==='number'){if(val===Infinity)return"__Inf__";if(val===-Infinity)return"__-Inf__";if(Number.isNaN(val))return"__NaN__";if(Object.is(val,-0))return"__-0__";} return val; };
     const inputs = $(inarr);
+    const escape = $(WasmTarget.host_escape_js());
     return inputs.map(args => { try {
         const r = f(...args.map(marsh));
         const v = "$(retmode)"==="vi" ? rdi(r) : "$(retmode)"==="vf" ? rdf(r) : JSON.parse(JSON.stringify(r, enc));
         return { ok: v };
-    } catch(err){ return { trap: String(err && err.message || err) + (process.env.WT_TRAP_STACK && err && err.stack ? " | " + String(err.stack).split("\\n").slice(0,3).join(" ; ") : "") }; } });
+    } catch(err){ const o = escape(e, err); if (o.throw !== undefined) return { throw: o.throw };
+        return { trap: o.trap + (process.env.WT_TRAP_STACK && err && err.stack ? " | " + String(err.stack).split("\\n").slice(0,3).join(" ; ") : "") }; } });
     """
-    return _pool_results(bytes, driver, length(inputs); timeout=timeout)
+    return _pool_results(bytes, driver, length(inputs), source_map; timeout=timeout)
 end
 
-# Run a driver body through the persistent pool and convert its raw {ok|trap}
-# results into the harness's tagged `(:ok,val)` / `(:trap,msg)` tuples. Falls
-# back to the harness-level marker (`:exec_error => …`) so the
-# property layer classifies them exactly as the old per-spawn path did.
-function _pool_results(bytes, driver, ninputs; timeout::Real=8)
+# Run a driver body through the persistent pool and convert its raw {ok|throw|trap}
+# results into the harness's tagged `(:ok,val)` / `(:throw,type)` / `(:trap,msg)` tuples: an
+# escaped Julia exception is `(:throw, name)`, its type named through the module's source map
+# (WasmRunner.escaped_class_name). Falls back to the harness-level marker
+# (`:exec_error => …`) so the property layer classifies them exactly as the old per-spawn path did.
+function _pool_results(bytes, driver, ninputs, source_map; timeout::Real=8)
     status, results = WasmRunner.run_driver_batch(bytes, driver; deadline=timeout, ninputs=ninputs)
     status === :error  && return (:exec_error => results)
     out = Vector{Tuple{Symbol,Any}}(undef, length(results))
     for (i, r) in enumerate(results)
         if r isa AbstractDict && haskey(r, "ok")
             out[i] = (:ok, _unmarshal(r["ok"]))
+        elseif r isa AbstractDict && haskey(r, "throw")
+            out[i] = (:throw, WasmRunner.escaped_class_name(String(r["throw"]), source_map))
         else
             out[i] = (:trap, String(get(r, "trap", "unknown")))
         end

@@ -7,10 +7,12 @@
 # at construction the program is discarded upstream), compile + run the same
 # function in wasm, and compare per input. The classification:
 #
-#   match           native==wasm (values close), OR both error  → OK
+#   match           native==wasm (values close), OR native throws and wasm throws a Julia
+#                   exception of the same type                   → OK
 #   wrong_value     both return, values differ                  → SOUNDNESS ALARM
-#   runtime_trap    native returns, wasm traps                  → reachable gap
-#   divergent_throw native throws, wasm returns                 → wasm over-accepts
+#   runtime_trap    native returns, wasm throws or traps        → reachable gap
+#   divergent_throw native throws, wasm returns, traps, or throws another type
+#                   (a Julia `catch` catches an exception of a type, never a trap)
 #   compile_error   strict compile raised (value-stub)          → known-wrong op
 #   optimizer_unsound  RAW wasm matches native but a binaryen-OPTIMIZED build
 #                      (wasm-opt -Os / -O3) diverges            → OPTIMIZER ALARM
@@ -41,7 +43,7 @@ struct Outcome
     src::String                 # function source
     input::Any                  # failing input tuple (or nothing)
     native::Any                 # (:ok,v)/(:throw,e) at the failing input
-    wasm::Any                   # (:ok,v)/(:trap,msg) at the failing input
+    wasm::Any                   # (:ok,v)/(:throw,type)/(:trap,msg) at the failing input
     detail::Any                 # raw extra (exception, body, …)
 end
 
@@ -55,18 +57,20 @@ function vals_match(a, b)
     return isequal(a, b)
 end
 
+# One rule for every sample: native's `(:ok, v)` / `(:throw, e)` against wasm's `(:ok, v)` /
+# `(:throw, name)` (a Julia exception, its type named) / `(:trap, msg)`. A throw matches only a
+# Julia exception of native's type: Julia is the ground truth, and a Julia `catch` catches an
+# exception of a type, never a wasm trap.
+# parity(quarantine: Julia's exception semantics; dart2wasm has no differential lane)
 function classify(nv, wv, cmp = vals_match)
     nstat, _ = nv
     wstat, _ = wv
-    if nstat === :ok && wstat === :ok
-        return cmp(nv[2], wv[2]) ? :match : :wrong_value
-    elseif nstat === :ok && wstat === :trap
+    if nstat === :ok
+        wstat === :ok && return cmp(nv[2], wv[2]) ? :match : :wrong_value
         return :runtime_trap
-    elseif nstat === :throw && wstat === :ok
-        return :divergent_throw
-    else
-        return :match   # both error → acceptable
     end
+    wstat === :throw && wv[2] == string(typeof(nv[2])) && return :match
+    return :divergent_throw
 end
 
 # wasm-opt levels every raw-clean program is re-checked against (binaryen).
@@ -245,19 +249,15 @@ function _differential_args(fn, argtypes::Tuple, samples, body, src, rt::Type; c
         wres isa Pair && return Outcome(:skip, src, nothing, nothing, nothing, wres.second)
         for (i, (nv, npost)) in enumerate(natpairs)
             w = wres[i]
-            nstat, wstat = nv[1], w[1]
-            if nstat === :ok && wstat === :ok
-                retok = tree_matches(rdesc, nv[2], w[2])
-                mutok = all(j -> pdescs[j] === nothing ||
-                                 tree_matches(pdescs[j], npost[j], w[3][j]), eachindex(pdescs))
-                (retok && mutok) && continue
-                wd = (:ok, retok ? "(ret ok; arg mutation diverged)" : tree_decode(rdesc, w[2]))
-                return Outcome(:wrong_value, src, samples[i], nv, wd, body)
-            elseif nstat === :ok && wstat === :trap
-                return Outcome(:runtime_trap, src, samples[i], nv, (:trap, w[2]), body)
-            elseif nstat === :throw && wstat === :ok
-                return Outcome(:divergent_throw, src, samples[i], nv, (:ok, tree_decode(rdesc, w[2])), body)
-            end
+            # the return and every mutable argument's post-call state compare as one value
+            cmp = (n, t) -> tree_matches(rdesc, n, t) &&
+                all(j -> pdescs[j] === nothing || tree_matches(pdescs[j], npost[j], w[3][j]), eachindex(pdescs))
+            cat = classify(nv, (w[1], w[2]), cmp)
+            cat === :match && continue
+            wd = w[1] !== :ok ? (w[1], w[2]) :
+                 nv[1] === :ok && tree_matches(rdesc, nv[2], w[2]) ? (:ok, "(ret ok; arg mutation diverged)") :
+                 (:ok, tree_decode(rdesc, w[2]))
+            return Outcome(cat, src, samples[i], nv, wd, body)
         end
         return Outcome(:ok, src, nothing, nothing, nothing, body)
     end

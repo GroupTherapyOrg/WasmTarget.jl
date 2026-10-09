@@ -851,16 +851,18 @@ end
 _import_function_name(module_name::String, field_name::String)::String =
     "$(module_name).$(field_name) (import)"
 
-# parity(quarantine: WT numbers a function when it is defined, where dart's FinalizableIndex
-# numbers it when the module is built, so a late import is refused instead of renumbered.)
+# parity(quarantine: a WT invention, open on dev/MARCH.md 13.17 A3B16 — WT numbers a function when
+# it is defined, where dart's FinalizableIndex numbers it when the module is built
+# (builder/util.dart:28), so a late import is refused instead of renumbered; no Julia necessity.)
 _check_import_precedes_definitions(mod::WasmModule, module_name::String, field_name::String)::Nothing =
     isempty(mod.functions) ? nothing : _module_invalid(:add_import,
         "import $(module_name).$(field_name) after $(length(mod.functions)) defined function(s) " *
         "would renumber them: every import precedes the first definition")
 
-# parity(quarantine: WT numbers a global when it is defined, where dart's FinalizableIndex numbers
-# every global when the module is built, the imported ones first (builder/util.dart:28
-# finalizeImportsAndBuilders), so a late global import is refused instead of renumbered.)
+# parity(quarantine: a WT invention, open on dev/MARCH.md 13.17 A3B16 — WT numbers a global when it
+# is defined, where dart's FinalizableIndex numbers every global when the module is built, the
+# imported ones first (builder/util.dart:28 finalizeImportsAndBuilders), so a late global import
+# is refused instead of renumbered; no Julia necessity.)
 function _check_global_import_precedes_definitions(mod::WasmModule, module_name::String, field_name::String)::Nothing
     local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
     defined === nothing && return nothing
@@ -884,9 +886,11 @@ end
     add_function!(mod, params, results, locals, body; name) -> func_idx
 
 Add a function named `name` to the module and return its index. dart's `define(type, [name])`
-takes the name optionally and dart2wasm passes one at its definitions (functions.dart:171
-getFunctionName, each generator's own text); here it is required, so no definition goes
-unnamed and a trap inside a function the compiler generates names it by its construct (L157).
+takes the name optionally, and dart2wasm names most of its definitions (functions.dart:171
+getFunctionName, each generator's own text) but not all (its cross-module global getter and
+setter, globals.dart:52 and :79); WT requires it, a strengthening of dart's practice, so no
+definition goes unnamed and a trap inside a function the compiler generates names it by its
+construct (L157).
 Note: Local function indices start after imported functions.
 Params and results can be NumType or WasmValType vectors.
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)

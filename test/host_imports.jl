@@ -125,3 +125,25 @@ end
     @test status === :ok
     @test results[1]["ok"] == "36"   # the import's 3 * 2, plus 3 + 1, 3 + 2, 3 + 3, 3 + 4, 3 + 5
 end
+
+# An import_stubs entry stands for a host import: an index that is not a host-declared function
+# import is refused, naming the stub. Unchecked, the stub's calls ran whatever function held the
+# index: `_hi_c2_f(1)` answered `_hi_c2_h`'s 0 where native is 4, and the module validated
+# (dev/AUDIT.md A14C2).
+@noinline _hi_c2_g(x::Int64)::Int64 = x + 1
+_hi_c2_f(x::Int64)::Int64 = 2 * _hi_c2_g(x)
+@noinline _hi_c2_h(x::Int64)::Int64 = x - 1
+@testset "an import stub's index names a host import" begin
+    @test _hi_c2_f(1) == 4
+    for idx in (1, 2, 0)   # two defined functions, and WT's own `wasmtarget.stack_trace` import
+        err = try
+            WasmTarget.compile_multi(Any[(_hi_c2_f, (Int64,)), (_hi_c2_h, (Int64,))];
+                                     import_stubs=Any[(_hi_c2_g, "g", (Int64,), idx, Int64)])
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("import stub \"g\"", err.msg) &&
+              occursin("not a host-declared function import", err.msg)
+    end
+end

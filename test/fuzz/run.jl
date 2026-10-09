@@ -77,7 +77,7 @@ function _reproducer(o::Outcome, ::Type{T0}, body; var::Symbol = :x) where {T0}
     _rr isa Vector || error("bridge could not run reproducer: " * string(_rr))
     _res = _rr[1]
     _pd = FuzzBridgeArgs.ismutable_shape($(T0)) ? FuzzBridge.descriptor($(T0))[1] : nothing
-    _ok = _nat[1] === :throw ? (_res[1] === :trap) :
+    _ok = _nat[1] === :throw ? (_res[1] === :throw && _res[2] == string(typeof(_nat[2]))) :
         (_res[1] === :ok &&
          FuzzBridge.tree_matches(FuzzBridge.descriptor(_rt)[1], _nat[2], _res[2]) &&
          (_pd === nothing || FuzzBridge.tree_matches(_pd, _c, _res[3][1])))

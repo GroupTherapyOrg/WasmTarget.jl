@@ -434,8 +434,9 @@ end
 """
     _held_bound_rejection(ci, src, idx, rec) -> WasmCompileError
 
-A constant whose objects pass the bound of the walk for the type objects constants hold (10^6,
-WT's own bound, not Julia's), rejected at statement `idx` (its NIR record `rec`) of the host whose
+A constant whose own objects (those no constant walked before it reached) pass the bound of the
+walk for the type objects constants hold (10^6 per constant, WT's own bound, not Julia's),
+rejected at statement `idx` (its NIR record `rec`) of the host whose
 CodeInstance is `ci`, and located as a codegen rejection is: its statement, source line and inline chain innermost
 first (as values.jl rejects a cyclic struct constant at its statement).
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world, and the type objects a constant holds are values a program reads; dart's constants are its own front end's, typed by their classes.)
@@ -443,7 +444,7 @@ parity(quarantine: Julia's trim collection (juliac --trim) is the closed world, 
 function _held_bound_rejection(ci, src::Core.CodeInfo, idx::Int, rec::NirStmt)::WasmCompileError
     local frames = stmt_frames(src.debuginfo, idx)
     return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),
-        "a constant whose objects passed 10^6, the bound of the walk for the type objects a constant holds",
+        "a constant whose own objects passed 10^6, the bound of the walk for the type objects a constant holds",
         isempty(frames) ? nothing : String(last(split(first(frames), " @ "))), nothing, idx,
         first(nir_text(rec), 160), frames))
 end
@@ -555,11 +556,13 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # MethodInstance, a CodeInstance, a CodeInfo, a binding, a SimpleVector) are not values a
     # program reads out of a constant (a NamedTuple, a Box are walked): walking them reached the
     # whole method graph, and a constant SimpleVector does not compile yet (MARCH 13.17 A11C9).
-    # Past 10^6 objects counted (each heap object once, and each fresh box getfield or getindex
-    # makes of an inline immutable; type objects, bits values and the skipped kinds are not
-    # counted) the walk rejects, a WasmCompileError at the statement whose constant it walked.
+    # Past 10^6 objects counted for one constant (its own: each heap object no earlier constant
+    # reached, once, and each fresh box getfield or getindex makes of an inline immutable; type
+    # objects, bits values and the skipped kinds are not counted) the walk rejects, a
+    # WasmCompileError at the statement whose constant it walked.
     function hold!(@nospecialize(root))
         local work = Any[root]
+        local own = 0
         while !isempty(work)
             local v = pop!(work)
             if v isa Type
@@ -576,7 +579,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             addr in held_seen && continue
             push!(held_seen, addr)
             push!(held_alive, v)
-            if length(held_seen) > 1_000_000
+            own += 1
+            if own > 1_000_000
                 throw(_held_bound_rejection(held_site[]::Tuple...))
             end
             if v isa Array || v isa GenericMemory

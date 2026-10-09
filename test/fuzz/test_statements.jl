@@ -90,3 +90,46 @@ const SEED = 0x5747_0001   # the fixed draw; a new seed is a new program set, re
         @test get(cats, :ok, 0) + get(cats, :skip, 0) > 0   # the loop actually verified things
     end
 end
+
+# The lane is strict on throws (FuzzProperty.classify): a native throw matches only a Julia
+# exception of native's type in wasm, never a trap or another type, as a Julia `catch` catches
+# an exception of a type and never a wasm trap. Two planted miscompiles of `÷`'s guard
+# (intrinsics_table.jl's checked_sdiv_int row, restored after) must fail it.
+const _WT = WasmTarget
+@testset "the statement lane is strict on throws" begin
+    @test FuzzProperty.classify((:throw, DivideError()), (:throw, "DivideError")) === :match
+    @test FuzzProperty.classify((:throw, DivideError()), (:trap, "divide by zero")) === :divergent_throw
+    @test FuzzProperty.classify((:throw, DivideError()), (:throw, "ArgumentError")) === :divergent_throw
+    @test FuzzProperty.classify((:throw, DivideError()), (:ok, 0)) === :divergent_throw
+    @test FuzzProperty.classify((:ok, 1), (:throw, "DivideError")) === :runtime_trap
+    k = (_WT.I64, _WT.I64, :checked_sdiv_int)
+    saved = _WT.INTRINSIC_BINOPS[k]
+    o0 = FuzzProperty.differential(:(x ÷ (x - x)), Int64)
+    println("unplanted: ", o0.category)
+    @test o0.category === :ok
+    try
+        # (i) no guard: wasm traps where Julia throws DivideError
+        _WT.INTRINSIC_BINOPS[k] = _WT.BinOpEmit((b, ctx, jw) -> _WT.num!(b, _WT.Opcode.I64_DIV_S), _WT.I64)
+        o = FuzzProperty.differential(:(x ÷ (x - x)), Int64)
+        println("planted (i), no guard: ", o.category, ", native ", o.native, ", wasm ", o.wasm)
+        @test o.category === :divergent_throw
+        @test o.native[2] isa DivideError && o.wasm[1] === :trap && occursin("divide by zero", o.wasm[2])
+        # (ii) the guard throws another fieldless exception the module numbers
+        _WT.INTRINSIC_BINOPS[k] = _WT.BinOpEmit(_WT.I64) do b, ctx, jw
+            la = UInt32(_WT.allocate_local!(ctx, _WT.I64)); lb = UInt32(_WT.allocate_local!(ctx, _WT.I64))
+            bld = _WT._sub_builder(b, ctx, "planted guard", 2; narrow_to=_WT.I64)
+            _WT.local_set!(bld, lb); _WT.local_set!(bld, la)
+            _WT.local_get!(bld, lb); _WT.num!(bld, _WT.Opcode.I64_EQZ)
+            _WT.if_!(bld); _WT._emit_throw_error_struct!(bld, ctx, StackOverflowError); _WT.end_block!(bld)
+            _WT.local_get!(bld, la); _WT.local_get!(bld, lb)
+            _WT.append_builder!(b, bld)
+            _WT.num!(b, _WT.Opcode.I64_DIV_S)
+        end
+        o = FuzzProperty.differential(:(x ÷ (x - x)), Int64)
+        println("planted (ii), StackOverflowError: ", o.category, ", native ", o.native, ", wasm ", o.wasm)
+        @test o.category === :divergent_throw
+        @test o.native[2] isa DivideError && o.wasm == (:throw, "StackOverflowError")
+    finally
+        _WT.INTRINSIC_BINOPS[k] = saved
+    end
+end

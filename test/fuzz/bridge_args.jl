@@ -16,6 +16,7 @@ using WasmTarget.Bridge
 using WasmTarget.Bridge: WALK_JS, BUILD_JS, _acc!
 using JSON
 using ..FuzzHarness: DEFAULT_TIMEOUT, run_driver_batch
+using ..FuzzHarness.WasmRunner: escaped_class_name
 using ..FuzzBridge
 
 # back-compat alias
@@ -25,7 +26,8 @@ const _BUILD_JS = BUILD_JS
     bridge_run_args(fn, argtypes, inputs; rettype, strict, timeout, opt)
 
 Full-generality runner: every arg AND the return value cross via the bit-exact
-bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:trap, msg)`, where
+bridge. Returns per-input `(:ok, ret_tree, post_trees)` / `(:throw, type, nothing)` (an
+escaped Julia exception, its type named through the source map) / `(:trap, msg)`, where
 `post_trees[j]` is the post-call re-read of the j-th MUTABLE arg (`nothing` for
 immutable args) — or `:unsupported` / `(:compile_error => e)`.
 """
@@ -68,8 +70,8 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     fname = string(nameof(fn))
     funcs = Any[(fn, argtypes, fname)]
     append!(funcs, accs)
-    bytes = try
-        WasmTarget.compile_multi(funcs; validate = true, optimize = opt)
+    bytes, source_map = try
+        WasmTarget.compile_multi_with_sourcemap(funcs; validate = true, optimize = opt)
     catch e
         return (:compile_error => e)
     end
@@ -85,13 +87,15 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     const inputs = $(JSON.json(enc_inputs));
     $WALK_JS
     $BUILD_JS
+    const escape = $(WasmTarget.host_escape_js());
     return inputs.map(trees => {
         try {
             const args = trees.map((t, j) => build(adescs[j], t));
             const r = f(...args);
             const post = args.map((a, j) => pdescs[j] ? walk(pdescs[j], a) : null);
             return { ok: walk(rdesc, r), post: post };
-        } catch (e) { return { trap: String(e && e.message || e) + (process.env.WT_TRAP_STACK && e && e.stack ? " | " + String(e.stack).split("\\n").slice(0,3).join(" ; ") : "") }; }
+        } catch (e) { const o = escape(ex, e); if (o.throw !== undefined) return { throw: o.throw };
+            return { trap: o.trap + (process.env.WT_TRAP_STACK && e && e.stack ? " | " + String(e.stack).split("\\n").slice(0,3).join(" ; ") : "") }; }
     });
     """
     status, results = run_driver_batch(bytes, driver; deadline = timeout, ninputs = length(inputs))
@@ -100,6 +104,8 @@ function bridge_run_args(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     for (i, r) in enumerate(results)
         if r isa AbstractDict && haskey(r, "ok")
             out[i] = (:ok, r["ok"], get(r, "post", nothing))
+        elseif r isa AbstractDict && haskey(r, "throw")
+            out[i] = (:throw, escaped_class_name(String(r["throw"]), source_map), nothing)
         else
             out[i] = (:trap, String(get(r, "trap", "unknown")), nothing)
         end

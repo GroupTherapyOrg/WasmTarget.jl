@@ -1300,3 +1300,84 @@ Resolution:
   Each lock and case was negative-tested. Probes 225/225 unchanged.
 - Everything else is on MARCH 13.17: A13B2, A13B4, A13C5, A13C6, A13C10, A13E4, A13E5 (filed
   under C1; a C4 finding), A13E6, A13P7, and the remainders named above.
+
+## 2026-10-09 — audited through f071e55a (8bc17d65..f071e55a: batches 112, 112b-1, the gate, 113)
+
+The fourteenth audit covers:
+- f36d346d, batch 112, the thirteenth audit's fixes;
+- 8ed47881, batch 112b-1, the export boundary as the host's glue;
+- f490f693, the gate on CI's runners;
+- f071e55a, batch 113, every function named, one compile entry, every Julia offset mapped, read at
+  its reviewed tree (c3f1c3a4).
+
+It made 29 findings, one of them seen from two areas (A14E1 = A14P1). Three were silent wrong
+answers, each measured at the start on Node 22.23.3:
+- A14C1. With the module exporting "x", the compile's "x" was renamed "x_d2", and the entry
+  requested as "x_d2" became "x_d2_d2": exports.x_d2(2) answered 3 where native answers 20.
+- A14C2. An import_stubs index that names no import bound the stub's calls to the function at that
+  index: native 4, wasm 0, the module valid (at a recursive index, stack exhaustion). Outside the
+  range: the check has returned quietly since before it.
+- A14E1 = A14P1. The glue's count is the glued object's, not the instance's. After `o(0n)`, a host
+  that called the glued `cbr` itself got `r`'s 1 where Julia's top-level call answers 2; two
+  instances of one glued object, A's import calling B's `r`, answered 1, or trapped on B's null
+  array.
+
+Area: builder — (A14B1) Two writers recorded a body's unmapped end: builder_code_mapped and a
+conditional append in the code-section writer (dart has one, instructions.dart:78). (A14B2) The
+import-order quarantines gave WT's eager numbering as their reason, a WT choice open on A3B16, not
+a Julia necessity. (A14B3) add_function! and WasmFunction accepted `name=""`, which the
+name-section writer then dropped silently: L157 held by spelling. (A14B4) `defaultable` had no
+caller. (A14B5) try_table!'s comment derived a block type from inputs and results it refuses, and
+its CATCH_REF and CATCH_ALL_REF arms type clauses no constructor builds, so A13B2 described an
+unreachable path. (A14B6) add_function!'s docstring said dart names every definition; its
+cross-module global getter and setter are unnamed (globals.dart:52, :79).
+
+Area: collection and planning — (A14C1) and (A14C2) above. (A14C3) The constant walk's 10^6 bound
+counted every constant together and blamed the statement that crossed the running total. (A14C4)
+The imported-global refusal refused every imported global, where its quarantine justifies only the
+count, and the imported-root refusal's case passed without its guard. (A14C5) compile_module kept a
+public docstring as a second entry, and options.jl named a compile_with_base that no longer sets
+OPTIONS[]. (A14C6) Two naming comments in compile.jl were false.
+
+Area: emission and diagnostics — (A14E1) above. (A14E2) A closure trampoline was named by its full
+printed type, unbounded. (A14E3) `_stmt_line` and `_nir_lines` kept the backward walk the source
+map's decoding dropped, two rules for one fact. (A14E4) A function's definition came from two
+sources. (A14E5) A stackified.jl comment called a recomputed statement unmapped. (A14E6) A
+GENERATED_CONSTRUCTS anchor named a local function's symbol path wrongly, and
+host_imports_open_global! kept a mutator's `!`.
+
+Area: enforcement and prose — (A14P1) = A14E1. (A14P2) L156's "every host-import call is saved and
+restored" was checked on two modules only. (A14P3) The imported-root case passed without its guard
+(with A14C4). (A14P4) L157 counted `name=` by text. (A14P5) C10's Planned cited 13.15 for an item
+13.15 did not hold. (A14P6) ExceptionStack.tla cited a deleted row. (A14P7) L158's "typed"
+keywords: `optimize` had no type. (A14P8) located_frames called a host-built function's frame "a
+statement with no source location in Julia's IR". (A14P9) gate.yml and run_tlc.sh described the
+TLC dealing two ways. (A14P10) 13.17 kept A13E8 with no open work, and the trap-discard policy was
+stated nowhere a host reads. (A14P11) 13.17's A3B15 and A13P7 rows were stale.
+
+Resolution:
+- In batch 113's commit, its own changes, before it landed: A14B1, A14B3, A14C5, A14C6,
+  A14E2-A14E6, A14P3-A14P9 and A14P11.
+- In batch 114 (the commit carrying this entry), each case run at the start first:
+  - A14C1: the export names are decided together. A requested name the module already exports is
+    refused, as are two entries requesting one name and one entry requested under two names; a
+    name nobody requested is disambiguated past every name already taken or decided;
+  - A14C2: a stub whose index is not a host-declared function import is refused, naming the stub;
+  - A14E1 = A14P1: model first. ExceptionStack.tla gains HostCallsGlued, and
+    MCExceptionStackHostCallsGluedBroken violates Agrees; the design instances are unchanged. The
+    glue hands each wrapped import and the count out once, to the instantiation that reads them,
+    and a second read throws, naming the import, so one glued object serves one instance and the
+    host never calls a glued import;
+  - A14C3: the bound counts one constant's own objects (two constants of 999,995 and 10 nodes
+    plan; the second was rejected);
+  - A14C4: the refusal is narrowed to the count, and a global the host imports for itself is read
+    and written (a case); the imported-root case asserts its own text;
+  - A14P2: every module the suite builds with import_stubs asserts the count of unsaved calls is 0
+    (seven more), and L156 counts them;
+  - A14P10: host_glue_js's and host_runtime_js's docstrings state the policy; A13E8 leaves 13.17;
+  - A14B2, A14B4, A14B5 and A14B6: the quarantines name A3B16, `defaultable` is deleted, the
+    try_table! comment is true and A13B2 is restated as the arms' deletion, the docstring is true.
+  The cases of A14C1-A14C4 and A14E1 failed at the start and pass, each reverted fix failed its
+  case again, and L156's extension was negative-tested; the probes change only by batch 114's
+  exported class reader.
+- Everything else is on MARCH 13.17 under its row: none of this entry's findings.

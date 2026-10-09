@@ -11,20 +11,21 @@
 
 # WT_FUZZ_PART=i/N (dev/lanes.sh --lane fuzz --part i/N, one job of dev/gate.sh's matrix) runs
 # part i of N: the families below are packed longest-first onto the least-loaded part by their
-# seconds measured on ubuntu CI (Julia 1.12, run 37879296900), as runtests.jl packs its phases, so
-# the N parts together run every family exactly once. Unset: every family.
+# seconds measured on ubuntu CI (Julia 1.12, gate run 37930172953, each family's testset time), as
+# runtests.jl packs its phases, so the N parts together run every family exactly once. Unset:
+# every family.
 const _FUZZ_SECONDS = [
-    "Differential fuzz (bounded)" => 143.5,
-    "Differential fuzz: LinearAlgebra matrix" => 274.1,
-    "Differential fuzz: Dates value layer" => 53.2,
-    "Differential fuzz: Random seeded streams" => 63.8,
-    "Differential fuzz: Statistics in-place" => 33.8,
-    "Differential fuzz: SparseArrays" => 528.9,
-    "Differential fuzz: ForwardDiff" => 142.6,
-    "Differential fuzz: StaticArrays" => 58.6,
-    "Differential fuzz: SimpleDiffEq" => 372.8,
-    "Differential fuzz: apparatus self-checks" => 418.3,
-    "Differential fuzz: README stdlib support" => 9.7,
+    "Differential fuzz (bounded)" => 156.4,
+    "Differential fuzz: LinearAlgebra matrix" => 309.5,
+    "Differential fuzz: Dates value layer" => 85.6,
+    "Differential fuzz: Random seeded streams" => 74.0,
+    "Differential fuzz: Statistics in-place" => 36.5,
+    "Differential fuzz: SparseArrays" => 588.1,
+    "Differential fuzz: ForwardDiff" => 125.9,
+    "Differential fuzz: StaticArrays" => 67.4,
+    "Differential fuzz: SimpleDiffEq" => 316.2,
+    "Differential fuzz: apparatus self-checks" => 500.2,
+    "Differential fuzz: README stdlib support" => 9.8,
 ]
 const _FUZZ_PART = let s = get(ENV, "WT_FUZZ_PART", "")
     m = match(r"^([0-9]+)/([1-9][0-9]*)$", s)

@@ -75,16 +75,6 @@ parity(pkg/wasm_builder/lib/src/ir/type.dart:39 ValueType)
 """
 const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UInt8}
 
-# whether a local of type `t` holds a default value before it is set: a reference only when it
-# is nullable (a one-byte abstract shorthand such as externref is nullable, a NonNullAbstractRef
-# is not), a number or a vector always
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:233 RefType.defaultable)
-defaultable(t::ConcreteRef)::Bool = t.nullable
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:233 RefType.defaultable)
-defaultable(::NonNullAbstractRef)::Bool = false
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:59 ValueType.defaultable)
-defaultable(::Union{NumType, RefType, UInt8})::Bool = true
-
 # ============================================================================
 # Function Types (Section 5.3.6)
 # ============================================================================

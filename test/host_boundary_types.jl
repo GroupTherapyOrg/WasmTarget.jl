@@ -64,22 +64,24 @@ _hbt_struct_caller(p::_HBTPoint) = _hbt_struct_stub(p)
         mod = HBT.WasmModule()
         idx = HBT.add_import!(mod, "host", "stub",
             HBT.WasmValType[HBT.I64, HBT.F64, HBT.ExternRef], HBT.WasmValType[])
-        bytes = HBT.compile_multi(
+        m = HBT.compile_module(
             Any[(_hbt_caller, (Int64, Float64, WasmTarget.JSValue), "caller")];
             existing_module=mod,
             import_stubs=Any[(_hbt_stub, "stub", (Int64, Float64, WasmTarget.JSValue),
-                              idx, Nothing)],
-            validate=false)
+                              idx, Nothing)])
+        @test unsaved_host_import_calls(m) == 0   # every call of the import saved and restored (L156)
+        bytes = HBT.to_bytes(m)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 
     @testset "a void/no-arg import signature compiles" begin
         mod = HBT.WasmModule()
         idx = HBT.add_import!(mod, "host", "void_stub", HBT.WasmValType[], HBT.WasmValType[])
-        bytes = HBT.compile_multi(Any[(_hbt_void_caller, (), "void_caller")];
+        m = HBT.compile_module(Any[(_hbt_void_caller, (), "void_caller")];
             existing_module=mod,
-            import_stubs=Any[(_hbt_void_stub, "void_stub", (), idx, Nothing)],
-            validate=false)
+            import_stubs=Any[(_hbt_void_stub, "void_stub", (), idx, Nothing)])
+        @test unsaved_host_import_calls(m) == 0
+        bytes = HBT.to_bytes(m)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
     end
 

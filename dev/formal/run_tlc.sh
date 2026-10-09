@@ -21,9 +21,12 @@ if [ ! -f "$JAR" ]; then
   curl -sSL -o "$JAR" https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
 fi
 WORKERS="${TLC_WORKERS:-auto}"
-# TLC_FAST=1 skips the instances listed in DEEP (each takes ~20-60 s):
-# the inner loop (dev/lanes.sh) runs the rest in ~30 s; CI and `bash run_tlc.sh` run all.
-DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg MCProvenDead.cfg MCStoragePointer.cfg MCDefiniteInit.cfg}"
+# TLC_FAST=1 skips the instances listed in DEEP: the first seven each took ~20-60 s, and the five
+# ExceptionStack and OperandStack instances each took 37-200 s locally (Apple M-series, java 11,
+# TLC_FAST=1 before they joined: ExceptionStackValueIdentityBroken 200 s, ExceptionStackDeep 134,
+# ExceptionStack 73, OperandStackIf 64, ExceptionStackPlain 37; TLC_FAST wall 886 s). A local run
+# (dev/lanes.sh) skips them; the gate (gate.yml, `--all`), formal.yml and `bash run_tlc.sh` run all.
+DEEP="${TLC_DEEP:-MCClassIdDispatchCascade.cfg MCClassIdDispatchCascadeBroken.cfg MCClassIdDispatchTotal.cfg MCClassIdDispatchTotalBroken.cfg MCProvenDead.cfg MCStoragePointer.cfg MCDefiniteInit.cfg MCExceptionStackValueIdentityBroken.cfg MCExceptionStackDeep.cfg MCExceptionStack.cfg MCOperandStackIf.cfg MCExceptionStackPlain.cfg}"
 fail=0
 # Each instance gets its own TLC metadir: TLC names its default one after the current second,
 # and two instances started within one second collided ("TLC writes its files to a directory

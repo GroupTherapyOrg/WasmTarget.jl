@@ -87,7 +87,7 @@ with the per-clause status. A clause is never closed by argument.
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `L156` (every call of a host-declared
   import is counted) `R34` `R39` (no smoke xfail compiles and then answers wrong, traps, or
   returns what the harness cannot read).
-  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.15, 13.17 — the exception stack across calls,
+  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.17 — the exception stack across calls,
   the traps where Julia answers, and the audits' unlocated and lossy paths.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
@@ -120,10 +120,10 @@ with the per-clause status. A clause is never closed by argument.
   below it is internal) `L159` (every byte
   of a function compiled from Julia IR maps to its statement or its definition, except a
   statement Julia gives no location of its own, which is unmapped, so a trap outside a statement
-  names its function's definition).
-  Planned: dev/MARCH.md 13.15 — an exception's type; the statement-generator lane strict; a
-  wrong value located in every traced callee; a check that `bash dev/lanes.sh` gives its
-  verdict in minutes.
+  names its function's definition) `L160` (an escaped exception names its type, through the
+  source map's class names) `L161` (the statement lane counts a throw as matched only by a
+  Julia exception of native's type) `L162` (the gate, every lane of `dev/lanes.sh` on CI's
+  runners through `bash dev/gate.sh`, gives its verdict within its 20-minute budget per lane).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
