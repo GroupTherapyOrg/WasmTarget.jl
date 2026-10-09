@@ -134,7 +134,7 @@ end
 
 # Emit a catchable throw of a fieldless exception struct (e.g. DivideError):
 # stash the instance in the $current_exn global, then `throw` tag 0 — the same
-# mechanism explicit Julia `throw(...)` lowers to, so enclosing try_table
+# mechanism explicit Julia `throw(...)` lowers to, so enclosing try
 # handlers (and JS, for uncaught propagation) see a real exception, not a trap.
 """builder-native (THE implementation): build the error struct, stash, throw.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""

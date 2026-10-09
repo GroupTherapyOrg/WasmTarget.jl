@@ -359,7 +359,7 @@ end
     mine = WasmTarget.add_global!(m2, WasmTarget.I64, true, 0; name="\$mine")
     @test WasmTarget.global_named(m2, "\$host_imports_open") == 0 && mine == 1
     compiled = WasmTarget.compile_module(roots; existing_module=m2)
-    @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(WasmTarget.to_bytes(compiled))))
+    @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(WasmTarget.to_bytes(compiled))))
     # a host-declared import with no count (added after setup) is refused where the count is read
     m3 = WasmTarget.WasmModule()
     WasmTarget.add_import!(m3, "host", "late", sig...)
@@ -468,7 +468,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     fname3(i) = m3.functions[Int(i) - WasmTarget.num_imported_funcs(m3) + 1].name
     @test fname3(only(e for e in m3.exports if e.name == "mk").idx) == "mk (export)"
     bytes3 = WasmTarget.to_bytes(m3)
-    @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(bytes3)))
+    @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(bytes3)))
     status, results = WasmRunner.run_driver_batch(bytes3, """
     const importObject = $(WasmTarget.host_runtime_js());
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });

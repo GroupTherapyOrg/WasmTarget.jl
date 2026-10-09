@@ -658,7 +658,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
 
     elseif node isa NirEnter
         # THE stackifier owns the control boundary: after this block it opens the typed
-        # try_table and catch landing for this EnterNode (stackified.jl: try_open_at), one
+        # try and its catch for this EnterNode (stackified.jl: try_open_at), one
         # lowering route, as dart2wasm's visitTryCatch owns its region. Here the region only
         # records the exception stack's depth when it is entered (jl_excstack_state), which
         # its pop_exception restores.
@@ -745,7 +745,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             stmt_bytes = builder_code(_sf)
         elseif node isa NirLeave
             # Exception handling: Leave try block — no-op in WASM
-            # (try_table control flow handles this structurally)
+            # (the region's try handles this structurally)
         elseif node isa NirPopException
             # Leaving a catch pops Julia's exception stack back to the depth its try region's
             # enter recorded (jl_restore_excstack).

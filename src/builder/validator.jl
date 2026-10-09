@@ -8,7 +8,7 @@ export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, reset_validator!, validate_instruction!,
        ControlLabel, ValidatorLabel, validate_block_start!, validate_block_end!,
        validate_br!, validate_br_if!, validate_if_start!, validate_else!,
-       validate_gc_instruction!
+       validate_catch_legacy!, validate_gc_instruction!
 
 """Symbolic structured-control target, matching dart2wasm's `Label` API. parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)"""
 mutable struct ControlLabel
@@ -30,19 +30,20 @@ Key insight from dart2wasm:
 """
 struct ValidatorLabel
     handle::ControlLabel                # identity-bearing branch target
-    kind::Symbol                        # :block, :loop, :if
+    kind::Symbol                        # :block, :loop, :if, :try
     stack_height_at_entry::Int          # Stack height when block was entered
     input_types::Vector{WasmValType}    # Loop branch target types
     result_types::Vector{WasmValType}   # Block's result types (outputs)
     reachable_at_entry::Bool            # Was block entry reachable?
     has_else::Bool                      # For :if labels — has else branch been seen?
+    has_catch::Bool                     # For :try labels — has a catch been seen? (dart Try.hasCatch)
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)
 function ValidatorLabel(kind::Symbol, stack_height::Int,
                         input_types::Vector{WasmValType}, result_types::Vector{WasmValType},
                         reachable::Bool; handle=ControlLabel(kind, input_types, result_types))::ValidatorLabel
-    ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false)
+    ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false, false)
 end
 
 """
@@ -468,6 +469,31 @@ function validate_block_start!(v::WasmStackValidator, kind::Symbol,
 end
 
 """
+    _verify_end_of_block!(v, label, height_what, type_what)
+
+The end of a frame's code, reached: the stack holds exactly the label's outputs above its
+base, each a subtype of its output. One check for a block's `end`, an if's `else` and a try's
+`catch`, as dart's `_verifyEndOfBlock` serves its end, else_ and catch_legacy; `height_what` and
+`type_what` name the point in its messages.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:566 InstructionsBuilder._verifyEndOfBlock)
+"""
+function _verify_end_of_block!(v::WasmStackValidator, label::ValidatorLabel,
+                               height_what::String, type_what::String)::Nothing
+    v.reachable || return nothing
+    expected_height = label.stack_height_at_entry + length(label.result_types)
+    if length(v.stack) != expected_height
+        push!(v.errors, "$(v.func_name): $(height_what) stack height mismatch — expected $(expected_height), got $(length(v.stack))")
+    end
+    for (i, expected) in enumerate(label.result_types)
+        idx = label.stack_height_at_entry + i
+        if idx <= length(v.stack) && !wasm_subtype(v.stack[idx], expected, v.mod)
+            push!(v.errors, "$(v.func_name): $(type_what) result type mismatch at position $i — expected $(expected), found $(v.stack[idx])")
+        end
+    end
+    return nothing
+end
+
+"""
     validate_block_end!(v)
 
 End the current block: pop the top label, verify the stack contains exactly
@@ -498,23 +524,7 @@ function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
                         "(its inputs are $(label.input_types))")
 
     # Validate stack height and types if code is reachable
-    if v.reachable
-        expected_height = label.stack_height_at_entry + length(label.result_types)
-        actual_height = length(v.stack)
-        if actual_height != expected_height
-            push!(v.errors, "$(v.func_name): block end stack height mismatch — expected $(expected_height), got $(actual_height)")
-        end
-        # Check result types match
-        for (i, expected) in enumerate(label.result_types)
-            idx = label.stack_height_at_entry + i
-            if idx <= length(v.stack)
-                actual = v.stack[idx]
-                if !wasm_subtype(actual, expected, v.mod)
-                    push!(v.errors, "$(v.func_name): block result type mismatch at position $i — expected $(expected), found $(actual)")
-                end
-            end
-        end
-    end
+    _verify_end_of_block!(v, label, "block end", "block")
 
     # Reset stack to entry height + result types (dart2wasm: _stackTypes.length = baseStackHeight; addAll(outputs))
     resize!(v.stack, label.stack_height_at_entry)
@@ -609,7 +619,7 @@ function validate_if_start!(v::WasmStackValidator,
     for t in input_types; validate_push!(v, t); end
     handle = ControlLabel(:if, input_types, result_types)
     label = ValidatorLabel(handle, :if, length(v.stack) - length(input_types),
-                           input_types, result_types, v.reachable, false)
+                           input_types, result_types, v.reachable, false, false)
     push!(v.labels, label)
     return handle
 end
@@ -640,23 +650,12 @@ function validate_else!(v::WasmStackValidator)::Union{Nothing, Bool}
     # Validate the then-branch's end as a block end: its height AND its value types against the
     # if's results (dart `_verifyEndOfBlock` → `_checkStackTypes(label.outputs)`); only the
     # height was checked, so an arm leaving a value of another type reached the module
-    if v.reachable
-        expected_height = label.stack_height_at_entry + length(label.result_types)
-        if length(v.stack) != expected_height
-            push!(v.errors, "$(v.func_name): if then-branch stack height mismatch — expected $(expected_height), got $(length(v.stack))")
-        end
-        for (i, expected) in enumerate(label.result_types)
-            idx = label.stack_height_at_entry + i
-            if idx <= length(v.stack) && !wasm_subtype(v.stack[idx], expected, v.mod)
-                push!(v.errors, "$(v.func_name): if then-branch result type mismatch at position $i — expected $(expected), found $(v.stack[idx])")
-            end
-        end
-    end
+    _verify_end_of_block!(v, label, "if then-branch", "if then-branch")
 
     # Replace label with has_else=true
     v.labels[end] = ValidatorLabel(label.handle, label.kind, label.stack_height_at_entry,
                                    label.input_types, label.result_types,
-                                   label.reachable_at_entry, true)
+                                   label.reachable_at_entry, true, false)
 
     # Reset the stack to the if's base and give the else arm the if's inputs, as the then arm
     # had them (dart else_: `_stackTypes.length = baseStackHeight; addAll(label.inputs)`)
@@ -665,6 +664,35 @@ function validate_else!(v::WasmStackValidator)::Union{Nothing, Bool}
 
     # Restore reachability from block entry
     v.reachable = label.reachable_at_entry
+end
+
+"""
+    validate_catch_legacy!(v, tag_inputs)
+
+Validate a legacy `catch`: the innermost label is a try; the try body's end is checked as a
+block's end, against the try's outputs; the catch body starts from the try's base with the
+tag's inputs, reachable as the try's entry was; and the try records that it has a catch.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:799 InstructionsBuilder.catch_legacy)
+"""
+function validate_catch_legacy!(v::WasmStackValidator, tag_inputs::Vector{WasmValType})::Nothing
+    # assert(_topOfLabelStack is Try || _reportError("Unexpected 'catch' (not in 'try' block)"))
+    if isempty(v.labels) || v.labels[end].kind !== :try
+        push!(v.errors, "$(v.func_name): Unexpected 'catch' (not in 'try' block)")
+        return nothing
+    end
+    label = v.labels[end]
+    # _verifyEndOfBlock(tag.type.inputs, reachableAfter: try_.reachable): the body's stack
+    # against the try's outputs, then the try's base with the tag's inputs
+    _verify_end_of_block!(v, label, "try body end (at its catch)", "try body (at its catch)")
+    # the base and the tag's inputs, as validate_block_end! resets to the base and the outputs
+    resize!(v.stack, label.stack_height_at_entry)
+    append!(v.stack, tag_inputs)
+    # try_.hasCatch = true; _reachable = try_.reachable
+    v.labels[end] = ValidatorLabel(label.handle, label.kind, label.stack_height_at_entry,
+                                   label.input_types, label.result_types,
+                                   label.reachable_at_entry, false, true)
+    v.reachable = label.reachable_at_entry
+    return nothing
 end
 
 # ============================================================================

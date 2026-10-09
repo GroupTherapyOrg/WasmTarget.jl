@@ -461,37 +461,54 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         stale = MBV.block!(closed)
         MBV.end_block!(closed)
         @test_throws ArgumentError MBV.br!(closed, stale)
-
-        m = MBV.WasmModule()
-        tag_type = MBV.add_type!(m, MBV.FuncType(
-            MBV.WasmValType[MBV.AnyRef, MBV.ExternRef], MBV.WasmValType[]))
-        tag = MBV.add_tag!(m, tag_type)
-        catches = MBV.InstrBuilder(; mod=m)
-        landing = MBV.block!(catches; results=MBV.WasmValType[MBV.AnyRef, MBV.ExternRef])
-        MBV.try_table!(catches, [MBV.catch_clause(tag, landing)])
-        MBV.end_block!(catches)
-        MBV.unreachable!(catches)
-        MBV.end_block!(catches)
-        MBV.drop!(catches)
-        MBV.drop!(catches)
-        MBV.finish_function!(catches)
-
-        bad_catch = MBV.InstrBuilder(; mod=m)
-        wrong = MBV.block!(bad_catch; results=MBV.WasmValType[MBV.I32])
-        @test_throws MBV.StackImbalanceError MBV.try_table!(
-            bad_catch, [MBV.catch_clause(tag, wrong)])
     end
 
-    @testset "a try_table with results or inputs is refused, however the keyword is spelled" begin
-        # V8 12.4 (Node 22) traps entering a try_table with a concrete-reference result (L155, A13B7)
+    @testset "a legacy try and catch, each check rejecting (dart try_legacy, catch_legacy)" begin
+        # instructions.dart:788 try_legacy and :799 catch_legacy: a catch whose innermost label
+        # is no try, a catch with the wrong stack, a catch of a tag the module does not define,
+        # and a try's end with the wrong outputs each reject at the emit
         m = MBV.WasmModule()
-        tag = MBV.add_tag!(m, MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[MBV.AnyRef], MBV.WasmValType[])))
-        b = MBV.InstrBuilder(; mod=m)
-        landing = MBV.block!(b; results=MBV.WasmValType[MBV.AnyRef])
-        results = MBV.WasmValType[MBV.I32]
-        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_clause(tag, landing)]; results)
-        inputs = MBV.WasmValType[MBV.I32]
-        @test_throws ArgumentError MBV.try_table!(b, [MBV.catch_clause(tag, landing)]; inputs)
+        payload = MBV.WasmValType[MBV.AnyRef, MBV.ExternRef]
+        tag = MBV.add_tag!(m, MBV.add_type!(m, MBV.FuncType(payload, MBV.WasmValType[])))
+        ok = MBV.InstrBuilder(; mod=m)
+        region = MBV.try_legacy!(ok; results=payload)
+        @test region isa MBV.ControlLabel && region.kind === :try
+        MBV.unreachable!(ok)
+        MBV.catch_legacy!(ok, tag)
+        @test ok.v.labels[end].has_catch
+        MBV.end_block!(ok)
+        MBV.drop!(ok)
+        MBV.drop!(ok)
+        MBV.finish_function!(ok)
+        @test ok.instrs[1] isa MBV.InstrIR.BeginTry && ok.instrs[3] == MBV.InstrIR.CatchLegacy(UInt32(tag))
+        # 0x06 then the block type (a function type for two results), 0x07 then the tag
+        code = MBV.builder_code(ok)
+        @test code[1] == MBV.Opcode.TRY == 0x06 && code[4] == MBV.Opcode.CATCH_LEGACY == 0x07 && code[5] == tag
+        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], code; name="f")
+        @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(MBV.to_bytes(m))))
+
+        # a catch outside a try
+        outside = MBV.InstrBuilder(; mod=m)
+        MBV.block!(outside; results=payload)
+        MBV.unreachable!(outside)
+        err = try; MBV.catch_legacy!(outside, tag); nothing; catch e; e; end
+        @test err isa MBV.StackImbalanceError && occursin("Unexpected 'catch' (not in 'try' block)", err.message)
+        # a catch with the wrong stack: the try body leaves an i32 where the try's outputs are due
+        wrong = MBV.InstrBuilder(; mod=m)
+        MBV.try_legacy!(wrong; results=payload)
+        MBV.i32_const!(wrong, 1)
+        err = try; MBV.catch_legacy!(wrong, tag); nothing; catch e; e; end
+        @test err isa MBV.StackImbalanceError && occursin("try body end (at its catch) stack height mismatch", err.message)
+        # a catch of a tag the module does not define
+        unknown = MBV.InstrBuilder(; mod=m)
+        MBV.try_legacy!(unknown)
+        @test_throws MBV.ModuleValidationError MBV.catch_legacy!(unknown, tag + 1)
+        # a try's end with the wrong outputs: the catch delivers the payload, the try wants an i32
+        badend = MBV.InstrBuilder(; mod=m)
+        MBV.try_legacy!(badend; results=MBV.WasmValType[MBV.I32])
+        MBV.i32_const!(badend, 1)
+        MBV.catch_legacy!(badend, tag)
+        @test_throws MBV.StackImbalanceError MBV.end_block!(badend)
     end
 
     @testset "a global import precedes every defined global, in one index space (dart GlobalsBuilder.import)" begin
@@ -514,7 +531,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.finish_function!(b)
         MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b); name="f")
         bytes = MBV.to_bytes(m)
-        @test success(pipeline(`wasm-tools validate --features=gc`; stdin=IOBuffer(bytes)))
+        @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(bytes)))
         printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
         @test occursin("(import \"wasmtarget\" \"host_imports_open\" (global (;0;) (mut i32)))", printed)
         @test occursin("(global (;1;) (mut i64) i64.const 0)", printed)
@@ -528,8 +545,8 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
     @testset "a frame's encoded block type is derived from its signature (dart _beginBlock)" begin
         # A caller names only the frame's inputs and results and the builder derives the
         # encoding (instructions.dart:707), so the encoded type and the tracked frame are one
-        # fact. A positional block type once let `try_table!(b, cs, I32)` track a void frame
-        # and encode a result (dev/AUDIT.md B2).
+        # fact. A positional block type once let a try's opener track a void frame and encode a
+        # result (dev/AUDIT.md B2).
         m = MBV.WasmModule()
         mk() = (b = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[]; mod=m);
                 MBV.local_get!(b, 0); b)
@@ -545,7 +562,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         # no positional block type exists to disagree with the frame
         @test !hasmethod(MBV.if_!, Tuple{MBV.InstrBuilder, Any})
         @test !hasmethod(MBV.block!, Tuple{MBV.InstrBuilder, Any})
-        @test !hasmethod(MBV.try_table!, Tuple{MBV.InstrBuilder, Vector, Any})
+        @test !hasmethod(MBV.try_legacy!, Tuple{MBV.InstrBuilder, Any})
         ok = mk()
         MBV.if_!(ok; results=MBV.WasmValType[MBV.I32])
         MBV.i32_const!(ok, 1)

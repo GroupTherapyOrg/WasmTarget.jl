@@ -76,21 +76,11 @@ struct BrOnNull    <: WasmInstr; depth::UInt32; end
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
 struct BrOnNonNull <: WasmInstr; depth::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2228 BrOnNonNull)
 
-# ── exception handling (Wasm 3.0) ──────────────────────────────────────────────────
-# A try_table catch clause (dart2wasm TryTableCatch): a kind byte + immediates.
-#   kind 0x00 catch          tag_idx label_idx   (pushes tag.inputs)
-#   kind 0x01 catch_ref      tag_idx label_idx   (pushes tag.inputs ++ exnref)
-#   kind 0x02 catch_all      label_idx           (pushes nothing)
-#   kind 0x03 catch_all_ref  label_idx           (pushes exnref)
-# `tag` is unused (and `0xffffffff`) for the *_all kinds.
-# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4930 TryTableCatch)
-struct TryCatch
-    kind::UInt8
-    tag::UInt32
-    label::UInt32
-end
-# try_table: a block opener (blocktype: 0x40 byte or a WasmValType) plus the catch vec.
-struct TryTable <: WasmInstr; blocktype::BlockTypeArg; catches::Vector{TryCatch}; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4839 BeginNoEffectTryTable)
+# ── exception handling (legacy, the form dart2wasm emits) ─────────────────────────
+# a legacy try: a block opener whose type is a block's (0x40, one value type or a function-type
+# index), as dart's BeginNoEffectTry, BeginOneOutputTry and BeginFunctionTry are one opener each
+struct BeginTry <: WasmInstr; blocktype::BlockTypeArg; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:908 BeginNoEffectTry)
+struct CatchLegacy <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:997 CatchLegacy)
 struct Throw    <: WasmInstr; tag::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1032 Throw)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
@@ -148,7 +138,7 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
     LocalGet, LocalSet, LocalTee, GlobalGet, GlobalSet,
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, Return, Call, CallIndirect,
     CallRef, BrOnNull, BrOnNonNull,
-    TryCatch, TryTable, Throw,
+    BeginTry, CatchLegacy, Throw,
     RefNullAbstract, RefNullConcrete, RefIsNull, RefAsNonNull,
     StructNew, StructNewDefault, StructGet, StructSet,
     ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
@@ -210,22 +200,12 @@ encode!(c::Vector{UInt8}, i::CallRef)::Vector{UInt8}     = (push!(c, Opcode.CALL
 encode!(c::Vector{UInt8}, i::BrOnNull)::Vector{UInt8}    = (push!(c, Opcode.BR_ON_NULL);     _u!(c, i.depth))
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
 encode!(c::Vector{UInt8}, i::BrOnNonNull)::Vector{UInt8} = (push!(c, Opcode.BR_ON_NON_NULL); _u!(c, i.depth))
-# try_table: 0x1F, blocktype, vec(catch). Each catch = kind byte + immediates (dart2wasm
-# TryTableCatch.serialize): catch/catch_ref write tag then label; the *_all kinds write only label.
-# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:4935 TryTableCatch.serialize)
-function _encode_catch!(c::Vector{UInt8}, k::TryCatch)::Vector{UInt8}
-    push!(c, k.kind)
-    if k.kind == Opcode.CATCH || k.kind == Opcode.CATCH_REF
-        _u!(c, k.tag)
-    end
-    _u!(c, k.label)
-end
-function encode!(c::Vector{UInt8}, i::TryTable)::Nothing
-    push!(c, Opcode.TRY_TABLE)
-    _block_type_bytes!(c, i.blocktype)
-    _u!(c, length(i.catches))
-    for k in i.catches; _encode_catch!(c, k); end
-end
+# try: 0x06 then its block type (dart: `s.writeByte(0x06); s.write(type)`)
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:948 BeginOneOutputTry.serialize)
+encode!(c::Vector{UInt8}, i::BeginTry)::Vector{UInt8} = (push!(c, Opcode.TRY); _block_type_bytes!(c, i.blocktype))
+# catch: 0x07 then the tag's index (dart: `s.writeByte(0x07); s.writeUnsigned(tag.index)`)
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:1007 CatchLegacy.serialize)
+encode!(c::Vector{UInt8}, i::CatchLegacy)::Vector{UInt8} = (push!(c, Opcode.CATCH_LEGACY); _u!(c, i.tag))
 encode!(c::Vector{UInt8}, i::Throw)::Vector{UInt8}   = (push!(c, Opcode.THROW); _u!(c, i.tag))
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)
@@ -308,7 +288,8 @@ mnemonic(i::BrOnNull)::String    = "br_on_null $(i.depth)"
 mnemonic(i::BrOnNonNull)::String = "br_on_non_null $(i.depth)"
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)
-mnemonic(i::TryTable)::String = "try_table"
+mnemonic(i::BeginTry)::String = "try $(i.blocktype)"
+mnemonic(i::CatchLegacy)::String = "catch $(i.tag)"
 mnemonic(i::Throw)::String   = "throw $(i.tag)"
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo)

@@ -31,20 +31,11 @@ module Opcode
     const TABLE_GET = 0x25       # table.get table_idx
     const TABLE_SET = 0x26       # table.set table_idx
 
-    # Exception handling instructions (Wasm 3.0)
+    # Exception handling instructions (legacy, the form dart2wasm emits)
+    const TRY = 0x06           # try blocktype - legacy try block
+    const CATCH_LEGACY = 0x07  # catch tag_idx - legacy catch of a tag
     const THROW = 0x08         # throw tag_idx - throw exception with tag
     const RETHROW = 0x09       # rethrow label_idx - re-throw caught exception (legacy)
-    const TRY_TABLE = 0x1F     # try_table blocktype catch* - structured exception handler
-
-# end parity-region
-    # Catch clause types for try_table
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:4937 TryTableCatch.deserialize)
-    const CATCH = 0x00         # catch tag_idx label_idx
-    const CATCH_REF = 0x01     # catch_ref tag_idx label_idx (pushes exnref)
-    const CATCH_ALL = 0x02     # catch_all label_idx
-    const CATCH_ALL_REF = 0x03 # catch_all_ref label_idx (pushes exnref)
-# end parity-region
-# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
 
     # Parametric instructions
     const DROP = 0x1A

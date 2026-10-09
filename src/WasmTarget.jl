@@ -560,7 +560,8 @@ end
 """
     validate_wasm_bytes(bytes; label="module") -> Vector{UInt8}
 
-Run `wasm-tools validate --features=gc` on `bytes`. Throws [`WasmValidationError`](@ref)
+Run `wasm-tools validate --features=gc,legacy-exceptions` on `bytes` (WT emits legacy exception
+handling, as dart2wasm does). Throws [`WasmValidationError`](@ref)
 if the validator rejects the module, and an `ErrorException` if `wasm-tools` is not installed:
 a validation that was asked for and cannot run is never skipped. Returns `bytes` unchanged so
 it can be used inline.
@@ -575,7 +576,7 @@ function validate_wasm_bytes(bytes::Vector{UInt8}; label::AbstractString="module
         write(p, bytes)
         err = IOBuffer()
         ok = try
-            Base.run(pipeline(`$(wasm_tools) validate --features=gc $(p)`, stdout=devnull, stderr=err))
+            Base.run(pipeline(`$(wasm_tools) validate --features=gc,legacy-exceptions $(p)`, stdout=devnull, stderr=err))
             true
         catch e
             # A nonzero exit is the validator's rejection; a failure to run it is not.

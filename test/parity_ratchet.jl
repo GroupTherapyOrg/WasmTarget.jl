@@ -998,7 +998,7 @@ const LOCKS = [
             forbidden = ["codegen/conditionals.jl", "generate_block_code!",
                          "For now, we just skip this - full implementation requires try_table"]
             required = ["THE stackifier owns the", "every CFG shape, including a single block",
-                        "try_open_at", "try_table!(b"]
+                        "try_open_at", "try_legacy!(b"]
             all_src = api_src * stmt_src * flow_src * stack_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
@@ -1305,14 +1305,11 @@ const LOCKS = [
                          r"br_if!\([^,]+,\s*(?:UInt32\()?\d",
                          r"br_on_(?:non_)?null!\([^,]+,\s*\d",
                          r"function\s+get_(?:forward|loop)_label_depth",
-                         r"br!\(b::InstrBuilder,\s*depth::Integer",
-                         r"catch_clause\(tag::Integer,\s*label::Integer"]
+                         r"br!\(b::InstrBuilder,\s*depth::Integer"]
             required = ["mutable struct ControlLabel", "handle::ControlLabel",
                         "function _label_depth(b::InstrBuilder, target::ControlLabel)",
                         "br!(b::InstrBuilder, target::ControlLabel)",
                         "branch target is not an open label",
-                        "try_table catches must retain symbolic ControlLabel targets",
-                        "validate_branch_types!(b.v, length(b.v.labels) - i, 0, caught)",
                         "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
                         "get_forward_label(target_block::Int)::ControlLabel"]
             sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +
@@ -2172,10 +2169,10 @@ const LOCKS = [
     "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
         () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
                           exclude_line=nothing)),
-    "L101_catch_all_clauses_extinct" => ("no catch_all or catch_ref clause anywhere in src: a Julia region catches only the typed tag (march 6, 2026-09-01), and the catch_all, catch_all_ref and catch_ref clause constructors are deleted (2026-09-29). catch_all_ref_clause, ported back for the export entry's handler (2026-10-07), is deleted again: no wasm catch observes stack exhaustion or a trap (legacy catch_all, a catch of the imported JSTag and catch_all_ref alike, measured on Node 22.23.3), so the export boundary is the host's glue (host_glue_js) and the entry has no handler. The allowlist is empty: a constructor anywhere in src, a clause built from its opcode or raw in codegen, and a clause built from a catch_all or catch_ref opcode in src/builder each count (audit #13 A13B3: a builder constructor of another name passed the count; dev/CHARTER.md C6)",
-        () -> count_sites(r"catch_all_clause|catch_all_ref_clause|catch_ref_clause") +
-              count_sites(r"Opcode\.CATCH_ALL|Opcode\.CATCH_REF|SymbolicTryCatch\(|TryCatch\("; roots=[CODEGEN]) +
-              count_sites(r"SymbolicTryCatch\(Opcode\.(CATCH_ALL|CATCH_REF|CATCH_ALL_REF)\b"; roots=[joinpath(SRC, "builder")])),
+    "L101_catch_all_clauses_extinct" => ("a Julia region catches only the typed exception tag: every catch_legacy! in codegen names the exception tag, index 0 (ensure_exception_tag!'s, as the one throw site's throw_!(b, 0)), and there is no catch_all in src, neither a constructor nor an opcode nor an IR instruction, and codegen builds no InstrIR.CatchLegacy past the builder. No wasm catch observes stack exhaustion or a trap (legacy catch_all, a catch of the imported JSTag and catch_all_ref alike, measured on Node 22.23.3), so the export boundary is the host's glue (host_glue_js) and an export entry has no handler; dart's builder has no catch_all_legacy (instructions.dart:799 catch_legacy only). A catch of any other tag, a literal or computed, counts (dev/CHARTER.md C6)",
+        () -> count_sites(r"\bcatch_legacy!\((?![^,()]+,\s*0\s*\))"; roots=[CODEGEN]) +
+              count_sites(r"catch_all|CatchAll|CATCH_ALL") +
+              count_sites(r"InstrIR\.CatchLegacy\("; roots=[CODEGEN])),
     "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
         () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
     "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
@@ -2360,6 +2357,9 @@ const LOCKS = [
                        # the export entry's handler and the wasm-side count (batch 112b-1): the
                        # boundary is the host's glue, host_glue_js
                        "catch_all_ref_clause", "throw_ref!", "ThrowRef", "THROW_REF",
+                       # the try_table form (batch 112b-2): a region is dart's legacy try and catch
+                       "try_table", "TryTable", "SymbolicTryCatch", "catch_clause", "InstrIR.TryCatch",
+                       "TryCatch(", "_encode_catch!", "TRY_TABLE", "CATCH_REF", "CATCH_ALL",
                        "except H6, H7 and A13E1"]
             n = 0
             for (dir, _, files) in walkdir(SRC), f in files
@@ -2731,27 +2731,27 @@ const LOCKS = [
                       # branches-ignore, no unfiltered or inline push), so no gate/** push runs them
                       pinned_push...])
         end),
-    "L155_try_tables_are_result_less" => ("every try_table codegen emits carries no results: a body's values leave it through locals (the catch regions, stackified.jl; the export entry, a prologue since batch 112b-1, holds no try_table). CI's wasm engine, V8 12.4 in Node 22, traps entering a try_table whose result is a concrete reference (`try_table (result (ref null \$s)) … end` traps on Node 22.23.3 and runs on Node 26; a numeric or anyref result runs): batch 108's export entry passed the gate on Node 25 and trapped in every CI shard. The builder refuses a try_table with inputs or results however the keyword is spelled (try_table!'s check, pinned here; the shorthand `try_table!(b, cs; results)` passed the text scan, A13B7), codegen builds no InstrIR.TryTable past it, and the scan of codegen's calls counts a `results` or `inputs` keyword or a splat (A13P16). This keeps a workaround for a form dart does not emit: dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy), whose try runs with a concrete-reference result on Node 22.23.3 (measured in batch 112: `try (result (ref null \$s))` with catch \$t, catch_all and rethrow); porting WT's exception lowering to it is dev/MARCH.md 13.17 A13E7 (dev/CHARTER.md C5)",
+    "L155_exception_handling_is_dart_legacy" => ("Exception handling is dart's legacy form: no try_table, throw_ref, catch_all, catch_ref or delegate, as a constructor or opcode in src. Every region opens with try_legacy!, whose outputs are the tag's payload, and closes with catch_legacy! on the exception tag. Every printed probe module holds no `try_table`, `throw_ref`, `delegate` or `catch_all`. dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy; try_table exists only in wasm_builder), and its try runs with a concrete-reference result on CI's engine, V8 12.4 in Node 22, where a try_table with one traps (batch 108). The source half counts each such name outside a comment in src, a try_legacy! or catch_legacy! call in codegen beyond the region's one each, and the region's opener, its catch and the tag's payload as written (stackified.jl, generate.jl ensure_exception_tag!); the behavior half is test/probe_bytes.jl, which prints every probe's module with wasm-tools and fails on any of the four, required here as written (dev/MARCH.md 13.17 A13E7; dev/CHARTER.md C5)",
         () -> begin
-            # the builder's refusal, exactly once
-            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
-            local n = length(findall("    (isempty(inputs) && isempty(results)) || throw(ArgumentError(", ib)) == 1 ? 0 : 1
-            # a try_table built in codegen past the builder's try_table! passes its check by
-            n += count_sites(r"InstrIR\.TryTable\("; roots=[CODEGEN])
-            # each `try_table!(` call, read to its closing paren across lines: a `results` or an
-            # `inputs` keyword (with `=` or the shorthand) or a splatted keyword in it counts
-            for (dir, _, fs) in walkdir(CODEGEN), f in fs
-                endswith(f, ".jl") || continue
-                local s = read(joinpath(dir, f), String)
-                for m in findall("try_table!(", s)
-                    local j = last(m); local k = j; local depth = 0
-                    while k <= lastindex(s)
-                        s[k] == '(' && (depth += 1)
-                        s[k] == ')' && (depth -= 1; depth == 0 && break)
-                        k = nextind(s, k)
-                    end
-                    occursin(r"\b(results|inputs)\b|\.\.\.", s[j:min(k, lastindex(s))]) && (n += 1)
-                end
+            # no try_table, throw_ref, catch_all, catch_ref or delegate as a constructor or opcode
+            local n = count_sites(r"try_table|TryTable|TRY_TABLE|throw_ref|ThrowRef|THROW_REF|catch_all|CatchAll|CATCH_ALL|catch_ref|CatchRef|CATCH_REF|\bdelegate[!_(]|Delegate\b|DELEGATE")
+            # the region: one try whose outputs are the tag's payload, closed by one catch of tag 0
+            local stack = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            n += occursin("local try_label = try_legacy!(b; results=WasmValType[AnyRef, ExternRef,\n" *
+                          "                                                                    ConcreteRef(exc_cell_type!(ctx.mod), true)])", stack) ? 0 : 1
+            n += occursin("                    unreachable!(b)        # structural trap: no normal path reaches the try's end\n                    catch_legacy!(b, 0)", stack) ? 0 : 1
+            n += occursin("tag_ft = FuncType(WasmValType[AnyRef, ExternRef, ConcreteRef(exc_cell_type!(mod), true)], WasmValType[])", gen) ? 0 : 1
+            n += abs(count_sites(r"\btry_legacy!\("; roots=[CODEGEN]) - 1) +
+                 abs(count_sites(r"\bcatch_legacy!\("; roots=[CODEGEN]) - 1) +
+                 count_sites(r"InstrIR\.(BeginTry|CatchLegacy)\("; roots=[CODEGEN])
+            # the behavior: every probe module, printed, holds none of the four
+            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
+            for req in ("const _NON_DART_EH = r\"\\b(try_table|throw_ref|delegate|catch_all)\\b\"",
+                        "occursin(_NON_DART_EH, read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String))",
+                        "        _non_dart_eh(bytes) && push!(non_dart_eh, name)",
+                        "    if !isempty(non_dart_eh)")
+                occursin(req, probe) || (n += 1)
             end
             n
         end),

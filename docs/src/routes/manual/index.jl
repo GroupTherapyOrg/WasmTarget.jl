@@ -287,8 +287,9 @@ any_positive(a::Int32, b::Int32)::Bool =
 
         H3(:class => "text-base font-semibold text-warm-700 dark:text-warm-300", "Try / Catch / Throw"),
         P(:class => "text-warm-600 dark:text-warm-400",
-            "Exception handling uses WASM's ", Code(:class => code_inline, "try_table"),
-            " and ", Code(:class => code_inline, "throw"), " instructions:"),
+            "Exception handling uses WASM's legacy ", Code(:class => code_inline, "try"), "/",
+            Code(:class => code_inline, "catch"), " and ", Code(:class => code_inline, "throw"),
+            " instructions, the form dart2wasm emits:"),
         Pre(:class => code_block, Code(:class => "language-julia", """function safe_div(a::Int32, b::Int32)::Int32
     try
         if b == Int32(0)

@@ -229,7 +229,8 @@ function builder_diagnose(b::InstrBuilder)::String
     if !isempty(b.v.labels)
         println(io, "  open blocks (outer→inner):")
         for (i, l) in enumerate(b.v.labels)
-            println(io, "    [$i] $(l.kind) base=$(l.stack_height_at_entry) results=$(l.result_types) reachable=$(l.reachable_at_entry)")
+            println(io, "    [$i] $(l.kind) base=$(l.stack_height_at_entry) results=$(l.result_types) reachable=$(l.reachable_at_entry)",
+                    l.kind === :try ? " has_catch=$(l.has_catch)" : "")
         end
     end
     dis = builder_disasm(b)
@@ -448,7 +449,7 @@ function finish_function!(b::InstrBuilder)::InstrBuilder
     local depth = 0
     for (i, ins) in enumerate(b.instrs)
         if ins isa InstrIR.Block || ins isa InstrIR.Loop || ins isa InstrIR.If ||
-           ins isa InstrIR.TryTable
+           ins isa InstrIR.BeginTry
             depth += 1
         elseif ins isa InstrIR.End
             depth -= 1
@@ -626,67 +627,29 @@ br_on_null!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
 br_on_non_null!(b::InstrBuilder, target::ControlLabel)::InstrBuilder =
     _br_on_non_null_depth!(b, _label_depth(b, target))
 
-# ── Exception handling (Wasm 3.0) ─────────────────────────────────────────────────
-# Catch-clause constructors a caller hands to `try_table!`. Label is the branch target
-# depth at the point of the try_table (dart2wasm passes a Label; here the caller resolves
-# it to a depth, exactly as it already does for br!/br_if!).
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:105 TryTableCatch)
-struct SymbolicTryCatch
-    opcode::UInt8
-    tag_idx::UInt32
-    target::ControlLabel
-end
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:116 Catch)
-catch_clause(tag::Integer, label::ControlLabel)::SymbolicTryCatch =
-    SymbolicTryCatch(Opcode.CATCH, UInt32(tag), label)
-
-# try_table: a block opener carrying catch clauses (dart2wasm `try_table`), its block type the
-# empty one (0x40), as it takes no inputs or results. Each catch branches out to its target
-# label with the values it catches, checked as every branch is (validate_branch_types!). The
-# CATCH_REF and CATCH_ALL_REF arms below type a clause no constructor builds (L101's allowlist is
-# empty); their deletion is dev/MARCH.md 13.17 A13B2, with the port to dart's legacy form (A13E7).
-# A try_table with inputs or results is refused: CI's wasm engine, V8 12.4 (Node 22), traps
-# entering a try_table whose result is a concrete reference, and its inputs are unmeasured, so a
-# body's values leave through locals (L155). dart2wasm emits no try_table, only legacy try
-# (code_generator.dart:945); WT's try_table lowering is dev/MARCH.md 13.17 A13E7.
-# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:907 InstructionsBuilder.try_table)
-function try_table!(b::InstrBuilder, catches::Vector; inputs::Vector{<:Any}=WasmValType[],
-                    results::Vector{<:Any}=WasmValType[])::ControlLabel
-    (isempty(inputs) && isempty(results)) || throw(ArgumentError(
-        "a try_table takes no inputs or results (V8 12.4 traps entering one with a concrete-reference result): its body's values leave through locals"))
+# ── Exception handling (legacy, the form dart2wasm emits) ──────────────────────────
+# A legacy try: a label of kind :try whose block type is derived from its inputs and outputs as
+# every block's is (_block_type!); its `end` checks the outputs as every block's end does.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:788 InstructionsBuilder.try_legacy)
+function try_legacy!(b::InstrBuilder; inputs::Vector{<:Any}=WasmValType[],
+                     results::Vector{<:Any}=WasmValType[])::ControlLabel
     local ins, outs = WasmValType[t for t in inputs], WasmValType[t for t in results]
-    for c in catches
-        c isa SymbolicTryCatch || throw(ArgumentError(
-            "try_table catches must retain symbolic ControlLabel targets"))
-        i = findlast(l -> l.handle === c.target, b.v.labels)
-        i === nothing && throw(ArgumentError("catch target is not an open label"))
-        caught = WasmValType[]
-        if c.opcode === Opcode.CATCH || c.opcode === Opcode.CATCH_REF
-            Int(c.tag_idx) < length(b.v.mod.tags) ||
-                throw(ArgumentError("catch references unknown tag $(c.tag_idx)"))
-            tag = b.v.mod.tags[Int(c.tag_idx) + 1]
-            ft = b.v.mod.types[Int(tag.type_idx) + 1]
-            ft isa FuncType || throw(ArgumentError("catch tag type is not a function type"))
-            append!(caught, ft.params)
-        end
-        (c.opcode === Opcode.CATCH_REF || c.opcode === Opcode.CATCH_ALL_REF) &&
-            push!(caught, ExnRef)
-        # the spec types the target as exactly the caught values; dart's _verifyBranchTypes
-        # checks only their suffix, so a target of another arity is rejected here
-        local targets = b.v.labels[i].kind === :loop ? b.v.labels[i].input_types : b.v.labels[i].result_types
-        length(targets) == length(caught) ||
-            push!(b.v.errors, "a catch delivers $(caught) to a target that takes $(targets)")
-        # the catch carries exactly what it caught to its target (dart: _verifyBranchTypes(
-        # catch_.label, 0, catch_.caughtValues()))
-        validate_branch_types!(b.v, length(b.v.labels) - i, 0, caught)
-        _check!(b)
-    end
-    encoded_catches = InstrIR.TryCatch[c isa SymbolicTryCatch ?
-        InstrIR.TryCatch(c.opcode, c.tag_idx, UInt32(_label_depth(b, c.target))) : c
-        for c in catches]
     local blocktype = _block_type!(b, ins, outs)
-    label = validate_block_start!(b.v, :try_table, ins, outs)
-    _emit!(b, InstrIR.TryTable(blocktype, encoded_catches)); return label
+    label = validate_block_start!(b.v, :try, ins, outs)
+    _emit!(b, InstrIR.BeginTry(blocktype)); return label
+end
+# A legacy catch of tag `tag`: the innermost label is a try, the try body's stack is checked
+# against the try's outputs, the catch body starts with the tag's inputs, and the tag is one
+# the module defines (dart: `assert(tag.enclosingModule == module)`).
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:799 InstructionsBuilder.catch_legacy)
+function catch_legacy!(b::InstrBuilder, tag::Integer)::InstrBuilder
+    local m = b.v.mod
+    m === nothing && throw(ArgumentError("catch needs the module that defines tag $tag"))
+    0 <= tag < length(m.tags) || _module_invalid(:catch, "tag $tag is not defined")
+    local ft = m.types[Int(m.tags[tag + 1].type_idx) + 1]
+    ft isa FuncType || _module_invalid(:catch, "tag $tag's type is not a function type")
+    validate_catch_legacy!(b.v, WasmValType[t for t in ft.params])
+    _emit!(b, InstrIR.CatchLegacy(UInt32(tag)))
 end
 # throw tag: pop the tag's inputs (caller declares them), then unreachable (dart2wasm throw_).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:820 InstructionsBuilder.throw_)
@@ -911,7 +874,7 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
         local _d = 1
         local _report = ""
         for (_ix, _ins) in enumerate(src.instrs)
-            if _ins isa InstrIR.Block || _ins isa InstrIR.Loop || _ins isa InstrIR.If || _ins isa InstrIR.TryTable
+            if _ins isa InstrIR.Block || _ins isa InstrIR.Loop || _ins isa InstrIR.If || _ins isa InstrIR.BeginTry
                 _d += 1
             elseif _ins isa InstrIR.End
                 _d -= 1

@@ -73,7 +73,7 @@ end
 """
 Represents a try/catch region in the IR.
 
-parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode with a catch_dest and a later :leave, where Kernel has a structured TryCatch node; the region's three statement indices are what the stackifier nests into try_table)
+parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode with a catch_dest and a later :leave, where Kernel has a structured TryCatch node; the region's three statement indices are what the stackifier nests into a try)
 """
 struct TryRegion
     enter_idx::Int      # SSA index of Core.EnterNode
@@ -87,7 +87,7 @@ Returns a list of TryRegion structs.
 
 parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode and a later :leave
 naming it, where Kernel has a structured TryCatch node; this scan pairs them into the
-TryRegion the stackifier nests into try_table.)
+TryRegion the stackifier nests into a try.)
 """
 function find_try_regions(nir::Vector{NirStmt})::Vector{TryRegion}
     regions = TryRegion[]
@@ -105,7 +105,7 @@ function find_try_regions(nir::Vector{NirStmt})::Vector{TryRegion}
             elseif catch_dest > i
                 # An always-throwing try body has NO :leave (Julia elides
                 # it when the body can't exit normally — e.g. `try div(0,0) catch`).
-                # Dropping the region here meant no try_table was emitted at all, so
+                # Dropping the region here meant no try was emitted at all, so
                 # the throw escaped uncaught. Synthesize leave_idx = catch_dest: the
                 # try body becomes enter+1 .. catch_dest-1 and every consumer's
                 # normal-exit range (leave_idx+1 .. catch_dest-1) is empty, which is
@@ -219,8 +219,9 @@ The module's one exception tag, index 0 (idempotent), whose payload is the excep
 stack trace of its throw, as dart's exception tag carries (exception, stackTrace), and a third
 value, the entry of Julia's exception stack its throw pushed (exc_cell_type!), so the entry
 travels with the unwind and the catch that lands it makes it the top by identity
-(stackified.jl). A try region's `try_table` catches it with `catch 0`, landing the payload in
-its handler. A host reads the first two values (getArg(tag, 0) and 1).
+(stackified.jl). A try region's legacy `try` catches it with `catch 0`, its payload the try's
+outputs, delivered at its end where the handler begins. A host reads the first two values
+(getArg(tag, 0) and 1).
 parity(tags.dart:37 ExceptionTags._defineDartExceptionTag)
 parity(quarantine: Julia's stack entries have identity and outlive an unwind (one object thrown twice is two entries); dart's tag carries (exception, stackTrace) alone, tags.dart:37.)
 """

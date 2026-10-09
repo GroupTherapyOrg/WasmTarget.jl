@@ -4610,7 +4610,7 @@ begin
             end
             # Happy path works
             @test compare_julia_wasm(f_throw, Int64(5)).pass
-            # Error path: error() now emits throw (catchable by try_table + catch_all)
+            # Error path: error() now emits throw (catchable by a region's try and catch of the tag)
             @test compare_julia_wasm(f_throw, Int64(-3)).pass
         end
 
@@ -5014,7 +5014,7 @@ begin
             # Write and validate
             tmpfile = tempname() * ".wasm"
             write(tmpfile, bytes)
-            result = try read(`wasm-tools validate $tmpfile`, String); "VALID" catch e; string(e) end
+            result = try read(`wasm-tools validate --features=gc,legacy-exceptions $tmpfile`, String); "VALID" catch e; string(e) end
             @test result == "VALID"
             rm(tmpfile; force=true)
         end
@@ -5979,7 +5979,7 @@ console.log(JSON.stringify({
             dir = mktempdir()
             wasm_path = joinpath(dir, "ir001_reg.wasm")
             write(wasm_path, bytes)
-            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            validate_output = read(`wasm-tools validate --features=gc,legacy-exceptions $wasm_path`, String)
             @test isempty(validate_output)
         end
 
@@ -6101,7 +6101,7 @@ console.log(JSON.stringify({
             dir = mktempdir()
             wasm_path = joinpath(dir, "ir003.wasm")
             write(wasm_path, bytes)
-            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            validate_output = read(`wasm-tools validate --features=gc,legacy-exceptions $wasm_path`, String)
             @test isempty(validate_output)
 
             # Runtime dispatch via Node.js

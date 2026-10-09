@@ -87,7 +87,7 @@ function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationCont
 end
 
 """Slice B: split blocks so every region's enter_idx ENDS a block and every
-catch_dest STARTS one — the try_table/landing labels then open and close exactly at
+catch_dest STARTS one — the region's try then opens and closes exactly at
 block boundaries and the stackifier's ordinary machinery does the rest.
 parity(quarantine: Julia's try regions are a flat `Core.EnterNode` / `catch_dest` pair of CFG
 edges; dart's TryCatch is one structured statement, code_generator.dart:925 visitTryCatch.)"""
@@ -605,7 +605,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         end
     end
 
-    # Slice B: targets INSIDE a try region must open INSIDE its try_table —
+    # Slice B: targets INSIDE a try region must open INSIDE its try —
     # a br from within the region to a label opened outside the try would exit the
     # try entirely (first-contact bug: the normal path br'd into the handler).
     # Deepest-construct-wins vs loops: a target inside both belongs to whichever
@@ -1100,7 +1100,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # silently dropped while its compiled condition stayed on the stack
     # ("values remaining at end of block"). Wrap the subset in an EXIT block:
     # out-of-subset forward branches br to it, landing exactly where the
-    # caller's continuation (e.g. the try_table) begins.
+    # caller's continuation (e.g. the region's try) begins.
     _subset_end = isempty(blocks) ? 0 : maximum(byt.end_idx for byt in blocks)
     _term_dest(t) = t isa Union{NirGotoIfNot, NirGoto} ? t.target : 0
     needs_exit_block = any(begin
@@ -1116,9 +1116,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     for (block_idx, block) in enumerate(blocks)
         # First, close any blocks whose target is this block
         # (We close BEFORE generating code for the target block)
-        # Slice B: a region's handler block starts here → the try_table and
-        # its landing block END exactly at this boundary (the catch br lands at the
-        # handler's first instruction). Innermost regions close first.
+        # a region's handler block starts here → its try's body, catch and end close exactly at
+        # this boundary (the catch's payload arrives at the handler's first instruction).
+        # Innermost regions close first.
         if haskey(try_close_at, block_idx)
             for r in try_close_at[block_idx]
                 # any region-inner target labels still open close first (nesting)
@@ -1128,12 +1128,11 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 end
                 if !isempty(label_stack) && label_stack[end][1] === :try
                     pop!(label_stack)
-                    end_block!(b)          # end try_table
-                    unreachable!(b)  # structural trap (the landing end is catch-arrival ONLY; normal paths br out)
-                end
-                if !isempty(label_stack) && label_stack[end][1] === :landing
-                    pop!(label_stack)
-                    end_block!(b)          # end landing — the catch payload arrives here
+                    # the body's normal exits branch out of the region, so its end is not
+                    # reached (dart's body ends in `br wrapperBlock`, code_generator.dart:951)
+                    unreachable!(b)        # structural trap: no normal path reaches the try's end
+                    catch_legacy!(b, 0)    # the payload is the try's outputs, at its end
+                    end_block!(b)          # end try — the catch payload arrives here
                     # The payload's entry, which its throw pushed, is Julia's top here (Julia's
                     # landing leaves the stack as it is): it becomes the top by identity, also
                     # when the host caught the escape, called an export and threw it again
@@ -1591,21 +1590,21 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         # trailing unreachable — maps to the function's definition (code_generator.dart:721)
         map_to_definition!(b, ctx)
 
-        # Slice B: this block ends with an EnterNode (post-split guarantee) →
-        # open the region: landing block (the catch's br target ends at the handler)
-        # then the try_table whose symbolic catch target is the landing. Outermost first.
+        # this block ends with an EnterNode (post-split guarantee) → open the region: one try
+        # whose outputs are the tag's payload (exn, stackTrace, entry), which its catch
+        # delivers at the try's end, where the handler begins. Outermost first.
+        # parity(pkg/dart2wasm/lib/code_generator.dart:945 try_legacy): visitTryCatch's
+        # `b.try_legacy([], [exceptionType, stackTraceType])` and `b.catch_legacy(tag)` (:999).
+        # dart's catch stashes the payload in locals, branches to the try's label with it once a
+        # guard passes (:985-993) and ends in a `rethrow` no guard reaches (:1025); WT emits
+        # neither, since both serve guards and a Julia catch has none: the catch's payload is the
+        # try's outputs directly.
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
-                # Slice D: the TYPED catch — the landing block carries the tag
-                # payload (exn, stackTrace, entry) as its results; catch_clause retains
-                # the landing label identity until the builder serializes it
-                # delivers it there (dart: b.catch_(exceptionTag) + 2×local_set).
-                local landing_label = block!(b; results=WasmValType[AnyRef, ExternRef,
-                                                                   ConcreteRef(exc_cell_type!(ctx.mod), true)])
-                push!(label_stack, (:landing, get(stmt_to_block, r.catch_dest, 0), landing_label))
-                local try_label = try_table!(b, [catch_clause(0, landing_label)])
+                local try_label = try_legacy!(b; results=WasmValType[AnyRef, ExternRef,
+                                                                    ConcreteRef(exc_cell_type!(ctx.mod), true)])
                 push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))
-                # region-inner forward targets open INSIDE the try_table
+                # region-inner forward targets open INSIDE the try
                 local _eb = get(stmt_to_block, r.enter_idx, 0)
                 if haskey(region_inner_targets, _eb)
                     for target in region_inner_targets[_eb]

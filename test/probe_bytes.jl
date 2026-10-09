@@ -30,16 +30,32 @@ const _PROBE_DIR = @__DIR__
 const _BASELINE_PATH = joinpath(_PROBE_DIR, "probe_baseline.txt")
 include("probe_corpus.jl")
 
+# Exception handling is dart's legacy form (L155): a printed probe module holds none of the
+# instructions dart2wasm does not emit. Its text, as wasm-tools prints it, is read.
+const _NON_DART_EH = r"\b(try_table|throw_ref|delegate|catch_all)\b"
+_non_dart_eh(bytes::Vector{UInt8})::Bool =
+    occursin(_NON_DART_EH, read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String))
+
 function main()
     hashes = Dict{String,String}()
+    non_dart_eh = String[]
     for (name, (f, argtypes)) in CASES
         bytes = WasmTarget.compile_multi([(f, argtypes, name)]; validate=false)
         hashes[name] = bytes2hex(SHA.sha256(bytes))
+        _non_dart_eh(bytes) && push!(non_dart_eh, name)
         # WT_PROBE_DUMP=<name>:<path> writes one probe's binary for cross-process diffing
         dump = get(ENV, "WT_PROBE_DUMP", "")
         if dump != "" && startswith(dump, name * ":")
             write(dump[length(name)+2:end], bytes)
         end
+    end
+
+    if !isempty(non_dart_eh)
+        for name in non_dart_eh
+            println("  NOT DART'S EXCEPTION HANDLING (try_table, throw_ref, delegate or catch_all): ", name)
+        end
+        println("probe_bytes: $(length(non_dart_eh)) of $(length(hashes)) probes hold exception handling dart2wasm does not emit")
+        return 1
     end
 
     if get(ENV, "WT_PROBE_RECORD", "") == "1"
