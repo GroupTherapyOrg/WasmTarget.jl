@@ -100,6 +100,7 @@ struct RefNullConcrete <: WasmInstr; heaptype::Int64; end  # parity(pkg/wasm_bui
 struct RefIsNull    <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2146 RefIsNull)
 struct RefAsNonNull <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2186 RefAsNonNull)
 struct RefEq        <: WasmInstr; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2219 RefEq)
+struct RefFunc      <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2155 RefFunc)
 
 # ── GC ───────────────────────────────────────────────────────────────────────────
 struct StructNew        <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2393 StructNew)
@@ -137,6 +138,20 @@ struct TruncSat <: WasmInstr; sub_op::UInt8; end  # parity(pkg/wasm_builder/lib/
 
 # end parity-region
 
+# May the instruction appear in a constant expression (a global's initializer)? The constants,
+# global.get, ref.null, ref.func, the allocations of a struct or an array of given elements,
+# the extern conversions and end; every other instruction is not.
+# parity(pkg/wasm_builder/lib/src/ir/instruction.dart:29 Instruction.isConstant)
+is_constant(::WasmInstr)::Bool = false
+# parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:29 Instruction.isConstant): each
+# class dart marks `isConstant => true` (End :1100, GlobalGet :1438, RefNull :2127, RefFunc :2167,
+# StructNew :2406, StructNewDefault :2439, ArrayNewFixed :2611, ArrayNewDefault :2679,
+# ExternInternalize :3027, ExternExternalize :3047, the four consts :3063-:3129)
+is_constant(::Union{End, GlobalGet, RefNullAbstract, RefNullConcrete, RefFunc, StructNew,
+                    StructNewDefault, ArrayNewFixed, ArrayNewDefault, AnyConvertExtern,
+                    ExternConvertAny, I32Const, I64Const, F32Const, F64Const})::Bool = true
+# end parity-region
+
 end # module InstrIR
 
 # ── serialize layer (dart2wasm serialize/) + printTo, by multiple dispatch ─────────
@@ -145,7 +160,7 @@ import .InstrIR: I32Const, I64Const, F32Const, F64Const, NumOp, Drop, Select, Se
     Unreachable, Nop, Block, Loop, If, Else, End, Br, BrIf, Return, Call, CallIndirect,
     CallRef, BrOnNull, BrOnNonNull,
     BeginTry, CatchLegacy, Throw,
-    RefNullAbstract, RefNullConcrete, RefIsNull, RefAsNonNull, RefEq,
+    RefNullAbstract, RefNullConcrete, RefIsNull, RefAsNonNull, RefEq, RefFunc,
     StructNew, StructNewDefault, StructGet, StructSet,
     ArrayNewDefault, ArrayNewFixed, ArrayNewData, ArrayGet, ArraySet, ArrayLen, ArrayCopy, ArrayFill,
     RefCastConcrete, RefCastAbstract, RefTest, AnyConvertExtern, ExternConvertAny,
@@ -222,6 +237,7 @@ encode!(c::Vector{UInt8}, i::RefNullConcrete)::Vector{UInt8} = (push!(c, Opcode.
 encode!(c::Vector{UInt8}, ::RefIsNull)::Vector{UInt8}    = push!(c, Opcode.REF_IS_NULL)
 encode!(c::Vector{UInt8}, ::RefAsNonNull)::Vector{UInt8} = push!(c, Opcode.REF_AS_NON_NULL)
 encode!(c::Vector{UInt8}, ::RefEq)::Vector{UInt8}        = push!(c, Opcode.REF_EQ)
+encode!(c::Vector{UInt8}, i::RefFunc)::Vector{UInt8}     = (push!(c, Opcode.REF_FUNC); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::StructNew)::Vector{UInt8}        = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_NEW); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::StructNewDefault)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_NEW_DEFAULT); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::StructGet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx); _u!(c, i.field))
@@ -307,6 +323,7 @@ mnemonic(i::RefNullConcrete)::String = "ref.null \$$(i.heaptype)"
 mnemonic(::RefIsNull)::String    = "ref.is_null"
 mnemonic(::RefAsNonNull)::String = "ref.as_non_null"
 mnemonic(::RefEq)::String        = "ref.eq"
+mnemonic(i::RefFunc)::String     = "ref.func $(i.idx)"
 mnemonic(i::StructNew)::String        = "struct.new \$$(i.idx)"
 mnemonic(i::StructNewDefault)::String = "struct.new_default \$$(i.idx)"
 mnemonic(i::StructGet)::String = "struct.get \$$(i.idx) $(i.field)"

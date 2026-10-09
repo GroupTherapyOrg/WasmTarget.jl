@@ -202,6 +202,11 @@ end
 # The export boundary, the host's
 # ============================================================================
 
+# the index of the global named `name` in `mod` (as the name section names it), or nothing: a
+# test reads a module's globals as a host reads them, by their names
+_global_by_name(mod::WasmTarget.WasmModule, name::String)::Union{Nothing,Int} =
+    (i = findfirst(g -> g.name == name, mod.globals); i === nothing ? nothing : i - 1)
+
 # a module as wasm-tools prints it, its name section stripped so every index is a number
 _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
     String[strip(l) for l in split(read(pipeline(pipeline(`wasm-tools strip --all`;
@@ -222,9 +227,9 @@ Read from the module's code as wasm-tools prints it (L156).
 function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
     local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
     local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
-    local count = WasmTarget.global_named(mod, "\$host_imports_open")
-    local tops = WasmTarget.global_named(mod, "\$import_tops")
-    local top = WasmTarget.global_named(mod, "\$exc_top")
+    local count = _global_by_name(mod, "\$host_imports_open")
+    local tops = _global_by_name(mod, "\$import_tops")
+    local top = _global_by_name(mod, "\$exc_top")
     local save = findfirst(f -> f.name == "import_tops save", mod.functions)
     local lines = _printed_lines(mod)
     local n = 0
@@ -250,7 +255,7 @@ each export entry (a function named "<name> (export)") a `try`, a `try_table` or
 module's code as wasm-tools prints it (L156).
 """
 function wasm_boundary_sites(mod::WasmTarget.WasmModule)::Int
-    local count = WasmTarget.global_named(mod, "\$host_imports_open")
+    local count = _global_by_name(mod, "\$host_imports_open")
     local entries = Set(WasmTarget.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
                         if endswith(f.name, " (export)"))
     local n = 0

@@ -33,12 +33,16 @@ _mbv_void_numeric_root(x::Int64) = x + Int64(1)
 _mbv_string_init() = "framework-seed"
 Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', c); nothing)
 
+# a function `params -> []` whose body is empty, defined in `m` (its builder, finished)
+_mbv_empty_function!(m, params; name) =
+    (b = MBV.InstrBuilder(params, MBV.WasmValType[]; mod=m); MBV.finish_function!(b); MBV.add_function!(m, b; name=name))
+
 @testset "module builder rejects invalid modules at construction" begin
     @testset "start signature" begin
         m = MBV.WasmModule()
-        good = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="good")
+        good = _mbv_empty_function!(m, MBV.WasmValType[]; name="good")
         MBV.add_start_function!(m, good)
-        bad = MBV.add_function!(m, MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="bad")
+        bad = _mbv_empty_function!(m, MBV.WasmValType[MBV.I32]; name="bad")
         @test_throws MBV.ModuleValidationError MBV.add_start_function!(m, bad)
         @test_throws MBV.ModuleValidationError MBV.add_start_function!(m, 99)
     end
@@ -47,7 +51,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         m = MBV.WasmModule()
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "missing", 0, 0)
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "bad-kind", 4, 0)
-        f = MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="f")
+        f = _mbv_empty_function!(m, MBV.WasmValType[]; name="f")
         MBV.add_export!(m, "f", 0, f)
         @test_throws MBV.ModuleValidationError MBV.add_export!(m, "f", 0, f)
         @test_throws MBV.ModuleValidationError MBV.add_table!(m, MBV.FuncRef, 2, 1)
@@ -304,15 +308,17 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test MBV._binaryen_worker_count(false) === nothing
     end
 
-    @testset "the exception stack's top is found by its name, never by its type" begin
+    @testset "the exception stack's top is held by handle, never found by its name or type" begin
         # a framework's own mutable anyref global was once taken for WT's exception global
         # (the first mutable anyref global), so every throw wrote into it (dev/AUDIT.md N1)
         m = MBV.WasmModule()
         theirs = MBV.add_global!(m, MBV.AnyRef, true, nothing)
-        top = MBV.ensure_exception_top_global!(m)
+        MBV.ensure_provenance_imports!(m)
+        r = MBV.recover_module_handles!(MBV.TypeRegistry(), m)
+        top = MBV.exc_top_global!(m, r)
         @test top != theirs && m.globals[Int(top) + 1].name == "\$exc_top"
-        @test MBV.ensure_exception_top_global!(m) == top
-        @test m.globals[Int(top) + 1].valtype == MBV.ConcreteRef(MBV.exc_cell_type!(m), true)
+        @test MBV.exc_top_global!(m, r) == top
+        @test m.globals[Int(top) + 1].valtype == MBV.ConcreteRef(MBV.exc_cell_type(r), true)
         @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.AnyRef, true, nothing; name="\$exc_top")
         # a typed null reference global names a type the module defines
         @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.ConcreteRef(UInt32(999), true), true, nothing)
@@ -407,13 +413,12 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
 
         # a framework's module declares WT's runtime imports before its own definitions
         late = MBV.WasmModule()
-        MBV.add_function!(late, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="f")
+        _mbv_empty_function!(late, MBV.WasmValType[]; name="f")
         @test_throws ArgumentError MBV.compile_multi(Any[(constant_root, (Int64,), "late")];
             existing_module=late, root_bindings=Dict("late" => constant_bindings))
         entry_module = MBV.WasmModule()
         MBV.ensure_provenance_imports!(entry_module)
-        entry_idx = MBV.add_function!(entry_module, MBV.WasmValType[],
-            MBV.WasmValType[], MBV.WasmValType[], UInt8[MBV.Opcode.END]; name="entry")
+        entry_idx = _mbv_empty_function!(entry_module, MBV.WasmValType[]; name="entry")
         with_entry = MBV.RootBindings(
             captured_constants=Dict(:offset => Int64(7)),
             entry_calls=UInt32[entry_idx], elide_closure_context=true)
@@ -514,7 +519,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         # 0x06 then the block type (a function type for two results), 0x07 then the tag
         code = MBV.builder_code(ok)
         @test code[1] == MBV.Opcode.TRY == 0x06 && code[4] == MBV.Opcode.CATCH_LEGACY == 0x07 && code[5] == tag
-        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[], MBV.WasmValType[], code; name="f")
+        MBV.add_function!(m, ok; name="f")
         @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(MBV.to_bytes(m))))
 
         # a catch outside a try
@@ -548,7 +553,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         count = MBV.add_global_import!(m, "wasmtarget", "host_imports_open", MBV.I32, true; name="\$host_imports_open")
         mine = MBV.add_global!(m, MBV.I64, true, 0; name="\$mine")
         @test (count, mine) == (0, 1)
-        @test MBV.global_named(m, "\$host_imports_open") == 0 && MBV.global_named(m, "\$mine") == 1
+        @test m.globals[1].name == "\$host_imports_open" && m.globals[2].name == "\$mine"
         late = try; MBV.add_global_import!(m, "host", "late", MBV.I32, false); nothing; catch err; err; end
         @test late isa MBV.ModuleValidationError &&
               occursin("host.late", sprint(showerror, late)) && occursin("\$mine", sprint(showerror, late))
@@ -559,12 +564,13 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.global_get!(b, mine); MBV.global_set!(b, mine)
         MBV.global_get!(b, count)
         MBV.finish_function!(b)
-        MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b); name="f")
+        MBV.add_function!(m, b; name="f")
         bytes = MBV.to_bytes(m)
         @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(bytes)))
         printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
-        @test occursin("(import \"wasmtarget\" \"host_imports_open\" (global (;0;) (mut i32)))", printed)
-        @test occursin("(global (;1;) (mut i64) i64.const 0)", printed)
+        # each named in the name section (subsection 7), as wasm-tools prints a name: `$` then it
+        @test occursin("(import \"wasmtarget\" \"host_imports_open\" (global \$\$host_imports_open (;0;) (mut i32)))", printed)
+        @test occursin("(global \$\$mine (;1;) (mut i64) i64.const 0)", printed)
         # an immutable imported global is not written
         m2 = MBV.WasmModule()
         fixed = MBV.add_global_import!(m2, "host", "fixed", MBV.I32, false)
@@ -762,4 +768,70 @@ include(joinpath(@__DIR__, "builder_cases.jl"))
     b = mk(MBV.WasmValType[MBV.ConcreteRef(UInt32(fa), true)]); MBV.local_get!(b, 0)
     @test_throws MBV.StackImbalanceError MBV.call_ref!(b, fb)
     @test_throws MBV.ModuleValidationError MBV.struct_get!(mk(), 99, 0)
+end
+
+# row k's program: a throw, whose compile defines the exception stack's top
+_mbv_k_throw(x::Int64) = x > 0 ? x : throw(DomainError(x))
+
+@testset "115b: every body is a builder the module made" begin
+    # each invalid body throws at its emitting call (or at its fill) where it once reached the
+    # module and only the engine refused it; the valid one builds, and wasm-tools accepts it
+    # (dev/CHARTER.md C7). Rows a-j are test/builder_cases.jl's body_cases, which the ratchet
+    # also runs over src/builder alone (L167, L168).
+    for c in body_cases(MBV)
+        @testset "row $(c.row) ($(c.id))" begin
+            if c.expect === :valid
+                local m = c.program()
+                @test m isa MBV.WasmModule
+                Sys.which("wasm-tools") === nothing ||
+                    @test MBV.validate_wasm_bytes(MBV.to_bytes(m)) isa Vector{UInt8}
+            else
+                @test_throws c.expect c.program()
+            end
+        end
+    end
+    # row k (A3B15): a host's global named `$exc_top`, of another type, is not WT's exception
+    # stack's top: the compile defines its own, held by handle, and the duplicate name is refused
+    # where the compile defines it, naming it
+    m = MBV.WasmModule()
+    MBV.ensure_provenance_imports!(m)
+    MBV.add_global!(m, MBV.I32, true, 0; name="\$exc_top")
+    err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=m); nothing; catch e; e; end
+    @test err !== nothing && occursin("a global named \"\\\$exc_top\" is already defined", sprint(showerror, err))
+    # a return in a function's builder is checked against the function's results
+    m = MBV.WasmModule(); idx = MBV.define_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I64]; name="f")
+    b = MBV.function_builder(m, idx); MBV.f64_const!(b, 1.0)
+    @test_throws MBV.StackImbalanceError MBV.return_!(b)
+    # a fragment's return carries its function's results: one built for others is refused at the append
+    frag = MBV.InstrBuilder(; mod=m, fragment=true); MBV.f64_const!(frag, 1.0); MBV.return_!(frag)
+    @test_throws ArgumentError MBV.append_builder!(MBV.function_builder(m, idx), frag)
+    # an unfilled function and an unfilled global make to_bytes refuse, naming them
+    @test_throws MBV.ModuleValidationError MBV.to_bytes(m)
+    m2 = MBV.WasmModule(); MBV.define_global!(m2, MBV.I32, false; name="pending")
+    err = try; MBV.to_bytes(m2); nothing; catch e; e; end
+    @test err isa MBV.ModuleValidationError && occursin("pending", sprint(showerror, err))
+    # a constant expression reads no mutable global
+    m3 = MBV.WasmModule(); gm = MBV.add_global!(m3, MBV.I32, true, 1)
+    g, init = MBV.define_global!(m3, MBV.I32, false)
+    @test_throws MBV.StackImbalanceError MBV.global_get!(init, gm)
+    # a function is filled once, by a function's builder, never a fragment
+    m4 = MBV.WasmModule(); f4 = MBV.define_function!(m4, MBV.WasmValType[], MBV.WasmValType[]; name="f")
+    b4 = MBV.function_builder(m4, f4); MBV.finish_function!(b4); MBV.fill_function!(m4, f4, b4)
+    b5 = MBV.function_builder(m4, f4); MBV.finish_function!(b5)
+    @test_throws MBV.ModuleValidationError MBV.fill_function!(m4, f4, b5)
+    f6 = MBV.define_function!(m4, MBV.WasmValType[], MBV.WasmValType[]; name="g")
+    b6 = MBV.InstrBuilder(; mod=m4, fragment=true); MBV.finish_function!(b6)
+    @test_throws MBV.ModuleValidationError MBV.fill_function!(m4, f6, b6)
+    # ref.func pushes the function's non-null reference, declared for reference
+    m7 = MBV.WasmModule(); f7 = MBV.define_function!(m7, MBV.WasmValType[], MBV.WasmValType[]; name="f")
+    b7 = MBV.function_builder(m7, f7); MBV.finish_function!(b7); MBV.fill_function!(m7, f7, b7)
+    g7, init7 = MBV.define_global!(m7, MBV.FuncRef, false)
+    @test_throws MBV.ModuleValidationError MBV.ref_func!(init7, f7)
+    MBV.declare_funcs!(m7, UInt32[f7])
+    MBV.ref_func!(init7, f7); MBV.finish_function!(init7); MBV.fill_global!(m7, g7, init7)
+    Sys.which("wasm-tools") === nothing || @test MBV.validate_wasm_bytes(MBV.to_bytes(m7)) isa Vector{UInt8}
+    # a global's name is in the name section (subsection 7, dart's NameSection)
+    m8 = MBV.WasmModule(); MBV.add_global!(m8, MBV.I32, false, 3; name="answer")
+    Sys.which("wasm-tools") === nothing ||
+        @test occursin("(global \$answer", read(pipeline(`wasm-tools print`; stdin=IOBuffer(MBV.to_bytes(m8))), String))
 end

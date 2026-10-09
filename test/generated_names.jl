@@ -26,15 +26,15 @@ _gn_name(kind::Symbol) = _GN.generated_function_name(kind, get(_GN_SUBJECTS, kin
 # a module whose export `planted_entry` calls one function named `name` that traps at once; the
 # export is built here, not compiled from Julia IR, so it is named by the construct it plays
 function _gn_planted(name::String)
-    mod = _GN.WasmModule()
-    mod.source_map_url = "planted.wasm.map"
-    planted = _GN.add_function!(mod, _GN.WasmValType[], _GN.WasmValType[], _GN.WasmValType[],
-                                UInt8[_GN.Opcode.UNREACHABLE, _GN.Opcode.END]; name=name)
+    mod = _GN.WasmModule(; source_map_url="planted.wasm.map")
+    p = _GN.InstrBuilder(; mod=mod)
+    _GN.unreachable!(p)
+    _GN.finish_function!(p)
+    planted = _GN.add_function!(mod, p; name=name)
     b = _GN.InstrBuilder(; mod=mod)
     _GN.call!(b, planted)
-    _GN.end_block!(b)
-    entry = _GN.add_function!(mod, _GN.WasmValType[], _GN.WasmValType[], _GN.WasmValType[],
-                              _GN.builder_code(b); name=_GN.generated_function_name(:export_entry, "planted_entry"))
+    _GN.finish_function!(b)
+    entry = _GN.add_function!(mod, b; name=_GN.generated_function_name(:export_entry, "planted_entry"))
     _GN.add_export!(mod, "planted_entry", 0, entry)
     bytes, json = _GN.to_bytes_with_source_map(mod)
     return WasmRunner.run_wasm_single(bytes, "planted_entry", ""; source_map=json)
@@ -99,8 +99,8 @@ end
     end
     # an empty name is refused where the function is defined, naming the call
     err = try; _gn_planted(""); nothing; catch e; e; end
-    @test err isa ArgumentError && occursin("add_function!(…; name=\"\")", err.msg)
-    err = try; _GN.WasmFunction(0, _GN.WasmValType[], UInt8[_GN.Opcode.END]; name=""); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("define_function!(…; name=\"\")", err.msg)
+    err = try; _GN.WasmFunction(UInt32(0), _GN.WasmValType[], nothing, _GN.SourceMapping[], ""); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("WasmFunction(type 0; name=\"\")", err.msg)
     # a frame with no name is a defect: the runner raises rather than print a fallback
     @test_throws ErrorException WasmRunner.located_frames(

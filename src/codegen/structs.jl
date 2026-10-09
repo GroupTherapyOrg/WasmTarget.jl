@@ -267,20 +267,13 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
         return nothing
     end
 
-    # SimpleVector is a variable-length container in Julia (fieldcount=0).
-    # Register it as an externref array type so _svec_len and _svec_ref work.
-    # SimpleVector elements are Any-typed, mapping to externref in WasmGC.
+    # SimpleVector is a variable-length container in Julia (fieldcount=0): its layout is
+    # \$JlSVec, an anyref array, which the \$JlType hierarchy defines before any type registers
+    # (a type object's `parameters` field holds one)
     if T === Core.SimpleVector
-        # When JlType hierarchy is active, reuse the heterogeneous
-        # $JlSVec array type. Previously this created a separate
-        # (array (mut anyref)) which caused type mismatch: struct.get on $JlDataType.parameters
-        # returns (ref null $JlSVec) but the local was typed with a different array type index.
-        if registry.jl_svec_idx !== nothing
-            arr_idx = registry.jl_svec_idx
-        else
-            local svec_elem_type = ExternRef
-            arr_idx = add_array_type!(mod, svec_elem_type, true)
-        end
+        registry.jl_svec_idx === nothing &&
+            error("Core.SimpleVector registers before the \$JlType hierarchy that defines its array type \$JlSVec")
+        arr_idx = registry.jl_svec_idx
         # Register as a "struct" with 0 Julia fields but backed by an array type
         info = StructInfo(T, arr_idx, Symbol[], DataType[], UInt32(0))  # SimpleVector is an array type, no typeId
         registry.structs[T] = info

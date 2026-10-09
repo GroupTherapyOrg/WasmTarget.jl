@@ -139,12 +139,11 @@ end
 """builder-native (THE implementation): build the error struct, stash, throw.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_throw_error_struct!(bld::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(ErrT))::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, ErrT)
     info === nothing && error("exception layout is unavailable for $ErrT")
     emit_struct_prefix!(bld, ctx.type_registry, ErrT, info)
     struct_new!(bld, info.wasm_type_idx)   # mod-resolved fields
-    emit_throw_value!(bld, ctx.mod)   # typed (exn, trace) tag
+    emit_throw_value!(bld, ctx.mod, ctx.type_registry)   # typed (exn, trace) tag
     return bld
 end
 
@@ -153,7 +152,6 @@ the name, or the operand that holds it at run time.
 parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                             @nospecialize(owner_type), field::Union{Symbol,NirNode})::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     info = register_struct_type!(ctx.mod, ctx.type_registry, FieldError)
     info === nothing && error("FieldError layout is unavailable")
     emit_struct_prefix!(bld, ctx.type_registry, FieldError, info)
@@ -163,7 +161,7 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     emit_value!(bld, field isa Symbol ? NirLiteral(field) : field, ctx,
                 fields[Int(info.field_offset) + 2].valtype; from_julia=Symbol)
     struct_new!(bld, info.wasm_type_idx)
-    emit_throw_value!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod, ctx.type_registry)
     return bld
 end
 
@@ -238,7 +236,6 @@ parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)"""
 function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
                                     arg_types::Tuple, physical_offset::Integer,
                                     index_local::Integer)::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     tuple_type = Tuple{arg_types...}
     tuple_info = haskey(ctx.type_registry.structs, tuple_type) ?
                  ctx.type_registry.structs[tuple_type] :
@@ -255,7 +252,7 @@ function _emit_vararg_bounds_error!(bld::InstrBuilder, ctx::AbstractCompilationC
     local_get!(bld, index_local)
     coerce_stack_top!(bld, AnyRef, ctx; from_julia=Int64)
     struct_new!(bld, error_info.wasm_type_idx)
-    emit_throw_value!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod, ctx.type_registry)
     return bld
 end
 
@@ -495,8 +492,6 @@ function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector
     seed_input!(b, WasmValType[I32])
     cp_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
-    builder_set_local_type!(b, cp_local, I32)
-    builder_set_local_type!(b, result_local, I32)
 
     # Store codepoint
     local_set!(b, cp_local)
@@ -625,8 +620,6 @@ function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector
     seed_input!(b, WasmValType[I32])
     raw_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
-    builder_set_local_type!(b, raw_local, I32)
-    builder_set_local_type!(b, result_local, I32)
 
     local_set!(b, raw_local)
 
@@ -1689,9 +1682,8 @@ function get_egal_function!(mod::WasmModule, registry::TypeRegistry)::UInt32
     local top, jt = registry.base_struct_idx, registry.jl_type_idx
     (top === nothing || jt === nothing) &&
         error("the runtime egal function needs the class hierarchy and the JlType hierarchy")
-    local fidx = add_function!(mod, WasmValType[AnyRef, AnyRef], WasmValType[I32], WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END];
-                               name=generated_function_name(:jl_egal))
+    local fidx = define_function!(mod, WasmValType[AnyRef, AnyRef], WasmValType[I32];
+                                  name=generated_function_name(:jl_egal))
     registry.egal_func_idx = fidx
     return fidx
 end
@@ -1701,7 +1693,8 @@ end
 
 Fills the runtime egal function's body when the module used it, after codegen: its class and
 closure lists are then every layout a value can have. Filling can register a field's layout,
-so it refills until the registries stop growing. A use after the fill raises.
+so its body is rebuilt until the registries stop growing, and the last is filled in. A use after
+the fill raises.
 parity(quarantine: dart's classes and closure layouts are all known before its code generator
 runs (closures.dart ClosureLayouter); a WT closure's context registers lazily where its first
 value is built, MARCH 13.17 A7S1.)
@@ -1710,23 +1703,22 @@ function fill_egal_function!(mod::WasmModule, registry::TypeRegistry)::Nothing
     local fidx = registry.egal_func_idx
     fidx === nothing && return
     local seen = (-1, -1)
+    local body = nothing
     while seen != (length(registry.type_ids), length(registry.structs))
         seen = (length(registry.type_ids), length(registry.structs))
-        _fill_egal_body!(mod, registry, fidx)
+        body = _egal_body(mod, registry, fidx)
     end
+    fill_function!(mod, fidx, body)
     registry.egal_filled = true
     return
 end
 
 # parity(intrinsics.dart:2974 MemberIntrinsic.identical): the body get_egal_function! defines
-function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Nothing
+function _egal_body(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::InstrBuilder
     local top = registry.base_struct_idx
     local jt = registry.jl_type_idx
-    local params = WasmValType[AnyRef, AnyRef]
-    local results = WasmValType[I32]
-    local b = InstrBuilder(params, results; func_name="jl_egal", mod=mod)
-    local extra = WasmValType[]
-    local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
+    local b = function_builder(mod, fidx)
+    local alloc = w -> builder_add_local!(b, w)
     local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
     local egal_call!() = call!(b, fidx)
 
@@ -1884,10 +1876,7 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
     end
     i32_const!(b, 0)   # identity classes: ref.eq above already said no
     end_block!(b)
-    local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
-                                       name=mod.functions[slot].name)
-    return
+    return b
 end
 
 """
@@ -1909,13 +1898,10 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local tv, sv = registry.jl_typevar_idx, registry.jl_svec_idx
     local params = WasmValType[AnyRef, AnyRef, I32]
     local results = WasmValType[I32]
-    local fidx = add_function!(mod, params, results, WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END];
-                               name=generated_function_name(:jl_has_typevar))
+    local fidx = define_function!(mod, params, results; name=generated_function_name(:jl_has_typevar))
     registry.has_typevar_func_idx = fidx
-    local b = InstrBuilder(params, results; func_name="jl_has_typevar", mod=mod)
-    local extra = WasmValType[]
-    local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
+    local b = function_builder(mod, fidx)
+    local alloc = w -> builder_add_local!(b, w)
     local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
     local has!() = call!(b, fidx)
     local eq!(l1, l2) = (local_get!(b, l1); ref_cast!(b, EqRef, true);
@@ -1983,9 +1969,7 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     # Union{}: nothing
     i32_const!(b, 0)
     end_block!(b)
-    local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
-                                       name=mod.functions[slot].name)
+    fill_function!(mod, fidx, b)
     return fidx
 end
 
@@ -2683,7 +2667,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
                 coerce_stack_top!(eb, cw, ctx; from_julia=c.arg_types[dpos])
             end
         end
-        emit_direct_call!(eb, ctx.mod, c.wasm_idx)
+        emit_direct_call!(eb, ctx.mod, ctx.type_registry, c.wasm_idx)
         rj = c.return_type
         local _c_results = _function_type(ctx.mod, c.wasm_idx).results
         rw = isempty(_c_results) ? nothing : _c_results[1]
@@ -2780,7 +2764,6 @@ end
 # parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
                                 ctx::AbstractCompilationContext; func::Symbol=:typeassert)::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
     def isa StructType || error("TypeError did not register as a Wasm struct")
@@ -2793,7 +2776,7 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
                     from_julia=(source_type isa Type ? source_type : fieldtype(TypeError, i)))
     end
     struct_new!(b, info.wasm_type_idx)
-    emit_throw_value!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod, ctx.type_registry)
     return b
 end
 
@@ -2884,7 +2867,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
                     emit_convert_to_f64!(_ssgb, global_type)
                     # Call the DOM import function
-                    emit_direct_call!(_ssgb, ctx.mod, import_idx)
+                    emit_direct_call!(_ssgb, ctx.mod, ctx.type_registry, import_idx)
                 end
             end
 
@@ -3650,7 +3633,6 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     if func === Core.throw
         # throw(obj): obj as the anyref the tag carries, thrown through the one throw
         length(args) == 1 || error("Core.throw takes one exception, got $(length(args)) operands")
-        ensure_exception_tag!(ctx.mod)
         local _thrb = _ctx_builder(ctx, "compile_call")
         begin
             local _throw_val = args[1]
@@ -3676,7 +3658,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             emit_value!(_thrb, _throw_val, ctx, AnyRef;
                         from_julia=(_throw_st isa DataType && isconcretetype(_throw_st)) ? _throw_st : nothing)
         end
-        emit_throw_value!(_thrb, ctx.mod)   # typed (exn, trace) tag
+        emit_throw_value!(_thrb, ctx.mod, ctx.type_registry)   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
 
     elseif func === Core.throw_methoderror
@@ -3684,7 +3666,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         _emit_throw_methoderror!(fb, args, ctx)
         ctx.last_stmt_was_stub = true
 
-    # Core._svec_len(sv) — SimpleVector is an externref array in WasmGC.
+    # Core._svec_len(sv) — a SimpleVector is \$JlSVec, an anyref array.
     # _svec_len returns Int64 = array.len (converted from i32 to i64).
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
@@ -3701,14 +3683,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 num!(fb, Opcode.I64_EXTEND_I32_U)
         end
 
-    # Core._svec_ref(sv, i) — get element from SimpleVector (externref array).
+    # Core._svec_ref(sv, i) — get element from a SimpleVector (\$JlSVec, an anyref array).
     # _svec_ref is 1-indexed in Julia, 0-indexed in Wasm → subtract 1.
     # Match both GlobalRef and direct builtin function object (same as _svec_len above).
     # args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
     # the generic loop above — do NOT call compile_value again here (causes double-push,
     # leaving 2 orphaned values on the stack → "values remaining" validation error).
     elseif isdefined(Core, :_svec_ref) && nir_const(func) === Core._svec_ref && length(args) == 2
-        # Get element from externref array
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
         local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # [svec, i64 idx] on fb
@@ -3716,13 +3697,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         num!(_svrb, Opcode.I32_WRAP_I64)
         i32_const!(_svrb, 1)  # 1
         num!(_svrb, Opcode.I32_SUB)
-        local _svelem = ctx.mod.types[svec_arr_idx + 1].elem.valtype
         array_get!(_svrb, svec_arr_idx)
-        # Legacy headerless registries used externref; the canonical hierarchy
-        # uses AnyRef directly.
-        if _svelem === ExternRef
-            any_convert_extern!(_svrb)
-        end
         append_builder!(fb, _svrb)
 
     # Core._apply_iterate(Base.iterate, f, container...) — vector splatting.
@@ -4161,7 +4136,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # on that same authoritative builder stack. A detached fragment
                 # here used to hide the call's parameter pops from validation.
                 local _xcb = fb
-                emit_direct_call!(_xcb, ctx.mod, target_info.wasm_idx)
+                emit_direct_call!(_xcb, ctx.mod, ctx.type_registry, target_info.wasm_idx)
                 # If the callee returns Union{} (Bottom), it always throws.
                 # The Wasm func type has no result, so code after is unreachable.
                 # Skip type bridge and emit unreachable to prevent stack underflow.
@@ -4468,7 +4443,7 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
     end
     local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, container_type)
     emit_value!(bld, container_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
-    emit_direct_call!(bld, ctx.mod, target.wasm_idx)
+    emit_direct_call!(bld, ctx.mod, ctx.type_registry, target.wasm_idx)
     if want === Union{}
         # The callee always throws, so its Wasm type has no result and everything
         # after the call is dead: a structural trap on a path Julia proves dead.
@@ -4605,7 +4580,6 @@ parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 """
 function _emit_apply_method_error!(bld::InstrBuilder, target_value,
                                    ctx::AbstractCompilationContext)::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     local error_info = register_struct_type!(ctx.mod, ctx.type_registry, MethodError)
     local args_info = register_tuple_type!(ctx.mod, ctx.type_registry, Tuple{})
     error_info === nothing && error("MethodError layout is unavailable")
@@ -4620,7 +4594,7 @@ function _emit_apply_method_error!(bld::InstrBuilder, target_value,
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
-    emit_throw_value!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod, ctx.type_registry)
     return bld
 end
 
@@ -4646,7 +4620,6 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
         end
         return _emit_throw_methoderror_by_class!(bld, args, ea, ctx)
     end
-    ensure_exception_tag!(ctx.mod)
     local reg = ctx.type_registry
     local error_info = register_struct_type!(ctx.mod, reg, MethodError)
     local args_info = register_tuple_type!(ctx.mod, reg, tuple_type)
@@ -4666,7 +4639,7 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     struct_new!(bld, args_info.wasm_type_idx)
     i64_const!(bld, Int64(WASM_WORLD_AGE))
     struct_new!(bld, error_info.wasm_type_idx)
-    emit_throw_value!(bld, ctx.mod)
+    emit_throw_value!(bld, ctx.mod, ctx.type_registry)
     return bld
 end
 
@@ -4692,7 +4665,6 @@ function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationCo
                                all(j -> j == dpos || T.parameters[j] === call_arg_types[j], 1:n) &&
                                !hasmethod(f, Tuple{T.parameters...})]
     if !isempty(tuples)
-        ensure_exception_tag!(ctx.mod)
         local err_info = register_struct_type!(ctx.mod, reg, MethodError)
         err_info === nothing && error("MethodError layout is unavailable")
         local err_def = ctx.mod.types[Int(err_info.wasm_type_idx) + 1]
@@ -4715,7 +4687,7 @@ function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationCo
             struct_new!(bld, args_info.wasm_type_idx)
             i64_const!(bld, Int64(WASM_WORLD_AGE))
             struct_new!(bld, err_info.wasm_type_idx)
-            emit_throw_value!(bld, ctx.mod)
+            emit_throw_value!(bld, ctx.mod, ctx.type_registry)
             end_block!(bld)
         end
     end
@@ -4739,7 +4711,6 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
                                            ctx::AbstractCompilationContext)::InstrBuilder
     local (p, S, rt) = ea
     local reg = ctx.type_registry
-    ensure_exception_tag!(ctx.mod)
     local error_info = register_struct_type!(ctx.mod, reg, MethodError)
     error_info === nothing && error("MethodError layout is unavailable")
     local err_def = ctx.mod.types[Int(error_info.wasm_type_idx) + 1]
@@ -4776,7 +4747,7 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
         struct_new!(bld, args_info.wasm_type_idx)
         i64_const!(bld, Int64(WASM_WORLD_AGE))
         struct_new!(bld, error_info.wasm_type_idx)
-        emit_throw_value!(bld, ctx.mod)
+        emit_throw_value!(bld, ctx.mod, ctx.type_registry)
         end_block!(bld)
     end
     unreachable!(bld)   # structural trap: a class with no numbered args tuple (A3S1)

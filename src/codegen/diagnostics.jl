@@ -245,7 +245,8 @@ function definition_source_info(def)::Union{SourceInfo,Nothing}
     local m = _definition_method(def)
     m === nothing && return nothing
     local file = string(m.file)
-    return SourceInfo(file, max(Int(m.line) - 1, 0), 0, string(m.module, ".", m.name, " @ ", file, ":", m.line))
+    return SourceInfo(source_file_uri(file), max(Int(m.line) - 1, 0), 0,
+                      string(m.module, ".", m.name, " @ ", file, ":", m.line))
 end
 
 """
@@ -317,7 +318,7 @@ function stmt_source_info(ctx, idx::Int)::Union{SourceInfo,Nothing}
                      m isa Method ? string(m.module, ".", m.name) : string(m)
         push!(chain, string(name, " @ ", n.file, ":", n.line))
     end
-    return SourceInfo(string(inner.file), max(Int(inner.line) - 1, 0), 0, join(chain, " ← "))
+    return SourceInfo(source_file_uri(string(inner.file)), max(Int(inner.line) - 1, 0), 0, join(chain, " ← "))
 end
 
 """

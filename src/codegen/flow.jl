@@ -4,7 +4,7 @@ For simple if-then-else patterns, we use the `if` instruction.
 parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
 function generate_structured(b::InstrBuilder, ctx::AbstractCompilationContext,
-                             blocks::Vector{BasicBlock})::Tuple{Vector{UInt8},Vector{SourceMapping}}
+                             blocks::Vector{BasicBlock})::InstrBuilder
     emit_trace_enter!(b, ctx)   # a traced compile: the host sees this function's entry
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
@@ -18,10 +18,7 @@ function generate_structured(b::InstrBuilder, ctx::AbstractCompilationContext,
 
     # Close exactly the seeded function frame. Any remaining block/loop is a
     # stackifier bug and must fail here, never serialize into malformed Wasm.
-    finish_function!(b)
-
-    # the body's bytes, and each statement's instructions mapped to its source (compile_statement!)
-    return builder_code_mapped(b)
+    return finish_function!(b)
 end
 
 
@@ -212,7 +209,6 @@ function _emit_phi_edge_guarded_unbox!(b::InstrBuilder, ctx::AbstractCompilation
     src_type === ExternRef && any_convert_extern!(b)
     # the edge value, held for the class test and the unbox
     local val_local = allocate_local!(ctx, AnyRef)
-    builder_set_local_type!(b, val_local, AnyRef)
     local_set!(b, val_local)
     local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, phi_local_type)
     local_get!(b, val_local)

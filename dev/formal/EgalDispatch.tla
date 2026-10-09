@@ -14,7 +14,7 @@
 (* be its context or its closure object, goes to the runtime function);    *)
 (* `nothing` against a value that may be `nothing` is its null/Nothing-    *)
 (* class test; every other pair boxes both operands and calls the runtime  *)
-(* egal function. That function's arms, in order (_fill_egal_body!):       *)
+(* egal function. That function's arms, in order (_egal_body):             *)
 (*   1. `nothing` on either side: the other must be `nothing`;             *)
 (*   2. identity (ref.eq) on the operands as given;                        *)
 (*   (type objects and SimpleVector: not modeled, no value here is one)    *)
@@ -154,7 +154,7 @@ SameClass(a, b) ==
       [] OTHER -> TRUE
 
 \* ---- the registries and the fill ----
-\* the lists _fill_egal_body! reads from the registries: `closures` (numbered, laid out, and
+\* the lists _egal_body reads from the registries: `closures` (numbered, laid out, and
 \* immutable unless MutableByFields) and the classed arm's classes (numbered, a singleton or
 \* compared by value)
 Lists(num, laid) ==

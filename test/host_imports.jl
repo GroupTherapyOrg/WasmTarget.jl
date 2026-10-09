@@ -50,8 +50,10 @@ _hi_entropy(words) = "(() => { const s = [" *
 
     # the builder refuses an import after a definition
     mod = WasmTarget.WasmModule()
-    WasmTarget.add_function!(mod, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
-                             WasmTarget.WasmValType[], UInt8[WasmTarget.Opcode.END]; name="f")
+    let b = WasmTarget.InstrBuilder(; mod=mod)
+        WasmTarget.finish_function!(b)
+        WasmTarget.add_function!(mod, b; name="f")
+    end
     @test_throws WasmTarget.ModuleValidationError WasmTarget.add_import!(mod, "env", "late",
         WasmTarget.WasmValType[], WasmTarget.WasmValType[])
 end

@@ -47,33 +47,50 @@ end
 
 Live, self-validating WebAssembly instruction emitter. `.instrs` is the ir/ instruction
 stream (serialized to bytes by `builder_code`); `.v` is the operand-stack model
-(`WasmStackValidator`); `.locals` types `local.get/set/tee`; GC ops take their
-field/element types directly (caller has them, exactly as it does when emitting).
+(`WasmStackValidator`); `.params` and `.locals` type `local.get/set/tee` (the parameters, then
+the locals declared after them, dart's `locals`); GC ops take their types from the module.
+
+A builder is a function's body (its top builder: function_builder, or one add_function! takes),
+a global's initializer (define_global!, a constant expression), or a fragment: a piece of a
+function's body that append_builder! merges into another builder of the same function. A
+fragment shares its function's locals (one declaration list) and carries its function's results,
+so its return is checked where it is emitted.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:172 InstructionsBuilder)
 """
 mutable struct InstrBuilder
     instrs::Vector{InstrIR.WasmInstr}   # the ir/ layer — serialized on demand
     v::WasmStackValidator
-    locals::Vector{WasmValType}         # param + local types, indexed by local index
+    params::Vector{WasmValType}         # the function's parameters, locals 0 .. n-1
+    results::Vector{WasmValType}        # the function's results, which its end and every return take
+    locals::Vector{WasmValType}         # the locals declared after them (shared by a function's fragments)
     func_name::String
     context::String                     # current Julia stmt/op being emitted (diagnostics)
-    trace::Union{Nothing, Vector{String}}  # opt-in full emit log (WT_BUILDER_TRACE)
-    # the function's live local types (a codegen-supplied closure idx → WasmValType, or nothing
-    # for a parameter): a fragment builder types the locals its function allocates after the
-    # fragment was made
-    locals_fn::Union{Nothing, Function}
+    trace::Union{Nothing, Vector{String}}  # opt-in full emit log (the module's builder_trace)
     seeded::Vector{WasmValType}         # inputs recorded by seed_input! (typed merges)
     # (instruction index → source) as emitted, in order (start_source_mapping!), when the
     # module records source maps; a fragment's mappings move into the builder it is appended
     # to, shifted (append_builder!). `nothing` otherwise (dart: null, instructions.dart:239).
     source_mappings::Union{Nothing,Vector{SourceMapping}}
+    # a fragment: merged into another builder by append_builder!, never a function's body
+    fragment::Bool
+    # a global's initializer (dart `constantExpression`): only constant instructions, and a
+    # global.get only of an immutable global below `readable_globals`
+    constant_expression::Bool
+    readable_globals::Int
+    # a fragment's record of what it needs and does, in order: (:req, x) a local.get of the
+    # non-defaultable local x unset in it, (:init, x) a set of x at its outer level
+    # (append_builder! replays it into the builder it is appended to)
+    init_log::Vector{Tuple{Symbol,Int}}
+    returns::Bool                       # holds a return (its results are its function's)
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
 function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
                       result_types::Vector{<:Any}=WasmValType[];
-                      func_name::String="", mod::WasmModule)::InstrBuilder
-    locals = WasmValType[p for p in param_types]
+                      func_name::String="", mod::WasmModule,
+                      locals::Vector{WasmValType}=WasmValType[],
+                      fragment::Bool=false, constant_expression::Bool=false,
+                      readable_globals::Integer=length(mod.globals))::InstrBuilder
     # the module whose types, functions, globals and tags every emit is checked against (dart:
     # an InstructionsBuilder always has its module)
     v = WasmStackValidator(; func_name=func_name, mod=mod)
@@ -81,11 +98,17 @@ function InstrBuilder(param_types::Vector{<:Any}=WasmValType[],
     # so end-of-function balance is checked against the declared results.
     push!(v.labels, ValidatorLabel(:expression, 0, WasmValType[],
                                    WasmValType[r for r in result_types], true))
-    trace = OPTIONS[].builder_trace ? String[] : nothing
+    trace = mod.builder_trace ? String[] : nothing
     records = mod.source_map_url !== nothing
-    InstrBuilder(InstrIR.WasmInstr[], v, locals, func_name, "", trace, nothing, WasmValType[],
-                 records ? SourceMapping[] : nothing)
+    InstrBuilder(InstrIR.WasmInstr[], v, WasmValType[p for p in param_types],
+                 WasmValType[r for r in result_types], locals, func_name, "",
+                 trace, WasmValType[], records ? SourceMapping[] : nothing, fragment,
+                 constant_expression, Int(readable_globals), Tuple{Symbol,Int}[], false)
 end
+
+# the results of `b`'s function (its outermost label's), which its end and its return pop
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:933 InstructionsBuilder.return_)
+builder_results(b::InstrBuilder)::Vector{WasmValType} = b.results
 
 # does `b` record source mappings? (its module has a source map URL)
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:254 InstructionsBuilder.recordSourceMaps)
@@ -188,6 +211,8 @@ _stack_snapshot(b::InstrBuilder)::Vector{String} = String[string(t) for t in b.v
 # already run against the operand-stack model by the calling method.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add)
 @inline function _emit!(b::InstrBuilder, instr::InstrIR.WasmInstr)::InstrBuilder
+    (b.constant_expression && !InstrIR.is_constant(instr)) &&
+        _reject!(b, "$(mnemonic(instr)) is not a constant instruction, and a global's initializer is a constant expression")
     push!(b.instrs, instr)
     if b.trace !== nothing
         top = isempty(b.v.stack) ? "-" : string(b.v.stack[end])
@@ -210,30 +235,14 @@ end
     return b
 end
 
-# Register a local's type so local.get/set/tee can be typed. idx is 0-based.
+# Declare a local of type `typ` after the parameters and the locals declared so far, and return
+# its index (0-based). A local is set where it is declared exactly when its type has a default
+# (a number, or a nullable reference); any other local is set by its first local.set or tee.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 function builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int
     typ isa ConcreteRef && _module_type(b.v.mod, typ.type_idx, :add_local)   # a type the module defines
     push!(b.locals, typ)
-    return length(b.locals) - 1
-end
-# parity(quarantine: the context-free Int128 builders (int128.jl) name their locals by index and
-# type them afterwards; dart's addLocal takes a local's type when it creates it. A local the
-# function's live local types hold keeps its type there (a different one is refused); any other
-# index past the builder's next one would leave a local untyped between, and is refused.)
-function builder_set_local_type!(b::InstrBuilder, idx::Integer, typ::WasmValType)::WasmValType
-    if b.locals_fn !== nothing
-        local held = b.locals_fn(Int(idx))
-        if held isa WasmValType
-            held == typ || throw(ArgumentError("builder_set_local_type!($(b.func_name)): local $idx is a $held, not $typ"))
-            return typ
-        end
-    end
-    0 <= idx <= length(b.locals) ||
-        throw(ArgumentError("builder_set_local_type!($(b.func_name)): local $idx is past the next one, $(length(b.locals))"))
-    typ isa ConcreteRef && _module_type(b.v.mod, typ.type_idx, :add_local)   # a type the module defines
-    idx == length(b.locals) ? push!(b.locals, typ) : (b.locals[idx + 1] = typ)
-    return typ
+    return length(b.params) + length(b.locals) - 1
 end
 
 # Reject the instruction being emitted, at its call, with the builder's context.
@@ -294,37 +303,80 @@ function select!(b::InstrBuilder, t::WasmValType)::InstrBuilder
 end
 
 # ── Variable ────────────────────────────────────────────────────────────────────
-# The type of local `idx`: the function's live local types (locals_fn) outrank the builder's own
-# list; a local neither holds is not the function's, and the instruction naming it is rejected.
+# The type of local `idx`: a parameter's, or a declared local's; a local the function does not
+# hold is invalid, and the instruction naming it is rejected.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 function _local_type(b::InstrBuilder, idx::Integer, op::String)::WasmValType
-    if b.locals_fn !== nothing
-        local t = b.locals_fn(Int(idx))
-        t isa WasmValType && return t
+    0 <= idx < length(b.params) && return b.params[idx + 1]
+    local k = idx - length(b.params)
+    0 <= k < length(b.locals) && return b.locals[k + 1]
+    _reject!(b, "$op: local $idx is not defined (the function has $(length(b.params) + length(b.locals)) locals)")
+end
+
+# is local `idx` set on every path to here? A parameter and a local whose type has a default are
+# always set; any other since its local.set or tee, until the end of the frame it was set in.
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:401 InstructionsBuilder._localIsInitialized)
+_local_initialized(b::InstrBuilder, idx::Integer)::Bool =
+    idx < length(b.params) || _defaultable(_local_type(b, idx, "local.get")) || Int(idx) in b.v.initialized
+
+# set local `idx` (dart _initializeLocal): an unset local is pushed on the initialization stack,
+# which its frame's end, else or catch pops; a fragment records a set at its outer level, which
+# append_builder! replays into the builder it is appended to
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:393 InstructionsBuilder._initializeLocal)
+function _initialize_local!(b::InstrBuilder, idx::Integer)::InstrBuilder
+    _local_initialized(b, idx) && return b
+    push!(b.v.initialized, Int(idx))
+    push!(b.v.init_stack, Int(idx))
+    (b.fragment && length(b.v.labels) == 1) && push!(b.init_log, (:init, Int(idx)))
+    return b
+end
+
+# a read of local `idx`, which must be set: a function's builder rejects an unset one where it
+# is read; a fragment, which has not seen what its destination sets, records the requirement
+# for append_builder! to check there (`from` names the fragment a replayed read came from)
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
+function _require_local!(b::InstrBuilder, idx::Integer, from::Union{Nothing,String}=nothing)::InstrBuilder
+    _local_initialized(b, idx) && return b
+    if b.fragment
+        push!(b.init_log, (:req, Int(idx)))
+        return b
     end
-    0 <= idx < length(b.locals) && return b.locals[idx + 1]
-    _reject!(b, "$op: local $idx is not defined (the function has $(length(b.locals)) locals)")
+    _reject!(b, "local.get: local $idx, a $(_local_type(b, idx, "local.get")), which has no default value, " *
+                "is read before it is set on every path to here" *
+                (from === nothing ? "" : " (read in the fragment $(repr(from)) appended here)"))
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
 function local_get!(b::InstrBuilder, idx::Integer)::InstrBuilder
     validate_push!(b.v, _local_type(b, idx, "local.get"))
+    _require_local!(b, idx)
     _emit!(b, InstrIR.LocalGet(UInt32(idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1035 InstructionsBuilder.local_set)
 function local_set!(b::InstrBuilder, idx::Integer)::InstrBuilder
     validate_pop!(b.v, _local_type(b, idx, "local.set"))
+    _initialize_local!(b, idx)
     _emit!(b, InstrIR.LocalSet(UInt32(idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1049 InstructionsBuilder.local_tee)
 function local_tee!(b::InstrBuilder, idx::Integer)::InstrBuilder
     lt = _local_type(b, idx, "local.tee")
     validate_pop!(b.v, lt); validate_push!(b.v, lt)
+    _initialize_local!(b, idx)
     _emit!(b, InstrIR.LocalTee(UInt32(idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1063 InstructionsBuilder.global_get)
 function global_get!(b::InstrBuilder, idx::Integer)::InstrBuilder
-    validate_push!(b.v, _module_global(b.v.mod, idx, :global_get).valtype)
+    local g = _module_global(b.v.mod, idx, :global_get)
+    # a constant expression reads an immutable global defined before the one it initializes
+    # (the spec's rule; dart orders its globals so each initializer reads earlier ones,
+    # globals.dart:56)
+    if b.constant_expression
+        idx < b.readable_globals || _reject!(b, "global.get $idx in the initializer of global " *
+            "$(b.readable_globals): a constant expression reads only a global defined before it")
+        g.mutable_ && _reject!(b, "global.get $idx in a constant expression: global $idx is mutable")
+    end
+    validate_push!(b.v, g.valtype)
     _emit!(b, InstrIR.GlobalGet(UInt32(idx)))
 end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1072 InstructionsBuilder.global_set)
@@ -456,6 +508,7 @@ function return_!(b::InstrBuilder)::InstrBuilder
         for t in reverse(b.v.labels[1].result_types); validate_pop!(b.v, t); end
     end
     b.v.reachable = false
+    b.returns = true
     _emit!(b, InstrIR.Return())
 end
 
@@ -608,6 +661,16 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1632 InstructionsBuilder.ref_eq)
 ref_eq!(b::InstrBuilder)::InstrBuilder =
     (validate_pop!(b.v, EqRef); validate_pop!(b.v, EqRef); validate_push!(b.v, I32); _emit!(b, InstrIR.RefEq()))
+# ref.func: the non-null reference to function `f`'s type; the function is declared for
+# reference (declare_funcs! or an element segment), as the spec requires of every ref.func
+# parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1594 InstructionsBuilder.ref_func)
+function ref_func!(b::InstrBuilder, f::Integer)::InstrBuilder
+    local m = b.v.mod
+    any(seg -> UInt32(f) in seg.func_indices, m.elem_segments) ||
+        _module_invalid(:ref_func, "function $f is not declared for reference (declare_funcs!)")
+    validate_push!(b.v, ConcreteRef(UInt32(_function_type_idx(m, f)), false))
+    _emit!(b, InstrIR.RefFunc(UInt32(f)))
+end
 
 # ── The module's types ──────────────────────────────────────────────────────────
 # The type the module defines at `idx`, of the kind the instruction takes (a struct, an array or a
@@ -844,15 +907,28 @@ end
 """
     append_builder!(dst, src)
 
-Typed builder merge: `dst` pops exactly what
-`src` was seeded with (`src.seeded`, in reverse) and pushes `src`'s tracked final
-stack; the instruction stream transfers at the ir/ layer. No byte round-trip and
-NO human-declared effects — the fragment's real, validator-tracked stack shape
+Merge the fragment `src` into `dst`, a builder of the same function (or of the same global's
+initializer): `dst` pops exactly what `src` was seeded with (`src.seeded`, in reverse) and
+pushes `src`'s tracked final stack; the instruction stream transfers at the ir/ layer. No byte
+round-trip and no human-declared effects — the fragment's real, validator-tracked stack shape
 transfers, so a mis-declared splice is impossible at these seams.
+
+The fragment is checked as part of `dst`: it declares its locals in its function's one list (or
+none) over the same parameters; a fragment holding a return carries `dst`'s results; a constant
+expression takes only a constant fragment. Its record of local initialization replays, in
+order, through `dst`'s own rules at `dst`'s current label: a set at its outer level sets the
+local in `dst` (until `dst`'s frame ends), and a read of a local it did not set is `dst`'s read,
+which a function's builder rejects when the local is unset there and a fragment `dst` records in
+turn. Its source mappings move with its instructions, and `dst`'s own mapping resumes after
+them.
+formal(dev/formal/LocalInit.tla): MergeAgrees, a function built from fragments has the
+verdict of one builder.
 parity(quarantine: the merge of a fragment builder into its caller; dart emits a function into
 one builder, so it has none.)
 """
 function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
+    src.fragment || throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the source is " *
+                                        "a function's own builder, not a fragment"))
     if length(src.v.labels) != 1
         # locate the underflow: depth trace over the instr kinds
         local _d = 1
@@ -871,6 +947,18 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
         error("append_builder!($(dst.func_name) ← $(src.func_name)): source has open control labels: " *
               "$(length(src.v.labels)) labels; $_report")
     end
+    (src.locals === dst.locals || isempty(src.locals)) ||
+        throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment declares " *
+                            "locals of its own, not in its function's list"))
+    (isempty(src.params) || src.params == dst.params) ||
+        throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment's parameters " *
+                            "$(src.params) are not its function's, $(dst.params)"))
+    (src.returns && builder_results(src) != builder_results(dst)) &&
+        throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment returns " *
+                            "$(builder_results(src)), its function $(builder_results(dst))"))
+    (dst.constant_expression && !src.constant_expression) &&
+        throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): a constant expression " *
+                            "takes only a constant fragment"))
     # Fragment violations PROPAGATE — they were silently dropped here,
     # which is why per-emit strict threw while the top-level harvest saw nothing.
     if has_errors(src.v)
@@ -881,6 +969,10 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     for t in Iterators.reverse(src.seeded)
         validate_pop!(dst.v, t)
     end
+    # the fragment's local initialization, replayed in order through dst's rules
+    for (kind, x) in src.init_log
+        kind === :init ? _initialize_local!(dst, x) : _require_local!(dst, x, src.func_name)
+    end
     # Transfer the tracked stack ALWAYS — downstream emission decisions read
     # dst.v.stack (the wrap chokepoint's actual-type). An unreachable tail
     # additionally poisons reachability (polymorphic stack, wasm-spec style).
@@ -888,14 +980,18 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
         validate_push!(dst.v, t)
     end
     src.v.reachable || (dst.v.reachable = false)
+    dst.returns |= src.returns
     # the fragment's source mappings, shifted to where its instructions land (dart has one
     # builder per function; WT merges fragments, as dart's serializer merges a body's
-    # mappings into the module's, function.dart:123 copyMappings)
-    if records_source_maps(dst) && records_source_maps(src)
+    # mappings into the module's, function.dart:123 copyMappings); after them dst's own
+    # mapping resumes, as dart's code generator restores its offset after a nested node
+    if records_source_maps(dst) && records_source_maps(src) && !isempty(src.source_mappings)
+        local resume = isempty(dst.source_mappings) ? nothing : dst.source_mappings[end].info
         local shift = length(dst.instrs)
         for m in src.source_mappings
             _add_source_mapping!(dst, shift_by(m, shift))
         end
+        _add_source_mapping!(dst, SourceMapping(shift + length(src.instrs), resume))
     end
     # element by element: a bulk `append!` of this abstract-eltype vector left #undef slots in
     # the copied region under Julia 1.13.0-rc1 (GC-timing dependent), which builder_code
@@ -905,4 +1001,140 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
         push!(dst.instrs, ins)
     end
     return _check!(dst)
+end
+
+# ════════════════════════════════════════════════════════════════════════════════
+# The module's function bodies and global initializers: each is a builder the module made
+# (dart builder/function.dart FunctionBuilder.body, builder/global.dart GlobalBuilder.initializer)
+# ════════════════════════════════════════════════════════════════════════════════
+
+"""
+    function_builder(mod, idx; locals) -> InstrBuilder
+
+The body of the defined function `idx`: a builder whose parameters and results are the
+function's, and whose locals are `locals` (the one list a compiled function's fragments share,
+dart's `body.locals`).
+parity(pkg/wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder)
+"""
+function function_builder(mod::WasmModule, idx::Integer;
+                          locals::Vector{WasmValType}=WasmValType[])::InstrBuilder
+    local fn = mod.functions[_defined_function_slot(mod, idx, :function_builder)]
+    local ft = mod.types[Int(fn.type_idx) + 1]::FuncType
+    return InstrBuilder(copy(ft.params), copy(ft.results); func_name=fn.name, mod=mod, locals=locals)
+end
+
+"""
+    fill_function!(mod, idx, b) -> idx
+
+Fill the defined function `idx` with its body `b`: a function's builder (not a fragment, not a
+constant expression), complete (finish_function!), of the function's own parameters and results.
+The function's locals and source mappings are the builder's. A function is filled once.
+parity(pkg/wasm_builder/lib/src/builder/function.dart:35 FunctionBuilder.forceBuild)
+"""
+function fill_function!(mod::WasmModule, idx::Integer, b::InstrBuilder)::UInt32
+    local slot = _defined_function_slot(mod, idx, :fill_function)
+    local fn = mod.functions[slot]
+    local ft = mod.types[Int(fn.type_idx) + 1]::FuncType
+    fn.body === nothing || _module_invalid(:fill_function, "function $idx ($(fn.name)) is already filled")
+    b.v.mod === mod || _module_invalid(:fill_function, "the body of function $idx was built for another module")
+    b.fragment && _module_invalid(:fill_function, "the body of function $idx is a fragment: a fragment is appended into its function's builder")
+    b.constant_expression && _module_invalid(:fill_function, "the body of function $idx is a constant expression")
+    isempty(b.v.labels) || _module_invalid(:fill_function, "the body of function $idx ($(fn.name)) is not complete: finish_function! ends it")
+    (b.params == ft.params && builder_results(b) == ft.results) ||
+        _module_invalid(:fill_function, "the body of function $idx ($(fn.name)) is built $(b.params) -> " *
+                        "$(builder_results(b)), the function is $(ft.params) -> $(ft.results)")
+    local code, mappings = builder_code_mapped(b)
+    mod.functions[slot] = WasmFunction(fn.type_idx, copy(b.locals), code, mappings, fn.name)
+    return UInt32(idx)
+end
+
+"""
+    add_function!(mod, b; name) -> func_idx
+
+Define a function of `b`'s parameters and results named `name`, and fill it with `b`, complete
+(define_function! then fill_function!).
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)
+"""
+function add_function!(mod::WasmModule, b::InstrBuilder; name::String)::UInt32
+    local idx = define_function!(mod, b.params, builder_results(b); name=name)
+    return fill_function!(mod, idx, b)
+end
+
+"""
+    define_global!(mod, valtype, mutable; name) -> (global_idx, initializer)
+
+Define a global of type `valtype` (mutable or not), named `name` when given, and return its
+index and its initializer: a builder of the constant expression that computes its value (no
+inputs, outputs `[valtype]`), which takes only constant instructions and reads only immutable
+globals defined before this one. The initializer is complete and filled in with fill_global!;
+to_bytes refuses a module with an unfilled global.
+parity(pkg/wasm_builder/lib/src/builder/global.dart:13 GlobalBuilder)
+"""
+function define_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool;
+                        name::Union{Nothing,String}=nothing)::Tuple{UInt32,InstrBuilder}
+    _check_global_name(mod, name, :define_global)
+    valtype isa ConcreteRef && _module_type(mod, valtype.type_idx, :define_global)
+    push!(mod.globals, WasmGlobalDef(valtype, mutable_, nothing, name))
+    local idx = UInt32(length(mod.globals) - 1)
+    local init = InstrBuilder(WasmValType[], WasmValType[valtype]; mod=mod,
+                              func_name=name === nothing ? "global $idx" : name,
+                              constant_expression=true, readable_globals=idx)
+    return idx, init
+end
+
+"""
+    define_global!(emit, mod, valtype, mutable; name) -> global_idx
+
+define_global!, then `emit(initializer)`, which emits the initializer's instructions, then its
+end and fill_global!: a global defined and built in one place.
+parity(pkg/wasm_builder/lib/src/builder/global.dart:13 GlobalBuilder)
+"""
+function define_global!(emit::Function, mod::WasmModule, valtype::WasmValType, mutable_::Bool;
+                        name::Union{Nothing,String}=nothing)::UInt32
+    local idx, init = define_global!(mod, valtype, mutable_; name=name)
+    emit(init)
+    finish_function!(init)
+    return fill_global!(mod, idx, init)
+end
+
+"""
+    fill_global!(mod, idx, init) -> idx
+
+Fill the defined global `idx` with its initializer `init`, complete (finish_function!): the
+constant expression define_global! made for it. A global is filled once.
+parity(pkg/wasm_builder/lib/src/builder/global.dart:24 GlobalBuilder.forceBuild)
+"""
+function fill_global!(mod::WasmModule, idx::Integer, init::InstrBuilder)::UInt32
+    0 <= idx < length(mod.globals) || _module_invalid(:fill_global, "global $idx is not defined")
+    local g = mod.globals[Int(idx) + 1]
+    g isa WasmGlobalDef || _module_invalid(:fill_global, "global $idx is imported")
+    g.init === nothing || _module_invalid(:fill_global, "global $idx is already filled")
+    (init.v.mod === mod && init.constant_expression && !init.fragment && init.readable_globals == idx &&
+     builder_results(init) == WasmValType[g.valtype]) ||
+        _module_invalid(:fill_global, "the initializer of global $idx is not the one define_global! made for it")
+    isempty(init.v.labels) || _module_invalid(:fill_global, "the initializer of global $idx is not complete: finish_function! ends it")
+    mod.globals[Int(idx) + 1] = WasmGlobalDef(g.valtype, g.mutable_, builder_code(init), g.name)
+    return UInt32(idx)
+end
+
+"""
+    add_global!(mod, valtype, mutable, init_value; name) -> global_idx
+
+Define a global whose initializer is one constant (define_global!, fill_global!): a number's
+`init_value` of its type, or a nullable reference's null (`init_value === nothing`).
+parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
+"""
+function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init_value;
+                     name::Union{Nothing,String}=nothing)::UInt32
+    (valtype isa NumType || init_value === nothing) ||
+        throw(ArgumentError("add_global!: a $valtype global starts at a constant of its type, or a nullable reference's null; got $(repr(init_value))"))
+    return define_global!(mod, valtype, mutable_; name=name) do init
+        valtype === I32 ? i32_const!(init, Int32(init_value)) :
+        valtype === I64 ? i64_const!(init, Int64(init_value)) :
+        valtype === F32 ? f32_const!(init, Float32(init_value)) :
+        valtype === F64 ? f64_const!(init, Float64(init_value)) :
+        valtype isa ConcreteRef ? ref_null!(init, valtype.type_idx) :
+        valtype isa RefType ? ref_null!(init, valtype) :
+        throw(ArgumentError("add_global!: a $valtype global has no null of its own"))
+    end
 end

@@ -892,7 +892,6 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     widen_length_to_i64!(b)
     num!(b, Opcode.I64_GE_U)
     if_!(b)
-    ensure_exception_tag!(ctx.mod)
     error_info = register_struct_type!(ctx.mod, ctx.type_registry, BoundsError)
     error_info === nothing && error("BoundsError layout is unavailable")
     emit_struct_prefix!(b, ctx.type_registry, BoundsError, error_info)
@@ -909,7 +908,7 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     end
     emit_value!(b, index, ctx, AnyRef; from_julia=Int64)
     struct_new!(b, error_info.wasm_type_idx)
-    emit_throw_value!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod, ctx.type_registry)
     end_block!(b)
     bc_static !== true && end_block!(b)
     return b
@@ -1278,9 +1277,8 @@ end
 # thrown through the one (exn, trace) tag, stashed in the exception global as every
 # WT throw site does.
 function _emit_throw_value!(b::InstrBuilder, ctx::AbstractCompilationContext, exn::Exception)::InstrBuilder
-    ensure_exception_tag!(ctx.mod)
     emit_value!(b, NirLiteral(exn), ctx, AnyRef; from_julia=typeof(exn))   # a host exception value: the explicit literal node
-    emit_throw_value!(b, ctx.mod)
+    emit_throw_value!(b, ctx.mod, ctx.type_registry)
     return b
 end
 
@@ -1826,7 +1824,7 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)::InstrBuilder
     end
     size_tuple_info = ctx.type_registry.structs[Tuple{Int64}]
 
-    # Get array type for Any (externref array)
+    # the array type of Any elements (an anyref array)
     any_array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, Any)
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
 
@@ -1990,7 +1988,6 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
     num!(fb, Opcode.I32_EQZ)
     if_!(fb)                                          # not a T → THROW
-    ensure_exception_tag!(ctx.mod)
     local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
     _te_def isa StructType || error("TypeError did not register as a Wasm struct")
@@ -2006,7 +2003,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     coerce_stack_top!(fb, _te_got_w, ctx;
                       from_julia=(_ta_static isa Type && isconcretetype(_ta_static) ? _ta_static : nothing))
     struct_new!(fb, _te_info.wasm_type_idx)
-    emit_throw_value!(fb, ctx.mod)   # typed (exn, trace) tag
+    emit_throw_value!(fb, ctx.mod, ctx.type_registry)   # typed (exn, trace) tag
     end_block!(fb)
     local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
     return append_builder!(b, fb)
@@ -2105,7 +2102,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{Instr
                 # Convert to f64 for DOM imports (all DOM imports expect f64)
                 emit_convert_to_f64!(_setb, global_type)
                 # Call the DOM import function
-                emit_direct_call!(_setb, ctx.mod, import_idx)
+                emit_direct_call!(_setb, ctx.mod, ctx.type_registry, import_idx)
             end
         end
 
@@ -2218,9 +2215,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             end
             # Land in a typed scratch + end with local.get (unambiguous tail for the
             # store heuristics — same workaround as the het-tuple arm above).
-            local _mb_res = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, _mb_out)
-            builder_set_local_type!(_mb_ib, _mb_res, _mb_out)
+            local _mb_res = allocate_local!(ctx, _mb_out)
             local_set!(_mb_ib, _mb_res)
             local_get!(_mb_ib, _mb_res)
             append_builder!(fb, _mb_ib)

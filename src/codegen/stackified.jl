@@ -235,7 +235,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # plain CFG blocks: the stackifier's phi machinery already owns handler-edge phis.
     if !isempty(try_regions)
         blocks = _split_blocks_for_regions(blocks, try_regions)
-        ensure_exception_tag!(ctx.mod)
     end
     blocks = _thread_backward_trampolines!(blocks, nir, try_regions)
     # ========================================================================
@@ -503,7 +502,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         isempty(params) && isempty(results) || throw(ArgumentError(
             "root entry call $target_idx must have signature () -> (); got " *
             "$(params) -> $(results) while compiling $(ctx.func_ref)"))
-        emit_direct_call!(b, ctx.mod, target_idx)
+        emit_direct_call!(b, ctx.mod, ctx.type_registry, target_idx)
     end
 
     # For very complex functions, use a dispatcher-style approach
@@ -1132,14 +1131,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # the body's normal exits branch out of the region, so its end is not
                     # reached (dart's body ends in `br wrapperBlock`, code_generator.dart:951)
                     unreachable!(b)        # structural trap: no normal path reaches the try's end
-                    catch_legacy!(b, 0)    # the payload is the try's outputs, at its end
+                    catch_legacy!(b, exc_tag(ctx.type_registry))    # the payload is the try's outputs, at its end
                     end_block!(b)          # end try — the catch payload arrives here
                     # The payload's entry, which its throw pushed, is Julia's top here (Julia's
                     # landing leaves the stack as it is): it becomes the top by identity, also
                     # when the host caught the escape, called an export and threw it again
                     # (ExceptionStack.tla, Landing = "identity", HostReraise). The exception and
                     # its stack are read from the entry; the count is the host's glue's, exact.
-                    global_set!(b, ensure_exception_top_global!(ctx.mod))
+                    global_set!(b, exc_top_global!(ctx.mod, ctx.type_registry))
                     drop!(b)   # stackTrace
                     drop!(b)   # exception
                 end
@@ -1603,7 +1602,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         if haskey(try_open_at, block_idx)
             for r in try_open_at[block_idx]
                 local try_label = try_legacy!(b; results=WasmValType[AnyRef, ExternRef,
-                                                                    ConcreteRef(exc_cell_type!(ctx.mod), true)])
+                                                                    ConcreteRef(exc_cell_type(ctx.type_registry), true)])
                 push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))
                 # region-inner forward targets open INSIDE the try
                 local _eb = get(stmt_to_block, r.enter_idx, 0)

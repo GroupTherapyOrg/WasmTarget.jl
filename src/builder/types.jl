@@ -1,7 +1,7 @@
 # Wasm Types - Value types, Reference types, and composite types
 # Reference: https://webassembly.github.io/spec/core/binary/types.html
 
-export NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, PackedType, StorageType, JSValue, WasmGlobal
+export NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, PackedType, StorageType
 
 # ============================================================================
 # Value Types (Section 5.3.1)
@@ -344,108 +344,4 @@ function wasm_subtype(a::WasmValType, b::WasmValType, types::Vector{CompositeTyp
     kb === :array  && return ka_abs === :array
     kb === :i31    && return ka_abs === :i31
     return false
-end
-
-# ============================================================================
-# JS Interop Types
-# ============================================================================
-
-"""
-    JSValue
-
-A Julia type representing a JavaScript value held as an externref.
-Used for DOM elements, JS objects, and other JS values.
-
-This is a primitive type to prevent Julia from optimizing it away.
-parity(sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef)
-"""
-primitive type JSValue 64 end
-
-# ============================================================================
-# WasmGlobal - Handle for Wasm Global Variables
-# ============================================================================
-
-"""
-    WasmGlobal{T, IDX}
-
-A handle to a WebAssembly global variable at index `IDX`. When compiled to Wasm:
-- `global[]` (getindex) → `global.get IDX`
-- `global[] = x` (setindex!) → `global.set IDX, x`
-
-The index is a type parameter so it's known at compile time, which is required
-because Wasm's `global.get` and `global.set` instructions take immediate indices.
-
-This is a general-purpose abstraction for any Julia code that needs to
-interact with Wasm global variables. Use cases include:
-- Stateful applications
-- Game engines
-- Reactive frameworks
-- Any code needing mutable Wasm state
-
-# Type Parameters
-- `T`: The type of value stored in the global (Int32, Float64, etc.)
-- `IDX`: The Wasm global index (0-based), must be an Int literal
-
-# Example
-```julia
-# Define types for specific globals (index is compile-time constant)
-const Counter = WasmGlobal{Int32, 0}   # Global index 0
-const Flag = WasmGlobal{Int32, 1}      # Global index 1
-
-# Functions that use globals - index is known from the type
-function increment(g::Counter)::Int32
-    g[] = g[] + Int32(1)
-    return g[]
-end
-
-function toggle(g::Flag)::Int32
-    g[] = g[] == Int32(0) ? Int32(1) : Int32(0)
-    return g[]
-end
-
-# Create instances (value is for Julia-side testing)
-counter = Counter(0)
-flag = Flag(1)
-
-# Compile to Wasm - global index extracted from type
-wasm_bytes = compile(increment, (Counter,))
-```
-parity(quarantine: Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-"""
-mutable struct WasmGlobal{T, IDX}
-    value::T
-end
-
-# Constructor with zero initial value
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function WasmGlobal{T, IDX}()::WasmGlobal{T, IDX} where {T, IDX}
-    return WasmGlobal{T, IDX}(zero(T))
-end
-
-# Get the global index from the type
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function global_index(::Type{WasmGlobal{T, IDX}})::Int where {T, IDX}
-    return IDX
-end
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function global_index(g::WasmGlobal{T, IDX})::Int where {T, IDX}
-    return IDX
-end
-
-# Get the element type
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function global_eltype(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
-    return T
-end
-
-# Accessor methods - work in Julia (for testing) and compile to Wasm global ops
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function Base.getindex(g::WasmGlobal{T, IDX})::T where {T, IDX}
-    return g.value
-end
-
-# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
-function Base.setindex!(g::WasmGlobal{T, IDX}, v::T)::T where {T, IDX}
-    g.value = v
-    return v
 end

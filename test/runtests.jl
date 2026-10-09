@@ -1303,7 +1303,7 @@ begin
             # Baseline residual is ~50 (all out-of-scope). Ceiling catches any real regression;
             # LOWER it as the residual is cleaned (it must only trend down).
             # march16: +4 in closures.jl — the vtable-global INIT bytes (constant-expression
-            # serialization, the same out-of-scope class as types.jl's _const_init_bytes!).
+            # serialization, the same out-of-scope class as types.jl's _const_init!).
             @test total <= 65
             # the three fully-migrated mega-dispatchers must STAY fully migrated:
             for f in ("calls.jl", "invoke.jl", "statements.jl", "int128.jl")
@@ -1457,20 +1457,11 @@ begin
             mod = WasmTarget.WasmModule()
 
             # Create a function: (param i32 i32) (result i32) -> local.get 0, local.get 1, i32.add
-            body = UInt8[
-                WasmTarget.Opcode.LOCAL_GET, 0x00,
-                WasmTarget.Opcode.LOCAL_GET, 0x01,
-                WasmTarget.Opcode.I32_ADD,
-                WasmTarget.Opcode.END,
-            ]
-
-            func_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32, WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.NumType[],
-                body; name="add"
-            )
+            b = WasmTarget.InstrBuilder([WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32]; mod=mod)
+            WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1)
+            WasmTarget.num!(b, WasmTarget.Opcode.I32_ADD)
+            WasmTarget.finish_function!(b)
+            func_idx = WasmTarget.add_function!(mod, b; name="add")
 
             WasmTarget.add_export!(mod, "add", 0, func_idx)
 
@@ -1484,20 +1475,11 @@ begin
         @testset "WasmModule - i64.add generation" begin
             mod = WasmTarget.WasmModule()
 
-            body = UInt8[
-                WasmTarget.Opcode.LOCAL_GET, 0x00,
-                WasmTarget.Opcode.LOCAL_GET, 0x01,
-                WasmTarget.Opcode.I64_ADD,
-                WasmTarget.Opcode.END,
-            ]
-
-            func_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I64, WasmTarget.I64],
-                [WasmTarget.I64],
-                WasmTarget.NumType[],
-                body; name="add64"
-            )
+            b = WasmTarget.InstrBuilder([WasmTarget.I64, WasmTarget.I64], [WasmTarget.I64]; mod=mod)
+            WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1)
+            WasmTarget.num!(b, WasmTarget.Opcode.I64_ADD)
+            WasmTarget.finish_function!(b)
+            func_idx = WasmTarget.add_function!(mod, b; name="add64")
 
             WasmTarget.add_export!(mod, "add64", 0, func_idx)
 
@@ -1510,29 +1492,12 @@ begin
         @testset "WasmModule - Multiple functions" begin
             mod = WasmTarget.WasmModule()
 
-            # Add function
-            add_body = UInt8[
-                WasmTarget.Opcode.LOCAL_GET, 0x00,
-                WasmTarget.Opcode.LOCAL_GET, 0x01,
-                WasmTarget.Opcode.I32_ADD,
-                WasmTarget.Opcode.END,
-            ]
-            add_idx = WasmTarget.add_function!(
-                mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], add_body; name="add"
-            )
-
-            # Subtract function
-            sub_body = UInt8[
-                WasmTarget.Opcode.LOCAL_GET, 0x00,
-                WasmTarget.Opcode.LOCAL_GET, 0x01,
-                WasmTarget.Opcode.I32_SUB,
-                WasmTarget.Opcode.END,
-            ]
-            sub_idx = WasmTarget.add_function!(
-                mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], sub_body; name="sub"
-            )
+            # an (i32, i32) -> i32 function applying `op` to its two parameters
+            binop(op, name) = (b = WasmTarget.InstrBuilder([WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32]; mod=mod);
+                               WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1); WasmTarget.num!(b, op);
+                               WasmTarget.finish_function!(b); WasmTarget.add_function!(mod, b; name=name))
+            add_idx = binop(WasmTarget.Opcode.I32_ADD, "add")
+            sub_idx = binop(WasmTarget.Opcode.I32_SUB, "sub")
 
             WasmTarget.add_export!(mod, "add", 0, add_idx)
             WasmTarget.add_export!(mod, "sub", 0, sub_idx)
@@ -1844,29 +1809,12 @@ begin
 
             # Function: () -> i32
             # Creates struct with values (42, 99), returns field 0
-            body = UInt8[]
-
-            # Push field values for struct.new (i32.const uses signed LEB128!)
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(42))  # field 0 value
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(99))  # field 1 value
-
-            # struct.new $type
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-
-            # struct.get $type $field
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-            append!(body, encode_leb128_unsigned(0))  # field index
-
-            # End function
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field0")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            WasmTarget.i32_const!(b, 42); WasmTarget.i32_const!(b, 99)   # the fields' values
+            WasmTarget.struct_new!(b, struct_type_idx)
+            WasmTarget.struct_get!(b, struct_type_idx, 0)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="get_field0")
             add_export!(mod, "get_field0", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1880,27 +1828,12 @@ begin
             mod = WasmModule()
             struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-            body = UInt8[]
-
-            # Create struct with (42, 99) - use signed LEB128 for i32.const
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(42))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(99))
-
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-
-            # Get field 1
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-            append!(body, encode_leb128_unsigned(1))  # field 1
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field1")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            WasmTarget.i32_const!(b, 42); WasmTarget.i32_const!(b, 99)
+            WasmTarget.struct_new!(b, struct_type_idx)
+            WasmTarget.struct_get!(b, struct_type_idx, 1)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="get_field1")
             add_export!(mod, "get_field1", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1916,28 +1849,12 @@ begin
             mod = WasmModule()
             struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-            body = UInt8[]
-
-            # Push function args for struct
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x00)  # arg a
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x01)  # arg b
-
-            # struct.new
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-
-            # struct.get field 1 (y)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(struct_type_idx))
-            append!(body, encode_leb128_unsigned(1))
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="create_and_get_y")
+            b = WasmTarget.InstrBuilder(NumType[I32, I32], NumType[I32]; mod=mod)
+            WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1)   # args a, b
+            WasmTarget.struct_new!(b, struct_type_idx)
+            WasmTarget.struct_get!(b, struct_type_idx, 1)                # field y
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="create_and_get_y")
             add_export!(mod, "create_and_get_y", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1962,28 +1879,12 @@ begin
             # Tuple is represented as struct { field0: i32, field1: i32 }
             tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-            body = UInt8[]
-
-            # Push tuple elements
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x00)
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x01)
-
-            # struct.new
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-
-            # Get element 0
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-            append!(body, encode_leb128_unsigned(0))
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_first")
+            b = WasmTarget.InstrBuilder(NumType[I32, I32], NumType[I32]; mod=mod)
+            WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1)   # the tuple's elements
+            WasmTarget.struct_new!(b, tuple_type_idx)
+            WasmTarget.struct_get!(b, tuple_type_idx, 0)                 # element 0
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="tuple_first")
             add_export!(mod, "tuple_first", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -1995,25 +1896,12 @@ begin
             mod = WasmModule()
             tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-            body = UInt8[]
-
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x00)
-            push!(body, Opcode.LOCAL_GET)
-            push!(body, 0x01)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-
-            # Get element 1 (second)
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-            append!(body, encode_leb128_unsigned(1))
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_second")
+            b = WasmTarget.InstrBuilder(NumType[I32, I32], NumType[I32]; mod=mod)
+            WasmTarget.local_get!(b, 0); WasmTarget.local_get!(b, 1)
+            WasmTarget.struct_new!(b, tuple_type_idx)
+            WasmTarget.struct_get!(b, tuple_type_idx, 1)                 # element 1 (second)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="tuple_second")
             add_export!(mod, "tuple_second", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2030,28 +1918,13 @@ begin
                 FieldType(I32, false)
             ])
 
-            body = UInt8[]
-
             # Create tuple (10, 20, 30), return third element
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(10))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(20))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(30))
-
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_NEW)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.STRUCT_GET)
-            append!(body, encode_leb128_unsigned(tuple_type_idx))
-            append!(body, encode_leb128_unsigned(2))  # third element
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="tuple_third")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            WasmTarget.i32_const!(b, 10); WasmTarget.i32_const!(b, 20); WasmTarget.i32_const!(b, 30)
+            WasmTarget.struct_new!(b, tuple_type_idx)
+            WasmTarget.struct_get!(b, tuple_type_idx, 2)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="tuple_third")
             add_export!(mod, "tuple_third", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2082,26 +1955,12 @@ begin
             # Creates array of length 5, returns the length
             mod = WasmModule()
             arr_type_idx = add_array_type!(mod, I32, true)
-
-            body = UInt8[]
-
-            # Create array with init value 0 and length 5
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(0))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(5))
-
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW)
-            append!(body, encode_leb128_unsigned(arr_type_idx))
-
-            # Get array length
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_LEN)
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_len")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            WasmTarget.i32_const!(b, 5)                        # its length; elements 0
+            WasmTarget.array_new_default!(b, arr_type_idx)
+            WasmTarget.array_len!(b)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="arr_len")
             add_export!(mod, "arr_len", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2110,32 +1969,16 @@ begin
 
         @testset "Hand-crafted: Array get element" begin
 
-            # Create array with init value 42, get element at index 0
+            # Create array [42, 42, 42], get element at index 1
             mod = WasmModule()
             arr_type_idx = add_array_type!(mod, I32, true)
-
-            body = UInt8[]
-
-            # Create array with init value 42 and length 3
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(42))  # all elements will be 42
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(3))
-
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW)
-            append!(body, encode_leb128_unsigned(arr_type_idx))
-
-            # Get element at index 1
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(1))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_GET)
-            append!(body, encode_leb128_unsigned(arr_type_idx))
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_get")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            for _ in 1:3; WasmTarget.i32_const!(b, 42); end
+            WasmTarget.array_new_fixed!(b, arr_type_idx, 3)
+            WasmTarget.i32_const!(b, 1)
+            WasmTarget.array_get!(b, arr_type_idx)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="arr_get")
             add_export!(mod, "arr_get", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2148,32 +1991,13 @@ begin
             mod = WasmModule()
             arr_type_idx = add_array_type!(mod, I32, true)
 
-            body = UInt8[]
-
-            # Push elements for array.new_fixed
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(10))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(20))
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(30))
-
-            # array.new_fixed $type $count
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_NEW_FIXED)
-            append!(body, encode_leb128_unsigned(arr_type_idx))
-            append!(body, encode_leb128_unsigned(3))  # count
-
-            # Get element at index 1 (should be 20)
-            push!(body, Opcode.I32_CONST)
-            append!(body, encode_leb128_signed(1))
-            push!(body, Opcode.GC_PREFIX)
-            push!(body, Opcode.ARRAY_GET)
-            append!(body, encode_leb128_unsigned(arr_type_idx))
-
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_fixed_get")
+            b = WasmTarget.InstrBuilder(NumType[], NumType[I32]; mod=mod)
+            WasmTarget.i32_const!(b, 10); WasmTarget.i32_const!(b, 20); WasmTarget.i32_const!(b, 30)
+            WasmTarget.array_new_fixed!(b, arr_type_idx, 3)
+            WasmTarget.i32_const!(b, 1)                        # element 1 (should be 20)
+            WasmTarget.array_get!(b, arr_type_idx)
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="arr_fixed_get")
             add_export!(mod, "arr_fixed_get", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2195,12 +2019,11 @@ begin
             @test import_idx == 0
 
             # Add a local function that calls the import
-            body = UInt8[
-                0x20, 0x00,  # local.get 0
-                0x10, 0x00,  # call 0 (the imported function)
-                0x0B         # end
-            ]
-            func_idx = add_function!(mod, NumType[I32], NumType[], NumType[], body; name="test")
+            b = WasmTarget.InstrBuilder(NumType[I32], NumType[]; mod=mod)
+            WasmTarget.local_get!(b, 0)
+            WasmTarget.call!(b, 0)   # the imported function
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="test")
             # func_idx should be 1 (after the imported function)
             @test func_idx == 1
 
@@ -2220,14 +2043,11 @@ begin
 
             # Local function: (param i32) -> i32
             # Calls the imported double_it function
-            body = UInt8[]
-            push!(body, Opcode.LOCAL_GET)
-            append!(body, encode_leb128_unsigned(0))
-            push!(body, Opcode.CALL)
-            append!(body, encode_leb128_unsigned(0))  # call import at index 0
-            push!(body, Opcode.END)
-
-            func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body; name="call_double")
+            b = WasmTarget.InstrBuilder(NumType[I32], NumType[I32]; mod=mod)
+            WasmTarget.local_get!(b, 0)
+            WasmTarget.call!(b, 0)   # the import at index 0
+            WasmTarget.finish_function!(b)
+            func_idx = add_function!(mod, b; name="call_double")
             add_export!(mod, "call_double", 0, func_idx)
 
             wasm_bytes = to_bytes(mod)
@@ -2751,6 +2571,17 @@ begin
     # Phase 18: Tables and Indirect Calls
     # ========================================================================
     @pphase "Phase 18: Tables" begin
+        # the i32 at byte `offset` of the module's exported memory, read by the host (Node.js)
+        _read_memory_i32(bytes, offset) = parse(Int32, strip(read(`node -e $("""
+            const bytes = Buffer.from([$(join(bytes, ","))]);
+            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js())).then(result => {
+                console.log(new DataView(result.instance.exports.memory.buffer).getInt32($offset, true));
+            });
+            """)`, String)))
+        # an i32 -> i32 function multiplying its parameter by k
+        _mul_function!(mod, k, name) = (b = WasmTarget.InstrBuilder([WasmTarget.I32], [WasmTarget.I32]; mod=mod);
+            WasmTarget.local_get!(b, 0); WasmTarget.i32_const!(b, k); WasmTarget.num!(b, WasmTarget.Opcode.I32_MUL);
+            WasmTarget.finish_function!(b); WasmTarget.add_function!(mod, b; name=name))
 
         @testset "Basic table creation" begin
             mod = WasmTarget.WasmModule()
@@ -2760,31 +2591,9 @@ begin
             @test table_idx == 0
 
             # Add some functions to populate the table
-            func1_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # get param
-                    WasmTarget.Opcode.I32_CONST, 0x02,  # push 2
-                    WasmTarget.Opcode.I32_MUL,          # multiply
-                    WasmTarget.Opcode.END
-                ]; name="double"
-            )
+            func1_idx = _mul_function!(mod, 2, "double")
 
-            func2_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # get param
-                    WasmTarget.Opcode.I32_CONST, 0x03,  # push 3
-                    WasmTarget.Opcode.I32_MUL,          # multiply
-                    WasmTarget.Opcode.END
-                ]; name="triple"
-            )
+            func2_idx = _mul_function!(mod, 3, "triple")
 
             # Export them for testing
             WasmTarget.add_export!(mod, "double", 0, func1_idx)
@@ -2806,31 +2615,9 @@ begin
             table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 4)
 
             # Add two functions with same signature
-            func_double = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,
-                    WasmTarget.Opcode.I32_CONST, 0x02,
-                    WasmTarget.Opcode.I32_MUL,
-                    WasmTarget.Opcode.END
-                ]; name="double"
-            )
+            func_double = _mul_function!(mod, 2, "double")
 
-            func_triple = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,
-                    WasmTarget.Opcode.I32_CONST, 0x03,
-                    WasmTarget.Opcode.I32_MUL,
-                    WasmTarget.Opcode.END
-                ]; name="triple"
-            )
+            func_triple = _mul_function!(mod, 3, "triple")
 
             # Initialize table with element segment
             WasmTarget.add_elem_segment!(mod, 0, 0, [func_double, func_triple])
@@ -2880,51 +2667,20 @@ begin
             table_idx = WasmTarget.add_table!(mod, WasmTarget.FuncRef, 4)
 
             # Add two functions with the same signature
-            func_double = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,
-                    WasmTarget.Opcode.I32_CONST, 0x02,
-                    WasmTarget.Opcode.I32_MUL,
-                    WasmTarget.Opcode.END
-                ]; name="double"
-            )
+            func_double = _mul_function!(mod, 2, "double")
 
-            func_triple = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,
-                    WasmTarget.Opcode.I32_CONST, 0x03,
-                    WasmTarget.Opcode.I32_MUL,
-                    WasmTarget.Opcode.END
-                ]; name="triple"
-            )
+            func_triple = _mul_function!(mod, 3, "triple")
 
             # Initialize table: [func_double, func_triple]
             WasmTarget.add_elem_segment!(mod, 0, 0, [func_double, func_triple])
 
             # Add a dispatcher function that takes (value, index) and calls indirectly
             # call_indirect format: call_indirect type_idx table_idx
-            dispatcher = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32, WasmTarget.I32],  # value, table_index
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # push value
-                    WasmTarget.Opcode.LOCAL_GET, 0x01,  # push table index
-                    WasmTarget.Opcode.CALL_INDIRECT,
-                    type_idx % UInt8,                   # type index
-                    0x00,                               # table index
-                    WasmTarget.Opcode.END
-                ]; name="dispatch"
-            )
+            db = WasmTarget.InstrBuilder([WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32]; mod=mod)  # value, table index
+            WasmTarget.local_get!(db, 0); WasmTarget.local_get!(db, 1)
+            WasmTarget.call_indirect!(db, type_idx, 0)
+            WasmTarget.finish_function!(db)
+            dispatcher = WasmTarget.add_function!(mod, db; name="dispatch")
 
             WasmTarget.add_export!(mod, "dispatch", 0, dispatcher)
 
@@ -2945,49 +2701,20 @@ begin
             mem_idx = WasmTarget.add_memory!(mod, 1)
             @test mem_idx == 0
 
-            # Export the memory
+            # Export the memory (WT emits no memory instruction: the host reads and writes it)
             WasmTarget.add_memory_export!(mod, "memory", mem_idx)
-
-            # Add a function that uses memory operations
-            func_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32, WasmTarget.I32],  # address, value
-                WasmTarget.WasmValType[],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # address
-                    WasmTarget.Opcode.LOCAL_GET, 0x01,  # value
-                    WasmTarget.Opcode.I32_STORE, 0x02, 0x00,  # store (align=4, offset=0)
-                    WasmTarget.Opcode.END
-                ]; name="store"
-            )
-            WasmTarget.add_export!(mod, "store", 0, func_idx)
-
-            # Add a load function
-            load_idx = WasmTarget.add_function!(
-                mod,
-                [WasmTarget.I32],      # address
-                [WasmTarget.I32],      # result
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.LOCAL_GET, 0x00,  # address
-                    WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # load (align=4, offset=0)
-                    WasmTarget.Opcode.END
-                ]; name="load"
-            )
-            WasmTarget.add_export!(mod, "load", 0, load_idx)
 
             bytes = WasmTarget.to_bytes(mod)
             @test length(bytes) > 0
             @test validate_wasm(bytes)
 
-            # Test memory operations via Node.js
+            # the exported memory, written and read by the host via Node.js
             js_code = """
             const bytes = Buffer.from([$(join(bytes, ","))]);
             WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js())).then(result => {
-                const { store, load, memory } = result.instance.exports;
-                store(0, 42);
-                console.log(load(0));
+                const { memory } = result.instance.exports;
+                new Int32Array(memory.buffer)[0] = 42;
+                console.log(new Int32Array(memory.buffer)[0]);
             });
             """
             result = read(`node -e $js_code`, String)
@@ -3016,52 +2743,24 @@ begin
             # Initialize memory with "Hello"
             WasmTarget.add_data_segment!(mod, 0, 0, "Hello")
 
-            # Add a function to read the first byte
-            func_idx = WasmTarget.add_function!(
-                mod,
-                WasmTarget.WasmValType[],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.I32_CONST, 0x00,  # address 0
-                    WasmTarget.Opcode.I32_LOAD, 0x00, 0x00,  # load (unaligned)
-                    WasmTarget.Opcode.END
-                ]; name="read_first"
-            )
-            WasmTarget.add_export!(mod, "read_first", 0, func_idx)
-
             bytes = WasmTarget.to_bytes(mod)
             @test length(bytes) > 0
             @test validate_wasm(bytes)
 
-            # Test via Node.js - "Hello" as little-endian i32 is 'H' + 'e'<<8 + 'l'<<16 + 'l'<<24
-            # = 0x48 + 0x65<<8 + 0x6c<<16 + 0x6c<<24 = 0x6c6c6548
+            # the host reads the memory the segment initialized: "Hello" as a little-endian i32 is
+            # 'H' + 'e'<<8 + 'l'<<16 + 'l'<<24 = 0x6c6c6548
             expected = Int32('H') | (Int32('e') << 8) | (Int32('l') << 16) | (Int32('l') << 24)
-            @test run_wasm(bytes, "read_first") == expected
+            @test _read_memory_i32(bytes, 0) == expected
         end
 
         @testset "Data segment with raw bytes" begin
             mod = WasmTarget.WasmModule()
 
             mem_idx = WasmTarget.add_memory!(mod, 1)
+            WasmTarget.add_memory_export!(mod, "memory", mem_idx)
 
             # Initialize with raw bytes [1, 2, 3, 4] at offset 16 (multiple of 4 for alignment)
             WasmTarget.add_data_segment!(mod, 0, 16, UInt8[1, 2, 3, 4])
-
-            # Function to load i32 from offset 16
-            # Note: i32.const uses signed LEB128, 16 = 0x10 fits in single byte
-            func_idx = WasmTarget.add_function!(
-                mod,
-                WasmTarget.WasmValType[],
-                [WasmTarget.I32],
-                WasmTarget.WasmValType[],
-                UInt8[
-                    WasmTarget.Opcode.I32_CONST, 0x10,    # 16
-                    WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # align=4, offset=0
-                    WasmTarget.Opcode.END
-                ]; name="read_data"
-            )
-            WasmTarget.add_export!(mod, "read_data", 0, func_idx)
 
             bytes = WasmTarget.to_bytes(mod)
             @test length(bytes) > 0
@@ -3069,7 +2768,7 @@ begin
 
             # Little-endian: [1, 2, 3, 4] = 0x04030201
             expected = Int32(1) | (Int32(2) << 8) | (Int32(3) << 16) | (Int32(4) << 24)
-            @test run_wasm(bytes, "read_data") == expected
+            @test _read_memory_i32(bytes, 16) == expected
         end
 
     end

@@ -31,10 +31,6 @@ function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     b_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    for (i, t) in ((b_struct_local, structref), (a_struct_local, structref), (a_lo_local, I64),
-                   (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64), (result_lo_local, I64))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop b_struct (top) then a_struct
     local_set!(b, b_struct_local)
@@ -57,7 +53,6 @@ function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
 
     # Save result_hi, then push fields in order (typeId, lo, hi)
     hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, hi_local, I64)
     local_set!(b, hi_local)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local)
@@ -87,11 +82,6 @@ function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     borrow_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    for (i, t) in ((b_struct_local, structref), (a_struct_local, structref), (a_lo_local, I64),
-                   (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (result_lo_local, I64), (result_hi_local, I64), (borrow_local, I64))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals (b_struct on top)
     local_set!(b, b_struct_local)
@@ -149,11 +139,6 @@ function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     w2_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    for i in (a_lo_local, a_hi_local, b_lo_local, b_hi_local, a0_local, a1_local, b0_local,
-              b1_local, t_local, w1_local, w2_local, result_lo_local, result_hi_local)
-        builder_set_local_type!(b, i, I64)
-    end
-    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
 
     # Pop structs; extract fields (lo=field 1, hi=field 2)
     local_set!(b, b_struct_local)
@@ -216,10 +201,6 @@ function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    for (i, t) in ((x_lo_local, I64), (x_hi_local, I64), (x_struct_local, structref),
-                   (result_lo_local, I64), (result_hi_local, I64))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop struct to local; extract lo (field 1), hi (field 2)
     local_set!(b, x_struct_local)
@@ -256,10 +237,6 @@ function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)::NTuple{4, 
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals
     local_set!(b, b_struct_local)
@@ -321,7 +298,6 @@ function emit_int128_sle!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
     local_set!(b, b_struct_local)
     local_set!(b, a_struct_local)
 
@@ -349,7 +325,6 @@ function emit_int128_ule!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     # Pop b and a to struct locals (so we can use each twice)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    builder_set_local_type!(b, b_struct_local, structref); builder_set_local_type!(b, a_struct_local, structref)
     local_set!(b, b_struct_local)
     local_set!(b, a_struct_local)
 
@@ -388,10 +363,6 @@ function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, x_struct_local, structref)
-    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, result_lo_local, result_hi_local, cross_local)
-        builder_set_local_type!(b, i, I64)
-    end
 
     # Pop n (top) and x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
@@ -457,10 +428,6 @@ function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, x_struct_local, structref)
-    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, result_lo_local, result_hi_local, cross_local)
-        builder_set_local_type!(b, i, I64)
-    end
 
     # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
@@ -532,10 +499,6 @@ function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     result_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     result_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     cross_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, x_struct_local, structref)
-    for i in (n_local, x_lo_local, x_hi_local, n_mod_local, sign_local, result_lo_local, result_hi_local, cross_local)
-        builder_set_local_type!(b, i, I64)
-    end
 
     # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
@@ -597,8 +560,6 @@ function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     clz_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for i in (x_lo_local, x_hi_local, clz_hi_local); builder_set_local_type!(b, i, I64); end
-    builder_set_local_type!(b, x_struct_local, structref)
 
     # Pop x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, x_struct_local)
@@ -616,7 +577,6 @@ function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
 
     # Wrap i64 result in UInt128 struct (lo=clz_result, hi=0)
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, result_local, I64)
     local_set!(b, result_local)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
@@ -641,8 +601,6 @@ function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     x_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     ctz_lo_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for i in (x_lo_local, x_hi_local, ctz_lo_local); builder_set_local_type!(b, i, I64); end
-    builder_set_local_type!(b, x_struct_local, structref)
 
     local_set!(b, x_struct_local)
     local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
@@ -658,7 +616,6 @@ function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     select!(b, I64)
 
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, result_local, I64)
     local_set!(b, result_local)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
@@ -680,7 +637,6 @@ function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     structref = _int128_structref(ctx, arg_type)
 
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    builder_set_local_type!(b, x_struct_local, structref)
     local_set!(b, x_struct_local)
 
     # popcnt(lo) + popcnt(hi)
@@ -689,7 +645,6 @@ function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     num!(b, Opcode.I64_ADD)
 
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
-    builder_set_local_type!(b, result_local, I64)
     local_set!(b, result_local)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
@@ -711,7 +666,6 @@ function emit_int128_not!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     structref = _int128_structref(ctx, arg_type)
 
     x_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    builder_set_local_type!(b, x_struct_local, structref)
     local_set!(b, x_struct_local)
 
     # { typeId=0, lo = lo xor -1, hi = hi xor -1 }
@@ -740,10 +694,6 @@ function emit_int128_and!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals
     local_set!(b, b_struct_local)
@@ -782,10 +732,6 @@ function emit_int128_or!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals
     local_set!(b, b_struct_local)
@@ -824,10 +770,6 @@ function emit_int128_xor!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals
     local_set!(b, b_struct_local)
@@ -881,10 +823,6 @@ function emit_int128_ne!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     b_hi_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
     b_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
     a_struct_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, structref)
-    for (i, t) in ((a_lo_local, I64), (a_hi_local, I64), (b_lo_local, I64), (b_hi_local, I64),
-                   (b_struct_local, structref), (a_struct_local, structref))
-        builder_set_local_type!(b, i, t)
-    end
 
     # Pop structs to locals
     local_set!(b, b_struct_local)
@@ -922,13 +860,10 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     registry.u128_divrem_func_idx !== nothing && return registry.u128_divrem_func_idx
     local params = WasmValType[I64, I64, I64, I64]
     local results = WasmValType[I64, I64, I64, I64]
-    local fidx = add_function!(mod, params, results, WasmValType[],
-                               UInt8[Opcode.UNREACHABLE, Opcode.END];
-                               name=generated_function_name(:udivmodti4))
+    local fidx = define_function!(mod, params, results; name=generated_function_name(:udivmodti4))
     registry.u128_divrem_func_idx = fidx
-    local b = InstrBuilder(params, results; func_name="u128_divrem", mod=mod)
-    local extra = WasmValType[]
-    local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
+    local b = function_builder(mod, fidx)
+    local alloc = w -> builder_add_local!(b, w)
     local n_lo, n_hi, d_lo, d_hi = 0, 1, 2, 3
     local q_lo, q_hi, r_lo, r_hi, i = alloc(I64), alloc(I64), alloc(I64), alloc(I64), alloc(I64)
     local borrow = alloc(I64)
@@ -989,9 +924,7 @@ function get_u128_divrem_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     end_block!(b)
     local_get!(b, q_lo); local_get!(b, q_hi); local_get!(b, r_lo); local_get!(b, r_hi)
     end_block!(b)
-    local slot = fidx - num_imported_funcs(mod) + 1
-    mod.functions[slot] = WasmFunction(mod.functions[slot].type_idx, extra, builder_code(b);
-                                       name=mod.functions[slot].name)
+    fill_function!(mod, fidx, b)
     return fidx
 end
 
@@ -1014,7 +947,7 @@ parity(quarantine: dart's int is one i64; Int128 and UInt128 are Julia's, over t
 function emit_int128_divrem!(b::InstrBuilder, ctx, result_type::Type; signed::Bool, rem::Bool)::InstrBuilder
     local type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     local structref = _int128_structref(ctx, result_type)
-    local loc! = w -> (i = allocate_local!(ctx, w); builder_set_local_type!(b, i, w); i)
+    local loc! = w -> allocate_local!(ctx, w)
     local sa = loc!(structref)
     local sb = loc!(structref)
     local a_lo, a_hi, b_lo, b_hi = loc!(I64), loc!(I64), loc!(I64), loc!(I64)
@@ -1082,7 +1015,7 @@ parity(quarantine: dart's int is one i64; Int128 and UInt128 are Julia's, over t
 function emit_int128_bswap!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     local type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
     local structref = _int128_structref(ctx, result_type)
-    local loc! = w -> (i = allocate_local!(ctx, w); builder_set_local_type!(b, i, w); i)
+    local loc! = w -> allocate_local!(ctx, w)
     local x = loc!(structref)
     local lo = loc!(I64)
     local hi = loc!(I64)

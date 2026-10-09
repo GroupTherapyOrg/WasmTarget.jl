@@ -26,6 +26,12 @@ cd "$dir"
 git remote get-url origin >/dev/null 2>&1 || git remote add origin https://github.com/dart-lang/sdk.git
 git config core.sparseCheckout true
 printf '%s\n' $paths > .git/info/sparse-checkout
-git fetch -q --depth 1 --filter=blob:none origin "$pin"
+# a lost connection to github.com is retried: three tries, 10 s then 30 s apart, loud on the last
+for try in 1 2 3; do
+  git fetch -q --depth 1 --filter=blob:none origin "$pin" && break
+  [ $try -eq 3 ] && { echo "fetch_dart_sdk: could not fetch dart-lang/sdk at $pin after 3 tries" >&2; exit 1; }
+  echo "fetch_dart_sdk: fetch failed (try $try of 3), retrying" >&2
+  sleep $((try == 1 ? 10 : 30))
+done
 git checkout -q --force FETCH_HEAD
 echo "dart-lang/sdk at $pin: $dir ($(printf '%s\n' $paths | wc -l | tr -d ' ') cited files)"

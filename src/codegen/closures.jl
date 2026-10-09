@@ -91,19 +91,12 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     vt_struct = get_closure_vtable_struct!(mod, registry, max_arity)
 
     # ── the vtable global: entry[a] = trampoline for arity a, null elsewhere ──
-    init = UInt8[]
-    for a in 0:max_arity
-        if haskey(tramps, a)
-            push!(init, Opcode.REF_FUNC)
-            append!(init, encode_leb128_unsigned(UInt64(tramps[a])))
-        else
-            push!(init, 0xD0)                                   # ref.null
-            push!(init, 0x70)                                   # funcref heap type
+    g = define_global!(mod, ConcreteRef(vt_struct, false), false) do init
+        for a in 0:max_arity
+            haskey(tramps, a) ? ref_func!(init, tramps[a]) : ref_null!(init, FuncRef)
         end
+        struct_new!(init, vt_struct)
     end
-    push!(init, Opcode.GC_PREFIX, 0x00)                          # struct.new
-    append!(init, encode_leb128_unsigned(UInt64(vt_struct)))
-    g = add_global_ref!(mod, vt_struct, false, init; nullable=false)
     cache[closure_type] = g
     return (g, vt_struct)
 end
@@ -330,8 +323,8 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
         obj_scratch = arity + length(tramp_locals)
     end
     tested && append!(tramp_locals, WasmValType[AnyRef, I32])
-    for (k, t) in enumerate(tramp_locals)
-        builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
+    for t in tramp_locals
+        builder_add_local!(tb, t)                         # declared after the params, in order
     end
     if tested
         local lbl = block!(tb)
@@ -348,8 +341,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                             captured_info, UInt32(1 + arity); obj_scratch)
     end
     end_block!(tb)   # the function frame's own end
-    tramp_idx = add_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef],
-                              tramp_locals, builder_code(tb);
+    tramp_idx = add_function!(mod, tb;
                               name=generated_function_name(:closure_trampoline, string(nameof(closure_type))))
     declare_funcs!(mod, UInt32[tramp_idx])
     return tramp_idx
@@ -382,7 +374,6 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
         unreachable!(tb)   # structural trap: no numbered args tuple (MARCH 13.17 A3S1)
         return tb
     end
-    ensure_exception_tag!(mod)
     local err_info = register_struct_type!(mod, registry, MethodError)
     err_info === nothing && error("MethodError layout is unavailable")
     local err_def = mod.types[Int(err_info.wasm_type_idx) + 1]
@@ -413,7 +404,7 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
         struct_new!(tb, args_info.wasm_type_idx)
         i64_const!(tb, Int64(WASM_WORLD_AGE))
         struct_new!(tb, err_info.wasm_type_idx)
-        emit_throw_value!(tb, mod)
+        emit_throw_value!(tb, mod, registry)
         end_block!(tb)
     end
     unreachable!(tb)   # structural trap: arguments of a class with no numbered args tuple (A3S1)
@@ -489,7 +480,6 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         local rw = body.results[1]
         local box_idx = get_numeric_box_type!(mod, registry, rw)
         local body_return_type = body.return_type
-        builder_set_local_type!(tb, Int(scratch), rw)   # the scratch's truth
         local_set!(tb, scratch)
         i32_const!(tb, Int64(ensure_type_id!(registry, body_return_type)))
         local_get!(tb, scratch)
@@ -566,8 +556,8 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
         push!(tramp_locals, AnyRef)                       # a closure result's object scratch
         obj_scratch = arity + length(tramp_locals)
     end
-    for (k, t) in enumerate(tramp_locals)
-        builder_set_local_type!(tb, arity + k, t)         # the builder checks every local's reads
+    for t in tramp_locals
+        builder_add_local!(tb, t)                         # declared after the params, in order
     end
     for c in cands
         local lbl = block!(tb)
@@ -580,8 +570,7 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     end
     _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
     end_block!(tb)
-    tramp_idx = add_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef],
-                              tramp_locals, builder_code(tb);
+    tramp_idx = add_function!(mod, tb;
                               name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))
     declare_funcs!(mod, UInt32[tramp_idx])
     return tramp_idx
@@ -623,9 +612,10 @@ world, so its entries are null.
 function get_empty_closure_vtable!(mod::WasmModule, registry::TypeRegistry)::UInt32
     registry.empty_closure_vtable_global !== nothing && return registry.empty_closure_vtable_global
     local vt_struct = get_closure_vtable_struct!(mod, registry, 0)
-    local init = UInt8[0xD0, 0x70, Opcode.GC_PREFIX, 0x00]    # ref.null func; struct.new
-    append!(init, encode_leb128_unsigned(UInt64(vt_struct)))
-    local g = add_global_ref!(mod, vt_struct, false, init; nullable=false)
+    local g = define_global!(mod, ConcreteRef(vt_struct, false), false) do init
+        ref_null!(init, FuncRef)
+        struct_new!(init, vt_struct)
+    end
     registry.empty_closure_vtable_global = g
     return g
 end
@@ -748,9 +738,9 @@ function _closure_body_for(ctx, closure_type::Type)::Union{Nothing, Tuple{UInt32
         local matches = takes_context ? info.func_ref === closure_type :
                         (info.func_ref isa Function && typeof(info.func_ref) === closure_type)
         matches || continue
-        # fullstrict: the PLACEHOLDER (pre-declared signatures) is THE truth — the
-        # same source the call! deriver enforces; the julia re-derivation could
-        # disagree (the trampoline then mismatched at its own call).
+        # the function's defined signature is the truth — the same source call!
+        # enforces; the julia re-derivation could disagree (the trampoline then mismatched
+        # at its own call).
         local _m = ctx.mod
         local _ni = count(imp -> imp.kind == 0x00, _m.imports)
         local _fi = Int(info.wasm_idx) - _ni
