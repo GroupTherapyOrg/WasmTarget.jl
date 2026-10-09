@@ -103,9 +103,8 @@ function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
         call!(b, rng.seed_import_idx)
         global_set!(b, g)
     end
-    end_block!(b)
-    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b);
-                         name=generated_function_name(:rng_seed))
+    finish_function!(b)
+    return add_function!(mod, b; name=generated_function_name(:rng_seed))
 end
 
 """
@@ -254,10 +253,6 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     b = _ctx_builder(ctx, "compile_string_equal")
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, str1_local, strref)
-    builder_set_local_type!(b, str2_local, strref)
-    builder_set_local_type!(b, len_local, I32)
-    builder_set_local_type!(b, i_local, I32)
 
     # Store str1 and str2 — expected=the DATA array; the funnel unwraps the classed
     # string (parity M9: ops read the class's array field once at entry)

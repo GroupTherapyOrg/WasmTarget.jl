@@ -8,7 +8,7 @@ export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, validate_instruction!,
        ControlLabel, ValidatorLabel, validate_block_start!, validate_block_end!,
        validate_br!, validate_br_if!, validate_if_start!, validate_else!,
-       validate_catch_legacy!, validate_gc_instruction!
+       validate_catch_legacy!, validate_gc_instruction!, reset_local_initialization!
 
 """Symbolic structured-control target, matching dart2wasm's `Label` API. parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)"""
 mutable struct ControlLabel
@@ -37,13 +37,18 @@ struct ValidatorLabel
     reachable_at_entry::Bool            # Was block entry reachable?
     has_else::Bool                      # For :if labels — has else branch been seen?
     has_catch::Bool                     # For :try labels — has a catch been seen? (dart Try.hasCatch)
+    # the height of the initialization stack at entry, which the label's end, else and catch
+    # reset to (dart Label.localInitializationStackHeight)
+    init_height::Int
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)
 function ValidatorLabel(kind::Symbol, stack_height::Int,
                         input_types::Vector{WasmValType}, result_types::Vector{WasmValType},
-                        reachable::Bool; handle=ControlLabel(kind, input_types, result_types))::ValidatorLabel
-    ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false, false)
+                        reachable::Bool; handle=ControlLabel(kind, input_types, result_types),
+                        init_height::Int=0)::ValidatorLabel
+    ValidatorLabel(handle, kind, stack_height, input_types, result_types, reachable, false, false,
+                   init_height)
 end
 
 """
@@ -64,11 +69,33 @@ mutable struct WasmStackValidator
     # the module being built: its types, functions, globals and tags type every check
     mod::WasmModule
     context_hint::String   # the emitting Julia statement (set via set_context!)
+    # the non-defaultable locals set on every path to here (dart _localInitialized, whose
+    # parameters and defaultable locals are always set), and the order they were set in, which
+    # a label's end, else and catch pop back to (dart _localInitializationStack)
+    initialized::Set{Int}
+    init_stack::Vector{Int}
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
 WasmStackValidator(; func_name="", mod::WasmModule)::WasmStackValidator =
-    WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "")
+    WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "",
+                       Set{Int}(), Int[])
+
+"""
+    reset_local_initialization!(v, label)
+
+Pop the initialization stack back to its height at `label`'s entry, unsetting each local popped:
+a local set inside a frame is set only until the frame's end, else or catch. A local is pushed
+only when it was unset, so the pops restore exactly the set at the frame's entry.
+formal(dev/formal/LocalInit.tla): Agrees, the builder's verdict is the specification's.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:405 InstructionsBuilder._resetLocalInitialization)
+"""
+function reset_local_initialization!(v::WasmStackValidator, label::ValidatorLabel)::Nothing
+    while length(v.init_stack) > label.init_height
+        delete!(v.initialized, pop!(v.init_stack))
+    end
+    return nothing
+end
 
 """
     validate_push!(v, typ)
@@ -378,7 +405,8 @@ function validate_block_start!(v::WasmStackValidator, kind::Symbol,
     for t in reverse(input_types); validate_pop!(v, t); end
     for t in input_types; validate_push!(v, t); end
     label = ValidatorLabel(kind, length(v.stack) - length(input_types),
-                           input_types, result_types, v.reachable)
+                           input_types, result_types, v.reachable;
+                           init_height=length(v.init_stack))
     push!(v.labels, label)
     return label.handle
 end
@@ -394,6 +422,8 @@ parity(pkg/wasm_builder/lib/src/builder/instructions.dart:566 InstructionsBuilde
 """
 function _verify_end_of_block!(v::WasmStackValidator, label::ValidatorLabel,
                                height_what::String, type_what::String)::Nothing
+    # the frame's local initializations end with it, reachable or not
+    reset_local_initialization!(v, label)
     v.reachable || return nothing
     expected_height = label.stack_height_at_entry + length(label.result_types)
     if length(v.stack) != expected_height
@@ -534,7 +564,8 @@ function validate_if_start!(v::WasmStackValidator,
     for t in input_types; validate_push!(v, t); end
     handle = ControlLabel(:if, input_types, result_types)
     label = ValidatorLabel(handle, :if, length(v.stack) - length(input_types),
-                           input_types, result_types, v.reachable, false, false)
+                           input_types, result_types, v.reachable, false, false,
+                           length(v.init_stack))
     push!(v.labels, label)
     return handle
 end
@@ -570,7 +601,7 @@ function validate_else!(v::WasmStackValidator)::Union{Nothing, Bool}
     # Replace label with has_else=true
     v.labels[end] = ValidatorLabel(label.handle, label.kind, label.stack_height_at_entry,
                                    label.input_types, label.result_types,
-                                   label.reachable_at_entry, true, false)
+                                   label.reachable_at_entry, true, false, label.init_height)
 
     # Reset the stack to the if's base and give the else arm the if's inputs, as the then arm
     # had them (dart else_: `_stackTypes.length = baseStackHeight; addAll(label.inputs)`)
@@ -605,7 +636,7 @@ function validate_catch_legacy!(v::WasmStackValidator, tag_inputs::Vector{WasmVa
     # try_.hasCatch = true; _reachable = try_.reachable
     v.labels[end] = ValidatorLabel(label.handle, label.kind, label.stack_height_at_entry,
                                    label.input_types, label.result_types,
-                                   label.reachable_at_entry, false, true)
+                                   label.reachable_at_entry, false, true, label.init_height)
     v.reachable = label.reachable_at_entry
     return nothing
 end

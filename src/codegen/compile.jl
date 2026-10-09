@@ -41,11 +41,11 @@ end
 
 # A global index a framework or a WasmGlobal argument names is never the count of open calls of
 # host-declared imports, `\$host_imports_open`, which only the host's glue writes (host_glue_js);
-# a global the host imports for itself is the host's to name. (The count is found by
-# host_imports_open_global: dev/MARCH.md 13.17 A3B15, globals by handle.)
+# a global the host imports for itself is the host's to name. A framework names the index before
+# or without a compile, so the count is found as the setup imported it (_imported_global).
 # parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
 function _refuse_imported_global(mod::WasmModule, global_idx::Integer, what::String)::Nothing
-    host_imports_open_global(mod) == global_idx || return nothing
+    _imported_global(mod, "wasmtarget", "host_imports_open") == global_idx || return nothing
     local g = mod.globals[Int(global_idx) + 1]
     throw(ArgumentError("$what $global_idx names the imported global $(g.module_name).$(g.field_name), " *
                         "not one the program defines"))
@@ -54,9 +54,7 @@ end
 """Add a nullable mutable reference global for initialization by a linked root.
 parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
-    b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
-    ref_null!(b, Int64(type_idx))
-    return add_global_ref!(mod, type_idx, true, builder_code(b); nullable=true)
+    return add_global!(mod, ConcreteRef(UInt32(type_idx), true), true, nothing)
 end
 
 """
@@ -87,11 +85,10 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
     b = InstrBuilder(; func_name="framework_global_initializer", mod=mod)
     call!(b, root_idx)
     global_set!(b, global_idx)
-    end_block!(b)
+    finish_function!(b)
     # named by the root that computes the value, as dart names a static field's initializer by
     # its member (functions.dart:360); a framework global itself carries no name
-    init_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[],
-                             builder_code(b);
+    init_idx = add_function!(mod, b;
                              name=generated_function_name(:field_initializer,
                                  mod.functions[Int(root_idx) - num_imported_funcs(mod) + 1].name))
     push!(registry.module_init_functions, init_idx)
@@ -155,7 +152,7 @@ parity(quarantine: the bespoke bodies L133 allows, each for its stated reason �
 function _build_standalone_intrinsic_bodies!()::Nothing
     isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
     for m in methods(Base.rethrow)
-        STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body
+        STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body!
     end
     return nothing
 end
@@ -168,33 +165,29 @@ its throw captured.
 parity(quarantine: Julia's rethrow is a function whose body is a foreigncall to the C
 runtime's jl_rethrow, not an expression inside its handler, so it reads the task's exception
 stack rather than a handler local.)"""
-function _generate_rethrow_standalone_body(arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
-                                           return_type::Union{Type,Nothing}=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
-    _ib_params = WasmValType[get_concrete_wasm_type(T, mod, type_registry) for T in arg_types]
-    b = InstrBuilder(_ib_params, WasmValType[]; func_name="rethrow_standalone_body", mod=mod)
+function _generate_rethrow_standalone_body!(b::InstrBuilder, arg_types::Tuple, mod::WasmModule,
+                                            type_registry::TypeRegistry)::InstrBuilder
     if length(arg_types) == 1
         # rethrow(e): `e` overwrites the top entry's exception, thrown with its stack
-        _wt_is_ref(_ib_params[1]) || error("rethrow(e) of a $(arg_types[1]), a value WT does not box " *
-                                           "here: its wasm type is $(_ib_params[1])")
+        _wt_is_ref(b.params[1]) || error("rethrow(e) of a $(arg_types[1]), a value WT does not box " *
+                                         "here: its wasm type is $(b.params[1])")
     end
     emit_rethrow!(b, mod, type_registry; other=length(arg_types) == 1 ? 0 : nothing)
-    end_block!(b)
-    return (builder_code(b), WasmValType[])
+    return finish_function!(b)
 end
 
 """Look up whether (f, arg_types) resolves to a Method registered in
-STANDALONE_INTRINSIC_BODIES, and if so return its compiled body.
+STANDALONE_INTRINSIC_BODIES, and if so return the generator that emits its body into the
+function's builder, `gen(b, arg_types, mod, type_registry)`.
 parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
-function _standalone_intrinsic_body(f, arg_types::Tuple, mod::WasmModule, type_registry::TypeRegistry;
-                                    return_type::Union{Type,Nothing}=nothing)::Union{Tuple{Vector{UInt8},Vector{WasmValType}},Nothing}
+function _standalone_intrinsic_body(f, arg_types::Tuple)::Union{Function,Nothing}
     f isa Function || return nothing
     _build_standalone_intrinsic_bodies!()
     isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
     # Julia's own method lookup, which answers `nothing` for no match or an ambiguity
     hit = Base._which(Tuple{Core.Typeof(f), arg_types...}; raise=false)
     hit === nothing && return nothing
-    haskey(STANDALONE_INTRINSIC_BODIES, hit.method) || return nothing
-    return STANDALONE_INTRINSIC_BODIES[hit.method](arg_types, mod, type_registry; return_type=return_type)
+    return get(STANDALONE_INTRINSIC_BODIES, hit.method, nothing)
 end
 
 """
@@ -292,8 +285,16 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # Create shared module and registries (or use the framework's predeclared module).
     if existing_module !== nothing
         mod = existing_module
+        # a module's source map URL is its own, from its construction (dart ModuleBuilder)
+        mod.source_map_url == source_map_url || throw(ArgumentError(
+            "existing_module records source maps for $(repr(mod.source_map_url)), the compile for " *
+            "$(repr(source_map_url)): construct it with WasmModule(; source_map_url)"))
+        # its builders' trace is its own too (WT_BUILDER_TRACE asks for it)
+        mod.builder_trace == OPTIONS[].builder_trace || throw(ArgumentError(
+            "existing_module's builders trace=$(mod.builder_trace), the compile's trace=$(OPTIONS[].builder_trace) " *
+            "(WT_BUILDER_TRACE): construct it with WasmModule(; builder_trace)"))
     else
-        mod = WasmModule()
+        mod = WasmModule(; source_map_url, builder_trace=OPTIONS[].builder_trace)
     end
     # one module shape: every module can report where its exceptions were thrown, and a
     # source map only maps its code (dart: a throw always captures StackTrace.current). A
@@ -305,10 +306,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # glue writes (host_glue_js), before any global it defines
     ensure_host_imports_open!(mod)
     ensure_provenance_imports!(mod)
-    source_map_url === nothing || (mod.source_map_url = source_map_url)
     trace === nothing || ensure_trace_imports!(mod)
     local translator = Translator(plan, trace)
     type_registry = TypeRegistry()
+    recover_module_handles!(type_registry, mod)
     append!(type_registry.method_error_args,
             sort!(DataType[T for T in plan.error_args_types if T <: Tuple]; by=type_order_key))
     func_registry = FunctionRegistry()
@@ -587,16 +588,39 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
     n_imports = length(mod.imports)
-    # fullstrict PRE-DECLARED SIGNATURES: the one derivation both the placeholder
-    # (registration) and the body fill use — the builder's call! deriver then reads
-    # TRUTH for every function from the moment indices exist (the 19 empty-sig call
-    # sites + all cross-calls stop guessing; declare-then-define, like an assembler).
+    # every function is defined with its signature (function_wasm_signature, the one derivation
+    # its body's builder carries too) before any body compiles, so a call! reads every function's
+    # type from the moment its index exists: define, then fill (functions.dart:31 define).
     n_existing = length(mod.functions)  # includes pre-created helper functions
     # T1.1 step 2: every dynamic-dispatch candidate (a discovery root, collected first or
     # not) registers as is_candidate=true → visible to the call-site typeId switch (by_ref)
     # and hidden from get_function's signature lookup; an :invoke that names it still
     # reaches it by its MethodInstance (get_function_by_mi).
     _disp_cands = plan.dispatch_candidates
+    # each function's name, given where it is defined: its Julia name, with a `_<k>` suffix for
+    # the k-th earlier function of that name, the name the compile asks to export it under
+    # (codegen_export_name may rename the export in a host's module; a generated function may
+    # share the text). A requested name is the entry's own; any other name already given (an
+    # entry given without a name, as another specialization of its function is) takes the first
+    # free `name_<k>`
+    # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
+    local given_names = Set{String}()
+    local plan_names = union(Set{String}(String(fd[3]) for fd in function_data), entry_names)
+    local export_name_counts = Dict{String,Int}()
+    local defined_names = String[]
+    for (f, arg_types, name, _, _, _, _) in function_data
+        local export_name = name
+        if !((f, Tuple(arg_types)) in named_entries) && (name in given_names || name in entry_names)
+            local k = get(export_name_counts, name, 1)
+            while string(name, "_", k) in given_names || string(name, "_", k) in plan_names
+                k += 1
+            end
+            export_name = string(name, "_", k)
+            export_name_counts[name] = k + 1
+        end
+        push!(given_names, export_name)
+        push!(defined_names, export_name)
+    end
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
         local fd_mi = function_data[i][9]
@@ -615,7 +639,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
                            mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
                            invoke_only = fd_mi in plan.invoke_only)
-        # fullstrict: the PLACEHOLDER carries the true signature from birth
+        # the definition carries the true signature
         local _pp, _rr = try
             function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
         catch err
@@ -626,11 +650,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                        "enrolled as " * plan.enrolled_as[fd_mi]],
                 err, _raised_frames(catch_backtrace(), :_compile_closed_world_plan)))
         end
-        local _ft_idx = add_type!(mod, FuncType(WasmValType[p for p in _pp], WasmValType[r for r in _rr]))
-        # the placeholder carries the function's Julia name until the compile loop fills its slot,
-        # where a later function of the same name takes a `_<k>` suffix
-        push!(mod.functions, WasmFunction(UInt32(_ft_idx), WasmValType[], UInt8[Opcode.UNREACHABLE, Opcode.END];
-                                          name=string(name)))
+        # defined here, its body filled by the compile loop below (every index exists before
+        # any body compiles)
+        define_function!(mod, _pp, _rr; name=defined_names[i])
     end
 
     # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
@@ -662,10 +684,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 throw(WasmInternalError(string(_T), 0, "", String["building the vtable of $(_T)"],
                     ErrorException("a callable body with no Method: $(_mi)"), Base.StackTraces.StackFrame[]))
             local _ats, _rt, _gas = _entry[2], _entry[5], _entry[6]
-            # fullstrict reorder: the placeholders occupy the body indices ALREADY —
-            # the standard formula reads them; trampolines append after.
+            # the defined functions occupy the body indices already — the standard formula
+            # reads them; trampolines append after.
             local _body_idx = UInt32(n_imports + n_existing + _i - 1)
-            # the body's own signature, the one its placeholder was declared with: a
+            # the body's own signature, the one its function was defined with: a
             # MemoryRef parameter crosses as its single-value struct, never its bare Memory
             local _bps, _brs = function_wasm_signature(_ats, _rt, _gas, mod, type_registry)
             haskey(_cv_bodies, _T) || (push!(_cv_types, _T); _cv_bodies[_T] = ClosureBody[]; _cv_ctx[_T] = _takes_context)
@@ -738,22 +760,15 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
 
-    # the names given so far, every name the plan holds, and the next suffix tried per name
-    local given_names = Set{String}()
-    local plan_names = union(Set{String}(String(fd[3]) for fd in function_data), entry_names)
-    local export_name_counts = Dict{String,Int}()
     # the exports this compile makes, (name, function index), one per function it defines:
     # added once, after codegen, where whether the module has Julia's exception stack is known
     local compile_exports = Tuple{String,UInt32}[]
 
-    # Second pass: compile function bodies
+    # Second pass: fill each defined function with its body
     for (i, (f, arg_types, name, _, return_type, global_args, is_closure, fn_nir)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
 
-        local body::Vector{UInt8}
-        local locals::Vector{WasmValType}
-
-        standalone_body = _standalone_intrinsic_body(f, arg_types, mod, type_registry; return_type=return_type)
+        standalone_body = _standalone_intrinsic_body(f, arg_types)
 
         # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.
@@ -768,25 +783,26 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 (dispatch_dt = nothing)
         end
 
-        # a selector caller's or a standalone intrinsic's body is the body of a Julia method's
-        # function, emitted in place of its statements: mapped whole to the method's definition,
-        # as dart emits an intrinsic body under its member's offset (code_generator.dart:3625-3634)
-        local body_mappings = SourceMapping[]
         # the function's definition, derived once from the plan's MethodInstance for every arm:
         # a whole body maps to it, and a body compiled from IR maps its code outside statements
         # to it (statement 0, map_to_definition!)
         local definition = mod.source_map_url === nothing ? nothing : definition_source_info(function_data[i][9])
-        if standalone_body !== nothing
-            body, locals = standalone_body
-            body_mappings = definition === nothing ? SourceMapping[] : [SourceMapping(0, definition), body_end_mapping(body)]
-        elseif dispatch_dt !== nothing
-            # Generate dispatch-only body (probe + call_indirect + return)
-            n_params = sum(j -> !(j in global_args) ? 1 : 0, 1:length(arg_types); init=0)
-            # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
-            body, locals = generate_selector_caller_body(
-                dispatch_dt, dispatch_registry, n_params, type_registry.base_struct_idx;
-                caller_return_type=return_type, mod=mod, type_registry=type_registry)
-            body_mappings = definition === nothing ? SourceMapping[] : [SourceMapping(0, definition), body_end_mapping(body)]
+        local b::InstrBuilder
+        if standalone_body !== nothing || dispatch_dt !== nothing
+            # a selector caller's or a standalone intrinsic's body is the body of a Julia method's
+            # function, emitted in place of its statements: mapped whole to the method's
+            # definition, as dart emits an intrinsic body under its member's offset
+            # (code_generator.dart:3625-3634)
+            b = function_builder(mod, func_idx)
+            definition === nothing || start_source_mapping!(b, definition)
+            if standalone_body !== nothing
+                standalone_body(b, arg_types, mod, type_registry)
+            else
+                # Generate dispatch-only body (probe + call_indirect + return)
+                # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
+                generate_selector_caller_body!(b, dispatch_dt, dispatch_registry, type_registry.base_struct_idx;
+                    caller_return_type=return_type, mod=mod, type_registry=type_registry)
+            end
         else
             # Generate function body from Julia IR
             bindings = get(root_bindings, name, nothing)
@@ -817,35 +833,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # and source location; converting failures to ErrorException here
             # erased the machine-readable contract used by framework callers.
             ctx.stmt_sources[0] = definition
-            body, body_mappings = generate_body(ctx)
-            locals = ctx.locals
+            b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)
         end
-
-        # fullstrict: FILL the pre-declared placeholder (same signature derivation)
-        param_types, result_types = function_wasm_signature(arg_types, return_type, global_args,
-                                                             mod, type_registry)
-        local _slot = Int(func_idx) - n_imports + 1
-        local _ft_idx2 = add_type!(mod, FuncType(WasmValType[p for p in param_types], WasmValType[r for r in result_types]))
-        # its name is given where it is defined: its Julia name, with a `_<k>` suffix for the k-th
-        # earlier compiled function of that name, the name the compile asks to export it under
-        # (codegen_export_name may rename the export in a host's module; a generated function
-        # may share the text)
-        # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
-        # a requested name is the entry's own; any other name already given (an entry given without
-        # a name, as another specialization of its function is) takes the first free `name_<k>`
-        export_name = name
-        if !((f, Tuple(arg_types)) in named_entries) && (name in given_names || name in entry_names)
-            local k = get(export_name_counts, name, 1)
-            while string(name, "_", k) in given_names || string(name, "_", k) in plan_names
-                k += 1
-            end
-            export_name = string(name, "_", k)
-            export_name_counts[name] = k + 1
-        end
-        push!(given_names, export_name)
-        mod.functions[_slot] = WasmFunction(UInt32(_ft_idx2), WasmValType[l for l in locals], body,
-                                            body_mappings, export_name)
-        push!(compile_exports, (export_name, func_idx))
+        fill_function!(mod, func_idx, b)
+        push!(compile_exports, (defined_names[i], func_idx))
     end
 
     # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
@@ -868,21 +859,19 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # existing_module's exports, made before this compile, are left as they were made. WT exports
     # every function this compile defines, where dart exports only a member with a wasm:export
     # pragma (functions.dart:154-156): dev/MARCH.md 13.17 A13C3.
-    # (whether the module has the stack is read by the global's name: dev/MARCH.md 13.17
-    # A3B15 = A2B6, globals by handle)
-    local exc_top = global_named(mod, "\$exc_top")
+    local exc_top = type_registry.handles.exc_top
     if exc_top !== nothing
         for k in hook_exports_from:length(mod.exports)
             local e = mod.exports[k]
             (e.kind == 0x00 && e.idx >= num_imported_funcs(mod)) || continue
-            mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, e.idx, e.name))
+            mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, type_registry, e.idx, e.name))
         end
     end
     # an exported function is exported once, under its export name, its entry named by it
     # parity(pkg/dart2wasm/lib/functions.dart:178 exports.export): `module.exports.export(exportName, function)`, once per exported function
     local finals = codegen_export_names(mod, String[first(e) for e in compile_exports], entry_names)
     for ((_, inner_idx), final) in zip(compile_exports, finals)
-        add_export!(mod, final, 0, exc_top === nothing ? inner_idx : emit_export_entry!(mod, inner_idx, final))
+        add_export!(mod, final, 0, exc_top === nothing ? inner_idx : emit_export_entry!(mod, type_registry, inner_idx, final))
     end
     # the class reader of an escaped exception, over the final numbering, as the egal function's
     # body is filled once codegen has numbered every class

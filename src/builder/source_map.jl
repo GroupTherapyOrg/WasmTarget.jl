@@ -10,9 +10,10 @@
 # statement that emitted the trapping instruction.
 
 """
-    SourceInfo(file, line, col, name)
+    SourceInfo(file_uri, line, col, name)
 
-Where mapped code came from: a source file, a 0-based line and column, and a name. WT maps a
+Where mapped code came from: a source file's URI (source_file_uri), a 0-based line and column,
+and a name. WT maps a
 statement to its innermost source frame (the method it was inlined from, when it was) and
 names it by the statement's inline chain, innermost first (`f @ file:line ← g @ file:line`):
 Julia inlines across methods, so the chain carries what dart's enclosing-member name does
@@ -20,7 +21,7 @@ and the methods between.
 parity(pkg/wasm_builder/lib/source_map.dart:39 SourceInfo)
 """
 struct SourceInfo
-    file::String
+    file_uri::String
     line::Int
     col::Int
     name::Union{Nothing,String}
@@ -37,6 +38,28 @@ parity(pkg/wasm_builder/lib/source_map.dart:7 SourceMapping)
 struct SourceMapping
     offset::Int
     info::Union{Nothing,SourceInfo}
+end
+
+"""
+    source_file_uri(path) -> String
+
+The URI of the source file at `path`, as dart's `Uri.file(path)` writes it: an absolute path is
+a `file://` URI (a Windows drive path `file:///C:/…`), a relative one a relative URI reference,
+each path character outside the URI path set percent-encoded.
+parity(pkg/wasm_builder/lib/source_map.dart:41 SourceInfo.fileUri)
+"""
+function source_file_uri(path::AbstractString)::String
+    local p = String(path)
+    local drive = occursin(r"^[A-Za-z]:[\\/]", p)
+    drive && (p = replace(p, '\\' => '/'))
+    local io = IOBuffer()
+    for byte in codeunits(p)
+        local c = Char(byte)
+        (isascii(c) && (isletter(c) || isdigit(c) || c in "-._~!\$&'()*+,;=:@/")) ?
+            write(io, c) : print(io, '%', uppercase(string(byte; base=16, pad=2)))
+    end
+    local encoded = String(take!(io))
+    return drive ? "file:///" * encoded : startswith(p, "/") ? "file://" * encoded : encoded
 end
 
 """
@@ -70,8 +93,8 @@ function source_map_json(mappings::Vector{SourceMapping})::String
     local name_index = Dict{String,Int}()
     for m in mappings
         m.info === nothing && continue
-        haskey(source_index, m.info.file) ||
-            (source_index[m.info.file] = length(sources); push!(sources, m.info.file))
+        haskey(source_index, m.info.file_uri) ||
+            (source_index[m.info.file_uri] = length(sources); push!(sources, m.info.file_uri))
         local n = m.info.name
         (n === nothing || haskey(name_index, n)) || (name_index[n] = length(names); push!(names, n))
     end
@@ -88,7 +111,7 @@ function source_map_json(mappings::Vector{SourceMapping})::String
         first = false
         last_target = _encode_vlq!(io, m.offset, last_target)
         if info !== nothing
-            last_source = _encode_vlq!(io, source_index[info.file], last_source)
+            last_source = _encode_vlq!(io, source_index[info.file_uri], last_source)
             last_line = _encode_vlq!(io, info.line, last_line)
             last_col = _encode_vlq!(io, info.col, last_col)
             info.name === nothing || (last_name = _encode_vlq!(io, name_index[info.name], last_name))

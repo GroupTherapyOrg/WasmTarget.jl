@@ -93,9 +93,9 @@ with the per-clause status. A clause is never closed by argument.
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every builder has its module)
   `L164` (one subtype relation, in the builder) `L165` (dart's storage types: no raw byte or
-  packed type as a value type) `L166` (every operand typed by the module's own types).
-  Planned: dev/MARCH.md 13.17 — a function's results checked at every return, a validating
-  initializer.
+  packed type as a value type) `L166` (every operand typed by the module's own types) `L167`
+  (every body is a builder the module made) `L168` (locals initialized before use) `L169`
+  (module objects held by handle).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:

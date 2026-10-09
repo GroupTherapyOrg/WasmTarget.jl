@@ -1,7 +1,111 @@
 # Code Generation - Julia IR to Wasm instructions
 # Maps Julia SSA statements to WebAssembly bytecode
 
-export compile_module, FunctionRegistry
+export compile_module, FunctionRegistry, JSValue, WasmGlobal
+
+# ============================================================================
+# JS Interop Types — Julia-side host API, held by codegen (the builder holds no Julia object)
+# ============================================================================
+
+"""
+    JSValue
+
+A Julia type representing a JavaScript value held as an externref.
+Used for DOM elements, JS objects, and other JS values.
+
+This is a primitive type to prevent Julia from optimizing it away.
+parity(sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef)
+"""
+primitive type JSValue 64 end
+
+# ============================================================================
+# WasmGlobal - Handle for Wasm Global Variables
+# ============================================================================
+
+"""
+    WasmGlobal{T, IDX}
+
+A handle to a WebAssembly global variable at index `IDX`. When compiled to Wasm:
+- `global[]` (getindex) → `global.get IDX`
+- `global[] = x` (setindex!) → `global.set IDX, x`
+
+The index is a type parameter so it's known at compile time, which is required
+because Wasm's `global.get` and `global.set` instructions take immediate indices.
+
+This is a general-purpose abstraction for any Julia code that needs to
+interact with Wasm global variables. Use cases include:
+- Stateful applications
+- Game engines
+- Reactive frameworks
+- Any code needing mutable Wasm state
+
+# Type Parameters
+- `T`: The type of value stored in the global (Int32, Float64, etc.)
+- `IDX`: The Wasm global index (0-based), must be an Int literal
+
+# Example
+```julia
+# Define types for specific globals (index is compile-time constant)
+const Counter = WasmGlobal{Int32, 0}   # Global index 0
+const Flag = WasmGlobal{Int32, 1}      # Global index 1
+
+# Functions that use globals - index is known from the type
+function increment(g::Counter)::Int32
+    g[] = g[] + Int32(1)
+    return g[]
+end
+
+function toggle(g::Flag)::Int32
+    g[] = g[] == Int32(0) ? Int32(1) : Int32(0)
+    return g[]
+end
+
+# Create instances (value is for Julia-side testing)
+counter = Counter(0)
+flag = Flag(1)
+
+# Compile to Wasm - global index extracted from type
+wasm_bytes = compile(increment, (Counter,))
+```
+parity(quarantine: Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+"""
+mutable struct WasmGlobal{T, IDX}
+    value::T
+end
+
+# Constructor with zero initial value
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function WasmGlobal{T, IDX}()::WasmGlobal{T, IDX} where {T, IDX}
+    return WasmGlobal{T, IDX}(zero(T))
+end
+
+# Get the global index from the type
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_index(::Type{WasmGlobal{T, IDX}})::Int where {T, IDX}
+    return IDX
+end
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_index(g::WasmGlobal{T, IDX})::Int where {T, IDX}
+    return IDX
+end
+
+# Get the element type
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_eltype(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
+    return T
+end
+
+# Accessor methods - work in Julia (for testing) and compile to Wasm global ops
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function Base.getindex(g::WasmGlobal{T, IDX})::T where {T, IDX}
+    return g.value
+end
+
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function Base.setindex!(g::WasmGlobal{T, IDX}, v::T)::T where {T, IDX}
+    g.value = v
+    return v
+end
 
 """
     StatementTrace(entry_name)
@@ -333,6 +437,30 @@ PendingTypes()::PendingTypes = PendingTypes(UInt32[], Dict{UInt32, Type}(), Dict
     Dict{UInt32, UInt32}(), Dict{UInt32, Vector{Tuple{Symbol, Type}}}(), PENDING_BASE)
 
 """
+    ModuleHandles
+
+The module objects codegen defines once per module and holds by handle, never finds again: the
+exception tag and the stack entry type its payload carries (made by ensure_provenance_imports!,
+which a host may call before the compile, recover_module_handles!), the top of Julia's
+exception stack (`\$exc_top`), the imported count of open host-declared imports
+(`\$host_imports_open`, ensure_host_imports_open!), and the tops saved at their calls
+(`\$import_tops`, its array type, and the helper that saves one). dart's code generator keeps
+each GlobalBuilder, FunctionBuilder and Tag it defines as an object.
+parity(pkg/dart2wasm/lib/translator.dart:96 Translator)
+"""
+mutable struct ModuleHandles
+    exc_tag::Union{Nothing,UInt32}
+    exc_cell::Union{Nothing,UInt32}
+    exc_top::Union{Nothing,UInt32}
+    host_imports_open::Union{Nothing,UInt32}
+    import_tops::Union{Nothing,UInt32}
+    import_tops_type::Union{Nothing,UInt32}
+    import_tops_save::Union{Nothing,UInt32}
+end
+# parity(pkg/dart2wasm/lib/translator.dart:96 Translator): a compile's handles, none held yet
+ModuleHandles()::ModuleHandles = ModuleHandles(nothing, nothing, nothing, nothing, nothing, nothing, nothing)
+
+"""
 Registry for struct and array type mappings within a module.
 
 parity(translator.dart:96 Translator): the translator's per-compile type state — classInfo
@@ -441,6 +569,8 @@ mutable struct TypeRegistry
     u128_divrem_func_idx::Union{Nothing, UInt32}
     # the types being registered right now (PendingTypes)
     pending::PendingTypes
+    # the module objects codegen holds by handle (ModuleHandles)
+    handles::ModuleHandles
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -471,7 +601,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
     nothing,                                            # has_typevar_func_idx
     nothing,                                            # u128_divrem_func_idx
-    PendingTypes()                                      # types being registered
+    PendingTypes(),                                     # types being registered
+    ModuleHandles()                                     # the module's handles
 )
 
 """
@@ -489,26 +620,24 @@ function get_or_create_lazy_string!(mod::WasmModule, registry::TypeRegistry, s::
     haskey(registry.lazy_string_globals, s) && return registry.lazy_string_globals[s]
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
-    init = vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(struct_idx)))
-    g = add_global_ref!(mod, struct_idx, true, init)
+    g = add_global!(mod, ConcreteRef(struct_idx, true), true, nothing)
     bytes = codeunits(s)
     seg_idx = add_passive_data_segment!(mod, Vector{UInt8}(bytes))
     # parity(constants.dart:2137 _createLazyGlobalInitializer): `[] -> [T]` with T the
     # constant's non-null type; build it, local.tee a T temp, store the global, return the temp.
     local str_ref = ConcreteRef(struct_idx, false)
-    results = WasmValType[str_ref]
-    local init_locals = WasmValType[ConcreteRef(arr_idx, true), str_ref]
-    b = InstrBuilder(init_locals, results; func_name="lazy_string_init", mod=mod)
+    b = InstrBuilder(WasmValType[], WasmValType[str_ref]; func_name="lazy_string_init", mod=mod)
+    local bytes_local = builder_add_local!(b, ConcreteRef(arr_idx, true))
+    local str_local = builder_add_local!(b, str_ref)
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, 0, String)
-    local_tee!(b, 1)
+    emit_string_wrap!(b, mod, registry, bytes_local, String)
+    local_tee!(b, str_local)
     global_set!(b, g)
-    local_get!(b, 1)
-    end_block!(b)
-    fidx = add_function!(mod, WasmValType[], results, init_locals, builder_code(b);
-                         name=generated_function_name(:lazy_initializer, constant_name(s)))
+    local_get!(b, str_local)
+    finish_function!(b)
+    fidx = add_function!(mod, b; name=generated_function_name(:lazy_initializer, constant_name(s)))
     registry.lazy_string_globals[s] = (g, fidx)
     return (g, fidx)
 end
@@ -526,19 +655,25 @@ parity(constants.dart:793 ConstantCreator.ensureConstant): one interned global p
 """
 function ensure_constant_global!(mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     haskey(registry.constant_globals, val) && return registry.constant_globals[val]
-    init = UInt8[]
-    info = _const_init_bytes!(init, mod, registry, val)
+    # built first as a constant fragment, since a value found not constant-expressible part way
+    # through defines no global
+    local value = InstrBuilder(; func_name="ensure_constant_global!", mod=mod,
+                               fragment=true, constant_expression=true)
+    info = _const_init!(value, mod, registry, val)
     info === nothing && return nothing
-    g = add_global_ref!(mod, info, false, init; nullable=false)
+    g, init = define_global!(mod, ConcreteRef(info, false), false)
+    append_builder!(init, value)
+    finish_function!(init)
+    fill_global!(mod, g, init)
     registry.constant_globals[val] = g
     return g
 end
 
-# Recursively build a CONSTANT-EXPRESSION initializer for `val`; returns the struct
-# type idx, or nothing when val is not eager-internable. Wasm constant exprs allow
-# i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
+# Recursively emit into the constant expression `b` the value `val`; returns the struct
+# type idx, or nothing when val is not eager-internable (`b` is then discarded). Wasm constant
+# exprs allow i32/i64/f32/f64.const, ref.null, global.get(imm), struct.new, array.new_fixed.
 # parity(constants.dart:908 ConstantCreator.visitInstanceConstant): header fields, then each field's constant.
-function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
+function _const_init!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
     if T === Int128 || T === UInt128
         # parity(constants.dart:622-655 visitIntConstant valueTypeConstants): a boxed
@@ -547,14 +682,10 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
         type_idx = get_int128_type!(mod, registry, T)
         lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
         hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
-        push!(init, Opcode.I32_CONST)
-        append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
-        push!(init, Opcode.I64_CONST)
-        append!(init, encode_leb128_signed(reinterpret(Int64, lo)))
-        push!(init, Opcode.I64_CONST)
-        append!(init, encode_leb128_signed(reinterpret(Int64, hi)))
-        push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
-        append!(init, encode_leb128_unsigned(UInt64(type_idx)))
+        i32_const!(b, Int64(ensure_type_id!(registry, T)))
+        i64_const!(b, reinterpret(Int64, lo))
+        i64_const!(b, reinterpret(Int64, hi))
+        struct_new!(b, type_idx)
         return type_idx
     end
     (isconcretetype(T) && isstructtype(T) && !ismutabletype(T)) || return nothing
@@ -586,11 +717,9 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
         end
     end
     # field 0: the typeId
-    push!(init, Opcode.I32_CONST)
-    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, T))))
+    i32_const!(b, Int64(ensure_type_id!(registry, T)))
     if info.field_offset == 2
-        push!(init, Opcode.I32_CONST)
-        append!(init, encode_leb128_signed(Int64(0))) # unassigned identityHash
+        i32_const!(b, 0) # unassigned identityHash
     end
     # fields: every one must itself be constant-expressible
     for i in 1:fieldcount(T)
@@ -598,32 +727,29 @@ function _const_init_bytes!(init::Vector{UInt8}, mod::WasmModule, registry::Type
         fv = getfield(val, i)
         FT = typeof(fv)
         if fv isa Int64
-            push!(init, Opcode.I64_CONST); append!(init, encode_leb128_signed(fv))
+            i64_const!(b, fv)
         elseif fv isa UInt64
-            push!(init, Opcode.I64_CONST); append!(init, encode_leb128_signed(reinterpret(Int64, fv)))
+            i64_const!(b, reinterpret(Int64, fv))
         elseif fv isa Bool
-            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv ? 1 : 0)))
+            i32_const!(b, fv ? 1 : 0)
         elseif fv isa Char
             # STACK-003 convention: Julia's LEFT-PACKED UTF-8 bits, NOT the codepoint
             # (gate-caught: DateFormat delimiters interned as codepoints → parse trap)
-            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, reinterpret(UInt32, fv)))))
+            i32_const!(b, Int64(reinterpret(Int32, reinterpret(UInt32, fv))))
         elseif fv isa Int8 || fv isa Int16 || fv isa Int32
-            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(fv)))
+            i32_const!(b, Int64(fv))
         elseif fv isa UInt8 || fv isa UInt16 || fv isa UInt32
-            push!(init, Opcode.I32_CONST); append!(init, encode_leb128_signed(Int64(reinterpret(Int32, UInt32(fv)))))
+            i32_const!(b, Int64(reinterpret(Int32, UInt32(fv))))
         elseif fv isa Float64
-            push!(init, Opcode.F64_CONST)
-            append!(init, reinterpret(UInt8, [fv]))
+            f64_const!(b, fv)
         elseif fv isa Float32
-            push!(init, Opcode.F32_CONST)
-            append!(init, reinterpret(UInt8, [fv]))
+            f32_const!(b, fv)
         else
-            # nested immutable struct constant: recurse (its bytes inline here)
-            _const_init_bytes!(init, mod, registry, fv) === nothing && return nothing
+            # nested immutable struct constant: recurse (its instructions inline here)
+            _const_init!(b, mod, registry, fv) === nothing && return nothing
         end
     end
-    push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
-    append!(init, encode_leb128_unsigned(UInt64(info.wasm_type_idx)))
+    struct_new!(b, info.wasm_type_idx)
     return UInt32(info.wasm_type_idx)
 end
 
@@ -646,39 +772,34 @@ function get_string_constant_global!(mod::WasmModule, registry::TypeRegistry,
                                      s::Union{String,Symbol}; eager::Bool=false)::Union{UInt32, Nothing}
     !eager && ncodeunits(String(s)) > 64 && return nothing   # eager threshold (dart lazies large constants)
     haskey(registry.string_constant_globals, s) && return registry.string_constant_globals[s]
-    struct_idx, init = _string_constant_initializer!(mod, registry, s)
-    g = add_global_ref!(mod, struct_idx, false, init; nullable=false)
+    g, init = define_global!(mod, ConcreteRef(get_string_struct_type!(mod, registry), false), false)
+    _emit_string_constant!(init, mod, registry, s)
+    finish_function!(init)
+    fill_global!(mod, g, init)
     registry.string_constant_globals[s] = g
     return g
 end
 
-"""Build the canonical classed-string constant expression for a String or Symbol `s`, under
-`typeof(s)`'s classId, without adding a global.
+"""Emit the canonical classed-string constant expression for a String or Symbol `s`, under
+`typeof(s)`'s classId, into the constant expression `b`: classId, unassigned identityHash, the
+byte array (array.new_fixed), struct.new. Returns the string's struct type.
 
 parity(constants.dart:872 ConstantCreator.visitStringConstant): its generator — object header,
 the byte array, struct.new.
 parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol's header is its own class's."""
-function _string_constant_initializer!(mod::WasmModule, registry::TypeRegistry,
-                                       s::Union{String,Symbol})::Tuple{UInt32,Vector{UInt8}}
+function _emit_string_constant!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                s::Union{String,Symbol})::UInt32
     struct_idx = get_string_struct_type!(mod, registry)
     arr_idx = get_string_array_type!(mod, registry)
-    # constant initializer: classId; unassigned identityHash; byte array; struct.new
-    init = UInt8[]
-    push!(init, Opcode.I32_CONST)
-    append!(init, encode_leb128_signed(Int64(ensure_type_id!(registry, typeof(s)))))
-    push!(init, Opcode.I32_CONST)
-    append!(init, encode_leb128_signed(Int64(0)))
+    i32_const!(b, Int64(ensure_type_id!(registry, typeof(s))))
+    i32_const!(b, 0)
     bytes = codeunits(String(s))
-    for b in bytes
-        push!(init, Opcode.I32_CONST)
-        append!(init, encode_leb128_signed(Int64(b)))
+    for byte in bytes
+        i32_const!(b, Int64(byte))
     end
-    push!(init, Opcode.GC_PREFIX, Opcode.ARRAY_NEW_FIXED)
-    append!(init, encode_leb128_unsigned(UInt64(arr_idx)))
-    append!(init, encode_leb128_unsigned(UInt64(length(bytes))))
-    push!(init, Opcode.GC_PREFIX, Opcode.STRUCT_NEW)
-    append!(init, encode_leb128_unsigned(UInt64(struct_idx)))
-    return struct_idx, init
+    array_new_fixed!(b, arr_idx, length(bytes))
+    struct_new!(b, struct_idx)
+    return struct_idx
 end
 
 """
@@ -688,28 +809,27 @@ Push the classed String or Symbol constant `s` (under `typeof(s)`'s class) insid
 init-function body: the interned global when one exists (short names), else built in place
 from a passive data segment
 (`array.new_data` is not a constant expression, so long strings have no eager global;
-dart initialises those lazily, constants.dart:2108 _createLazyConstant). `scratch` is the index of a local of the
-string ARRAY type the caller declares only when `used[]` comes back true.
+dart initialises those lazily, constants.dart:2108 _createLazyConstant). `scratch` holds the
+index of a local of the string ARRAY type, declared in `b` the first time one is needed
+(negative until then).
 
 parity(constants.dart:1937 _ConstantAccessor._readDefinedConstant): global.get of an eager constant.
 """
 function emit_string_constant_ref!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                                   s::Union{String,Symbol}, scratch::Integer,
-                                   used::Base.RefValue{Bool})::InstrBuilder
+                                   s::Union{String,Symbol}, scratch::Base.RefValue{Int})::InstrBuilder
     local g = get_string_constant_global!(mod, registry, s)
     if g !== nothing
         global_get!(b, g)
         return b
     end
     local arr_idx = get_string_array_type!(mod, registry)
-    used[] || builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
-    used[] = true
+    scratch[] < 0 && (scratch[] = builder_add_local!(b, ConcreteRef(arr_idx, true)))
     local bytes = Vector{UInt8}(codeunits(String(s)))
     local seg_idx = add_passive_data_segment!(mod, bytes)
     i32_const!(b, 0)
     i32_const!(b, Int64(length(bytes)))
     array_new_data!(b, arr_idx, seg_idx)
-    emit_string_wrap!(b, mod, registry, scratch, typeof(s))
+    emit_string_wrap!(b, mod, registry, scratch[], typeof(s))
     return b
 end
 
@@ -723,8 +843,10 @@ parity(constants.dart:872 visitStringConstant)
 """
 function add_string_global!(mod::WasmModule, registry::TypeRegistry, s::String;
                             mutable::Bool=true)::UInt32
-    struct_idx, init = _string_constant_initializer!(mod, registry, s)
-    return add_global_ref!(mod, struct_idx, mutable, init; nullable=false)
+    g, init = define_global!(mod, ConcreteRef(get_string_struct_type!(mod, registry), false), mutable)
+    _emit_string_constant!(init, mod, registry, s)
+    finish_function!(init)
+    return fill_global!(mod, g, init)
 end
 
 """
@@ -1251,9 +1373,7 @@ function get_typevar_constant_global!(mod::WasmModule, registry::TypeRegistry, t
     haskey(registry.typevar_constant_globals, tv) && return registry.typevar_constant_globals[tv]
     idx = registry.jl_typevar_idx
     idx === nothing && error("TypeVar constants require the canonical JlType hierarchy")
-    b = InstrBuilder(; func_name="get_typevar_constant_global!", mod=mod)
-    struct_new_default!(b, idx)
-    g = add_global_ref!(mod, idx, true, builder_code(b); nullable=false)
+    g = define_global!(init -> struct_new_default!(init, idx), mod, ConcreteRef(idx, false), true)
     registry.typevar_constant_globals[tv] = g
     _type_object_constant!(mod, registry, tv.lb)
     _type_object_constant!(mod, registry, tv.ub)
@@ -1495,14 +1615,13 @@ function get_module_constant_global!(mod::WasmModule, registry::TypeRegistry,
     string_idx = get_string_struct_type!(mod, registry)
     name_global = get_string_constant_global!(mod, registry, nameof(module_value))
     name_global === nothing && error("Module name exceeds the eager Symbol constant limit")
-    b = InstrBuilder(; func_name="get_module_constant_global!", mod=mod)
-    i32_const!(b, Int64(ensure_type_id!(registry, Module)))
-    i32_const!(b, 0)
-    global_get!(b, name_global)
-    ref_null!(b, AnyRef)
-    struct_new!(b, info.wasm_type_idx)
-    global_idx = add_global_ref!(mod, info.wasm_type_idx, false, builder_code(b);
-                                 nullable=false)
+    global_idx = define_global!(mod, ConcreteRef(info.wasm_type_idx, false), false) do b
+        i32_const!(b, Int64(ensure_type_id!(registry, Module)))
+        i32_const!(b, 0)
+        global_get!(b, name_global)
+        ref_null!(b, AnyRef)
+        struct_new!(b, info.wasm_type_idx)
+    end
     registry.constant_globals[module_value] = global_idx
     parent = parentmodule(module_value)
     parent === module_value || get_module_constant_global!(mod, registry, parent)
@@ -1897,13 +2016,13 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     rec_ref = ConcreteRef(rec_idx, true)
     stage_seg = add_passive_data_segment!(mod, tables.stages)
     rec_seg = add_passive_data_segment!(mod, tables.records)
-    stage_global = add_global_ref!(mod, stage_idx, true,
-        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(stage_idx))))
-    rec_global = add_global_ref!(mod, rec_idx, true,
-        vcat(UInt8[Opcode.REF_NULL], encode_leb128_signed(Int64(rec_idx))))
-    # locals: 0 cp, 1 field, 2 the stage table, 3 the record index
-    b = InstrBuilder(WasmValType[I32, I32, stage_ref, I32], WasmValType[I32]; func_name=name, mod=mod)
-    i32_const!(b, tables.oob); local_set!(b, 3)
+    stage_global = add_global!(mod, stage_ref, true, nothing)
+    rec_global = add_global!(mod, rec_ref, true, nothing)
+    # parameters 0 cp, 1 field; locals the stage table and the record index
+    b = InstrBuilder(WasmValType[I32, I32], WasmValType[I32]; func_name=name, mod=mod)
+    local stage_table = builder_add_local!(b, stage_ref)
+    local record = builder_add_local!(b, I32)
+    i32_const!(b, tables.oob); local_set!(b, record)
     local_get!(b, 0); i32_const!(b, 0x110000); num!(b, Opcode.I32_LT_U)
     if_!(b)
     initialized = block!(b; results=WasmValType[stage_ref])
@@ -1914,11 +2033,11 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     global_set!(b, stage_global)
     global_get!(b, stage_global)
     end_block!(b)
-    local_set!(b, 2)
+    local_set!(b, stage_table)
     # record index = stage[0x1100 + (stage[cp >> 8] << 8) + (cp & 0xff)]
-    local_get!(b, 2)
+    local_get!(b, stage_table)
     i32_const!(b, 0x1100)
-    local_get!(b, 2)
+    local_get!(b, stage_table)
     local_get!(b, 0); i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
     array_get!(b, stage_idx; signed=false)
     i32_const!(b, 8); num!(b, Opcode.I32_SHL)
@@ -1926,7 +2045,7 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     local_get!(b, 0); i32_const!(b, 0xff); num!(b, Opcode.I32_AND)
     num!(b, Opcode.I32_ADD)
     array_get!(b, stage_idx; signed=false)
-    local_set!(b, 3)
+    local_set!(b, record)
     end_block!(b)
     initialized = block!(b; results=WasmValType[rec_ref])
     global_get!(b, rec_global)
@@ -1936,14 +2055,12 @@ function _two_stage_lookup_func!(mod::WasmModule, registry::TypeRegistry, tables
     global_set!(b, rec_global)
     global_get!(b, rec_global)
     end_block!(b)
-    local_get!(b, 3); i32_const!(b, tables.width); num!(b, Opcode.I32_MUL)
+    local_get!(b, record); i32_const!(b, tables.width); num!(b, Opcode.I32_MUL)
     local_get!(b, 1); num!(b, Opcode.I32_ADD)
     array_get!(b, rec_idx)
     return_!(b)
-    end_block!(b)
-    return add_function!(mod, WasmValType[I32, I32], WasmValType[I32],
-                         WasmValType[stage_ref, I32], builder_code(b);
-                         name=generated_function_name(:foreigncall_table, name))
+    finish_function!(b)
+    return add_function!(mod, b; name=generated_function_name(:foreigncall_table, name))
 end
 
 """
@@ -2058,12 +2175,10 @@ function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
     end
     box_type = get_nothing_box_type!(mod, registry)
     # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
-    b = InstrBuilder(; func_name="get_nothing_global!", mod=mod)
-    emit_type_id!(b, registry, Nothing)
-    struct_new!(b, box_type)
-    init_expr = builder_code(b)
-    # Use add_global_ref! which handles non-null concrete ref type + END byte
-    global_idx = add_global_ref!(mod, box_type, false, init_expr; nullable=false)
+    global_idx = define_global!(mod, ConcreteRef(box_type, false), false) do b
+        emit_type_id!(b, registry, Nothing)
+        struct_new!(b, box_type)
+    end
     registry.nothing_global_idx = global_idx
     return global_idx
 end
@@ -2089,12 +2204,9 @@ function get_type_constant_global!(mod::WasmModule, registry::TypeRegistry, @nos
     # the constant is an instance of its kind; struct.new_default zeroes it, and
     # populate_type_constant_globals! fills it (ref.eq tells two allocations apart)
     kind_idx = type_object_struct_idx(registry, type_val)
-    b = InstrBuilder(; func_name="get_type_constant_global!", mod=mod)
-    struct_new_default!(b, kind_idx)
-    init_bytes = builder_code(b)
-
-    # Create the global (mutable ref — needs patching by init function)
-    global_idx = add_global_ref!(mod, kind_idx, true, init_bytes; nullable=false)
+    # the global (mutable ref — needs patching by init function)
+    global_idx = define_global!(init -> struct_new_default!(init, kind_idx), mod,
+                                ConcreteRef(kind_idx, false), true)
 
     # Cache
     registry.type_constant_globals[type_val] = global_idx
@@ -2147,31 +2259,29 @@ function get_typename_constant_global!(mod::WasmModule, registry::TypeRegistry, 
 
     # Immutable classId must be established at allocation; mutable payload fields
     # begin null and are populated by the start function.
-    b = InstrBuilder(; func_name="get_typename_constant_global!", mod=mod)
     str_arr_idx = get_string_array_type!(mod, registry)
     string_idx = get_string_struct_type!(mod, registry)
     jl_type_idx = registry.jl_type_idx
-    i32_const!(b, Int64(ensure_type_id!(registry, Core.TypeName)))
-    i32_const!(b, 0)
     module_idx = registry.structs[Module].wasm_type_idx
-    ref_null!(b, Int64(string_idx))
-    ref_null!(b, Int64(module_idx))
-    ref_null!(b, Int64(jl_type_idx))
-    ref_null!(b, Int64(string_idx))
-    i32_const!(b, 0)
-    i32_const!(b, 0)
-    i32_const!(b, 0)
-    i64_const!(b, 0)
-    i64_const!(b, 0)
-    i32_const!(b, 0)
-    i32_const!(b, 0)
-    i32_const!(b, 0)
-    i32_const!(b, 0)
-    struct_new!(b, tn_type_idx)
-    init_bytes = builder_code(b)
-
     # Mutable global — needs patching by init function
-    global_idx = add_global_ref!(mod, tn_type_idx, true, init_bytes; nullable=false)
+    global_idx = define_global!(mod, ConcreteRef(tn_type_idx, false), true) do b
+        i32_const!(b, Int64(ensure_type_id!(registry, Core.TypeName)))
+        i32_const!(b, 0)
+        ref_null!(b, Int64(string_idx))
+        ref_null!(b, Int64(module_idx))
+        ref_null!(b, Int64(jl_type_idx))
+        ref_null!(b, Int64(string_idx))
+        i32_const!(b, 0)
+        i32_const!(b, 0)
+        i32_const!(b, 0)
+        i64_const!(b, 0)
+        i64_const!(b, 0)
+        i32_const!(b, 0)
+        i32_const!(b, 0)
+        i32_const!(b, 0)
+        i32_const!(b, 0)
+        struct_new!(b, tn_type_idx)
+    end
 
     registry.typename_constant_globals[tn] = global_idx
     return global_idx
@@ -2215,9 +2325,8 @@ function finalize_module_initializers!(mod::WasmModule, registry::TypeRegistry):
     for func_idx in funcs
         call!(b, func_idx)
     end
-    end_block!(b)
-    func_idx = add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b);
-                             name=generated_function_name(:start_function))
+    finish_function!(b)
+    func_idx = add_function!(mod, b; name=generated_function_name(:start_function))
     add_start_function!(mod, func_idx)
     return
 end
@@ -2238,8 +2347,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
     b = InstrBuilder(; func_name="_populate_jl_hierarchy!", mod=mod)
     # local 0: the string-array scratch for Symbol constants built in place (declared
     # only when a name exceeds the eager-interning threshold)
-    local _pop_str_scratch = 0
-    local _pop_str_used = Ref(false)
+    local _pop_str_scratch = Ref(-1)
 
     # Close Module ancestry before iterating the constant registry, then wire
     # exact parent identities. Root modules point to themselves.
@@ -2432,7 +2540,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
     local tv_string_idx = get_string_struct_type!(mod, registry)
     for (tv, g) in sort!(collect(registry.typevar_constant_globals); by = p -> p.second)
         global_get!(b, g)
-        emit_string_constant_ref!(b, mod, registry, tv.name, _pop_str_scratch, _pop_str_used)
+        emit_string_constant_ref!(b, mod, registry, tv.name, _pop_str_scratch)
         struct_set!(b, tv_idx, UInt32(1))
         for (f, bound) in ((UInt32(2), tv.lb), (UInt32(3), tv.ub))
             local bg = _type_object_global(registry, bound)
@@ -2449,7 +2557,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         # content-derived metadata across ordinary calls.
         string_idx = get_string_struct_type!(mod, registry)
         global_get!(b, tn_global_idx)
-        emit_string_constant_ref!(b, mod, registry, tn.name, _pop_str_scratch, _pop_str_used)
+        emit_string_constant_ref!(b, mod, registry, tn.name, _pop_str_scratch)
         struct_set!(b, tn_type_idx, UInt32(2))
 
         # Field 3: an interned Module object, never a name-string surrogate.
@@ -2462,7 +2570,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
         end
 
         global_get!(b, tn_global_idx)
-        emit_string_constant_ref!(b, mod, registry, tn.singletonname, _pop_str_scratch, _pop_str_used)
+        emit_string_constant_ref!(b, mod, registry, tn.singletonname, _pop_str_scratch)
         struct_set!(b, tn_type_idx, UInt32(5))
 
         # Field 6: whether module.singletonname is a real binding.
@@ -2537,13 +2645,10 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
     # Populate the type lookup table (typeId → DataType struct ref)
     populate_type_lookup_table!(b, registry)
 
-    isempty(builder_code(b)) && return
+    isempty(b.instrs) && return
 
-    end_block!(b)  # function-terminating END
-    body = builder_code(b)
-    func_idx = add_function!(mod, WasmValType[], WasmValType[],
-                             _pop_str_used[] ? WasmValType[ConcreteRef(get_string_array_type!(mod, registry), true)] : WasmValType[],
-                             body; name=generated_function_name(:type_objects))
+    finish_function!(b)
+    func_idx = add_function!(mod, b; name=generated_function_name(:type_objects))
     add_start_function!(mod, func_idx)
 end
 
@@ -2614,12 +2719,10 @@ function create_type_lookup_table!(mod::WasmModule, registry::TypeRegistry)::Uni
 
     # Create the lookup array global initialized with null refs
     # Init expression: i32.const <size>, array.new_default $arr_type
-    b = InstrBuilder(; func_name="create_type_lookup_table!", mod=mod)
-    i32_const!(b, Int64(table_size))
-    array_new_default!(b, arr_type_idx)
-    init_bytes = builder_code(b)
-
-    global_idx = add_global_ref!(mod, arr_type_idx, true, init_bytes; nullable=false)
+    global_idx = define_global!(mod, ConcreteRef(arr_type_idx, false), true) do b
+        i32_const!(b, Int64(table_size))
+        array_new_default!(b, arr_type_idx)
+    end
     registry.type_lookup_global = global_idx
     registry.type_lookup_table_size = table_size  # record for OOB guard
 end
@@ -2990,12 +3093,10 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
             return _resolve_multivariant_union(T, non_nothing_u, mod, registry; for_local=for_local)
         end
     elseif T === Core.SimpleVector
-        # Core.SimpleVector maps to $JlSVec array type when JlType hierarchy is active.
-        # This ensures field access on DataType.parameters returns the correct type.
-        if registry.jl_svec_idx !== nothing
-            return ConcreteRef(registry.jl_svec_idx, true)
-        end
-        return ArrayRef
+        # Core.SimpleVector is \$JlSVec, an anyref array the \$JlType hierarchy defines first
+        registry.jl_svec_idx === nothing &&
+            error("Core.SimpleVector has no layout before the \$JlType hierarchy defines \$JlSVec")
+        return ConcreteRef(registry.jl_svec_idx, true)
     elseif T === Core.TypeName
         # Core.TypeName maps to $JlTypeName struct type when hierarchy is active.
         if registry.jl_typename_idx !== nothing

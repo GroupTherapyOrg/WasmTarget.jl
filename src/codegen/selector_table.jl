@@ -193,12 +193,12 @@ end
 parity(quarantine: dart's virtual call indexes the table unguarded, code_generator.dart:2028
 _virtualCall, because the receiver statically has the member; a Julia dynamic call's
 receiver may have NO method, and its classId would otherwise index another selector's
-cell): with the receiver's classId on the stack, keep it in local `sc`, trap unless
+cell): with the receiver's classId on the stack, keep it in local `sc` (an i32 the caller
+declared), trap unless
 `lo <= classId <= hi` (THE single range discriminator, dart's unsigned window), and leave
 the classId back on the stack for the offset add.
 """
 function emit_classid_span_guard!(b::InstrBuilder, sc::Integer, lo::Integer, hi::Integer)::InstrBuilder
-    builder_set_local_type!(b, Int(sc), I32)
     local_tee!(b, UInt32(sc))
     emit_classid_range_check!(b, lo, hi)
     num!(b, Opcode.I32_EQZ)
@@ -240,18 +240,15 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
             struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0))
             # the level-2 span guard (a classId outside it has no row in this group)
             local lo2, hi2 = _cascade_span(c)
-            emit_classid_span_guard!(tb, arity, lo2, hi2)   # first extra local
+            emit_classid_span_guard!(tb, builder_add_local!(tb, I32), lo2, hi2)
             if c.offset2 != 0
                 i32_const!(tb, Int64(c.offset2))
                 num!(tb, Opcode.I32_ADD)
             end
-            res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
-                WasmValType[dt.result_wasm_type] : WasmValType[]
             call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx)
             end_block!(tb)
-            tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[I32], builder_code(tb);
-                                      name=generated_function_name(:polymorphic_dispatcher,
-                                                                   "$(func_ref), axis $(c.axis2)"))
+            tramp_idx = add_function!(mod, tb; name=generated_function_name(:polymorphic_dispatcher,
+                                                                           "$(func_ref), axis $(c.axis2)"))
             push!(entries, (c.l1_pos, tramp_idx))
             for (pos2, entry_i) in c.rows2
                 push!(entries, (pos2, dt.entries[entry_i].wrapper_idx))
@@ -273,9 +270,10 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
 end
 
 """
-    generate_selector_caller_body(dt, dt_registry, n_params, base_struct_idx) -> (body, locals)
+    generate_selector_caller_body!(b, dt, dt_registry, base_struct_idx; caller_return_type, mod, type_registry) -> b
 
-dart's virtual call site (code_generator.dart:2103-2110), as the dispatcher body:
+dart's virtual call site (code_generator.dart:2103-2110), as the dispatcher body, emitted into
+`b`, the caller's function builder, and ended:
 
     push args · receiver.classId · [+ offset] · call_indirect(sig, THE table)
 
@@ -283,18 +281,13 @@ A classId with no row hits a null funcref → trap: the honest MethodError analo
 (loud, dart-legit) — same posture the FNV probe's miss already had.
 parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
-function generate_selector_caller_body(dt::DispatchTable, dt_registry,
-                                       n_params::Int, base_struct_idx::UInt32;
-                                       caller_return_type::Type=Any, mod::WasmModule,
-                                       type_registry=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
+function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_registry,
+                                        base_struct_idx::UInt32;
+                                        caller_return_type::Type=Any, mod::WasmModule,
+                                        type_registry=nothing)::InstrBuilder
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
     arity = Int(dt.arity)
-    # the builder carries the caller's signature (params + the dispatch result), so the
-    # function frame's end validates against it
-    local _sc_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
-                    WasmValType[dt.result_wasm_type] : WasmValType[]
-    b = InstrBuilder(copy(dt.slot_types), _sc_res; func_name="selector_caller", mod=mod)
     # tag-run: push params, refining each to the sig's slot type (the struct-LUB
     # slots are narrower than the caller's own declared params)
     for j in 1:arity
@@ -310,15 +303,11 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
     struct_get!(b, UInt32(base_struct_idx), UInt32(0))
     # the span guard: a classId outside [lo, hi] has no row (MethodError → trap)
     local lo, hi = _selector_span(dt_registry, dt.func_ref)
-    locals = WasmValType[I32]            # first extra local: the guarded classId
-    emit_classid_span_guard!(b, n_params, lo, hi)
+    emit_classid_span_guard!(b, builder_add_local!(b, I32), lo, hi)   # the guarded classId
     if offset != 0
         i32_const!(b, Int64(offset))
         num!(b, Opcode.I32_ADD)
     end
-    sig = FuncType(copy(dt.slot_types),   # The per-slot LUB (was uniform AnyRef)
-                   dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
-                       WasmValType[dt.result_wasm_type] : WasmValType[])
     call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx)
     # Result seam: the caller's DECLARED result may be anyref (dynamic-call inference)
     # while the selector signature is typed — box through the ONE producer.
@@ -331,15 +320,12 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
             # the ONE box shape (emit_classid_box!): save value · classId · value · struct.new
             box_idx = get_numeric_box_type!(mod, type_registry, dt.result_wasm_type)
             tid = ensure_type_id!(type_registry, jt)
-            scratch = UInt32(n_params + 1)   # second extra local (after the classId)
-            push!(locals, dt.result_wasm_type)
-            builder_set_local_type!(b, Int(scratch), dt.result_wasm_type)
+            scratch = builder_add_local!(b, dt.result_wasm_type)   # after the classId
             local_set!(b, scratch)
             i32_const!(b, Int64(tid))
             local_get!(b, scratch)
             struct_new!(b, box_idx)
         end
     end
-    end_block!(b)
-    return builder_code(b), locals
+    return finish_function!(b)
 end

@@ -357,13 +357,13 @@ end
     WasmTarget.add_import!(m2, "host", "cb", sig...)
     WasmTarget.ensure_host_imports_open!(m2)
     mine = WasmTarget.add_global!(m2, WasmTarget.I64, true, 0; name="\$mine")
-    @test WasmTarget.global_named(m2, "\$host_imports_open") == 0 && mine == 1
+    @test m2.globals[1].name == "\$host_imports_open" && mine == 1
     compiled = WasmTarget.compile_module(roots; existing_module=m2)
     @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(WasmTarget.to_bytes(compiled))))
     # a host-declared import with no count (added after setup) is refused where the count is read
     m3 = WasmTarget.WasmModule()
     WasmTarget.add_import!(m3, "host", "late", sig...)
-    e3 = _wt_hb_err(() -> WasmTarget.host_imports_open_global(m3))
+    e3 = _wt_hb_err(() -> WasmTarget.host_imports_open_global(m3, WasmTarget.recover_module_handles!(WasmTarget.TypeRegistry(), (WasmTarget.ensure_provenance_imports!(m3); m3))))
     @test e3 isa ArgumentError && occursin("host.late", e3.msg) && occursin("wasmtarget.host_imports_open", e3.msg)
     # a global index naming the imported count, at each entry that takes one
     counted() = (m = WasmTarget.WasmModule(); WasmTarget.add_import!(m, "host", "cb", sig...);
@@ -403,13 +403,15 @@ end
 # functions.dart:141)
 @noinline _wt_c1_x(n::Int64) = n + 1
 @noinline _wt_c1_x_d2(n::Int64) = 10n
+# a function [] -> [] with an empty body, defined in `m` (its builder, finished)
+_wt_empty_function!(m, name) = (b = WasmTarget.InstrBuilder(; mod=m); WasmTarget.finish_function!(b);
+                               WasmTarget.add_function!(m, b; name=name))
 @noinline _wt_c1_inner(n::Int64) = n * 3
 _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
 @testset "each export is made once: the compile's and its hook's by their entries, a prior one left alone" begin
     mod = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod)
-    pre = WasmTarget.add_function!(mod, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
-                                   WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
+    pre = _wt_empty_function!(mod, "pre")
     WasmTarget.add_export!(mod, "pre", 0, pre)
     m = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod,
         link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "esc_hook", 0, roots["esc"]))
@@ -427,8 +429,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     # 3, where native x_d2(2) is 20 (dev/AUDIT.md A14C1)
     mod2 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod2)
-    pre2 = WasmTarget.add_function!(mod2, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
-                                    WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
+    pre2 = _wt_empty_function!(mod2, "pre")
     WasmTarget.add_export!(mod2, "x", 0, pre2)
     @test _wt_c1_x_d2(2) == 20
     err = try
@@ -447,8 +448,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     # "_wt_c1_inner" export stays, the compile's discovered callee takes the next free name
     mod4 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod4)
-    pre4 = WasmTarget.add_function!(mod4, WasmTarget.WasmValType[], WasmTarget.WasmValType[],
-                                    WasmTarget.WasmValType[], UInt8[0x0b]; name="pre")
+    pre4 = _wt_empty_function!(mod4, "pre")
     WasmTarget.add_export!(mod4, "_wt_c1_inner", 0, pre4)
     m4 = WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4)
     @test count(e -> e.name == "_wt_c1_inner", m4.exports) == 1
@@ -461,8 +461,9 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     mod3 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod3)
     t3 = WasmTarget.add_type!(mod3, WasmTarget.StructType([WasmTarget.FieldType(WasmTarget.I64, false)]))
-    mk = WasmTarget.add_function!(mod3, WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.ConcreteRef(t3, false)],
-                                  WasmTarget.WasmValType[], UInt8[0x42, 0x00, 0xfb, 0x00, UInt8(t3), 0x0b]; name="mk")
+    mkb = WasmTarget.InstrBuilder(WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.ConcreteRef(t3, false)]; mod=mod3)
+    WasmTarget.i64_const!(mkb, 0); WasmTarget.struct_new!(mkb, t3); WasmTarget.finish_function!(mkb)
+    mk = WasmTarget.add_function!(mod3, mkb; name="mk")
     m3 = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod3,
         link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk))
     fname3(i) = m3.functions[Int(i) - WasmTarget.num_imported_funcs(m3) + 1].name

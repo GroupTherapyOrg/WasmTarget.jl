@@ -9,8 +9,7 @@
 
 function builder_cases(W::Module)
     VT = W.WasmValType
-    fin(m, ps, rs, b) = (W.finish_function!(b);
-        W.add_function!(m, VT[ps...], VT[rs...], VT[], W.builder_code(b); name="f"); m)
+    fin(m, ps, rs, b) = (W.finish_function!(b); W.add_function!(m, b; name="f"); m)
     cases = Any[]
     add(row, id, expect, program) = push!(cases, (row = row, id = id, expect = expect, program = program))
 
@@ -107,6 +106,76 @@ function builder_cases(W::Module)
         W.call!(b, 999) end)
     # A3B5: every builder has its module
     add("s", "A3B5", UndefKeywordError, () -> W.InstrBuilder(VT[], VT[W.I64]; func_name="g"))
+    return cases
+end
+
+# The module's bodies as programs (dev/CHARTER.md C7): every function body and global
+# initializer is a builder the module made, its locals initialized before they are read, its
+# returns its function's results, its initializer a constant expression. Rows a-j of
+# test/module_builder_validation.jl's testset "115b: every body is a builder the module made"
+# (its row k compiles, so it is there alone); the ratchet runs these over src/builder alone
+# (L167, L168).
+function body_cases(W::Module)
+    VT = W.WasmValType
+    cases = Any[]
+    add(row, id, expect, program) = push!(cases, (row = row, id = id, expect = expect, program = program))
+    # a struct type, its non-null reference, and a builder of `params -> results` in a fresh module
+    setup(params=VT[], results=VT[]) = (m = W.WasmModule(); st = W.add_struct_type!(m, W.FieldType[]);
+        r = W.ConcreteRef(UInt32(st), false); (m, st, r, W.InstrBuilder(params, VT[(t === :r ? r : t) for t in results]; mod=m)))
+    # A13B1: a non-defaultable local read before any set
+    add("a", "A13B1", W.StackImbalanceError, () -> begin
+        m, st, r, b = setup(VT[], Any[:r]); i = W.builder_add_local!(b, r)
+        W.local_get!(b, i) end)
+    # A13B1: a set inside a block does not initialize after its end
+    add("b", "A13B1", W.StackImbalanceError, () -> begin
+        m, st, r, b = setup(VT[], Any[:r]); i = W.builder_add_local!(b, r)
+        W.block!(b); W.struct_new_default!(b, st); W.local_set!(b, i); W.end_block!(b)
+        W.local_get!(b, i) end)
+    # A13B1: set in the then arm only, read in the else arm
+    add("c", "A13B1", W.StackImbalanceError, () -> begin
+        m, st, r, b = setup(VT[W.I32]); i = W.builder_add_local!(b, r)
+        W.local_get!(b, 0); W.if_!(b); W.struct_new_default!(b, st); W.local_set!(b, i); W.else_!(b)
+        W.local_get!(b, i) end)
+    # A13B1: a fragment reads an unset non-defaultable local, appended where it was never set
+    add("d", "A13B1", W.StackImbalanceError, () -> begin
+        m, st, r, b = setup(); i = W.builder_add_local!(b, r)
+        F = W.InstrBuilder(VT[], VT[]; mod=m, locals=b.locals, fragment=true)
+        W.local_get!(F, i); W.drop!(F)
+        W.append_builder!(b, F) end)
+    # A13B1, valid: F sets the local at its outer level, G reads it; F then G appended
+    add("e", "A13B1", :valid, () -> begin
+        m, st, r, b = setup(); i = W.builder_add_local!(b, r)
+        F = W.InstrBuilder(VT[], VT[]; mod=m, locals=b.locals, fragment=true)
+        W.struct_new_default!(F, st); W.local_set!(F, i)
+        G = W.InstrBuilder(VT[], VT[]; mod=m, locals=b.locals, fragment=true)
+        W.local_get!(G, i); W.drop!(G)
+        W.append_builder!(b, F); W.append_builder!(b, G)
+        W.finish_function!(b); W.add_function!(m, b; name="f"); m end)
+    # A3B1: a body with no results returns an f64; put in a function [] -> [i64]
+    add("f", "A3B1", W.ModuleValidationError, () -> begin
+        m = W.WasmModule(); idx = W.define_function!(m, VT[], VT[W.I64]; name="f")
+        b = W.InstrBuilder(; mod=m); W.f64_const!(b, 1.0); W.return_!(b); W.finish_function!(b)
+        W.fill_function!(m, idx, b) end)
+    # A3B16: a function [] -> [i32] filled with a body built [i64] -> [i64]
+    add("g", "A3B16", W.ModuleValidationError, () -> begin
+        m = W.WasmModule(); idx = W.define_function!(m, VT[], VT[W.I32]; name="f")
+        b = W.InstrBuilder(VT[W.I64], VT[W.I64]; mod=m); W.local_get!(b, 0); W.finish_function!(b)
+        W.fill_function!(m, idx, b) end)
+    # A4B1, A11E6: an i32 initializes (ref $st)
+    add("h", "A4B1/A11E6", W.StackImbalanceError, () -> begin
+        m, st, r, _ = setup(); g, init = W.define_global!(m, r, false)
+        W.i32_const!(init, 0); W.finish_function!(init) end)
+    # A4B1: an initializer holding a call (a constant expression is required)
+    add("i", "A4B1", W.StackImbalanceError, () -> begin
+        m, st, r, fb = setup(VT[], Any[:r]); W.struct_new_default!(fb, st); W.finish_function!(fb)
+        fidx = W.add_function!(m, fb; name="f")
+        g, init = W.define_global!(m, r, false)
+        W.call!(init, fidx) end)
+    # A4B1: an initializer's global.get of a global defined after it
+    add("j", "A4B1", W.StackImbalanceError, () -> begin
+        m = W.WasmModule(); g0, init0 = W.define_global!(m, W.I32, false)
+        g1 = W.add_global!(m, W.I32, false, 7)
+        W.global_get!(init0, g1) end)
     return cases
 end
 

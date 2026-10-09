@@ -524,7 +524,6 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
         "numeric boxing requires a concrete Julia source type, got $julia_type")
     box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
     sc = boxing_scratch_local!(ctx, wasm_type)
-    builder_set_local_type!(b, sc, wasm_type)
     local_set!(b, sc)                       # save the value
     emit_type_id!(b, ctx.type_registry, julia_type)
     local_get!(b, sc)                       # reload the value (field 1)
@@ -565,7 +564,8 @@ end
     emit_string_wrap!(b, mod, registry, scratch, class)
 
 parity(constants.dart:872 visitStringConstant) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
-byte array on the stack, wrap it as `\$JlString{classId(class), 0, data}`. The ONE
+byte array on the stack, wrap it as `\$JlString{classId(class), 0, data}`, through `scratch`, a
+local of the byte array's type the caller declared. The ONE
 place a String or Symbol value is born; every producer routes here and names its class.
 parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
 parity(quarantine: Julia's jl_sym_t holds its name bytes inline as jl_string_t does, and Base
@@ -577,8 +577,6 @@ function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     (class === String || class === Symbol) ||
         error("emit_string_wrap!: $class is not a classed-string class (String or Symbol)")
     struct_idx = get_string_struct_type!(mod, registry)
-    arr_idx = get_string_array_type!(mod, registry)
-    builder_set_local_type!(b, Int(scratch), ConcreteRef(arr_idx, true))
     local_set!(b, scratch)
     i32_const!(b, Int64(ensure_type_id!(registry, class)))
     i32_const!(b, 0) # identityHash: lazily assigned by objectid
@@ -593,8 +591,7 @@ parity(constants.dart:872 visitStringConstant): the same classed string producer
 scratch local dart's `b.addLocal` would give it."""
 function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext, class::Type)::InstrBuilder
     arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    sc = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, ConcreteRef(arr_idx, true))
+    sc = allocate_local!(ctx, ConcreteRef(arr_idx, true))
     return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc, class)
 end
 
@@ -670,9 +667,7 @@ parity(pkg/dart2wasm/lib/types.dart:434 Types.emitIsTest)
 function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
                            box_idx::Integer, check_type::Type)::InstrBuilder
     tid = ensure_type_id!(ctx.type_registry, check_type)
-    tmp = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, AnyRef)
-    builder_set_local_type!(b, tmp, AnyRef)
+    tmp = allocate_local!(ctx, AnyRef)
     local_tee!(b, tmp)
     ref_test!(b, Int64(box_idx), false)
     if_!(b; results=WasmValType[I32])
@@ -941,16 +936,19 @@ function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)
     saved_scratch = ctx.scratch_locals
     saved_boxing = ctx.boxing_scratch_locals
     saved_typeof = ctx.typeof_scratch_local
+    saved_params, saved_results = ctx.wasm_params, ctx.wasm_results
     ctx.n_params = 0
+    ctx.wasm_params, ctx.wasm_results = WasmValType[], WasmValType[]
     ctx.locals = WasmValType[]
     ctx.scratch_locals = nothing
     ctx.boxing_scratch_locals = Dict{WasmValType,Int}()
     ctx.typeof_scratch_local = nothing
     try
         b = _compile_value_b(NirLiteral(val), ctx)
-        return b, copy(ctx.locals)
+        return b, ctx.locals
     finally
         ctx.n_params = saved_n_params
+        ctx.wasm_params, ctx.wasm_results = saved_params, saved_results
         ctx.locals = saved_locals
         ctx.scratch_locals = saved_scratch
         ctx.boxing_scratch_locals = saved_boxing
@@ -1024,43 +1022,25 @@ widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_
 """
     _ctx_builder(ctx, name) -> InstrBuilder
 
-fullstrict: THE codegen builder constructor — mod + seeded params + the LIVE locals
-provider, so the tracker always reads ctx truth (bare builders guessed AnyRef for
-locals allocated after creation — the largest residual mismatch class).
+A fragment of the function `ctx` compiles: its parameters and results are the function's
+(ctx.wasm_params, ctx.wasm_results), so a return in it is checked against the function's
+results, and its locals are the function's one list (ctx.locals), which every builder of the
+function shares and allocate_local! declares into.
 parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
 """
-function _ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder
-    local b = InstrBuilder(; func_name=name, mod=ctx.mod)
-    _seed_builder_locals!(b, ctx)
-    return b
-end
+_ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder =
+    InstrBuilder(ctx.wasm_params, ctx.wasm_results; func_name=name, mod=ctx.mod, locals=ctx.locals,
+                 fragment=true)
 
 """
-    _seed_builder_locals!(b, ctx)
+    _ctx_function_builder(ctx, func_idx) -> InstrBuilder
 
-Give a fresh value-builder the function's local types: the params through the julia→wasm
-mapping the function header used, every other local through the live provider over ctx.locals,
-so `local_get!` pushes each local's own type, as dart's builder knows its locals. A local the
-builder holds by neither is not the function's: local.get, local.set and local.tee of it reject
-at the call (there is no fallback type).
-parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
+The body of the function `ctx` compiles, defined at `func_idx`: its builder (function_builder),
+whose locals are ctx.locals, the list its fragments share.
+parity(pkg/wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder)
 """
-function _seed_builder_locals!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
-    for i in 1:ctx.n_params
-        i <= length(ctx.arg_types) || break
-        builder_set_local_type!(b, i - 1,
-            boundary_wasm_type(ctx.arg_types[i], ctx.mod, ctx.type_registry))
-    end
-    # The LIVE provider types every non-param local, including those allocated after this
-    # builder's creation (_local_type asks it before the seeded table, so ctx.locals is
-    # not copied into each fragment builder).
-    b.locals_fn = function(idx::Int)
-        idx < ctx.n_params && return nothing   # params: the static seed rules
-        local off = idx - ctx.n_params + 1
-        (off >= 1 && off <= length(ctx.locals)) ? ctx.locals[off] : nothing
-    end
-    return b
-end
+_ctx_function_builder(ctx::AbstractCompilationContext, func_idx::Integer)::InstrBuilder =
+    function_builder(ctx.mod, func_idx; locals=ctx.locals)
 
 """True for the literal `nothing` operand.
 parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
@@ -1318,16 +1298,15 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                     copy(init_b.v.stack), 0, "compile_value"))
                 init_type = only(init_b.v.stack)
                 init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
-                null_b = InstrBuilder(; func_name="mutable_global_storage", mod=ctx.mod)
-                ref_null!(null_b, Int64(init_type.type_idx))
-                global_idx = add_global_ref!(ctx.mod, init_type.type_idx, true,
-                                             builder_code(null_b); nullable=true)
+                global_idx = add_global!(ctx.mod, ConcreteRef(init_type.type_idx, true), true, nothing)
                 global_set!(init_b, global_idx)
-                end_block!(init_b)
-                init_func = add_function!(ctx.mod, WasmValType[], WasmValType[],
-                                          init_locals, builder_code(init_b);
-                                          name=generated_function_name(:field_initializer,
-                                                                       "$(node.mod).$(node.name)"))
+                init_func = define_function!(ctx.mod, WasmValType[], WasmValType[];
+                                             name=generated_function_name(:field_initializer,
+                                                                          "$(node.mod).$(node.name)"))
+                local init_body = function_builder(ctx.mod, init_func; locals=init_locals)
+                append_builder!(init_body, init_b)
+                finish_function!(init_body)
+                fill_function!(ctx.mod, init_func, init_body)
                 push!(ctx.type_registry.module_init_functions, init_func)
                 globals[actual_val] = (global_idx, init_type.type_idx)
                 global_get!(b, global_idx)
@@ -1437,7 +1416,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # THE ensureConstant funnel (constants.dart:49/427-443 — ONE constantInfo map
             # deduplicating every constant kind). SSAValue/Argument/SlotNumber are immutable
             # single-Int64-field structs: their layout is fixed by the type (not by the
-            # runtime value), so `_const_init_bytes!`'s constant-expressibility guard always
+            # runtime value), so `_const_init!`'s constant-expressibility guard always
             # holds and the funnel always succeeds — there is no inline struct_new! fallback
             # for these types (unlike the mutable/non-constant-field kinds elsewhere in this
             # function, which keep one because their funnel attempt is genuinely conditional).

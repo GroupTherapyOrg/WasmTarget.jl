@@ -1,7 +1,7 @@
 # WebAssembly Instructions and Opcodes
 # Reference: https://webassembly.github.io/spec/core/binary/instructions.html
 
-export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_type_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, add_global_ref!, to_bytes
+export Opcode, WasmModule, WasmImport, WasmTable, WasmMemory, WasmDataSegment, WasmTag, add_function!, add_import!, add_export!, add_struct_type!, add_array_type!, add_type_group!, add_table!, add_table_export!, add_elem_segment!, add_memory!, add_memory_export!, add_data_segment!, add_tag!, add_start_function!, define_function!, function_builder, fill_function!, define_global!, fill_global!, to_bytes
 
 # ============================================================================
 # Opcodes (Section 5.4)
@@ -266,30 +266,26 @@ end
 # ============================================================================
 
 """
-Represents a WebAssembly function definition: its type, locals, body bytes, the body's
-source mappings (byte offsets into `body`; empty for a compiler-generated function that no
-statement emitted), and the name it is defined with, which the name section gives it: every
-function has one, and an empty name, which the name section could not carry, is refused at
-construction (L157).
+A function the module defines: its type, the name it is defined with (which the name section
+gives it: every function has one, and an empty name, which the name section could not carry, is
+refused at definition, L157), and its body once filled from a builder (fill_function!): the
+locals the builder declared, its serialized instructions and their source mappings (byte offsets
+into `body`). An unfilled function (`body === nothing`) is defined and not yet built; to_bytes
+refuses a module holding one, as dart requires every body complete before serialization.
 parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction)
 """
 struct WasmFunction
     type_idx::UInt32
     locals::Vector{WasmValType}
-    body::Vector{UInt8}
+    body::Union{Nothing,Vector{UInt8}}
     mappings::Vector{SourceMapping}
     name::String
-    function WasmFunction(type_idx::UInt32, locals::Vector{WasmValType}, body::Vector{UInt8},
+    function WasmFunction(type_idx::UInt32, locals::Vector{WasmValType}, body::Union{Nothing,Vector{UInt8}},
                           mappings::Vector{SourceMapping}, name::String)::WasmFunction
         isempty(name) && throw(ArgumentError("WasmFunction(type $type_idx; name=\"\"): a function is named where it is defined, and the name section drops an empty name"))
         return new(type_idx, locals, body, mappings, name)
     end
 end
-# parity(pkg/wasm_builder/lib/src/ir/function.dart:77 DefinedFunction): a body with no source
-# mappings, named as every function is where it is defined (functions.dart:31 define's name):
-# a body rebuilt into a defined slot passes the slot's name on.
-WasmFunction(type_idx::Integer, locals::Vector, body::Vector{UInt8}; name::String)::WasmFunction =
-    WasmFunction(UInt32(type_idx), WasmValType[l for l in locals], body, SourceMapping[], name)
 
 """
 Represents an export entry.
@@ -318,13 +314,15 @@ end
 """
     WasmGlobalDef
 
-Internal representation of a WebAssembly global variable definition.
+A global the module defines: its type, mutability, name, and initializer (define_global!).
 parity(pkg/wasm_builder/lib/src/ir/global.dart:40 DefinedGlobal)
 """
 struct WasmGlobalDef
     valtype::WasmValType     # Type of the global
     mutable_::Bool           # Whether the global is mutable
-    init::Vector{UInt8}      # Initialization expression (bytecode)
+    # its initializer, serialized from its constant-expression builder once filled
+    # (fill_global!); `nothing` while defined and not yet filled, which to_bytes refuses
+    init::Union{Nothing,Vector{UInt8}}
     name::Union{Nothing,String}   # the name it was defined with (dart GlobalBuilder.globalName)
 end
 
@@ -440,10 +438,17 @@ mutable struct WasmModule
     # once, after every type is defined, types.dart:77; the writer computes the section's and
     # refuses a complete record that disagrees)
     type_groups::Vector{UnitRange{Int}}
+    # every builder of this module records its full emit log, which its errors carry (dart
+    # InstructionsBuilder.traceEnabled, set from the ModuleBuilder's construction)
+    builder_trace::Bool
 end
 
-# parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder)
-WasmModule()::WasmModule = WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[], WasmModuleGlobal[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[], nothing, nothing, UnitRange{Int}[])
+# parity(pkg/wasm_builder/lib/src/builder/module.dart:48 ModuleBuilder): the source map URL and
+# the trace are the module's from its construction
+WasmModule(; source_map_url::Union{Nothing,String}=nothing, builder_trace::Bool=false)::WasmModule =
+    WasmModule(CompositeType[], WasmImport[], WasmFunction[], WasmTable[], WasmMemory[],
+               WasmModuleGlobal[], WasmExport[], WasmElemSegment[], WasmDataSegment[], WasmTag[],
+               nothing, source_map_url, UnitRange{Int}[], builder_trace)
 
 # ============================================================================
 # Module Building API
@@ -470,17 +475,18 @@ Base.showerror(io::IO, e::ModuleValidationError) =
 # parity(pkg/wasm_builder/lib/src/builder/functions.dart:10 FunctionsBuilder)
 @inline _function_count(mod::WasmModule)::Int64 = num_imported_funcs(mod) + length(mod.functions)
 
+# the type index of function `idx`, imported or defined
 # parity(pkg/wasm_builder/lib/src/ir/function.dart:36 BaseFunction.type)
-function _function_type(mod::WasmModule, idx::Integer)::FuncType
+function _function_type_idx(mod::WasmModule, idx::Integer)::UInt32
     0 <= idx < _function_count(mod) ||
         _module_invalid(:function_index, "function index $idx is out of bounds")
-    if idx < num_imported_funcs(mod)
-        imp = filter(x -> x.kind == 0x00, mod.imports)[idx + 1]
-        ft = mod.types[Int(imp.type_idx) + 1]
-    else
-        fn = mod.functions[idx - num_imported_funcs(mod) + 1]
-        ft = mod.types[Int(fn.type_idx) + 1]
-    end
+    idx < num_imported_funcs(mod) && return filter(x -> x.kind == 0x00, mod.imports)[idx + 1].type_idx
+    return mod.functions[idx - num_imported_funcs(mod) + 1].type_idx
+end
+
+# parity(pkg/wasm_builder/lib/src/ir/function.dart:36 BaseFunction.type)
+function _function_type(mod::WasmModule, idx::Integer)::FuncType
+    ft = mod.types[Int(_function_type_idx(mod, idx)) + 1]
     ft isa FuncType || _module_invalid(:function_index, "function $idx has a non-function type")
     return ft
 end
@@ -528,7 +534,8 @@ formal(dev/formal/TypeIdentity.tla): an index handed back is the runtime type re
 parity(quarantine: WT's validator identifies a type by its index, so an addition structurally
 identical to a type already defined returns that type's index, as wasm's iso-recursive
 canonicalization identifies the two at run time; dart's defineStruct and defineArray define a
-new type every time and deduplicate only function types, types.dart:406 _FunctionTypeKey.)
+new type every time and deduplicate only function types, types.dart:406 _FunctionTypeKey; open
+on dev/MARCH.md 13.7.)
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
     _check_refs_defined(mod, ct, length(mod.types))
@@ -619,9 +626,9 @@ end
 
 # every type index `ct` refers to is below `limit`: a type is added after what it refers to,
 # or with it in one group (add_type_group!)
-# parity(quarantine: WT numbers a type when it is added, since function bodies are bytes by the
-# time the module is written (dev/formal/RecGroup.tla), so each addition must refer only
-# backward or within its group; dart numbers every type at the end, types.dart:240.)
+# parity(quarantine: WT numbers a type when it is added, a body serialized when its function is
+# filled (dev/formal/RecGroup.tla), so each addition must refer only backward or within its group;
+# dart numbers every type at the end, types.dart:240: eager numbering, open on dev/MARCH.md 13.7.)
 function _check_refs_defined(mod::WasmModule, ct::CompositeType, limit::Integer)::Nothing
     for r in type_refs(ct)
         Int(r) < limit ||
@@ -642,9 +649,10 @@ formal(dev/formal/TypeIdentity.tla): two distinct indices are never one runtime 
 index handed back is the runtime type requested.
 parity(pkg/wasm_builder/lib/src/builder/types.dart:350 TypesBuilder.defineStruct): the types
 are defined, and their recursion group follows from the graph (recursion_groups). Returning an
-equal group's index: parity(quarantine: WT numbers a type when it adds it, since function
-bodies are bytes before the module is written, so an addition wasm would canonicalize into an
-existing group must be that group's index; dart numbers its groups at the end.)
+equal group's index: parity(quarantine: WT numbers a type when it adds it, so an addition wasm
+would canonicalize into an existing group must be that group's index; dart numbers its groups at
+the end, a FinalizableIndex: the equal-group merge eager numbering forces, open on dev/MARCH.md
+13.7.)
 """
 function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
     local base = length(mod.types)
@@ -825,7 +833,7 @@ end
 _import_function_name(module_name::String, field_name::String)::String =
     "$(module_name).$(field_name) (import)"
 
-# parity(quarantine: a WT invention, open on dev/MARCH.md 13.17 A3B16 — WT numbers a function when
+# parity(quarantine: a WT invention, open on dev/MARCH.md 13.7 (eager numbering) — WT numbers a function when
 # it is defined, where dart's FinalizableIndex numbers it when the module is built
 # (builder/util.dart:28), so a late import is refused instead of renumbered; no Julia necessity.)
 _check_import_precedes_definitions(mod::WasmModule, module_name::String, field_name::String)::Nothing =
@@ -833,7 +841,7 @@ _check_import_precedes_definitions(mod::WasmModule, module_name::String, field_n
         "import $(module_name).$(field_name) after $(length(mod.functions)) defined function(s) " *
         "would renumber them: every import precedes the first definition")
 
-# parity(quarantine: a WT invention, open on dev/MARCH.md 13.17 A3B16 — WT numbers a global when it
+# parity(quarantine: a WT invention, open on dev/MARCH.md 13.7 (eager numbering) — WT numbers a global when it
 # is defined, where dart's FinalizableIndex numbers every global when the module is built, the
 # imported ones first (builder/util.dart:28 finalizeImportsAndBuilders), so a late global import
 # is refused instead of renumbered; no Julia necessity.)
@@ -857,30 +865,33 @@ function num_imported_funcs(mod::WasmModule)::Int
 end
 
 """
-    add_function!(mod, params, results, locals, body; name) -> func_idx
+    define_function!(mod, params, results; name) -> func_idx
 
-Add a function named `name` to the module and return its index. dart's `define(type, [name])`
-takes the name optionally, and dart2wasm names most of its definitions (functions.dart:171
-getFunctionName, each generator's own text) but not all (its cross-module global getter and
-setter, globals.dart:52 and :79); WT requires it, a strengthening of dart's practice, so no
-definition goes unnamed and a trap inside a function the compiler generates names it by its
-construct (L157).
-Note: Local function indices start after imported functions.
-Params and results can be NumType or WasmValType vectors.
+Define a function of type `params -> results` named `name`, with no body yet, and return its
+index (imported functions come first in the index space). Its body is a builder of that type
+(function_builder), filled in with fill_function!; to_bytes refuses a module with an unfilled
+function. dart's `define(type, [name])` takes the name optionally, and dart2wasm names most of
+its definitions (functions.dart:171 getFunctionName, each generator's own text) but not all (its
+cross-module global getter and setter, globals.dart:52 and :79); WT requires it, a strengthening
+of dart's practice, so no definition goes unnamed and a trap inside a function the compiler
+generates names it by its construct (L157).
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:31 FunctionsBuilder.define)
 """
-function add_function!(mod::WasmModule,
-                       params::Vector{<:WasmValType},
-                       results::Vector{<:WasmValType},
-                       locals::Vector{<:WasmValType},
-                       body::Vector{UInt8}; name::String)::UInt32
-    isempty(name) && throw(ArgumentError("add_function!(…; name=\"\"): a function is named where it is defined, and the name section drops an empty name"))
-    ft = FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
-    type_idx = add_type!(mod, ft)
-    push!(mod.functions, WasmFunction(type_idx, WasmValType[l for l in locals], body,
-                                      SourceMapping[], name))
-    # Function index = number of imported functions + local function index
+function define_function!(mod::WasmModule, params::Vector{<:WasmValType}, results::Vector{<:WasmValType};
+                          name::String)::UInt32
+    isempty(name) && throw(ArgumentError("define_function!(…; name=\"\"): a function is named where it is defined, and the name section drops an empty name"))
+    local type_idx = add_type!(mod, FuncType(WasmValType[p for p in params], WasmValType[r for r in results]))
+    push!(mod.functions, WasmFunction(type_idx, WasmValType[], nothing, SourceMapping[], name))
     return UInt32(num_imported_funcs(mod) + length(mod.functions) - 1)
+end
+
+# the defined function at `idx`, by its slot
+# parity(pkg/wasm_builder/lib/src/builder/functions.dart:12 FunctionsBuilder._functionBuilders)
+function _defined_function_slot(mod::WasmModule, idx::Integer, op::Symbol)::Int
+    local slot = Int(idx) - num_imported_funcs(mod) + 1
+    1 <= slot <= length(mod.functions) ||
+        _module_invalid(op, "function $idx is not a function the module defines")
+    return slot
 end
 
 """
@@ -903,69 +914,17 @@ function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)
     return mod
 end
 
-"""
-    add_global!(mod, valtype, mutable, init_value; name) -> global_idx
-
-Add a global variable to the module and return its index; `name` names it, as dart's
-`define(type, name)` does, so it is found by name (global_named). The init_value should be a
-constant of the appropriate type; a reference global starts null.
-parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
-"""
-function add_global!(mod::WasmModule, valtype::WasmValType, mutable_::Bool, init_value;
-                     name::Union{Nothing,String}=nothing)::UInt32
-    name === nothing || global_named(mod, name) === nothing ||
-        _module_invalid(:add_global, "a global named $(repr(name)) is already defined")
-    # Generate initialization expression
-    init = UInt8[]
-    if valtype == I32
-        push!(init, Opcode.I32_CONST)
-        append!(init, encode_leb128_signed(Int32(init_value)))
-    elseif valtype == I64
-        push!(init, Opcode.I64_CONST)
-        append!(init, encode_leb128_signed(Int64(init_value)))
-    elseif valtype == F32
-        push!(init, Opcode.F32_CONST)
-        append!(init, reinterpret(UInt8, [Float32(init_value)]))
-    elseif valtype == F64
-        push!(init, Opcode.F64_CONST)
-        append!(init, reinterpret(UInt8, [Float64(init_value)]))
-    elseif valtype == ExternRef
-        # externref initialized to null
-        push!(init, Opcode.REF_NULL)
-        push!(init, 0x6F)  # externref heap type
-    elseif valtype == AnyRef
-        push!(init, Opcode.REF_NULL)
-        push!(init, 0x6E)  # any heap type
-    elseif valtype isa ConcreteRef && valtype.nullable && init_value === nothing
-        Int(valtype.type_idx) < length(mod.types) ||
-            _module_invalid(:add_global, "type $(valtype.type_idx) is not defined")
-        push!(init, Opcode.REF_NULL)      # ref.null of its own type (a heap type index, s33)
-        append!(init, encode_leb128_signed(Int64(valtype.type_idx)))
-    else
-        error("Unsupported global type: $valtype")
-    end
-    push!(init, Opcode.END)
-
-    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init, name))
-    return UInt32(length(mod.globals) - 1)
-end
-
-"""
-    global_named(mod, name) -> global_idx | nothing
-
-The global defined or imported with `name`, found by its name and never by its type.
-parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
-"""
-function global_named(mod::WasmModule, name::String)::Union{Nothing,UInt32}
-    local i = findfirst(g -> g.name == name, mod.globals)
-    return i === nothing ? nothing : UInt32(i - 1)
-end
+# a global's name, when given, names no other global (the name section names each by its own)
+# parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
+_check_global_name(mod::WasmModule, name::Union{Nothing,String}, op::Symbol)::Nothing =
+    (name === nothing || !any(g -> g.name == name, mod.globals)) ? nothing :
+        _module_invalid(op, "a global named $(repr(name)) is already defined")
 
 """
     add_global_import!(mod, module_name, field_name, valtype, mutable; name) -> global_idx
 
 Import a global of type `valtype` (mutable or not) from `module_name.field_name` and return its
-index; `name` names it, so it is found by name (global_named). Imported globals come first in the
+index; `name` names it in the name section. Imported globals come first in the
 global index space, and WT numbers a global when it is defined (dart's FinalizableIndex numbers it
 when the module is built), so an import after a defined global, which would renumber it under
 the code already emitted, is refused, as add_import! refuses a function import after a defined
@@ -976,46 +935,10 @@ function add_global_import!(mod::WasmModule, module_name::String, field_name::St
                             valtype::WasmValType, mutable_::Bool;
                             name::Union{Nothing,String}=nothing)::UInt32
     _check_global_import_precedes_definitions(mod, module_name, field_name)
-    name === nothing || global_named(mod, name) === nothing ||
-        _module_invalid(:add_global_import, "a global named $(repr(name)) is already defined")
+    _check_global_name(mod, name, :add_global_import)
     valtype isa ConcreteRef && !(Int(valtype.type_idx) < length(mod.types)) &&
         _module_invalid(:add_global_import, "type $(valtype.type_idx) is not defined")
     push!(mod.globals, WasmGlobalImport(module_name, field_name, valtype, mutable_, name))
-    return UInt32(length(mod.globals) - 1)
-end
-
-"""
-    add_global_ref!(mod, type_idx, mutable, init_expr) -> global_idx
-
-Add a global variable with a WasmGC reference type to the module.
-parity(pkg/wasm_builder/lib/src/builder/globals.dart:29 GlobalsBuilder.define)
-The init_expr should be the bytecode for the initialization expression
-(e.g., struct.new instructions) WITHOUT the trailing END byte.
-
-# Arguments
-- `mod`: The WasmModule to add the global to
-- `type_idx`: The type index of the WasmGC struct/array type
-- `mutable_`: Whether the global is mutable
-- `init_expr`: The initialization bytecode (without END byte)
-- `nullable`: Whether the reference is nullable (default: true)
-
-# Example
-```julia
-# Create a global holding a struct instance
-struct_type_idx = add_struct_type!(mod, [...])
-init_bytes = [Opcode.GC_PREFIX, Opcode.STRUCT_NEW_DEFAULT, ...type_idx_leb...]
-global_idx = add_global_ref!(mod, struct_type_idx, true, init_bytes)
-```
-"""
-function add_global_ref!(mod::WasmModule, type_idx::Integer, mutable_::Bool, init_expr::Vector{UInt8}; nullable::Bool=true)::UInt32
-    # Reference type to the struct (ConcreteRef: type_idx first, then nullable)
-    valtype = ConcreteRef(UInt32(type_idx), nullable)
-
-    # Add END byte to init expression
-    init = copy(init_expr)
-    push!(init, Opcode.END)
-
-    push!(mod.globals, WasmGlobalDef(valtype, mutable_, init, nothing))
     return UInt32(length(mod.globals) - 1)
 end
 
@@ -1207,6 +1130,7 @@ const SECTION_DATA = 0x0B  # parity(pkg/wasm_builder/lib/src/serialize/sections.
 const SECTION_START = 0x08    # Start function (section 8); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:557 StartSection.sectionId)
 const SECTION_DATACOUNT = 0x0C  # Data count (section 12); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:653 DataCountSection.sectionId)
 const SECTION_TAG = 0x0D      # Exception tags (section 13); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:413 TagSection.sectionId)
+const SECTION_CUSTOM = 0x00   # a custom section (the name section, sourceMappingURL); parity(pkg/wasm_builder/lib/src/serialize/sections.dart:836 CustomSection.sectionId)
 # end parity-region
 
 """
@@ -1242,6 +1166,16 @@ module with a `source_map_url` gets the `sourceMappingURL` section after the nam
 parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
 """
 function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapping}}
+    # every body is complete before the module is written (dart: a body must be ended before
+    # the module is serialized, functions.dart:28-30; a global's initializer is built with it)
+    for (k, f) in enumerate(mod.functions)
+        f.body === nothing && _module_invalid(:to_bytes,
+            "function $(num_imported_funcs(mod) + k - 1) ($(f.name)) is defined and never filled (fill_function!)")
+    end
+    for (k, g) in enumerate(mod.globals)
+        (g isa WasmGlobalDef && g.init === nothing) && _module_invalid(:to_bytes,
+            "global $(k - 1)$(g.name === nothing ? "" : " ($(g.name))") is defined and never filled (fill_global!)")
+    end
     w = WasmWriter()
     local module_mappings = SourceMapping[]
 
@@ -1363,8 +1297,8 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
                 # Global type: valtype + mutability
                 write_valtype!(section, g.valtype)
                 write_byte!(section, g.mutable_ ? 0x01 : 0x00)
-                # Init expression (already includes END byte)
-                append!(section.buffer, g.init)
+                # its initializer, a complete constant expression (fill_global!)
+                append!(section.buffer, something(g.init))
             end
         end
     end
@@ -1458,7 +1392,7 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
 
                 # Body instructions
                 local body_start = length(body_writer.buffer)
-                append!(body_writer.buffer, func.body)
+                append!(body_writer.buffer, something(func.body))
 
                 # Write body size then body
                 write_u32!(section, length(body_writer.buffer))
@@ -1506,7 +1440,8 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
 
     # Name section (custom section): each function's own name, the one it was imported or
     # defined with, in index order; a function with none ("") is not named. An export's name
-    # names no function (dart's NameSection reads `functions[i].functionName` only)
+    # names no function (dart's NameSection reads `functions[i].functionName` only). Then each
+    # global's name, imported or defined, in index order (subsection 7, `globals[i].globalName`)
     # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:844 NameSection)
     func_names = Pair{UInt32, String}[]
     func_idx = UInt32(0)
@@ -1519,26 +1454,24 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
         push!(func_names, func_idx => f.name)   # never empty (WasmFunction refuses one)
         func_idx += 1
     end
-    if !isempty(func_names)
-        # Custom section (section id 0)
-        write_byte!(w, 0x00)
-        custom_section = WasmWriter()
-        # Section name: "name"
-        write_name!(custom_section, "name")
-        # Subsection 1: function names
-        subsection = WasmWriter()
-        write_u32!(subsection, length(func_names))
-        for (idx, name) in func_names
-            write_u32!(subsection, idx)
-            write_name!(subsection, name)
+    local global_names = Pair{UInt32,String}[UInt32(k - 1) => g.name
+                                             for (k, g) in enumerate(mod.globals) if g.name !== nothing]
+    if !isempty(func_names) || !isempty(global_names)
+        write_section!(w, SECTION_CUSTOM) do custom_section
+            write_name!(custom_section, "name")
+            for (id, names) in ((0x01, func_names), (0x07, global_names))
+                isempty(names) && continue
+                subsection = WasmWriter()
+                write_u32!(subsection, length(names))
+                for (idx, name) in names
+                    write_u32!(subsection, idx)
+                    write_name!(subsection, name)
+                end
+                write_byte!(custom_section, id)
+                write_u32!(custom_section, length(subsection.buffer))
+                append!(custom_section.buffer, subsection.buffer)
+            end
         end
-        # Write subsection (id=1, then size, then content)
-        write_byte!(custom_section, 0x01)  # subsection id: function names
-        write_u32!(custom_section, length(subsection.buffer))
-        append!(custom_section.buffer, subsection.buffer)
-        # Write custom section size then content
-        write_u32!(w, length(custom_section.buffer))
-        append!(w.buffer, custom_section.buffer)
     end
 
     mod.source_map_url === nothing || write_source_mapping_url_section!(w, mod.source_map_url)
@@ -1552,12 +1485,10 @@ The `sourceMappingURL` custom section: its name, then the URL of the module's so
 parity(pkg/wasm_builder/lib/src/serialize/sections.dart:1085 SourceMapSection)
 """
 function write_source_mapping_url_section!(w::WasmWriter, url::String)::WasmWriter
-    local contents = WasmWriter()
-    write_name!(contents, "sourceMappingURL")
-    write_name!(contents, url)
-    write_byte!(w, 0x00)
-    write_u32!(w, length(contents.buffer))
-    append!(w.buffer, contents.buffer)
+    write_section!(w, SECTION_CUSTOM) do contents
+        write_name!(contents, "sourceMappingURL")
+        write_name!(contents, url)
+    end
     return w
 end
 

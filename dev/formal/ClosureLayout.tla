@@ -191,7 +191,7 @@ VARIABLES
     vtArrivals,        \* [Types -> 0..MaxArrivals] -- vtable arrivals (build_closure_vtable! / closure_vtable) so far
     seenVt,            \* SUBSET Types -- T's whose vtable global exists
     globalId,          \* [Types -> Nat] -- the one vtable global per closure body (0 = unassigned)
-    nextGlobalId,      \* Nat -- add_global_ref!'s monotonic counter
+    nextGlobalId,      \* Nat -- define_global!'s monotonic counter
     shapeAtCreation,   \* [Types -> Nat] -- GROUND TRUTH: the vt_struct id T's global was populated with
     lastAnnotated,     \* [Types -> Nat] -- the vt_struct id most recently RETURNED/used for T
     arityOf,           \* [Types -> Nat] -- the arity of T's most recent arrival (diagnostic/history)

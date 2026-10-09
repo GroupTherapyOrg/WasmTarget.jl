@@ -662,7 +662,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # lowering route, as dart2wasm's visitTryCatch owns its region. Here the region only
         # records the exception stack's depth when it is entered (jl_excstack_state), which
         # its pop_exception restores.
-        global_get!(b, ensure_exception_top_global!(ctx.mod))
+        global_get!(b, exc_top_global!(ctx.mod, ctx.type_registry))
         local_set!(b, exc_saved_local!(ctx, idx))
 
     elseif node isa NirGlobalRef
@@ -725,7 +725,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         elseif node isa NirTheException
             # The exception being handled: the top of Julia's exception stack
             # (jl_current_exception)
-            emit_current_exception!(_sf, ctx.mod)
+            emit_current_exception!(_sf, ctx.mod, ctx.type_registry)
             # The exception is anyref but the SSA local may be structref (for Union{ErrorException, BoundsError}).
             # Downcast anyref → structref so the local.set is type-valid.
             local _exn_local_wasm = nothing
@@ -754,7 +754,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                 "pop_exception without the enter it pops to"; idx=idx, detail=node)
             if _pop_enter isa NirSSA
                 local_get!(_sf, exc_saved_local!(ctx, _pop_enter.id))
-                global_set!(_sf, ensure_exception_top_global!(ctx.mod))
+                global_set!(_sf, exc_top_global!(ctx.mod, ctx.type_registry))
                 stmt_bytes = builder_code(_sf)
             end
         elseif node isa NirNoOp
@@ -765,7 +765,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             # variable that may be unassigned. The exception is the exact Julia
             # object, thrown through the one exception tag (never a skipped check
             # — before this lowering the head fell through as an empty statement).
-            ensure_exception_tag!(ctx.mod)
             local _tu_info = register_struct_type!(ctx.mod, ctx.type_registry, UndefVarError)
             _tu_info === nothing && error("UndefVarError layout is unavailable")
             local _tu_fields = ctx.mod.types[_tu_info.wasm_type_idx + 1].fields
@@ -779,7 +778,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             emit_value!(_sf, NirLiteral(:local), ctx,
                         _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
             struct_new!(_sf, _tu_info.wasm_type_idx)
-            emit_throw_value!(_sf, ctx.mod)
+            emit_throw_value!(_sf, ctx.mod, ctx.type_registry)
             end_block!(_sf)
             stmt_bytes = builder_code(_sf)
         else

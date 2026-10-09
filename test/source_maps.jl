@@ -23,8 +23,7 @@ function _smt_rethrow_other(x::Int64)
 end
 
 @testset "source maps: the builder records dart's mappings" begin
-    m = _SMT.WasmModule()
-    m.source_map_url = "t.map"
+    m = _SMT.WasmModule(; source_map_url="t.map")
     b = _SMT.InstrBuilder(; mod=m)
     @test _SMT.records_source_maps(b)
     @test !_SMT.records_source_maps(_SMT.InstrBuilder(; mod=_SMT.WasmModule()))  # no URL: no recording
@@ -37,12 +36,22 @@ end
     _SMT.i64_const!(b, 2)
     _SMT.stop_source_mapping!(b)
     @test b.source_mappings == [_SMT.SourceMapping(0, s2), _SMT.SourceMapping(2, nothing)]
-    # a fragment's mappings land shifted by where its instructions do
-    frag = _SMT.InstrBuilder(; mod=m)
+    # a fragment's mappings land shifted by where its instructions do, and the destination's own
+    # mapping (here none: unmapped) resumes after them, so the fragment's last does not run on
+    frag = _SMT.InstrBuilder(; mod=m, fragment=true)
     _SMT.start_source_mapping!(frag, s1)
     _SMT.i64_const!(frag, 3)
     _SMT.append_builder!(b, frag)
-    @test b.source_mappings[end] == _SMT.SourceMapping(2, s1)
+    @test b.source_mappings[end-1:end] == [_SMT.SourceMapping(2, s1), _SMT.SourceMapping(3, nothing)]
+    # a source is its file's URI, as dart's Uri.file writes it: an absolute path a file:// URI (a
+    # Windows drive path file:///C:/…), a relative one a relative reference, each character
+    # outside the URI path set percent-encoded
+    @test _SMT.source_file_uri("/home/u/a.jl") == "file:///home/u/a.jl"
+    @test _SMT.source_file_uri("C:\\work\\a.jl") == "file:///C:/work/a.jl"
+    @test _SMT.source_file_uri("./int.jl") == "./int.jl"
+    @test _SMT.source_file_uri("none") == "none"
+    @test _SMT.source_file_uri("/a b/c%d#e.jl") == "file:///a%20b/c%25d%23e.jl"
+    @test _SMT.source_file_uri("/é.jl") == "file:///%C3%A9.jl"
     # serialized: instruction indices become the byte offsets of those instructions
     code, mapped = _SMT.builder_code_mapped(b)
     @test mapped[1] == _SMT.SourceMapping(0, s2)
@@ -56,7 +65,9 @@ end
     offsets = Set(s[1] for s in segs)
     checked = 0
     for f in mod.functions
-        isempty(f.mappings) && continue
+        # a body no statement emitted (a generated function) records only its end (dart's
+        # serializer ends every body with `addMapping(s.offset, null)`, instructions.dart:78)
+        all(m -> m.info === nothing, f.mappings) && continue
         # the body's start in the module, from its first mapping; every mapping must then be a
         # module offset the map lists, and the module must hold the body's bytes there
         local start = nothing
@@ -77,6 +88,10 @@ end
     @test checked >= 2
     # the recursive call's own line is mapped, named by its inline chain
     sm = WasmRunner.JSON.parse(json)
+    # the map's sources are file URIs: this file's, and no bare absolute path
+    @test _SMT.source_file_uri(@__FILE__) in sm["sources"]
+    @test startswith(_SMT.source_file_uri(@__FILE__), "file:///")
+    @test !any(src -> startswith(src, "/") || occursin('\\', src), sm["sources"])
     @test any(n -> occursin("_smt_down @ ", n) && occursin("source_maps.jl:12", n), sm["names"])
     @test occursin("sourceMappingURL", String(copy(bytes)))
 end
@@ -164,12 +179,13 @@ _smt_host_entry(x::Int64)::Int64 = _smt_host_stub(x) * 2
 end
 
 @testset "source maps: a host's module, mapped, is compile_multi's module plus its URL section" begin
-    host() = (m = _SMT.WasmModule();
+    # the host's module records source maps from its construction (dart ModuleBuilder.sourceMapUrl)
+    host(url=nothing) = (m = _SMT.WasmModule(; source_map_url=url);
               (m, _SMT.add_import!(m, "host", "stub", _SMT.WasmValType[_SMT.I64], _SMT.WasmValType[_SMT.I64])))
     m1, i1 = host()
     plain = _SMT.compile_multi([(_smt_host_entry, (Int64,), "host_entry")]; existing_module=m1,
                                import_stubs=Any[(_smt_host_stub, "stub", (Int64,), i1, Int64)])
-    m2, i2 = host()
+    m2, i2 = host("m.map")
     mapped, json = _SMT.compile_multi_with_sourcemap([(_smt_host_entry, (Int64,), "host_entry")];
                        sourcemap_url="m.map", existing_module=m2,
                        import_stubs=Any[(_smt_host_stub, "stub", (Int64,), i2, Int64)])
@@ -427,7 +443,7 @@ end
 _smt_late_entry(n::Int64)::Int64 = (s = Int64(0); for x in _smt_late_shapes(n); s += _smt_late_area(x)::Int64; end; s)
 
 @testset "source maps: the class reader reads the last round's classes" begin
-    m = _SMT.WasmModule()
+    m = _SMT.WasmModule(; source_map_url="m.map")
     idx = _SMT.add_import!(m, "host", "stub", _SMT.WasmValType[_SMT.I64], _SMT.WasmValType[_SMT.I64])
     bytes, json = _SMT.compile_multi_with_sourcemap([(_smt_late_entry, (Int64,), "late_entry")];
                       sourcemap_url="m.map", existing_module=m,

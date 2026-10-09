@@ -33,21 +33,69 @@ include("probe_corpus.jl")
 # Exception handling is dart's legacy form (L155): a printed probe module holds none of the
 # instructions dart2wasm does not emit. Its text, as wasm-tools prints it, is read.
 const _NON_DART_EH = r"\b(try_table|throw_ref|delegate|catch_all)\b"
-_non_dart_eh(bytes::Vector{UInt8})::Bool =
-    occursin(_NON_DART_EH, read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String))
+_non_dart_eh(printed::String)::Bool = occursin(_NON_DART_EH, printed)
+
+# The names the module's name section gives its globals (subsection 7), read from its bytes.
+function _global_names(bytes::Vector{UInt8})::Vector{String}
+    local uleb(i) = (r = 0; s = 0; while true; x = bytes[i]; i += 1; r |= Int(x & 0x7f) << s; s += 7; x < 0x80 && return (r, i); end)
+    local names = String[]
+    local i = 9
+    while i <= length(bytes)
+        local id = bytes[i]
+        local size, j = uleb(i + 1)
+        local stop = j + size
+        if id == 0x00
+            local nlen, k = uleb(j)
+            if String(bytes[k:k + nlen - 1]) == "name"
+                k += nlen
+                while k < stop
+                    local sub = bytes[k]
+                    local ssize, m = uleb(k + 1)
+                    if sub == 0x07
+                        local count, q = uleb(m)
+                        for _ in 1:count
+                            local _, q2 = uleb(q)
+                            local len, q3 = uleb(q2)
+                            push!(names, String(bytes[q3:q3 + len - 1]))
+                            q = q3 + len
+                        end
+                    end
+                    k = m + ssize
+                end
+            end
+        end
+        i = stop
+    end
+    return names
+end
+# every global the module names is named in its printed text (`(global $<name>`), as dart's
+# NameSection writes each global's name (sections.dart:844): the global names its writer wrote
+_unnamed_globals(bytes::Vector{UInt8}, printed::String)::Int =
+    count(n -> !occursin("(global \$" * n * " ", printed), _global_names(bytes))
 
 function main()
     hashes = Dict{String,String}()
     non_dart_eh = String[]
+    unnamed = String[]
     for (name, (f, argtypes)) in CASES
         bytes = WasmTarget.compile_multi([(f, argtypes, name)]; validate=false)
         hashes[name] = bytes2hex(SHA.sha256(bytes))
-        _non_dart_eh(bytes) && push!(non_dart_eh, name)
+        printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
+        _non_dart_eh(printed) && push!(non_dart_eh, name)
+        _unnamed_globals(bytes, printed) == 0 || push!(unnamed, name)
         # WT_PROBE_DUMP=<name>:<path> writes one probe's binary for cross-process diffing
         dump = get(ENV, "WT_PROBE_DUMP", "")
         if dump != "" && startswith(dump, name * ":")
             write(dump[length(name)+2:end], bytes)
         end
+    end
+
+    if !isempty(unnamed)
+        for name in unnamed
+            println("  A NAMED GLOBAL NOT PRINTED BY ITS NAME: ", name)
+        end
+        println("probe_bytes: $(length(unnamed)) of $(length(hashes)) probes name a global the printed module does not")
+        return 1
     end
 
     if !isempty(non_dart_eh)

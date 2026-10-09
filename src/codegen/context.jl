@@ -92,6 +92,10 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # The function's source-location table: a located diagnostic decodes a statement's
     # inline chain and the method's definition site from it (diagnostics.jl).
     debuginfo::Union{Core.DebugInfo, Nothing}
+    # the function's wasm signature (function_wasm_signature), which its body builder and every
+    # fragment carry: its parameters type locals 0 .. n_params-1, its results type every return
+    wasm_params::Vector{WasmValType}
+    wasm_results::Vector{WasmValType}
 end
 
 # parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
@@ -150,7 +154,8 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         nir_ssa_users(body.stmts),
         Dict{Int,Union{Nothing,SourceInfo}}(),
         body.slot_types,
-        body.debuginfo
+        body.debuginfo,
+        function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)...
     )
     # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION

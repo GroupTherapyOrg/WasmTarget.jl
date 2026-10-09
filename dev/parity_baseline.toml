@@ -8,5 +8,5 @@ R27_coercion_bypass = 18
 R33_unexercised_registry_entries = 5
 R3_infer_value_type = 58
 R40_process_global_state = 7
-R5_julia_type_reguess = 63
+R5_julia_type_reguess = 62
 R7_raw_coercion_ops = 21

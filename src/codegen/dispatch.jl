@@ -300,17 +300,8 @@ function emit_dispatch_wrappers!(mod::WasmModule,
     isempty(dt_registry.tables) && return
 
     for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
-        param_types = copy(dt.slot_types)   # the per-slot LUB
         # Dispatch signature result type
-        is_numeric_return = dt.result_wasm_type in (I32, I64, F32, F64)
         is_anyref_return = dt.result_wasm_type == AnyRef
-        result_types = if is_numeric_return
-            WasmValType[dt.result_wasm_type]
-        elseif is_anyref_return
-            WasmValType[AnyRef]
-        else
-            WasmValType[]
-        end
 
         wrapper_indices = UInt32[]
         # the level-1 dispatch axis: verified by the guarded classId index itself
@@ -319,7 +310,17 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             local _wr_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                             WasmValType[dt.result_wasm_type] : WasmValType[]
             b = InstrBuilder(copy(dt.slot_types), _wr_res; func_name="emit_dispatch_wrappers!", mod=mod)
-            local _tsig = mod.types[Int(mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].type_idx) + 1]
+            # its one local, after the params: a numeric result's box scratch, or a closure
+            # result's context scratch
+            if is_anyref_return
+                local _ewt = julia_to_wasm_type(entry.return_type)
+                if _ewt in (I32, I64, F32, F64)
+                    builder_add_local!(b, _ewt)
+                elseif is_context_type(type_registry, entry.return_type)
+                    builder_add_local!(b, AnyRef)
+                end
+            end
+            local _tsig = _function_type(mod, entry.target_idx)
 
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
@@ -390,7 +391,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             end
 
             # call $target — target_idx is correct because actual functions were added first
-            emit_direct_call!(b, mod, entry.target_idx)
+            emit_direct_call!(b, mod, type_registry, entry.target_idx)
 
             # Box numeric results when dispatch table uses anyref return
             # tag-run: key on the TRACKED actual — the call's derived (placeholder)
@@ -401,7 +402,6 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 # already a ref — anyref-compatible, pass through; a closure's context is
                 # its object at the anyref result (emit_context_object!, A11E1)
                 if is_context_type(type_registry, entry.return_type)
-                    builder_set_local_type!(b, Int(dt.arity), AnyRef)
                     emit_context_object!(b, mod, type_registry, entry.return_type, dt.arity)
                 end
             elseif is_anyref_return
@@ -417,8 +417,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # hardcoded 0 = non-discriminable — an isa/typeof on this result would wrongly fail),
                     # reload, struct.new {classId, value}. (dispatch carries mod+registry, not ctx, so it
                     # cannot share emit_classid_box!'s ctx-allocated scratch local — same shape inline.)
-                    builder_set_local_type!(b, Int(dt.arity), entry_wasm_type)  # the scratch's truth
-                    local_set!(b, UInt32(Int(dt.arity)))  # first extra local
+                    local_set!(b, UInt32(Int(dt.arity)))  # the box scratch, the first local
                     i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
                     local_get!(b, UInt32(Int(dt.arity)))
                     struct_new!(b, box_idx)   # mod-resolved fields
@@ -433,23 +432,10 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             end
 
             end_block!(b)
-            body = builder_code(b)
-
-            # Wrapper needs an extra local for boxing when mixed returns
-            wrapper_locals = WasmValType[]
-            if is_anyref_return
-                entry_wasm_type = julia_to_wasm_type(entry.return_type)
-                if entry_wasm_type in (I32, I64, F32, F64)
-                    push!(wrapper_locals, entry_wasm_type)
-                elseif is_context_type(type_registry, entry.return_type)
-                    push!(wrapper_locals, AnyRef)   # the closure object's context scratch
-                end
-            end
 
             # named by the specialization it adapts, the function the selector table reaches
             local _target_name = mod.functions[Int(entry.target_idx) - length(mod.imports) + 1].name
-            wrapper_idx = add_function!(mod, param_types, result_types, wrapper_locals, body;
-                                        name=generated_function_name(:dispatch_wrapper, _target_name))
+            wrapper_idx = add_function!(mod, b; name=generated_function_name(:dispatch_wrapper, _target_name))
             push!(wrapper_indices, wrapper_idx)
 
             dt.entries[entry_i] = DispatchEntry(
