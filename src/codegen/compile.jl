@@ -55,7 +55,7 @@ end
 parity(quarantine: the substitutions one compilation root carries for a host framework (captured signal globals and constants, a linked root's initializer); dart2wasm compiles one program with one main.)"""
 function add_uninitialized_ref_global!(mod::WasmModule, type_idx::Integer)::UInt32
     b = InstrBuilder(; func_name="uninitialized_framework_global", mod=mod)
-    ref_null!(b, Int64(type_idx), ConcreteRef(UInt32(type_idx), true))
+    ref_null!(b, Int64(type_idx))
     return add_global_ref!(mod, type_idx, true, builder_code(b); nullable=true)
 end
 
@@ -82,10 +82,10 @@ function add_root_global_initializer!(mod::WasmModule, registry::TypeRegistry,
         throw(ArgumentError("framework initializer root $root_idx must take no parameters"))
     length(root_type.results) == 1 ||
         throw(ArgumentError("framework initializer root $root_idx must return one value"))
-    wasm_subtype(only(root_type.results), global_def.valtype, mod) ||
+    wasm_subtype(only(root_type.results), global_def.valtype, mod.types) ||
         throw(ArgumentError("framework initializer root result is incompatible with global $global_idx"))
     b = InstrBuilder(; func_name="framework_global_initializer", mod=mod)
-    call!(b, root_idx, WasmValType[], root_type.results)
+    call!(b, root_idx)
     global_set!(b, global_idx)
     end_block!(b)
     # named by the root that computes the value, as dart names a static field's initializer by

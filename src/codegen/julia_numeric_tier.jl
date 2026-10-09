@@ -160,7 +160,7 @@ function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
     info = get_function(ctx.func_registry, Base.fma_emulated, (T, T, T))
     info === nothing && error("Base.fma_emulated(::$T, ::$T, ::$T) is not in the closed world")
     local w = T === Float32 ? F32 : F64
-    call!(fb, info.wasm_idx, WasmValType[w, w, w], WasmValType[w])
+    call!(fb, info.wasm_idx)
     return w
 end
 
@@ -379,7 +379,7 @@ end
 # translator.dart:346; Julia's trunc_int from a 128-bit source reads the struct's lo limb.)
 function _int128_trunc_lo!(b::InstrBuilder, ctx, source_type::Type)::NumType
     source_type_idx = get_int128_type!(ctx.mod, ctx.type_registry, source_type)
-    struct_get!(b, source_type_idx, UInt32(1), I64)  # field 1 = lo (0 = typeId)
+    struct_get!(b, source_type_idx, UInt32(1))  # field 1 = lo (0 = typeId)
     return I64
 end
 

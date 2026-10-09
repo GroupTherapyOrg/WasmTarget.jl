@@ -26,7 +26,7 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
     else
         vinfo = ctx.type_registry.structs[vt]
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(vinfo.wasm_type_idx), true))
-        struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1), ConcreteRef(UInt32(arr_t), true))
+        struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1))
     end
     ref_cast!(b, Int64(arr_t), true)
     return b
@@ -662,7 +662,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # lowering route, as dart2wasm's visitTryCatch owns its region. Here the region only
         # records the exception stack's depth when it is entered (jl_excstack_state), which
         # its pop_exception restores.
-        global_get!(b, ensure_exception_top_global!(ctx.mod), ConcreteRef(exc_cell_type!(ctx.mod), true))
+        global_get!(b, ensure_exception_top_global!(ctx.mod))
         local_set!(b, exc_saved_local!(ctx, idx))
 
     elseif node isa NirGlobalRef
@@ -1125,7 +1125,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         else
             elem_type = struct_type.name.name === :GenericMemoryRef ? struct_type.parameters[2] : struct_type.parameters[1]
             array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-            ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
+            ref_null!(b, Int64(array_type_idx))
         end
         return b
     end
@@ -1133,7 +1133,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         # Memory{T} — emit ref.null of the array type (we can't construct raw memory in Wasm)
         elem_type = eltype(struct_type)
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        ref_null!(b, Int64(array_type_idx), ConcreteRef(UInt32(array_type_idx), true))
+        ref_null!(b, Int64(array_type_idx))
         return b
     end
 
@@ -1188,7 +1188,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                     error("registered union field $i has no physical Wasm type")
                 local _null_field_wasm = _null_struct_def.fields[_null_fi].valtype
                 if _null_field_wasm isa ConcreteRef
-                    ref_null!(b, Int64(_null_field_wasm.type_idx), _null_field_wasm)
+                    ref_null!(b, Int64(_null_field_wasm.type_idx))
                 elseif _wt_is_ref(_null_field_wasm)
                     ref_null!(b, _null_field_wasm)
                 else
@@ -1302,7 +1302,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         for fi in (n_wasm_provided + 1):n_required
             missing_type = struct_type_def.fields[fi].valtype
             if missing_type isa ConcreteRef
-                ref_null!(b, Int64(missing_type.type_idx), missing_type)
+                ref_null!(b, Int64(missing_type.type_idx))
             elseif missing_type === StructRef || missing_type === ArrayRef ||
                    missing_type === ExternRef || missing_type === AnyRef || missing_type === EqRef
                 # Null is the explicit Wasm representation of Julia's undefined
@@ -1438,7 +1438,7 @@ function _fc_memset!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
         emit_value!(b, zero(elem_type), ctx, elem_wasm)
     end
     _emit_storage_element_offset!(b, nbytes_arg, nothing, ctx, shift)
-    array_fill!(b, arr, sizeof(elem_type) == 1 ? I32 : elem_wasm)
+    array_fill!(b, arr)
     # C memset returns its destination pointer; materialise it only for a stored result.
     haskey(ctx.ssa_locals, idx) && emit_value!(b, ptr_arg, ctx, I64)
     return b
@@ -1487,19 +1487,19 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
                 emit_value!(b, object_arg, ctx, object_ref)
                 local_set!(b, object_local)
                 local_get!(b, object_local)
-                struct_get!(b, object_idx, UInt32(1), I32)
+                struct_get!(b, object_idx, UInt32(1))
                 local_tee!(b, hash_local)
                 num!(b, Opcode.I32_EQZ)
                 if_!(b; results=WasmValType[I32])
                     # next = counter + 1; persist it globally and on the object.
-                    global_get!(b, counter, I32)
+                    global_get!(b, counter)
                     i32_const!(b, 1)
                     num!(b, Opcode.I32_ADD)
                     local_tee!(b, hash_local)
                     global_set!(b, counter)
                     local_get!(b, object_local)
                     local_get!(b, hash_local)
-                    struct_set!(b, object_idx, UInt32(1), I32)
+                    struct_set!(b, object_idx, UInt32(1))
                     local_get!(b, hash_local)
                 else_!(b)
                     local_get!(b, hash_local)
@@ -1591,7 +1591,7 @@ function _emit_cstring_extent!(b::InstrBuilder, ptr_arg::NirNode, source::NirNod
     local scan = loop!(b)
     local_get!(b, end_local); local_get!(b, arr_local); array_len!(b)
     num!(b, Opcode.I32_GE_U); br_if!(b, done)
-    local_get!(b, arr_local); local_get!(b, end_local); array_get!(b, arr_idx, I32; signed=false)
+    local_get!(b, arr_local); local_get!(b, end_local); array_get!(b, arr_idx; signed=false)
     num!(b, Opcode.I32_EQZ); br_if!(b, done)
     local_get!(b, end_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, end_local)
     br!(b, scan)
@@ -1874,7 +1874,7 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
             narrow_length_to_i32!(b)
             i32_const!(b, 1)
             num!(b, Opcode.I32_SUB)  # 0-based index
-            array_get!(b, str_arr_type, I32; signed=false)
+            array_get!(b, str_arr_type; signed=false)
 
             #     if array[idx] == byte, found!
             local_get!(b, byte_local)
@@ -1947,10 +1947,10 @@ function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
     br_if!(b, done)
     local_get!(b, a_arr)
     local_get!(b, a_off); local_get!(b, i); num!(b, Opcode.I32_ADD)
-    array_get!(b, arr, I32; signed=false)
+    array_get!(b, arr; signed=false)
     local_get!(b, b_arr)
     local_get!(b, b_off); local_get!(b, i); num!(b, Opcode.I32_ADD)
-    array_get!(b, arr, I32; signed=false)
+    array_get!(b, arr; signed=false)
     num!(b, Opcode.I32_SUB)
     local_tee!(b, diff)
     br_if!(b, done)
@@ -2026,7 +2026,7 @@ end
 # parity(quarantine: the jl_hrtime foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
         perf_now_idx = ensure_perf_now_import!(ctx.mod)
-        call!(b, perf_now_idx, WasmValType[], WasmValType[F64])
+        call!(b, perf_now_idx)
         # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
         f64_const!(b, 1.0e6)
         num!(b, Opcode.F64_MUL)
@@ -2115,7 +2115,7 @@ function _fc_jl_is_const!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
         if module_owner !== nothing && isequal(module_owner, name_owner)
             tn_idx = ctx.type_registry.jl_typename_idx
             emit_value!(b, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-            struct_get!(b, tn_idx, UInt32(7), I32)
+            struct_get!(b, tn_idx, UInt32(7))
             return b
         end
     return nothing
@@ -2164,7 +2164,7 @@ function _fc_jl_id_start_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
             emit_value!(b, node.operands[1], ctx, I32)
             i32_const!(b, 0)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
+            call!(b, prop_idx)
             i32_const!(b, 7); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
@@ -2177,7 +2177,7 @@ function _fc_jl_id_char!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::A
             emit_value!(b, node.operands[1], ctx, I32)
             i32_const!(b, 0)
             prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-            call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
+            call!(b, prop_idx)
             i32_const!(b, 8); num!(b, Opcode.I32_SHR_U)
             i32_const!(b, 1); num!(b, Opcode.I32_AND)
             return b
@@ -2348,7 +2348,7 @@ function _fc_jl_module_parent!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     length(node.operands) >= 1 || return nothing
         module_info = ctx.type_registry.structs[Module]
         emit_value!(b, node.operands[1], ctx, ConcreteRef(module_info.wasm_type_idx, false))
-        struct_get!(b, module_info.wasm_type_idx, UInt32(3), AnyRef)
+        struct_get!(b, module_info.wasm_type_idx, UInt32(3))
         ref_cast!(b, Int64(module_info.wasm_type_idx), false)
         return b
 end
@@ -2359,8 +2359,7 @@ function _fc_jl_module_name!(b::InstrBuilder, node::NirForeignCall, idx::Int, ct
         module_info = ctx.type_registry.structs[Module]
         string_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
         emit_value!(b, node.operands[1], ctx, ConcreteRef(module_info.wasm_type_idx, false))
-        struct_get!(b, module_info.wasm_type_idx, UInt32(2),
-                    ConcreteRef(UInt32(string_idx), true))
+        struct_get!(b, module_info.wasm_type_idx, UInt32(2))
         return b
 end
 
@@ -2374,7 +2373,6 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     length(node.operands) >= 2 || return nothing
     reg = ctx.type_registry
     jt, ua, tv = reg.jl_type_idx, reg.jl_unionall_idx, reg.jl_typevar_idx
-    jtr = ConcreteRef(UInt32(jt), true)
     v, t = allocate_local!(ctx, AnyRef), allocate_local!(ctx, AnyRef)
     emit_value!(b, node.operands[1], ctx, AnyRef); local_set!(b, v)
     emit_value!(b, node.operands[2], ctx, AnyRef); local_set!(b, t)
@@ -2386,14 +2384,14 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     done = block!(b; results=WasmValType[AnyRef])
     # `T where T<:S` is S
     local_get!(b, t); ref_cast!(b, EqRef, true); local_get!(b, v); ref_cast!(b, EqRef, true)
-    num!(b, Opcode.REF_EQ)
+    ref_eq!(b)
     if_!(b)
-    local_get!(b, v); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, UInt32(3), jtr)
+    local_get!(b, v); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, UInt32(3))
     br!(b, done)
     end_block!(b)
     # a body that does not mention v is the body
     local_get!(b, t); local_get!(b, v); i32_const!(b, 0)
-    call!(b, get_has_typevar_function!(ctx.mod, reg), WasmValType[AnyRef, AnyRef, I32], WasmValType[I32])
+    call!(b, get_has_typevar_function!(ctx.mod, reg))
     num!(b, Opcode.I32_EQZ)
     if_!(b)
     local_get!(b, t); br!(b, done)
@@ -2402,7 +2400,7 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     i32_const!(b, Int64(JL_TYPE_KIND_UNIONALL))
     local_get!(b, v); ref_cast!(b, Int64(jt), true)
     local_get!(b, t); ref_cast!(b, Int64(jt), true)
-    struct_new!(b, ua, WasmValType[I32, jtr, jtr])
+    struct_new!(b, ua)
     end_block!(b)
     return b
 end
@@ -2413,7 +2411,7 @@ function _fc_utf8proc_charwidth!(b::InstrBuilder, node::NirForeignCall, idx::Int
         emit_value!(b, node.operands[1], ctx, I32)
         i32_const!(b, 0)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-        call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
+        call!(b, prop_idx)
         i32_const!(b, 5); num!(b, Opcode.I32_SHR_U)
         i32_const!(b, 0x03); num!(b, Opcode.I32_AND)
         return b
@@ -2425,7 +2423,7 @@ function _fc_utf8proc_category!(b::InstrBuilder, node::NirForeignCall, idx::Int,
         emit_value!(b, node.operands[1], ctx, I32)
         i32_const!(b, 0)
         prop_idx = get_or_create_unicode_property_func!(ctx.mod, ctx.type_registry)
-        call!(b, prop_idx, WasmValType[I32, I32], WasmValType[I32])
+        call!(b, prop_idx)
         i32_const!(b, 0x1f); num!(b, Opcode.I32_AND)
         return b
 end
@@ -2437,8 +2435,7 @@ function _emit_unicode_case_mapping!(b::InstrBuilder, node::NirForeignCall, ctx:
     emit_value!(b, node.operands[1], ctx, I32)
     emit_value!(b, node.operands[1], ctx, I32)
     i32_const!(b, field)
-    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry),
-          WasmValType[I32, I32], WasmValType[I32])
+    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry))
     num!(b, Opcode.I32_ADD)
     return b
 end
@@ -2449,8 +2446,7 @@ function _emit_unicode_case_predicate!(b::InstrBuilder, node::NirForeignCall, ct
     length(node.operands) >= 1 || return nothing
     emit_value!(b, node.operands[1], ctx, I32)
     i32_const!(b, field)
-    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry),
-          WasmValType[I32, I32], WasmValType[I32])
+    call!(b, get_or_create_unicode_case_func!(ctx.mod, ctx.type_registry))
     return b
 end
 

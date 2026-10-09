@@ -41,10 +41,10 @@ function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     local_set!(b, a_struct_local)
 
     # Extract a_lo, a_hi, b_lo, b_hi (lo=field 1, hi=field 2)
-    local_get!(b, a_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, a_lo_local)
-    local_get!(b, a_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, a_hi_local)
-    local_get!(b, b_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, b_lo_local)
-    local_get!(b, b_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, b_hi_local)
+    local_get!(b, a_struct_local); struct_get!(b, type_idx, 1); local_set!(b, a_lo_local)
+    local_get!(b, a_struct_local); struct_get!(b, type_idx, 2); local_set!(b, a_hi_local)
+    local_get!(b, b_struct_local); struct_get!(b, type_idx, 1); local_set!(b, b_lo_local)
+    local_get!(b, b_struct_local); struct_get!(b, type_idx, 2); local_set!(b, b_hi_local)
 
     # result_lo = a_lo + b_lo
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_ADD)
@@ -62,7 +62,7 @@ function emit_int128_add!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local)
     local_get!(b, hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -100,8 +100,8 @@ function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Extract fields (lo=field 1, hi=field 2)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     # result_lo = a_lo - b_lo
@@ -115,7 +115,7 @@ function emit_int128_sub!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -160,8 +160,8 @@ function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     local_set!(b, a_struct_local)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     mask32 = Int64(0xFFFFFFFF)
@@ -197,7 +197,7 @@ function emit_int128_mul!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -223,8 +223,8 @@ function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
 
     # Pop struct to local; extract lo (field 1), hi (field 2)
     local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # Two's complement: result_lo = ~x_lo + 1 ; result_hi = ~x_hi + (x_lo==0 ? 1 : 0)
     local_get!(b, x_lo_local); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
@@ -236,7 +236,7 @@ function emit_int128_neg!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -268,8 +268,8 @@ function _int128_cmp_operands!(b::InstrBuilder, ctx, arg_type::Type)::NTuple{4, 
     # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in ((a_struct_local, a_lo_local, a_hi_local),
                                                (b_struct_local, b_lo_local, b_hi_local))
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
     return (a_lo_local, a_hi_local, b_lo_local, b_hi_local)
 end
@@ -395,8 +395,8 @@ function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
 
     # Pop n (top) and x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # n_mod = n & 63
     local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
@@ -432,7 +432,7 @@ function emit_int128_shl!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -464,8 +464,8 @@ function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
 
     # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # n_mod = n & 63
     local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
@@ -500,7 +500,7 @@ function emit_int128_lshr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -539,8 +539,8 @@ function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
 
     # Pop n (top), x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, n_local); local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # n_mod = n & 63 ; sign = x_hi >>s 63 (all-1s if negative)
     local_get!(b, n_local); i64_const!(b, 63); num!(b, Opcode.I64_AND); local_set!(b, n_mod_local)
@@ -576,7 +576,7 @@ function emit_int128_ashr!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilde
     # Create result struct (typeId, lo, hi)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     local_get!(b, result_lo_local); local_get!(b, result_hi_local)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -602,8 +602,8 @@ function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
 
     # Pop x_struct; extract lo (field 1), hi (field 2)
     local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # clz_hi = clz(x_hi)
     local_get!(b, x_hi_local); num!(b, Opcode.I64_CLZ); local_set!(b, clz_hi_local)
@@ -621,7 +621,7 @@ function emit_int128_ctlz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
     i64_const!(b, 0)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -645,8 +645,8 @@ function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     builder_set_local_type!(b, x_struct_local, structref)
 
     local_set!(b, x_struct_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, x_lo_local)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, x_hi_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); local_set!(b, x_lo_local)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); local_set!(b, x_hi_local)
 
     # ctz_lo = ctz(x_lo)
     local_get!(b, x_lo_local); num!(b, Opcode.I64_CTZ); local_set!(b, ctz_lo_local)
@@ -663,7 +663,7 @@ function emit_int128_cttz!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
     i64_const!(b, 0)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -684,8 +684,8 @@ function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     local_set!(b, x_struct_local)
 
     # popcnt(lo) + popcnt(hi)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); num!(b, Opcode.I64_POPCNT)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); num!(b, Opcode.I64_POPCNT)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); num!(b, Opcode.I64_POPCNT)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); num!(b, Opcode.I64_POPCNT)
     num!(b, Opcode.I64_ADD)
 
     result_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I64)
@@ -694,7 +694,7 @@ function emit_int128_ctpop!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
     local_get!(b, result_local)
     i64_const!(b, 0)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -716,9 +716,9 @@ function emit_int128_not!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
 
     # { typeId=0, lo = lo xor -1, hi = hi xor -1 }
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, arg_type)))  # real classId (was placeholder 0)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
-    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2, I64); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 1); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
+    local_get!(b, x_struct_local); struct_get!(b, type_idx, 2); i64_const!(b, -1); num!(b, Opcode.I64_XOR)
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -752,15 +752,15 @@ function emit_int128_and!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo & b_lo ; result_hi = a_hi & b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_AND)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_AND)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -794,15 +794,15 @@ function emit_int128_or!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo | b_lo ; result_hi = a_hi | b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_OR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_OR)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -836,15 +836,15 @@ function emit_int128_xor!(b::InstrBuilder, ctx, result_type::Type)::InstrBuilder
     # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))  # real classId (was placeholder 0)
     # result_lo = a_lo ^ b_lo ; result_hi = a_hi ^ b_hi
     local_get!(b, a_lo_local); local_get!(b, b_lo_local); num!(b, Opcode.I64_XOR)
     local_get!(b, a_hi_local); local_get!(b, b_hi_local); num!(b, Opcode.I64_XOR)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -893,8 +893,8 @@ function emit_int128_ne!(b::InstrBuilder, ctx, arg_type::Type)::InstrBuilder
     # Extract fields (lo=field 1, hi=field 2; typeId at field 0)
     for (struct_local, lo_local, hi_local) in [(a_struct_local, a_lo_local, a_hi_local),
                                                 (b_struct_local, b_lo_local, b_hi_local)]
-        local_get!(b, struct_local); struct_get!(b, type_idx, 1, I64); local_set!(b, lo_local)
-        local_get!(b, struct_local); struct_get!(b, type_idx, 2, I64); local_set!(b, hi_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 1); local_set!(b, lo_local)
+        local_get!(b, struct_local); struct_get!(b, type_idx, 2); local_set!(b, hi_local)
     end
 
     # (a_lo != b_lo) || (a_hi != b_hi)
@@ -1023,8 +1023,8 @@ function emit_int128_divrem!(b::InstrBuilder, ctx, result_type::Type; signed::Bo
     local nb = loc!(I32)
     local_set!(b, sb); local_set!(b, sa)
     for (st, lo, hi) in ((sa, a_lo, a_hi), (sb, b_lo, b_hi))
-        local_get!(b, st); struct_get!(b, type_idx, 1, I64); local_set!(b, lo)
-        local_get!(b, st); struct_get!(b, type_idx, 2, I64); local_set!(b, hi)
+        local_get!(b, st); struct_get!(b, type_idx, 1); local_set!(b, lo)
+        local_get!(b, st); struct_get!(b, type_idx, 2); local_set!(b, hi)
     end
     # DivideError: a zero divisor; signed division of typemin by -1
     local_get!(b, b_lo); local_get!(b, b_hi); num!(b, Opcode.I64_OR); num!(b, Opcode.I64_EQZ)
@@ -1052,8 +1052,7 @@ function emit_int128_divrem!(b::InstrBuilder, ctx, result_type::Type; signed::Bo
         neg_if!(na, a_lo, a_hi); neg_if!(nb, b_lo, b_hi)
     end
     local_get!(b, a_lo); local_get!(b, a_hi); local_get!(b, b_lo); local_get!(b, b_hi)
-    call!(b, get_u128_divrem_function!(ctx.mod, ctx.type_registry),
-          WasmValType[I64, I64, I64, I64], WasmValType[I64, I64, I64, I64])
+    call!(b, get_u128_divrem_function!(ctx.mod, ctx.type_registry))
     local_set!(b, r_hi); local_set!(b, r_lo); local_set!(b, q_hi); local_set!(b, q_lo)
     local lo, hi = rem ? (r_lo, r_hi) : (q_lo, q_hi)
     if signed
@@ -1066,7 +1065,7 @@ function emit_int128_divrem!(b::InstrBuilder, ctx, result_type::Type; signed::Bo
     end
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))
     local_get!(b, lo); local_get!(b, hi)
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end
 
@@ -1088,8 +1087,8 @@ function emit_int128_bswap!(b::InstrBuilder, ctx, result_type::Type)::InstrBuild
     local lo = loc!(I64)
     local hi = loc!(I64)
     local_set!(b, x)
-    local_get!(b, x); struct_get!(b, type_idx, 1, I64); local_set!(b, lo)
-    local_get!(b, x); struct_get!(b, type_idx, 2, I64); local_set!(b, hi)
+    local_get!(b, x); struct_get!(b, type_idx, 1); local_set!(b, lo)
+    local_get!(b, x); struct_get!(b, type_idx, 2); local_set!(b, hi)
     # byte k of the limb moves to byte 7 - k
     local swap! = l -> for k in 0:7
         local_get!(b, l); i64_const!(b, 8k); num!(b, Opcode.I64_SHR_U)
@@ -1100,6 +1099,6 @@ function emit_int128_bswap!(b::InstrBuilder, ctx, result_type::Type)::InstrBuild
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, result_type)))
     swap!(hi)   # the new low limb
     swap!(lo)   # the new high limb
-    struct_new!(b, type_idx, WasmValType[I32, I64, I64])
+    struct_new!(b, type_idx)
     return b
 end

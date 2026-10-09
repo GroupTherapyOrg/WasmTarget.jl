@@ -24,19 +24,18 @@
 (* else frame pops the results from the pushed inputs, so it is valid iff  *)
 (* Len(ins) = Len(res) and each ins[k] is a subtype of res[k]. WT's        *)
 (* validate_block_end! states that rule for an else-less `if`: equal       *)
-(* length plus wasm_subtype(in, out) per position -- the FIXED rule        *)
-(* (batch 107, A3B11), checked whether or not the end is reachable, as     *)
-(* the spec checks it. ElseLessExact = TRUE is batch 66's rule instead,    *)
-(* `label.input_types != label.result_types`: it rejects the valid         *)
+(* length plus wasm_subtype(in, out) per position, checked whether or not  *)
+(* the end is reachable, as the spec checks it. ElseLessExact = TRUE is    *)
+(* the equality rule instead, `label.input_types != label.result_types`,   *)
+(* which rejects the valid                                                 *)
 (* `const sub; const i32; if [sub]->[super] end; drop`.                    *)
 (*                                                                         *)
 (* THE CLAIM. Complete: WT accepts every program the spec accepts. Sound   *)
 (* where reachable: a program WT accepts and that has no instruction in    *)
 (* dead code, the spec accepts. The Broken variants: DropBlockResults      *)
-(* drops a block's (and an if's) declared result types from the tracker -- *)
-(* the bug _blocktype_results fixed (a positional value blocktype reached  *)
-(* the bytes but not the tracker, so every `if_!(b, I32)` value was lost   *)
-(* at its end); ElseLessExact is batch 66's equality rule.                 *)
+(* drops a block's (and an if's) declared result types from the tracker,   *)
+(* which then holds the block type the bytes carry but not its results, so *)
+(* a frame's value is lost at its end; ElseLessExact is the equality rule. *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Four value types, i32, i64 and the pair      *)
 (* "sub" <: "super" (a reference type and its supertype); the instructions *)
@@ -59,7 +58,7 @@ EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS MaxLen,
           DropBlockResults,  \* TRUE = the broken tracker
-          ElseLessExact,     \* TRUE = batch 66's else-less if rule (input_types != result_types)
+          ElseLessExact,     \* TRUE = the equality rule for an else-less if (input_types != result_types)
           Instrs             \* the instance's instruction set (CoreInstrs, IfInstrs below)
 
 Types == {"i32", "i64", "sub", "super"}
@@ -165,7 +164,7 @@ ArmBad(w, l) == w.reachable /\
 ElseLessBad(l) ==
     l.kind = "if" /\ ~l.hasElse /\
     IF ElseLessExact
-    THEN l.ins # l.results                                   \* batch 66: equality
+    THEN l.ins # l.results                                   \* the equality rule
     ELSE Len(l.ins) # Len(l.results) \/                      \* the fix: length, then
          \E k \in 1..Len(l.ins) : ~Sub(l.ins[k], l.results[k])   \* wasm_subtype per position
 

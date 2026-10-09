@@ -64,6 +64,7 @@ anchor in `src/` has a row.)
 | Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
 | `isa` and typeassert lowering | `_compile_call_isa` (calls.jl) | — a per-statement port of emit_isa's case order (cgutils.cpp), not an algorithm |
 | Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
+| Value-type subtyping | `wasm_subtype` (builder/types.jl) | — a per-type rule, type.dart isSubtypeOf; test_wasm_subtype_lattice.jl |
 | Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
 | Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
 | LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl) | — encodings; wasm-tools parses every module |

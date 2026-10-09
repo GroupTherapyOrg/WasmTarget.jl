@@ -91,10 +91,11 @@ with the per-clause status. A clause is never closed by argument.
   the traps where Julia answers, and the audits' unlocated and lossy paths.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
-  the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every codegen builder has its module).
-  Planned: dev/MARCH.md 13.17 — a function's results checked at every return, casts, nulls,
-  struct.new and conversions typed by the module, no raw byte as a value type, one subtype
-  relation in the builder, a validating initializer.
+  the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every builder has its module)
+  `L164` (one subtype relation, in the builder) `L165` (dart's storage types: no raw byte or
+  packed type as a value type) `L166` (every operand typed by the module's own types).
+  Planned: dev/MARCH.md 13.17 — a function's results checked at every return, a validating
+  initializer.
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
@@ -123,7 +124,8 @@ with the per-clause status. A clause is never closed by argument.
   names its function's definition) `L160` (an escaped exception names its type, through the
   source map's class names) `L161` (the statement lane counts a throw as matched only by a
   Julia exception of native's type) `L162` (the gate, every lane of `dev/lanes.sh` on CI's
-  runners through `bash dev/gate.sh`, gives its verdict within its 20-minute budget per lane).
+  runners through `bash dev/gate.sh`, gives its verdict within its 20-minute budget per lane)
+  `L163` (the inner loop on CI's runners: `bash dev/gate.sh --fast`, the ratchet and both smokes).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this

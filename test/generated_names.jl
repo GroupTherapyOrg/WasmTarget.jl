@@ -31,7 +31,7 @@ function _gn_planted(name::String)
     planted = _GN.add_function!(mod, _GN.WasmValType[], _GN.WasmValType[], _GN.WasmValType[],
                                 UInt8[_GN.Opcode.UNREACHABLE, _GN.Opcode.END]; name=name)
     b = _GN.InstrBuilder(; mod=mod)
-    _GN.call!(b, planted, _GN.WasmValType[], _GN.WasmValType[])
+    _GN.call!(b, planted)
     _GN.end_block!(b)
     entry = _GN.add_function!(mod, _GN.WasmValType[], _GN.WasmValType[], _GN.WasmValType[],
                               _GN.builder_code(b); name=_GN.generated_function_name(:export_entry, "planted_entry"))

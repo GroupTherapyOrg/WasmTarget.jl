@@ -27,15 +27,10 @@ module Opcode
     const BR_ON_NULL = 0xD5      # br_on_null label - branch if ref is null
     const BR_ON_NON_NULL = 0xD6  # br_on_non_null label - branch if ref is non-null
 
-    # Reference-typed table access
-    const TABLE_GET = 0x25       # table.get table_idx
-    const TABLE_SET = 0x26       # table.set table_idx
-
     # Exception handling instructions (legacy, the form dart2wasm emits)
     const TRY = 0x06           # try blocktype - legacy try block
     const CATCH_LEGACY = 0x07  # catch tag_idx - legacy catch of a tag
     const THROW = 0x08         # throw tag_idx - throw exception with tag
-    const RETHROW = 0x09       # rethrow label_idx - re-throw caught exception (legacy)
 
     # Parametric instructions
     const DROP = 0x1A
@@ -51,15 +46,7 @@ module Opcode
 
     # Memory instructions
     const I32_LOAD = 0x28
-    const I64_LOAD = 0x29
-    const F32_LOAD = 0x2A
-    const F64_LOAD = 0x2B
     const I32_STORE = 0x36
-    const I64_STORE = 0x37
-    const F32_STORE = 0x38
-    const F64_STORE = 0x39
-    const MEMORY_SIZE = 0x3F
-    const MEMORY_GROW = 0x40
 
     # Numeric instructions - Constants
     const I32_CONST = 0x41
@@ -256,13 +243,6 @@ module Opcode
     const REF_TEST_NULL = 0x15    # ref.test null (ref null $t) : [(ref null? $ht)] -> [i32]
     const REF_CAST = 0x16         # ref.cast (ref $t) : [(ref null? $ht)] -> [(ref $t)]
     const REF_CAST_NULL = 0x17    # ref.cast null (ref null $t) : [(ref null? $ht)] -> [(ref null $t)]
-    const BR_ON_CAST = 0x18       # br_on_cast
-    const BR_ON_CAST_FAIL = 0x19  # br_on_cast_fail
-
-    # i31 operations (0xFB prefix)
-    const REF_I31 = 0x1C          # ref.i31 : [i32] -> [(ref i31)]
-    const I31_GET_S = 0x1D        # i31.get_s : [(ref null i31)] -> [i32]
-    const I31_GET_U = 0x1E        # i31.get_u : [(ref null i31)] -> [i32]
 
     # any/extern conversions (0xFB prefix)
     const ANY_CONVERT_EXTERN = 0x1A  # any.convert_extern
@@ -273,21 +253,11 @@ module Opcode
     # Saturating truncation (0xFC prefix, sub-ops 0x00–0x07): float → int, clamping
     # out-of-range / NaN to the int min/max/0 instead of trapping (the non-saturating
     # 0xA8–0xB1 family traps on overflow).
-    const I32_TRUNC_SAT_F32_S = 0x00
-    const I32_TRUNC_SAT_F32_U = 0x01
-    const I32_TRUNC_SAT_F64_S = 0x02
-    const I32_TRUNC_SAT_F64_U = 0x03
-    const I64_TRUNC_SAT_F32_S = 0x04
-    const I64_TRUNC_SAT_F32_U = 0x05
-    const I64_TRUNC_SAT_F64_S = 0x06
     const I64_TRUNC_SAT_F64_U = 0x07
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize)
-    # Bulk memory and table operations (0xFC prefix)
+    # the 0xFC prefix (saturating truncation)
     const FC_PREFIX = 0xFC
-    const MEMORY_FILL = 0x0B    # memory.fill mem_idx
-    const TABLE_SIZE = 0x10     # table.size table_idx
-    const TABLE_FILL = 0x11     # table.fill table_idx
 # end parity-region
 end
 
@@ -515,12 +485,22 @@ function _function_type(mod::WasmModule, idx::Integer)::FuncType
     return ft
 end
 
+# A struct's supertype is declared before it, inside a recursion group too (the wasm rule), so
+# every supertype chain ends. Checked for every type being added before any field or subtype
+# check, which walks supertype chains (wasm_subtype).
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:712 DefType.superType)
+function _check_supertype_declared_earlier(ct::CompositeType, own::Integer)::Nothing
+    (ct isa StructType && ct.supertype_idx !== nothing) || return nothing
+    local si = Int(ct.supertype_idx)
+    0 <= si < own ||
+        _module_invalid(:add_type, "struct supertype $si must be declared earlier than its subtype $own")
+    return nothing
+end
+
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1136 StructType.isStructuralSubtypeOf)
 function _validate_struct_subtype!(mod::WasmModule, st::StructType)::Nothing
     st.supertype_idx === nothing && return
-    si = Int(st.supertype_idx)
-    0 <= si < length(mod.types) ||
-        _module_invalid(:add_type, "struct supertype $si must be declared earlier")
+    si = Int(st.supertype_idx)   # below the subtype's own index: _check_supertype_declared_earlier
     super = mod.types[si + 1]
     super isa StructType || _module_invalid(:add_type, "struct supertype $si is not a struct")
     length(st.fields) >= length(super.fields) ||
@@ -530,7 +510,9 @@ function _validate_struct_subtype!(mod::WasmModule, st::StructType)::Nothing
         cf.mutable_ == sf.mutable_ ||
             _module_invalid(:add_type, "field $i changes mutability from supertype $si")
         # Mutable fields are invariant. Immutable fields are covariant.
-        ok = sf.mutable_ ? cf.valtype == sf.valtype : wasm_subtype(cf.valtype, sf.valtype, mod)
+        ok = sf.mutable_ ? cf.valtype == sf.valtype :
+             (cf.valtype isa PackedType || sf.valtype isa PackedType) ? cf.valtype === sf.valtype :
+             wasm_subtype(cf.valtype, sf.valtype, mod.types)
         ok || _module_invalid(:add_type, "field $i is not a valid subtype of supertype $si")
     end
 end
@@ -550,6 +532,7 @@ new type every time and deduplicate only function types, types.dart:406 _Functio
 """
 function add_type!(mod::WasmModule, ct::CompositeType)::UInt32
     _check_refs_defined(mod, ct, length(mod.types))
+    _check_supertype_declared_earlier(ct, length(mod.types))
     ct isa StructType && _validate_struct_subtype!(mod, ct)
     # an existing type with equal fields that is its own recursion group, referring to no type
     # in it, is the same runtime type (a member of a recursion group is not, however equal its
@@ -572,10 +555,9 @@ end
 
 # parity(quarantine: the structural identity add_type! deduplicates by, above.)
 function types_equal(a::StructType, b::StructType)::Bool
-    # step5: the SUPERTYPE is part of a struct type's identity — the class-DAG's
-    # synthetic {classId} structs differ ONLY by their parent (dedup collapsed the
-    # whole hierarchy into $JlBase otherwise). Matches wasm's nominal-ish subtyping:
-    # (sub A (struct i32)) and (sub B (struct i32)) are distinct types.
+    # the supertype is part of a struct type's identity: the class hierarchy's {classId}
+    # structs differ only by their parent, and (sub A (struct i32)) and (sub B (struct i32))
+    # are distinct types
     a.supertype_idx == b.supertype_idx &&
     length(a.fields) == length(b.fields) &&
     all(fields_equal(af, bf) for (af, bf) in zip(a.fields, b.fields))
@@ -610,7 +592,7 @@ end
 Add an array type to the module and return its index.
 parity(pkg/wasm_builder/lib/src/builder/types.dart:368 TypesBuilder.defineArray)
 """
-function add_array_type!(mod::WasmModule, elem_type::WasmValType, mutable_::Bool=true)::UInt32
+function add_array_type!(mod::WasmModule, elem_type::StorageType, mutable_::Bool=true)::UInt32
     add_type!(mod, ArrayType(FieldType(elem_type, mutable_)))
 end
 
@@ -666,7 +648,8 @@ existing group must be that group's index; dart numbers its groups at the end.)
 """
 function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32
     local base = length(mod.types)
-    for ct in types
+    for (k, ct) in enumerate(types)
+        _check_supertype_declared_earlier(ct, base + k - 1)
         _check_refs_defined(mod, ct, base + length(types))
     end
     local n = length(types)
@@ -904,7 +887,7 @@ end
     add_export!(mod, name, kind, idx)
 
 Add an export entry to the module.
-- kind: 0=func, 1=table, 2=memory, 3=global
+- kind: 0=func, 1=table, 2=memory, 3=global, 4=tag
 parity(pkg/wasm_builder/lib/src/builder/exports.dart:14 ExportsBuilder.export)
 """
 function add_export!(mod::WasmModule, name::String, kind::Integer, idx::Integer)::WasmModule
@@ -1693,16 +1676,16 @@ function write_composite_type!(w::WasmWriter, at::ArrayType)::WasmWriter
 end
 
 """
-Write a field type (valtype + mutability).
+Write a field type (storage type + mutability).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize)
 """
 function write_field_type!(w::WasmWriter, ft::FieldType)::WasmWriter
-    write_valtype!(w, ft.valtype)
+    write_storage_type!(w, ft.valtype)
     write_byte!(w, ft.mutable_ ? 0x01 : 0x00)
 end
 
 """
-Write a value type (NumType, RefType, or packed type).
+Write a value type (NumType or a reference type).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:121 NumType.serialize)
 """
 function write_valtype!(w::WasmWriter, vt::NumType)::WasmWriter
@@ -1715,10 +1698,11 @@ end
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
 write_valtype!(w::WasmWriter, vt::RefType)::WasmWriter = write_byte!(w, UInt8(vt))
 
+# a field's storage type: a packed type's one byte, or a value type as every value type is written
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:1399 PackedType.serialize)
-function write_valtype!(w::WasmWriter, vt::UInt8)::WasmWriter
-    write_byte!(w, vt)
-end
+write_storage_type!(w::WasmWriter, t::PackedType)::WasmWriter = write_byte!(w, UInt8(t))
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1296 _WithMutability.serialize)
+write_storage_type!(w::WasmWriter, t::WasmValType)::WasmWriter = write_valtype!(w, t)
 
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:249 RefType.serialize)
 function write_valtype!(w::WasmWriter, vt::NonNullAbstractRef)::WasmWriter

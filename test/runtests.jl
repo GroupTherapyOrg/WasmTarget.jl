@@ -1229,10 +1229,10 @@ begin
             # This lock makes any regression — the silent unwiring, a staged carve-out,
             # a new opt-out — impossible to land.
             WT = WasmTarget
-            lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
+            lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock", mod=WT.WasmModule())
             @test !hasfield(WT.InstrBuilder, :strict) # strictness is not configurable
             @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # UNDERFLOW throws
-            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2")
+            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2", mod=WT.WasmModule())
             WT.i64_const!(lb2, 1)
             @test_throws WT.StackImbalanceError WT.num!(lb2, WT.Opcode.I32_EQZ)  # TYPE MISMATCH throws
             # ZERO opt-outs in the tree (no netting, no exceptions):
@@ -1251,34 +1251,36 @@ begin
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
             WT = WasmTarget
             # function-end balance: x*x+1 leaves exactly the one f64 result
-            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1")
+            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1", mod=WT.WasmModule())
             WT.local_get!(b, 0); WT.local_get!(b, 0); WT.num!(b, WT.Opcode.F64_MUL)
             WT.f64_const!(b, 1.0); WT.num!(b, WT.Opcode.F64_ADD)
             @test WT.stack_height(b.v) == 1
             WT.end_block!(b)                       # balanced → no throw
             @test length(WT.builder_code(b)) > 0
             # strict imbalance throws at the emit site
-            b2 = WT.InstrBuilder(; func_name="bad")
+            b2 = WT.InstrBuilder(; func_name="bad", mod=WT.WasmModule())
             @test_throws WT.StackImbalanceError WT.num!(b2, WT.Opcode.I32_ADD)
             # GC type-directed effect: struct.new consumes its N fields, pushes (ref t)
-            b3 = WT.InstrBuilder(; func_name="sn")
+            m3 = WT.WasmModule()
+            sn = WT.add_struct_type!(m3, [WT.FieldType(WT.I32, true), WT.FieldType(WT.I64, true)])
+            b3 = WT.InstrBuilder(; func_name="sn", mod=m3)
             WT.i32_const!(b3, 0); WT.i64_const!(b3, 7)
-            WT.struct_new!(b3, 2, WT.WasmValType[WT.I32, WT.I64])
+            WT.struct_new!(b3, sn)
             @test WT.stack_height(b3.v) == 1 && !WT.has_errors(b3.v)
             # dart2wasm base-guard: cannot pop past a block boundary
-            b4 = WT.InstrBuilder(; func_name="bg")
+            b4 = WT.InstrBuilder(; func_name="bg", mod=WT.WasmModule())
             WT.block!(b4)
             @test_throws WT.StackImbalanceError WT.drop!(b4)
             # rich diagnostics carry the Julia-statement context
-            b5 = WT.InstrBuilder(; func_name="diag")
+            b5 = WT.InstrBuilder(; func_name="diag", mod=WT.WasmModule())
             WT.set_context!(b5, "stmt-X")
             err = try; WT.drop!(b5); nothing; catch e; e; end
             @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
             # blocktype encoding: value-type/void immediates are SINGLE on-wire bytes
             # (regression guard — block!/if_!/loop! must NOT LEB-encode 0x40/0x7F)
-            bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
+            bbt = WT.InstrBuilder(; func_name="bt", mod=WT.WasmModule()); WT.block!(bbt); WT.end_block!(bbt)
             @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
-            bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
+            bbi = WT.InstrBuilder(; func_name="bti", mod=WT.WasmModule()); WT.i32_const!(bbi, 1)
             WT.if_!(bbi; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0)   # I32 encodes as 0x7F
             WT.else_!(bbi); WT.i32_const!(bbi, 2); WT.end_block!(bbi)           # an if with a result has an else
             @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00,
@@ -3780,37 +3782,34 @@ begin
     # ========================================================================
     @pphase "Phase 29: Stack Validator Integration" begin
 
+        # every validator has its module (a ConcreteRef's index names one of its types); each
+        # check below starts from a fresh one, as each function's builder does
+        _p29_mod() = (m = WasmModule();
+                      add_struct_type!(m, [FieldType(I32, true)]);                      # type 0
+                      add_struct_type!(m, [FieldType(I32, true), FieldType(F64, true),
+                                           FieldType(ExternRef, true)]);                # type 1
+                      m)
+        _p29_v(name) = WasmStackValidator(; func_name=name, mod=_p29_mod())
+
         @testset "externref-vs-anyref mismatch (PURE-323 pattern)" begin
-            v = WasmStackValidator(func_name="test_externref_anyref")
-            # Push ExternRef (a live Any rep). A ref.cast to a GC struct is the PURE-323
-            # pattern: externref and the GC `any` hierarchy are DISJOINT tops, so the cast
-            # cannot be expressed — codegen must emit extern.convert_any FIRST (it does, at
-            # every real GC-cast site). Loop A/P13: the validator now CATCHES this
-            # cross-hierarchy cast (it used to be permissively — and wrongly — accepted).
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.REF_CAST, ConcreteRef(UInt32(5)))
-            @test has_errors(v)          # P13: cross-hierarchy ref.cast is flagged
-            @test stack_height(v) == 1   # still pops the operand + pushes the target
+            # externref and the GC `any` hierarchy are disjoint tops: a ref.cast of an externref
+            # to a GC struct cannot be expressed, so codegen converts first (extern.convert_any)
+            b = WasmTarget.InstrBuilder(WasmValType[ExternRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0)
+            @test_throws WasmTarget.StackImbalanceError WasmTarget.ref_cast!(b, 0, true)
 
-            # Now test the REAL mismatch: push externref, try any_convert_extern
-            # which expects externref (correct), then push result as anyref
-            reset_validator!(v)
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.ANY_CONVERT_EXTERN)
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === WasmTarget.AnyRef  # Result should be anyref
-
-            # Test the reverse: push anyref, try extern_convert_any
-            reset_validator!(v)
-            validate_push!(v, WasmTarget.AnyRef)
-            validate_gc_instruction!(v, Opcode.EXTERN_CONVERT_ANY)
-            @test !has_errors(v)
-            @test v.stack[1] === ExternRef
+            # any.convert_extern takes an externref and gives an anyref of its nullability
+            b = WasmTarget.InstrBuilder(WasmValType[ExternRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0); WasmTarget.any_convert_extern!(b)
+            @test b.v.stack == WasmValType[WasmTarget.AnyRef]
+            # extern.convert_any the reverse
+            b = WasmTarget.InstrBuilder(WasmValType[WasmTarget.AnyRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0); WasmTarget.extern_convert_any!(b)
+            @test b.v.stack == WasmValType[ExternRef]
         end
 
         @testset "numeric-vs-ref mismatch (PURE-321 pattern)" begin
-            v = WasmStackValidator(func_name="test_numeric_ref_mismatch")
+            v = _p29_v("test_numeric_ref_mismatch")
             # Push I32 (numeric), try to pop ConcreteRef — classic PURE-321 bug
             validate_push!(v, I32)
             validate_pop!(v, ConcreteRef(UInt32(0), true))
@@ -3819,15 +3818,15 @@ begin
             @test any(contains("I32"), v.errors)
 
             # Reverse: push ref, try to pop I32
-            reset_validator!(v)
-            validate_push!(v, ConcreteRef(UInt32(3), true))
+            v = _p29_v("test_numeric_ref_mismatch_2")
+            validate_push!(v, ConcreteRef(UInt32(1), true))
             validate_pop!(v, I32)
             @test has_errors(v)
             @test any(contains("type mismatch"), v.errors)
         end
 
         @testset "stack underflow (common codegen bug)" begin
-            v = WasmStackValidator(func_name="test_underflow")
+            v = _p29_v("test_underflow")
             # Pop from empty stack — happens when codegen drops a value that
             # was never pushed (e.g., missing phi initialization)
             validate_pop!(v, I32)
@@ -3835,14 +3834,14 @@ begin
             @test any(contains("stack underflow"), v.errors)
 
             # pop_any from empty stack
-            reset_validator!(v)
+            v = _p29_v("test_underflow_2")
             result = validate_pop_any!(v)
             @test result === nothing
             @test has_errors(v)
         end
 
         @testset "correct code validates clean" begin
-            v = WasmStackValidator(func_name="test_clean")
+            v = _p29_v("test_clean")
             # i32.add: push two i32s, validate add, should produce one i32
             validate_push!(v, I32)
             validate_push!(v, I32)
@@ -3852,7 +3851,7 @@ begin
             @test v.stack[1] === I32
 
             # i64 arithmetic
-            reset_validator!(v)
+            v = _p29_v("test_clean_2")
             validate_push!(v, I64)
             validate_push!(v, I64)
             validate_instruction!(v, Opcode.I64_ADD)
@@ -3860,52 +3859,35 @@ begin
             @test stack_height(v) == 1
             @test v.stack[1] === I64
 
-            # Constant push
-            reset_validator!(v)
-            validate_instruction!(v, Opcode.I32_CONST)
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === I32
-
-            # Drop
-            validate_instruction!(v, Opcode.DROP)
-            @test !has_errors(v)
-            @test stack_height(v) == 0
+            # a constant takes its immediate: num! refuses it, i32_const! emits it
+            b = WasmTarget.InstrBuilder(; mod=_p29_mod())
+            @test_throws ArgumentError WasmTarget.num!(b, Opcode.I32_CONST)
+            WasmTarget.i32_const!(b, 7)
+            @test b.v.stack == WasmValType[I32]
+            WasmTarget.drop!(b)
+            @test stack_height(b.v) == 0
         end
 
         @testset "GC struct operations" begin
-            v = WasmStackValidator(func_name="test_struct_ops")
-            type_idx = 7
-            field_types = [I32, F64, ExternRef]
+            m = _p29_mod()
+            type_idx = 1   # struct {i32, f64, externref}
+            b = WasmTarget.InstrBuilder(; mod=m)
+            WasmTarget.i32_const!(b, 0); WasmTarget.f64_const!(b, 1.0); WasmTarget.ref_null!(b, ExternRef)
+            WasmTarget.struct_new!(b, type_idx)
+            @test b.v.stack == WasmValType[ConcreteRef(UInt32(type_idx), false)]  # struct.new is non-null
 
-            # struct.new: push field values, validate struct.new
-            validate_push!(v, I32)        # field 0
-            validate_push!(v, F64)        # field 1
-            validate_push!(v, ExternRef)  # field 2
-            validate_gc_instruction!(v, Opcode.STRUCT_NEW, (type_idx, field_types))
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] isa ConcreteRef
-            @test v.stack[1].type_idx == UInt32(type_idx)
-            @test v.stack[1].nullable == false  # struct.new produces non-nullable
+            # struct.get: pop struct ref, push the module's field type
+            WasmTarget.struct_get!(b, type_idx, 1)
+            @test b.v.stack == WasmValType[F64]
 
-            # struct.get: pop struct ref, push field type
-            validate_gc_instruction!(v, Opcode.STRUCT_GET, (type_idx, F64))
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === F64
-
-            # struct.new with wrong field types → should error
-            reset_validator!(v)
-            validate_push!(v, I32)
-            validate_push!(v, I32)  # wrong: should be F64
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.STRUCT_NEW, (type_idx, field_types))
-            @test has_errors(v)  # F64 expected, I32 found
+            # struct.new with wrong field types → rejected at the call
+            b = WasmTarget.InstrBuilder(; mod=m)
+            WasmTarget.i32_const!(b, 0); WasmTarget.i32_const!(b, 1); WasmTarget.ref_null!(b, ExternRef)
+            @test_throws WasmTarget.StackImbalanceError WasmTarget.struct_new!(b, type_idx)  # F64 expected, I32 found
         end
 
         @testset "block/loop label tracking" begin
-            v = WasmStackValidator(func_name="test_blocks")
+            v = _p29_v("test_blocks")
 
             # Block that produces I32
             validate_block_start!(v, :block, WasmValType[I32])
@@ -3916,7 +3898,7 @@ begin
             @test v.stack[1] === I32
 
             # Block with wrong result type
-            reset_validator!(v)
+            v = _p29_v("test_blocks_2")
             validate_block_start!(v, :block, WasmValType[I32])
             validate_push!(v, F64)  # wrong type for result
             validate_block_end!(v)
@@ -3924,16 +3906,16 @@ begin
             @test any(contains("block result type mismatch"), v.errors)
 
             # Loop with br (br to loop = restart, no values needed)
-            reset_validator!(v)
+            v = _p29_v("test_blocks_3")
             validate_block_start!(v, :loop)
             validate_push!(v, I32)  # loop counter
-            validate_instruction!(v, Opcode.DROP)  # consume it
+            validate_pop_any!(v)    # consume it
             validate_br!(v, 0)  # br back to loop start
             validate_block_end!(v)
             @test !has_errors(v)
 
             # Nested block + br to outer
-            reset_validator!(v)
+            v = _p29_v("test_blocks_4")
             validate_block_start!(v, :block, WasmValType[I32])  # outer
             validate_block_start!(v, :block)                     # inner (void)
             validate_push!(v, I32)
@@ -3945,29 +3927,18 @@ begin
             @test stack_height(v) == 1
         end
 
-        @testset "validator reset and reuse" begin
-            v = WasmStackValidator(func_name="func1")
-            validate_push!(v, I32)
-            validate_pop!(v, F64)  # type mismatch
-            @test has_errors(v)
-
-            # Reset should clear everything
-            reset_validator!(v)
-            @test !has_errors(v)
-            @test stack_height(v) == 0
-            @test isempty(v.labels)
-            @test v.reachable == true
-        end
-
         @testset "validator cannot be disabled or skip unknown opcodes" begin
-            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled")
-            v = WasmStackValidator(func_name="strict")
+            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled", mod=WasmModule())
+            # a validator always has its module
+            @test_throws UndefKeywordError WasmStackValidator(func_name="no module")
+            v = _p29_v("strict")
             @test_throws ArgumentError validate_instruction!(v, UInt8(0xff))
             @test_throws ArgumentError validate_gc_instruction!(v, UInt8(0xff))
         end
 
         @testset "reachability after unconditional br" begin
-            v = WasmStackValidator(func_name="test_reachability")
+            v = _p29_v("test_reachability")
+
             validate_block_start!(v, :block)
             validate_br!(v, 0)  # unconditional branch
             @test v.reachable == false

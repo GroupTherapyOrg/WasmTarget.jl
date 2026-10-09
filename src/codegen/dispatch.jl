@@ -347,7 +347,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     local _base = type_registry.base_struct_idx
                     local_get!(b, UInt32(j - 1))
                     ref_cast!(b, Int64(_base), false)
-                    struct_get!(b, UInt32(_base), UInt32(0), I32)   # field 0 = classId
+                    struct_get!(b, UInt32(_base), UInt32(0))   # field 0 = classId
                     i32_const!(b, Int64(tid))
                     num!(b, Opcode.I32_NE)
                     if_!(b)

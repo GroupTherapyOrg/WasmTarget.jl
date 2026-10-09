@@ -8,6 +8,10 @@
 #
 #   bash dev/gate.sh                 # HEAD, on gate/<current branch, / as ->
 #   bash dev/gate.sh <rev> [<name>]  # a branch or commit, on gate/<name>
+#   bash dev/gate.sh --fast [<rev>] [<name>]   # the inner loop, not the push gate: pushes to
+#       gate-fast/<name>, where .github/workflows/gate-fast.yml runs only the ratchet and smoke
+#       on 1.12 and 1.13 (L163), and prints `FAST green` or `FAST red`; its budget is
+#       gate-fast.yml's lane timeout
 #
 # The commit is pushed as it is: uncommitted changes are not in it. A gate branch keeps its
 # julia caches from push to push (GitHub scopes a cache to its branch and the default branch);
@@ -15,12 +19,15 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 command -v gh >/dev/null || { echo "gate: needs the GitHub CLI (gh)" >&2; exit 2; }
+fast=0; [ "${1:-}" = --fast ] && { fast=1; shift; }
+prefix=gate; workflow=Gate; verdict=LANES
+[ $fast -eq 0 ] || { prefix=gate-fast; workflow="Gate fast"; verdict=FAST; }
 rev=${1:-HEAD}
 sha=$(git rev-parse --verify -q "$rev^{commit}") || { echo "gate: no commit $rev" >&2; exit 2; }
 if [ -n "${2:-}" ]; then name=$2
 elif git show-ref --verify -q "refs/heads/$rev"; then name=$rev
 else name=$(git symbolic-ref --short -q HEAD || echo detached); fi
-name=${name#gate/}; name=gate/${name//\//-}
+name=${name#gate/}; name=${name#gate-fast/}; name=$prefix/${name//\//-}
 [ -z "$(git status --porcelain --untracked-files=no)" ] || echo "gate: uncommitted changes are not in the gated commit"
 t0=$(date -u +%Y-%m-%dT%H:%M:%SZ); s0=$(date +%s)
 # a push of the commit a gate branch already holds starts no run, so a re-gate goes to the first
@@ -35,17 +42,23 @@ for _ in $(seq 60); do
   # does not parse is named by its path, and its run is red
   id=$(gh run list --branch "$name" --limit 20 --json databaseId,headSha,createdAt,workflowName \
        --jq "[.[] | select(.headSha == \"$sha\" and .createdAt >= \"$t0\" and
-                          (.workflowName == \"Gate\" or .workflowName == \".github/workflows/gate.yml\"))][0].databaseId // empty")
+                          (.workflowName == \"$workflow\" or .workflowName == \".github/workflows/$prefix.yml\"))][0].databaseId // empty")
   [ -n "$id" ] && break
   sleep 5
 done
-[ -n "$id" ] || { echo "gate: no gate.yml run for $sha on $name" >&2; exit 2; }
+[ -n "$id" ] || { echo "gate: no $prefix.yml run for $sha on $name" >&2; exit 2; }
 echo "gate: run $id  $(gh run view "$id" --json url --jq .url)"
 gh run watch "$id" --interval 30 >/dev/null 2>&1
-# the budget B, minutes per lane job: the lane job's timeout in gate.yml, the one source (L162)
+# the budget B, minutes per lane job: the lane job's timeout in gate.yml, the one source (L162);
+# under --fast B_fast, the lane job's timeout in gate-fast.yml, its one source (L163)
+if [ $fast -eq 0 ]; then
 budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }
               inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)
-[ -n "$budget" ] || { echo "gate: gate.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
+else
+budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }
+              inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate-fast.yml)
+fi
+[ -n "$budget" ] || { echo "gate: $prefix.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
 gh run view "$id" --json jobs --jq '.jobs[] | [.conclusion, .name,
     (if (.startedAt // "") != "" and (.completedAt // "") != "" and .startedAt < .completedAt
      then ((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601) | tostring) else "" end)] | @tsv' |
@@ -57,6 +70,6 @@ gh run view "$id" --json jobs --jq '.jobs[] | [.conclusion, .name,
                        slowest, slow, B, B * 60, (slow >= B * 60 ? ", PAST IT" : "") }'
 conclusion=$(gh run view "$id" --json conclusion --jq .conclusion)
 echo "gate: wall $(( $(date +%s) - s0 ))s"
-if [ "$conclusion" = success ]; then echo "LANES green"; exit 0; fi
+if [ "$conclusion" = success ]; then echo "$verdict green"; exit 0; fi
 echo "the red lane's log: gh run view $id --log-failed"
-echo "LANES red"; exit 1
+echo "$verdict red"; exit 1

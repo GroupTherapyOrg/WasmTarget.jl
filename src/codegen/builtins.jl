@@ -120,7 +120,7 @@ function _lower_isdefinedglobal!(b, fb, ctx, call, idx, args, callee)::Union{Not
         tn_idx === nothing && error("JlTypeName layout is unavailable")
         ib = _ctx_builder(ctx, "compile_call.isdefinedglobal_typename")
         emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-        struct_get!(ib, tn_idx, UInt32(6), I32)
+        struct_get!(ib, tn_idx, UInt32(6))
         append_builder!(b, ib)
         return b
     end
@@ -189,7 +189,7 @@ function _lower_getglobal!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, 
         jl_type_idx = ctx.type_registry.jl_type_idx
         ib = _ctx_builder(ctx, "compile_call.getglobal_typename")
         emit_value!(ib, module_owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-        struct_get!(ib, tn_idx, UInt32(4), ConcreteRef(UInt32(jl_type_idx), true))
+        struct_get!(ib, tn_idx, UInt32(4))
         append_builder!(b, ib)
         return b
     end
@@ -271,14 +271,14 @@ function _lower_length!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             emit_value!(_lnb2, arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
 
             # Get field 2 (size tuple; field 0 = typeId, field 1 = ref)
-            struct_get!(_lnb2, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
+            struct_get!(_lnb2, info.wasm_type_idx, wasm_field_idx(info, 2))
 
             # Get field 1 of the size tuple (the Int64 value; field 0 = typeId)
             # Size tuple is Tuple{Int64}
             size_tuple_type = Tuple{Int64}
             if haskey(ctx.type_registry.structs, size_tuple_type)
                 size_info = ctx.type_registry.structs[size_tuple_type]
-                struct_get!(_lnb2, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+                struct_get!(_lnb2, size_info.wasm_type_idx, wasm_field_idx(size_info, 1))
             end
             append_builder!(fb, _lnb2)
             return append_builder!(b, fb)
@@ -299,9 +299,8 @@ function _lower_nfields!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, In
         local size_info = ctx.type_registry.structs[Tuple{Int64}]
         local nb = _ctx_builder(ctx, "compile_call")
         emit_value!(nb, args[1], ctx, ConcreteRef(info.wasm_type_idx, true))
-        struct_get!(nb, info.wasm_type_idx, wasm_field_idx(info, 2),
-                    ConcreteRef(size_info.wasm_type_idx, true))
-        struct_get!(nb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+        struct_get!(nb, info.wasm_type_idx, wasm_field_idx(info, 2))
+        struct_get!(nb, size_info.wasm_type_idx, wasm_field_idx(size_info, 1))
         return append_builder!(b, nb)
     end
     return nothing
@@ -473,8 +472,7 @@ function _emit_memoryref_box_field!(b::InstrBuilder, ctx::AbstractCompilationCon
     T = get_ssa_type(ctx, arg)
     box_idx = register_memoryref_box!(ctx.mod, ctx.type_registry, T)
     local_get!(b, _memoryref_argument_local(ctx, arg))
-    struct_get!(b, box_idx, field, field == UInt32(2) ?
-        ConcreteRef(get_array_type!(ctx.mod, ctx.type_registry, eltype(T)), true) : I32)
+    struct_get!(b, box_idx, field)
     return b
 end
 
@@ -749,10 +747,10 @@ function emit_memoryref_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext,
     tmp = allocate_local!(ctx, ConcreteRef(box_idx, false))
     ref_cast!(b, Int64(box_idx), false)
     local_tee!(b, tmp)
-    struct_get!(b, box_idx, UInt32(3), I32)   # off0
+    struct_get!(b, box_idx, UInt32(3))   # off0
     local_set!(b, ctx.memoryref_offset_locals[idx])
     local_get!(b, tmp)
-    struct_get!(b, box_idx, UInt32(2), ConcreteRef(get_array_type!(ctx.mod, ctx.type_registry, eltype(T)), true))
+    struct_get!(b, box_idx, UInt32(2))
     local_set!(b, ctx.ssa_locals[idx])
     return b
 end
@@ -939,8 +937,7 @@ function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)::Unio
     mib = _ctx_builder(ctx, "compile_call.memoryref_isassigned")
     emit_memoryref!(mib, ctx, ref_arg)
     if _wt_is_ref(elem_wasm)
-        array_get!(mib, array_type_idx, elem_wasm;
-                   signed=packed_array_signedness(elem_type))
+        array_get!(mib, array_type_idx; signed=packed_array_signedness(elem_type))
         ref_is_null!(mib); num!(mib, Opcode.I32_EQZ)
     else
         drop!(mib) # index
@@ -1013,7 +1010,7 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     local _mrgb = _ctx_builder(ctx, "compile_call")
     emit_memoryref!(_mrgb, ctx, ref_arg)
 
-    array_get!(_mrgb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
+    array_get!(_mrgb, array_type_idx; signed=packed_array_signedness(elem_type))
 
     # Note: if elem_type is Any, array.get returns externref and the SSA local
     # is also typed as externref (fixed in analyze_ssa_types!). No cast needed here.
@@ -1147,7 +1144,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
         # `nothing` is the element type's null; a numeric value is boxed with its Julia
         # classId by the value wrap (never replaced by a null).
         if is_nothing_value(value_arg, ctx)
-            ref_null!(_msb, Int64(wasm_elem_type.type_idx), wasm_elem_type)
+            ref_null!(_msb, Int64(wasm_elem_type.type_idx))
         elseif mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
             emit_value!(_msb, value_arg, ctx, wasm_elem_type)   # the wrap boxes it
         else
@@ -1164,7 +1161,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     end
 
     # array.set consumes [array_ref, i32_index, value] and returns nothing
-    array_set!(_msb, array_type_idx, AnyRef)
+    array_set!(_msb, array_type_idx)
 
     # Julia's memoryrefset! returns the stored value, so push it again
     # This is needed because compile_statement may add LOCAL_SET after this
@@ -1344,8 +1341,8 @@ function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{I
         num!(_apb, Opcode.I64_DIV_U)
     end
     narrow_length_to_i32!(_apb)
-    elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx), elem) : ref_null!(_apb, elem)
-    array_set!(_apb, arr_t, elem)
+    elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx)) : ref_null!(_apb, elem)
+    array_set!(_apb, arr_t)
     emit_value!(_apb, p, ctx, I64)
     append_builder!(fb, _apb)
     return append_builder!(b, fb)
@@ -1374,14 +1371,14 @@ function emit_vararg_to_fixed_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     local tdef = ctx.mod.types[Int(tinfo.wasm_type_idx) + 1]
     local data = allocate_local!(ctx, ConcreteRef(arr, true))
     ref_cast!(b, Int64(vinfo.wasm_type_idx), false)
-    struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1), ConcreteRef(arr, true))
+    struct_get!(b, vinfo.wasm_type_idx, wasm_field_idx(vinfo, 1))
     local_set!(b, data)
     emit_struct_prefix!(b, reg, T, tinfo)
     for i in 1:length(T.parameters)
         local_get!(b, data)
         i32_const!(b, Int64(i - 1))
         # a packed i8/i16 element is read with its signedness, an unpacked one (Bool) plainly
-        array_get!(b, arr, elem_w; signed=packed_array_signedness(E))
+        array_get!(b, arr; signed=packed_array_signedness(E))
         coerce_stack_top!(b, tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype, ctx; from_julia=E)
     end
     struct_new!(b, tinfo.wasm_type_idx)
@@ -1416,10 +1413,10 @@ function emit_fixed_to_vararg_tuple!(b::InstrBuilder, ctx::AbstractCompilationCo
     emit_struct_prefix!(b, reg, V, vinfo)
     for i in 1:k
         local_get!(b, tup)
-        struct_get!(b, tinfo.wasm_type_idx, wasm_field_idx(tinfo, i), tdef.fields[wasm_field_idx(tinfo, i) + 1].valtype)
+        struct_get!(b, tinfo.wasm_type_idx, wasm_field_idx(tinfo, i))
         coerce_stack_top!(b, elem_w, ctx; from_julia=E)
     end
-    array_new_fixed!(b, arr, k, elem_w)
+    array_new_fixed!(b, arr, k)
     emit_struct_prefix!(b, reg, Tuple{Int64}, size_info)
     i64_const!(b, Int64(k))
     struct_new!(b, size_info.wasm_type_idx)
@@ -1477,7 +1474,7 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
                 (struct_type_def isa StructType && _nf <= length(struct_type_def.fields)) ||
                     error("tuple field $fi has no physical Wasm type")
                 local _ng = get_nothing_global!(ctx.mod, ctx.type_registry)
-                global_get!(_tupb, _ng, ctx.mod.globals[Int(_ng) + 1].valtype)
+                global_get!(_tupb, _ng)
                 coerce_stack_top!(_tupb, struct_type_def.fields[_nf].valtype, ctx; from_julia=Nothing)
                 continue
             end
@@ -1574,7 +1571,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         haskey(ctx.type_registry.type_constant_globals, arg_type) ||
             error("closed-world typeof is missing the static type global for $arg_type")
         dt_global = ctx.type_registry.type_constant_globals[arg_type]
-        global_get!(_tofb, dt_global, ctx.mod.globals[dt_global + 1].valtype)
+        global_get!(_tofb, dt_global)
     elseif arg_type isa DataType && is_runtime_vararg_tuple_type(arg_type)
         # its type is NTuple{n,E} for the n it has at run time (jl_f_tuple): a type object WT
         # does not build at run time (MARCH 13.14), and its header names no Julia type
@@ -1619,7 +1616,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             emit_type_lookup!(_tofb, reg, temp_local)
         else
             local konst!(K) = (g = get_type_constant_global!(ctx.mod, reg, K);
-                               global_get!(_tofb, g, ctx.mod.globals[Int(g) + 1].valtype))
+                               global_get!(_tofb, g))
             local v = allocate_local!(ctx, AnyRef)
             local k = allocate_local!(ctx, I32)
             local_set!(_tofb, v)
@@ -1629,7 +1626,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_type_idx), false)
             if_!(_tofb)
             local_get!(_tofb, v); ref_cast!(_tofb, Int64(reg.jl_type_idx), false)
-            struct_get!(_tofb, reg.jl_type_idx, UInt32(0), I32); local_set!(_tofb, k)
+            struct_get!(_tofb, reg.jl_type_idx, UInt32(0)); local_set!(_tofb, k)
             for (K, code) in ((Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
                               (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
                 local_get!(_tofb, k); i32_const!(_tofb, Int64(code)); num!(_tofb, Opcode.I32_EQ)
@@ -1652,7 +1649,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             br!(_tofb, done)
             end_block!(_tofb)
             local nothing_global = ctx.type_registry.type_constant_globals[Nothing]
-            global_get!(_tofb, nothing_global, ctx.mod.globals[nothing_global + 1].valtype)
+            global_get!(_tofb, nothing_global)
             end_block!(_tofb)
         end
     end
@@ -1782,7 +1779,7 @@ function _emit_storage_pointer_egal!(fb::InstrBuilder, ctx::AbstractCompilationC
         local_tee!(fb, l)
         return l
     end
-    num!(fb, Opcode.REF_EQ)
+    ref_eq!(fb)
     if same_type
         for l in locals
             local_get!(fb, l)
@@ -1858,7 +1855,7 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)::InstrBuilder
         for ea in expr_args
             emit_value!(fb, ea, ctx, wasm_elem_type)
         end
-            array_new_fixed!(fb, any_array_type_idx, n_expr_args, wasm_elem_type)
+            array_new_fixed!(fb, any_array_type_idx, n_expr_args)
     end
     data_arr_local = allocate_local!(ctx, ConcreteRef(any_array_type_idx, true))
         local_set!(fb, data_arr_local)
@@ -2070,7 +2067,7 @@ function _lower_getfield_signal_read!(b, fb, ctx, call, idx, args)::Union{InstrB
         field_name = nir_const(field_ref)
         if field_name === :value
             global_idx = ctx.signal_ssa_getters[idx]
-            global_get!(fb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+            global_get!(fb, global_idx)
             return append_builder!(b, fb)
         end
     end
@@ -2104,7 +2101,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{Instr
                     i32_const!(_setb, Int(arg))
                 end
                 # Push the signal value (re-read from global)
-                global_get!(_setb, global_idx, global_type)
+                global_get!(_setb, global_idx)
                 # Convert to f64 for DOM imports (all DOM imports expect f64)
                 emit_convert_to_f64!(_setb, global_type)
                 # Call the DOM import function
@@ -2113,7 +2110,7 @@ function _lower_setfield_signal_write!(b, fb, ctx, call, idx, args)::Union{Instr
         end
 
         # setfield! returns the value written, so re-read it
-        global_get!(_setb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+        global_get!(_setb, global_idx)
         append_builder!(fb, _setb)
         return append_builder!(b, fb)
     end
@@ -2190,14 +2187,12 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             local arr_idx = get_array_type!(ctx.mod, ctx.type_registry, E)
             local tb = _ctx_builder(ctx, "compile_call")
             emit_value!(tb, obj_arg, ctx, ConcreteRef(info.wasm_type_idx, true))
-            struct_get!(tb, info.wasm_type_idx, wasm_field_idx(info, 1),
-                        ConcreteRef(arr_idx, true))
+            struct_get!(tb, info.wasm_type_idx, wasm_field_idx(info, 1))
             emit_value!(tb, field_ref, ctx, I64)
             i64_const!(tb, 1)
             num!(tb, Opcode.I64_SUB)
             narrow_length_to_i32!(tb)
-            local ew = julia_to_wasm_type(E)
-            array_get!(tb, arr_idx, ew; signed=packed_array_signedness(E))
+            array_get!(tb, arr_idx; signed=packed_array_signedness(E))
             return append_builder!(b, tb)
         end
         # parity(closures.dart:1365 Context): getfield(%box::Core.Box, :contents) — read the SHARED cell
@@ -2210,7 +2205,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
             local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
-            struct_get!(_mb_ib, _mb_idx, UInt32(1), _mb_ft)
+            struct_get!(_mb_ib, _mb_idx, UInt32(1))
             # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
             # unbox through the ONE funnel so declared and actual agree at the store.
             local _mb_jt = get(ctx.ssa_types, idx, Any)
@@ -2274,7 +2269,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
             rng_global = get_rng_global_idx(field_sym)
             if rng_global !== nothing
-                global_get!(fb, rng_global, ctx.mod.globals[rng_global + 1].valtype)
+                global_get!(fb, rng_global)
                 return append_builder!(b, fb)
             end
         end
@@ -2286,7 +2281,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 # Extract global index from type parameter
                 global_idx = get_wasm_global_idx(obj_arg, ctx)
                 if global_idx !== nothing
-                    global_get!(fb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+                    global_get!(fb, global_idx)
                     return append_builder!(b, fb)
                 end
             end
@@ -2331,14 +2326,14 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         local _ref_arr = allocate_local!(ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         local_tee!(_refb, _ref_arr)
-                        struct_get!(_refb, info.wasm_type_idx, array_offset_field_idx(info), I32)
+                        struct_get!(_refb, info.wasm_type_idx, array_offset_field_idx(info))
                         local_set!(_refb, ctx.memoryref_offset_locals[idx])
                         local_get!(_refb, _ref_arr)
                     else
                         # Typed arrival when the struct is registered
                         emit_value!(_refb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     end
-                    struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
+                    struct_get!(_refb, info.wasm_type_idx, wasm_field_idx(info, 1))
                 else
                     # parity(class_info.dart:666 ClassInfoCollector.collect): an unregistered struct previously emitted an INCOMPLETE
                     # struct.get (prefix+opcode, no immediates — invalid wasm). Loud reject.
@@ -2358,7 +2353,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     info = ctx.type_registry.structs[obj_type]
                     # Typed arrival when the struct is registered
                     emit_value!(_szfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                    struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
+                    struct_get!(_szfb, info.wasm_type_idx, wasm_field_idx(info, 2))
                 else
                     record_unsupported!(ctx, :unsupported_type, "size access on an unregistered struct type"; idx=idx)
                     unreachable!(_szfb)
@@ -2381,7 +2376,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         local _sfb = _ctx_builder(ctx, "compile_call")
                         # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                        struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
                     end
@@ -2478,7 +2473,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
                     emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
                     _unpack_memoryref_field_read!(fb, ctx, idx)
                     return append_builder!(b, fb)
                 end
@@ -2521,8 +2516,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 local _sfg_layout = ctx.mod.types[Int(info.wasm_type_idx) + 1]
                 _sfg_layout isa StructType || error("registered getfield owner has no struct layout")
                 local _sfg_fields = _sfg_layout.fields
-                local _sfg_ft = _sfg_fields[Int(_sfg_wfi) + 1].valtype
-                struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi, _sfg_ft)
+                struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi)
                 _unpack_memoryref_field_read!(_sfgb, ctx, idx)
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
@@ -2603,11 +2597,11 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         # Push all fields onto stack (account for typeId at field 0)
                         for i in 0:(length(elem_types)-1)
                             local_get!(_htb, tuple_local)
-                            struct_get!(_htb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)  # skip typeId
+                            struct_get!(_htb, info.wasm_type_idx, i + Int(info.field_offset))  # skip typeId
                         end
 
                         # Create array from fields
-                        array_new_fixed!(_htb, array_type_idx, length(elem_types), AnyRef)
+                        array_new_fixed!(_htb, array_type_idx, length(elem_types))
 
                         # Store array in local - use concrete ref to specific array type
                         array_local = length(ctx.locals) + ctx.n_params
@@ -2632,7 +2626,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         # Access array: array.get (use ARRAY_GET_U for packed i8 arrays)
                         local_get!(_htb, array_local)
                         local_get!(_htb, idx_local)
-                        array_get!(_htb, array_type_idx, AnyRef; signed=packed_array_signedness(elem_type))
+                        array_get!(_htb, array_type_idx; signed=packed_array_signedness(elem_type))
 
                         # If array element type is ExternRef (e.g., elem_type=Any),
                         # array_get returns externref. Downstream code may ref_cast to a struct
@@ -2701,7 +2695,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             n_fields = length(elem_types)
                             emit_field_wrap = i -> begin
                                 local_get!(_hetb, tuple_local)
-                                struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset), AnyRef)
+                                struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset))
                                 # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
                                 # Coerce the raw field value to U's canonical wasm rep.
                                 fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
@@ -2726,7 +2720,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                                     # i64 here did not validate, a WasmInternalError, A11 c4)
                                     if elem_types[i + 1] === Nothing
                                         drop!(_hetb)
-                                        ref_null!(_hetb, Int64(union_wasm.type_idx), union_wasm)
+                                        ref_null!(_hetb, Int64(union_wasm.type_idx))
                                     else
                                         coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=elem_types[i + 1])
                                     end
@@ -2762,7 +2756,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     end
                 elseif field_idx !== nothing && field_idx >= 1 && field_idx <= length(info.field_names)
                     emit_value!(fb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))   # typed arrival
-                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx), AnyRef)
+                    struct_get!(fb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
                     return append_builder!(b, fb)
                 end
             end
@@ -2842,11 +2836,11 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     # If obj_arg's local is structref, insert ref.cast null before struct_set
                                         emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     local_get!(_vrb, temp_local)
-                    struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1), AnyRef)
+                    struct_set!(_vrb, info.wasm_type_idx, wasm_field_idx(info, 1))
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     emit_ref_cast_if_structref!(_vrb, obj_arg, info.wasm_type_idx, ctx)
                     emit_memoryref_offset!(_vrb, ctx, value_arg)
-                    struct_set!(_vrb, info.wasm_type_idx, array_offset_field_idx(info), I32)
+                    struct_set!(_vrb, info.wasm_type_idx, array_offset_field_idx(info))
                     # setfield! returns the ref it stored: a read result is a snapshot pair
                     # (_is_memoryref_store_result) — its off0 here, its Memory left for the store
                     if haskey(ctx.memoryref_offset_locals, idx)
@@ -2886,7 +2880,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 local_get!(_vsb, temp_local)
 
                 # struct.set
-                struct_set!(_vsb, info.wasm_type_idx, wasm_field_idx(info, 2), AnyRef)
+                struct_set!(_vsb, info.wasm_type_idx, wasm_field_idx(info, 2))
 
                 # setfield! returns the value, so push it again
                 local_get!(_vsb, temp_local)
@@ -2937,7 +2931,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     local _sf_val = is_nothing_value(value_arg, ctx) ? NirLiteral(nothing) : value_arg
                     local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
                     emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
-                    struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx), _sf_expected)
+                    struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
                     # setfield! returns the value — use compile_value to match SSA return type
                     emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
                     append_builder!(fb, _sfsb)

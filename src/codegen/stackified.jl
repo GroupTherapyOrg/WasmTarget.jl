@@ -498,7 +498,8 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # exception exists in the flow path.
     b = _ctx_builder(ctx, "generate_stackified_flow")
     for target_idx in ctx.entry_calls
-        params, results = _true_call_sig(b, target_idx, WasmValType[], WasmValType[])
+        local target_ft = _function_type(ctx.mod, target_idx)
+        params, results = target_ft.params, target_ft.results
         isempty(params) && isempty(results) || throw(ArgumentError(
             "root entry call $target_idx must have signature () -> (); got " *
             "$(params) -> $(results) while compiling $(ctx.func_ref)"))
@@ -759,7 +760,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                 local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
                 local phi_julia = get(ctx.ssa_types, phi_idx, Any)
                 if local_wasm_type isa ConcreteRef
-                    ref_null!(pvb, Int64(local_wasm_type.type_idx), local_wasm_type)
+                    ref_null!(pvb, Int64(local_wasm_type.type_idx))
                 elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
                        local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
                        local_wasm_type === EqRef

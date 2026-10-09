@@ -285,7 +285,7 @@ function _emit_closure_arg_tests!(tb::InstrBuilder, mod::WasmModule, registry::T
         br_if!(tb, lbl)
         local_get!(tb, tmp)
         ref_cast!(tb, Int64(top_idx), false)
-        struct_get!(tb, UInt32(top_idx), UInt32(0), I32)
+        struct_get!(tb, UInt32(top_idx), UInt32(0))
         local_set!(tb, itmp)
         if isempty(ids)
             br!(tb, lbl)
@@ -431,7 +431,7 @@ function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeR
         local cb = get_closure_base_struct!(mod, registry)
         local_get!(tb, UInt32(j)); ref_test!(tb, Int64(cb), false)
         if_!(tb; results=WasmValType[pt])
-        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(cb), false); struct_get!(tb, cb, UInt32(2), AnyRef)
+        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(cb), false); struct_get!(tb, cb, UInt32(2))
         ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
         else_!(tb)
         local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
@@ -465,13 +465,13 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
     if takes_context
         local_get!(tb, UInt32(0))
         ref_cast!(tb, Int64(base_idx), false)
-        struct_get!(tb, base_idx, UInt32(2), AnyRef)               # .context
+        struct_get!(tb, base_idx, UInt32(2))               # .context
         ref_cast!(tb, Int64(captured_info.wasm_type_idx), false)   # captured struct
     end
     for j in 1:arity
         _closure_narrow_arg!(tb, mod, registry, j, body.params[j + (takes_context ? 1 : 0)])
     end
-    call!(tb, body.body_idx, WasmValType[], body.results)
+    call!(tb, body.body_idx)
     if isempty(body.results)
         if body.return_type === Nothing
             ref_null!(tb, AnyRef)
@@ -661,7 +661,7 @@ function emit_closure_wrap!(b::InstrBuilder, ctx, closure_type::Type, body_idx::
         # singleton as Dart uses its canonical dummy context object.
         drop!(b)
         local ng = get_nothing_global!(ctx.mod, ctx.type_registry)
-        global_get!(b, ng, ctx.mod.globals[Int(ng) + 1].valtype)
+        global_get!(b, ng)
         local_set!(b, UInt32(ctx_scratch))
     end
     _emit_closure_object!(b, ctx.mod, ctx.type_registry, closure_type, g, ctx_scratch)
@@ -677,12 +677,12 @@ function _emit_closure_object!(b::InstrBuilder, mod::WasmModule, registry::TypeR
     i32_const!(b, Int64(ensure_type_id!(registry, closure_type)))
     i32_const!(b, 0)
     local_get!(b, UInt32(scratch))
-    global_get!(b, g, mod.globals[Int(g) + 1].valtype)   # the vtable's declared type, not a re-derivation
+    global_get!(b, g)   # the vtable's declared type, not a re-derivation
     local type_globals = registry.type_constant_globals
     (type_globals !== nothing && haskey(type_globals, closure_type)) ||
         error("closed-world type object missing for closure $closure_type")
     local type_global = type_globals[closure_type]
-    global_get!(b, type_global, mod.globals[Int(type_global) + 1].valtype)
+    global_get!(b, type_global)
     struct_new!(b, base_idx)
     return b
 end
@@ -852,11 +852,11 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     end
     local_get!(b, UInt32(scratch))
     ref_cast!(b, Int64(base_idx), false)
-    struct_get!(b, base_idx, UInt32(3), StructRef)          # .vtable
+    struct_get!(b, base_idx, UInt32(3))          # .vtable
     ref_cast!(b, Int64(vt_struct), false)
-    struct_get!(b, vt_struct, UInt32(arity), FuncRef) # entry[arity]
+    struct_get!(b, vt_struct, UInt32(arity)) # entry[arity]
     ref_cast!(b, Int64(sig_idx), false)                      # (ref $sig)
-    call_ref!(b, sig_idx, sig.params, sig.results)
+    call_ref!(b, sig_idx)
     # the uniform result (anyref) converts to the call's inferred type (the funnel
     # unboxes numerics / casts refs — dart converts at the same seam)
     local _rt = get(ctx.ssa_types, idx, Any)

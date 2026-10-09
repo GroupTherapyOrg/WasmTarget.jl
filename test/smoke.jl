@@ -11,7 +11,10 @@
 # Exit:  0 = all pass, 1 = any fail/error (so it is gate-able + CI-able).
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
 # Part:   WT_SMOKE_PART=i/N julia --project=. test/smoke.jl  # one of N parts (i in 0..N-1)
+# Times:  WT_SMOKE_TIMES=1 also prints each group's wall seconds and the package load's, the
+#         numbers dev/gate.sh --fast's part counts are sized from (.github/workflows/gate-fast.yml)
 # ============================================================================
+const SMOKE_T_START = time()
 using WasmTarget
 using Random, SHA   # seeded streams, as the full suite loads them
 using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
@@ -2077,14 +2080,19 @@ function _smoke_error_text(e)::String
     return length(text) > 600 ? first(text, 600) * "…" : text
 end
 
+const SMOKE_TIMES = get(ENV, "WT_SMOKE_TIMES", "") == "1"
+_smoke_time(what, t) = SMOKE_TIMES && println("smoke time: ", what, " ", round(time() - t; digits = 1), " s")
+
 function main()
     t0 = time()
+    _smoke_time("load", SMOKE_T_START)
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
     ngroups = 0
     for (group, cases) in _smoke_part(GROUPS)
         _want(group) || continue
         ngroups += 1
+        local tg = time()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"
@@ -2101,6 +2109,7 @@ function main()
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
             end
         end
+        _smoke_time("group $group", tg)
     end
     # xfail lane: known-pending gaps. A NEWLY-PASSING one is great news (its loop landed) and
     # never fails the gate; a still-failing one must fail the way XFAIL_RUNTIME says it does.
@@ -2108,6 +2117,7 @@ function main()
     xf_part = _smoke_part(XFAIL)
     for (group, cases) in xf_part
         _want(group) || continue
+        local tg = time()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"; push!(xf_seen, tag)
@@ -2120,6 +2130,7 @@ function main()
                 got === want || push!(xf_mismatch, "$tag: XFAIL_RUNTIME says $want, measured $got")
             end
         end
+        _smoke_time("xfail group $group", tg)
     end
     for tag in keys(XFAIL_RUNTIME)
         # checked by the part its group is dealt to; a tag naming no xfail group, by part 0

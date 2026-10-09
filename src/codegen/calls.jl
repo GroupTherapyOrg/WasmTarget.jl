@@ -221,7 +221,7 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
         if_!(ib; results=WasmValType[out])
         local wfi = wasm_field_idx(info, i)
         emit_value!(ib, obj, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
-        struct_get!(ib, info.wasm_type_idx, wfi, flds[Int(wfi) + 1].valtype)
+        struct_get!(ib, info.wasm_type_idx, wfi)
         out === AnyRef && coerce_stack_top!(ib, AnyRef, ctx; from_julia=fieldtype(T, i))
         else_!(ib)
     end
@@ -491,7 +491,7 @@ parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dar
 """
 function emit_char_codepoint_to_rawbits(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [codepoint:i32] from the stack, pushes [rawbits:i32].
-    b = InstrBuilder(; func_name="emit_char_codepoint_to_rawbits", mod=ctx.mod)
+    b = _ctx_builder(ctx, "emit_char_codepoint_to_rawbits")
     seed_input!(b, WasmValType[I32])
     cp_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -621,7 +621,7 @@ parity(quarantine: a Julia Char is its UTF-8 bytes left-aligned in a UInt32; dar
 """
 function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector{UInt8}
     # MIGRATED to InstrBuilder. Consumes [rawbits:i32] from the stack, pushes [codepoint:i32].
-    b = InstrBuilder(; func_name="emit_char_rawbits_to_codepoint", mod=ctx.mod)
+    b = _ctx_builder(ctx, "emit_char_rawbits_to_codepoint")
     seed_input!(b, WasmValType[I32])
     raw_local = UInt32(allocate_local!(ctx, I32))
     result_local = UInt32(allocate_local!(ctx, I32))
@@ -1246,7 +1246,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
 
         # Get y's hi part to check sign
         local_get!(bld, y_struct_local)
-        struct_get!(bld, type_idx, 2, I64)  # Field 2 = hi (0=typeId, 1=lo)
+        struct_get!(bld, type_idx, 2)  # Field 2 = hi (0=typeId, 1=lo)
 
         # Check if negative (hi < 0)
         i64_const!(bld, 0)
@@ -1376,20 +1376,19 @@ function emit_typename_symbol_metadata!(b::InstrBuilder, symbol, owner,
     symbol_struct_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
     symbol_data = allocate_local!(ctx, ConcreteRef(UInt32(str_idx), true))
     emit_value!(b, symbol, ctx, ConcreteRef(UInt32(symbol_struct_idx), true))
-    struct_get!(b, symbol_struct_idx, UInt32(2), ConcreteRef(UInt32(str_idx), true))
+    struct_get!(b, symbol_struct_idx, UInt32(2))
     local_set!(b, symbol_data)
     local_get!(b, symbol_data)
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, UInt32(5),
-                ConcreteRef(UInt32(symbol_struct_idx), true))
-    struct_get!(b, symbol_struct_idx, UInt32(2), ConcreteRef(UInt32(str_idx), true))
-    num!(b, Opcode.REF_EQ)
+    struct_get!(b, tn_idx, UInt32(5))
+    struct_get!(b, symbol_struct_idx, UInt32(2))
+    ref_eq!(b)
     if_!(b; results=WasmValType[I32])
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, singleton_field, I32)
+    struct_get!(b, tn_idx, singleton_field)
     else_!(b)
     emit_value!(b, owner, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, name_field, I32)
+    struct_get!(b, tn_idx, name_field)
     end_block!(b)
     return b
 end
@@ -1433,8 +1432,8 @@ function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         local w = ConcreteRef(UInt32(idx), true)
         local l1, l2 = _egal_local!(b, alloc, p1, w), _egal_local!(b, alloc, p2, w)
         for f in (UInt32(1), UInt32(2))           # lo, hi limbs after the classId
-            local_get!(b, l1); struct_get!(b, idx, f, I64)
-            local_get!(b, l2); struct_get!(b, idx, f, I64)
+            local_get!(b, l1); struct_get!(b, idx, f)
+            local_get!(b, l2); struct_get!(b, idx, f)
             num!(b, Opcode.I64_EQ)
         end
         num!(b, Opcode.I32_AND)
@@ -1478,7 +1477,7 @@ function _emit_string_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegi
     local sidx = get_string_struct_type!(mod, registry)
     local aidx = get_string_array_type!(mod, registry)
     local aw = ConcreteRef(UInt32(aidx), true)
-    local data(p) = () -> (p(); struct_get!(b, sidx, UInt32(2), aw))
+    local data(p) = () -> (p(); struct_get!(b, sidx, UInt32(2)))
     local la, lb = _egal_local!(b, alloc, data(p1), aw), _egal_local!(b, alloc, data(p2), aw)
     return _emit_string_equal_core!(b, aidx, la, lb, alloc(I32), alloc(I32))
 end
@@ -1488,7 +1487,7 @@ end
 parity(intrinsics.dart:1409 StaticIntrinsic.identical): its operands translated to `eqref`."""
 function _to_eqref!(b::InstrBuilder, mod::WasmModule, w::WasmValType)::InstrBuilder
     w === ExternRef && any_convert_extern!(b)
-    wasm_subtype(w, EqRef, mod) || ref_cast!(b, EqRef, true)
+    wasm_subtype(w, EqRef, mod.types) || ref_cast!(b, EqRef, true)
     return b
 end
 
@@ -1584,13 +1583,13 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         # unwraps both and compares the contexts by identity, A11B1)
         p1(); _to_eqref!(b, mod, w1)
         p2(); _to_eqref!(b, mod, w2)
-        num!(b, Opcode.REF_EQ)
+        ref_eq!(b)
     else
         (_wt_is_ref(w1) && _wt_is_ref(w2)) ||
             error("egal: a $T value in a numeric $w1/$w2 representation has no class to compare")
         p1(); _to_anyref!(b, w1)
         p2(); _to_anyref!(b, w2)
-        call!(b, get_egal_function!(mod, registry), WasmValType[AnyRef, AnyRef], WasmValType[I32])
+        call!(b, get_egal_function!(mod, registry))
     end
     return b
 end
@@ -1621,7 +1620,7 @@ function _emit_fields_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegi
         local FT = info.field_types[fi]
         local widx = wasm_field_idx(info, fi)
         local wf = fields[widx + 1].valtype
-        local field(s) = () -> (local_get!(b, s); struct_get!(b, sidx, widx, wf))
+        local field(s) = () -> (local_get!(b, s); struct_get!(b, sidx, widx))
         if _wt_is_ref(wf) && FT isa DataType && isconcretetype(FT) && !Base.issingletontype(FT)
             local f1, f2 = _egal_local!(b, alloc, field(s1), wf), _egal_local!(b, alloc, field(s2), wf)
             local_get!(b, f1); ref_is_null!(b); local_get!(b, f2); ref_is_null!(b)
@@ -1665,10 +1664,6 @@ function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer):
     end_block!(b)
     return b
 end
-
-# abstract heap type `eq` as a ref.test immediate (the s33 encoding of 0x6D)
-# parity(pkg/wasm_builder/lib/src/ir/type.dart:501 EqHeapType.serialize)
-const _HEAP_EQ = Int64(-19)
 
 """
     get_egal_function!(mod, registry) -> UInt32
@@ -1733,7 +1728,7 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
     local extra = WasmValType[]
     local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
     local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
-    local egal_call!() = call!(b, fidx, params, results)
+    local egal_call!() = call!(b, fidx)
 
     # nothing: null or the Nothing class, on either side
     local_get!(b, 0); ref_is_null!(b)
@@ -1742,34 +1737,33 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
     local_get!(b, 1); ref_is_null!(b)
     ret!(() -> _emit_is_nothing!(b, registry, 0))
     # identity
-    local_get!(b, 0); ref_test!(b, _HEAP_EQ, false)
-    local_get!(b, 1); ref_test!(b, _HEAP_EQ, false)
+    local_get!(b, 0); ref_test!(b, EqRef, false)
+    local_get!(b, 1); ref_test!(b, EqRef, false)
     num!(b, Opcode.I32_AND)
     if_!(b)
     local_get!(b, 0); ref_cast!(b, EqRef, true)
     local_get!(b, 1); ref_cast!(b, EqRef, true)
-    num!(b, Opcode.REF_EQ)
+    ref_eq!(b)
     ret!(() -> i32_const!(b, 1))
     end_block!(b)
     # type objects: kinds equal, then a Union / UnionAll fieldwise; a DataType and Union{} are
     # canonical objects, so identity (already false) decides them
-    local jtr = ConcreteRef(UInt32(jt), true)
     local_get!(b, 0); ref_test!(b, Int64(jt), false)
     if_!(b)
     local_get!(b, 1); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
     ret!(() -> i32_const!(b, 0))
     local k = alloc(I32)
-    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0))
     local_tee!(b, k)
-    local_get!(b, 1); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    local_get!(b, 1); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0))
     num!(b, Opcode.I32_NE)
     ret!(() -> i32_const!(b, 0))
     for (kind, si) in ((JL_TYPE_KIND_UNION, registry.jl_union_idx), (JL_TYPE_KIND_UNIONALL, registry.jl_unionall_idx))
         local_get!(b, k); i32_const!(b, kind); num!(b, Opcode.I32_EQ)
         ret!(() -> begin
             for f in (UInt32(1), UInt32(2))
-                local_get!(b, 0); ref_cast!(b, Int64(si), false); struct_get!(b, si, f, jtr)
-                local_get!(b, 1); ref_cast!(b, Int64(si), false); struct_get!(b, si, f, jtr)
+                local_get!(b, 0); ref_cast!(b, Int64(si), false); struct_get!(b, si, f)
+                local_get!(b, 1); ref_cast!(b, Int64(si), false); struct_get!(b, si, f)
                 egal_call!()
             end
             num!(b, Opcode.I32_AND)
@@ -1797,8 +1791,8 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
         local done = block!(b)
         local again = loop!(b)
         local_get!(b, i); local_get!(b, n); num!(b, Opcode.I32_GE_U); br_if!(b, done)
-        local_get!(b, v1); local_get!(b, i); array_get!(b, sv, AnyRef)
-        local_get!(b, v2); local_get!(b, i); array_get!(b, sv, AnyRef)
+        local_get!(b, v1); local_get!(b, i); array_get!(b, sv)
+        local_get!(b, v2); local_get!(b, i); array_get!(b, sv)
         egal_call!(); num!(b, Opcode.I32_EQZ)
         ret!(() -> i32_const!(b, 0))
         local_get!(b, i); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i)
@@ -1832,25 +1826,25 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
             for l in (0, 1)   # a closure object is its context, unless that is the dummy
                 local_get!(b, l); ref_test!(b, Int64(cb), false)
                 if_!(b)
-                local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2), AnyRef)
-                local_tee!(b, cx); ref_test!(b, _HEAP_EQ, false)
+                local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2))
+                local_tee!(b, cx); ref_test!(b, EqRef, false)
                 if_!(b; results=WasmValType[I32])
                 local_get!(b, cx); ref_cast!(b, EqRef, false)
-                global_get!(b, ng, mod.globals[Int(ng) + 1].valtype)
-                num!(b, Opcode.REF_EQ); num!(b, Opcode.I32_EQZ)
+                global_get!(b, ng)
+                ref_eq!(b); num!(b, Opcode.I32_EQZ)
                 else_!(b); i32_const!(b, 1); end_block!(b)
                 if_!(b)
                 local_get!(b, cx); local_set!(b, l)
                 end_block!(b)
                 end_block!(b)
             end
-            local_get!(b, 0); ref_test!(b, _HEAP_EQ, false)
-            local_get!(b, 1); ref_test!(b, _HEAP_EQ, false)
+            local_get!(b, 0); ref_test!(b, EqRef, false)
+            local_get!(b, 1); ref_test!(b, EqRef, false)
             num!(b, Opcode.I32_AND)
             if_!(b)
             local_get!(b, 0); ref_cast!(b, EqRef, true)
             local_get!(b, 1); ref_cast!(b, EqRef, true)
-            num!(b, Opcode.REF_EQ)
+            ref_eq!(b)
             ret!(() -> i32_const!(b, 1))
             end_block!(b)
         end
@@ -1858,7 +1852,7 @@ function _fill_egal_body!(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)
             local cx = registry.structs[C].wasm_type_idx
             local is_c(l) = (local_get!(b, l); ref_test!(b, Int64(cx), false);
                              if_!(b; results=WasmValType[I32]);
-                             local_get!(b, l); ref_cast!(b, Int64(cx), false); struct_get!(b, cx, UInt32(0), I32);
+                             local_get!(b, l); ref_cast!(b, Int64(cx), false); struct_get!(b, cx, UInt32(0));
                              i32_const!(b, Int64(id)); num!(b, Opcode.I32_EQ);
                              else_!(b); i32_const!(b, 0); end_block!(b))
             is_c(0)
@@ -1923,10 +1917,9 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local extra = WasmValType[]
     local alloc = w -> (push!(extra, w); builder_add_local!(b, w))
     local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
-    local has!() = call!(b, fidx, params, results)
-    local jtr = ConcreteRef(UInt32(jt), true)
+    local has!() = call!(b, fidx)
     local eq!(l1, l2) = (local_get!(b, l1); ref_cast!(b, EqRef, true);
-                         local_get!(b, l2); ref_cast!(b, EqRef, true); num!(b, Opcode.REF_EQ))
+                         local_get!(b, l2); ref_cast!(b, EqRef, true); ref_eq!(b))
     # null (an unrepresented value parameter) mentions nothing
     local_get!(b, 0); ref_is_null!(b)
     ret!(() -> i32_const!(b, 0))
@@ -1937,20 +1930,20 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     local_get!(b, 0); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
     ret!(() -> i32_const!(b, 0))
     local k = alloc(I32)
-    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0), I32)
+    local_get!(b, 0); ref_cast!(b, Int64(jt), false); struct_get!(b, jt, UInt32(0))
     local_set!(b, k)
     # a UnionAll: its var's bounds, then its body, with v shadowed when its var is v
     local_get!(b, k); i32_const!(b, Int64(JL_TYPE_KIND_UNIONALL)); num!(b, Opcode.I32_EQ)
     ret!(() -> begin
         local var = alloc(AnyRef)
-        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(1), jtr)
+        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(1))
         local_set!(b, var)
         for f in (UInt32(2), UInt32(3))   # lb, ub
-            local_get!(b, var); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, f, jtr)
+            local_get!(b, var); ref_cast!(b, Int64(tv), false); struct_get!(b, tv, f)
             local_get!(b, 1); local_get!(b, 2); has!()
             ret!(() -> i32_const!(b, 1))
         end
-        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(2), jtr)
+        local_get!(b, 0); ref_cast!(b, Int64(ua), false); struct_get!(b, ua, UInt32(2))
         local_get!(b, 1)
         local_get!(b, 2); eq!(var, 1); num!(b, Opcode.I32_OR)
         has!()
@@ -1958,10 +1951,10 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
     # a Union: either member
     local_get!(b, k); i32_const!(b, Int64(JL_TYPE_KIND_UNION)); num!(b, Opcode.I32_EQ)
     ret!(() -> begin
-        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(1), jtr)
+        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(1))
         local_get!(b, 1); local_get!(b, 2); has!()
         ret!(() -> i32_const!(b, 1))
-        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(2), jtr)
+        local_get!(b, 0); ref_cast!(b, Int64(un), false); struct_get!(b, un, UInt32(2))
         local_get!(b, 1); local_get!(b, 2); has!()
     end)
     # a DataType: any parameter
@@ -1970,7 +1963,7 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
         local ps = alloc(ConcreteRef(UInt32(sv), true))
         local n, i = alloc(I32), alloc(I32)
         local_get!(b, 0); ref_cast!(b, Int64(dt), false)
-        struct_get!(b, dt, UInt32(3), ConcreteRef(UInt32(sv), true)); local_tee!(b, ps)
+        struct_get!(b, dt, UInt32(3)); local_tee!(b, ps)
         ref_is_null!(b)
         ret!(() -> i32_const!(b, 0))
         local_get!(b, ps); array_len!(b); local_set!(b, n)
@@ -1978,7 +1971,7 @@ function get_has_typevar_function!(mod::WasmModule, registry::TypeRegistry)::UIn
         local done = block!(b)
         local again = loop!(b)
         local_get!(b, i); local_get!(b, n); num!(b, Opcode.I32_GE_U); br_if!(b, done)
-        local_get!(b, ps); local_get!(b, i); array_get!(b, sv, AnyRef)
+        local_get!(b, ps); local_get!(b, i); array_get!(b, sv)
         local_get!(b, 1); local_get!(b, 2); has!()
         ret!(() -> i32_const!(b, 1))
         local_get!(b, i); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i)
@@ -2016,7 +2009,7 @@ function _emit_egal_class!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     if !_wt_is_ref(rep)
         local box = get_numeric_box_type!(mod, registry, rep)
         local payload(l) = () -> (local_get!(b, l); ref_cast!(b, Int64(box), false);
-                                  struct_get!(b, box, UInt32(1), rep))
+                                  struct_get!(b, box, UInt32(1)))
         return _emit_bits_egal!(b, mod, registry, alloc, C, payload(0), payload(1))
     end
     if !(rep isa ConcreteRef)
@@ -2067,7 +2060,7 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
         # element offset (Julia compares its ptr_or_offset and mem fields)
         emit_memoryref_mem!(bld, ctx, x)
         emit_memoryref_mem!(bld, ctx, y)
-        num!(bld, Opcode.REF_EQ)
+        ref_eq!(bld)
         emit_memoryref_offset!(bld, ctx, x)
         emit_memoryref_offset!(bld, ctx, y)
         num!(bld, Opcode.I32_EQ)
@@ -2090,7 +2083,7 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
     else
         pusher(x, AnyRef, concrete(T1) ? T1 : nothing)()
         pusher(y, AnyRef, concrete(T2) ? T2 : nothing)()
-        call!(bld, get_egal_function!(mod, reg), WasmValType[AnyRef, AnyRef], WasmValType[I32])
+        call!(bld, get_egal_function!(mod, reg))
     end
     append_builder!(b, bld)
     return b
@@ -2204,9 +2197,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
             local size_info = ctx.type_registry.structs[Tuple{Int64}]
             ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
-            struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2),
-                        ConcreteRef(size_info.wasm_type_idx, true))
-            struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1), I64)
+            struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2))
+            struct_get!(bld, size_info.wasm_type_idx, wasm_field_idx(size_info, 1))
             local n_local = length(lens) > 1 ? allocate_local!(ctx, I64) : nothing
             n_local === nothing || local_set!(bld, n_local)
             for (i, (kind, k)) in enumerate(lens)
@@ -2540,8 +2532,8 @@ function emit_type_object_test!(b::InstrBuilder, mod::WasmModule, reg::TypeRegis
         if_!(b; results=WasmValType[I32])
         local_get!(b, UInt32(v))
         ref_cast!(b, Int64(jt), false)
-        global_get!(b, tg, mod.globals[Int(tg) + 1].valtype)
-        num!(b, Opcode.REF_EQ)
+        global_get!(b, tg)
+        ref_eq!(b)
         else_!(b)
         otherwise === nothing ? i32_const!(b, 0) : otherwise(b)
         end_block!(b)
@@ -2564,7 +2556,7 @@ function emit_type_object_test!(b::InstrBuilder, mod::WasmModule, reg::TypeRegis
         local k = scratch()
         local_get!(b, UInt32(v))
         ref_cast!(b, Int64(jt), false)
-        struct_get!(b, jt, UInt32(0), I32)
+        struct_get!(b, jt, UInt32(0))
         local_set!(b, k)
         for (i, code) in enumerate(codes)
             local_get!(b, k); i32_const!(b, Int64(code)); num!(b, Opcode.I32_EQ)
@@ -2742,15 +2734,15 @@ function emit_closed_world_type_bounds!(b::InstrBuilder, tn, ctx::AbstractCompil
                  ctx.type_registry.structs[UnitRange{Int64}] :
                  register_struct_type!(ctx.mod, ctx.type_registry, UnitRange{Int64})
     emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, UInt32(8), I32)
+    struct_get!(b, tn_idx, UInt32(8))
     if_!(b; results=WasmValType[AnyRef])
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, UnitRange{Int64})))
     i32_const!(b, 0) # ordinary immutable Object identity slot
     emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, UInt32(9), I64)
+    struct_get!(b, tn_idx, UInt32(9))
     emit_value!(b, tn, ctx, ConcreteRef(UInt32(tn_idx), true))
-    struct_get!(b, tn_idx, UInt32(10), I64)
-    struct_new!(b, range_info.wasm_type_idx, WasmValType[I32, I32, I64, I64])
+    struct_get!(b, tn_idx, UInt32(10))
+    struct_new!(b, range_info.wasm_type_idx)
     else_!(b)
     ref_null!(b, AnyRef)
     end_block!(b)
@@ -2767,15 +2759,15 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     emit_value!(b, parent, ctx, module_ref); local_set!(b, parent_local)
     emit_value!(b, from, ctx, module_ref); local_set!(b, from_local)
 
-    local_get!(b, parent_local); local_get!(b, from_local); num!(b, Opcode.REF_EQ)
+    local_get!(b, parent_local); local_get!(b, from_local); ref_eq!(b)
     if_!(b; results=WasmValType[I32])
     # Same module means the same binding, provided it is not deprecated.
     emit_typename_symbol_metadata!(b, symbol, owner, UInt32(11), UInt32(12), ctx)
     num!(b, Opcode.I32_EQZ)
     else_!(b)
     main_global = get_module_constant_global!(ctx.mod, ctx.type_registry, Main)
-    local_get!(b, from_local); global_get!(b, main_global, module_ref)
-    num!(b, Opcode.REF_EQ)
+    local_get!(b, from_local); global_get!(b, main_global)
+    ref_eq!(b)
     if_!(b; results=WasmValType[I32])
     emit_typename_symbol_metadata!(b, symbol, owner, UInt32(13), UInt32(14), ctx)
     else_!(b)
@@ -2865,7 +2857,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # Signal getter: no args, returns the signal value
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
             global_idx = ctx.signal_ssa_getters[ssa_id]
-            global_get!(fb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+            global_get!(fb, global_idx)
             return append_builder!(b, fb)
         end
         # Signal setter: one arg, sets the signal value
@@ -2888,7 +2880,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         i32_const!(_ssgb, Int(arg))
                     end
                     # Push the signal value (re-read from global)
-                    global_get!(_ssgb, global_idx, global_type)
+                    global_get!(_ssgb, global_idx)
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
                     emit_convert_to_f64!(_ssgb, global_type)
                     # Call the DOM import function
@@ -2897,7 +2889,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
 
             # Setter returns the value in Therapy.jl, so re-read it
-            global_get!(_ssgb, global_idx, ctx.mod.globals[global_idx + 1].valtype)
+            global_get!(_ssgb, global_idx)
             append_builder!(fb, _ssgb)
             return append_builder!(b, fb)
         end
@@ -2973,7 +2965,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _prvb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_prvb, _pr_vec, ctx, _pr_arr_t)
             _emit_storage_pointer_offset!(_prvb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing, _pr_vec, 1)
-            array_get!(_prvb, _pr_arr_t, I32; signed=false)
+            array_get!(_prvb, _pr_arr_t; signed=false)
             append_builder!(fb, _prvb)
             return append_builder!(b, fb)
         elseif _pr_vec !== nothing && _pr_tp0 isa DataType && isprimitivetype(_pr_tp0) &&
@@ -3002,7 +2994,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     i32_const!(_prwb, Int64(_prw_k))
                     num!(_prwb, Opcode.I32_ADD)
                 end
-                array_get!(_prwb, _prw_arr, I32; signed=false)
+                array_get!(_prwb, _prw_arr; signed=false)
                 if _prw_w64
                     num!(_prwb, Opcode.I64_EXTEND_I32_U)
                     if _prw_k > 0
@@ -3058,7 +3050,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             num!(_prbb, Opcode.I32_SHR_U)
             # packed or not by the one rule (packed_array_storage, A11B11); a packed element is
             # read unsigned, the byte extraction below masking it
-            array_get!(_prbb, _prb_arr, I32; signed=(packed_array_storage(_prb_te) === nothing ? nothing : false))
+            array_get!(_prbb, _prb_arr; signed=(packed_array_storage(_prb_te) === nothing ? nothing : false))
             # shift = 8 * (b & (s-1))
             local_get!(_prbb, _prb_lb)
             i32_const!(_prbb, Int64(_prb_s - 1))
@@ -3107,7 +3099,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 emit_value!(_prrb, _prg_vec, ctx,
                             ConcreteRef(UInt32(_prr_info.wasm_type_idx), true))
                 ref_cast!(_prrb, Int64(_prr_info.wasm_type_idx), true)
-                struct_get!(_prrb, _prr_info.wasm_type_idx, wasm_field_idx(_prr_info, 1), julia_to_wasm_type(_prr_te))
+                struct_get!(_prrb, _prr_info.wasm_type_idx, wasm_field_idx(_prr_info, 1))
                 if _prr_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
                     num!(_prrb, Opcode.I64_REINTERPRET_F64)
                 elseif (_prr_te === UInt64 || _prr_te === Int64) && _prg_tp === Float64
@@ -3129,14 +3121,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 local _prg_vinfo = ctx.type_registry.structs[_prg_vt]
                 emit_value!(_prgb, _prg_vec, ctx,
                             ConcreteRef(UInt32(_prg_vinfo.wasm_type_idx), true))
-                struct_get!(_prgb, _prg_vinfo.wasm_type_idx, wasm_field_idx(_prg_vinfo, 1), ConcreteRef(_prg_arr, true))
+                struct_get!(_prgb, _prg_vinfo.wasm_type_idx, wasm_field_idx(_prg_vinfo, 1))
                 ref_cast!(_prgb, Int64(_prg_arr), true)
                 _emit_storage_pointer_offset!(_prgb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing,
                                               _prg_vec, sizeof(_prg_te))
                 i32_const!(_prgb, Int64(trailing_zeros(sizeof(_prg_te))))
                 num!(_prgb, Opcode.I32_SHR_U)
-                array_get!(_prgb, _prg_arr, julia_to_wasm_type(_prg_te);
-                           signed=packed_array_signedness(_prg_te))
+                array_get!(_prgb, _prg_arr; signed=packed_array_signedness(_prg_te))
                 if _prg_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
                     num!(_prgb, Opcode.I64_REINTERPRET_F64)
                 elseif (_prg_te === UInt64 || _prg_te === Int64) && _prg_tp === Float64
@@ -3171,7 +3162,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             _emit_backing_array!(_psb, _ps_vec, ctx, _ps_arr_t)
             _emit_storage_pointer_offset!(_psb, ctx, _ps_ptr, length(args) >= 3 ? args[3] : nothing, _ps_vec, 1)
             emit_value!(_psb, args[2], ctx, I32)
-            array_set!(_psb, _ps_arr_t, I32)
+            array_set!(_psb, _ps_arr_t)
             emit_value!(_psb, _ps_ptr, ctx, I64)
             append_builder!(fb, _psb)
             return append_builder!(b, fb)
@@ -3213,7 +3204,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 elseif (_psr_te === UInt32 || _psr_te === Int32) && _psg_tp === Float32
                     num!(_psrb, Opcode.I32_REINTERPRET_F32)
                 end
-                struct_set!(_psrb, _psr_info.wasm_type_idx, wasm_field_idx(_psr_info, 1), julia_to_wasm_type(_psr_te))
+                struct_set!(_psrb, _psr_info.wasm_type_idx, wasm_field_idx(_psr_info, 1))
                 emit_value!(_psrb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psrb)
                 return append_builder!(b, fb)
@@ -3243,7 +3234,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     local _psg_vinfo = ctx.type_registry.structs[_psg_vt]
                     emit_value!(_psgb, _psg_vec, ctx,
                                 ConcreteRef(UInt32(_psg_vinfo.wasm_type_idx), true))
-                    struct_get!(_psgb, _psg_vinfo.wasm_type_idx, wasm_field_idx(_psg_vinfo, 1), ConcreteRef(_psg_arr, true))
+                    struct_get!(_psgb, _psg_vinfo.wasm_type_idx, wasm_field_idx(_psg_vinfo, 1))
                 end
                 ref_cast!(_psgb, Int64(_psg_arr), true)
                 _emit_storage_pointer_offset!(_psgb, ctx, _ps_ptr, length(args) >= 3 ? args[3] : nothing,
@@ -3260,7 +3251,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 elseif (_psg_te === UInt32 || _psg_te === Int32) && _psg_tp === Float32
                     num!(_psgb, Opcode.I32_REINTERPRET_F32)
                 end
-                array_set!(_psgb, _psg_arr, julia_to_wasm_type(_psg_te))
+                array_set!(_psgb, _psg_arr)
                 emit_value!(_psgb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psgb)
                 return append_builder!(b, fb)
@@ -3300,8 +3291,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     _psw_lh = allocate_local!(ctx, I64)
                     emit_value!(_pswb, args[2], ctx, ConcreteRef(_psw_it, true))
                     local_set!(_pswb, _psw_lx)
-                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 2, I64); local_set!(_pswb, _psw_lh)
-                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 1, I64)
+                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 2); local_set!(_pswb, _psw_lh)
+                    local_get!(_pswb, _psw_lx); struct_get!(_pswb, _psw_it, 1)
                 else
                     local _psw_vw = julia_to_wasm_type(_psg_tp)
                     emit_value!(_pswb, args[2], ctx, _psw_vw)
@@ -3322,7 +3313,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         num!(_pswb, Opcode.I64_SHR_U)
                     end
                     num!(_pswb, Opcode.I32_WRAP_I64)
-                    array_set!(_pswb, _psw_arr, I32)
+                    array_set!(_pswb, _psw_arr)
                 end
                 emit_value!(_pswb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _pswb)
@@ -3726,7 +3717,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         i32_const!(_svrb, 1)  # 1
         num!(_svrb, Opcode.I32_SUB)
         local _svelem = ctx.mod.types[svec_arr_idx + 1].elem.valtype
-        array_get!(_svrb, svec_arr_idx, _svelem)
+        array_get!(_svrb, svec_arr_idx)
         # Legacy headerless registries used externref; the canonical hierarchy
         # uses AnyRef directly.
         if _svelem === ExternRef
@@ -3932,11 +3923,10 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                                   register_tuple_type!(ctx.mod, ctx.type_registry, _gft_T)
                 local _gft_wfi = wasm_field_idx(_gft_info, _gft_i)
                 local _gft_fields = ctx.mod.types[_gft_info.wasm_type_idx + 1].fields
-                local _gft_ft = _gft_fields[Int(_gft_wfi) + 1].valtype
                 local _gft_ib = _ctx_builder(ctx, "compile_call.tuple_getfield")
                 emit_value!(_gft_ib, args[1], ctx,
                             ConcreteRef(UInt32(_gft_info.wasm_type_idx), true))
-                struct_get!(_gft_ib, _gft_info.wasm_type_idx, _gft_wfi, _gft_ft)
+                struct_get!(_gft_ib, _gft_info.wasm_type_idx, _gft_wfi)
                 append_builder!(fb, _gft_ib)
                 _gfc_done = true
             end
@@ -3978,7 +3968,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             !(_bxd_ty isa ConcreteRef) && ref_cast!(_bxd_ib, Int64(_bxd_idx), false)
             local _bxd_ft = ctx.mod.types[_bxd_idx + 1].fields[2].valtype
             if _wt_is_ref(_bxd_ft)
-                struct_get!(_bxd_ib, _bxd_idx, UInt32(1), _bxd_ft)
+                struct_get!(_bxd_ib, _bxd_idx, UInt32(1))
                 ref_is_null!(_bxd_ib)
                 num!(_bxd_ib, Opcode.I32_EQZ)
             else
@@ -4017,7 +4007,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     emit_value!(_isd_b, args[1], ctx,
                                 ConcreteRef(UInt32(_isd_info.wasm_type_idx), true))
                     if _wt_is_ref(_isd_ft)
-                        struct_get!(_isd_b, _isd_info.wasm_type_idx, _isd_wfi, _isd_ft)
+                        struct_get!(_isd_b, _isd_info.wasm_type_idx, _isd_wfi)
                         ref_is_null!(_isd_b); num!(_isd_b, Opcode.I32_EQZ)
                     else
                         drop!(_isd_b); i32_const!(_isd_b, 1)
@@ -4053,10 +4043,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     local _gfb_flds = ctx.mod.types[_gfb_info.wasm_type_idx + 1].fields
                     if _gfb_wfi >= 0 && _gfb_wfi < length(_gfb_flds)
                         local _gfb_ib = _ctx_builder(ctx, "compile_call")
-                        local _gfb_ft = _gfb_flds[_gfb_wfi + 1].valtype
                         emit_value!(_gfb_ib, args[1], ctx,
                                     ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
-                        struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_wfi), _gfb_ft)
+                        struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_wfi))
                         append_builder!(fb, _gfb_ib)
                         _gfc_done = true
                     end
@@ -4150,7 +4139,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             # the Nothing emission is exactly one i32.const 0 (ir/-kind test)
                             if length(_cab.instrs) == 1 && _cab.instrs[1] isa InstrIR.I32Const
                                 if expected_wasm isa ConcreteRef
-                                    ref_null!(fb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
+                                    ref_null!(fb, Int64(expected_wasm.type_idx))
                                 else
                                     ref_null!(fb, expected_wasm)
                                 end
@@ -4351,7 +4340,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             # Extract each field from tuple and push for struct.new
                             for (i, (name, vtype)) in enumerate(zip(names, value_types))
                                 local_get!(_ntb, tuple_local)
-                                struct_get!(_ntb, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, i), julia_to_wasm_type(vtype))  # account for typeId
+                                struct_get!(_ntb, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, i))  # account for typeId
                             end
 
                             # Create the NamedTuple struct
@@ -4518,7 +4507,6 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     vec_idx = vec_info.wasm_type_idx
     arr_ref = ConcreteRef(arr_type_idx, true)
     size_idx = size_info.wasm_type_idx
-    size_ref = ConcreteRef(size_idx, true)
     off = vec_info.field_offset
     n_prefix = length(prefix_args)
 
@@ -4535,14 +4523,14 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     emit_value!(bld, container_arg, ctx, ConcreteRef(vec_idx, true))
     local_set!(bld, vec_local)
     local_get!(bld, vec_local)
-    struct_get!(bld, vec_idx, off, arr_ref)
+    struct_get!(bld, vec_idx, off)
     local_set!(bld, src_local)
     local_get!(bld, vec_local)
-    struct_get!(bld, vec_idx, array_offset_field_idx(vec_info), I32)
+    struct_get!(bld, vec_idx, array_offset_field_idx(vec_info))
     local_set!(bld, src_off_local)
     local_get!(bld, vec_local)
-    struct_get!(bld, vec_idx, off + 1, size_ref)
-    struct_get!(bld, size_idx, size_info.field_offset, I64)
+    struct_get!(bld, vec_idx, off + 1)
+    struct_get!(bld, size_idx, size_info.field_offset)
     narrow_length_to_i32!(bld)
     local_tee!(bld, tail_len)
     i32_const!(bld, n_prefix)
@@ -4551,12 +4539,12 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     array_new_default!(bld, arr_type_idx)
     local_set!(bld, dst_local)
 
-    elem_wasm = ctx.mod.types[arr_type_idx + 1].elem.valtype
+    elem_wasm = unpacked(ctx.mod.types[arr_type_idx + 1].elem.valtype)
     for (i, arg) in enumerate(prefix_args)
         local_get!(bld, dst_local)
         i32_const!(bld, i - 1)
         emit_value!(bld, arg, ctx, elem_wasm)
-        array_set!(bld, arr_type_idx, elem_wasm)
+        array_set!(bld, arr_type_idx)
     end
 
     local_get!(bld, dst_local)
@@ -4836,14 +4824,14 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         emit_value!(bld, container_arg, ctx, ConcreteRef(vec_idx, true))
         local_set!(bld, vec_local)
         local_get!(bld, vec_local)
-        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 1), ConcreteRef(arr_type_idx, true))
+        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 1))
         local_set!(bld, arr_local)
         local_get!(bld, vec_local)
-        struct_get!(bld, vec_idx, array_offset_field_idx(vec_info), I32)
+        struct_get!(bld, vec_idx, array_offset_field_idx(vec_info))
         local_set!(bld, off_local)
         local_get!(bld, vec_local)
-        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 2), ConcreteRef(size_type_idx, true))
-        struct_get!(bld, size_type_idx, wasm_field_idx(size_info, 1), I64)
+        struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 2))
+        struct_get!(bld, size_type_idx, wasm_field_idx(size_info, 1))
         num!(bld, Opcode.I32_WRAP_I64)
         local_set!(bld, len_local)
         i32_const!(bld, 0)
@@ -4859,8 +4847,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         local_get!(bld, off_local)   # element i sits at the :ref offset + i
         local_get!(bld, i_local)
         num!(bld, Opcode.I32_ADD)
-        array_get!(bld, arr_type_idx, elem_wasm_type;
-                   signed=packed_array_signedness(elem_type))
+        array_get!(bld, arr_type_idx; signed=packed_array_signedness(elem_type))
         local_set!(bld, elem_local)
         local_get!(bld, has_value)
         if_!(bld; results=WasmValType[elem_wasm_type])
@@ -4940,18 +4927,18 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
 
     # src_arr = vec_ref.data  (field_offset)
     local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset, ConcreteRef(arr_type_idx, true))
+    struct_get!(bld, vec_type_idx, field_offset)
     local_set!(bld, src_arr_local)
 
     # src_off = vec_ref.off0 (the :ref offset of its first element)
     local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, array_offset_field_idx(vec_info), I32)
+    struct_get!(bld, vec_type_idx, array_offset_field_idx(vec_info))
     local_set!(bld, src_off_local)
 
     # len = vec_ref.size[1]  (vec → size tuple → i64 → i32)
     local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))
-    struct_get!(bld, size_type_idx, size_field_offset, I64)
+    struct_get!(bld, vec_type_idx, field_offset + 1)
+    struct_get!(bld, size_type_idx, size_field_offset)
     num!(bld, Opcode.I32_WRAP_I64)
     local_set!(bld, len_local)
 
@@ -4972,7 +4959,7 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     emit_struct_prefix!(bld, ctx.type_registry, result_type, result_info)
     local_get!(bld, new_arr_local)
     local_get!(bld, vec_ref_local)
-    struct_get!(bld, vec_type_idx, field_offset + 1, ConcreteRef(size_type_idx, true))  # size tuple
+    struct_get!(bld, vec_type_idx, field_offset + 1)  # size tuple
     result_type <: Array && i32_const!(bld, 0)   # an Array result's off0: the fresh array's first element
     struct_new!(bld, result_type_idx)
     append_builder!(fb, bld)
@@ -4988,11 +4975,11 @@ function _emit_svec_values!(b::InstrBuilder, values::AbstractVector{<:NirNode},
     arr_idx = info.wasm_type_idx
     arr_def = ctx.mod.types[arr_idx + 1]
     arr_def isa ArrayType || error("SimpleVector did not register as a Wasm array")
-    elem_type = arr_def.elem.valtype
+    elem_type = unpacked(arr_def.elem.valtype)
     for value in values
         emit_value!(b, value, ctx, elem_type)   # the funnel reads the value's static Julia type
     end
-    array_new_fixed!(b, arr_idx, length(values), elem_type)
+    array_new_fixed!(b, arr_idx, length(values))
     return b
 end
 

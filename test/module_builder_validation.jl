@@ -75,6 +75,36 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         b = MBV.StructType([MBV.FieldType(MBV.ConcreteRef(nxt, true), true)])
         @test MBV.add_type_group!(m, MBV.CompositeType[a, b]) == nxt
         @test (Int(nxt):Int(nxt) + 1) in MBV.recursion_groups(m)
+        # a struct's supertype is declared before it, inside a group too (the wasm rule): a member
+        # naming itself or a later member as its supertype is refused where the group is added,
+        # so no supertype chain is a cycle (one made wasm_subtype loop forever)
+        let cm = MBV.WasmModule()
+            local b0 = UInt32(length(cm.types))
+            @test_throws MBV.ModuleValidationError MBV.add_type_group!(cm,
+                MBV.CompositeType[MBV.StructType(MBV.FieldType[], b0)])
+        end
+        let cm = MBV.WasmModule()
+            local b0 = UInt32(length(cm.types))
+            @test_throws MBV.ModuleValidationError MBV.add_type_group!(cm,
+                MBV.CompositeType[MBV.StructType(MBV.FieldType[], b0 + UInt32(1)), MBV.StructType(MBV.FieldType[], b0)])
+        end
+        # every member's supertype is checked before any member's fields: here A's covariance
+        # check (its (ref null B) field against X's (ref null Y)) would walk B's supertype cycle
+        let cm = MBV.WasmModule()
+            local y = MBV.add_struct_type!(cm, MBV.FieldType[])
+            local x = MBV.add_type!(cm, MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(y), true), false)]))
+            local b0 = UInt32(length(cm.types))
+            @test_throws MBV.ModuleValidationError MBV.add_type_group!(cm, MBV.CompositeType[
+                MBV.StructType([MBV.FieldType(MBV.ConcreteRef(b0 + UInt32(1), true), false)], UInt32(x)),
+                MBV.StructType([MBV.FieldType(MBV.ConcreteRef(b0, true), true)], b0 + UInt32(1))])
+            @test length(cm.types) == b0   # refused before it was appended
+        end
+        let cm = MBV.WasmModule()
+            local b0 = UInt32(length(cm.types))
+            # the later member naming the earlier one is a valid group
+            local fb = MBV.FieldType(MBV.ConcreteRef(b0 + UInt32(1), true), false)
+            @test MBV.add_type_group!(cm, MBV.CompositeType[MBV.StructType([fb]), MBV.StructType([fb], b0)]) == b0
+        end
         @test_throws MBV.ModuleValidationError MBV.add_type_group!(m,
             MBV.CompositeType[MBV.StructType([MBV.FieldType(MBV.ConcreteRef(UInt32(99), true), true)])])
         # a recursion group's members are one strongly connected component (dev/AUDIT.md A7B1:
@@ -85,13 +115,13 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         # a packed array's element is read signed or unsigned, never plainly (dev/AUDIT.md A9B3:
         # a plain array.get of an i8 array made a module the engine refused)
         let pm = MBV.WasmModule()
-            local i8arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(0x78, true)))
+            local i8arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(MBV.I8, true)))
             local i64arr = MBV.add_type!(pm, MBV.ArrayType(MBV.FieldType(MBV.I64, true)))
-            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i8arr, MBV.I32)
-            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i64arr, MBV.I64; signed=true)
+            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i8arr)
+            @test_throws MBV.ModuleValidationError MBV.array_get!(MBV.InstrBuilder(; mod=pm), i64arr; signed=true)
             # a packed struct field is never read by struct.get (A11B9: dart asserts a value type)
-            local i8st = MBV.add_type!(pm, MBV.StructType([MBV.FieldType(0x78, false)]))
-            @test_throws MBV.ModuleValidationError MBV.struct_get!(MBV.InstrBuilder(; mod=pm), i8st, 0, MBV.I32)
+            local i8st = MBV.add_type!(pm, MBV.StructType([MBV.FieldType(MBV.I8, false)]))
+            @test_throws MBV.ModuleValidationError MBV.struct_get!(MBV.InstrBuilder(; mod=pm), i8st, 0)
         end
         # the writer checks the groups the builder recorded against the section's components
         # (dev/AUDIT.md A8B4: a record that disagrees is refused when the module is written)
@@ -210,7 +240,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.F64]; mod=m)
         # A call site cannot erase or misstate an import result: the module's
         # declared function type is the sole stack contract.
-        MBV.call!(b, imported, MBV.WasmValType[], MBV.WasmValType[])
+        MBV.call!(b, imported)
         MBV.finish_function!(b)
         @test MBV.builder_code(b) == UInt8[MBV.Opcode.CALL, 0x00, MBV.Opcode.END]
 
@@ -443,7 +473,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
     end
 
     @testset "symbolic control labels" begin
-        b = MBV.InstrBuilder()
+        b = MBV.InstrBuilder(; mod=MBV.WasmModule())
         done = MBV.block!(b)
         again = MBV.loop!(b)
         @test done isa MBV.ControlLabel
@@ -457,7 +487,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         MBV.end_block!(b)
         MBV.finish_function!(b)
 
-        closed = MBV.InstrBuilder()
+        closed = MBV.InstrBuilder(; mod=MBV.WasmModule())
         stale = MBV.block!(closed)
         MBV.end_block!(closed)
         @test_throws ArgumentError MBV.br!(closed, stale)
@@ -525,9 +555,9 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.ModuleValidationError MBV.add_global!(m, MBV.I32, true, 0; name="\$host_imports_open")
         # read and written through the one index space, typed by the import
         b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.I32]; mod=m)
-        MBV.global_get!(b, count, MBV.I32); MBV.global_set!(b, count)
-        MBV.global_get!(b, mine, MBV.I64); MBV.global_set!(b, mine)
-        MBV.global_get!(b, count, MBV.I32)
+        MBV.global_get!(b, count); MBV.global_set!(b, count)
+        MBV.global_get!(b, mine); MBV.global_set!(b, mine)
+        MBV.global_get!(b, count)
         MBV.finish_function!(b)
         MBV.add_function!(m, MBV.WasmValType[], MBV.WasmValType[MBV.I32], MBV.WasmValType[], MBV.builder_code(b); name="f")
         bytes = MBV.to_bytes(m)
@@ -551,7 +581,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         mk() = (b = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[]; mod=m);
                 MBV.local_get!(b, 0); b)
         enc(f) = (b = mk(); f(b); b.instrs[end].blocktype)
-        @test enc(b -> MBV.if_!(b)) === 0x40
+        @test enc(b -> MBV.if_!(b)) === MBV.InstrIR.VOID_BLOCK   # the void block type, not a byte
         @test enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32])) === MBV.I32
         two = enc(b -> MBV.if_!(b; results=MBV.WasmValType[MBV.I32, MBV.I64]))
         @test two isa Int && m.types[two + 1].params == MBV.WasmValType[] &&
@@ -610,9 +640,12 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         @test_throws MBV.StackImbalanceError MBV.select!(b, MBV.I32)
         b = mk(); MBV.i64_const!(b, 1); MBV.i64_const!(b, 2); MBV.i32_const!(b, 1)
         @test MBV.select!(b, MBV.I64) isa MBV.InstrBuilder
-        # call_ref's signature is its function type's
-        b = mk(); MBV.i32_const!(b, 1); MBV.ref_null!(b, Int64(fn_t), MBV.ConcreteRef(UInt32(fn_t), true))
-        @test_throws MBV.ModuleValidationError MBV.call_ref!(b, fn_t, MBV.WasmValType[MBV.I64], MBV.WasmValType[MBV.I32])
+        # call_ref's signature is its function type's: the type the module defines, a function type
+        b = mk(); MBV.i32_const!(b, 1); MBV.ref_null!(b, Int64(fn_t))
+        @test MBV.call_ref!(b, fn_t) isa MBV.InstrBuilder
+        b = mk(); MBV.i32_const!(b, 1); MBV.ref_null!(b, Int64(arr))
+        @test_throws MBV.ModuleValidationError MBV.call_ref!(b, arr)
+        @test_throws MBV.ModuleValidationError MBV.call_ref!(mk(), 99)
         # else gives its arm the if's inputs; an if with results needs an else
         b = mk(); MBV.i32_const!(b, 7); MBV.i32_const!(b, 1)
         MBV.if_!(b; inputs=MBV.WasmValType[MBV.I32], results=MBV.WasmValType[MBV.I32])
@@ -621,8 +654,8 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         b = mk(); MBV.i32_const!(b, 1)
         MBV.if_!(b; results=MBV.WasmValType[MBV.I32]); MBV.i32_const!(b, 2)
         @test_throws MBV.StackImbalanceError MBV.end_block!(b)
-        # a field's storage type is a value type, never a raw byte standing for one
-        @test_throws ArgumentError MBV.FieldType(0x70, false)
+        # a field's storage type is a value type or a packed type, never a raw byte standing for one
+        @test_throws MethodError MBV.FieldType(0x70, false)
         @test MBV.FieldType(MBV.FuncRef, false).valtype === MBV.FuncRef
     end
 
@@ -634,7 +667,7 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         nonnull, nullable = MBV.ConcreteRef(UInt32(a), false), MBV.ConcreteRef(UInt32(a), true)
         elseless(inputs, results) = (b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[]; mod=m);
             for t in inputs
-                t === nonnull ? (MBV.i32_const!(b, 1); MBV.struct_new!(b, a)) : MBV.ref_null!(b, Int64(a), nullable)
+                t === nonnull ? (MBV.i32_const!(b, 1); MBV.struct_new!(b, a)) : MBV.ref_null!(b, Int64(a))
             end;
             MBV.i32_const!(b, 1);
             MBV.if_!(b; inputs=MBV.WasmValType[inputs...], results=MBV.WasmValType[results...]);
@@ -660,16 +693,73 @@ Base.@noinline _mbv_io_receiver_print(io::IOBuffer, c::Char) = (print(io, '\\', 
         ok = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
         MBV.local_get!(ok, 0)
         MBV.if_!(ok; results=MBV.WasmValType[ra])
-        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.ref_null!(ok, Int64(a))
         MBV.else_!(ok)
-        MBV.ref_null!(ok, Int64(a), ra)
+        MBV.ref_null!(ok, Int64(a))
         MBV.end_block!(ok)
         MBV.finish_function!(ok)
 
         bad = MBV.InstrBuilder(MBV.WasmValType[MBV.I32], MBV.WasmValType[ra]; mod=m)
         MBV.local_get!(bad, 0)
         MBV.if_!(bad; results=MBV.WasmValType[ra])
-        MBV.ref_null!(bad, Int64(c), rc)
+        MBV.ref_null!(bad, Int64(c))
         @test_throws MBV.StackImbalanceError MBV.else_!(bad)
     end
+end
+
+include(joinpath(@__DIR__, "builder_cases.jl"))
+
+@testset "115a: every instruction typed as dart types it" begin
+    # each invalid program throws at its emitting call where it once reached the module and only
+    # the engine refused it; each valid one builds, and wasm-tools accepts it (dev/AUDIT.md A3B2-
+    # A3B10, A3B14; dev/CHARTER.md C7). The rows are test/builder_cases.jl's, which the ratchet
+    # also runs over src/builder alone (L164, L165, L166, L151).
+    for c in builder_cases(MBV)
+        @testset "row $(c.row) ($(c.id))" begin
+            if c.expect === :valid
+                local m = c.program()
+                @test m isa MBV.WasmModule
+                Sys.which("wasm-tools") === nothing ||
+                    @test MBV.validate_wasm_bytes(MBV.to_bytes(m)) isa Vector{UInt8}
+            else
+                @test_throws c.expect c.program()
+            end
+        end
+    end
+    # row s with its module: the global's own type is the one pushed, an i32 where i64 is the result
+    m = MBV.WasmModule(); MBV.add_global!(m, MBV.I32, false, 0)
+    b = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.I64]; func_name="g", mod=m)
+    MBV.global_get!(b, 0)
+    @test_throws MBV.StackImbalanceError MBV.finish_function!(b)
+    # the claimed-type forms are gone (each instruction takes the module's type, as dart's take the
+    # type object): a caller's claim is a MethodError at the call
+    m = MBV.WasmModule(); st = MBV.add_struct_type!(m, [MBV.FieldType(MBV.I64, true)])
+    b = MBV.InstrBuilder(; mod=m)
+    @test_throws MethodError MBV.ref_null!(b, st, MBV.ConcreteRef(UInt32(st), false))
+    @test_throws MethodError MBV.struct_new!(b, st, MBV.WasmValType[MBV.I32])
+    @test_throws MethodError MBV.struct_get!(b, st, 0, MBV.I64)
+    @test_throws MethodError MBV.call!(b, 0, MBV.WasmValType[], MBV.WasmValType[])
+    @test_throws MethodError MBV.global_get!(b, 0, MBV.I64)
+    # A3B14: a rejection for each operand check: global.get of an unknown global, ref.as_non_null
+    # of a number, ref.eq of an operand outside eq, extern.convert_any of an operand outside any,
+    # ref.cast across hierarchies, call_indirect of an unknown type, call_ref of another type,
+    # an unknown index
+    mk(ps=MBV.WasmValType[]) = MBV.InstrBuilder(ps, MBV.WasmValType[]; mod=m)
+    @test_throws MBV.ModuleValidationError MBV.global_get!(mk(), 5)
+    b = mk(); MBV.i32_const!(b, 1)
+    @test_throws MBV.StackImbalanceError MBV.ref_as_non_null!(b)
+    b = mk(MBV.WasmValType[MBV.ExternRef]); MBV.local_get!(b, 0); MBV.local_get!(b, 0)
+    @test_throws MBV.StackImbalanceError MBV.ref_eq!(b)
+    b = mk(MBV.WasmValType[MBV.FuncRef]); MBV.local_get!(b, 0)
+    @test_throws MBV.StackImbalanceError MBV.extern_convert_any!(b)
+    b = mk(MBV.WasmValType[MBV.ExternRef]); MBV.local_get!(b, 0)
+    @test_throws MBV.StackImbalanceError MBV.ref_cast!(b, st, false)
+    MBV.add_table!(m, MBV.FuncRef, 1)
+    b = mk(); MBV.i32_const!(b, 0)
+    @test_throws MBV.ModuleValidationError MBV.call_indirect!(b, 77, 0)
+    fa = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[], MBV.WasmValType[MBV.I32]))
+    fb = MBV.add_type!(m, MBV.FuncType(MBV.WasmValType[], MBV.WasmValType[MBV.F32]))
+    b = mk(MBV.WasmValType[MBV.ConcreteRef(UInt32(fa), true)]); MBV.local_get!(b, 0)
+    @test_throws MBV.StackImbalanceError MBV.call_ref!(b, fb)
+    @test_throws MBV.ModuleValidationError MBV.struct_get!(mk(), 99, 0)
 end

@@ -237,7 +237,7 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
             end   # (trampoline params ARE the slot types — no refinement needed)
             local_get!(tb, UInt32(c.axis2 - 1))
             ref_cast!(tb, Int64(_st_base_idx(dt_registry)), false)
-            struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0), I32)
+            struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0))
             # the level-2 span guard (a classId outside it has no row in this group)
             local lo2, hi2 = _cascade_span(c)
             emit_classid_span_guard!(tb, arity, lo2, hi2)   # first extra local
@@ -247,8 +247,7 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
             end
             res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                 WasmValType[dt.result_wasm_type] : WasmValType[]
-            call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
-                           copy(dt.slot_types), res)
+            call_indirect!(tb, dt.dispatch_sig_idx, dt_registry.selector_table_idx)
             end_block!(tb)
             tramp_idx = add_function!(mod, copy(dt.slot_types), res, WasmValType[I32], builder_code(tb);
                                       name=generated_function_name(:polymorphic_dispatcher,
@@ -286,14 +285,13 @@ parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
 function generate_selector_caller_body(dt::DispatchTable, dt_registry,
                                        n_params::Int, base_struct_idx::UInt32;
-                                       caller_return_type::Type=Any, mod=nothing,
+                                       caller_return_type::Type=Any, mod::WasmModule,
                                        type_registry=nothing)::Tuple{Vector{UInt8},Vector{WasmValType}}
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
     arity = Int(dt.arity)
-    # fullstrict: the builder carries its TRUE signature (params + the dispatch result)
-    # so the function frame's end validates against the real contract, and mod for
-    # the derived-truth chokepoints.
+    # the builder carries the caller's signature (params + the dispatch result), so the
+    # function frame's end validates against it
     local _sc_res = dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                     WasmValType[dt.result_wasm_type] : WasmValType[]
     b = InstrBuilder(copy(dt.slot_types), _sc_res; func_name="selector_caller", mod=mod)
@@ -309,7 +307,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
     # receiver.classId (dart: struct.get topInfo.classId)
     local_get!(b, UInt32(axis - 1))
     ref_cast!(b, Int64(base_struct_idx), false)
-    struct_get!(b, UInt32(base_struct_idx), UInt32(0), I32)
+    struct_get!(b, UInt32(base_struct_idx), UInt32(0))
     # the span guard: a classId outside [lo, hi] has no row (MethodError → trap)
     local lo, hi = _selector_span(dt_registry, dt.func_ref)
     locals = WasmValType[I32]            # first extra local: the guarded classId
@@ -321,8 +319,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
     sig = FuncType(copy(dt.slot_types),   # The per-slot LUB (was uniform AnyRef)
                    dt.result_wasm_type in (I32, I64, F32, F64, AnyRef) ?
                        WasmValType[dt.result_wasm_type] : WasmValType[])
-    call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx,
-                   sig.params, sig.results)
+    call_indirect!(b, dt.dispatch_sig_idx, dt_registry.selector_table_idx)
     # Result seam: the caller's DECLARED result may be anyref (dynamic-call inference)
     # while the selector signature is typed — box through the ONE producer.
     declared = julia_to_wasm_type(caller_return_type)
@@ -340,7 +337,7 @@ function generate_selector_caller_body(dt::DispatchTable, dt_registry,
             local_set!(b, scratch)
             i32_const!(b, Int64(tid))
             local_get!(b, scratch)
-            struct_new!(b, box_idx, WasmValType[I32, dt.result_wasm_type])
+            struct_new!(b, box_idx)
         end
     end
     end_block!(b)

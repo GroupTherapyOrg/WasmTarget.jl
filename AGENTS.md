@@ -35,17 +35,17 @@ each tied to machine checks; it outranks every plan, brief and task list.
 
 ## Correct or loud — never silent
 
-A module that runs and returns the wrong value is the worst possible outcome. Every
-construct codegen cannot lower rejects through `record_unsupported!` /
-`emit_unsupported_stub!` (`src/codegen/diagnostics.jl`), attributed to its statement with
-the inline chain innermost-first (L118, L119). Never emit a plausible default, a zero or a
-null to get past a gap.
+A module that runs and returns the wrong value is the worst possible outcome. Every construct
+codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_stub!`
+(`src/codegen/diagnostics.jl`), attributed to its statement with the inline chain innermost-first
+(L118, L119). Never emit a plausible default, a zero or a null to get past a gap.
 
 ## The enforcement stack
 
 | Layer | Command |
 |---|---|
 | the gate: every lane below | `bash dev/gate.sh` (L162); locally `bash dev/lanes.sh` (`--fast`) |
+| the inner loop, not the push gate: ratchet + both smokes on CI | `bash dev/gate.sh --fast` L163 |
 | locks, ratchets, charter status | `julia --project=. test/parity_ratchet.jl` |
 | differential smoke | `julia --project=. test/smoke.jl [group]` |
 | byte-identity probes | `julia --project=. test/probe_bytes.jl` |

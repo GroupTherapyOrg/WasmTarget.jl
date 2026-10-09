@@ -124,7 +124,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     if haskey(ctx.invoke_imports, idx)
         target_idx = ctx.invoke_imports[idx]
         bii = _ctx_builder(ctx, "compile_invoke")
-        params, _ = _true_call_sig(bii, target_idx, WasmValType[], WasmValType[])
+        params = _function_type(ctx.mod, target_idx).params
         selected = get(ctx.invoke_arguments, idx, collect(eachindex(args)))
         all(i -> 1 <= i <= length(args), selected) || throw(ArgumentError(
             "bound invoke $idx has an out-of-range argument projection"))
@@ -150,7 +150,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         if haskey(ctx.signal_ssa_getters, ssa_id) && isempty(args)
             global_idx = ctx.signal_ssa_getters[ssa_id]
             bsg = _ctx_builder(ctx, "compile_invoke")
-            global_get!(bsg, global_idx, AnyRef)
+            global_get!(bsg, global_idx)
             return append_builder!(b, bsg)
         end
         # Signal setter: one arg, sets the signal value
@@ -173,7 +173,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         i32_const!(bss2, Int(arg))
                     end
                     # Push the signal value (re-read from global)
-                    global_get!(bss2, global_idx, AnyRef)
+                    global_get!(bss2, global_idx)
                     # Convert to f64 for DOM imports (all DOM imports expect f64)
                     emit_convert_to_f64!(bss2, global_type)
                     # Call the DOM import function
@@ -182,7 +182,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             end
 
             # Setter returns the value in Therapy.jl, so re-read it
-            global_get!(bss2, global_idx, AnyRef)
+            global_get!(bss2, global_idx)
             return append_builder!(b, bss2)
         end
     end
@@ -414,7 +414,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     num!(bd, Opcode.I64_LT_S)
 
                     # Call dec
-                    call!(bd, _dec_info.wasm_idx, WasmValType[], WasmValType[])
+                    call!(bd, _dec_info.wasm_idx)
                     return append_builder!(b, bd)
                 end
             end
@@ -482,7 +482,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             # Emit the appropriate null/zero value based on the wasm type
             _nb = _ctx_builder(ctx, "compile_invoke")
             if wasm_type isa ConcreteRef
-                ref_null!(_nb, Int64(wasm_type.type_idx), ConcreteRef(UInt32(wasm_type.type_idx), true))
+                ref_null!(_nb, Int64(wasm_type.type_idx))
             elseif wasm_type === ExternRef
                 ref_null!(_nb, ExternRef)
             elseif wasm_type === AnyRef
@@ -524,7 +524,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                                                          ctx.mod, ctx.type_registry)
                     local _spb = _ctx_builder(ctx, "compile_invoke")
                     if _sp_w isa ConcreteRef
-                        ref_null!(_spb, Int64(_sp_w.type_idx), ConcreteRef(UInt32(_sp_w.type_idx), true))
+                        ref_null!(_spb, Int64(_sp_w.type_idx))
                         append_builder!(fb, _spb)
                     elseif _sp_w === AnyRef || _sp_w === StructRef || _sp_w === ExternRef || _sp_w === EqRef
                         ref_null!(_spb, _sp_w)
@@ -557,7 +557,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         # the pop-two-bytes surgery is gone; we just don't merge the arg)
                         if length(_ab.instrs) == 1 && _ab.instrs[1] isa InstrIR.I32Const
                             if expected_wasm isa ConcreteRef
-                                ref_null!(fb, Int64(expected_wasm.type_idx), ConcreteRef(UInt32(expected_wasm.type_idx), true))
+                                ref_null!(fb, Int64(expected_wasm.type_idx))
                             else
                                 ref_null!(fb, expected_wasm)
                             end
@@ -716,8 +716,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         # function signatures. Reuse the builder's sole resolver;
                         # reconstructing only the local-function half here left
                         # imported calls with an unseeded operand stack.
-                        local _cc_params, _ = _true_call_sig(
-                            fb, target_info.wasm_idx, WasmValType[], WasmValType[])
+                        local _cc_params = _function_type(ctx.mod, target_info.wasm_idx).params
                         tracing(:cc) && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
                         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
@@ -803,7 +802,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     _ps
                 end
                 bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
-                call!(bsc2, ctx.func_idx, WasmValType[], WasmValType[])
+                call!(bsc2, ctx.func_idx)
                 # Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)
                     local_idx_val = ctx.ssa_locals[idx]

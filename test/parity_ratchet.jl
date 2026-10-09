@@ -891,6 +891,33 @@ const METRICS = [
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
 ]
 
+# The builder alone: src/builder/*.jl, with the options file it reads first, loaded in the order
+# src/WasmTarget.jl includes them into a module of their own (named WasmTarget, as InstrIR's
+# `using ..WasmTarget` asks). The builder's behavioral locks (L151, L164, L165, L166) run its
+# checks here in seconds, without loading the package.
+const _BUILDER_SANDBOX = Ref{Union{Nothing,Module}}(nothing)
+function builder_sandbox()::Module
+    _BUILDER_SANDBOX[] === nothing || return _BUILDER_SANDBOX[]
+    local files = String[]
+    for m in eachmatch(r"^include\(\"([^\"]+)\"\)"m, read(joinpath(SRC, "WasmTarget.jl"), String))
+        push!(files, m[1])
+        m[1] == "builder/instr_builder.jl" && break
+    end
+    local W = Module(:WasmTarget)
+    Core.eval(W, :(include(p) = Base.include($W, p)))
+    for f in files
+        Base.include(W, joinpath(SRC, f))
+    end
+    return _BUILDER_SANDBOX[] = W
+end
+include(joinpath(ROOT, "test", "builder_cases.jl"))
+# run `f(W)` on the sandbox in the newest world (the sandbox's methods are defined after the locks)
+in_builder_sandbox(f::Function) = (local W = builder_sandbox(); Base.invokelatest(f, W))
+# how many of test/builder_cases.jl's rows (all, or those named) do not hold over the sandbox
+builder_rows_failing(rows=nothing)::Int = in_builder_sandbox() do W
+    count(c -> (rows === nothing || c.row in rows) && !builder_case_holds(W, c), builder_cases(W))
+end
+
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
     # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
@@ -1365,7 +1392,7 @@ const LOCKS = [
                         "invokes unknown compilation roots",
                         "selects arguments for unbound invoke sites",
                         "static_wasm_type(NirLiteral(_captured_value), ctx)",
-                        "Declaratively bound invoke", "params, _ = _true_call_sig",
+                        "Declaratively bound invoke", "params = _function_type(ctx.mod, target_idx).params",
                         "emit_value!(bii, arg, ctx, expected",
                         "root entry call \$target_idx must have signature () -> ()",
                         "add_root_global_initializer!",
@@ -2059,8 +2086,8 @@ const LOCKS = [
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             load_src = read(joinpath(CODEGEN, "calls.jl"), String) *
                        read(joinpath(CODEGEN, "invoke.jl"), String)
-            required = ["T === Int8 || T === UInt8 ? UInt8(0x78)",
-                        "T === Int16 || T === UInt16 ? UInt8(0x77)",
+            required = ["T === Int8 || T === UInt8 ? I8",
+                        "T === Int16 || T === UInt16 ? I16",
                         "packed_array_signedness(elem_type)"]
             count(p -> !occursin(p, types_src * load_src), required) +
             count(_ -> true, eachmatch(r"signed=\(elem_type === UInt8", load_src))
@@ -2075,11 +2102,11 @@ const LOCKS = [
                 "StructType(fields, top)",
                 "FieldType(I32, true)",
                 "get_identity_counter_global!",
-                "struct_get!(b, object_idx, UInt32(1), I32)",
-                "struct_set!(b, object_idx, UInt32(1), I32)",
+                "struct_get!(b, object_idx, UInt32(1))",
+                "struct_set!(b, object_idx, UInt32(1))",
                 "StructType(fields, object)",
-                "struct_get!(tb, base_idx, UInt32(2), AnyRef)",
-                "struct_get!(b, base_idx, UInt32(3), StructRef)",
+                "struct_get!(tb, base_idx, UInt32(2))",
+                "struct_get!(b, base_idx, UInt32(3))",
                 "ensure_type_id!(registry, body_return_type)",
             ]
             all_src = types_src * stmt_src * closure_src
@@ -2325,6 +2352,7 @@ const LOCKS = [
     "L121_retired_names_absent_from_src" => ("a symbol this campaign deleted must not appear ANYWHERE in src — comments and docstrings included. A reference to a function that no longer exists sends the next reader (human or agent) looking for it; the cloud review of 2026-09-04 spent a finding on exactly that (a docstring naming julia_to_wasm_type_concrete, folded into get_concrete_wasm_type in Phase 4.1). Historical records in dev/ and test/ ledgers are exempt — they document what WAS (locked 2026-09-04)",
         () -> begin
             retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
+                       "builder_diagnose",   # the builder's post-mortem printer, with no caller
                        "string_hash_func_idx", "_wasm_string_fnv1a",
                        "resolve_through_dead_boundscheck",
                        "_is_typelevel_foldable",   # Phase 12 C: the fold enumeration
@@ -2509,15 +2537,15 @@ const LOCKS = [
             local throw_refs = count_sites(r"throw_ref|ThrowRef|THROW_REF")
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
-            local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod)"),
+            local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)))\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod)"),
                               (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
                               (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    source_map_url === nothing"),
                               (gen, "const st = e.getArg(tag, 1);"),
                               (runner, "catch (e) { return [(\$(WasmTarget.host_escape_js()))(instance.exports, e)]; }"),
                               (runner, "    \$HOST_RUNTIME_MERGE_JS"),
-                              (gen, "    global_get!(b, top, ConcreteRef(cell, true))\n    struct_get!(b, cell, 1, ExternRef)\n    global_get!(b, top, ConcreteRef(cell, true))\n    throw_!(b, 0)"),
-                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx, ft.params, ft.results)\n    finish_function!(b)"),
-                              (gen, "        struct_set!(b, cell, 0, AnyRef)\n    end\n    return _emit_throw_top!(b, mod)\nend")]
+                              (gen, "    global_get!(b, top)\n    struct_get!(b, cell, 1)\n    global_get!(b, top)\n    throw_!(b, 0)"),
+                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx)\n    finish_function!(b)"),
+                              (gen, "        struct_set!(b, cell, 0)\n    end\n    return _emit_throw_top!(b, mod)\nend")]
             # _emit_throw_top!'s callers, exactly: the throw that pushes (emit_throw_value!) and
             # the rethrow that does not (emit_rethrow!); a call from any other function, one that
             # throws the top without pushing it, fires
@@ -2602,13 +2630,20 @@ const LOCKS = [
             glue_ok && push!(answered, ("wasmtarget", "host_imports_open"))
             length(symdiff(created, answered)) + (glue_ok ? 0 : 1)
         end),
-    "L151_every_builder_has_its_module" => ("every InstrBuilder codegen constructs names its module (`mod=`), as every dart InstructionsBuilder has one: a builder without it cannot resolve a type index, so a subtype check against an abstract reference (an array.len's arrayref, a struct's field) could not be made and a global's initializer went unchecked; the module-less builder remains only for the builder's own unit tests (dev/AUDIT.md A2B7, B5; dev/CHARTER.md C7)",
+    "L151_every_builder_has_its_module" => ("every builder has its module, as every dart InstructionsBuilder has one (instructions.dart:233): InstrBuilder and WasmStackValidator have no method without a WasmModule (`mod` is a required keyword, never `Union{Nothing}`), so a module-less builder cannot be made and its fallbacks (a caller's global type, an unchecked global.set, a guessed struct for an unresolvable index, a call's claimed signature) are unreachable; no `=== nothing` test of a module in src/builder and no `mod=nothing` in src; every InstrBuilder codegen constructs names its module (`mod=`). Its behavior, over src/builder alone: `InstrBuilder(; func_name)` and `WasmStackValidator(; func_name)` throw (dev/AUDIT.md A2B7, A3B5, B5; dev/CHARTER.md C7)",
         () -> begin
             local n = 0
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
                 for m in eachmatch(r"InstrBuilder\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", read(joinpath(dir, f), String))
                     occursin("mod=", m.match) || (n += 1)
+                end
+            end
+            n += count_sites(r"\b(mod|_mod|v\.mod|b\.v\.mod)\s*[!=]==?\s*nothing\b"; roots=[joinpath(SRC, "builder")])
+            n += count_sites(r"\bmod\s*=\s*nothing\b|mod::Union\{Nothing"; roots=[SRC])
+            n += in_builder_sandbox() do W
+                count((() -> W.InstrBuilder(; func_name="no module"), () -> W.WasmStackValidator(; func_name="no module"))) do make
+                    try; make(); true; catch e; !(e isa UndefKeywordError); end
                 end
             end
             n
@@ -2990,6 +3025,166 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                       occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
+        end),
+    "L163_the_fast_lane" => ("the inner loop on CI's runners: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and the full gate (gate.yml, L153, L162) stays the push gate. gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; AGENTS.md's enforcement table has its row, `bash dev/gate.sh --fast` as ratchet + both smokes on CI's runners, the inner loop, not the push gate (dev/CHARTER.md C10)",
+        () -> begin
+            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
+            local wf = joinpath(ROOT, ".github", "workflows")
+            isfile(joinpath(wf, "gate-fast.yml")) || return 1
+            local fast_raw = read(joinpath(wf, "gate-fast.yml"), String)
+            local fast = _code(joinpath(wf, "gate-fast.yml"))
+            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
+            local agents = replace(read(joinpath(ROOT, "AGENTS.md"), String), r"\s+" => " ")
+            local v = 0
+            # the triggers, exactly
+            v += occursin("\non:\n  push:\n    branches: ['gate-fast/**']\n  workflow_dispatch:\n", fast) &&
+                 count(r"^\s*push:"m, fast) == 1 && !occursin("branches-ignore", fast) ? 0 : 1
+            # the matrix: the ratchet, smoke 0..N-1, smoke-1.13 0..M-1, with the N and M the header states
+            local jobs = Dict{String,Vector{String}}()
+            for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, fast)
+                push!(get!(jobs, m[1], String[]), m[2])
+            end
+            local stated = match(r"N = (\d+) and M = (\d+)", fast_raw)
+            local N = stated === nothing ? -1 : parse(Int, stated[1])
+            local M = stated === nothing ? -1 : parse(Int, stated[2])
+            local parts(n) = String["$i/$n" for i in 0:n-1]
+            v += (sort(collect(keys(jobs))) == ["ratchet", "smoke", "smoke-1.13"] && jobs["ratchet"] == [""] &&
+                  sort(jobs["smoke"]) == sort(parts(N)) && sort(jobs["smoke-1.13"]) == sort(parts(M))) ? 0 : 1
+            v += 1 + N + M <= 20 ? 0 : 1
+            v += occursin("      fail-fast: true\n", fast) && !occursin("fail-fast: false", fast) ? 0 : 1
+            # the budget: the lane job's timeout, the one gate.sh --fast reads, and no other timeout
+            local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, fast)]
+            v += length(lane_t) == 1 && length(collect(eachmatch(r"timeout-minutes:", fast))) == 1 ? 0 : 1
+            v += occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate-fast.yml)", sh) ? 0 : 1
+            v += occursin("bash dev/lanes.sh --lane \${{ matrix.lane }}\${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}\n", fast) ? 0 : 1
+            # no lane variable set by the workflow
+            v += occursin(r"\b(WT|TLC)_[A-Z_]+", fast) ? 1 : 0
+            # ci.yml, formal.yml and gate.yml never run on a gate-fast/** push
+            for f in ("ci.yml", "formal.yml", "gate.yml")
+                local c = _code(joinpath(wf, f))
+                v += occursin("gate-fast", c) || occursin("'**'", c) || occursin("branches-ignore", c) ? 1 : 0
+            end
+            # gate.sh --fast pushes to gate-fast/ and never to gate/
+            v += occursin("[ \$fast -eq 0 ] || { prefix=gate-fast; workflow=\"Gate fast\"; verdict=FAST; }", sh) &&
+                 occursin("name=\$prefix/\${name//\\//-}", sh) ? 0 : 1
+            v += occursin("| the inner loop, not the push gate: ratchet + both smokes on CI | `bash dev/gate.sh --fast` L163 |", agents) ? 0 : 1
+            v
+        end),
+    "L164_one_subtype_relation" => ("one subtype relation, in the builder, as dart's isSubtypeOf lives beside its types (type.dart:236 RefType.isSubtypeOf, :733 DefType.isSubtypeOf): wasm_subtype, the heap-kind resolver, the same-top predicate and the non-null map are each defined once, in src/builder/types.jl; src/codegen defines none of the lattice names and no `_non_null` exists. Its behavior, run over src/builder alone: a defined function type is a subtype of itself, of func and of its nullable form, never of another function type, of an abstract type outside func or of a struct; a struct reaches its declared supertype; a non-null exn reference is a subtype of exnref; and test/builder_cases.jl's rows a-c (funcref is no (ref null \$sig), two function types are unrelated, an undefined type index is invalid, never a guessed struct) reject at their call (dev/AUDIT.md A3B3; dev/CHARTER.md C7)",
+        () -> begin
+            local names = ["wasm_subtype", "_wt_is_ref", "_wt_ref_nullable", "_wt_drop_nullable", "_wt_heap_kind",
+                           "_wt_heap_kind_of_byte", "_wt_hierarchy_top", "_wt_same_hierarchy", "_wt_top_ref",
+                           "_wt_defined_type", "_wt_concrete_supertype_idx", "_wt_concrete_chain_reaches", "_non_null"]
+            local def_rx = Regex("^\\s*(?:@inline\\s+)?(?:function\\s+)?(" * join(names, "|") * ")\\(")
+            local v = 0
+            local homes = Dict{String,Set{String}}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                local rel = relpath(joinpath(dir, f), SRC)
+                for line in eachline(joinpath(dir, f))
+                    local m = match(def_rx, line)
+                    m === nothing && continue
+                    # a definition: `function name(` or a short form `name(…)::T =`
+                    (startswith(lstrip(line), "function") || occursin(r"\)\s*(::\S+)?\s*=(?!=)", line)) || continue
+                    push!(get!(homes, m[1], Set{String}()), replace(rel, '\\' => '/'))
+                end
+            end
+            for n in names
+                local h = get(homes, n, Set{String}())
+                v += n == "_non_null" ? length(h) : (h == Set(["builder/types.jl"]) ? 0 : 1)
+            end
+            # the behavior, over the builder alone
+            v += in_builder_sandbox() do W
+            local m = W.WasmModule()
+            local base = W.add_struct_type!(m, [W.FieldType(W.I32, false)])
+            local mid = W.add_type!(m, W.StructType([W.FieldType(W.I32, false), W.FieldType(W.I64, false)], UInt32(base)))
+            local f = W.add_type!(m, W.FuncType(W.WasmValType[], W.WasmValType[W.I32]))
+            local g = W.add_type!(m, W.FuncType(W.WasmValType[], W.WasmValType[W.I64]))
+            local cr(i, n=true) = W.ConcreteRef(UInt32(i), n)
+            local T = m.types
+            local holds = [W.wasm_subtype(cr(f, false), cr(f), T), W.wasm_subtype(cr(f), W.FuncRef, T),
+                           W.wasm_subtype(cr(mid), cr(base), T), W.wasm_subtype(cr(mid, false), W.StructRef, T),
+                           W.wasm_subtype(W.NonNullAbstractRef(UInt8(W.ExnRef)), W.ExnRef, T),
+                           !W.wasm_subtype(cr(f), cr(g), T), !W.wasm_subtype(cr(g), cr(f), T),
+                           !W.wasm_subtype(cr(f), W.AnyRef, T), !W.wasm_subtype(cr(f), W.StructRef, T),
+                           !W.wasm_subtype(W.FuncRef, cr(f), T), !W.wasm_subtype(cr(base), cr(f), T),
+                           !W.wasm_subtype(cr(base), cr(mid), T)]
+            count(!, holds)
+            end
+            v += builder_rows_failing(("a", "b", "c"))
+            v
+        end),
+    "L165_storage_types_are_darts" => ("dart's StorageType split (type.dart:11 StorageType, :39 ValueType, :1370 PackedType): WasmValType's union holds no UInt8 and no PackedType, so no local, parameter, result, label, global or select holds a raw byte or a packed type; PackedType (I8, I16) is a type of its own, which a field's type admits (StorageType, held by FieldType and ArrayType, read through `unpacked`, written by write_storage_type!), StorageType annotating exactly FieldType's field and constructor, ArrayType's constructor, _wt_is_ref, add_array_type! and _defaultable; no `isa UInt8` in src/builder; the packed bytes 0x78 and 0x77 are spelled in src only by PackedType's own definition (and the Opcode constants I32_ROTL and I32_ROTR), so the packed test is `isa PackedType` / `unpacked`, never `in (0x78, 0x77)`; the void block type is InstrIR's VOID_BLOCK, not the byte 0x40. Its behavior, over src/builder alone: test/builder_cases.jl's row d (no local is an i8) rejects and row g (struct.new of a packed field pops its unpacked i32) builds (dev/AUDIT.md A3B4, A12B6; dev/CHARTER.md C7 C1)",
+        () -> begin
+            local types_src = read(joinpath(SRC, "builder", "types.jl"), String)
+            local u = match(r"const WasmValType = Union\{([^}]*)\}", types_src)
+            local v = u === nothing ? 1 : (occursin("UInt8", u[1]) || occursin("PackedType", u[1]) ? 1 : 0)
+            v += occursin("const StorageType = Union{WasmValType, PackedType}", types_src) ? 0 : 1
+            # StorageType annotates exactly these definitions
+            local allowed = Dict("builder/types.jl" => 4, "builder/instructions.jl" => 1, "builder/instr_builder.jl" => 1)
+            local seen = Dict{String,Int}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                for line in eachline(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    seen[rel] = get(seen, rel, 0) + length(collect(eachmatch(r"::StorageType\b", line)))
+                end
+            end
+            filter!(p -> p.second > 0, seen)
+            v += seen == allowed ? 0 : 1
+            v += count_sites(r"\bisa\s+UInt8\b"; roots=[joinpath(SRC, "builder")])
+            v += count_sites(r"0x7[78]\b"; exclude_line=r"const I32_ROT[LR] = 0x7[78]$|^\s*I(8|16) = 0x7[78]\s+#")
+            v += count_sites(r"\b0x40\b"; roots=[joinpath(SRC, "builder")], exclude_line=r"push!\(c, 0x40\)|byte & 0x40")
+            v += builder_rows_failing(("d", "g"))
+            v
+        end),
+    "L166_operands_typed_by_the_module" => ("every instruction typed as dart types it, by the module's own types (instructions.dart: struct_get :1657, struct_set :1696, struct_new :1711, array_get :1735, array_set :1774, array_new_fixed :1802, array_fill :1875, call :947, call_indirect :960, call_ref :973, global_get :1063 each take the type or function object itself; ref_null :1570 its heap type; one _verifyCast :1927 for ref_test :1944 and ref_cast :1961; the conversions keep nullability :2028 :2040; ref_eq :1632): none of struct_get!, struct_set!, array_get!, array_set!, array_new_fixed!, array_fill!, call!, global_get!, call_ref!, call_indirect!, struct_new! and ref_null! takes a claimed type (each is defined exactly with dart's arguments); one resolver, _module_type, with one policy (an undefined index or another kind is invalid) and _true_call_sig, _true_field_type, _true_elem_type and _function_type_sig gone; ref_test! and ref_cast! both go through _verify_cast!; num! refuses a non-numeric opcode (validate_instruction! holds no constant, memory, parametric or reference arm) and ref_eq! emits ref.eq. Its behavior, over src/builder alone: every row of test/builder_cases.jl holds (each invalid program throws at its call, each valid one builds), which test/module_builder_validation.jl's testset '115a: every instruction typed as dart types it' also runs with wasm-tools (dev/AUDIT.md A3B2, A3B6-A3B10, A3B14; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local val = read(joinpath(SRC, "builder", "validator.jl"), String)
+            local expected = Dict(
+                "struct_get!" => ["struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer)"],
+                "struct_set!" => ["struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer)"],
+                "array_get!" => ["array_get!(b::InstrBuilder, type_idx::Integer; signed::Union{Nothing,Bool}=nothing)"],
+                "array_set!" => ["array_set!(b::InstrBuilder, type_idx::Integer)"],
+                "array_new_fixed!" => ["array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer)"],
+                "array_fill!" => ["array_fill!(b::InstrBuilder, type_idx::Integer)"],
+                "call!" => ["call!(b::InstrBuilder, func_idx::Integer)"],
+                "global_get!" => ["global_get!(b::InstrBuilder, idx::Integer)"],
+                "call_ref!" => ["call_ref!(b::InstrBuilder, type_idx::Integer)"],
+                "call_indirect!" => ["call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer)"],
+                "struct_new!" => ["struct_new!(b::InstrBuilder, type_idx::Integer)"],
+                "ref_null!" => ["ref_null!(b::InstrBuilder, heaptype::Integer)", "ref_null!(b::InstrBuilder, rt::RefType)"])
+            local v = 0
+            for (name, sigs) in expected
+                local defs = String[]
+                for (dir, _, files) in walkdir(SRC), f in files
+                    endswith(f, ".jl") || continue
+                    for line in eachline(joinpath(dir, f))
+                        local m = match(Regex("^(?:function\\s+)?(" * replace(name, "!" => "\\!") * "\\([^)]*\\))(?:::InstrBuilder)?\\s*(?:=|\$)"), line)
+                        m === nothing || push!(defs, m[1])
+                    end
+                end
+                v += sort(defs) == sort(sigs) ? 0 : 1
+            end
+            v += count_sites(r"\b(_true_call_sig|_true_field_type|_true_elem_type|_function_type_sig)\b")
+            v += length(collect(eachmatch(r"^function _module_type\("m, ib))) == 1 ? 0 : 1
+            v += count_sites(r"^function _module_type\(|^_module_type\(") == 1 ? 0 : 1
+            # ref_test! (each form) and ref_cast! (each form) check through _verify_cast!
+            for m in eachmatch(r"^function (ref_test!|ref_cast!)\(.*?^end"ms, ib)
+                occursin("_verify_cast!(b, ", m.match) || (v += 1)
+            end
+            length(collect(eachmatch(r"^function (ref_test!|ref_cast!)\("m, ib))) == 4 || (v += 1)
+            # num!'s validator: no arm for an instruction with an immediate, a memory access, a
+            # parametric or a reference instruction
+            local vi = match(r"function validate_instruction!\(.*?\nend\n"s, val)
+            v += vi === nothing ? 1 :
+                 length(collect(eachmatch(r"Opcode\.(I32_CONST|I64_CONST|F32_CONST|F64_CONST|DROP|SELECT|SELECT_T|REF_\w+|\w+_LOAD|\w+_STORE|MEMORY_\w+)\b", vi.match)))
+            v += occursin("ref_eq!(b::InstrBuilder)::InstrBuilder =", ib) && occursin("InstrIR.RefEq()", ib) ? 0 : 1
+            v += count_sites(r"num!\([^,]*,\s*Opcode\.REF_EQ\)")
+            v += builder_rows_failing()
+            v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin

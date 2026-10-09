@@ -100,7 +100,7 @@ constant is initialized in the module's start function.
 function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
     b = InstrBuilder(; func_name="rng_seed_initializer", mod=mod)
     for g in (rng.rng0_idx, rng.rng1_idx, rng.rng2_idx, rng.rng3_idx)
-        call!(b, rng.seed_import_idx, WasmValType[], WasmValType[I64])
+        call!(b, rng.seed_import_idx)
         global_set!(b, g)
     end
     end_block!(b)
@@ -220,9 +220,9 @@ function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
                 end_block!(b)
                 # compare str1[i] vs str2[i] (unsigned packed-byte get)
                 local_get!(b, str1_local); local_get!(b, i_local)
-                array_get!(b, str_type_idx, I32; signed=false)
+                array_get!(b, str_type_idx; signed=false)
                 local_get!(b, str2_local); local_get!(b, i_local)
-                array_get!(b, str_type_idx, I32; signed=false)
+                array_get!(b, str_type_idx; signed=false)
                 num!(b, Opcode.I32_NE)
                 if_!(b)
                     i32_const!(b, 0); br!(b, done_label)    # differ → not equal
@@ -251,7 +251,7 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     ctx.scratch_locals === nothing && allocate_string_scratch!(ctx)
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_equal", mod=ctx.mod)
+    b = _ctx_builder(ctx, "compile_string_equal")
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, str1_local, strref)

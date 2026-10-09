@@ -253,7 +253,7 @@ function emit_throw_value!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     ensure_exception_tag!(mod)
     local cell = exc_cell_type!(mod)
     local top = ensure_exception_top_global!(mod)
-    call!(b, something(_stack_trace_func_idx(mod)), WasmValType[], WasmValType[ExternRef])
+    call!(b, something(_stack_trace_func_idx(mod)))
     struct_new!(b, cell)
     global_set!(b, top)
     _emit_throw_top!(b, mod)
@@ -266,11 +266,11 @@ end
 function _emit_throw_top!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     local cell = exc_cell_type!(mod)
     local top = ensure_exception_top_global!(mod)
-    global_get!(b, top, ConcreteRef(cell, true))
-    struct_get!(b, cell, 0, AnyRef)
-    global_get!(b, top, ConcreteRef(cell, true))
-    struct_get!(b, cell, 1, ExternRef)
-    global_get!(b, top, ConcreteRef(cell, true))
+    global_get!(b, top)
+    struct_get!(b, cell, 0)
+    global_get!(b, top)
+    struct_get!(b, cell, 1)
+    global_get!(b, top)
     throw_!(b, 0)
     return b
 end
@@ -289,7 +289,7 @@ function emit_rethrow!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
                        other::Union{Nothing,Integer}=nothing)::InstrBuilder
     local cell = exc_cell_type!(mod)
     local top = ensure_exception_top_global!(mod)
-    global_get!(b, top, ConcreteRef(cell, true))
+    global_get!(b, top)
     ref_is_null!(b)
     if_!(b)
     local info = register_struct_type!(mod, registry, ErrorException)
@@ -298,14 +298,14 @@ function emit_rethrow!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry;
     local msg = other === nothing ? "rethrow() not allowed outside a catch block" :
                                     "rethrow(exc) not allowed outside a catch block"
     local g = get_string_constant_global!(mod, registry, msg; eager=true)
-    global_get!(b, g, ConcreteRef(get_string_struct_type!(mod, registry), false))
+    global_get!(b, g)
     struct_new!(b, info.wasm_type_idx)
     emit_throw_value!(b, mod)
     end_block!(b)
     if other !== nothing
-        global_get!(b, top, ConcreteRef(cell, true))
+        global_get!(b, top)
         local_get!(b, UInt32(other))
-        struct_set!(b, cell, 0, AnyRef)
+        struct_set!(b, cell, 0)
     end
     return _emit_throw_top!(b, mod)
 end
@@ -320,13 +320,13 @@ parity(quarantine: Julia's per-task exception stack, read by the_exception; dart
 function emit_current_exception!(b::InstrBuilder, mod::WasmModule)::InstrBuilder
     local cell = exc_cell_type!(mod)
     local top = ensure_exception_top_global!(mod)
-    global_get!(b, top, ConcreteRef(cell, true))
+    global_get!(b, top)
     ref_is_null!(b)
     if_!(b; results=WasmValType[AnyRef])
     ref_null!(b, AnyRef)
     else_!(b)
-    global_get!(b, top, ConcreteRef(cell, true))
-    struct_get!(b, cell, 0, AnyRef)
+    global_get!(b, top)
+    struct_get!(b, cell, 0)
     end_block!(b)
     return b
 end
@@ -443,6 +443,7 @@ function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, transl
     local ctx = CompilationContext(NirBody(NirStmt[], Type[Any], nothing), (Any,), Int32, mod, registry;
                                    translator=translator)
     local b = InstrBuilder(WasmValType[AnyRef], WasmValType[I32]; func_name="ensure_class_id_reader!", mod=mod)
+    _seed_builder_locals!(b, ctx)   # the locals emit_class_id! allocates on ctx
     local_get!(b, 0)
     emit_class_id!(b, ctx, Any)
     finish_function!(b)
@@ -523,7 +524,7 @@ function emit_trace_enter!(b::InstrBuilder, ctx::AbstractCompilationContext)::In
     local id = _trace_id(ctx)
     id === nothing && return b
     i32_const!(b, id)
-    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", "trace_enter")), WasmValType[I32], WasmValType[])
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", "trace_enter")))
     return b
 end
 
@@ -546,7 +547,7 @@ function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext,
     i32_const!(b, id)
     i32_const!(b, idx)
     local_get!(b, local_idx)
-    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)), WasmValType[I32, I32, local_type], WasmValType[])
+    call!(b, something(_import_func_idx(ctx.mod, "wasmtarget", name)))
     push!(ctx.translator.trace.probed[id], idx)
     return b
 end
@@ -616,22 +617,22 @@ function emit_export_entry!(mod::WasmModule, inner_idx::Integer, name::String)::
     local count = host_imports_open_global(mod)
     local b = InstrBuilder(copy(ft.params), copy(ft.results); func_name="emit_export_entry!", mod=mod)
     if count === nothing
-        ref_null!(b, cell.type_idx, cell)
+        ref_null!(b, cell.type_idx)
     else
         # a re-entrant call starts with the top at its open import's call
-        global_get!(b, count, I32); num!(b, Opcode.I32_EQZ)
+        global_get!(b, count); num!(b, Opcode.I32_EQZ)
         if_!(b; results=WasmValType[cell])
-        ref_null!(b, cell.type_idx, cell)
+        ref_null!(b, cell.type_idx)
         else_!(b)
         local tops = ensure_import_tops_global!(mod)
-        global_get!(b, tops, ConcreteRef(import_tops_type!(mod), true))
-        global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_SUB)
-        array_get!(b, import_tops_type!(mod), cell)
+        global_get!(b, tops)
+        global_get!(b, count); i32_const!(b, 1); num!(b, Opcode.I32_SUB)
+        array_get!(b, import_tops_type!(mod))
         end_block!(b)
     end
     global_set!(b, top)
     for i in 0:length(ft.params) - 1; local_get!(b, i); end
-    call!(b, inner_idx, ft.params, ft.results)
+    call!(b, inner_idx)
     finish_function!(b)
     return add_function!(mod, ft.params, ft.results, WasmValType[], builder_code(b); name=generated_function_name(:export_entry, name))
 end
@@ -728,31 +729,31 @@ function import_tops_save!(mod::WasmModule)::UInt32
     local b = InstrBuilder(WasmValType[], WasmValType[]; func_name="import_tops_save!", mod=mod)
     local grown = builder_add_local!(b, arr_ref)
     # the array's length, 0 while it is null
-    global_get!(b, tops, arr_ref); ref_is_null!(b)
+    global_get!(b, tops); ref_is_null!(b)
     if_!(b; results=WasmValType[I32])
     i32_const!(b, 0)
     else_!(b)
-    global_get!(b, tops, arr_ref); array_len!(b)
+    global_get!(b, tops); array_len!(b)
     end_block!(b)
     # too short for index count: a new array of (count + 1) * 2 slots, the old one copied in
-    global_get!(b, count, I32); num!(b, Opcode.I32_LE_U)
+    global_get!(b, count); num!(b, Opcode.I32_LE_U)
     if_!(b)
-    global_get!(b, count, I32); i32_const!(b, 1); num!(b, Opcode.I32_ADD); i32_const!(b, 1); num!(b, Opcode.I32_SHL)
+    global_get!(b, count); i32_const!(b, 1); num!(b, Opcode.I32_ADD); i32_const!(b, 1); num!(b, Opcode.I32_SHL)
     array_new_default!(b, arr)
     local_set!(b, grown)
-    global_get!(b, tops, arr_ref); ref_is_null!(b); num!(b, Opcode.I32_EQZ)
+    global_get!(b, tops); ref_is_null!(b); num!(b, Opcode.I32_EQZ)
     if_!(b)
     local_get!(b, grown); i32_const!(b, 0)
-    global_get!(b, tops, arr_ref); i32_const!(b, 0)
-    global_get!(b, tops, arr_ref); array_len!(b)
+    global_get!(b, tops); i32_const!(b, 0)
+    global_get!(b, tops); array_len!(b)
     array_copy!(b, arr, arr)
     end_block!(b)
     local_get!(b, grown); global_set!(b, tops)
     end_block!(b)
-    global_get!(b, tops, arr_ref)
-    global_get!(b, count, I32)
-    global_get!(b, top, ConcreteRef(exc_cell_type!(mod), true))
-    array_set!(b, arr, ConcreteRef(exc_cell_type!(mod), true))
+    global_get!(b, tops)
+    global_get!(b, count)
+    global_get!(b, top)
+    array_set!(b, arr)
     finish_function!(b)
     return add_function!(mod, WasmValType[], WasmValType[], WasmValType[arr_ref], builder_code(b);
                          name=generated_function_name(:import_tops_save))
@@ -773,14 +774,14 @@ parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack,
 function emit_direct_call!(b::InstrBuilder, mod::WasmModule, func_idx::Integer)::InstrBuilder
     local imports = filter(imp -> imp.kind == 0x00, mod.imports)
     local host = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1])
-    host && call!(b, import_tops_save!(mod), WasmValType[], WasmValType[])
-    call!(b, func_idx, WasmValType[], WasmValType[])
+    host && call!(b, import_tops_save!(mod))
+    call!(b, func_idx)
     if host
         local cell = ConcreteRef(exc_cell_type!(mod), true)
         local tops = ensure_import_tops_global!(mod)
-        global_get!(b, tops, ConcreteRef(import_tops_type!(mod), true))
-        global_get!(b, something(host_imports_open_global(mod)), I32)
-        array_get!(b, import_tops_type!(mod), cell)
+        global_get!(b, tops)
+        global_get!(b, something(host_imports_open_global(mod)))
+        array_get!(b, import_tops_type!(mod))
         global_set!(b, ensure_exception_top_global!(mod))
     end
     return b

@@ -5,7 +5,7 @@
 # instruction builder throws them at that same emit before another instruction can run.
 
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
-       stack_height, has_errors, reset_validator!, validate_instruction!,
+       stack_height, has_errors, validate_instruction!,
        ControlLabel, ValidatorLabel, validate_block_start!, validate_block_end!,
        validate_br!, validate_br_if!, validate_if_start!, validate_else!,
        validate_catch_legacy!, validate_gc_instruction!
@@ -61,16 +61,13 @@ mutable struct WasmStackValidator
     func_name::String                   # For error messages
     labels::Vector{ValidatorLabel}      # Label stack for control flow
     reachable::Bool                     # Whether current code is reachable
-    # The WasmModule being built — `wasm_subtype` needs it to resolve a ConcreteRef's
-    # declared supertype chain (struct-vs-array kind + nominal `<:`). `nothing` when
-    # unavailable — e.g. the numeric-only int128 builders, where no ConcreteRef ever
-    # reaches the heap-kind branch, so the degraded relation is never exercised (Loop A).
-    mod::Union{Nothing, WasmModule}
+    # the module being built: its types, functions, globals and tags type every check
+    mod::WasmModule
     context_hint::String   # the emitting Julia statement (set via set_context!)
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:233 InstructionsBuilder)
-WasmStackValidator(; func_name="", mod=nothing)::WasmStackValidator =
+WasmStackValidator(; func_name="", mod::WasmModule)::WasmStackValidator =
     WasmStackValidator(WasmValType[], String[], func_name, ValidatorLabel[], true, mod, "")
 
 """
@@ -110,7 +107,7 @@ function validate_pop!(v::WasmStackValidator, expected::WasmValType)::WasmValTyp
         return expected
     end
     actual = pop!(v.stack)
-    if !wasm_subtype(actual, expected, v.mod)
+    if !wasm_subtype(actual, expected, v.mod.types)
         push!(v.errors, "$(v.func_name): type mismatch — expected $(expected), found $(actual)")
     end
     return actual
@@ -164,32 +161,6 @@ Whether any validation errors have been collected.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:452 InstructionsBuilder._reportError)
 """
 has_errors(v::WasmStackValidator)::Bool = !isempty(v.errors)
-
-"""
-    reset_validator!(v)
-
-Clear the stack and errors for reuse (e.g., between functions).
-parity(quarantine: WT reuses one validator across the functions and fragments of a module;
-dart creates an InstructionsBuilder per function.)
-"""
-function reset_validator!(v::WasmStackValidator)::Bool
-    empty!(v.stack)
-    empty!(v.errors)
-    empty!(v.labels)
-    v.reachable = true
-end
-
-# ============================================================================
-# Type Assignability
-# ============================================================================
-
-# Type assignability is now the precise dart2wasm-faithful `wasm_subtype` lattice
-# (src/codegen/values.jl `isSubtypeOf`): nullability-aware, walks a ConcreteRef's
-# declared supertype chain, and respects the abstract any/eq/struct/array/i31/func/
-# extern/exn hierarchy. The old permissive `wasm_types_assignable` (any-ref ↔ any-ref ⇒
-# true) + `_is_ref_type` shim were a deliberate "start permissive, tighten later"
-# placeholder — DELETED here (Loop A): the validator calls `wasm_subtype`
-# directly at every pop/branch/block-result check, with `v.mod` for the concrete chain.
 
 # ============================================================================
 # Opcode Sets for Instruction Validation
@@ -283,17 +254,18 @@ const F64_CMP_OPS = Set{UInt8}([
 # ============================================================================
 
 """
-    validate_instruction!(v, opcode, type_info=nothing)
+    validate_instruction!(v, opcode)
 
-Validate a single instruction's stack effect. Pops expected operands and pushes
-results according to the Wasm spec. Mirrors dart2wasm's InstructionsBuilder
-assertion checks for numeric/parametric/conversion instructions.
+Validate a no-immediate numeric, comparison or conversion instruction's stack effect: pop its
+operands, push its result, as each of dart's emitters (i32_add … f64_promote_f32) checks them.
+Any other opcode (a constant, a memory access, a parametric or reference instruction) is refused:
+each has its own builder method.
 parity(quarantine: the per-opcode stack effects num! validates, which dart checks in each
 emitter's _verifyTypes.)
 
 For GC-prefixed instructions (0xFB), use validate_gc_instruction!.
 """
-function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=nothing)::Union{Nothing, WasmValType, Vector{WasmValType}}
+function validate_instruction!(v::WasmStackValidator, opcode::UInt8)::Union{Nothing, WasmValType, Vector{WasmValType}}
 
     # --- Numeric unary: pop T, push T (same type) ---
     if opcode in I32_UNARY_OPS
@@ -328,29 +300,6 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode in F64_CMP_OPS
         validate_pop!(v, F64); validate_pop!(v, F64); validate_push!(v, I32)
 
-    # --- Constants: push T ---
-    elseif opcode == Opcode.I32_CONST
-        validate_push!(v, I32)
-    elseif opcode == Opcode.I64_CONST
-        validate_push!(v, I64)
-    elseif opcode == Opcode.F32_CONST
-        validate_push!(v, F32)
-    elseif opcode == Opcode.F64_CONST
-        validate_push!(v, F64)
-
-    # --- Parametric ---
-    elseif opcode == Opcode.DROP
-        validate_pop_any!(v)
-    elseif opcode == Opcode.SELECT || opcode == Opcode.SELECT_T
-        # select t: [t, t, i32] → [t], its value type named by the caller (dart select(type),
-        # instructions.dart:1004)
-        type_info isa WasmValType ||
-            throw(ArgumentError("select needs its value type (select!(b, t))"))
-        validate_pop!(v, I32)  # condition
-        validate_pop!(v, type_info)
-        validate_pop!(v, type_info)
-        validate_push!(v, type_info)
-
     # --- Integer conversions ---
     elseif opcode == Opcode.I32_WRAP_I64
         validate_pop!(v, I64); validate_push!(v, I32)
@@ -381,7 +330,7 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode == Opcode.I32_EXTEND8_S || opcode == Opcode.I32_EXTEND16_S
         validate_pop!(v, I32); validate_push!(v, I32)
 
-    # --- Float precision conversion (were UNTRACKED — the fma32 class) ---
+    # --- Float precision conversion ---
     elseif opcode == Opcode.F64_PROMOTE_F32
         validate_pop!(v, F32); validate_push!(v, F64)
     elseif opcode == Opcode.F32_DEMOTE_F64
@@ -397,42 +346,8 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8, type_info=n
     elseif opcode == Opcode.F64_REINTERPRET_I64
         validate_pop!(v, I64); validate_push!(v, F64)
 
-    # --- Reference instructions (non-GC-prefix) ---
-    elseif opcode == Opcode.REF_NULL
-        # ref.null $t: push null ref of given type (type_info = the ref type)
-        if type_info !== nothing
-            validate_push!(v, type_info)
-        end
-    elseif opcode == Opcode.REF_IS_NULL
-        # a nullable reference of any hierarchy (dart RefType.common(nullable: true))
-        validate_pop_ref!(v); validate_push!(v, I32)
-    elseif opcode == Opcode.REF_EQ
-        validate_pop!(v, EqRef); validate_pop!(v, EqRef); validate_push!(v, I32)
-
-    # --- Memory instructions ---
-    elseif opcode == Opcode.I32_LOAD
-        validate_pop!(v, I32); validate_push!(v, I32)
-    elseif opcode == Opcode.I64_LOAD
-        validate_pop!(v, I32); validate_push!(v, I64)
-    elseif opcode == Opcode.F32_LOAD
-        validate_pop!(v, I32); validate_push!(v, F32)
-    elseif opcode == Opcode.F64_LOAD
-        validate_pop!(v, I32); validate_push!(v, F64)
-    elseif opcode == Opcode.I32_STORE
-        validate_pop!(v, I32); validate_pop!(v, I32)  # value, addr
-    elseif opcode == Opcode.I64_STORE
-        validate_pop!(v, I64); validate_pop!(v, I32)
-    elseif opcode == Opcode.F32_STORE
-        validate_pop!(v, F32); validate_pop!(v, I32)
-    elseif opcode == Opcode.F64_STORE
-        validate_pop!(v, F64); validate_pop!(v, I32)
-    elseif opcode == Opcode.MEMORY_SIZE
-        validate_push!(v, I32)
-    elseif opcode == Opcode.MEMORY_GROW
-        validate_pop!(v, I32); validate_push!(v, I32)
-
     else
-        throw(ArgumentError("unmodeled Wasm opcode 0x$(string(opcode, base=16, pad=2)) in strict instruction validator"))
+        throw(ArgumentError("unmodeled Wasm opcode 0x$(string(opcode, base=16, pad=2)) for num!: it emits only a no-immediate numeric, comparison or conversion instruction, and every other instruction has its own builder method"))
     end
 end
 
@@ -486,7 +401,7 @@ function _verify_end_of_block!(v::WasmStackValidator, label::ValidatorLabel,
     end
     for (i, expected) in enumerate(label.result_types)
         idx = label.stack_height_at_entry + i
-        if idx <= length(v.stack) && !wasm_subtype(v.stack[idx], expected, v.mod)
+        if idx <= length(v.stack) && !wasm_subtype(v.stack[idx], expected, v.mod.types)
             push!(v.errors, "$(v.func_name): $(type_what) result type mismatch at position $i — expected $(expected), found $(v.stack[idx])")
         end
     end
@@ -519,7 +434,7 @@ function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
     # ElseLessExact is the equality rule, which rejected a valid if
     (label.kind === :if && !label.has_else &&
      !(length(label.input_types) == length(label.result_types) &&
-       all(wasm_subtype(i, r, v.mod) for (i, r) in zip(label.input_types, label.result_types)))) &&
+       all(wasm_subtype(i, r, v.mod.types) for (i, r) in zip(label.input_types, label.result_types)))) &&
         push!(v.errors, "$(v.func_name): an if with results $(label.result_types) needs an else " *
                         "(its inputs are $(label.input_types))")
 
@@ -539,7 +454,7 @@ end
 
 Validate an unconditional branch. Checks that:
 1. The target label exists at the given depth
-2. The stack has the correct types for the target (result_types for block/if, empty for loop)
+2. The stack has the correct types for the target (a block's or if's results, a loop's inputs)
 
 After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
@@ -577,7 +492,7 @@ function validate_branch_types!(v::WasmStackValidator, label_depth::Int, popped:
     stack = length(inputs) <= length(pushed) ? pushed[end - length(inputs) + 1:end] :
             WasmValType[v.stack[n - popped + length(pushed) - length(inputs) + 1:n - popped]; pushed]
     for (i, expected) in enumerate(inputs)
-        wasm_subtype(stack[i], expected, v.mod) ||
+        wasm_subtype(stack[i], expected, v.mod.types) ||
             push!(v.errors, "$(v.func_name): branch to $(label.kind) type mismatch at position $i — " *
                   "expected $(expected), found $(stack[i]) [ctx: $(v.context_hint)]")
     end
@@ -796,46 +711,6 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         validate_pop!(v, ConcreteRef(UInt32(src_type_idx), true))  # src array
         validate_pop!(v, I32)  # dst offset
         validate_pop!(v, ConcreteRef(UInt32(dst_type_idx), true))  # dst array
-
-    elseif gc_opcode == Opcode.REF_CAST
-        # ref.cast (ref $t): pop ref, push (ref $t) non-nullable
-        target_type = type_info
-        actual = validate_pop_ref!(v)
-        # P13: a ref.cast is only valid WITHIN one reference hierarchy — the operand and
-        # the target must share a top (any / func / extern / exn). A cross-hierarchy cast
-        # (e.g. externref → a GC struct) can never be expressed; codegen must emit an
-        # extern.convert_any first. (Within-hierarchy always-trapping casts stay valid.)
-        if actual !== nothing && !_wt_same_hierarchy(actual, target_type, v.mod)
-            push!(v.errors, "$(v.func_name): ref.cast target $(target_type) is in a different hierarchy than the operand $(actual)")
-        end
-        validate_push!(v, target_type)
-
-    elseif gc_opcode == Opcode.REF_CAST_NULL
-        # ref.cast null (ref null $t): pop ref, push (ref null $t) nullable
-        target_type = type_info
-        actual = validate_pop_ref!(v)
-        if actual !== nothing && !_wt_same_hierarchy(actual, target_type, v.mod)
-            push!(v.errors, "$(v.func_name): ref.cast null target $(target_type) is in a different hierarchy than the operand $(actual)")
-        end
-        validate_push!(v, target_type)
-
-    elseif gc_opcode == Opcode.ANY_CONVERT_EXTERN
-        # any.convert_extern: pop externref, push anyref
-        validate_pop!(v, ExternRef)
-        validate_push!(v, AnyRef)
-
-    elseif gc_opcode == Opcode.EXTERN_CONVERT_ANY
-        # extern.convert_any: pop anyref, push externref (dart extern_convert_any)
-        validate_pop!(v, AnyRef)
-        validate_push!(v, ExternRef)
-
-    elseif gc_opcode == Opcode.REF_TEST || gc_opcode == Opcode.REF_TEST_NULL
-        # ref.test (ref $t): pop a reference in the target's hierarchy, push i32
-        local actual = validate_pop_ref!(v)
-        if actual !== nothing && type_info !== nothing && !_wt_same_hierarchy(actual, type_info, v.mod)
-            push!(v.errors, "$(v.func_name): ref.test target $(type_info) is in a different hierarchy than the operand $(actual)")
-        end
-        validate_push!(v, I32)
 
     else
         throw(ArgumentError("unmodeled Wasm GC opcode 0x$(string(gc_opcode, base=16, pad=2)) in strict instruction validator"))
