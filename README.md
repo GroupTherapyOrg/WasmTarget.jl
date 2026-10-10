@@ -26,22 +26,11 @@ Julia's compiler does the hard work — parsing, macro expansion, type inference
 
 1. **Direct compilation.** The function's own typed IR — arithmetic, control flow, loops, structs, tuples, closures, try/catch — translates statement-by-statement to Wasm instructions. This is how *your* code compiles, and how most of Base compiles too, because Julia inlines aggressively: a call like `sum(v)` usually arrives already flattened into plain loops inside the caller's IR.
 
-2. **Closed-world trim collection (the default discovery).** WasmTarget feeds your entry points to the *same* closed-world collection machinery that powers `juliac --trim` upstream (`Compiler.typeinf_ext_toplevel` / `CompilationQueue` — see [JuliaLang/julia#62087](https://github.com/JuliaLang/julia/issues/62087), where this strategy is laid out). The compiler walks every reachable `:invoke` in a single consistent inference world and hands back `(CodeInstance, CodeInfo)` pairs for the whole call graph; WasmTarget compiles each one as its own Wasm function and links the calls. Nothing is hand-curated: `Statistics.quantile`, `sort!` internals, Dict hashing, string search — the entire reachable world is collected the way the compiler itself sees it. The previous curated-whitelist discovery remains available via `compile_multi(...; discovery=:legacy)`.
+2. **Closed-world trim collection.** WasmTarget feeds your entry points to the *same* closed-world collection machinery that powers `juliac --trim` upstream (`Compiler.typeinf_ext_toplevel` / `CompilationQueue` — see [JuliaLang/julia#62087](https://github.com/JuliaLang/julia/issues/62087), where this strategy is laid out). The compiler walks every reachable `:invoke` in a single consistent inference world and hands back `(CodeInstance, CodeInfo)` pairs for the whole call graph; WasmTarget compiles each one as its own Wasm function and links the calls. Nothing is hand-curated: `Statistics.quantile`, `sort!` internals, Dict hashing, string search — the entire reachable world is collected the way the compiler itself sees it.' It is the only discovery path.
 
-3. **Method overlays (~100 methods).** For Base methods whose real implementation can't translate — they reach into GC internals, `ccall` into libjulia/libc, use pointer arithmetic, or rely on lookup tables WasmGC can't address — WasmTarget ships replacement implementations via Julia's [`OverlayMethodTable`](https://github.com/JuliaGPU/GPUCompiler.jl), the same mechanism CUDA.jl and AMDGPU.jl use. Overlays are resolved *during inference* — including inside the trim collection — so codegen never sees the original. They are *semantically faithful* substitutes, e.g. `Base.Math.pow_body` is re-implemented as the same compensated power-by-squaring algorithm (bit-identical results), and `reinterpret` becomes a direct `Core.bitcast`.
+3. **Method overlays.** Where Julia's own body cannot compile to WasmGC — it calls into the C runtime, or reads memory WasmGC cannot address — WasmTarget substitutes a method through Julia's [`OverlayMethodTable`](https://github.com/JuliaGPU/GPUCompiler.jl), the mechanism CUDA.jl and AMDGPU.jl use. Overlays are resolved *during inference*, inside the trim collection too, so codegen never sees the original. Each one states in its source why Julia's body cannot compile (`src/codegen/interpreter.jl` and `ext/`; a lock counts any overlay without a reason, and checks each reason that names a BLAS or LAPACK routine), and one whose Julia body compiles is deleted.
 
-Where overlays currently live, by area:
-
-| Area | Examples |
-|:-----|:---------|
-| Array mutation | `push!`, `pop!`, `insert!`, `deleteat!`, `splice!`, `append!`, `copy`, `filter` — WasmGC arrays are fixed-size, so growth is reallocate-and-copy |
-| Strings | `split`, `join`, `replace`, `strip` family, `repeat`, `reverse`, `cmp`, `string(::Float64)` (Ryu shortest-round-trip, reimplemented) |
-| Math tails | `sinh`/`cosh`/`tanh`/`asin`, `hypot`, `mod`/`rem(::Float64)`, `pow_body`, `Math.table_unpack` (memory-addressed tables → computed) |
-| Bit reinterpretation | `reinterpret` between same-width primitives → `Core.bitcast`; shifts on `BitInteger` (Julia over-shift semantics) |
-| Reductions | `reduce`/`foldl`/`maximum`/`minimum`/`argmax`/`argmin`/`count` on `Vector` — flat-IR loop forms |
-| Dict/Set | `Dict` tuple constructor, `delete!`, `union!` |
-
-Everything not listed compiles from its real Base implementation. The split is verified continuously — see the coverage matrix below.
+Everything else compiles from its real Base implementation. The split is verified continuously — see the coverage matrix below.
 
 ## Quick Start
 
@@ -109,29 +98,29 @@ Coverage is tracked by a **differential fuzzer**, not a hand-maintained list. Th
 | Iterators | `collect`, `enumerate`, `zip`, `pairs`, `Iterators.take`/`drop`/`filter`/`map`/`flatten`, ranges |
 | Control flow | nested if/else, while loops with accumulators, try/catch/finally (including nested chains), early returns, closures over all of the above |
 
-Every signature's status lives in [`test/fuzz/COVERAGE.md`](test/fuzz/COVERAGE.md), regenerated from fuzzing runs: an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Current matrix: **all 588 entries pass**, with **0 silent divergences** — every known unsupported construct fails *loudly* (a compile error or a trap), never miscompiles. The ledger in [`test/fuzz/failures/`](test/fuzz/failures/) holds 240+ caught-and-shrunk divergence postmortems, each a self-reproducing case that auto-closes when fixed. A bounded `discovery_differential()` additionally cross-checks the trim and legacy pipelines against each other on generated programs.
+Every signature's status is regenerated on demand into `test/fuzz/COVERAGE.md` (`julia --project=test/fuzz test/fuzz/run.jl coverage`): an entry is `pass` only when it appears in at least one randomly-generated program whose Wasm output **matched native Julia exactly** — value, thrown-ness, and argument mutations. Every known unsupported construct fails *loudly* (a compile error or a trap), never miscompiles. Gaps the fuzzer found that are not yet fixed live in [`test/fuzz/failures/`](test/fuzz/failures/), each a self-reproducing case that auto-closes when fixed.
 
 ## Standard Library & SciML Integrations
 
 Stdlib (and now SciML-library) support ships as zero-dependency [package extensions](https://pkgdocs.julialang.org/v1/creating-packages/#Conditional-loading-of-code-in-packages-(Extensions)) (weakdeps) — loading the library activates the extension, nothing is required otherwise. Every supported name is one of two things, never asserted:
 
-- **(A) compiled from its real implementation** and confirmed by a differential sweep (Wasm vs native, the same tolerance/bit-exact oracle as core); or
-- **(B) rerouted through a bit-exact `@overlay`** when the real implementation reaches code WasmGC can't lower (BLAS/LAPACK `ccall`s, SIMD intrinsics, dimension-reduction machinery) — a *semantically identical* substitute, proven equivalent before it ships.
+- **(A) compiled from its real implementation** and confirmed by a differential sweep (Wasm vs native, by the same bit-exact oracle as core); or
+- **(B) rerouted through an `@overlay`** when the real implementation reaches code WasmGC can't lower (BLAS/LAPACK `ccall`s, SIMD intrinsics) — a substitute confirmed by the same differential sweep, with the reason Julia's body cannot compile stated in the extension's source.
 
-Support is tracked the same way Base is: a **grounded percentage over the full `names(Stdlib)` surface** (out-of-scope = genuinely non-Wasm, e.g. host entropy / packed BLAS forms), regenerated from differential runs into [`test/fuzz/STDLIB_COVERAGE.md`](test/fuzz/STDLIB_COVERAGE.md).
+Support is tracked the same way Base is: a **grounded percentage over the full `names(Stdlib)` surface** (out-of-scope = genuinely non-Wasm, e.g. host entropy / packed BLAS forms), regenerated from differential runs into `test/fuzz/STDLIB_COVERAGE.md` (`julia --project=test/fuzz test/fuzz/stdlib_coverage.jl`).
 
 | Stdlib | In-scope support | Highlights | Notes |
 |:-------|:-----------------|:-----------|:------|
-| `Statistics` | **100%** | `mean`/`var`/`std`/`cor`/`median`/`quantile` + in-place `mean!`/`median!`/`quantile!` | bit-exact vs native, both Julia versions |
-| `LinearAlgebra` | **97%** | `det`/`inv`/`\`/`norm`/`dot`/`cross`, factorization **objects** `lu`/`cholesky`/`eigen`/`svd` (+ `eigvals`/`svdvals`/`pinv`/`cond`), structured types (`Diagonal`/`Symmetric`/`Triangular`/…), in-place `mul!`/`ldiv!`/`rdiv!`/`kron!`/`triu!`/… | factorizations hand-rolled (LU / cyclic-Jacobi / one-sided-Jacobi) where BLAS/LAPACK can't lower, reconstruction-verified; `qr`/`schur`/`lq`/general & complex eigen out of scope |
-| `Dates` | **96%** | construction (`Date`/`DateTime`/`Time`), arithmetic, accessors, conversions (`datetime2unix`↔`unix2datetime`, `…2julian`/`…2rata`), `dayname`/`monthname`, adjusters (`tonext`/`toprev`/`tofirst`/`tolast`), `string` rendering | `format` (the `DateFormat` DSL) and `canonicalize` pending; `now`/`today` need host time |
+| `Statistics` | **100%** | `mean`/`var`/`std`/`cor`/`median`/`quantile` + in-place `mean!`/`median!`/`quantile!` | bit-exact vs native, both Julia versions, except the two-vector `cor`, whose `@simd` reduction Julia leaves free to reorder (compared within a relative 1e-9) |
+| `LinearAlgebra` | **97%** · Julia 1.13: **95%** | `det`/`inv`/`\`/`norm`/`dot`/`cross`, factorization **objects** `lu`/`cholesky`/`eigen`/`svd` (+ `eigvals`/`svdvals`/`pinv`/`cond`), structured types (`Diagonal`/`Symmetric`/`Triangular`/…), in-place `mul!`/`ldiv!`/`rdiv!`/`kron!`/`triu!`/… | factorizations hand-rolled (LU / cyclic-Jacobi / one-sided-Jacobi) where BLAS/LAPACK can't lower, reconstruction-verified; `qr`/`schur`/`lq`/general & complex eigen out of scope |
+| `Dates` | **96%** · Julia 1.13: **90%** | construction (`Date`/`DateTime`/`Time`), arithmetic, accessors, conversions (`datetime2unix`↔`unix2datetime`, `…2julian`/`…2rata`), `dayname`/`monthname`, adjusters (`tonext`/`toprev`/`tofirst`/`tolast`), `string` rendering | `format` (the `DateFormat` DSL) and `canonicalize` pending; `now`/`today` need host time |
 | `Random` | **100%** *(Julia ≤1.12)* | seeded `Xoshiro`: `rand`/`randn`/`randexp`, `randperm`/`randcycle`/`shuffle` (+ `!`-variants), `seed!`, `randsubseq`/`randsubseq!`, `randstring` | the seeded-RNG differential is a valid oracle on ≤1.12; on 1.13-rc1 Xoshiro seeding was reworked and the stream is platform-unstable, so the suite is gated there. Out of scope: `rand!`/`randn!`/`randexp!` array fills (8-lane SIMD `llvmcall`), `bitrand` (`BitVector`), OS entropy |
-| `SparseArrays` | **100%** | `SparseMatrixCSC` construction, `nnz`/`nonzeros`/`rowvals`/`findnz`/`nzrange`, reductions, `sparse·vector`/`sparse·sparse` (**matmul**), `+`/`-`, `transpose`/`permute`, `spdiagm`/`spzeros`/`hcat`/`vcat`/`blockdiag`, `dropzeros!`/`droptol!`/`fkeep!` — plus multi-op combos (`A*B+Cᵀ`, …) to prove composition | unlocked by registering `SparseMatrixCSC` as a real struct (not WT's array layout) + textbook-CSC ext overlays; `sparse`-direct `\`/factorizations out of scope (SuiteSparse C library), `sprand`/`sprandn` (RNG consumption diverges) |
-| `ForwardDiff` *(SciML)* | **100%** | forward-mode autodiff in the browser: `derivative`/`gradient`/`jacobian`/`hessian` (+ in-place `!` forms) — EXACT derivatives, no finite differences. Combos verified: `‖∇f‖`, `J·x`, a 2×2 Newton step `J⁻¹F`, Rosenbrock gradient/Hessian | `derivative` compiles from the real impl; `gradient`/`jacobian`/`hessian` are overlays reusing the single-partial `Dual` seed one direction at a time (bit-identical to native's Partials{N}, since forward-mode partials never cross slots). Unlocked by a narrow core fix registering `Dual`/`Partials` as real structs (fixes array-of-`<:Number`-struct literals generally). The `Config`/`Chunk` preallocation API is out of scope (cyclic-`Method` `@generated` seeder; the standard API covers the same results) |
-| `StaticArrays` *(SciML)* | **100%** | the `SVector` surface: construction (positional/tuple/converting-eltype, all `N` incl. the single-element vector), `getindex`, iterate/destructure, reductions (`sum`/`prod`/`maximum`/`minimum`), arithmetic/`dot`/broadcast | `SVector{N,T}` is an `NTuple`-backed *struct*, not a heap array — unlocked by registering `:SArray` as a real struct (the SparseMatrixCSC/`Dual` lever) + overlaying `construct_type` to the identity for already-parameterized types (WT's interpreter can't fold its type-level `adapt_size`/`adapt_eltype`/`typeintersect` machinery with concrete-eval off). `SMatrix`/`MArray` out of scope |
-| `SimpleDiffEq` *(SciML)* | **100%** | **solve ODEs in a frozen Wasm module**: every fixed-step solver — `SimpleEuler`/`SimpleRK4`/`SimpleTsit5`/`LoopEuler`/`LoopRK4` — over scalar, `Vector`- and `SVector`-state systems (decay, logistic, harmonic oscillator, Lotka–Volterra, nonlinear pendulum, Lorenz), incl. parameterized `ODEProblem(f,u0,tspan,p)` | the SciMLBase abstraction (`ODEProblem`/`ODEFunction`/`solve`) is cleared by three pure levers: a curated type-level concrete-eval fold (`apply_type`/`isinplace`-type-param/…), a concrete `ODEFunction` construction overlay (bypassing `isinplace` method-arity reflection), and `solve → DiffEqBase.__solve` (bypassing the kwarg-`Pairs` machinery); solution types are registered as real structs. `SimpleTsit5`'s `SVector` Butcher tableau rides on the StaticArrays support above. Adaptive `SimpleATsit5` and `Vector`-typed `p` out of scope |
+| `SparseArrays` | **100%** | `SparseMatrixCSC` construction, `nnz`/`nonzeros`/`rowvals`/`findnz`/`nzrange`, reductions, `sparse·vector`/`sparse·sparse` (**matmul**), `+`/`-`, `transpose`/`permute`, `spdiagm`/`spzeros`/`hcat`/`vcat`/`blockdiag`, `dropzeros!`/`droptol!`/`fkeep!` — plus multi-op combos (`A*B+Cᵀ`, …) to prove composition | compiles from the real implementation, `SparseMatrixCSC` laid out by its fields like any struct; `sparse`-direct `\`/factorizations out of scope (SuiteSparse C library), `sprand`/`sprandn` (RNG consumption diverges) |
+| `ForwardDiff` *(SciML)* | **100%** | forward-mode autodiff in the browser: `derivative`/`gradient`/`jacobian`/`hessian` (+ in-place `!` forms) — EXACT derivatives, no finite differences. Combos verified: `‖∇f‖`, `J·x`, a 2×2 Newton step `J⁻¹F`, Rosenbrock gradient/Hessian | `derivative` compiles from the real implementation; `gradient`/`jacobian`/`hessian` and their `!` forms are overlays that seed one direction at a time with a single-partial `Dual` (bit-identical to native's `Partials{N}`: forward-mode partials never cross slots). The `Config`/`Chunk` preallocation API is not supported |
+| `StaticArrays` *(SciML)* | **100%** | the `SVector` surface: construction (positional/tuple/converting-eltype, all `N` incl. the single-element vector), `getindex`, iterate/destructure, reductions (`sum`/`prod`/`maximum`/`minimum`), arithmetic/`dot`/broadcast | `SVector{N,T}` is an `NTuple`-backed *struct*, not a heap array, laid out by its fields; `construct_type` is overlaid to the identity for an already-parameterized type (its reason in the extension). `SMatrix`/`MArray` out of scope |
+| `SimpleDiffEq` *(SciML)* | **100%** | **solve ODEs in a frozen Wasm module**: every fixed-step solver — `SimpleEuler`/`SimpleRK4`/`SimpleTsit5`/`LoopEuler`/`LoopRK4` — over scalar, `Vector`- and `SVector`-state systems (decay, logistic, harmonic oscillator, Lotka–Volterra, nonlinear pendulum, Lorenz), incl. parameterized `ODEProblem(f,u0,tspan,p)` | `ODEProblem`'s constructors and `solve` are overlaid, each with its reason in the extension. `SimpleTsit5`'s `SVector` Butcher tableau rides on the StaticArrays support above. Adaptive `SimpleATsit5` and `Vector`-typed `p` out of scope |
 
-Three **SciML libraries** now run the same way the stdlibs do — autodiff, static arrays, and a full ODE solver, each in a frozen, offline Wasm module. The docs homepage closes the loop: a **live Lorenz attractor** whose ODE is re-solved by `SimpleRK4` over an `SVector{3}` state and re-drawn by [WasmMakie](https://github.com/GroupTherapyOrg/WasmMakie.jl) on every slider move — the whole solve-and-plot loop compiled to WebAssembly, no server. Two things make all of this cheap. The **trim collection** compiles things like `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) with zero special-casing. And the differential oracle is **tolerance-aware**, so a hand-rolled factorization — or an `@muladd` step that fuses differently than native — still validates as correct. Per-library ledgers (what's verified, what's overlaid, what's out-of-scope and *why*) live in [`test/fuzz/FINDINGS.md`](test/fuzz/FINDINGS.md).
+Three **SciML libraries** now run the same way the stdlibs do — autodiff, static arrays, and a full ODE solver, each in a frozen, offline Wasm module. The docs homepage closes the loop: a **live Lorenz attractor** whose ODE is re-solved by `SimpleRK4` over an `SVector{3}` state and re-drawn by [WasmMakie](https://github.com/GroupTherapyOrg/WasmMakie.jl) on every slider move — the whole solve-and-plot loop compiled to WebAssembly, no server. Two things make all of this cheap. The **trim collection** compiles things like `quantile` (which needs `sort!` internals, kwarg bodies, and `Core.kwcall`) with zero special-casing. And the differential oracle is **bit-exact**: a float matches only when its bits are Julia's, and a relative 1e-9 applies only to a case named with the reason Julia leaves its last bits to the platform (a BLAS or LAPACK routine, an `@simd` reduction, a `muladd`).
 
 ## Language Features
 
@@ -207,18 +196,17 @@ dispatch with the standard Julia tooling — [JET.jl](https://github.com/aviates
 WasmTarget ships none of this machinery itself; these are author-side linters that
 make code "stricter" in exactly the way the compiler wants.
 
-**`validate=true` (default).** Every compiled module is checked with
-`wasm-tools validate`; a reject raises `WasmValidationError` rather than handing
-back malformed bytes.
+**Valid by construction.** The builder checks every instruction against its
+declared inputs and outputs as it is emitted, as dart2wasm's does, so an invalid
+module is an error at the construct that made it. `validate=true` (or
+`WT_VALIDATE=1`) adds `wasm-tools validate` as an independent cross-check: a reject
+raises `WasmValidationError`, and a validation asked for without `wasm-tools`
+installed is an error, never skipped.
 
-**`discovery=:trim` (default).** Callee discovery uses the upstream closed-world
-trim collection; pass `discovery=:legacy` for the previous curated-whitelist
-walker. Because the trim collection compiles the *full* reachable world
-(including print/show paths), emitted modules may import the standardized
-`wasm:js-string` builtins and a small `io` module — embedders should instantiate
-with `WebAssembly.instantiate(bytes, imports, { builtins: ['js-string'] })` and
-may stub the `io` functions (`write_string`, `write_int`, `write_float`,
-`write_bool`, `write_newline`, `write_nothing`).
+**One discovery.** Callees are discovered by the upstream closed-world trim
+collection. A module has no console: a receiver-free `print`/`println`/`show` in the
+reachable world is a compile error at its statement, and `print(io, …)` to an
+`IOBuffer` compiles like any other Julia call, with no host import.
 
 **Differential fuzzing.** `test/fuzz/` generates *well-typed* random compositions of
 Base functions — expressions, statements, loops, try/catch, closures, structs — and
@@ -233,7 +221,7 @@ runs standalone:
 ```bash
 julia --project=test/fuzz test/fuzz/run.jl sweep     # parallel discovery (time-boxed)
 julia --project=test/fuzz test/fuzz/run.jl verify    # re-check open gaps, auto-close fixed
-julia --project=test/fuzz test/fuzz/run.jl coverage  # regenerate COVERAGE.md
+julia --project=test/fuzz test/fuzz/run.jl coverage  # write test/fuzz/COVERAGE.md
 ```
 
 ## Requirements

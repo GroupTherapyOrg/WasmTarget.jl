@@ -1,258 +1,17 @@
 # ============================================================================
-# String IO — wasm:js-string Builtins (standardized, Chrome 131+)
+# Performance Timer — jl_hrtime via performance.now()
 # ============================================================================
 
-# Module-level storage for the i16 char array type index used at the JS boundary
-const _CHAR_ARRAY_TYPE_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_char_array_idx, nothing)
-
-function clear_char_array_type!()
-    _CHAR_ARRAY_TYPE_IDX[] = nothing
-end
-
-"""
-Get or create the i16 char array type used for `wasm:js-string.fromCharCodeArray`.
-Internal strings stay as i8 UTF-8; this i16 type is only for the JS boundary.
-"""
-function get_char_array_type!(mod::WasmModule)::UInt32
-    if _CHAR_ARRAY_TYPE_IDX[] !== nothing
-        return _CHAR_ARRAY_TYPE_IDX[]
-    end
-    # (array (mut i16)) for UTF-16 char codes
-    idx = add_array_type!(mod, UInt8(0x77), true)  # 0x77 = i16
-    _CHAR_ARRAY_TYPE_IDX[] = idx
-    return idx
-end
-
-"""
-Module-level storage for the utf8_to_js helper function index.
-This helper converts an i8 UTF-8 array to a JS string via fromCharCodeArray.
-Created once per module in add_io_imports!.
-"""
-const _UTF8_TO_JS_FUNC_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_utf8_to_js_idx, nothing)
-
-function clear_utf8_to_js_func!()
-    _UTF8_TO_JS_FUNC_IDX[] = nothing
-end
-
-"""
-Create a WASM helper function that converts i8 UTF-8 array → JS string.
-
-The helper:
-1. Gets the i8 array length
-2. Creates an i16 array of the same length
-3. Loops: zero-extends each i8 byte to i16
-4. Calls fromCharCodeArray(i16arr, 0, len) → (ref extern)
-
-Signature: (ref null \$i8arr) → (ref extern)
-"""
-function create_utf8_to_js_helper!(mod::WasmModule, type_registry::TypeRegistry, decode_import_idx::UInt32)::UInt32
-    str_arr_type_idx = get_string_array_type!(mod, type_registry)
-    char_arr_type_idx = get_char_array_type!(mod)
-
-    i8arr_ref = ConcreteRef(str_arr_type_idx, true)  # param type: (ref null $i8arr)
-
-    # Function type: (ref null $i8arr) → (ref extern)
-    ft = FuncType(WasmValType[i8arr_ref], WasmValType[NonNullExternRef])
-    type_idx = add_type!(mod, ft)
-
-    # Locals: 0=param(i8arr), 1=len(i32), 2=i16arr(ref $i16arr), 3=i(i32)
-    locals = WasmValType[I32, ConcreteRef(char_arr_type_idx, true), I32]
-
-    local_i8arr = UInt32(0)
-    local_len = UInt32(1)
-    local_i16arr = UInt32(2)
-    local_i = UInt32(3)
-
-    # MIGRATED to InstrBuilder (typed). Full helper-function body: i8 UTF-8 array →
-    # i16 char array → fromCharCodeArray. Byte-identical to the raw emission below.
-    char_arr_ref = ConcreteRef(char_arr_type_idx, true)
-    b = InstrBuilder(WasmValType[i8arr_ref], WasmValType[NonNullExternRef];
-                     func_name="create_utf8_to_js_helper")
-    builder_set_local_type!(b, local_len, I32)
-    builder_set_local_type!(b, local_i16arr, char_arr_ref)
-    builder_set_local_type!(b, local_i, I32)
-
-    # len = i8arr.len
-    local_get!(b, local_i8arr)
-    array_len!(b)
-    local_tee!(b, local_len)
-
-    # i16arr = array.new_default $i16arr len
-    array_new_default!(b, char_arr_type_idx)
-    local_set!(b, local_i16arr)
-
-    # i = 0
-    i32_const!(b, 0)
-    local_set!(b, local_i)
-
-    # block { loop {
-    done_label = block!(b)
-    loop_label = loop!(b)
-
-    # if i >= len, break
-    local_get!(b, local_i)
-    local_get!(b, local_len)
-    num!(b, Opcode.I32_GE_U)
-    br_if!(b, done_label)
-
-    # i16arr[i] = (i32)i8arr[i]  — array.get_u zero-extends, array.set truncates
-    local_get!(b, local_i16arr)
-    local_get!(b, local_i)
-    local_get!(b, local_i8arr)
-    local_get!(b, local_i)
-    array_get!(b, str_arr_type_idx, I32; signed=false)
-    array_set!(b, char_arr_type_idx, I32)
-
-    # i++
-    local_get!(b, local_i)
-    i32_const!(b, 1)
-    num!(b, Opcode.I32_ADD)
-    local_set!(b, local_i)
-
-    # br loop
-    br!(b, loop_label)
-
-    end_block!(b)  # end loop
-    end_block!(b)  # end block
-
-    # return fromCharCodeArray(i16arr, 0, len)
-    local_get!(b, local_i16arr)
-    i32_const!(b, 0)
-    local_get!(b, local_len)
-    call!(b, decode_import_idx,
-          WasmValType[char_arr_ref, I32, I32], WasmValType[NonNullExternRef])
-
-    end_block!(b)  # end function
-    body = builder_code(b)
-
-    func = WasmFunction(type_idx, locals, body)
-    push!(mod.functions, func)
-    func_idx = UInt32(length(mod.imports) + length(mod.functions) - 1)
-    _UTF8_TO_JS_FUNC_IDX[] = func_idx
-    return func_idx
-end
-
-"""
-    emit_jl_string_to_js!(b, decode_func_idx)
-
-Convert a Julia string (WasmGC i8 array on stack) to a JS string via the
-module-level `\$utf8_to_js` helper — builder-native (THE implementation).
-
-**Stack effect:** `[(ref \$str_arr)] → [(ref extern)]`
-"""
-function emit_jl_string_to_js!(b::InstrBuilder, decode_func_idx::UInt32)
-    helper_idx = _UTF8_TO_JS_FUNC_IDX[]
-    if helper_idx === nothing
-        error("utf8_to_js helper not created — call create_utf8_to_js_helper! first")
-    end
-    # Call $utf8_to_js(i8_arr_ref) → (ref extern), the REAL declared effect.
-    call!(b, helper_idx, WasmValType[ArrayRef], WasmValType[NonNullExternRef])
-    return b
-end
-
-# ============================================================================
-# Stack Trace Support — JS new Error().stack Import
-# ============================================================================
-
-# census F7 (march5): add_stack_trace_import!/ensure_stack_trace_global! deleted
-# with the dormant PURE-9036 cluster (see generate.jl note; rebuild = D9.1 typed tag).
-
-# ============================================================================
-# IO Bridge — println/print via JS Imports
-# ============================================================================
-
-"""
-PURE-9040: IO import indices stored in the module for println/print support.
-"""
-mutable struct IOImports
-    write_string_idx::UInt32    # io.write_string(externref) → void
-    write_int_idx::UInt32       # io.write_int(i64) → void
-    write_float_idx::UInt32     # io.write_float(f64) → void
-    write_bool_idx::UInt32      # io.write_bool(i32) → void
-    write_newline_idx::UInt32   # io.write_newline() → void
-    write_nothing_idx::UInt32   # io.write_nothing() → void (PURE-9041)
-    decode_idx::UInt32          # wasm:text-decoder.decodeStringFromUTF8Array
-end
-
-"""
-    add_io_imports!(mod, type_registry) -> IOImports
-
-Add IO bridge imports for println/print support.
-Imports: io.write_string, io.write_int, io.write_float, io.write_bool, io.write_newline
-Also adds wasm:text-decoder import for string conversion.
-"""
-function add_io_imports!(mod::WasmModule, type_registry::TypeRegistry)
-    # String decoder via standardized wasm:js-string builtins
-    char_arr_type_idx = get_char_array_type!(mod)
-    char_arr_ref_nullable = ConcreteRef(char_arr_type_idx, true)
-
-    decode_idx = add_import!(mod, "wasm:js-string", "fromCharCodeArray",
-        WasmValType[char_arr_ref_nullable, I32, I32],
-        WasmValType[NonNullExternRef])
-
-    # IO imports (must be registered BEFORE the helper function, since imports shift function indices)
-    write_string_idx = add_import!(mod, "io", "write_string",
-        WasmValType[ExternRef], WasmValType[])
-    write_int_idx = add_import!(mod, "io", "write_int",
-        WasmValType[I64], WasmValType[])
-    write_float_idx = add_import!(mod, "io", "write_float",
-        WasmValType[F64], WasmValType[])
-    write_bool_idx = add_import!(mod, "io", "write_bool",
-        WasmValType[I32], WasmValType[])
-    write_newline_idx = add_import!(mod, "io", "write_newline",
-        WasmValType[], WasmValType[])
-    # PURE-9041: write_nothing() outputs "nothing" string
-    write_nothing_idx = add_import!(mod, "io", "write_nothing",
-        WasmValType[], WasmValType[])
-
-    # Create the utf8→js helper AFTER all imports are registered
-    # (adding imports after this would shift function indices)
-    create_utf8_to_js_helper!(mod, type_registry, decode_idx)
-
-    return IOImports(write_string_idx, write_int_idx, write_float_idx,
-                     write_bool_idx, write_newline_idx, write_nothing_idx, decode_idx)
-end
-
-# Module-level storage for IO imports (set during compile_module if println/print is used)
-const _IO_IMPORTS = TaskLocalRef{Union{Nothing, IOImports}}(:_wt_io_imports, nothing)
-
-"""
-    get_io_imports() -> Union{Nothing, IOImports}
-
-Get the current IO imports, or nothing if not initialized.
-"""
-function get_io_imports()
-    return _IO_IMPORTS[]
-end
-
-"""
-    set_io_imports!(imports::IOImports)
-
-Store IO imports for use during compilation.
-"""
-function set_io_imports!(imports::IOImports)
-    _IO_IMPORTS[] = imports
-end
-
-"""
-    clear_io_imports!()
-
-Clear IO imports after compilation.
-"""
-function clear_io_imports!()
-    _IO_IMPORTS[] = nothing
-end
-
-# ============================================================================
-# Performance Timer — jl_hrtime via performance.now() (PURE-9042)
-# ============================================================================
-
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
 
 """
     ensure_perf_now_import!(mod) -> UInt32
 
 Import env.perf_now() → f64 for high-resolution timing. Idempotent.
+
+parity(quarantine: Julia's time_ns() is the jl_hrtime foreigncall into libuv's clock, which
+wasm does not have; the host clock import stands in for it.)
 """
 function ensure_perf_now_import!(mod::WasmModule)::UInt32
     existing = _PERF_NOW_IDX[]
@@ -264,18 +23,23 @@ function ensure_perf_now_import!(mod::WasmModule)::UInt32
     return idx
 end
 
-function clear_perf_now!()
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
+function clear_perf_now!()::Nothing
     _PERF_NOW_IDX[] = nothing
 end
 
 # ============================================================================
-# RNG State — Xoshiro256++ via Wasm Globals (PURE-9043)
+# RNG State — Xoshiro256++ via Wasm Globals
 # ============================================================================
 
 """
-PURE-9043: RNG state stored in 4 mutable i64 Wasm globals.
+RNG state stored in 4 mutable i64 Wasm globals.
 Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
 We store these in Wasm globals instead.
+
+parity(quarantine: Julia's rand() reads Xoshiro256++ state from the fields rngState0..3 of
+the Task that the jl_get_current_task foreigncall returns; the module has no Task object, so
+the four state words are module globals.)
 """
 struct RNGGlobals
     rng0_idx::UInt32  # global index for rngState0 (i64)
@@ -285,60 +49,72 @@ struct RNGGlobals
     seed_import_idx::UInt32  # import index for env.random_i64
 end
 
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
 const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
 
-function get_rng_globals()
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
+function get_rng_globals()::Union{Nothing, RNGGlobals}
     return _RNG_GLOBALS[]
 end
 
-function set_rng_globals!(rng::RNGGlobals)
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
+function set_rng_globals!(rng::RNGGlobals)::RNGGlobals
     _RNG_GLOBALS[] = rng
 end
 
-function clear_rng_globals!()
+# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
+function clear_rng_globals!()::Nothing
     _RNG_GLOBALS[] = nothing
 end
 
 """
     ensure_rng_globals!(mod) -> RNGGlobals
 
-Create 4 mutable i64 globals for Xoshiro256++ RNG state + JS seed import.
-Idempotent — returns existing globals if already created.
+The four mutable i64 globals that hold the Task's Xoshiro256++ state words, and the host
+entropy import `env.random_i64` that seeds them (rng_seed_initializer!). Idempotent.
+
+parity(sdk/lib/_internal/wasm/standalone/math_externs_patch.dart:54 _initialSeed): dart2wasm
+seeds its default Random from the embedder's random integer.
 """
 function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
     existing = get_rng_globals()
-    if existing !== nothing
-        return existing
+    existing === nothing || return existing
+    seed_idx = add_import!(mod, "env", "random_i64", WasmValType[], WasmValType[I64])
+    # const-expr init via the builder's ONE global-def channel (i64.const 0; end); the start
+    # function stores the host's seed before any code reads them
+    g = UInt32[add_global!(mod, I64, true, Int64(0)) for _ in 1:4]
+    return set_rng_globals!(RNGGlobals(g[1], g[2], g[3], g[4], seed_idx))
+end
+
+"""
+    rng_seed_initializer!(mod, rng) -> func_idx
+
+The module initializer that stores four host draws in the RNG's state words, in order: Julia's
+`Random.__init__` seeds the default RNG with four `UInt64`s from `RandomDevice`
+(`seed!(rng, nothing)` → `initstate!(rng, (s0, s1, s2, s3))`), and `env.random_i64` is that
+device. It is the first initializer the one start function runs.
+
+parity(globals.dart:167 _initializeAtStartup): a static field whose initializer is not a
+constant is initialized in the module's start function.
+"""
+function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
+    b = InstrBuilder(; func_name="rng_seed_initializer", mod=mod)
+    for g in (rng.rng0_idx, rng.rng1_idx, rng.rng2_idx, rng.rng3_idx)
+        call!(b, rng.seed_import_idx)
+        global_set!(b, g)
     end
-
-    # Import seed function: env.random_i64() -> i64
-    seed_idx = add_import!(mod, "env", "random_i64",
-        WasmValType[], WasmValType[I64])
-
-    # Create 4 mutable i64 globals with non-zero seeds
-    # Initial values are arbitrary non-zero constants (within signed i64 range)
-    seeds = Int64[
-        1311768467294899695,   # 0x1234567890ABCDEF & 0x7FFF...
-        3978425108881204001,   # non-zero seed
-        7463728394857261543,   # non-zero seed
-        2846573918374629105,   # non-zero seed
-    ]
-
-    rng_indices = UInt32[]
-    for seed in seeds
-        # const-expr init via the builder's ONE global-def channel (i64.const seed; end)
-        push!(rng_indices, add_global!(mod, I64, true, seed))
-    end
-
-    rng = RNGGlobals(rng_indices[1], rng_indices[2], rng_indices[3], rng_indices[4], seed_idx)
-    set_rng_globals!(rng)
-    return rng
+    end_block!(b)
+    return add_function!(mod, WasmValType[], WasmValType[], WasmValType[], builder_code(b);
+                         name=generated_function_name(:rng_seed))
 end
 
 """
     get_rng_global_idx(field_name::Symbol) -> Union{UInt32, Nothing}
 
 Map rngState field name to global index. Returns nothing if field is not an RNG field.
+
+parity(quarantine: redirects getfield(current_task(), :rngStateN) to the module global that
+holds that word, see RNGGlobals.)
 """
 function get_rng_global_idx(field_name::Symbol)::Union{UInt32, Nothing}
     rng = get_rng_globals()
@@ -362,78 +138,18 @@ end
 # ============================================================================
 
 """
-Compile string concatenation (str1 * str2).
-Creates a new string array with combined contents.
-Uses locals for intermediate values.
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+
+The N-way string-concat LOGIC only: `str_locals` already hold the DATA array refs to
+concatenate (already pushed there by the caller — via `emit_value!` for the ctx+args
+call site, or via raw `local.get`/`struct.get` for a standalone intrinsic body). No
+`ctx` involved — pure InstrBuilder local-index manipulation, so both call shapes
+(argument-emitting and raw-param) can share this one array.new_default + array.copy
+sequence instead of each re-deriving it.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)
 """
-# MIGRATED to InstrBuilder (typed). Concatenates two char-arrays via scratch locals +
-# array.copy. Byte-identical to before.
-"""builder-returning core (march3): callers merge via append_builder!."""
-function compile_string_concat_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
-    str_type_idx = ctx.type_registry.string_array_idx
-
-    # Use scratch locals stored in context (allocated at compile context creation time)
-    if ctx.scratch_locals === nothing
-        error("String operations require scratch locals but none were allocated")
-    end
-    result_local, str1_local, str2_local, len1_local, i_local = ctx.scratch_locals
-
-    b = InstrBuilder(; func_name="compile_string_concat")
-    set_context!(b, "string concat")
-    strref = ConcreteRef(UInt32(str_type_idx), true)
-    builder_set_local_type!(b, result_local, strref)
-    builder_set_local_type!(b, str1_local, strref)
-    builder_set_local_type!(b, str2_local, strref)
-    builder_set_local_type!(b, len1_local, I32)
-
-    # Store str1, str2
-    emit_value!(b, str1, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
-    local_set!(b, str1_local)
-    emit_value!(b, str2, ctx, ConcreteRef(UInt32(str_type_idx), true))   # parity(M9): funnel → DATA array
-    local_set!(b, str2_local)
-
-    # len1 = str1.len (stored); len2 = str2.len (left on stack)
-    local_get!(b, str1_local); array_len!(b); local_set!(b, len1_local)
-    local_get!(b, str2_local); array_len!(b)            # stack: [len2]
-
-    # Create result array of len1 + len2
-    local_get!(b, len1_local); num!(b, Opcode.I32_ADD)
-    array_new_default!(b, str_type_idx); local_set!(b, result_local)
-
-    # Copy str1 → result[0:len1]   array.copy: [dst, dst_off, src, src_off, len]
-    local_get!(b, result_local); i32_const!(b, 0)
-    local_get!(b, str1_local); i32_const!(b, 0)
-    local_get!(b, len1_local)
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    # Copy str2 → result[len1:]
-    local_get!(b, result_local); local_get!(b, len1_local)  # dst_off = len1
-    local_get!(b, str2_local); i32_const!(b, 0)             # src_off = 0
-    local_get!(b, str2_local); array_len!(b)                # len = str2.len
-    array_copy!(b, str_type_idx, str_type_idx)
-
-    local_get!(b, result_local)                             # return result
-    return b
-end
-
-_all_string_args(args, ctx::AbstractCompilationContext) =
-    all(t -> t === String || t === Symbol, (infer_value_type(arg, ctx) for arg in args))
-
-"""Concatenate every proven String/Symbol argument through one N-way builder."""
-function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
-    isempty(args) && error("N-way string concatenation requires at least one argument")
-    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
-    strref = ConcreteRef(str_type_idx, true)
-    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
-    offset_local = allocate_local!(ctx, I32)
-    total_len_local = allocate_local!(ctx, I32)
-    result_local = allocate_local!(ctx, strref)
-    b = _ctx_builder(ctx, "compile_string_concat_many")
-
-    for i in eachindex(args)
-        emit_value!(b, args[i], ctx, strref)
-        local_set!(b, str_locals[i])
-    end
+function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_locals::Vector{Int},
+                                   offset_local::Int, total_len_local::Int, result_local::Int)::InstrBuilder
     i32_const!(b, 0)
     for loc in str_locals
         local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
@@ -455,24 +171,87 @@ function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::In
     return b
 end
 
+"""Concatenate every proven String/Symbol argument through one N-way builder.
+Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)"""
+function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("N-way string concatenation requires at least one argument")
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    strref = ConcreteRef(str_type_idx, true)
+    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
+    offset_local = allocate_local!(ctx, I32)
+    total_len_local = allocate_local!(ctx, I32)
+    result_local = allocate_local!(ctx, strref)
+    b = _ctx_builder(ctx, "compile_string_concat_many")
+
+    for i in eachindex(args)
+        emit_value!(b, args[i], ctx, strref)
+        local_set!(b, str_locals[i])
+    end
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+    return b
+end
+
+"""
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
+
+The element-wise char-array equality LOGIC only: `str1_local`/`str2_local` already
+hold the DATA array refs to compare. No `ctx` involved — shared by the ctx+args call
+site and any raw-param intrinsic body.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
+"""
+function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
+                                  str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)::InstrBuilder
+    # len1 = str1.len (tee into len_local); compare with len2
+    local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
+    local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
+
+    # If lengths differ → 0; else compare elements
+    if_!(b; results=WasmValType[I32])
+        i32_const!(b, 0)                                   # lengths differ → not equal
+    else_!(b)
+        i32_const!(b, 0); local_set!(b, i_local)           # i = 0
+        done_label = block!(b; results=WasmValType[I32]) # break-with-result block
+            loop_label = loop!(b)                    # void loop
+                # if i >= len → all matched, push 1 and break to block
+                local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
+                if_!(b)
+                    i32_const!(b, 1); br!(b, done_label)
+                end_block!(b)
+                # compare str1[i] vs str2[i] (unsigned packed-byte get)
+                local_get!(b, str1_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx; signed=false)
+                local_get!(b, str2_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx; signed=false)
+                num!(b, Opcode.I32_NE)
+                if_!(b)
+                    i32_const!(b, 0); br!(b, done_label)    # differ → not equal
+                end_block!(b)
+                # i += 1; continue
+                local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
+                br!(b, loop_label)
+            end_block!(b)                                  # end loop
+            unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
+        end_block!(b)                                      # end result block
+    end_block!(b)                                          # end if-else
+
+    return b
+end
+
 """
 Compile string equality comparison (str1 == str2).
-Returns i32 (0 or 1).
-Uses scratch locals allocated by allocate_scratch_locals!.
+Returns i32 (0 or 1). Uses scratch locals allocated by allocate_scratch_locals!.
+builder-returning core (): callers merge via append_builder!.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
 """
-# MIGRATED to InstrBuilder (typed). Element-wise char-array equality with explicit
-# control flow (if/else over length mismatch, then a compare-loop). Byte-identical.
-"""builder-returning core (march3): callers merge via append_builder!."""
 function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
     str_type_idx = ctx.type_registry.string_array_idx
 
     # Use scratch locals stored in context (allocated at compile context creation time)
-    if ctx.scratch_locals === nothing
-        error("String operations require scratch locals but none were allocated")
-    end
+    ctx.scratch_locals === nothing && allocate_string_scratch!(ctx)
     _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
 
-    b = InstrBuilder(; func_name="compile_string_equal")
+    b = _ctx_builder(ctx, "compile_string_equal")
     set_context!(b, "string ==")
     strref = ConcreteRef(UInt32(str_type_idx), true)
     builder_set_local_type!(b, str1_local, strref)
@@ -487,38 +266,6 @@ function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::In
     emit_value!(b, str2, ctx, strref)
     local_set!(b, str2_local)
 
-    # len1 = str1.len (tee into len_local); compare with len2
-    local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
-    local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
-
-    # If lengths differ → 0; else compare elements
-    if_!(b, 0x7F; results=WasmValType[I32])
-        i32_const!(b, 0)                                   # lengths differ → not equal
-    else_!(b)
-        i32_const!(b, 0); local_set!(b, i_local)           # i = 0
-        done_label = block!(b, 0x7F; results=WasmValType[I32]) # break-with-result block
-            loop_label = loop!(b, 0x40)                    # void loop
-                # if i >= len → all matched, push 1 and break to block
-                local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
-                if_!(b, 0x40)
-                    i32_const!(b, 1); br!(b, done_label)
-                end_block!(b)
-                # compare str1[i] vs str2[i] (unsigned packed-byte get)
-                local_get!(b, str1_local); local_get!(b, i_local)
-                array_get!(b, str_type_idx, I32; signed=false)
-                local_get!(b, str2_local); local_get!(b, i_local)
-                array_get!(b, str_type_idx, I32; signed=false)
-                num!(b, Opcode.I32_NE)
-                if_!(b, 0x40)
-                    i32_const!(b, 0); br!(b, done_label)    # differ → not equal
-                end_block!(b)
-                # i += 1; continue
-                local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
-                br!(b, loop_label)
-            end_block!(b)                                  # end loop
-            unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
-        end_block!(b)                                      # end result block
-    end_block!(b)                                          # end if-else
-
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
     return b
 end

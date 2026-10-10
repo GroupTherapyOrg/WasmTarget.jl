@@ -1,21 +1,14 @@
 # Wasm Types - Value types, Reference types, and composite types
 # Reference: https://webassembly.github.io/spec/core/binary/types.html
 
-export ValType, NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, JSValue, WasmGlobal
+export NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, ArrayType, FieldType, CompositeType, WasmValType, PackedType, StorageType, JSValue, WasmGlobal
 
 # ============================================================================
 # Value Types (Section 5.3.1)
 # ============================================================================
 
 """
-    ValType
-
-Abstract type for all WebAssembly value types.
-"""
-abstract type ValType end
-
-"""
-    NumType <: ValType
+    NumType
 
 Numeric types in WebAssembly.
 """
@@ -27,7 +20,7 @@ Numeric types in WebAssembly.
 end
 
 """
-    RefType <: ValType
+    RefType
 
 Reference types in WebAssembly (including WasmGC extensions).
 """
@@ -47,13 +40,15 @@ end
 
 A concrete reference type with a type index, e.g., `(ref null \$typeidx)`.
 Used for locals and parameters that hold instances of specific struct/array types.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 """
 struct ConcreteRef
     type_idx::UInt32
     nullable::Bool
 end
 
-ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
+ConcreteRef(type_idx::UInt32)::ConcreteRef = ConcreteRef(type_idx, true)  # Default nullable
 
 """
     NonNullAbstractRef
@@ -61,20 +56,52 @@ ConcreteRef(type_idx::UInt32) = ConcreteRef(type_idx, true)  # Default nullable
 A non-nullable reference to an abstract heap type, e.g., `(ref extern)` or `(ref func)`.
 RefType values like ExternRef (0x6F) are always nullable shorthand; this type
 expresses the non-null variant needed for some import signatures (e.g., JS String Builtins).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
 """
 struct NonNullAbstractRef
     heaptype_byte::UInt8  # Same byte as the RefType enum: 0x6F for extern, 0x70 for func, etc.
 end
 
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:185 RefType.extern)
 const NonNullExternRef = NonNullAbstractRef(UInt8(ExternRef))  # (ref extern)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:195 RefType.func)
 const NonNullFuncRef = NonNullAbstractRef(UInt8(FuncRef))      # (ref func)
 
 """
     WasmValType
 
-Union type for all Wasm value types (numeric, reference, packed, concrete refs).
+A value type: numeric or reference (abstract or concrete). A packed i8/i16 is no value type: it
+is a field's storage type only (PackedType).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:39 ValueType)
 """
-const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UInt8}
+const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef}
+
+"""
+    PackedType
+
+A packed storage type, i8 or i16, which exists only in memory: a struct field's or an array
+element's type, read and written as its unpacked i32.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1370 PackedType)
+"""
+@enum PackedType::UInt8 begin
+    I8 = 0x78   # i8
+    I16 = 0x77  # i16
+end
+
+"""
+    StorageType
+
+A field's type: a value type or a packed type (FieldType admits it; every other place holds a
+value type).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:11 StorageType)
+"""
+const StorageType = Union{WasmValType, PackedType}
+
+# the value type a storage type is read and written as: a packed type's i32, a value type itself
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1382 PackedType.unpacked)
+unpacked(::PackedType)::WasmValType = I32
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:43 ValueType.unpacked)
+unpacked(t::WasmValType)::WasmValType = t
 
 # ============================================================================
 # Function Types (Section 5.3.6)
@@ -85,6 +112,7 @@ const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef, UIn
 
 A function type describing the signature of a WebAssembly function.
 Supports both numeric types and reference types (for WasmGC).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:974 FunctionType)
 """
 struct FuncType
     params::Vector{WasmValType}
@@ -92,7 +120,8 @@ struct FuncType
 end
 
 # Convenience constructor for NumType-only signatures
-FuncType(params::Vector{NumType}, results::Vector{NumType}) =
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:974 FunctionType)
+FuncType(params::Vector{NumType}, results::Vector{NumType})::FuncType =
     FuncType(WasmValType[p for p in params], WasmValType[r for r in results])
 
 # ============================================================================
@@ -104,93 +133,218 @@ FuncType(params::Vector{NumType}, results::Vector{NumType}) =
     FieldType
 
 A field in a WasmGC struct type.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
 """
 struct FieldType
-    valtype::WasmValType  # The type of the field
+    valtype::StorageType  # The field's storage type: a value type or a packed i8/i16
     mutable_::Bool        # Whether the field is mutable
 end
 
-FieldType(valtype::WasmValType) = FieldType(valtype, true)  # Default to mutable
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1338 FieldType)
+FieldType(valtype::StorageType)::FieldType = FieldType(valtype, true)  # Default to mutable
 
 """
     StructType
 
 A WasmGC struct type with named fields.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1119 StructType)
 """
 struct StructType
     fields::Vector{FieldType}
-    supertype_idx::Union{Nothing, UInt32}  # PURE-9026: supertype index for subtyping (nothing = no supertype)
+    supertype_idx::Union{Nothing, UInt32}  # supertype index for subtyping (nothing = no supertype)
 end
 
 # Backward-compatible constructor (no supertype)
-StructType(fields::Vector{FieldType}) = StructType(fields, nothing)
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1119 StructType)
+StructType(fields::Vector{FieldType})::StructType = StructType(fields, nothing)
 
 """
     ArrayType
 
 A WasmGC array type with element type.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:1229 ArrayType)
 """
 struct ArrayType
     elem::FieldType  # Element type with mutability
 end
 
-ArrayType(valtype::WasmValType) = ArrayType(FieldType(valtype, true))
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:1229 ArrayType)
+ArrayType(valtype::StorageType)::ArrayType = ArrayType(FieldType(valtype, true))
 
 """
     CompositeType
 
 Union of all composite types in WasmGC.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:708 DefType)
 """
 const CompositeType = Union{FuncType, StructType, ArrayType}
 
-"""
-    HeapType
-
-Represents a heap type - either an abstract type or a concrete type index.
-"""
-struct HeapType
-    # If index >= 0, it's a concrete type index
-    # If index < 0, it's an abstract type encoded as negative
-    index::Int32
-end
-
-# Abstract heap types (encoded as negative values internally)
-const HEAP_FUNC = HeapType(-1)      # func
-const HEAP_EXTERN = HeapType(-2)    # extern
-const HEAP_ANY = HeapType(-3)       # any
-const HEAP_EQ = HeapType(-4)        # eq
-const HEAP_I31 = HeapType(-5)       # i31
-const HEAP_STRUCT = HeapType(-6)    # struct
-const HEAP_ARRAY = HeapType(-7)     # array
-const HEAP_NONE = HeapType(-8)      # none
-const HEAP_NOEXTERN = HeapType(-9)  # noextern
-const HEAP_NOFUNC = HeapType(-10)   # nofunc
-
-HeapType(idx::Integer) = HeapType(Int32(idx))
-
-"""
-    RefTypeGC
-
-A reference type in WasmGC with nullability.
-"""
-struct RefTypeGC
-    nullable::Bool
-    heaptype::HeapType
-end
-
-RefTypeGC(ht::HeapType) = RefTypeGC(true, ht)  # Default to nullable
-
 # ============================================================================
-# Limits (for memories and tables)
+# Subtyping (the one relation every check asks: the builder's operand checks, its casts and
+# codegen's conversions). WT's value types name a heap type by a byte (the abstract ones) or by
+# a type index (a defined type), so the relation reads a defined type's kind and declared
+# supertype from the module's type list, where dart's DefType holds them.
 # ============================================================================
 
-struct Limits
-    min::UInt32
-    max::Union{Nothing, UInt32}
+# is `t` a reference type?
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:164 RefType)
+_wt_is_ref(t::StorageType)::Bool =
+    t isa RefType || t isa ConcreteRef || t isa NonNullAbstractRef
+
+# parity-region(pkg/wasm_builder/lib/src/ir/type.dart:170 RefType.nullable): one method per WT
+# reference representation; an abstract RefType is the nullable shorthand.
+_wt_ref_nullable(t::ConcreteRef)::Bool = t.nullable
+_wt_ref_nullable(::NonNullAbstractRef)::Bool = false
+_wt_ref_nullable(::RefType)::Bool = true
+# end parity-region
+
+# The reference type made non-null: a concrete one loses its null, the nullable shorthand becomes
+# its non-null form; a numeric type is itself.
+# parity-region(pkg/wasm_builder/lib/src/ir/type.dart:229 RefType.withNullability): one method per
+# WT reference representation; a numeric type is ValueType.withNullability's (:56).
+_wt_drop_nullable(t::ConcreteRef)::WasmValType = ConcreteRef(t.type_idx, false)
+_wt_drop_nullable(t::RefType)::WasmValType = NonNullAbstractRef(UInt8(t))
+_wt_drop_nullable(t::NonNullAbstractRef)::WasmValType = t
+_wt_drop_nullable(t::NumType)::WasmValType = t
+# end parity-region
+
+"""
+    _wt_heap_kind(t, types) -> Symbol
+
+The heap type of a reference type, by kind: an abstract heap type (`:any`, `:eq`, `:struct`,
+`:array`, `:i31`, `:extern`, `:func`, `:exn`), a defined type of the module (`:concrete_struct`,
+`:concrete_array`, `:concrete_func`), or `:unknown` for a heap byte WT does not model. A type
+index the module does not define is invalid, never guessed.
+parity(pkg/wasm_builder/lib/src/ir/type.dart:166 RefType.heapType)
+"""
+function _wt_heap_kind(t::WasmValType, types::Vector{CompositeType})::Symbol
+    if t isa ConcreteRef
+        local ct = _wt_defined_type(t.type_idx, types)
+        ct isa ArrayType && return :concrete_array
+        ct isa FuncType && return :concrete_func
+        return :concrete_struct
+    elseif t isa NonNullAbstractRef
+        return _wt_heap_kind_of_byte(t.heaptype_byte)
+    elseif t isa RefType
+        return _wt_heap_kind_of_byte(UInt8(t))
+    end
+    return :unknown
 end
 
-Limits(min::Integer) = Limits(UInt32(min), nothing)
-Limits(min::Integer, max::Integer) = Limits(UInt32(min), UInt32(max))
+# the type the module defines at `idx`; an index it does not define is invalid
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:708 DefType)
+function _wt_defined_type(idx::Integer, types::Vector{CompositeType})::CompositeType
+    0 <= idx < length(types) || _module_invalid(:heap_type, "type $idx is not defined")
+    return types[Int(idx) + 1]
+end
+
+# An abstract heap type's code (the RefType enum's byte) as its kind; a code WT does not model
+# (none, noextern, nofunc, noexn) is :unknown.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:361 HeapType.deserialize)
+function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
+    byte == UInt8(AnyRef)    ? :any    :
+    byte == UInt8(EqRef)     ? :eq     :
+    byte == UInt8(StructRef) ? :struct :
+    byte == UInt8(ArrayRef)  ? :array  :
+    byte == UInt8(I31Ref)    ? :i31    :
+    byte == UInt8(ExternRef) ? :extern :
+    byte == UInt8(FuncRef)   ? :func   :
+    byte == UInt8(ExnRef)    ? :exn    : :unknown
+end
+
+# The top of a heap kind's hierarchy: any (eq, struct, array, i31 and the defined structs and
+# arrays), func (the defined function types), extern or exn; the four share no supertype.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:348 HeapType.topType)
+function _wt_hierarchy_top(kind::Symbol)::Symbol
+    (kind === :func || kind === :concrete_func) ? :func :
+    kind === :extern ? :extern :
+    kind === :exn    ? :exn    :
+    (kind === :any || kind === :eq || kind === :struct || kind === :array ||
+     kind === :i31 || kind === :concrete_struct || kind === :concrete_array) ? :any :
+    :unknown
+end
+
+# The nullable reference to the top of `t`'s hierarchy (dart `RefType(heapType.topType,
+# nullable: true)`, the input a cast or a test takes), or nothing for a heap type WT does not
+# model.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:348 HeapType.topType)
+function _wt_top_ref(t::WasmValType, types::Vector{CompositeType})::Union{Nothing,RefType}
+    local top = _wt_hierarchy_top(_wt_heap_kind(t, types))
+    top === :any ? AnyRef : top === :func ? FuncRef : top === :extern ? ExternRef :
+    top === :exn ? ExnRef : nothing
+end
+
+"""
+    _wt_same_hierarchy(a, b, types) -> Bool
+
+Whether two reference types share a top (any, func, extern or exn), as a cast's operand and
+target must: dart's `_verifyCast` takes the target's top type as the cast's input. It is not a
+subtype check: a cast between two unrelated structs is valid and traps at run time.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1927 InstructionsBuilder._verifyCast)
+"""
+function _wt_same_hierarchy(a::WasmValType, b::WasmValType, types::Vector{CompositeType})::Bool
+    local ta = _wt_hierarchy_top(_wt_heap_kind(a, types))
+    ta !== :unknown && ta === _wt_hierarchy_top(_wt_heap_kind(b, types))
+end
+
+# the declared supertype of the type at `idx`, or nothing: only a struct type declares one
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:712 DefType.superType)
+function _wt_concrete_supertype_idx(idx::Integer, types::Vector{CompositeType})::Union{Nothing,UInt32}
+    local ct = _wt_defined_type(idx, types)
+    ct isa StructType ? ct.supertype_idx : nothing
+end
+
+# Does the type at `a_idx` reach the type at `b_idx` along its declared supertype chain? A struct's
+# supertype is declared before it, inside a recursion group too (_check_supertype_declared_earlier
+# checks every type add_type! or add_type_group! adds, before any check walks a chain), so the
+# chain ends.
+# parity(pkg/wasm_builder/lib/src/ir/type.dart:733 DefType.isSubtypeOf)
+function _wt_concrete_chain_reaches(a_idx::Integer, b_idx::Integer, types::Vector{CompositeType})::Bool
+    local cur::Union{Nothing,UInt32} = UInt32(a_idx)
+    while cur !== nothing
+        cur == b_idx && return true
+        cur = _wt_concrete_supertype_idx(cur, types)
+    end
+    return false
+end
+
+"""
+    wasm_subtype(a, b, types) -> Bool
+
+Whether a value of type `a` may be used where `b` is expected, as dart's `isSubtypeOf` answers
+it: a numeric type only as itself; a reference type when its nullability allows it (a nullable
+one is never a subtype of a non-null one) and its heap type is a subtype of the other's. A
+defined type walks its declared supertype chain, then its abstract super (struct, array or func),
+so two distinct function types are unrelated, as are a function type and any type outside the
+func hierarchy; any > eq > {struct, array, i31}; extern, func and exn each their own top.
+`types` is the module's type list (WasmModule.types).
+parity(pkg/wasm_builder/lib/src/ir/type.dart:236 RefType.isSubtypeOf)
+"""
+function wasm_subtype(a::WasmValType, b::WasmValType, types::Vector{CompositeType})::Bool
+    a === b && return true
+    (_wt_is_ref(a) && _wt_is_ref(b)) || return false
+    (_wt_ref_nullable(a) && !_wt_ref_nullable(b)) && return false
+    local ka = _wt_heap_kind(a, types)
+    local kb = _wt_heap_kind(b, types)
+    (ka === :unknown || kb === :unknown) && return false
+    # a defined target: a defined type on the source's declared chain
+    if kb === :concrete_struct || kb === :concrete_array || kb === :concrete_func
+        (ka === :concrete_struct || ka === :concrete_array || ka === :concrete_func) || return false
+        return _wt_concrete_chain_reaches(Int(a.type_idx), Int(b.type_idx), types)
+    end
+    # an abstract target: the source's abstract heap type (a defined type's abstract super)
+    local ka_abs = ka === :concrete_struct ? :struct : ka === :concrete_array ? :array :
+                   ka === :concrete_func ? :func : ka
+    kb === :extern && return ka_abs === :extern
+    kb === :func   && return ka_abs === :func
+    kb === :exn    && return ka_abs === :exn
+    kb === :any    && return _wt_hierarchy_top(ka_abs) === :any
+    kb === :eq     && return ka_abs === :eq || ka_abs === :struct || ka_abs === :array || ka_abs === :i31
+    kb === :struct && return ka_abs === :struct
+    kb === :array  && return ka_abs === :array
+    kb === :i31    && return ka_abs === :i31
+    return false
+end
 
 # ============================================================================
 # JS Interop Types
@@ -203,6 +357,7 @@ A Julia type representing a JavaScript value held as an externref.
 Used for DOM elements, JS objects, and other JS values.
 
 This is a primitive type to prevent Julia from optimizing it away.
+parity(sdk/lib/_wasm/wasm_types.dart:59 WasmExternRef)
 """
 primitive type JSValue 64 end
 
@@ -255,250 +410,42 @@ flag = Flag(1)
 # Compile to Wasm - global index extracted from type
 wasm_bytes = compile(increment, (Counter,))
 ```
+parity(quarantine: Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 """
 mutable struct WasmGlobal{T, IDX}
     value::T
 end
 
 # Constructor with zero initial value
-WasmGlobal{T, IDX}() where {T, IDX} = WasmGlobal{T, IDX}(zero(T))
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function WasmGlobal{T, IDX}()::WasmGlobal{T, IDX} where {T, IDX}
+    return WasmGlobal{T, IDX}(zero(T))
+end
 
 # Get the global index from the type
-global_index(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = IDX
-global_index(g::WasmGlobal{T, IDX}) where {T, IDX} = IDX
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_index(::Type{WasmGlobal{T, IDX}})::Int where {T, IDX}
+    return IDX
+end
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_index(g::WasmGlobal{T, IDX})::Int where {T, IDX}
+    return IDX
+end
 
 # Get the element type
-global_eltype(::Type{WasmGlobal{T, IDX}}) where {T, IDX} = T
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
+function global_eltype(::Type{WasmGlobal{T, IDX}})::Type where {T, IDX}
+    return T
+end
 
 # Accessor methods - work in Julia (for testing) and compile to Wasm global ops
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 function Base.getindex(g::WasmGlobal{T, IDX})::T where {T, IDX}
     return g.value
 end
 
+# parity(quarantine: WasmGlobal API — Julia has no declaration of a wasm global, so a host-shared global's index rides in the argument type WasmGlobal{T,IDX} to give global.get/global.set their immediate)
 function Base.setindex!(g::WasmGlobal{T, IDX}, v::T)::T where {T, IDX}
     g.value = v
     return v
-end
-
-# ============================================================================
-# Helper functions
-# ============================================================================
-
-"""
-Convert a Julia type to a Wasm value type (NumType or RefType).
-"""
-function julia_to_wasm_type(::Type{T})::WasmValType where T
-    if T === Int32 || T === UInt32
-        return I32
-    elseif T === Int64 || T === UInt64 || T === Int
-        return I64
-    elseif T === Float32
-        return F32
-    elseif T === Float64
-        return F64
-    elseif T === Bool
-        # Bool is represented as i32 (0 or 1)
-        return I32
-    elseif T === Char
-        # Char is represented as i32 (Unicode codepoint)
-        return I32
-    elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16
-        # Smaller integers also use i32
-        return I32
-    elseif T === Int128 || T === UInt128
-        # 128-bit integers are represented as WasmGC structs with two i64 fields
-        return StructRef
-    elseif T === Nothing
-        # Nothing has no Wasm representation - handled specially
-        # Return I32 as a placeholder (functions returning Nothing don't actually return)
-        return I32
-    elseif T === Any
-        # Any can hold any value - map to anyref for internal polymorphism
-        # anyref supports ref.cast/ref.test/br_on_cast (externref does not)
-        # Convert to externref only at JS boundary via extern.convert_any
-        return AnyRef
-    elseif T === JSValue
-        # JS values are held as externref
-        return ExternRef
-    elseif T === String || T === Symbol || T <: AbstractString
-        # parity(M9): strings are CLASSED — {classId, data} <: $JlBase. The abstract
-        # (module-less) rep is StructRef; concrete mappers give the $JlString ref.
-        return StructRef
-    elseif T <: Tuple
-        # Tuples map to WasmGC structs
-        return StructRef
-    elseif !(T isa Union) && T <: AbstractArray
-        # Arrays map to WasmGC arrays. P4-stdlib: exclude Unions —
-        # Union{Vector{Float64}, Vector{UInt64}} <: AbstractArray is true and
-        # short-circuited here to ArrayRef, but Vectors are concretely struct
-        # refs; route unions to find_common_wasm_type below (same class as
-        # the P2-batch20 exclusion in get_concrete_wasm_type).
-        return ArrayRef
-    elseif T <: WasmGlobal
-        # WasmGlobal is passed as a WasmGC struct (holds just value since idx is in type)
-        return StructRef
-    elseif T isa Union
-        # Handle Union types by finding a common Wasm type
-        return resolve_union_type(T)
-    elseif isconcretetype(T) && isstructtype(T)
-        # User-defined structs map to WasmGC structs
-        return StructRef
-    elseif T isa UnionAll && isstructtype(T)
-        # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
-        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
-        return AnyRef
-    elseif isprimitivetype(T)
-        # Custom primitive types (e.g., JuliaSyntax.Kind, Core.IntrinsicFunction) - map by size.
-        # IMPORTANT: Check BEFORE T <: Function since Core.IntrinsicFunction IS a primitive type
-        # (sizeof=8, stored as an integer ID) AND is a subtype of Function.
-        # Without this ordering, IntrinsicFunction → ExternRef (wrong) instead of I64.
-        sz = sizeof(T)
-        if sz <= 4
-            return I32
-        elseif sz <= 8
-            return I64
-        else
-            error("Primitive type too large for Wasm: $T ($sz bytes)")
-        end
-    elseif T <: Function
-        # Abstract Function types (non-closure) map to externref
-        return ExternRef
-    elseif T <: Type && !(T isa UnionAll) && !isstructtype(T)
-        # PURE-4155: Type{X} singleton values are now represented as DataType struct refs (global.get)
-        # instead of i32.const 0. Use StructRef as the generic fallback since we don't have
-        # access to the module/registry here to get the concrete DataType type index.
-        # NOTE: Struct types like Union, DataType are handled above (isconcretetype && isstructtype)
-        # NOTE: !isstructtype(T) ensures we only match singleton Type{X} (e.g., Type{Int64})
-        return StructRef
-    elseif isabstracttype(T)
-        # Abstract types (e.g., Compiler.CallInfo, Type (UnionAll)) can hold any concrete subtype
-        # PURE-9020: Use AnyRef for internal polymorphism (supports ref.cast/ref.test)
-        # NOTE: Type (without parameter) is UnionAll and isabstracttype, maps here
-        return AnyRef
-    else
-        error("Unsupported Julia type for Wasm: $T")
-    end
-end
-
-"""
-Resolve a Union type to a common Wasm type.
-
-Strategy:
-- Union{Nothing, T} -> type of T (Nothing is "no value")
-- Union{T1, T2, ...} where all are numeric -> widest numeric type
-- Otherwise error
-"""
-function resolve_union_type(T::Union)::WasmValType
-    # Get the union types
-    types = Base.uniontypes(T)
-
-    # Filter out Nothing
-    non_nothing = filter(t -> t !== Nothing, types)
-
-    if isempty(non_nothing)
-        # Union of just Nothing - shouldn't happen but handle it
-        return I32
-    elseif length(non_nothing) == 1
-        # Union{Nothing, T} -> T
-        return julia_to_wasm_type(non_nothing[1])
-    else
-        # Multi-variant: box mixed-CATEGORY numeric (int/float — Union{Int64,Float64}) behind
-        # AnyRef. Collapsing to the widest primitive is LOSSY (Int 1 / Float 1.0 become the same
-        # f64, tag gone). The SAME needs_anyref_boxing decision the codegen resolver uses
-        # (_resolve_multivariant_union) — so the builder + codegen layers AGREE on one boxing rule.
-        # Same-category numeric (all-int / all-float) → widest primitive (find_common_wasm_type).
-        # NOTE: Union{Int128,Int64,BigInt} → I64 (Int128/BigInt store i64.const 0 defaults; the
-        # caller discriminates via isa()).
-        needs_anyref_boxing(T) && return AnyRef
-        return find_common_wasm_type(non_nothing)
-    end
-end
-
-"""
-Find a common Wasm type for a list of Julia types.
-For numeric types, returns the widest type.
-"""
-function find_common_wasm_type(types::Vector)::WasmValType
-    # Check if all are numeric
-    if all(t -> t <: Number, types)
-        # Prefer i64 over i32, f64 over f32
-        has_i64 = any(t -> t === Int64 || t === UInt64 || t === Int, types)
-        has_f64 = any(t -> t === Float64, types)
-        has_f32 = any(t -> t === Float32, types)
-        has_float = has_f64 || has_f32
-        has_int = any(t -> t === Int32 || t === UInt32 || t === Int64 || t === UInt64 ||
-                         t === Int || t === Bool || t === Int8 || t === UInt8 ||
-                         t === Int16 || t === UInt16, types)
-
-        if has_float
-            return has_f64 ? F64 : F32
-        elseif has_i64
-            return I64
-        else
-            return I32
-        end
-    end
-
-    # Check if all are string/symbol types (WasmGC arrays)
-    if all(t -> t === String || t === Symbol || t <: AbstractString, types)
-        return ArrayRef
-    end
-
-    # Check if all are RAW-array-represented types. P4-stdlib (Statistics
-    # median): Vector/Matrix are concretely (ref $struct{arr,size}) — only
-    # String/Symbol and Memory/MemoryRef compile to bare wasm arrays. The old
-    # blanket `t <: AbstractArray → ArrayRef` typed Union{Nothing,
-    # Vector{Float64}, Vector{UInt64}} signatures as arrayref while every
-    # return site pushes a struct ref: the callee's value died to a ref.null
-    # default and the caller failed validation (structref vs arrayref).
-    _is_array_rep = t -> t === String || t === Symbol ||
-        (t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
-                            t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef))
-    if all(_is_array_rep, types)
-        return ArrayRef
-    end
-
-    # Check if all are reference types (structs, tuples, struct-represented
-    # arrays). Exclude raw-array reps (String/Symbol/Memory).
-    is_wasm_struct = t -> !_is_array_rep(t) &&
-        (((isconcretetype(t) && isstructtype(t)) || t <: Tuple) || t <: AbstractArray)
-    if all(is_wasm_struct, types)
-        return StructRef
-    end
-
-    # Heterogeneous union (mix of primitives, strings, structs, etc.)
-    # PURE-9020: Use anyref as the universal boxed value type (supports ref.cast/ref.test)
-    return AnyRef
-end
-
-"""
-    needs_anyref_boxing(T::Union)::Bool
-
-PURE-9030: Check if a Union type needs anyref boxing for runtime dispatch.
-Returns true when the union has members with incompatible Wasm types (e.g., Int32+Float64),
-meaning widening loses type identity and isa() checks can't work.
-Used to override parameter types to anyref in function signatures.
-"""
-function needs_anyref_boxing(T::Union)::Bool
-    types = Base.uniontypes(T)
-    non_nothing = filter(t -> t !== Nothing, types)
-    length(non_nothing) < 2 && return false
-    # Box iff EVERY member boxes as a NUMERIC value (i32/i64/f32/f64) — covers Number
-    # subtypes AND Char/other numeric-rep primitives, excluding struct/string/ref members
-    # (those use their own ConcreteRef/tagged rep).
-    wasm_list = WasmValType[julia_to_wasm_type(t) for t in non_nothing]
-    all(w -> w === I32 || w === I64 || w === F32 || w === F64, wasm_list) || return false
-    # ANY multi-member numeric union must box (dart2wasm boxes every dynamic value): members
-    # with DIFFERENT wasm reps (e.g. Int64 i64 vs Bool i32, or int vs float) can't collapse to
-    # one faithful primitive — the het-tuple/phi if-else would read different-width fields under
-    # a single block result type → INVALID wasm; members SHARING a rep (Bool/Int8/Int32 all i32)
-    # lose their type tag on collapse → isa/typeof mis-fire. Either way: box, keep the classId.
-    return true
-end
-
-"""
-Get the element type from a WasmGlobal type.
-"""
-function wasm_global_element_type(::Type{WasmGlobal{T, IDX}}) where {T, IDX}
-    return T
 end

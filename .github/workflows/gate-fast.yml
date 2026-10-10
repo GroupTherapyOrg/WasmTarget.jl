@@ -1,0 +1,122 @@
+name: Gate fast
+# The inner loop on CI's runners (AGENTS.md; dev/CHARTER.md C10, L163): the ratchet and smoke on
+# Julia 1.12 and 1.13, each job through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13>
+# [--part i/N]`, the smokes dealt into N and M parts (test/smoke.jl's round-robin _smoke_part).
+# `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name> and prints the verdict. It is not
+# the push gate: the full gate (gate.yml, `bash dev/gate.sh`, L153, L162) stays that. Its steps
+# and caches are gate.yml's lane job's, minus Java and TLC. The first red job cancels the rest.
+# The parts: N = 10 and M = 9, 1 + N + M = 20 jobs, the account's concurrent runners. Measured
+# (fast-lane run 37967359140 at N = M = 4, every cache cold): setup 23-35 s and package precompile
+# 167-261 s per job (F), smoke's work 1064 s on 1.12 and 885 s on 1.13, the largest group
+# (julia_string_bodies, 124 s) a floor no N removes. No N meets a 300 s job with a cold
+# precompile; under the cap the slowest projected job is 484 s cold (smoke-1.13 at M = 9),
+# which gives the budget B_fast = 9 minutes. The precompile floor is why a cold verdict takes
+# longer than ~5 minutes; a warm cache (the same gate-fast branch, the same runner CPU model)
+# drops it.
+on:
+  push:
+    branches: ['gate-fast/**']
+  workflow_dispatch:
+
+# Only the newest push per fast branch runs; a superseded run is cancelled.
+concurrency:
+  group: gate-fast-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # julia-actions/cache deletes this branch's superseded caches
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lane:
+    name: ${{ matrix.lane }}${{ matrix.part != '' && format(' {0}', matrix.part) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 9   # the budget B_fast (header); dev/gate.sh --fast reads it here
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { lane: ratchet, part: '' }
+          - { lane: smoke, part: '0/10' }
+          - { lane: smoke, part: '1/10' }
+          - { lane: smoke, part: '2/10' }
+          - { lane: smoke, part: '3/10' }
+          - { lane: smoke, part: '4/10' }
+          - { lane: smoke, part: '5/10' }
+          - { lane: smoke, part: '6/10' }
+          - { lane: smoke, part: '7/10' }
+          - { lane: smoke, part: '8/10' }
+          - { lane: smoke, part: '9/10' }
+          - { lane: smoke-1.13, part: '0/9' }
+          - { lane: smoke-1.13, part: '1/9' }
+          - { lane: smoke-1.13, part: '2/9' }
+          - { lane: smoke-1.13, part: '3/9' }
+          - { lane: smoke-1.13, part: '4/9' }
+          - { lane: smoke-1.13, part: '5/9' }
+          - { lane: smoke-1.13, part: '6/9' }
+          - { lane: smoke-1.13, part: '7/9' }
+          - { lane: smoke-1.13, part: '8/9' }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # L148 checks the audit log against the commit history
+
+      # the wasm engine is CI's: the Node major ci.yml's node-version names (dev/lanes.sh reads
+      # the same line and fails a lane on any other major)
+      - name: CI's Node major
+        id: ci
+        run: |
+          echo "node=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.ci.outputs.node }}
+
+      # juliaup, so `julia` is 1.12 and `julia +1.13` is 1.13, the two commands dev/lanes.sh runs;
+      # each download retried (a timed-out Julia download failed a whole run, 37890994081)
+      - name: Julia (juliaup)
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          if [ "${{ matrix.lane }}" = smoke-1.13 ]; then channel 1.13; fi
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+
+      # gate.yml's cache keys (per runner CPU model; a package image compiled for one model is
+      # recompiled on another): the package alone, smoke-1.13 on its own Julia
+      - name: Runner CPU model
+        id: cpu
+        run: |
+          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: gate-${{ matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes' }}-${{ steps.cpu.outputs.model }}
+          include-matrix: false
+
+      - name: Install wasm-tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+
+      # instantiate only: each lane precompiles in its own configuration (Pkg.test's differs)
+      - name: Install dependencies
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: ${{ matrix.lane == 'smoke-1.13' && 'julia +1.13' || 'julia' }} --project=. -e 'using Pkg; Pkg.instantiate()'
+
+      # the dart-lang/sdk files src/ cites, for L132 (the ratchet lane)
+      - name: Pinned dart2wasm sources
+        if: matrix.lane == 'ratchet'
+        run: bash dev/fetch_dart_sdk.sh
+
+      - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
+        run: |
+          # the job's stdout can be a non-blocking pipe, where one large write fails part-way
+          # ("echo: write error: Resource temporarily unavailable": 37893727231 lost a shard's log)
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
+          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}

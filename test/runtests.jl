@@ -20,7 +20,7 @@ function _wt_logical_cpus()
 end
 # A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
 # (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
-if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1"
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1" && get(ENV, "WT_PHASE", "") == ""
     nshards = max(1, min(_wt_logical_cpus(), 16))
     if nshards > 1
         @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
@@ -112,7 +112,24 @@ const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
     isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
 end
 _wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
-_wt_shard0() = _WT_SHARD == 0 && !_wt_fuzz()         # run-once Aqua/QA only on codegen shard 0
+# The QA families (the files included below, before the phases) are dealt round-robin across
+# the shards in file order, the k-th to shard (k-1) % N, so the N shards together run each exactly
+# once (on ubuntu CI they took 616 s, run 37879296900, which alone made shard 0 the slowest job).
+# Not in a WT_PHASE run or the fuzz pass. Each one run prints a WT_QA_TIME line.
+const _WT_QA_DEALT = Ref(0)
+function _wt_qa(name::AbstractString)::Bool
+    _WT_QA_DEALT[] += 1
+    ((_WT_QA_DEALT[] - 1) % _WT_NSHARDS == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
+    println("WT_QA\t", name)
+    return true
+end
+function _wt_qa_include(path::AbstractString)
+    local name = isabspath(path) ? relpath(path, @__DIR__) : path
+    _wt_qa(name) || return nothing
+    local t = @elapsed include(path)
+    println("WT_QA_TIME\t", round(t; digits = 3), "\t", name)
+    return nothing
+end
 # Fuzz runs in its own pass (WT_FUZZ=1) OR inline when not sharding (serial fallback).
 _wt_run_fuzz() = _wt_fuzz() || (get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_NO_SHARD", "") == "1")
 
@@ -130,72 +147,107 @@ import SHA
 using Dates: Dates, @dateformat_str
 
 # Package-level QA runs first so structural failures surface
-# before the ~hour-long codegen suite spins up. (Shard 0 only — it's process-wide.)
-_wt_shard0() && include("test_aqua.jl")
-_wt_shard0() && include("diagnostics_sink.jl")
-_wt_shard0() && include("m8_selector_table.jl")
-_wt_shard0() && include("m11_intrinsics_table.jl")
-_wt_shard0() && include("module_builder_validation.jl")
-
+# before the ~hour-long codegen suite spins up. (Each on one shard — it's process-wide.)
+_wt_qa_include("test_aqua.jl")
+_wt_qa_include("test_explicit_imports.jl")
+_wt_qa_include("diagnostics_sink.jl")
+_wt_qa_include("m8_selector_table.jl")
+_wt_qa_include("m11_intrinsics_table.jl")
+# the suite's helpers, before the files that check a module's host-import calls with them
 include("utils.jl")
-include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
-_wt_shard0() && include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
-_wt_shard0() && include("recursive_groups.jl")
-_wt_shard0() && include("apply_iterate_soundness.jl")
+_wt_qa_include("module_builder_validation.jl")
+_wt_qa_include("grapheme_break.jl")
+_wt_qa_include("nir_use_index.jl")
+_wt_qa_include("host_boundary_types.jl")
 
-# Cleanup-loop regression guards (shard 0 only — node-differential, run once). The multivar
+# a rejection names its statement and inline chain (dev/MARCH.md exit criterion 5)
+_wt_qa_include("diagnostic_attribution.jl")
+_wt_qa_include("no_undefined_globals.jl")
+_wt_qa_include("source_maps.jl")
+_wt_qa_include("generated_names.jl")
+_wt_qa_include("wrong_value_locator.jl")
+_wt_qa_include("fold_rule.jl")
+# formal(dev/formal/ClassIdDispatch.tla) MissingMethodTraps: MethodError receivers trap through the one table.
+_wt_qa_include("dispatch_method_error.jl")
+# formal(dev/formal/ClassIdDispatch.tla) RangeIsa: lazily numbered types under range-less abstracts.
+_wt_qa_include("lazy_classid_isa.jl")
+include(joinpath(@__DIR__, "integration", "snapshot_islands.jl"))  # Snapshot.jl island fixtures
+# Native linear-memory sidecar (dev/PARITY_MASTER.md, Scope).
+# Node-differential, run once (on one shard) like the other fixture suites above.
+_wt_qa_include(joinpath(@__DIR__, "sidecar", "sidecar_test.jl"))
+_wt_qa_include("m10_contexts.jl")   # needs utils (compare_julia_wasm)
+_wt_qa_include("recursive_groups.jl")
+_wt_qa_include("overlay_reasons.jl")
+_wt_qa_include("apply_iterate_soundness.jl")
+
+# Cleanup-loop regression guards (one shard each — node-differential, run once). The multivar
 # if/else phi-merge root fix + the Loop-1 fix_* deletion guards (migrated emitters are correct
 # for every case the deleted passes addressed). See dev/HISTORY.md#typed-builder-and-cleanup-campaigns.
-_wt_shard0() && include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
-_wt_shard0() && include("cleanup_loop1_backfills.jl")
+_wt_qa_include(joinpath(@__DIR__, "fuzz", "repro_multivar_phi_merge.jl"))
+_wt_qa_include("cleanup_loop1_backfills.jl")
 # Parity Loop A: the WasmGC subtype lattice (wasm_subtype) — supertype-chain + nullability aware,
 # mirroring dart2wasm HeapType.isSubtypeOf. See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
-_wt_shard0() && include("test_wasm_subtype_lattice.jl")
+_wt_qa_include("test_wasm_subtype_lattice.jl")
 # Parity Loop C: F31 heterogeneous-Union value extraction + F-i31 full-width int box (the
 # phi-store now CONSTRUCTS the tagged-union struct instead of dummying to ref.null, and ints
 # are boxed full-width, not via lossy i31). See dev/HISTORY.md#uniform-values-objects-and-class-hierarchy.
-_wt_shard0() && include("f31_union_value_backfills.jl")
+_wt_qa_include("f31_union_value_backfills.jl")
 # Parity Loop 0: F11 Int128 bit-counting intrinsics (cttz/ctpop/not_int now handle is_128bit;
 # a single i64 op on a 128-bit value was invalid wasm). See dev/HISTORY.md#parity-method.
-_wt_shard0() && include("f11_int128_bitcount_backfills.jl")
+_wt_qa_include("f11_int128_bitcount_backfills.jl")
 # Parity probe: sort comparator kwargs (by/lt) were silently dropped by the non-mutating sort
-# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order. See FINDINGS.md.
-_wt_shard0() && include("sort_comparator_backfills.jl")
+# overlay (only rev was forwarded to sort!) → sort(v, by=f) returned default order.
+_wt_qa_include("sort_comparator_backfills.jl")
 # CFG normalization: shared non-returning bounds-error tails may cross natural
 # loop regions and must be duplicated through the canonical statement compiler.
-_wt_shard0() && include("crossing_terminal_taildup.jl")
+_wt_qa_include("crossing_terminal_taildup.jl")
 # F3 sub-loop L0 (dev/HISTORY.md#closures-and-dynamic-dispatch): Core.Box contents-type inference.
-_wt_shard0() && include("f3_box_capture_l0.jl")
+_wt_qa_include("f3_box_capture_l0.jl")
 # F3 sub-loop L1 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized mutable Box{contents} struct registry.
-_wt_shard0() && include("f3_box_capture_l1.jl")
+_wt_qa_include("f3_box_capture_l1.jl")
 # F3 sub-loop L2a (dev/HISTORY.md#closures-and-dynamic-dispatch): cross-function box-field-type pre-pass.
-_wt_shard0() && include("f3_box_capture_l2_prepass.jl")
+_wt_qa_include("f3_box_capture_l2_prepass.jl")
 # F3 sub-loop L2b (dev/HISTORY.md#closures-and-dynamic-dispatch): value-type propagation past Box{Any} erasure.
-_wt_shard0() && include("f3_box_capture_l2b_propagate.jl")
+_wt_qa_include("f3_box_capture_l2b_propagate.jl")
 # Loop C value channel: general numeric value-type propagation (Any-but-really-i64).
-_wt_shard0() && include("value_channel_propagate.jl")
+_wt_qa_include("value_channel_propagate.jl")
 # parity(M1) ONE LOWERING: void bodies through the stackifier (compile + run-no-trap guards).
-_wt_shard0() && include("m1_void_backfills.jl")
+_wt_qa_include("m1_void_backfills.jl")
 # march3: try/catch driver battery (the throw-arm-past-the-leave silent miscompile).
-_wt_shard0() && include("march3_try_backfills.jl")
-_wt_shard0() && include("type_world_bounds.jl")
-_wt_shard0() && include("module_metadata.jl")
-_wt_shard0() && include("vararg_fixed_prefix.jl")
-_wt_shard0() && include("symbol_syntax_metadata.jl")
-_wt_shard0() && include("memmove_single_path.jl")
-_wt_shard0() && include("mutable_global_initialization.jl")
-_wt_shard0() && include("reinterpret_array_semantics.jl")
-_wt_shard0() && include("storage_relative_pointer_soundness.jl")
-_wt_shard0() && include("real_bottom_exceptions.jl")
-_wt_shard0() && include("no_fabricated_values.jl")
+_wt_qa_include("march3_try_backfills.jl")
+_wt_qa_include("type_world_bounds.jl")
+_wt_qa_include("module_metadata.jl")
+_wt_qa_include("layout_read_memo.jl")
+_wt_qa_include("ir_one_inference_path.jl")
+_wt_qa_include("vararg_fixed_prefix.jl")
+_wt_qa_include("symbol_syntax_metadata.jl")
+_wt_qa_include("memmove_single_path.jl")
+_wt_qa_include("host_imports.jl")
+_wt_qa_include("immutable_objectid.jl")
+_wt_qa_include("mutable_global_initialization.jl")
+# Ground-truth string hashing: hash(::String/::SubString{String}) now bit-exact
+# with native Julia (not merely internally consistent) — Dict{String,V}/
+# Set{String} CONSTANTS built natively resolve correctly from wasm.
+_wt_qa_include("string_hash_ground_truth.jl")
+_wt_qa_include("reinterpret_array_semantics.jl")
+_wt_qa_include("storage_relative_pointer_soundness.jl")
+_wt_qa_include("real_bottom_exceptions.jl")
+_wt_qa_include("no_fabricated_values.jl")
+# Phase 6.3 (dev/MARCH.md): dart's two-tier diagnostics — a construct WT cannot
+# represent must reject through record_unsupported! (classified WasmCompileError),
+# never leak an internal StackImbalanceError.
+_wt_qa_include("capability_negative_controls.jl")
+_wt_qa_include("unknown_ir_heads.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
-if _wt_shard0()
+if _wt_qa("parity_ratchet.jl")
+    _wt_ratchet_t0 = time()
     ENV["WT_RATCHET_INCLUDED"] = "1"
     include("parity_ratchet.jl")
     @testset "parity ratchet (dev/PARITY_MASTER.md)" begin
         @test ParityRatchet.run()
     end
+    println("WT_QA_TIME\t", round(time() - _wt_ratchet_t0; digits = 3), "\tparity_ratchet.jl")
 end
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
@@ -207,6 +259,23 @@ mutable struct InterpValue; tag::Int32; int_val::Int64; float_val::Float64; bool
 struct TestPair{T}; first::T; second::T; end
 mutable struct TestCounter; value::Int64; end
 mutable struct TestNode; value::Int64; next::Union{TestNode, Nothing}; end
+# Phase 6.1 regression fixture: `node.next = nothing` (no branch, no PiNode) lowers
+# the RHS as GlobalRef(Main, :nothing) in typed IR, not a literal `nothing` —
+# confirmed via code_typed. setfield! on a Union{TestNode,Nothing} field must
+# recognize this form (is_nothing_value, unions.jl) and null the field with ITS OWN
+# concrete type (ref.null $TestNode), not the generic bottom `ref.null none`
+# (tracked as AnyRef — a concrete-struct field sink then rejects it with a
+# StackImbalanceError at struct_set!). Regression for the crash reproduced by
+# `MathOptInterface.Utilities.Model{Float64}()` (calls.jl compile_call! setfield!).
+# @noinline + top-level (matches _g1_objid below): inlined into a single closure,
+# Julia's SROA scalar-replaces the `next` field down to pure phi/dataflow and never
+# exercises the setfield!/getfield codegen this regresses; nested inside a @testset
+# it becomes a captured closure and the compiled export hits a JS-boundary
+# marshaling mismatch instead.
+@noinline function _wt_clear_next!(node::TestNode)
+    node.next = nothing
+    return node.next === nothing
+end
 struct TestPoint2D; x::Float64; y::Float64; end
 struct TestLine; p1::TestPoint2D; p2::TestPoint2D; end
 # WASMTARGET-FUZZ: structs with 128-bit fields — register as int128 struct ref
@@ -454,11 +523,34 @@ function _phase_owner(n::Int)
 end
 function _run_phases()
     println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
-    owner = _phase_owner(_WT_NSHARDS)
-    for (i, (name, pf)) in enumerate(_PHASES)
-        owner[i] == _WT_SHARD || continue
-        t = @elapsed pf()
-        println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+    # WT_PHASE=<substring> selector: run phases matching substring (case-insensitive), skip shard assignment
+    phase_filter = get(ENV, "WT_PHASE", "")
+    if phase_filter != ""
+        filter_lower = lowercase(phase_filter)
+        matches = Int[]
+        for (i, (name, _)) in enumerate(_PHASES)
+            occursin(filter_lower, lowercase(name)) && push!(matches, i)
+        end
+        if isempty(matches)
+            println("ERROR: No phases match WT_PHASE=\"$phase_filter\". Available phases:")
+            for (name, _) in _PHASES
+                println("  ", name)
+            end
+            exit(1)
+        end
+        for i in matches
+            name, pf = _PHASES[i]
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
+    else
+        # Normal sharded mode: use LPT bin-packing
+        owner = _phase_owner(_WT_NSHARDS)
+        for (i, (name, pf)) in enumerate(_PHASES)
+            owner[i] == _WT_SHARD || continue
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
     end
 end
 
@@ -1137,10 +1229,10 @@ begin
             # This lock makes any regression — the silent unwiring, a staged carve-out,
             # a new opt-out — impossible to land.
             WT = WasmTarget
-            lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock")
+            lb = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock", mod=WT.WasmModule())
             @test !hasfield(WT.InstrBuilder, :strict) # strictness is not configurable
             @test_throws WT.StackImbalanceError WT.num!(lb, WT.Opcode.I64_ADD)  # UNDERFLOW throws
-            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2")
+            lb2 = WT.InstrBuilder(WT.WasmValType[], WT.WasmValType[]; func_name="lock2", mod=WT.WasmModule())
             WT.i64_const!(lb2, 1)
             @test_throws WT.StackImbalanceError WT.num!(lb2, WT.Opcode.I32_EQZ)  # TYPE MISMATCH throws
             # ZERO opt-outs in the tree (no netting, no exceptions):
@@ -1159,45 +1251,49 @@ begin
         @testset "InstrBuilder (typed wasm builder, dart2wasm-style)" begin
             WT = WasmTarget
             # function-end balance: x*x+1 leaves exactly the one f64 result
-            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1")
+            b = WT.InstrBuilder(WT.WasmValType[WT.F64], WT.WasmValType[WT.F64]; func_name="sq1", mod=WT.WasmModule())
             WT.local_get!(b, 0); WT.local_get!(b, 0); WT.num!(b, WT.Opcode.F64_MUL)
             WT.f64_const!(b, 1.0); WT.num!(b, WT.Opcode.F64_ADD)
             @test WT.stack_height(b.v) == 1
             WT.end_block!(b)                       # balanced → no throw
             @test length(WT.builder_code(b)) > 0
             # strict imbalance throws at the emit site
-            b2 = WT.InstrBuilder(; func_name="bad")
+            b2 = WT.InstrBuilder(; func_name="bad", mod=WT.WasmModule())
             @test_throws WT.StackImbalanceError WT.num!(b2, WT.Opcode.I32_ADD)
             # GC type-directed effect: struct.new consumes its N fields, pushes (ref t)
-            b3 = WT.InstrBuilder(; func_name="sn")
+            m3 = WT.WasmModule()
+            sn = WT.add_struct_type!(m3, [WT.FieldType(WT.I32, true), WT.FieldType(WT.I64, true)])
+            b3 = WT.InstrBuilder(; func_name="sn", mod=m3)
             WT.i32_const!(b3, 0); WT.i64_const!(b3, 7)
-            WT.struct_new!(b3, 2, WT.WasmValType[WT.I32, WT.I64])
+            WT.struct_new!(b3, sn)
             @test WT.stack_height(b3.v) == 1 && !WT.has_errors(b3.v)
             # dart2wasm base-guard: cannot pop past a block boundary
-            b4 = WT.InstrBuilder(; func_name="bg")
+            b4 = WT.InstrBuilder(; func_name="bg", mod=WT.WasmModule())
             WT.block!(b4)
             @test_throws WT.StackImbalanceError WT.drop!(b4)
             # rich diagnostics carry the Julia-statement context
-            b5 = WT.InstrBuilder(; func_name="diag")
+            b5 = WT.InstrBuilder(; func_name="diag", mod=WT.WasmModule())
             WT.set_context!(b5, "stmt-X")
             err = try; WT.drop!(b5); nothing; catch e; e; end
             @test err isa WT.StackImbalanceError && occursin("stmt-X", sprint(showerror, err))
             # blocktype encoding: value-type/void immediates are SINGLE on-wire bytes
             # (regression guard — block!/if_!/loop! must NOT LEB-encode 0x40/0x7F)
-            bbt = WT.InstrBuilder(; func_name="bt"); WT.block!(bbt); WT.end_block!(bbt)
+            bbt = WT.InstrBuilder(; func_name="bt", mod=WT.WasmModule()); WT.block!(bbt); WT.end_block!(bbt)
             @test WT.builder_code(bbt) == UInt8[WT.Opcode.BLOCK, 0x40, WT.Opcode.END]
-            bbi = WT.InstrBuilder(; func_name="bti"); WT.i32_const!(bbi, 1)
-            WT.if_!(bbi, 0x7F; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0); WT.end_block!(bbi)
-            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00, WT.Opcode.END]
+            bbi = WT.InstrBuilder(; func_name="bti", mod=WT.WasmModule()); WT.i32_const!(bbi, 1)
+            WT.if_!(bbi; results=WT.WasmValType[WT.I32]); WT.i32_const!(bbi, 0)   # I32 encodes as 0x7F
+            WT.else_!(bbi); WT.i32_const!(bbi, 2); WT.end_block!(bbi)           # an if with a result has an else
+            @test WT.builder_code(bbi) == UInt8[WT.Opcode.I32_CONST, 0x01, WT.Opcode.IF, 0x7F, WT.Opcode.I32_CONST, 0x00,
+                                                WT.Opcode.ELSE, WT.Opcode.I32_CONST, 0x02, WT.Opcode.END]
             # instruction-IR ADT (dart2wasm ir/ layer): records typed instrs + symbolic disasm
             @test all(i -> i isa WT.InstrIR.WasmInstr, bbi.instrs)
-            @test WT.builder_disasm(bbi) == ["i32.const 1", "if 127", "i32.const 0", "end"]
+            @test WT.builder_disasm(bbi) == ["i32.const 1", "if I32", "i32.const 0", "else", "i32.const 2", "end"]
         end
 
         @testset "InstrBuilder migration invariant (no raw-emission regression)" begin
             # All codegen function-body emission is migrated onto the typed InstrBuilder.
             # The residual raw push!(bytes, Opcode.*) sites are out-of-scope module-section
-            # module-section serialization and encode_block_type + intentional
+            # module-section serialization and the block-type encoding + intentional
             # byte-inspecting/byte-exact local buffers. Lock the invariant so new code can't
             # silently re-introduce blind raw emission — it must go through the builder.
             cgdir = joinpath(dirname(pathof(WasmTarget)), "codegen")
@@ -1288,15 +1384,11 @@ begin
             ]
 
             # Test that the harness can execute this binary
-            if NODE_CMD !== nothing
-                result = run_wasm(hardcoded_wasm, "add", Int32(2), Int32(3))
-                @test result == 5
+            result = run_wasm(hardcoded_wasm, "add", Int32(2), Int32(3))
+            @test result == 5
 
-                result = run_wasm(hardcoded_wasm, "add", Int32(100), Int32(-50))
-                @test result == 50
-            else
-                @warn "Skipping Wasm execution tests (Node.js not available)"
-            end
+            result = run_wasm(hardcoded_wasm, "add", Int32(100), Int32(-50))
+            @test result == 50
         end
 
         @testset "Hardcoded Wasm Binary - i64.add" begin
@@ -1345,18 +1437,14 @@ begin
                 0x0B,
             ]
 
-            if NODE_CMD !== nothing
-                result = run_wasm(hardcoded_wasm_i64, "add64", Int64(10), Int64(20))
-                @test result == 30
+            result = run_wasm(hardcoded_wasm_i64, "add64", Int64(10), Int64(20))
+            @test result == 30
 
-                # Test with large numbers that would overflow JS Number
-                large_a = Int64(9007199254740993)  # 2^53 + 1
-                large_b = Int64(1)
-                result = run_wasm(hardcoded_wasm_i64, "add64", large_a, large_b)
-                @test result == large_a + large_b
-            else
-                @warn "Skipping Wasm execution tests (Node.js not available)"
-            end
+            # Test with large numbers that would overflow JS Number
+            large_a = Int64(9007199254740993)  # 2^53 + 1
+            large_b = Int64(1)
+            result = run_wasm(hardcoded_wasm_i64, "add64", large_a, large_b)
+            @test result == large_a + large_b
         end
     end
 
@@ -1381,7 +1469,7 @@ begin
                 [WasmTarget.I32, WasmTarget.I32],
                 [WasmTarget.I32],
                 WasmTarget.NumType[],
-                body
+                body; name="add"
             )
 
             WasmTarget.add_export!(mod, "add", 0, func_idx)
@@ -1389,10 +1477,8 @@ begin
             wasm_bytes = WasmTarget.to_bytes(mod)
 
             # Verify we can execute it
-            if NODE_CMD !== nothing
-                result = run_wasm(wasm_bytes, "add", Int32(7), Int32(8))
-                @test result == 15
-            end
+            result = run_wasm(wasm_bytes, "add", Int32(7), Int32(8))
+            @test result == 15
         end
 
         @testset "WasmModule - i64.add generation" begin
@@ -1410,17 +1496,15 @@ begin
                 [WasmTarget.I64, WasmTarget.I64],
                 [WasmTarget.I64],
                 WasmTarget.NumType[],
-                body
+                body; name="add64"
             )
 
             WasmTarget.add_export!(mod, "add64", 0, func_idx)
 
             wasm_bytes = WasmTarget.to_bytes(mod)
 
-            if NODE_CMD !== nothing
-                result = run_wasm(wasm_bytes, "add64", Int64(100), Int64(200))
-                @test result == 300
-            end
+            result = run_wasm(wasm_bytes, "add64", Int64(100), Int64(200))
+            @test result == 300
         end
 
         @testset "WasmModule - Multiple functions" begin
@@ -1435,7 +1519,7 @@ begin
             ]
             add_idx = WasmTarget.add_function!(
                 mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], add_body
+                WasmTarget.NumType[], add_body; name="add"
             )
 
             # Subtract function
@@ -1447,7 +1531,7 @@ begin
             ]
             sub_idx = WasmTarget.add_function!(
                 mod, [WasmTarget.I32, WasmTarget.I32], [WasmTarget.I32],
-                WasmTarget.NumType[], sub_body
+                WasmTarget.NumType[], sub_body; name="sub"
             )
 
             WasmTarget.add_export!(mod, "add", 0, add_idx)
@@ -1455,10 +1539,8 @@ begin
 
             wasm_bytes = WasmTarget.to_bytes(mod)
 
-            if NODE_CMD !== nothing
-                @test run_wasm(wasm_bytes, "add", Int32(10), Int32(5)) == 15
-                @test run_wasm(wasm_bytes, "sub", Int32(10), Int32(5)) == 5
-            end
+            @test run_wasm(wasm_bytes, "add", Int32(10), Int32(5)) == 15
+            @test run_wasm(wasm_bytes, "sub", Int32(10), Int32(5)) == 5
         end
     end
 
@@ -1471,26 +1553,22 @@ begin
             # Define a simple function
             simple_add(a, b) = a + b
 
-            if NODE_CMD !== nothing
-                # Compile and run
-                wasm_bytes = WasmTarget.compile(simple_add, (Int64, Int64))
+            # Compile and run
+            wasm_bytes = WasmTarget.compile(simple_add, (Int64, Int64))
 
-                # Debug: dump the bytes
-                # dump_wasm(wasm_bytes, "/tmp/simple_add.wasm")
+            # Debug: dump the bytes
+            # dump_wasm(wasm_bytes, "/tmp/simple_add.wasm")
 
-                result = run_wasm(wasm_bytes, "simple_add", Int64(5), Int64(7))
-                @test result == 12
-            end
+            result = run_wasm(wasm_bytes, "simple_add", Int64(5), Int64(7))
+            @test result == 12
         end
 
         @testset "TDD Macro - @test_compile" begin
             my_add(x, y) = x + y
 
-            if NODE_CMD !== nothing
-                @test_compile my_add(Int64(10), Int64(20))
-                @test_compile my_add(Int64(-5), Int64(5))
-                @test_compile my_add(Int64(0), Int64(0))
-            end
+            @test_compile my_add(Int64(10), Int64(20))
+            @test_compile my_add(Int64(-5), Int64(5))
+            @test_compile my_add(Int64(0), Int64(0))
         end
 
     end
@@ -1508,56 +1586,50 @@ begin
             is_lte(x, y) = x <= y
             is_gte(x, y) = x >= y
 
-            if NODE_CMD !== nothing
-                # Test is_positive
-                @test_compile is_positive(Int64(5))
-                @test_compile is_positive(Int64(-5))
-                @test_compile is_positive(Int64(0))
+            # Test is_positive
+            @test_compile is_positive(Int64(5))
+            @test_compile is_positive(Int64(-5))
+            @test_compile is_positive(Int64(0))
 
-                # Test is_negative
-                @test_compile is_negative(Int64(5))
-                @test_compile is_negative(Int64(-5))
+            # Test is_negative
+            @test_compile is_negative(Int64(5))
+            @test_compile is_negative(Int64(-5))
 
-                # Test is_zero
-                @test_compile is_zero(Int64(0))
-                @test_compile is_zero(Int64(1))
+            # Test is_zero
+            @test_compile is_zero(Int64(0))
+            @test_compile is_zero(Int64(1))
 
-                # Test is_not_zero
-                @test_compile is_not_zero(Int64(0))
-                @test_compile is_not_zero(Int64(42))
+            # Test is_not_zero
+            @test_compile is_not_zero(Int64(0))
+            @test_compile is_not_zero(Int64(42))
 
-                # Test is_lte and is_gte
-                @test_compile is_lte(Int64(3), Int64(5))
-                @test_compile is_lte(Int64(5), Int64(5))
-                @test_compile is_lte(Int64(7), Int64(5))
-                @test_compile is_gte(Int64(7), Int64(5))
-                @test_compile is_gte(Int64(5), Int64(5))
-            end
+            # Test is_lte and is_gte
+            @test_compile is_lte(Int64(3), Int64(5))
+            @test_compile is_lte(Int64(5), Int64(5))
+            @test_compile is_lte(Int64(7), Int64(5))
+            @test_compile is_gte(Int64(7), Int64(5))
+            @test_compile is_gte(Int64(5), Int64(5))
         end
 
         @testset "Simple conditional - ternary" begin
             # x < 0 ? -x : x  (absolute value)
             my_abs(x) = x < 0 ? -x : x
 
-            if NODE_CMD !== nothing
-                @test_compile my_abs(Int64(5))
-                @test_compile my_abs(Int64(-5))
-                @test_compile my_abs(Int64(0))
-            end
+            @test_compile my_abs(Int64(5))
+            @test_compile my_abs(Int64(-5))
+            @test_compile my_abs(Int64(0))
         end
 
         @testset "Max/Min functions" begin
             my_max(a, b) = a > b ? a : b
             my_min(a, b) = a < b ? a : b
 
-            if NODE_CMD !== nothing
-                @test_compile my_max(Int64(10), Int64(20))
-                @test_compile my_max(Int64(20), Int64(10))
-                @test_compile my_max(Int64(5), Int64(5))
+            @test_compile my_max(Int64(10), Int64(20))
+            @test_compile my_max(Int64(20), Int64(10))
+            @test_compile my_max(Int64(5), Int64(5))
 
-                @test_compile my_min(Int64(10), Int64(20))
-                @test_compile my_min(Int64(20), Int64(10))
-            end
+            @test_compile my_min(Int64(10), Int64(20))
+            @test_compile my_min(Int64(20), Int64(10))
         end
 
         @testset "If-else blocks" begin
@@ -1611,34 +1683,28 @@ begin
             my_sub(a, b) = a - b
             my_mul(a, b) = a * b
 
-            if NODE_CMD !== nothing
-                @test_compile my_sub(Int64(10), Int64(3))
-                @test_compile my_sub(Int64(3), Int64(10))
-                @test_compile my_mul(Int64(6), Int64(7))
-                @test_compile my_mul(Int64(-3), Int64(4))
-            end
+            @test_compile my_sub(Int64(10), Int64(3))
+            @test_compile my_sub(Int64(3), Int64(10))
+            @test_compile my_mul(Int64(6), Int64(7))
+            @test_compile my_mul(Int64(-3), Int64(4))
         end
 
         @testset "Division and Remainder" begin
             my_div(a, b) = a ÷ b  # Integer division
             my_rem(a, b) = a % b  # Remainder
 
-            if NODE_CMD !== nothing
-                @test_compile my_div(Int64(10), Int64(3))
-                @test_compile my_div(Int64(20), Int64(4))
-                @test_compile my_rem(Int64(10), Int64(3))
-                @test_compile my_rem(Int64(20), Int64(4))
-            end
+            @test_compile my_div(Int64(10), Int64(3))
+            @test_compile my_div(Int64(20), Int64(4))
+            @test_compile my_rem(Int64(10), Int64(3))
+            @test_compile my_rem(Int64(20), Int64(4))
         end
 
         @testset "Negation" begin
             my_neg(x) = -x
 
-            if NODE_CMD !== nothing
-                @test_compile my_neg(Int64(5))
-                @test_compile my_neg(Int64(-5))
-                @test_compile my_neg(Int64(0))
-            end
+            @test_compile my_neg(Int64(5))
+            @test_compile my_neg(Int64(-5))
+            @test_compile my_neg(Int64(0))
         end
 
         @testset "Bitwise operations" begin
@@ -1647,12 +1713,10 @@ begin
             my_xor(a, b) = a ⊻ b
             my_not(x) = ~x
 
-            if NODE_CMD !== nothing
-                @test_compile my_and(Int64(0b1100), Int64(0b1010))
-                @test_compile my_or(Int64(0b1100), Int64(0b1010))
-                @test_compile my_xor(Int64(0b1100), Int64(0b1010))
-                @test_compile my_not(Int64(0))
-            end
+            @test_compile my_and(Int64(0b1100), Int64(0b1010))
+            @test_compile my_or(Int64(0b1100), Int64(0b1010))
+            @test_compile my_xor(Int64(0b1100), Int64(0b1010))
+            @test_compile my_not(Int64(0))
         end
 
         @testset "Shift operations" begin
@@ -1682,31 +1746,25 @@ begin
         @testset "Int32 to Int64" begin
             widen32(x::Int32) = Int64(x)
 
-            if NODE_CMD !== nothing
-                @test_compile widen32(Int32(42))
-                @test_compile widen32(Int32(-42))
-                @test_compile widen32(Int32(0))
-            end
+            @test_compile widen32(Int32(42))
+            @test_compile widen32(Int32(-42))
+            @test_compile widen32(Int32(0))
         end
 
         @testset "Int64 to Int32 (truncate)" begin
             narrow64(x::Int64) = Int32(x % Int32)
 
-            if NODE_CMD !== nothing
-                @test_compile narrow64(Int64(42))
-                @test_compile narrow64(Int64(-42))
-            end
+            @test_compile narrow64(Int64(42))
+            @test_compile narrow64(Int64(-42))
         end
 
         @testset "Int to Float" begin
             int_to_f64(x::Int64) = Float64(x)
             int_to_f32(x::Int32) = Float32(x)
 
-            if NODE_CMD !== nothing
-                @test_compile int_to_f64(Int64(42))
-                @test_compile int_to_f64(Int64(-42))
-                @test_compile int_to_f32(Int32(42))
-            end
+            @test_compile int_to_f64(Int64(42))
+            @test_compile int_to_f64(Int64(-42))
+            @test_compile int_to_f32(Int32(42))
         end
 
         @testset "Float arithmetic" begin
@@ -1715,12 +1773,10 @@ begin
             sub_f64(a::Float64, b::Float64) = a - b
             div_f64(a::Float64, b::Float64) = a / b
 
-            if NODE_CMD !== nothing
-                @test_compile add_f64(1.5, 2.5)
-                @test_compile mul_f64(3.0, 4.0)
-                @test_compile sub_f64(10.0, 3.0)
-                @test_compile div_f64(10.0, 4.0)
-            end
+            @test_compile add_f64(1.5, 2.5)
+            @test_compile mul_f64(3.0, 4.0)
+            @test_compile sub_f64(10.0, 3.0)
+            @test_compile div_f64(10.0, 4.0)
         end
 
     end
@@ -1776,124 +1832,118 @@ begin
         end
 
         @testset "Hand-crafted: Struct creation and field access" begin
-            if NODE_CMD !== nothing
 
-                # Create a module that:
-                # 1. Defines a struct type { i32, i32 }
-                # 2. Has a function that creates a struct and reads field 0
+            # Create a module that:
+            # 1. Defines a struct type { i32, i32 }
+            # 2. Has a function that creates a struct and reads field 0
 
-                mod = WasmModule()
+            mod = WasmModule()
 
-                # Add struct type: { field0: i32, field1: i32 }
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            # Add struct type: { field0: i32, field1: i32 }
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                # Function: () -> i32
-                # Creates struct with values (42, 99), returns field 0
-                body = UInt8[]
+            # Function: () -> i32
+            # Creates struct with values (42, 99), returns field 0
+            body = UInt8[]
 
-                # Push field values for struct.new (i32.const uses signed LEB128!)
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))  # field 0 value
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(99))  # field 1 value
+            # Push field values for struct.new (i32.const uses signed LEB128!)
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))  # field 0 value
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(99))  # field 1 value
 
-                # struct.new $type
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            # struct.new $type
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # struct.get $type $field
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(0))  # field index
+            # struct.get $type $field
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(0))  # field index
 
-                # End function
-                push!(body, Opcode.END)
+            # End function
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "get_field0", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field0")
+            add_export!(mod, "get_field0", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                result = run_wasm(wasm_bytes, "get_field0")
+            wasm_bytes = to_bytes(mod)
+            result = run_wasm(wasm_bytes, "get_field0")
 
-                @test result == 42
-            end
+            @test result == 42
         end
 
         @testset "Hand-crafted: Struct field 1 access" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            mod = WasmModule()
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create struct with (42, 99) - use signed LEB128 for i32.const
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(99))
+            # Create struct with (42, 99) - use signed LEB128 for i32.const
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(99))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # Get field 1
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(1))  # field 1
+            # Get field 1
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(1))  # field 1
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "get_field1", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="get_field1")
+            add_export!(mod, "get_field1", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                result = run_wasm(wasm_bytes, "get_field1")
+            wasm_bytes = to_bytes(mod)
+            result = run_wasm(wasm_bytes, "get_field1")
 
-                @test result == 99
-            end
+            @test result == 99
         end
 
         @testset "Hand-crafted: Struct with parameters" begin
-            if NODE_CMD !== nothing
 
-                # Function: (a: i32, b: i32) -> i32
-                # Creates struct(a, b), returns field y (b)
-                mod = WasmModule()
-                struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
+            # Function: (a: i32, b: i32) -> i32
+            # Creates struct(a, b), returns field y (b)
+            mod = WasmModule()
+            struct_type_idx = add_struct_type!(mod, [FieldType(I32, true), FieldType(I32, true)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push function args for struct
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)  # arg a
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)  # arg b
+            # Push function args for struct
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)  # arg a
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)  # arg b
 
-                # struct.new
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
+            # struct.new
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
 
-                # struct.get field 1 (y)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(struct_type_idx))
-                append!(body, encode_leb128_unsigned(1))
+            # struct.get field 1 (y)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(struct_type_idx))
+            append!(body, encode_leb128_unsigned(1))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "create_and_get_y", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="create_and_get_y")
+            add_export!(mod, "create_and_get_y", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
+            wasm_bytes = to_bytes(mod)
 
-                @test run_wasm(wasm_bytes, "create_and_get_y", Int32(10), Int32(20)) == 20
-                @test run_wasm(wasm_bytes, "create_and_get_y", Int32(100), Int32(200)) == 200
-            end
+            @test run_wasm(wasm_bytes, "create_and_get_y", Int32(10), Int32(20)) == 20
+            @test run_wasm(wasm_bytes, "create_and_get_y", Int32(100), Int32(200)) == 200
         end
 
     end
@@ -1904,114 +1954,108 @@ begin
     @pphase "Phase 8: Tuples" begin
 
         @testset "Hand-crafted: Tuple creation and access" begin
-            if NODE_CMD !== nothing
 
-                # Function: (a: i32, b: i32) -> i32
-                # Creates tuple (a, b), returns first element
-                mod = WasmModule()
+            # Function: (a: i32, b: i32) -> i32
+            # Creates tuple (a, b), returns first element
+            mod = WasmModule()
 
-                # Tuple is represented as struct { field0: i32, field1: i32 }
-                tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
+            # Tuple is represented as struct { field0: i32, field1: i32 }
+            tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push tuple elements
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)
+            # Push tuple elements
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)
 
-                # struct.new
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            # struct.new
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                # Get element 0
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(0))
+            # Get element 0
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(0))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_first", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_first")
+            add_export!(mod, "tuple_first", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_first", Int32(10), Int32(20)) == 10
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_first", Int32(10), Int32(20)) == 10
         end
 
         @testset "Hand-crafted: Tuple second element" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
+            mod = WasmModule()
+            tuple_type_idx = add_struct_type!(mod, [FieldType(I32, false), FieldType(I32, false)])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x00)
-                push!(body, Opcode.LOCAL_GET)
-                push!(body, 0x01)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x00)
+            push!(body, Opcode.LOCAL_GET)
+            push!(body, 0x01)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                # Get element 1 (second)
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(1))
+            # Get element 1 (second)
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(1))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_second", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32, I32], NumType[I32], NumType[], body; name="tuple_second")
+            add_export!(mod, "tuple_second", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_second", Int32(10), Int32(20)) == 20
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_second", Int32(10), Int32(20)) == 20
         end
 
         @testset "Hand-crafted: 3-element tuple" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
-                # Tuple{Int32, Int32, Int32}
-                tuple_type_idx = add_struct_type!(mod, [
-                    FieldType(I32, false),
-                    FieldType(I32, false),
-                    FieldType(I32, false)
-                ])
+            mod = WasmModule()
+            # Tuple{Int32, Int32, Int32}
+            tuple_type_idx = add_struct_type!(mod, [
+                FieldType(I32, false),
+                FieldType(I32, false),
+                FieldType(I32, false)
+            ])
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create tuple (10, 20, 30), return third element
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(10))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(20))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(30))
+            # Create tuple (10, 20, 30), return third element
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(10))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(20))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(30))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_NEW)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_NEW)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.STRUCT_GET)
-                append!(body, encode_leb128_unsigned(tuple_type_idx))
-                append!(body, encode_leb128_unsigned(2))  # third element
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.STRUCT_GET)
+            append!(body, encode_leb128_unsigned(tuple_type_idx))
+            append!(body, encode_leb128_unsigned(2))  # third element
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "tuple_third", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="tuple_third")
+            add_export!(mod, "tuple_third", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "tuple_third") == 30
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "tuple_third") == 30
         end
 
     end
@@ -2033,113 +2077,107 @@ begin
         end
 
         @testset "Hand-crafted: Array length" begin
-            if NODE_CMD !== nothing
 
-                # Function: () -> i32
-                # Creates array of length 5, returns the length
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Function: () -> i32
+            # Creates array of length 5, returns the length
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create array with init value 0 and length 5
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(0))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(5))
+            # Create array with init value 0 and length 5
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(0))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(5))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                # Get array length
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_LEN)
+            # Get array length
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_LEN)
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_len", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_len")
+            add_export!(mod, "arr_len", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_len") == 5
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_len") == 5
         end
 
         @testset "Hand-crafted: Array get element" begin
-            if NODE_CMD !== nothing
 
-                # Create array with init value 42, get element at index 0
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Create array with init value 42, get element at index 0
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Create array with init value 42 and length 3
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(42))  # all elements will be 42
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(3))
+            # Create array with init value 42 and length 3
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(42))  # all elements will be 42
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(3))
 
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                # Get element at index 1
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(1))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_GET)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            # Get element at index 1
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(1))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_GET)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_get", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_get")
+            add_export!(mod, "arr_get", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_get") == 42
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_get") == 42
         end
 
         @testset "Hand-crafted: Array new_fixed" begin
-            if NODE_CMD !== nothing
 
-                # Create array with fixed elements [10, 20, 30], get middle element
-                mod = WasmModule()
-                arr_type_idx = add_array_type!(mod, I32, true)
+            # Create array with fixed elements [10, 20, 30], get middle element
+            mod = WasmModule()
+            arr_type_idx = add_array_type!(mod, I32, true)
 
-                body = UInt8[]
+            body = UInt8[]
 
-                # Push elements for array.new_fixed
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(10))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(20))
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(30))
+            # Push elements for array.new_fixed
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(10))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(20))
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(30))
 
-                # array.new_fixed $type $count
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_NEW_FIXED)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
-                append!(body, encode_leb128_unsigned(3))  # count
+            # array.new_fixed $type $count
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_NEW_FIXED)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
+            append!(body, encode_leb128_unsigned(3))  # count
 
-                # Get element at index 1 (should be 20)
-                push!(body, Opcode.I32_CONST)
-                append!(body, encode_leb128_signed(1))
-                push!(body, Opcode.GC_PREFIX)
-                push!(body, Opcode.ARRAY_GET)
-                append!(body, encode_leb128_unsigned(arr_type_idx))
+            # Get element at index 1 (should be 20)
+            push!(body, Opcode.I32_CONST)
+            append!(body, encode_leb128_signed(1))
+            push!(body, Opcode.GC_PREFIX)
+            push!(body, Opcode.ARRAY_GET)
+            append!(body, encode_leb128_unsigned(arr_type_idx))
 
-                push!(body, Opcode.END)
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body)
-                add_export!(mod, "arr_fixed_get", 0, func_idx)
+            func_idx = add_function!(mod, NumType[], NumType[I32], NumType[], body; name="arr_fixed_get")
+            add_export!(mod, "arr_fixed_get", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
-                @test run_wasm(wasm_bytes, "arr_fixed_get") == 20
-            end
+            wasm_bytes = to_bytes(mod)
+            @test run_wasm(wasm_bytes, "arr_fixed_get") == 20
         end
 
     end
@@ -2162,7 +2200,7 @@ begin
                 0x10, 0x00,  # call 0 (the imported function)
                 0x0B         # end
             ]
-            func_idx = add_function!(mod, NumType[I32], NumType[], NumType[], body)
+            func_idx = add_function!(mod, NumType[I32], NumType[], NumType[], body; name="test")
             # func_idx should be 1 (after the imported function)
             @test func_idx == 1
 
@@ -2174,33 +2212,31 @@ begin
         end
 
         @testset "Execute: Import and call JavaScript function" begin
-            if NODE_CMD !== nothing
 
-                mod = WasmModule()
+            mod = WasmModule()
 
-                # Import: env.double(i32) -> i32
-                import_idx = add_import!(mod, "env", "double_it", NumType[I32], NumType[I32])
+            # Import: env.double(i32) -> i32
+            import_idx = add_import!(mod, "env", "double_it", NumType[I32], NumType[I32])
 
-                # Local function: (param i32) -> i32
-                # Calls the imported double_it function
-                body = UInt8[]
-                push!(body, Opcode.LOCAL_GET)
-                append!(body, encode_leb128_unsigned(0))
-                push!(body, Opcode.CALL)
-                append!(body, encode_leb128_unsigned(0))  # call import at index 0
-                push!(body, Opcode.END)
+            # Local function: (param i32) -> i32
+            # Calls the imported double_it function
+            body = UInt8[]
+            push!(body, Opcode.LOCAL_GET)
+            append!(body, encode_leb128_unsigned(0))
+            push!(body, Opcode.CALL)
+            append!(body, encode_leb128_unsigned(0))  # call import at index 0
+            push!(body, Opcode.END)
 
-                func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body)
-                add_export!(mod, "call_double", 0, func_idx)
+            func_idx = add_function!(mod, NumType[I32], NumType[I32], NumType[], body; name="call_double")
+            add_export!(mod, "call_double", 0, func_idx)
 
-                wasm_bytes = to_bytes(mod)
+            wasm_bytes = to_bytes(mod)
 
-                # Run with imports
-                result = run_wasm_with_imports(wasm_bytes, "call_double",
-                    Dict("env" => Dict("double_it" => "(x) => x * 2")),
-                    Int32(21))
-                @test result == 42
-            end
+            # Run with imports
+            result = run_wasm_with_imports(wasm_bytes, "call_double",
+                Dict("env" => Dict("double_it" => "(x) => x * 2")),
+                Int32(21))
+            @test result == 42
         end
 
     end
@@ -2336,18 +2372,18 @@ begin
             wasm_bytes = WasmTarget.compile(test_float_add, (Float64, Float64))
             @test length(wasm_bytes) > 0
 
-            @test run_wasm(wasm_bytes, "test_float_add", 1.5, 2.5) ≈ 4.0
-            @test run_wasm(wasm_bytes, "test_float_add", -1.0, 1.0) ≈ 0.0
-            @test run_wasm(wasm_bytes, "test_float_add", 100.5, 200.5) ≈ 301.0
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", 1.5, 2.5), 4.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", -1.0, 1.0), 0.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_add", 100.5, 200.5), 301.0)
         end
 
         @testset "Float multiplication" begin
             wasm_bytes = WasmTarget.compile(test_float_mul, (Float64, Float64))
             @test length(wasm_bytes) > 0
 
-            @test run_wasm(wasm_bytes, "test_float_mul", 2.0, 3.0) ≈ 6.0
-            @test run_wasm(wasm_bytes, "test_float_mul", -2.0, 4.0) ≈ -8.0
-            @test run_wasm(wasm_bytes, "test_float_mul", 0.5, 0.5) ≈ 0.25
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", 2.0, 3.0), 6.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", -2.0, 4.0), -8.0)
+            @test isequal(run_wasm(wasm_bytes, "test_float_mul", 0.5, 0.5), 0.25)
         end
 
         @testset "Integer branching" begin
@@ -2450,10 +2486,8 @@ begin
         @testset "String literal length — i32.const signed-LEB" begin
             wasm_bytes = WasmTarget.compile(str_mid_literal, (Int64,))
             @test validate_wasm(wasm_bytes)
-            if NODE_CMD !== nothing
-                for xv in (Int64(5), Int64(42), Int64(123456))
-                    @test run_wasm(wasm_bytes, "str_mid_literal", xv) == str_mid_literal(xv)
-                end
+            for xv in (Int64(5), Int64(42), Int64(123456))
+                @test run_wasm(wasm_bytes, "str_mid_literal", xv) == str_mid_literal(xv)
             end
         end
 
@@ -2468,371 +2502,8 @@ begin
             @test validate_wasm(wasm_bytes)
         end
 
-        # String hashing for dict keys
-        @testset "String hash" begin
-            function test_str_hash()::Int32
-                return str_hash("hello")
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_hash, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            # Verify hash matches Julia's fallback
-            @test run_wasm(wasm_bytes, "test_str_hash") == str_hash("hello")
-        end
-
-        @testset "String hash consistency" begin
-            function test_hash_diff()::Int32
-                h1 = str_hash("hello")
-                h2 = str_hash("world")
-                if h1 == h2
-                    return Int32(0)
-                else
-                    return Int32(1)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_hash_diff, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_hash_diff") == 1  # Different strings have different hashes
-        end
-
-        # ======================================================================
-        # BROWSER-010: New String Operations
-        # ======================================================================
-
-        @testset "str_find - basic search" begin
-            function test_str_find_basic()::Int32
-                return str_find("hello world", "world")
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_find_basic, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_find_basic") == 7  # "world" starts at position 7
-        end
-
-        @testset "str_find - not found" begin
-            function test_str_find_notfound()::Int32
-                return str_find("hello world", "xyz")
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_find_notfound, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_find_notfound") == 0  # Not found returns 0
-        end
-
-        @testset "str_contains - found" begin
-            function test_str_contains_found()::Int32
-                if str_contains("hello world", "world")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_contains_found, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_contains_found") == 1
-        end
-
-        @testset "str_contains - not found" begin
-            function test_str_contains_notfound()::Int32
-                if str_contains("hello world", "xyz")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_contains_notfound, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_contains_notfound") == 0
-        end
-
-        @testset "str_startswith - true case" begin
-            function test_str_startswith_true()::Int32
-                if str_startswith("hello world", "hello")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_startswith_true, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_startswith_true") == 1
-        end
-
-        @testset "str_startswith - false case" begin
-            function test_str_startswith_false()::Int32
-                if str_startswith("hello world", "world")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_startswith_false, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_startswith_false") == 0
-        end
-
-        @testset "str_endswith - true case" begin
-            function test_str_endswith_true()::Int32
-                if str_endswith("hello world", "world")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_endswith_true, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_endswith_true") == 1
-        end
-
-        @testset "str_endswith - false case" begin
-            function test_str_endswith_false()::Int32
-                if str_endswith("hello world", "hello")
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_endswith_false, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_endswith_false") == 0
-        end
-
         # ========================================================================
-        # BROWSER-010: str_uppercase, str_lowercase, str_trim
-        # ========================================================================
-
-        @testset "str_uppercase - basic" begin
-            function test_str_uppercase()::Int32
-                result = str_uppercase("hello")
-                # Check first char is 'H' (72)
-                return str_char(result, Int32(1))
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_uppercase, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_uppercase") == 72  # 'H'
-        end
-
-        @testset "str_uppercase - mixed case" begin
-            function test_str_uppercase_mixed()::Int32
-                result = str_uppercase("HeLLo WoRLD")
-                # Check length is preserved
-                len = str_len(result)
-                # Check some characters
-                first = str_char(result, Int32(1))  # 'H' = 72
-                fifth = str_char(result, Int32(5))  # 'O' = 79
-                space = str_char(result, Int32(6))  # ' ' = 32
-                last = str_char(result, Int32(11)) # 'D' = 68
-                # Return sum as verification
-                return first + fifth + space + last
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_uppercase_mixed, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_uppercase_mixed") == 72 + 79 + 32 + 68  # 251
-        end
-
-        @testset "str_lowercase - basic" begin
-            function test_str_lowercase()::Int32
-                result = str_lowercase("HELLO")
-                # Check first char is 'h' (104)
-                return str_char(result, Int32(1))
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_lowercase, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_lowercase") == 104  # 'h'
-        end
-
-        @testset "str_lowercase - mixed case" begin
-            function test_str_lowercase_mixed()::Int32
-                result = str_lowercase("HeLLo WoRLD")
-                # Check length is preserved
-                len = str_len(result)
-                # Check some characters
-                first = str_char(result, Int32(1))  # 'h' = 104
-                fifth = str_char(result, Int32(5))  # 'o' = 111
-                space = str_char(result, Int32(6))  # ' ' = 32
-                last = str_char(result, Int32(11)) # 'd' = 100
-                # Return sum as verification
-                return first + fifth + space + last
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_lowercase_mixed, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_lowercase_mixed") == 104 + 111 + 32 + 100  # 347
-        end
-
-        @testset "str_trim - leading and trailing spaces" begin
-            function test_str_trim_both()::Int32
-                result = str_trim("  hello  ")
-                # Length should be 5
-                return str_len(result)
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_trim_both, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_trim_both") == 5
-        end
-
-        @testset "str_trim - content preserved" begin
-            function test_str_trim_content()::Int32
-                result = str_trim("  hello  ")
-                # First char should be 'h' (104)
-                return str_char(result, Int32(1))
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_trim_content, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_trim_content") == 104  # 'h'
-        end
-
-        @testset "str_trim - no whitespace" begin
-            function test_str_trim_no_ws()::Int32
-                result = str_trim("hello")
-                # Length should remain 5
-                return str_len(result)
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_trim_no_ws, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_trim_no_ws") == 5
-        end
-
-        @testset "str_trim - all whitespace" begin
-            function test_str_trim_all_ws()::Int32
-                result = str_trim("   ")
-                # Length should be 0
-                return str_len(result)
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_trim_all_ws, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_trim_all_ws") == 0
-        end
-
-        @testset "str_trim - tabs and newlines" begin
-            function test_str_trim_special()::Int32
-                # "\thello\n" - tab at start, newline at end
-                s = str_new(Int32(7))
-                str_setchar!(s, Int32(1), Int32(9))   # tab
-                str_setchar!(s, Int32(2), Int32(104)) # h
-                str_setchar!(s, Int32(3), Int32(101)) # e
-                str_setchar!(s, Int32(4), Int32(108)) # l
-                str_setchar!(s, Int32(5), Int32(108)) # l
-                str_setchar!(s, Int32(6), Int32(111)) # o
-                str_setchar!(s, Int32(7), Int32(10))  # newline
-                result = str_trim(s)
-                # Length should be 5
-                return str_len(result)
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_trim_special, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_trim_special") == 5
-        end
-
-        # BROWSER-010: Dedicated tests for str_char and str_substr
-
-        @testset "str_char - get character at index" begin
-            function test_str_char_basic()::Int32
-                s = "hello"
-                return str_char(s, Int32(1))  # 'h' = 104
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_char_basic, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_char_basic") == 104  # 'h'
-        end
-
-        @testset "str_char - multiple positions" begin
-            function test_str_char_multi()::Int32
-                s = "hello"
-                # Sum first and last character: 'h'(104) + 'o'(111) = 215
-                return str_char(s, Int32(1)) + str_char(s, Int32(5))
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_char_multi, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_char_multi") == 215
-        end
-
-        @testset "str_substr - extract substring" begin
-            function test_str_substr_basic()::Int32
-                s = "hello world"
-                sub = str_substr(s, Int32(7), Int32(5))  # "world"
-                return str_len(sub)
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_substr_basic, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_substr_basic") == 5
-        end
-
-        @testset "str_substr - verify content" begin
-            function test_str_substr_content()::Int32
-                s = "hello world"
-                sub = str_substr(s, Int32(7), Int32(5))  # "world"
-                # Return first char of "world" = 'w' = 119
-                return str_char(sub, Int32(1))
-            end
-
-            wasm_bytes = WasmTarget.compile(test_str_substr_content, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_str_substr_content") == 119  # 'w'
-        end
-
-        @testset "str_char - character comparison for tokenizer" begin
-            # This test verifies the pattern used in tokenizer
-            function test_char_comparison()::Int32
-                s = "hello"
-                c = str_char(s, Int32(1))
-                # Compare character to ASCII code
-                if c == Int32(104)  # 'h'
-                    return Int32(1)
-                else
-                    return Int32(0)
-                end
-            end
-
-            wasm_bytes = WasmTarget.compile(test_char_comparison, ())
-            @test length(wasm_bytes) > 0
-            @test validate_wasm(wasm_bytes)
-            @test run_wasm(wasm_bytes, "test_char_comparison") == 1
-        end
-
-        # ========================================================================
-        # Julia Base string dispatch → str_* intrinsics
+        # Julia Base string dispatch (WASM_METHOD_TABLE overlays, interpreter.jl)
         # ========================================================================
 
         @testset "Base.startswith dispatch" begin
@@ -2922,7 +2593,7 @@ begin
         @testset "Base.lowercase dispatch" begin
             function test_base_lowercase()::Int32
                 result = lowercase("HELLO")
-                return str_char(result, Int32(1))
+                return Int32(codeunit(result, 1))
             end
             wasm_bytes = WasmTarget.compile(test_base_lowercase, ())
             @test length(wasm_bytes) > 0
@@ -2933,7 +2604,7 @@ begin
         @testset "Base.uppercase dispatch" begin
             function test_base_uppercase()::Int32
                 result = uppercase("hello")
-                return str_char(result, Int32(1))
+                return Int32(codeunit(result, 1))
             end
             wasm_bytes = WasmTarget.compile(test_base_uppercase, ())
             @test length(wasm_bytes) > 0
@@ -3099,7 +2770,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,  # push 2
                     WasmTarget.Opcode.I32_MUL,          # multiply
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func2_idx = WasmTarget.add_function!(
@@ -3112,7 +2783,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,  # push 3
                     WasmTarget.Opcode.I32_MUL,          # multiply
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Export them for testing
@@ -3145,7 +2816,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func_triple = WasmTarget.add_function!(
@@ -3158,7 +2829,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Initialize table with element segment
@@ -3219,7 +2890,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x02,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="double"
             )
 
             func_triple = WasmTarget.add_function!(
@@ -3232,7 +2903,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x03,
                     WasmTarget.Opcode.I32_MUL,
                     WasmTarget.Opcode.END
-                ]
+                ]; name="triple"
             )
 
             # Initialize table: [func_double, func_triple]
@@ -3252,7 +2923,7 @@ begin
                     type_idx % UInt8,                   # type index
                     0x00,                               # table index
                     WasmTarget.Opcode.END
-                ]
+                ]; name="dispatch"
             )
 
             WasmTarget.add_export!(mod, "dispatch", 0, dispatcher)
@@ -3288,7 +2959,7 @@ begin
                     WasmTarget.Opcode.LOCAL_GET, 0x01,  # value
                     WasmTarget.Opcode.I32_STORE, 0x02, 0x00,  # store (align=4, offset=0)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="store"
             )
             WasmTarget.add_export!(mod, "store", 0, func_idx)
 
@@ -3302,7 +2973,7 @@ begin
                     WasmTarget.Opcode.LOCAL_GET, 0x00,  # address
                     WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # load (align=4, offset=0)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="load"
             )
             WasmTarget.add_export!(mod, "load", 0, load_idx)
 
@@ -3313,7 +2984,7 @@ begin
             # Test memory operations via Node.js
             js_code = """
             const bytes = Buffer.from([$(join(bytes, ","))]);
-            WebAssembly.instantiate(bytes).then(result => {
+            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js())).then(result => {
                 const { store, load, memory } = result.instance.exports;
                 store(0, 42);
                 console.log(load(0));
@@ -3355,7 +3026,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x00,  # address 0
                     WasmTarget.Opcode.I32_LOAD, 0x00, 0x00,  # load (unaligned)
                     WasmTarget.Opcode.END
-                ]
+                ]; name="read_first"
             )
             WasmTarget.add_export!(mod, "read_first", 0, func_idx)
 
@@ -3388,7 +3059,7 @@ begin
                     WasmTarget.Opcode.I32_CONST, 0x10,    # 16
                     WasmTarget.Opcode.I32_LOAD, 0x02, 0x00,  # align=4, offset=0
                     WasmTarget.Opcode.END
-                ]
+                ]; name="read_data"
             )
             WasmTarget.add_export!(mod, "read_data", 0, func_idx)
 
@@ -3492,114 +3163,100 @@ begin
     @pphase "Phase 22: Math Functions (WASM-native)" begin
 
         @testset "sqrt (via llvm intrinsic)" begin
-            if NODE_CMD !== nothing
-                # Use the raw llvm intrinsic to avoid domain checking
-                function test_sqrt_fast(x::Float64)::Float64
-                    return Base.Math.sqrt_llvm(x)
-                end
-
-                bytes = compile(test_sqrt_fast, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[4.0]) ≈ 2.0
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[9.0]) ≈ 3.0
-                @test run_wasm(bytes, "test_sqrt_fast", Float64[2.0]) ≈ sqrt(2.0)
+            # Use the raw llvm intrinsic to avoid domain checking
+            function test_sqrt_fast(x::Float64)::Float64
+                return Base.Math.sqrt_llvm(x)
             end
+
+            bytes = compile(test_sqrt_fast, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[4.0]), 2.0)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[9.0]), 3.0)
+            @test isequal(run_wasm(bytes, "test_sqrt_fast", Float64[2.0]), sqrt(2.0))
         end
 
         @testset "abs" begin
-            if NODE_CMD !== nothing
-                function test_abs(x::Float64)::Float64
-                    return abs(x)
-                end
-
-                bytes = compile(test_abs, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_abs", Float64[-5.0]) ≈ 5.0
-                @test run_wasm(bytes, "test_abs", Float64[3.0]) ≈ 3.0
-                @test run_wasm(bytes, "test_abs", Float64[-0.0]) ≈ 0.0
+            function test_abs(x::Float64)::Float64
+                return abs(x)
             end
+
+            bytes = compile(test_abs, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_abs", Float64[-5.0]), 5.0)
+            @test isequal(run_wasm(bytes, "test_abs", Float64[3.0]), 3.0)
+            @test isequal(run_wasm(bytes, "test_abs", Float64[-0.0]), 0.0)
         end
 
         @testset "floor" begin
-            if NODE_CMD !== nothing
-                function test_floor(x::Float64)::Float64
-                    return floor(x)
-                end
-
-                bytes = compile(test_floor, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_floor", Float64[3.7]) ≈ 3.0
-                @test run_wasm(bytes, "test_floor", Float64[-2.3]) ≈ -3.0
-                @test run_wasm(bytes, "test_floor", Float64[5.0]) ≈ 5.0
+            function test_floor(x::Float64)::Float64
+                return floor(x)
             end
+
+            bytes = compile(test_floor, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_floor", Float64[3.7]), 3.0)
+            @test isequal(run_wasm(bytes, "test_floor", Float64[-2.3]), -3.0)
+            @test isequal(run_wasm(bytes, "test_floor", Float64[5.0]), 5.0)
         end
 
         @testset "ceil" begin
-            if NODE_CMD !== nothing
-                function test_ceil(x::Float64)::Float64
-                    return ceil(x)
-                end
-
-                bytes = compile(test_ceil, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_ceil", Float64[3.2]) ≈ 4.0
-                @test run_wasm(bytes, "test_ceil", Float64[-2.7]) ≈ -2.0
-                @test run_wasm(bytes, "test_ceil", Float64[5.0]) ≈ 5.0
+            function test_ceil(x::Float64)::Float64
+                return ceil(x)
             end
+
+            bytes = compile(test_ceil, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[3.2]), 4.0)
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[-2.7]), -2.0)
+            @test isequal(run_wasm(bytes, "test_ceil", Float64[5.0]), 5.0)
         end
 
         @testset "round" begin
-            if NODE_CMD !== nothing
-                function test_round(x::Float64)::Float64
-                    return round(x)
-                end
-
-                bytes = compile(test_round, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_round", Float64[3.2]) ≈ 3.0
-                @test run_wasm(bytes, "test_round", Float64[3.7]) ≈ 4.0
-                @test run_wasm(bytes, "test_round", Float64[-2.5]) ≈ -2.0  # Round to even
+            function test_round(x::Float64)::Float64
+                return round(x)
             end
+
+            bytes = compile(test_round, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_round", Float64[3.2]), 3.0)
+            @test isequal(run_wasm(bytes, "test_round", Float64[3.7]), 4.0)
+            @test isequal(run_wasm(bytes, "test_round", Float64[-2.5]), -2.0)  # Round to even
         end
 
         @testset "trunc" begin
-            if NODE_CMD !== nothing
-                function test_trunc(x::Float64)::Float64
-                    return trunc(x)
-                end
-
-                bytes = compile(test_trunc, (Float64,))
-                @test length(bytes) > 0
-                @test validate_wasm(bytes)
-                @test run_wasm(bytes, "test_trunc", Float64[3.7]) ≈ 3.0
-                @test run_wasm(bytes, "test_trunc", Float64[-3.7]) ≈ -3.0
-                @test run_wasm(bytes, "test_trunc", Float64[5.0]) ≈ 5.0
+            function test_trunc(x::Float64)::Float64
+                return trunc(x)
             end
+
+            bytes = compile(test_trunc, (Float64,))
+            @test length(bytes) > 0
+            @test validate_wasm(bytes)
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[3.7]), 3.0)
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[-3.7]), -3.0)
+            @test isequal(run_wasm(bytes, "test_trunc", Float64[5.0]), 5.0)
         end
 
         @testset "Float32 variants" begin
-            if NODE_CMD !== nothing
-                function test_abs_f32(x::Float32)::Float32
-                    return abs(x)
-                end
-
-                function test_floor_f32(x::Float32)::Float32
-                    return floor(x)
-                end
-
-                bytes_abs = compile(test_abs_f32, (Float32,))
-                @test length(bytes_abs) > 0
-                @test validate_wasm(bytes_abs)
-
-                bytes_floor = compile(test_floor_f32, (Float32,))
-                @test length(bytes_floor) > 0
-                @test validate_wasm(bytes_floor)
+            function test_abs_f32(x::Float32)::Float32
+                return abs(x)
             end
+
+            function test_floor_f32(x::Float32)::Float32
+                return floor(x)
+            end
+
+            bytes_abs = compile(test_abs_f32, (Float32,))
+            @test length(bytes_abs) > 0
+            @test validate_wasm(bytes_abs)
+
+            bytes_floor = compile(test_floor_f32, (Float32,))
+            @test length(bytes_floor) > 0
+            @test validate_wasm(bytes_floor)
         end
 
     end
@@ -4125,37 +3782,34 @@ begin
     # ========================================================================
     @pphase "Phase 29: Stack Validator Integration" begin
 
+        # every validator has its module (a ConcreteRef's index names one of its types); each
+        # check below starts from a fresh one, as each function's builder does
+        _p29_mod() = (m = WasmModule();
+                      add_struct_type!(m, [FieldType(I32, true)]);                      # type 0
+                      add_struct_type!(m, [FieldType(I32, true), FieldType(F64, true),
+                                           FieldType(ExternRef, true)]);                # type 1
+                      m)
+        _p29_v(name) = WasmStackValidator(; func_name=name, mod=_p29_mod())
+
         @testset "externref-vs-anyref mismatch (PURE-323 pattern)" begin
-            v = WasmStackValidator(func_name="test_externref_anyref")
-            # Push ExternRef (a live Any rep). A ref.cast to a GC struct is the PURE-323
-            # pattern: externref and the GC `any` hierarchy are DISJOINT tops, so the cast
-            # cannot be expressed — codegen must emit extern.convert_any FIRST (it does, at
-            # every real GC-cast site). Loop A/P13: the validator now CATCHES this
-            # cross-hierarchy cast (it used to be permissively — and wrongly — accepted).
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.REF_CAST, ConcreteRef(UInt32(5)))
-            @test has_errors(v)          # P13: cross-hierarchy ref.cast is flagged
-            @test stack_height(v) == 1   # still pops the operand + pushes the target
+            # externref and the GC `any` hierarchy are disjoint tops: a ref.cast of an externref
+            # to a GC struct cannot be expressed, so codegen converts first (extern.convert_any)
+            b = WasmTarget.InstrBuilder(WasmValType[ExternRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0)
+            @test_throws WasmTarget.StackImbalanceError WasmTarget.ref_cast!(b, 0, true)
 
-            # Now test the REAL mismatch: push externref, try any_convert_extern
-            # which expects externref (correct), then push result as anyref
-            reset_validator!(v)
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.ANY_CONVERT_EXTERN)
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === WasmTarget.AnyRef  # Result should be anyref
-
-            # Test the reverse: push anyref, try extern_convert_any
-            reset_validator!(v)
-            validate_push!(v, WasmTarget.AnyRef)
-            validate_gc_instruction!(v, Opcode.EXTERN_CONVERT_ANY)
-            @test !has_errors(v)
-            @test v.stack[1] === ExternRef
+            # any.convert_extern takes an externref and gives an anyref of its nullability
+            b = WasmTarget.InstrBuilder(WasmValType[ExternRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0); WasmTarget.any_convert_extern!(b)
+            @test b.v.stack == WasmValType[WasmTarget.AnyRef]
+            # extern.convert_any the reverse
+            b = WasmTarget.InstrBuilder(WasmValType[WasmTarget.AnyRef], WasmValType[]; mod=_p29_mod())
+            WasmTarget.local_get!(b, 0); WasmTarget.extern_convert_any!(b)
+            @test b.v.stack == WasmValType[ExternRef]
         end
 
         @testset "numeric-vs-ref mismatch (PURE-321 pattern)" begin
-            v = WasmStackValidator(func_name="test_numeric_ref_mismatch")
+            v = _p29_v("test_numeric_ref_mismatch")
             # Push I32 (numeric), try to pop ConcreteRef — classic PURE-321 bug
             validate_push!(v, I32)
             validate_pop!(v, ConcreteRef(UInt32(0), true))
@@ -4164,15 +3818,15 @@ begin
             @test any(contains("I32"), v.errors)
 
             # Reverse: push ref, try to pop I32
-            reset_validator!(v)
-            validate_push!(v, ConcreteRef(UInt32(3), true))
+            v = _p29_v("test_numeric_ref_mismatch_2")
+            validate_push!(v, ConcreteRef(UInt32(1), true))
             validate_pop!(v, I32)
             @test has_errors(v)
             @test any(contains("type mismatch"), v.errors)
         end
 
         @testset "stack underflow (common codegen bug)" begin
-            v = WasmStackValidator(func_name="test_underflow")
+            v = _p29_v("test_underflow")
             # Pop from empty stack — happens when codegen drops a value that
             # was never pushed (e.g., missing phi initialization)
             validate_pop!(v, I32)
@@ -4180,14 +3834,14 @@ begin
             @test any(contains("stack underflow"), v.errors)
 
             # pop_any from empty stack
-            reset_validator!(v)
+            v = _p29_v("test_underflow_2")
             result = validate_pop_any!(v)
             @test result === nothing
             @test has_errors(v)
         end
 
         @testset "correct code validates clean" begin
-            v = WasmStackValidator(func_name="test_clean")
+            v = _p29_v("test_clean")
             # i32.add: push two i32s, validate add, should produce one i32
             validate_push!(v, I32)
             validate_push!(v, I32)
@@ -4197,7 +3851,7 @@ begin
             @test v.stack[1] === I32
 
             # i64 arithmetic
-            reset_validator!(v)
+            v = _p29_v("test_clean_2")
             validate_push!(v, I64)
             validate_push!(v, I64)
             validate_instruction!(v, Opcode.I64_ADD)
@@ -4205,52 +3859,35 @@ begin
             @test stack_height(v) == 1
             @test v.stack[1] === I64
 
-            # Constant push
-            reset_validator!(v)
-            validate_instruction!(v, Opcode.I32_CONST)
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === I32
-
-            # Drop
-            validate_instruction!(v, Opcode.DROP)
-            @test !has_errors(v)
-            @test stack_height(v) == 0
+            # a constant takes its immediate: num! refuses it, i32_const! emits it
+            b = WasmTarget.InstrBuilder(; mod=_p29_mod())
+            @test_throws ArgumentError WasmTarget.num!(b, Opcode.I32_CONST)
+            WasmTarget.i32_const!(b, 7)
+            @test b.v.stack == WasmValType[I32]
+            WasmTarget.drop!(b)
+            @test stack_height(b.v) == 0
         end
 
         @testset "GC struct operations" begin
-            v = WasmStackValidator(func_name="test_struct_ops")
-            type_idx = 7
-            field_types = [I32, F64, ExternRef]
+            m = _p29_mod()
+            type_idx = 1   # struct {i32, f64, externref}
+            b = WasmTarget.InstrBuilder(; mod=m)
+            WasmTarget.i32_const!(b, 0); WasmTarget.f64_const!(b, 1.0); WasmTarget.ref_null!(b, ExternRef)
+            WasmTarget.struct_new!(b, type_idx)
+            @test b.v.stack == WasmValType[ConcreteRef(UInt32(type_idx), false)]  # struct.new is non-null
 
-            # struct.new: push field values, validate struct.new
-            validate_push!(v, I32)        # field 0
-            validate_push!(v, F64)        # field 1
-            validate_push!(v, ExternRef)  # field 2
-            validate_gc_instruction!(v, Opcode.STRUCT_NEW, (type_idx, field_types))
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] isa ConcreteRef
-            @test v.stack[1].type_idx == UInt32(type_idx)
-            @test v.stack[1].nullable == false  # struct.new produces non-nullable
+            # struct.get: pop struct ref, push the module's field type
+            WasmTarget.struct_get!(b, type_idx, 1)
+            @test b.v.stack == WasmValType[F64]
 
-            # struct.get: pop struct ref, push field type
-            validate_gc_instruction!(v, Opcode.STRUCT_GET, (type_idx, F64))
-            @test !has_errors(v)
-            @test stack_height(v) == 1
-            @test v.stack[1] === F64
-
-            # struct.new with wrong field types → should error
-            reset_validator!(v)
-            validate_push!(v, I32)
-            validate_push!(v, I32)  # wrong: should be F64
-            validate_push!(v, ExternRef)
-            validate_gc_instruction!(v, Opcode.STRUCT_NEW, (type_idx, field_types))
-            @test has_errors(v)  # F64 expected, I32 found
+            # struct.new with wrong field types → rejected at the call
+            b = WasmTarget.InstrBuilder(; mod=m)
+            WasmTarget.i32_const!(b, 0); WasmTarget.i32_const!(b, 1); WasmTarget.ref_null!(b, ExternRef)
+            @test_throws WasmTarget.StackImbalanceError WasmTarget.struct_new!(b, type_idx)  # F64 expected, I32 found
         end
 
         @testset "block/loop label tracking" begin
-            v = WasmStackValidator(func_name="test_blocks")
+            v = _p29_v("test_blocks")
 
             # Block that produces I32
             validate_block_start!(v, :block, WasmValType[I32])
@@ -4261,7 +3898,7 @@ begin
             @test v.stack[1] === I32
 
             # Block with wrong result type
-            reset_validator!(v)
+            v = _p29_v("test_blocks_2")
             validate_block_start!(v, :block, WasmValType[I32])
             validate_push!(v, F64)  # wrong type for result
             validate_block_end!(v)
@@ -4269,16 +3906,16 @@ begin
             @test any(contains("block result type mismatch"), v.errors)
 
             # Loop with br (br to loop = restart, no values needed)
-            reset_validator!(v)
+            v = _p29_v("test_blocks_3")
             validate_block_start!(v, :loop)
             validate_push!(v, I32)  # loop counter
-            validate_instruction!(v, Opcode.DROP)  # consume it
+            validate_pop_any!(v)    # consume it
             validate_br!(v, 0)  # br back to loop start
             validate_block_end!(v)
             @test !has_errors(v)
 
             # Nested block + br to outer
-            reset_validator!(v)
+            v = _p29_v("test_blocks_4")
             validate_block_start!(v, :block, WasmValType[I32])  # outer
             validate_block_start!(v, :block)                     # inner (void)
             validate_push!(v, I32)
@@ -4290,29 +3927,18 @@ begin
             @test stack_height(v) == 1
         end
 
-        @testset "validator reset and reuse" begin
-            v = WasmStackValidator(func_name="func1")
-            validate_push!(v, I32)
-            validate_pop!(v, F64)  # type mismatch
-            @test has_errors(v)
-
-            # Reset should clear everything
-            reset_validator!(v)
-            @test !has_errors(v)
-            @test stack_height(v) == 0
-            @test isempty(v.labels)
-            @test v.reachable == true
-        end
-
         @testset "validator cannot be disabled or skip unknown opcodes" begin
-            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled")
-            v = WasmStackValidator(func_name="strict")
+            @test_throws MethodError WasmStackValidator(enabled=false, func_name="disabled", mod=WasmModule())
+            # a validator always has its module
+            @test_throws UndefKeywordError WasmStackValidator(func_name="no module")
+            v = _p29_v("strict")
             @test_throws ArgumentError validate_instruction!(v, UInt8(0xff))
             @test_throws ArgumentError validate_gc_instruction!(v, UInt8(0xff))
         end
 
         @testset "reachability after unconditional br" begin
-            v = WasmStackValidator(func_name="test_reachability")
+            v = _p29_v("test_reachability")
+
             validate_block_start!(v, :block)
             validate_br!(v, 0)  # unconditional branch
             @test v.reachable == false
@@ -4332,51 +3958,41 @@ begin
         @testset "compare_julia_wasm — Int32 add" begin
             add_one(x::Int32) = x + Int32(1)
             r = compare_julia_wasm(add_one, Int32(5))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(6)
-                @test r.actual == 6
-            end
+            @test r.pass
+            @test r.expected == Int32(6)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm — Int32 multiply" begin
             mul_two(x::Int32) = x * Int32(2)
             r = compare_julia_wasm(mul_two, Int32(7))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(14)
-                @test r.actual == 14
-            end
+            @test r.pass
+            @test r.expected == Int32(14)
+            @test r.actual == 14
         end
 
         @testset "compare_julia_wasm — Int32 two args" begin
             my_add(a::Int32, b::Int32) = a + b
             r = compare_julia_wasm(my_add, Int32(3), Int32(4))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(7)
-                @test r.actual == 7
-            end
+            @test r.pass
+            @test r.expected == Int32(7)
+            @test r.actual == 7
         end
 
         @testset "compare_julia_wasm — negative numbers" begin
             negate(x::Int32) = -x
             r = compare_julia_wasm(negate, Int32(42))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(-42)
-                @test r.actual == -42
-            end
+            @test r.pass
+            @test r.expected == Int32(-42)
+            @test r.actual == -42
         end
 
         @testset "compare_julia_wasm — zero" begin
             identity_fn(x::Int32) = x
             r = compare_julia_wasm(identity_fn, Int32(0))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(0)
-                @test r.actual == 0
-            end
+            @test r.pass
+            @test r.expected == Int32(0)
+            @test r.actual == 0
         end
 
         @testset "compare_batch — multiple inputs" begin
@@ -4389,9 +4005,7 @@ begin
             ])
             @test length(results) == 4
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4404,9 +4018,7 @@ begin
             ])
             @test length(results) == 3
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4421,49 +4033,37 @@ begin
 
         @testset "compare_julia_wasm_manual — correct expected" begin
             r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(6))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(6)
-                @test r.actual == 6
-            end
+            @test r.pass
+            @test r.expected == Int32(6)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm_manual — wrong expected detects mismatch" begin
             r = compare_julia_wasm_manual(x -> x + Int32(1), (Int32(5),), Int32(99))
-            if !r.skipped
-                @test !r.pass
-                @test r.expected == Int32(99)
-                @test r.actual == 6
-            end
+            @test !r.pass
+            @test r.expected == Int32(99)
+            @test r.actual == 6
         end
 
         @testset "compare_julia_wasm_manual — multiply" begin
             r = compare_julia_wasm_manual(x -> x * Int32(3), (Int32(4),), Int32(12))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — two args" begin
             my_sub(a::Int32, b::Int32) = a - b
             r = compare_julia_wasm_manual(my_sub, (Int32(10), Int32(3)), Int32(7))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — zero" begin
             r = compare_julia_wasm_manual(x -> x, (Int32(0),), Int32(0))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_julia_wasm_manual — negative" begin
             r = compare_julia_wasm_manual(x -> -x, (Int32(42),), Int32(-42))
-            if !r.skipped
-                @test r.pass
-            end
+            @test r.pass
         end
 
         @testset "compare_batch_manual — multiple inputs" begin
@@ -4475,9 +4075,7 @@ begin
             ])
             @test length(results) == 4
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4487,19 +4085,15 @@ begin
                 ((Int32(5),), Int32(99)),   # wrong
             ])
             @test length(results) == 2
-            if !results[1].skipped
-                @test results[1].pass
-                @test !results[2].pass
-            end
+            @test results[1].pass
+            @test !results[2].pass
         end
 
         @testset "compare_julia_wasm_wrapper — basic" begin
             r = compare_julia_wasm_wrapper(x -> x + Int32(10), Int32(5))
-            if !r.skipped
-                @test r.pass
-                @test r.expected == Int32(15)
-                @test r.actual == 15
-            end
+            @test r.pass
+            @test r.expected == Int32(15)
+            @test r.actual == 15
         end
 
         # Ground truth snapshot tests — exercise the MACHINERY in a temp dir so
@@ -4526,9 +4120,7 @@ begin
             results = compare_against_ground_truth("gt_double", x -> x * Int32(2); dir=gtdir)
             @test length(results) == 3
             for r in results
-                if !r.skipped
-                    @test r.pass
-                end
+                @test r.pass
             end
         end
 
@@ -4539,9 +4131,7 @@ begin
             # Intentionally use wrong function to get mismatch
             results = compare_against_ground_truth("gt_negate", x -> x + Int32(1); dir=gtdir)
             @test length(results) == 2
-            if !results[1].skipped
-                @test !results[1].pass  # -5 != 6
-            end
+            @test !results[1].pass  # -5 != 6
         end
 
         @testset "load_ground_truth — error on missing" begin
@@ -4838,6 +4428,18 @@ begin
             @test compare_julia_wasm(f_list, Int64(10)).pass
         end
 
+        @testset "setfield! nulls a Union{Struct,Nothing} field (GlobalRef nothing, not literal)" begin
+            # _wt_clear_next! (top-level, above TestPoint2D): the Phase 6.1 setfield!
+            # regression fixture — see its docstring for the crash it guards against.
+            f_clear_and_reset_next(n::Int64) = begin
+                head = TestNode(n, TestNode(n + 1, nothing))
+                cleared = _wt_clear_next!(head) ? Int64(1) : Int64(0)
+                head.next = TestNode(n + 2, nothing)
+                cleared * Int64(100) + head.next.value
+            end
+            @test compare_julia_wasm(f_clear_and_reset_next, Int64(7)).pass
+        end
+
         @testset "Nested structs" begin
             f_nested(x1::Float64, y1::Float64, x2::Float64, y2::Float64) = begin
                 l = TestLine(TestPoint2D(x1, y1), TestPoint2D(x2, y2))
@@ -4979,7 +4581,7 @@ begin
             end
             # Happy path works
             @test compare_julia_wasm(f_throw, Int64(5)).pass
-            # Error path: error() now emits throw (catchable by try_table + catch_all)
+            # Error path: error() now emits throw (catchable by a region's try and catch of the tag)
             @test compare_julia_wasm(f_throw, Int64(-3)).pass
         end
 
@@ -5047,7 +4649,7 @@ begin
             js_code = """
             import fs from 'fs';
             const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-            const importObject = { Math: { pow: Math.pow } };
+            const importObject = $(WasmTarget.host_runtime_js());
             async function run() {
                 const mod = await WebAssembly.instantiate(bytes, importObject);
                 const e = mod.instance.exports;
@@ -5063,7 +4665,7 @@ begin
             js_path = joinpath(dirname(wasm_path), "test.mjs")
             write(js_path, js_code)
 
-            node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
+            node_cmd = `$NODE $js_path`
             output = strip(read(node_cmd, String))
             results = JSON.parse(output)
 
@@ -5114,66 +4716,62 @@ begin
         end
 
         @testset "Overlay dispatch: user method overrides base" begin
-            if NODE_CMD === nothing
-                @test_skip "Node.js not available"
-            else
-                # Compile base + overlay functions with a dispatcher
-                functions = [
-                    (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
-                    (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
-                    (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
-                    (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
-                    (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
-                    (disp_val, (DispOverlay1,)),
-                    (disp_val, (DispOverlay2,)),
-                    (disp_caller, (Any,)),
-                    (make_disp_s1, (Int32,)),
-                    (make_disp_s5, (Int32,)),
-                    (make_disp_overlay1, (Int32,)),
-                    (make_disp_overlay2, (Int32,)),
-                ]
+            # Compile base + overlay functions with a dispatcher
+            functions = [
+                (disp_val, (DispS1,)),  (disp_val, (DispS2,)),
+                (disp_val, (DispS3,)),  (disp_val, (DispS4,)),
+                (disp_val, (DispS5,)),  (disp_val, (DispS6,)),
+                (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
+                (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
+                (disp_val, (DispOverlay1,)),
+                (disp_val, (DispOverlay2,)),
+                (disp_caller, (Any,)),
+                (make_disp_s1, (Int32,)),
+                (make_disp_s5, (Int32,)),
+                (make_disp_overlay1, (Int32,)),
+                (make_disp_overlay2, (Int32,)),
+            ]
 
-                bytes = to_bytes(compile_module(functions))
+            bytes = to_bytes(compile_module(functions))
 
-                wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
-                write(wasm_path, bytes)
+            wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
+            write(wasm_path, bytes)
 
-                js_code = """
-                import fs from 'fs';
-                const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-                const importObject = { Math: { pow: Math.pow } };
-                async function run() {
-                    const mod = await WebAssembly.instantiate(bytes, importObject);
-                    const e = mod.instance.exports;
-                    const results = [];
-                    // Base dispatch: DispS1(10) → 10+1=11, DispS5(10) → 10+5=15
-                    results.push(e.disp_caller(e.make_disp_s1(10)));
-                    results.push(e.disp_caller(e.make_disp_s5(10)));
-                    // Overlay dispatch: DispOverlay1(10) → 10+100=110, DispOverlay2(10) → 10+200=210
-                    results.push(e.disp_caller(e.make_disp_overlay1(10)));
-                    results.push(e.disp_caller(e.make_disp_overlay2(10)));
-                    console.log(JSON.stringify(results));
-                }
-                run();
-                """
-                js_path = joinpath(dirname(wasm_path), "test.mjs")
-                write(js_path, js_code)
+            js_code = """
+            import fs from 'fs';
+            const bytes = fs.readFileSync('$(escape_string(wasm_path))');
+            const importObject = $(WasmTarget.host_runtime_js());
+            async function run() {
+                const mod = await WebAssembly.instantiate(bytes, importObject);
+                const e = mod.instance.exports;
+                const results = [];
+                // Base dispatch: DispS1(10) → 10+1=11, DispS5(10) → 10+5=15
+                results.push(e.disp_caller(e.make_disp_s1(10)));
+                results.push(e.disp_caller(e.make_disp_s5(10)));
+                // Overlay dispatch: DispOverlay1(10) → 10+100=110, DispOverlay2(10) → 10+200=210
+                results.push(e.disp_caller(e.make_disp_overlay1(10)));
+                results.push(e.disp_caller(e.make_disp_overlay2(10)));
+                console.log(JSON.stringify(results));
+            }
+            run();
+            """
+            js_path = joinpath(dirname(wasm_path), "test.mjs")
+            write(js_path, js_code)
 
-                node_cmd = NEEDS_EXPERIMENTAL_FLAG ? `$NODE_CMD --experimental-wasm-gc $js_path` : `$NODE_CMD $js_path`
-                output = strip(read(node_cmd, String))
-                results = JSON.parse(output)
+            node_cmd = `$NODE $js_path`
+            output = strip(read(node_cmd, String))
+            results = JSON.parse(output)
 
-                # Ground truth comparison: native Julia
-                native_s1 = Int(disp_caller(DispS1(Int32(10))))           # 11
-                native_s5 = Int(disp_caller(DispS5(Int32(10))))           # 15
-                native_o1 = Int(disp_caller(DispOverlay1(Int32(10))))     # 110
-                native_o2 = Int(disp_caller(DispOverlay2(Int32(10))))     # 210
+            # Ground truth comparison: native Julia
+            native_s1 = Int(disp_caller(DispS1(Int32(10))))           # 11
+            native_s5 = Int(disp_caller(DispS5(Int32(10))))           # 15
+            native_o1 = Int(disp_caller(DispOverlay1(Int32(10))))     # 110
+            native_o2 = Int(disp_caller(DispOverlay2(Int32(10))))     # 210
 
-                @test results[1] == native_s1   # Base: DispS1(10) → 11
-                @test results[2] == native_s5   # Base: DispS5(10) → 15
-                @test results[3] == native_o1   # Overlay: DispOverlay1(10) → 110
-                @test results[4] == native_o2   # Overlay: DispOverlay2(10) → 210
-            end
+            @test results[1] == native_s1   # Base: DispS1(10) → 11
+            @test results[2] == native_s5   # Base: DispS5(10) → 15
+            @test results[3] == native_o1   # Overlay: DispOverlay1(10) → 110
+            @test results[4] == native_o2   # Overlay: DispOverlay2(10) → 210
         end
 
         @testset "the FNV hash-dispatch apparatus is DELETED (LOCK L10)" begin
@@ -5219,43 +4817,41 @@ begin
         end
 
         @testset "typeof(x) returns correct type via ref.eq" begin
-            if NODE_CMD !== nothing
-                funcs = [
-                    (typeof_check_s1, (TypeHierS1,)),
-                    (typeof_check_s2, (TypeHierS2,)),
-                    (typeof_cross_check, (TypeHierS1,)),
-                    (make_th_s1, (Int32,)),
-                    (make_th_s2, (Int32,)),
-                ]
-                mod = compile_module(funcs)
-                bytes = to_bytes(mod)
-                wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
-                write(wasm_path, bytes)
+            funcs = [
+                (typeof_check_s1, (TypeHierS1,)),
+                (typeof_check_s2, (TypeHierS2,)),
+                (typeof_cross_check, (TypeHierS1,)),
+                (make_th_s1, (Int32,)),
+                (make_th_s2, (Int32,)),
+            ]
+            mod = compile_module(funcs)
+            bytes = to_bytes(mod)
+            wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
+            write(wasm_path, bytes)
 
-                js_code = """
-                const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
-                WebAssembly.instantiate(bytes, {Math: {pow: Math.pow}}).then(m => {
-                    const exp = m.instance.exports;
-                    const s1 = exp.make_th_s1(42);
-                    const s2 = exp.make_th_s2(42);
-                    const r1 = exp.typeof_check_s1(s1);
-                    const r2 = exp.typeof_check_s2(s2);
-                    const r3 = exp.typeof_cross_check(s1);
-                    console.log(JSON.stringify([r1, r2, r3]));
-                }).catch(e => { console.error(e.message); process.exit(1); });
-                """
-                result = read(`$NODE_CMD -e $js_code`, String)
-                results = JSON.parse(strip(result))
+            js_code = """
+            const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
+            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js())).then(m => {
+                const exp = m.instance.exports;
+                const s1 = exp.make_th_s1(42);
+                const s2 = exp.make_th_s2(42);
+                const r1 = exp.typeof_check_s1(s1);
+                const r2 = exp.typeof_check_s2(s2);
+                const r3 = exp.typeof_cross_check(s1);
+                console.log(JSON.stringify([r1, r2, r3]));
+            }).catch(e => { console.error(e.message); process.exit(1); });
+            """
+            result = read(`$NODE -e $js_code`, String)
+            results = JSON.parse(strip(result))
 
-                # Ground truth
-                native_s1 = typeof_check_s1(TypeHierS1(Int32(42)))    # 1 (TypeHierS1 === TypeHierS1)
-                native_s2 = typeof_check_s2(TypeHierS2(Int32(42)))    # 1 (TypeHierS2 === TypeHierS2)
-                native_cross = typeof_cross_check(TypeHierS1(Int32(42)))  # 0 (TypeHierS1 !== TypeHierS2)
+            # Ground truth
+            native_s1 = typeof_check_s1(TypeHierS1(Int32(42)))    # 1 (TypeHierS1 === TypeHierS1)
+            native_s2 = typeof_check_s2(TypeHierS2(Int32(42)))    # 1 (TypeHierS2 === TypeHierS2)
+            native_cross = typeof_cross_check(TypeHierS1(Int32(42)))  # 0 (TypeHierS1 !== TypeHierS2)
 
-                @test results[1] == native_s1   # typeof(s1) === TypeHierS1 → 1
-                @test results[2] == native_s2   # typeof(s2) === TypeHierS2 → 1
-                @test results[3] == native_cross # typeof(s1) === TypeHierS2 → 0
-            end
+            @test results[1] == native_s1   # typeof(s1) === TypeHierS1 → 1
+            @test results[2] == native_s2   # typeof(s2) === TypeHierS2 → 1
+            @test results[3] == native_cross # typeof(s1) === TypeHierS2 → 0
         end
 
         @testset "Type hierarchy: super chain matches Julia's" begin
@@ -5343,15 +4939,12 @@ begin
             ])
 
             @test length(bytes) > 0
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "ws_int_num") == 1        # Int64 <: Number
-                @test run_wasm(bytes, "ws_int_str") == 0        # Int64 !<: AbstractString
-                @test run_wasm(bytes, "ws_int_int") == 1        # Int64 <: Int64
-                @test run_wasm(bytes, "ws_f64_num") == 1        # Float64 <: Number
-                @test run_wasm(bytes, "ws_int_signed") == 1     # Int64 <: Signed
-                @test run_wasm(bytes, "ws_bool_int") == 1       # Bool <: Integer
-            end
+            @test run_wasm(bytes, "ws_int_num") == 1        # Int64 <: Number
+            @test run_wasm(bytes, "ws_int_str") == 0        # Int64 !<: AbstractString
+            @test run_wasm(bytes, "ws_int_int") == 1        # Int64 <: Int64
+            @test run_wasm(bytes, "ws_f64_num") == 1        # Float64 <: Number
+            @test run_wasm(bytes, "ws_int_signed") == 1     # Int64 <: Signed
+            @test run_wasm(bytes, "ws_bool_int") == 1       # Bool <: Integer
         end
 
         @testset "SVec parameter access on DataType" begin
@@ -5371,11 +4964,8 @@ begin
             ])
 
             @test length(bytes) > 0
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "svec_len_int64") == 0    # Int64.parameters is empty
-                @test run_wasm(bytes, "svec_len_vec") == 2      # Vector{Int64}.parameters has 2 elements
-            end
+            @test run_wasm(bytes, "svec_len_int64") == 0    # Int64.parameters is empty
+            @test run_wasm(bytes, "svec_len_vec") == 2      # Vector{Int64}.parameters has 2 elements
         end
 
         @testset "Full wasm_subtype chain compiles and validates" begin
@@ -5395,7 +4985,7 @@ begin
             # Write and validate
             tmpfile = tempname() * ".wasm"
             write(tmpfile, bytes)
-            result = try read(`wasm-tools validate $tmpfile`, String); "VALID" catch e; string(e) end
+            result = try read(`wasm-tools validate --features=gc,legacy-exceptions $tmpfile`, String); "VALID" catch e; string(e) end
             @test result == "VALID"
             rm(tmpfile; force=true)
         end
@@ -5424,12 +5014,8 @@ begin
 
             bytes = WasmTarget.compile_multi(funcs)
             @test length(bytes) > 0
-
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                @test run_wasm(bytes, "test_fee_eq") == 1     # Int64 ≡ Int64 (invariant)
-                @test run_wasm(bytes, "test_fee_neq") == 0    # Int64 ≢ Number (invariant)
-            end
+            @test run_wasm(bytes, "test_fee_eq") == 1     # Int64 ≡ Int64 (invariant)
+            @test run_wasm(bytes, "test_fee_neq") == 0    # Int64 ≢ Number (invariant)
         end
 
         @testset "wasm_subtype ground truth: 100+ DataType pairs" begin
@@ -5619,128 +5205,124 @@ begin
             all_funcs = vcat(wrapper_funcs, all_subtype_funcs)
             bytes = WasmTarget.compile_multi(all_funcs)
             @test length(bytes) > 0
-
-            valid = try run(`$(first(NODE_CMD)) -e "1"`) !== nothing; true catch; false end
-            if valid
-                # Ground truth: each test matches native Julia <:
-                # Concrete numeric identity
-                @test run_wasm(bytes, "gt_i64_i64") == 1      # Int64 <: Int64
-                @test run_wasm(bytes, "gt_i32_i32") == 1      # Int32 <: Int32
-                @test run_wasm(bytes, "gt_f64_f64") == 1      # Float64 <: Float64
-                @test run_wasm(bytes, "gt_f32_f32") == 1      # Float32 <: Float32
-                @test run_wasm(bytes, "gt_bool_bool") == 1    # Bool <: Bool
-                # Numeric hierarchy (true)
-                @test run_wasm(bytes, "gt_i64_num") == 1      # Int64 <: Number
-                @test run_wasm(bytes, "gt_i64_real") == 1     # Int64 <: Real
-                @test run_wasm(bytes, "gt_i64_int") == 1      # Int64 <: Integer
-                @test run_wasm(bytes, "gt_i64_signed") == 1   # Int64 <: Signed
-                @test run_wasm(bytes, "gt_i64_any") == 1      # Int64 <: Any
-                @test run_wasm(bytes, "gt_i32_signed") == 1   # Int32 <: Signed
-                @test run_wasm(bytes, "gt_i32_num") == 1      # Int32 <: Number
-                @test run_wasm(bytes, "gt_f64_num") == 1      # Float64 <: Number
-                @test run_wasm(bytes, "gt_f64_real") == 1     # Float64 <: Real
-                @test run_wasm(bytes, "gt_f64_absfloat") == 1 # Float64 <: AbstractFloat
-                @test run_wasm(bytes, "gt_f32_num") == 1      # Float32 <: Number
-                @test run_wasm(bytes, "gt_bool_int") == 1     # Bool <: Integer
-                @test run_wasm(bytes, "gt_bool_num") == 1     # Bool <: Number
-                @test run_wasm(bytes, "gt_u64_unsigned") == 1 # UInt64 <: Unsigned
-                @test run_wasm(bytes, "gt_u64_num") == 1      # UInt64 <: Number
-                @test run_wasm(bytes, "gt_u8_unsigned") == 1  # UInt8 <: Unsigned
-                @test run_wasm(bytes, "gt_u8_num") == 1       # UInt8 <: Number
-                # Numeric hierarchy (false)
-                @test run_wasm(bytes, "gt_i64_unsigned") == 0 # Int64 !<: Unsigned
-                @test run_wasm(bytes, "gt_i64_absfloat") == 0 # Int64 !<: AbstractFloat
-                @test run_wasm(bytes, "gt_i64_absstr") == 0   # Int64 !<: AbstractString
-                @test run_wasm(bytes, "gt_i32_i64") == 0      # Int32 !<: Int64
-                @test run_wasm(bytes, "gt_f64_signed") == 0   # Float64 !<: Signed
-                @test run_wasm(bytes, "gt_f32_f64") == 0      # Float32 !<: Float64
-                @test run_wasm(bytes, "gt_bool_signed") == 0  # Bool !<: Signed
-                @test run_wasm(bytes, "gt_u64_signed") == 0   # UInt64 !<: Signed
-                # Reverse direction (abstract !<: concrete)
-                @test run_wasm(bytes, "gt_num_i64") == 0      # Number !<: Int64
-                @test run_wasm(bytes, "gt_real_i64") == 0     # Real !<: Int64
-                @test run_wasm(bytes, "gt_signed_i64") == 0   # Signed !<: Int64
-                @test run_wasm(bytes, "gt_any_i64") == 0      # Any !<: Int64
-                @test run_wasm(bytes, "gt_any_num") == 0      # Any !<: Number
-                # Any <: Any
-                @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
-                # String types
-                @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
-                @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — FOUND-5003: fixed Union{Type{T}} phi local allocation
-                @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
-                @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
-                @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
-                # Parametric types — invariant
-                @test run_wasm(bytes, "gt_vi64_vi64") == 1    # Vector{Int64} <: Vector{Int64}
-                @test run_wasm(bytes, "gt_vi64_vnum") == 0    # Vector{Int64} !<: Vector{Number} (invariant!)
-                @test run_wasm(bytes, "gt_vf64_vf64") == 1    # Vector{Float64} <: Vector{Float64}
-                @test run_wasm(bytes, "gt_vf64_vnum") == 0    # Vector{Float64} !<: Vector{Number}
-                @test run_wasm(bytes, "gt_vi32_vi32") == 1    # Vector{Int32} <: Vector{Int32}
-                @test run_wasm(bytes, "gt_vi32_vi64") == 0    # Vector{Int32} !<: Vector{Int64}
-                @test run_wasm(bytes, "gt_di64_di64") == 1    # Dict{String,Int64} <: Dict{String,Int64}
-                @test run_wasm(bytes, "gt_di64_dnum") == 0    # Dict{String,Int64} !<: Dict{String,Number}
-                @test run_wasm(bytes, "gt_pi_pi") == 1        # Pair{Int64,Int64} <: Pair{Int64,Int64}
-                @test run_wasm(bytes, "gt_pi_pn") == 0        # Pair{Int64,Int64} !<: Pair{Int64,Number}
-                # Tuple types — covariant
-                @test run_wasm(bytes, "gt_ti64_ti64") == 1    # Tuple{Int64} <: Tuple{Int64}
-                @test run_wasm(bytes, "gt_ti64_tnum") == 1    # Tuple{Int64} <: Tuple{Number} (covariant!)
-                @test run_wasm(bytes, "gt_tif_tnn") == 1      # Tuple{Int64,Float64} <: Tuple{Number,Number}
-                @test run_wasm(bytes, "gt_t0_t0") == 1        # Tuple{} <: Tuple{}
-                @test run_wasm(bytes, "gt_t1_t2") == 0        # Tuple{Int64} !<: Tuple{Int64,Float64}
-                @test run_wasm(bytes, "gt_tf_ti") == 0        # Tuple{Float64} !<: Tuple{Int64}
-                # More numerics
-                @test run_wasm(bytes, "gt_i8_signed") == 1    # Int8 <: Signed
-                @test run_wasm(bytes, "gt_i8_int") == 1       # Int8 <: Integer
-                @test run_wasm(bytes, "gt_i8_num") == 1       # Int8 <: Number
-                @test run_wasm(bytes, "gt_i8_i64") == 0       # Int8 !<: Int64
-                @test run_wasm(bytes, "gt_i16_signed") == 1   # Int16 <: Signed
-                @test run_wasm(bytes, "gt_i16_num") == 1      # Int16 <: Number
-                @test run_wasm(bytes, "gt_u16_unsigned") == 1 # UInt16 <: Unsigned
-                @test run_wasm(bytes, "gt_u16_num") == 1      # UInt16 <: Number
-                @test run_wasm(bytes, "gt_i128_signed") == 1  # Int128 <: Signed
-                @test run_wasm(bytes, "gt_i128_num") == 1     # Int128 <: Number
-                @test run_wasm(bytes, "gt_u128_unsigned") == 1 # UInt128 <: Unsigned
-                @test run_wasm(bytes, "gt_f16_absfloat") == 1 # Float16 <: AbstractFloat
-                @test run_wasm(bytes, "gt_f16_real") == 1     # Float16 <: Real
-                @test run_wasm(bytes, "gt_f16_f64") == 0      # Float16 !<: Float64
-                # Cross-category false
-                @test run_wasm(bytes, "gt_i64_str") == 0      # Int64 !<: String
-                @test run_wasm(bytes, "gt_str_i64") == 0      # String !<: Int64
-                @test run_wasm(bytes, "gt_f64_str") == 0      # Float64 !<: String
-                @test run_wasm(bytes, "gt_bool_str") == 0     # Bool !<: String
-                @test run_wasm(bytes, "gt_num_str") == 0      # Number !<: String
-                # Abstract hierarchy
-                @test run_wasm(bytes, "gt_signed_int") == 1   # Signed <: Integer
-                @test run_wasm(bytes, "gt_int_real") == 1     # Integer <: Real
-                @test run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — FOUND-5003: fixed Union{Type{T}} phi local allocation
-                @test run_wasm(bytes, "gt_num_any") == 1      # Number <: Any
-                @test run_wasm(bytes, "gt_unsigned_int") == 1 # Unsigned <: Integer
-                @test run_wasm(bytes, "gt_absfloat_real") == 1 # AbstractFloat <: Real
-                @test run_wasm(bytes, "gt_signed_unsigned") == 0 # Signed !<: Unsigned
-                @test run_wasm(bytes, "gt_unsigned_signed") == 0 # Unsigned !<: Signed
-                @test run_wasm(bytes, "gt_absfloat_int") == 0 # AbstractFloat !<: Integer
-                @test run_wasm(bytes, "gt_int_absfloat") == 0 # Integer !<: AbstractFloat
-                # Nothing
-                @test run_wasm(bytes, "gt_nothing_nothing") == 1 # Nothing <: Nothing
-                @test run_wasm(bytes, "gt_nothing_any") == 1    # Nothing <: Any
-                @test run_wasm(bytes, "gt_nothing_i64") == 0    # Nothing !<: Int64
-                @test run_wasm(bytes, "gt_i64_nothing") == 0    # Int64 !<: Nothing
-                # Type{T}
-                @test run_wasm(bytes, "gt_typei_typei") == 1  # Type{Int64} <: Type{Int64}
-                @test run_wasm(bytes, "gt_typei_typen") == 0  # Type{Int64} !<: Type{Number}
-                @test run_wasm(bytes, "gt_typei_dt") == 1     # Type{Int64} <: DataType
-                # Char
-                @test run_wasm(bytes, "gt_char_char") == 1    # Char <: Char
-                @test run_wasm(bytes, "gt_char_any") == 1     # Char <: Any
-                @test run_wasm(bytes, "gt_char_num") == 0     # Char !<: Number
-                # More cross-type
-                @test run_wasm(bytes, "gt_absstr_any") == 1   # AbstractString <: Any
-                @test run_wasm(bytes, "gt_absstr_num") == 0   # AbstractString !<: Number
-                @test run_wasm(bytes, "gt_i64_bool") == 0     # Int64 !<: Bool
-                @test run_wasm(bytes, "gt_bool_i64") == 0     # Bool !<: Int64
-                @test run_wasm(bytes, "gt_f64_i64") == 0      # Float64 !<: Int64
-                @test run_wasm(bytes, "gt_i64_f64") == 0      # Int64 !<: Float64
-            end
+            # Ground truth: each test matches native Julia <:
+            # Concrete numeric identity
+            @test run_wasm(bytes, "gt_i64_i64") == 1      # Int64 <: Int64
+            @test run_wasm(bytes, "gt_i32_i32") == 1      # Int32 <: Int32
+            @test run_wasm(bytes, "gt_f64_f64") == 1      # Float64 <: Float64
+            @test run_wasm(bytes, "gt_f32_f32") == 1      # Float32 <: Float32
+            @test run_wasm(bytes, "gt_bool_bool") == 1    # Bool <: Bool
+            # Numeric hierarchy (true)
+            @test run_wasm(bytes, "gt_i64_num") == 1      # Int64 <: Number
+            @test run_wasm(bytes, "gt_i64_real") == 1     # Int64 <: Real
+            @test run_wasm(bytes, "gt_i64_int") == 1      # Int64 <: Integer
+            @test run_wasm(bytes, "gt_i64_signed") == 1   # Int64 <: Signed
+            @test run_wasm(bytes, "gt_i64_any") == 1      # Int64 <: Any
+            @test run_wasm(bytes, "gt_i32_signed") == 1   # Int32 <: Signed
+            @test run_wasm(bytes, "gt_i32_num") == 1      # Int32 <: Number
+            @test run_wasm(bytes, "gt_f64_num") == 1      # Float64 <: Number
+            @test run_wasm(bytes, "gt_f64_real") == 1     # Float64 <: Real
+            @test run_wasm(bytes, "gt_f64_absfloat") == 1 # Float64 <: AbstractFloat
+            @test run_wasm(bytes, "gt_f32_num") == 1      # Float32 <: Number
+            @test run_wasm(bytes, "gt_bool_int") == 1     # Bool <: Integer
+            @test run_wasm(bytes, "gt_bool_num") == 1     # Bool <: Number
+            @test run_wasm(bytes, "gt_u64_unsigned") == 1 # UInt64 <: Unsigned
+            @test run_wasm(bytes, "gt_u64_num") == 1      # UInt64 <: Number
+            @test run_wasm(bytes, "gt_u8_unsigned") == 1  # UInt8 <: Unsigned
+            @test run_wasm(bytes, "gt_u8_num") == 1       # UInt8 <: Number
+            # Numeric hierarchy (false)
+            @test run_wasm(bytes, "gt_i64_unsigned") == 0 # Int64 !<: Unsigned
+            @test run_wasm(bytes, "gt_i64_absfloat") == 0 # Int64 !<: AbstractFloat
+            @test run_wasm(bytes, "gt_i64_absstr") == 0   # Int64 !<: AbstractString
+            @test run_wasm(bytes, "gt_i32_i64") == 0      # Int32 !<: Int64
+            @test run_wasm(bytes, "gt_f64_signed") == 0   # Float64 !<: Signed
+            @test run_wasm(bytes, "gt_f32_f64") == 0      # Float32 !<: Float64
+            @test run_wasm(bytes, "gt_bool_signed") == 0  # Bool !<: Signed
+            @test run_wasm(bytes, "gt_u64_signed") == 0   # UInt64 !<: Signed
+            # Reverse direction (abstract !<: concrete)
+            @test run_wasm(bytes, "gt_num_i64") == 0      # Number !<: Int64
+            @test run_wasm(bytes, "gt_real_i64") == 0     # Real !<: Int64
+            @test run_wasm(bytes, "gt_signed_i64") == 0   # Signed !<: Int64
+            @test run_wasm(bytes, "gt_any_i64") == 0      # Any !<: Int64
+            @test run_wasm(bytes, "gt_any_num") == 0      # Any !<: Number
+            # Any <: Any
+            @test run_wasm(bytes, "gt_any_any") == 1      # Any <: Any
+            # String types
+            @test run_wasm(bytes, "gt_str_str") == 1      # String <: String
+            @test run_wasm(bytes, "gt_str_absstr") == 1   # String <: AbstractString — FOUND-5003: fixed Union{Type{T}} phi local allocation
+            @test run_wasm(bytes, "gt_str_any") == 1      # String <: Any
+            @test run_wasm(bytes, "gt_str_num") == 0      # String !<: Number
+            @test run_wasm(bytes, "gt_absstr_str") == 0   # AbstractString !<: String
+            # Parametric types — invariant
+            @test run_wasm(bytes, "gt_vi64_vi64") == 1    # Vector{Int64} <: Vector{Int64}
+            @test run_wasm(bytes, "gt_vi64_vnum") == 0    # Vector{Int64} !<: Vector{Number} (invariant!)
+            @test run_wasm(bytes, "gt_vf64_vf64") == 1    # Vector{Float64} <: Vector{Float64}
+            @test run_wasm(bytes, "gt_vf64_vnum") == 0    # Vector{Float64} !<: Vector{Number}
+            @test run_wasm(bytes, "gt_vi32_vi32") == 1    # Vector{Int32} <: Vector{Int32}
+            @test run_wasm(bytes, "gt_vi32_vi64") == 0    # Vector{Int32} !<: Vector{Int64}
+            @test run_wasm(bytes, "gt_di64_di64") == 1    # Dict{String,Int64} <: Dict{String,Int64}
+            @test run_wasm(bytes, "gt_di64_dnum") == 0    # Dict{String,Int64} !<: Dict{String,Number}
+            @test run_wasm(bytes, "gt_pi_pi") == 1        # Pair{Int64,Int64} <: Pair{Int64,Int64}
+            @test run_wasm(bytes, "gt_pi_pn") == 0        # Pair{Int64,Int64} !<: Pair{Int64,Number}
+            # Tuple types — covariant
+            @test run_wasm(bytes, "gt_ti64_ti64") == 1    # Tuple{Int64} <: Tuple{Int64}
+            @test run_wasm(bytes, "gt_ti64_tnum") == 1    # Tuple{Int64} <: Tuple{Number} (covariant!)
+            @test run_wasm(bytes, "gt_tif_tnn") == 1      # Tuple{Int64,Float64} <: Tuple{Number,Number}
+            @test run_wasm(bytes, "gt_t0_t0") == 1        # Tuple{} <: Tuple{}
+            @test run_wasm(bytes, "gt_t1_t2") == 0        # Tuple{Int64} !<: Tuple{Int64,Float64}
+            @test run_wasm(bytes, "gt_tf_ti") == 0        # Tuple{Float64} !<: Tuple{Int64}
+            # More numerics
+            @test run_wasm(bytes, "gt_i8_signed") == 1    # Int8 <: Signed
+            @test run_wasm(bytes, "gt_i8_int") == 1       # Int8 <: Integer
+            @test run_wasm(bytes, "gt_i8_num") == 1       # Int8 <: Number
+            @test run_wasm(bytes, "gt_i8_i64") == 0       # Int8 !<: Int64
+            @test run_wasm(bytes, "gt_i16_signed") == 1   # Int16 <: Signed
+            @test run_wasm(bytes, "gt_i16_num") == 1      # Int16 <: Number
+            @test run_wasm(bytes, "gt_u16_unsigned") == 1 # UInt16 <: Unsigned
+            @test run_wasm(bytes, "gt_u16_num") == 1      # UInt16 <: Number
+            @test run_wasm(bytes, "gt_i128_signed") == 1  # Int128 <: Signed
+            @test run_wasm(bytes, "gt_i128_num") == 1     # Int128 <: Number
+            @test run_wasm(bytes, "gt_u128_unsigned") == 1 # UInt128 <: Unsigned
+            @test run_wasm(bytes, "gt_f16_absfloat") == 1 # Float16 <: AbstractFloat
+            @test run_wasm(bytes, "gt_f16_real") == 1     # Float16 <: Real
+            @test run_wasm(bytes, "gt_f16_f64") == 0      # Float16 !<: Float64
+            # Cross-category false
+            @test run_wasm(bytes, "gt_i64_str") == 0      # Int64 !<: String
+            @test run_wasm(bytes, "gt_str_i64") == 0      # String !<: Int64
+            @test run_wasm(bytes, "gt_f64_str") == 0      # Float64 !<: String
+            @test run_wasm(bytes, "gt_bool_str") == 0     # Bool !<: String
+            @test run_wasm(bytes, "gt_num_str") == 0      # Number !<: String
+            # Abstract hierarchy
+            @test run_wasm(bytes, "gt_signed_int") == 1   # Signed <: Integer
+            @test run_wasm(bytes, "gt_int_real") == 1     # Integer <: Real
+            @test run_wasm(bytes, "gt_real_num") == 1     # Real <: Number — FOUND-5003: fixed Union{Type{T}} phi local allocation
+            @test run_wasm(bytes, "gt_num_any") == 1      # Number <: Any
+            @test run_wasm(bytes, "gt_unsigned_int") == 1 # Unsigned <: Integer
+            @test run_wasm(bytes, "gt_absfloat_real") == 1 # AbstractFloat <: Real
+            @test run_wasm(bytes, "gt_signed_unsigned") == 0 # Signed !<: Unsigned
+            @test run_wasm(bytes, "gt_unsigned_signed") == 0 # Unsigned !<: Signed
+            @test run_wasm(bytes, "gt_absfloat_int") == 0 # AbstractFloat !<: Integer
+            @test run_wasm(bytes, "gt_int_absfloat") == 0 # Integer !<: AbstractFloat
+            # Nothing
+            @test run_wasm(bytes, "gt_nothing_nothing") == 1 # Nothing <: Nothing
+            @test run_wasm(bytes, "gt_nothing_any") == 1    # Nothing <: Any
+            @test run_wasm(bytes, "gt_nothing_i64") == 0    # Nothing !<: Int64
+            @test run_wasm(bytes, "gt_i64_nothing") == 0    # Int64 !<: Nothing
+            # Type{T}
+            @test run_wasm(bytes, "gt_typei_typei") == 1  # Type{Int64} <: Type{Int64}
+            @test run_wasm(bytes, "gt_typei_typen") == 0  # Type{Int64} !<: Type{Number}
+            @test run_wasm(bytes, "gt_typei_dt") == 1     # Type{Int64} <: DataType
+            # Char
+            @test run_wasm(bytes, "gt_char_char") == 1    # Char <: Char
+            @test run_wasm(bytes, "gt_char_any") == 1     # Char <: Any
+            @test run_wasm(bytes, "gt_char_num") == 0     # Char !<: Number
+            # More cross-type
+            @test run_wasm(bytes, "gt_absstr_any") == 1   # AbstractString <: Any
+            @test run_wasm(bytes, "gt_absstr_num") == 0   # AbstractString !<: Number
+            @test run_wasm(bytes, "gt_i64_bool") == 0     # Int64 !<: Bool
+            @test run_wasm(bytes, "gt_bool_i64") == 0     # Bool !<: Int64
+            @test run_wasm(bytes, "gt_f64_i64") == 0      # Float64 !<: Int64
+            @test run_wasm(bytes, "gt_i64_f64") == 0      # Int64 !<: Float64
         end
 
     end
@@ -6141,13 +5723,13 @@ begin
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const r = e.tf5_dispatch_ab(a);
 console.log(JSON.stringify({result: Number(r)}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6191,7 +5773,7 @@ console.log(JSON.stringify({result: Number(r)}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const b = e.tf5_make_beta(10n);
@@ -6202,7 +5784,7 @@ const cg = e.tf5_dispatch_3way(g);
 const ok = Number(ca)===1 && Number(cb)===2 && Number(cg)===3;
 console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6230,7 +5812,7 @@ console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const cat = e.tf5_make_cat(10);
 const dog = e.tf5_make_dog(20);
@@ -6239,7 +5821,7 @@ const cd = e.tf5_classify_pet(dog);
 const ok = Number(cc)===1 && Number(cd)===2;
 console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6329,7 +5911,7 @@ console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const rn = e.ir001_make_returnnode(99n);
 const gn = e.ir001_make_gotonode(10n);
@@ -6345,7 +5927,7 @@ console.log(JSON.stringify({
     ok: Number(d_rn)===1 && Number(d_gn)===2 && Number(d_gif)===3 && Number(d_ssa)===4
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6368,7 +5950,7 @@ console.log(JSON.stringify({
             dir = mktempdir()
             wasm_path = joinpath(dir, "ir001_reg.wasm")
             write(wasm_path, bytes)
-            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            validate_output = read(`wasm-tools validate --features=gc,legacy-exceptions $wasm_path`, String)
             @test isempty(validate_output)
         end
 
@@ -6408,7 +5990,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const ssa = e.ir002_make_ssaval(42n);
 const arg = e.ir002_make_argument(7n);
@@ -6421,7 +6003,7 @@ console.log(JSON.stringify({
     ok: v_ssa===42n && v_arg===7n && v_gn===99n
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6490,7 +6072,7 @@ console.log(JSON.stringify({
             dir = mktempdir()
             wasm_path = joinpath(dir, "ir003.wasm")
             write(wasm_path, bytes)
-            validate_output = read(`wasm-tools validate $wasm_path`, String)
+            validate_output = read(`wasm-tools validate --features=gc,legacy-exceptions $wasm_path`, String)
             @test isempty(validate_output)
 
             # Runtime dispatch via Node.js
@@ -6498,7 +6080,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, { Math: { pow: Math.pow } });
+const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js()));
 const e = instance.exports;
 const call_expr = e.ir003_make_call_expr();
 const invoke_expr = e.ir003_make_invoke_expr();
@@ -6511,7 +6093,7 @@ console.log(JSON.stringify({
     ok: d_call===10 && d_invoke===11 && d_new===12
 }));
 """)
-            node_cmd = NODE_CMD
+            node_cmd = NODE
             if node_cmd !== nothing
                 output = strip(read(`$node_cmd $js_path`, String))
                 result = JSON.parse(output)
@@ -6676,7 +6258,7 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t59_isinf_exp, 1000.0).pass    # exp(1000) = Inf
 
             _t59_exp_neginf(x::Float64)::Float64 = exp(-x * x)
-            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) ≈ 0
+            @test compare_julia_wasm(_t59_exp_neginf, 100.0).pass    # exp(-10000) underflows to 0
 
             _t59_isinf_log(x::Float64)::Int32 = Int32(isinf(log(x)))
             @test compare_julia_wasm(_t59_isinf_log, 0.0).pass       # log(0) = -Inf (doesn't throw in Julia for 0.0)
@@ -6752,21 +6334,16 @@ console.log(JSON.stringify({
         end
 
         @testset "Hyperbolic sinh/cosh/tanh (WASMTARGET-FUZZ)" begin
-            # Base sinh/cosh/tanh were value-stubs (no codegen) — hypot(Inf, sinh(x))
-            # failed to validate. Overlays: cosh exact; sinh Taylor (|x|<0.35) else
-            # exp-based with an overflow-safe eᵃ/2 for |x|>20; tanh = sinh/cosh (±1 for |x|>20).
-            # These use a *different* algorithm than Base (exp-based), so compare within
-            # the differential tolerance (rtol=1e-9) rather than bit-exact `==`.
+            # Julia's own sinh/cosh/tanh bodies, compared bit-exact (their approximating
+            # overlays are gone).
             _t60_sinh(x::Float64)::Float64 = sinh(x)
             _t60_cosh(x::Float64)::Float64 = cosh(x)
             _t60_tanh(x::Float64)::Float64 = tanh(x)
-            _hyp_close(f, x) = (r = compare_julia_wasm(f, x);
-                !r.skipped && isapprox(r.expected, r.actual; rtol=1e-9, atol=1e-12))
             for x in (0.0, 0.34, 0.35, 0.5, 1.0, -1.0, 2.0, -2.0, 5.0, 20.0, 21.0,
                       30.0, 710.0, 1e-8, 1e-300)
-                @test _hyp_close(_t60_sinh, x)
-                @test _hyp_close(_t60_cosh, x)
-                @test _hyp_close(_t60_tanh, x)
+                @test compare_julia_wasm(_t60_sinh, x).pass
+                @test compare_julia_wasm(_t60_cosh, x).pass
+                @test compare_julia_wasm(_t60_tanh, x).pass
             end
             # saturation / specials via Bool wrappers (bit-exact ⇒ plain `.pass`)
             _t60_sinh_pinf(x::Float64)::Bool = isinf(sinh(x)) && sinh(x) > 0.0
@@ -6777,9 +6354,9 @@ console.log(JSON.stringify({
             @test compare_julia_wasm(_t60_cosh_inf, -Inf).pass
             @test compare_julia_wasm(_t60_tanh_one, Inf).pass
             @test compare_julia_wasm(_t60_tanh_nan, NaN).pass
-            # Float32 redirect
+            # Julia's Float32 sinh
             _t60_sinh32(x::Float32)::Float32 = sinh(x)
-            @test _hyp_close(_t60_sinh32, 1.0f0)
+            @test compare_julia_wasm(_t60_sinh32, 1.0f0).pass
         end
 
         @testset "Numeric-struct field struct.new/struct.get (WASMTARGET-FUZZ)" begin
@@ -6876,31 +6453,21 @@ console.log(JSON.stringify({
             # tracked, passing or failing. The loop's product KPI is "PI pieces green:
             # N/total". To update after a (re-)harvest or codegen fix that flips a piece:
             # `julia --project=. test/integration/regen_snapshot_lock.jl` and commit the lock.
-            # Node-gated (skips cleanly when the wasm runner is unavailable).
-            if WasmRunner.runner_available() && isfile(SNAP_FIX)
-                statuses = pi_all_statuses()
-                @test !isempty(statuses)
-                lock = isfile(SNAP_LOCK) ? JSON.parsefile(SNAP_LOCK) : Dict{String,Any}()
-                @info "Snapshot.jl island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
-                for s in statuses
-                    rec = get(lock, s.key, nothing)
-                    if rec === nothing
-                        @warn "PI island piece missing from lock — run test/integration/regen_snapshot_lock.jl" key = s.key status = s.status
-                        @test false
-                    else
-                        _ok = s.status == rec["status"]
-                        _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
-                        # The lock (snapshot_island_status.json) is generated on the stable
-                        # release Julia (1.12). On a moving prerelease (~1.13.0-rc) a few
-                        # pieces legitimately classify differently; that shouldn't redden
-                        # CI on the unstable target. Enforce strictly on stable, tolerate
-                        # flips on prerelease (regen the lock once 1.13 ships stable).
-                        if _ok || VERSION < v"1.13-"
-                            @test _ok
-                        else
-                            @test_broken _ok
-                        end
-                    end
+            statuses = pi_all_statuses()
+            @test !isempty(statuses)
+            lock = JSON.parsefile(SNAP_LOCK)
+            @info "Snapshot.jl island fixtures" total=length(statuses) green=count(s -> s.status == "green", statuses)
+            for s in statuses
+                rec = get(lock, s.key, nothing)
+                if rec === nothing
+                    @warn "PI island piece missing from lock — run test/integration/regen_snapshot_lock.jl" key = s.key status = s.status
+                    @test false
+                else
+                    _ok = s.status == rec["status"]
+                    _ok || @warn "PI island piece status FLIP" key = s.key live = s.status locked = rec["status"] detail = s.detail
+                    # exact on every Julia the suite runs (1.13.0 measured: no piece classifies
+                    # differently; the prerelease tolerance is gone)
+                    @test _ok
                 end
             end
         end
@@ -7711,11 +7278,11 @@ console.log(JSON.stringify({
             r = compare_julia_wasm(tc_len)
             @test r.pass  # 11
 
-            tc_first()::Int64 = Int64(str_char(titlecase("hello world"), Int32(1)))
+            tc_first()::Int64 = Int64(codeunit(titlecase("hello world"), 1))
             r = compare_julia_wasm(tc_first)
             @test r.pass  # 'H' = 72
 
-            tc_strict()::Int64 = Int64(str_char(titlecase("hELLO"), Int32(2)))
+            tc_strict()::Int64 = Int64(codeunit(titlecase("hELLO"), 2))
             r = compare_julia_wasm(tc_strict)
             @test r.pass
 
@@ -7738,11 +7305,11 @@ console.log(JSON.stringify({
             r = compare_julia_wasm(lcf_len)
             @test r.pass  # 5
 
-            lcf_first()::Int64 = Int64(str_char(lowercasefirst("HELLO"), Int32(1)))
+            lcf_first()::Int64 = Int64(codeunit(lowercasefirst("HELLO"), 1))
             r = compare_julia_wasm(lcf_first)
             @test r.pass  # 'h' = 104
 
-            lcf_second()::Int64 = Int64(str_char(lowercasefirst("HELLO"), Int32(2)))
+            lcf_second()::Int64 = Int64(codeunit(lowercasefirst("HELLO"), 2))
             r = compare_julia_wasm(lcf_second)
             @test r.pass  # 'E' = 69
 
@@ -7765,11 +7332,11 @@ console.log(JSON.stringify({
             r = compare_julia_wasm(ucf_len)
             @test r.pass  # 5
 
-            ucf_first()::Int64 = Int64(str_char(uppercasefirst("hello"), Int32(1)))
+            ucf_first()::Int64 = Int64(codeunit(uppercasefirst("hello"), 1))
             r = compare_julia_wasm(ucf_first)
             @test r.pass  # 'H' = 72
 
-            ucf_second()::Int64 = Int64(str_char(uppercasefirst("hello"), Int32(2)))
+            ucf_second()::Int64 = Int64(codeunit(uppercasefirst("hello"), 2))
             r = compare_julia_wasm(ucf_second)
             @test r.pass  # 'e' = 101
 
@@ -9290,16 +8857,12 @@ console.log(JSON.stringify({
         _s1004_sizeof()::Int64 = sizeof("hello")
         _s1004_length()::Int64 = length("hello")
         _s1004_concat_len()::Int64 = length("hello" * " world")
-        _s1004_hash()::Int32 = str_hash("hello")
-        _s1004_char()::Int64 = Int64(str_char("hello", Int32(1)))
 
-        @testset "basic (sizeof/length/concat/hash/char)" begin
+        @testset "basic (sizeof/length/concat)" begin
             for opt in [false, true]
                 @test compare_julia_wasm(_s1004_sizeof; optimize=opt).pass
                 @test compare_julia_wasm(_s1004_length; optimize=opt).pass
                 @test compare_julia_wasm(_s1004_concat_len; optimize=opt).pass
-                @test compare_julia_wasm(_s1004_hash; optimize=opt).pass
-                @test compare_julia_wasm(_s1004_char; optimize=opt).pass
             end
         end
 
@@ -9985,9 +9548,7 @@ console.log(JSON.stringify({
         @test compare_julia_wasm(_stats_mean_literal, 2.75).pass
         @test compare_julia_wasm_vec(_stats_var, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_std, Float64[3.0, 1.5, 2.5, 4.0]).pass
-        # median/quantile: native shapes on 1.12; on 1.13 the
-        # WasmTargetStatisticsExt overlays reroute the wrapper
-        # specializations through their literal definitions.
+        # median/quantile: Julia's own wrappers, on 1.12 and 1.13.
         @test compare_julia_wasm_vec(_stats_median, Float64[3.0, 1.5, 2.5, 4.0]).pass
         @test compare_julia_wasm_vec(_stats_median, Float64[9.0, -2.0, 7.5, 0.0, 1.0, 3.25, -8.0]).pass
         @test compare_julia_wasm_vec(_stats_quantile, Float64[1.0, 2.0, 3.0, 4.0]).pass
@@ -10042,9 +9603,8 @@ console.log(JSON.stringify({
     end
 
     # ── P4-stdlib: Random (stdlib #3) ──────────────────────────────────────
-    # Seeded Xoshiro streams compile from the real implementations and match
-    # native bit-exactly; WasmTargetRandomExt reroutes hash_seed through
-    # SHA's type-stable byte-vector path (identical digests). Unseeded RNGs
+    # Seeded Xoshiro streams compile from the real implementations, Random's
+    # own hash_seed included, and match native bit-exactly. Unseeded RNGs
     # (TaskLocalRNG, OS entropy) defer to embedding-side imports.
     _rand_i64(x::Int64)::Int64 = rand(Random.Xoshiro(x), Int64)
     _rand_f64(x::Int64)::Float64 = rand(Random.Xoshiro(x))
@@ -10059,21 +9619,14 @@ console.log(JSON.stringify({
     _rand_bool(x::Int64)::Bool = rand(Random.Xoshiro(x), Bool)
 
     @pphase "Random stdlib" begin
-        # 1.13's Random IR shapes hit the ledgered memoryrefnew pair-to-local
-        # family (a517b4c8372d) across the board — the whole phase is gated
-        # until pair-locals land. 1.12: all seeded streams bit-exact.
-        @static if VERSION < v"1.13-"
-            @test compare_julia_wasm(_rand_i64, 42).pass
-            @test compare_julia_wasm(_rand_i64, -3).pass
-            @test compare_julia_wasm(_rand_f64, 42).pass
-            @test compare_julia_wasm(_rand_range, 7).pass
-            @test compare_julia_wasm(_rand_randn, 42).pass
-            @test compare_julia_wasm(_rand_stream, 7).pass
-            @test compare_julia_wasm(_rand_bool, 42).pass
-            @test compare_julia_wasm(_rand_bool, -3).pass
-        else
-            @test_skip false
-        end
+        @test compare_julia_wasm(_rand_i64, 42).pass
+        @test compare_julia_wasm(_rand_i64, -3).pass
+        @test compare_julia_wasm(_rand_f64, 42).pass
+        @test compare_julia_wasm(_rand_range, 7).pass
+        @test compare_julia_wasm(_rand_randn, 42).pass
+        @test compare_julia_wasm(_rand_stream, 7).pass
+        @test compare_julia_wasm(_rand_bool, 42).pass
+        @test compare_julia_wasm(_rand_bool, -3).pass
     end
 
     # top-level so they're singleton functions, not capturing closures —

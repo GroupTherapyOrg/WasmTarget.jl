@@ -1,0 +1,101 @@
+# The formal layer
+
+Model checking is the third enforcement layer beside the locks (syntactic, `test/parity_ratchet.jl`)
+and the differential oracle (behavioral, native vs wasm). It exists for the claims neither of those
+can exhaust — "for every CFG in the class", "under any discovery order", "no two selectors
+collide" — the classes WasmTarget's real bugs lived in. The pattern is JuliaLang/julia's
+`doc/src/devdocs/scheduler-wakeup/SchedulerWake.tla` (a TLA+ model of the scheduler wake handshake,
+authored with Claude for #61826, checked by TLC over every interleaving); WasmTarget goes one step
+further and gates on it.
+
+## Files
+
+| File | Role |
+|---|---|
+| `<Name>.tla` | the model of the ACTUAL Julia algorithm, read from source; its header says what is abstracted and why that suffices, names the modeled function, and cites the dart anchor (or the quarantine reason) |
+| `MC<Name>.tla` / `MC<Name>.cfg` | a small instance: `TypeOK`, the claim invariants/properties, and TLC's deadlock check (on unless the cfg says `CHECK_DEADLOCK FALSE`; a run that ends gives its terminal states an explicit stutter in the model, e.g. `Terminal == done /\ UNCHANGED vars`) |
+| `MC<Name>[Variant]Broken.cfg` | a variant TLC MUST reject: a deliberately wrong one (a CONSTANT flag mirroring a realistic bug class; a model no wrong variant can violate proves nothing), or a pinned open finding of the code itself (its header names the dev/MARCH.md row) |
+| `run_tlc.sh` | runs every `MC*.cfg`; fails if a positive instance fails or a Broken one does not violate exactly the claim its first line names (`\* expect: <Invariant>`, checked on one worker so the first violation TLC reports is fixed; never `TypeOK`, which a Broken cfg must not name: it breaks a claim, not the type invariant); fetches TLC v1.7.4 to `~/.cache/wasmtarget` if absent |
+
+The modeled Julia function carries a one-line `formal(dev/formal/<Name>.tla): <claim>` anchor —
+inside its docstring when it has one (a comment line between a docstring and its definition
+detaches the docstring; R35 counts those), otherwise as a `#` comment directly above it;
+L111 keeps every model paired with its instance, a Broken variant, and an anchor. `formal.yml`
+runs the harness on every push.
+
+## Components
+
+Every algorithmic component of `src/` — a fixpoint, a graph walk, a numbering, a proof the
+compiler acts on — and the model that checks it. A row with no model names why. (C8's
+proposed lock reads this table: each modeled function carries its `formal(` anchor, and every
+anchor in `src/` has a row.)
+
+| Component | Functions | Model |
+|---|---|---|
+| Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `emit_duplicated_terminal!` (stackified.jl) | Stackifier |
+| ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
+| Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
+| Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis`, `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
+| Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
+| Coercion funnel | `convert_type!`, `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
+| Constant interning | `ensure_constant_global!` (types.jl) | Constants |
+| Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
+| Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |
+| NIR boundary | `build_nir` (nir.jl) | NirBuild |
+| Box contents join | `box_contents_type` (box_capture.jl) | BoxJoin |
+| Box-derived value types | `f3_box_value_types` (box_capture.jl) | BoxValueTypes |
+| Numeric accumulator types | `propagate_numeric_value_types` (box_capture.jl) | NumericJoin |
+| Storage-relative pointers | `_storage_relative_pointer_is_closed`, `_trace_memmove_ptr` (statements.jl) | StoragePointer |
+| Dead-statement proof | `stmt_is_proven_unreachable`, `analyze_blocks` (generate.jl) | ProvenDead |
+| Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
+| Native sidecar protocol | test/sidecar | Sidecar |
+| Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
+| External-leaf cut at every merge (ClosedWorld's ExternalLeaves, LeavesNeverCollected) | `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
+| Every dynamic candidate a dispatch root, collected first or not (ClosedWorld's RootsComplete) | `collect_closed_world`'s dynamic step (trimcollect.jl) | ClosedWorld |
+| Inline classId switch | `_try_inline_typeid_dispatch`, `_emit_switch_methoderror!`, `_emit_throw_methoderror_by_class!` (calls.jl), `_emit_closure_arg_tests!`, `_closure_dispatch_trampoline!`, `_closure_trampoline!`, `_emit_trampoline_methoderror!` (closures.jl), `bare_array_partition` (builtins.jl), the no-method args tuples (`_dynamic_dispatch_candidate_mis`, `methoderror_args_types`, trimcollect.jl) | ClassIdSwitch |
+| Dynamic-call enrollment and row order | `_dynamic_dispatch_candidate_mis` and its walk of the held constants `hold!` (trimcollect.jl), `_most_specific_first`, `ambiguous_class_tuple` (closures.jl), the vtable pre-pass's invoke-only and ambiguity rules (compile.jl) | Enrollment |
+| Type identity under iso-recursive canonicalization | `add_type!`, `add_type_group!`, `_group_member_equal` (instructions.jl), `finish_pending!` (structs.jl) | TypeIdentity |
+| `===` over representations | `emit_egal!`, `get_egal_function!`, `fill_egal_function!`, `_fill_egal_body!` (calls.jl) | EgalDispatch |
+| Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
+| Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
+| Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
+| Julia's exception stack | `emit_throw_value!`, `emit_rethrow!`, `emit_current_exception!`, `exc_saved_local!`, `emit_export_entry!` (a prologue), `emit_direct_call!` (the slot save and restore around a host-declared import call), `host_glue_js` (the count, the host's) (generate.jl), the one-time export of each function in `_compile_closed_world_plan` (compile.jl), a region's enter and pop_exception (statements.jl), the catch landing (stackified.jl) | ExceptionStack |
+| SSA stack residency | `allocate_ssa_locals!`, `needs_local` (context.jl) | — no claim to check: every SSA a statement reads gets a local |
+| Cast-result refinement | `refine_checked_cast_types!` (context.jl) | — no fixpoint: one local rule per statement |
+| `isa` and typeassert lowering | `_compile_call_isa` (calls.jl) | — a per-statement port of emit_isa's case order (cgutils.cpp), not an algorithm |
+| Concrete-evaluation rule | interpreter.jl | — a per-function predicate list (C3), not an algorithm |
+| Value-type subtyping | `wasm_subtype` (builder/types.jl) | — a per-type rule, type.dart isSubtypeOf; test_wasm_subtype_lattice.jl |
+| Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
+| Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
+| LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl) | — encodings; wasm-tools parses every module |
+
+## Rules
+
+- A change to a modeled algorithm updates the model FIRST and lands with TLC green.
+- A new protocol or algorithm is modeled spec-first; the code is checked against the model.
+- A TLC counterexample against the real algorithm is a finding: reproduce it in Julia, fix the
+  algorithm, keep the invariant. Never weaken an invariant to make TLC pass. (ConsultChain → L113;
+  ClassIdDispatch → the dispatch guards; Stackifier's Broken instances are the `b9f4d229` miscompile
+  and the `8424acd3` dropped phi store.)
+- Keep instances small enough for CI (seconds to a couple of minutes). If exhaustive enumeration at
+  the size that contains a witness is intractable, the Broken instance uses a fixed witness CFG and
+  the positive instance stays exhaustive at the tractable size (Stackifier: N=4 exhaustive; N=5 is
+  not CI-tractable).
+- Commit messages for algorithmic fixes narrate the protocol: the exact shape that breaks, the
+  invariant, and why the fix restores it.
+
+## Nightly
+
+`formal.yml` also runs on a schedule with `TLC_NIGHTLY=1` and a 5-hour budget: the harness then
+adds `dev/formal/nightly/MC*.cfg` — instances too large for the 20-minute gate, checked against
+the same model modules (a `nightly/MCStackifierN5.cfg` would check `MCStackifier.tla` at N=5).
+Nothing lives there yet: every current instance fits the gate. Add one only when it terminates
+in the budget on a 2-core runner — a job that never finishes proves nothing either.
+
+## Running
+
+```
+bash dev/formal/run_tlc.sh            # every instance
+TLC_WORKERS=auto bash dev/formal/run_tlc.sh
+java -cp ~/.cache/wasmtarget/tla2tools.jar tlc2.TLC -workers auto -config MCStackifier.cfg MCStackifier.tla
+```

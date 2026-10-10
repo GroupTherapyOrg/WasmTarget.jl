@@ -11,6 +11,7 @@ export encode_leb128_unsigned, encode_leb128_signed, WasmWriter
     encode_leb128_unsigned(value) -> Vector{UInt8}
 
 Encode an unsigned integer using LEB128 (Little Endian Base 128).
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
 """
 function encode_leb128_unsigned(value::Integer)::Vector{UInt8}
     result = UInt8[]
@@ -31,6 +32,7 @@ end
     encode_leb128_signed(value) -> Vector{UInt8}
 
 Encode a signed integer using LEB128 (Little Endian Base 128).
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
 """
 function encode_leb128_signed(value::Integer)::Vector{UInt8}
     result = UInt8[]
@@ -57,93 +59,67 @@ end
     WasmWriter
 
 A mutable buffer for building WebAssembly binary data.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:17 Serializer)
 """
 mutable struct WasmWriter
     buffer::Vector{UInt8}
 end
 
-WasmWriter() = WasmWriter(UInt8[])
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:17 Serializer)
+WasmWriter()::WasmWriter = WasmWriter(UInt8[])
 
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:29 Serializer.offset)
 Base.length(w::WasmWriter) = length(w.buffer)
-bytes(w::WasmWriter) = w.buffer
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:141 Serializer.data)
+bytes(w::WasmWriter)::Vector{UInt8} = w.buffer
 
 """
 Write raw bytes to the buffer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes)
 """
-function write_bytes!(w::WasmWriter, data::Vector{UInt8})
+function write_bytes!(w::WasmWriter, data::Vector{UInt8})::WasmWriter
     append!(w.buffer, data)
     return w
 end
 
-function write_bytes!(w::WasmWriter, data::UInt8...)
+# parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:55 Serializer.writeBytes)
+function write_bytes!(w::WasmWriter, data::UInt8...)::WasmWriter
     append!(w.buffer, data)
     return w
 end
 
 """
 Write a single byte.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:48 Serializer.writeByte)
 """
-function write_byte!(w::WasmWriter, b::UInt8)
+function write_byte!(w::WasmWriter, b::UInt8)::WasmWriter
     push!(w.buffer, b)
     return w
 end
 
 """
 Write an unsigned LEB128 integer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:69 Serializer.writeUnsigned)
 """
-function write_u32!(w::WasmWriter, value::Integer)
+function write_u32!(w::WasmWriter, value::Integer)::WasmWriter
     append!(w.buffer, encode_leb128_unsigned(value))
     return w
 end
 
 """
 Write a signed LEB128 integer.
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:61 Serializer.writeSigned)
 """
-function write_i32!(w::WasmWriter, value::Integer)
+function write_i32!(w::WasmWriter, value::Integer)::WasmWriter
     append!(w.buffer, encode_leb128_signed(value))
     return w
 end
-
-function write_i64!(w::WasmWriter, value::Integer)
-    append!(w.buffer, encode_leb128_signed(value))
-    return w
-end
-
-"""
-Write a 32-bit float (little endian).
-"""
-function write_f32!(w::WasmWriter, value::Float32)
-    append!(w.buffer, reinterpret(UInt8, [value]))
-    return w
-end
-
-"""
-Write a 64-bit float (little endian).
-"""
-function write_f64!(w::WasmWriter, value::Float64)
-    append!(w.buffer, reinterpret(UInt8, [value]))
-    return w
-end
-
-"""
-Write a vector with its length prefix (LEB128).
-"""
-function write_vec!(w::WasmWriter, items::Vector)
-    write_u32!(w, length(items))
-    for item in items
-        write_item!(w, item)
-    end
-    return w
-end
-
-# Generic item writer - override for specific types
-write_item!(w::WasmWriter, b::UInt8) = write_byte!(w, b)
-write_item!(w::WasmWriter, n::NumType) = write_byte!(w, UInt8(n))
 
 """
 Write a name (UTF-8 string with length prefix).
+parity(pkg/wasm_builder/lib/src/serialize/serializer.dart:103 Serializer.writeName)
 """
-function write_name!(w::WasmWriter, name::String)
+function write_name!(w::WasmWriter, name::String)::WasmWriter
     name_bytes = Vector{UInt8}(name)
     write_u32!(w, length(name_bytes))
     append!(w.buffer, name_bytes)

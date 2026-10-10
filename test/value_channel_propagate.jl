@@ -14,7 +14,7 @@
     fplain(x::Int64)::Int64 = x * 2 + 1                     # no Any SSAs
     for (f, ts) in Any[(ghet, (Bool,)), (fmix, (Bool,)), (fplain, (Int64,))]
         ci = code_typed(f, ts; optimize = true)[1].first
-        @test isempty(WasmTarget.propagate_numeric_value_types(ci.code, ci.ssavaluetypes))
+        @test isempty(WasmTarget.propagate_numeric_value_types(WasmTarget.build_nir(ci)))
     end
 
     # POSITIVE (the real case): WT interp scalar-replaces counter's box → an Any-typed Int64 cycle.
@@ -24,10 +24,11 @@
     res = Base.code_typed(counter, (Int64,); interp = interp)
     if !isempty(res)                                        # guard: WT-interp IR available
         ci = res[1].first
-        vt = WasmTarget.propagate_numeric_value_types(ci.code, ci.ssavaluetypes)
+        nir = WasmTarget.build_nir(ci)
+        vt = WasmTarget.propagate_numeric_value_types(nir)
         @test !isempty(vt)
         @test all(t -> t isa DataType && isconcretetype(t) && (t <: Integer || t <: AbstractFloat), values(vt))
         # the Any-typed accumulator phi + its `+` are among them
-        @test any(i -> ci.code[i] isa Core.PhiNode, keys(vt))
+        @test any(i -> nir[i].node isa WasmTarget.NirPhi, keys(vt))
     end
 end

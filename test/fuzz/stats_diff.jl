@@ -25,7 +25,8 @@ function _st_diff(fn, argTs::Tuple, inputs::Vector, rettype)
     for (i, r) in enumerate(res)
         a = inputs[i]
         nat = try (true, fn(deepcopy.(a)...)) catch; (false, nothing) end
-        ok = r[1] === :ok ? (nat[1] && _ST_B.tree_matches(rdesc, nat[2], r[2])) : !nat[1]
+        ok = r[1] === :ok ? (nat[1] && _ST_B.tree_matches(rdesc, nat[2], r[2];
+                                                          nonportable = get(_ST_NONPORTABLE, fn, nothing))) : !nat[1]
         if !ok
             @error("Statistics differential mismatch",
                 function_name=string(nameof(fn)), argument_types=argTs,
@@ -44,12 +45,17 @@ _st_meanb(r, A) = mean!(r, A)
 # cor exercises the type-level concrete-eval fold (src/codegen/interpreter.jl):
 # its result type is `one(float(nonmissingtype(eltype)))` — a pure type-level
 # chain that WT could not lower until the fold. 1-arg autocorrelation = 1.0 hits
-# the chain directly; 2-arg uses the corm reroute (Statistics ext) for the value.
+# the chain directly; 2-arg reaches it through its x === y branch, then corm.
 _st_cor1(v)    = cor(v)
 _st_cor2(a, b) = cor(a, b)
 
+# The cases whose native value's last bits are not Julia's portable answer: Statistics.corm
+# accumulates under `@simd`, and native vectorizes that reduction in an order its target's
+# vector width decides (it differs from the sequential order in 2074 of 3000 random inputs on
+# arm64). Every other case is compared bit-exact.
+const _ST_NONPORTABLE = Dict{Function,String}(_st_cor2 => "@simd Statistics.corm")
+
 function run_stats_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x57A7)
     @testset "in-place median!/quantile!" begin
         @test _st_diff(_st_medb, (Vector{Float64},),
@@ -57,7 +63,7 @@ function run_stats_tests(; reps::Int = 40)
         @test _st_diff(_st_quab, (Vector{Float64}, Float64),
                        [ (_st_rv(rng, rand(rng, 3:9)), rand(rng)) for _ in 1:reps ], Float64)
     end
-    @testset "in-place mean! (row-means overlay)" begin
+    @testset "in-place mean! (sum! over a dimension, then the rescale)" begin
         @test _st_diff(_st_meanb, (Vector{Float64}, Matrix{Float64}),
                        [ (m = rand(rng, 2:4); n = rand(rng, 2:5); (zeros(m), _st_rm(rng, m, n))) for _ in 1:reps ],
                        Vector{Float64})

@@ -81,14 +81,9 @@ end""")),
             Code(:class => code_inline, "(array (mut i8))"),
             " holding UTF-8 bytes; reads use ", Code(:class => code_inline, "array.get_u"),
             " which zero-extends each byte to ", Code(:class => code_inline, "i32"),
-            " on the stack, so arithmetic (e.g. inside ",
-            Code(:class => code_inline, "str_char(s, i)::Int32"),
+            " on the stack, so character-indexing arithmetic (e.g. ",
+            Code(:class => code_inline, "Int32(codeunit(s, i))"),
             ") happens at i32 width with no truncation cost."),
-        P(:class => "text-warm-600 dark:text-warm-400",
-            "An ", Code(:class => code_inline, "(array (mut i16))"),
-            " type also appears in compiled modules — it's purely the JS-boundary bridge. ",
-            Code(:class => code_inline, "wasm:js-string.fromCharCodeArray"),
-            " (Chrome 131+ / Node 23+) takes UTF-16 char codes, so an i8 → i16 widen happens once at the println / format-output boundary. Internal strings stay UTF-8 i8 throughout."),
 
         H3(:class => "text-base font-semibold text-warm-700 dark:text-warm-300", "JSValue + WasmGlobal"),
         P(:class => "text-warm-600 dark:text-warm-400",
@@ -292,8 +287,9 @@ any_positive(a::Int32, b::Int32)::Bool =
 
         H3(:class => "text-base font-semibold text-warm-700 dark:text-warm-300", "Try / Catch / Throw"),
         P(:class => "text-warm-600 dark:text-warm-400",
-            "Exception handling uses WASM's ", Code(:class => code_inline, "try_table"),
-            " and ", Code(:class => code_inline, "throw"), " instructions:"),
+            "Exception handling uses WASM's legacy ", Code(:class => code_inline, "try"), "/",
+            Code(:class => code_inline, "catch"), " and ", Code(:class => code_inline, "throw"),
+            " instructions, the form dart2wasm emits:"),
         Pre(:class => code_block, Code(:class => "language-julia", """function safe_div(a::Int32, b::Int32)::Int32
     try
         if b == Int32(0)
