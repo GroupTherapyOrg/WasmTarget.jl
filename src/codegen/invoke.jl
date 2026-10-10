@@ -17,7 +17,7 @@ function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodIns
     isva = mi.def.isva
     fixed_count = isva ? mi.def.nargs - 2 : mi.def.nargs - 1  # exclude #self# (and the vararg slot)
     fieldcount(target) == fixed_count + (isva ? 1 : 0) || return false
-    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
+    local hit = p0_irget("invoke20", ctx.translator.plan.ir_cache, mi)
     hit === nothing && return false
     body = hit[1]
     nir = build_nir(body)
@@ -115,6 +115,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # Skipped statements emit nothing (NOP). This prevents argument values
     # (e.g., string constants for js() calls) from being compiled to WASM.
     if idx in ctx.skip_stmts
+        p0!("P0A arm=skip")
         return append_builder!(b, fb)
     end
 
@@ -137,6 +138,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                         from_julia=(jt isa Type && isconcretetype(jt)) ? jt : nothing)
         end
         emit_direct_call!(bii, ctx.mod, ctx.type_registry, target_idx)
+        p0!("P0A arm=invoke_imports")
         return append_builder!(b, bii)
     end
 
@@ -151,6 +153,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             global_idx = ctx.signal_ssa_getters[ssa_id]
             bsg = _ctx_builder(ctx, "compile_invoke")
             global_get!(bsg, global_idx)
+            p0!("P0A arm=signal")
             return append_builder!(b, bsg)
         end
         # Signal setter: one arg, sets the signal value
@@ -183,6 +186,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
 
             # Setter returns the value in Therapy.jl, so re-read it
             global_get!(bss2, global_idx)
+            p0!("P0A arm=signal")
             return append_builder!(b, bss2)
         end
     end
@@ -198,6 +202,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     if _cw_f === Base.check_world_bounded || _cw_f === _closed_world_type_bounds ||
        _cw_f === Base.isvisible || _cw_f === _closed_world_isvisible
         local _cw_r = BUILTIN_LOWERINGS[_cw_f](b, fb, ctx, node, idx, args, _cw_f)
+        p0!("P0A arm=closed_world_builtin mi_fi=" * string(ctx.func_registry !== nothing && get_function_by_mi(ctx.func_registry, mi) !== nothing) * " returned=" * string(_cw_r !== nothing))
         _cw_r !== nothing && return _cw_r
     end
 
@@ -214,6 +219,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             "eval (dynamic world-age reflection is outside WT's closed-world compilation target)";
             idx=idx, detail=node, soundness_fatal=true)
         ctx.last_stmt_was_stub = true
+        p0!("P0A arm=eval")
         return append_builder!(b, fb)
     end
 
@@ -274,6 +280,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
     local mi_target = (ctx.func_registry !== nothing && mi isa Core.MethodInstance) ?
                       get_function_by_mi(ctx.func_registry, mi) : nothing
+    local _p0_selfrule_e = is_self_call_early
+    local _p0e = "none"
     mi_target === nothing || (is_self_call_early = mi_target.wasm_idx == ctx.func_idx)
 
     # Get parameter types - for self-calls, use ctx.arg_types (the function's compiled signature)
@@ -325,9 +333,11 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                                                  expected_return=_exp_ret isa Type ? _exp_ret : nothing)
                 target_info_early === nothing || break
             end
+            target_info_early === nothing || (_p0e = "sig")
             # Closure/kwarg functions are registered with self-type prepended
             if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
                 target_info_early = get_function(ctx.func_registry, called_func_early, _sigs_early[end])
+                target_info_early === nothing || (_p0e = "selfsig")
                 # 453393ca4ba4: a CAPTURING closure entry takes the closure object as
                 # wasm param 1 — the call site must push it (Snapshot.jl newton C-W3:
                 # 6 values for a 7-param functype → "nothing on stack")
@@ -356,6 +366,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
             if ti !== nothing
                 target_info_early = ti
+                _p0e = "bytype"
                 closure_self_to_push = early_operand
             end
         end
@@ -365,6 +376,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     if mi_target !== nothing && !is_self_call_early && target_info_early !== nothing &&
        target_info_early !== mi_target && target_info_early.arg_types == mi_target.arg_types
         target_info_early = mi_target
+        _p0e *= "+mioverride"
     end
     # self-prepended entries: arg_types are shifted +1 relative to `args`
     early_argtypes_offset = closure_self_to_push === nothing ? 0 : 1
@@ -391,6 +403,10 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             if _name_early === Symbol("#string#403") && length(args) == 4 &&
                ctx.func_registry !== nothing
                 _dec_info = get_function(ctx.func_registry, Base.dec, (UInt64, Int64, Bool))
+                let _dm = CC.specialize_method(which(Base.dec, (UInt64, Int64, Bool)), Tuple{typeof(Base.dec), UInt64, Int64, Bool}, Core.svec())
+                    local bm = get_function_by_mi(ctx.func_registry, _dm)
+                    p0!("P0A arm=dec_lookup dec_by_sig=$(_dec_info !== nothing) dec_by_mi=" * (bm === _dec_info ? "same" : bm === nothing ? "NONE" : "DIFFERENT"))
+                end
                 if _dec_info !== nothing
                     bd = _ctx_builder(ctx, "compile_invoke")
                     _x = args[4]  # the integer value
@@ -415,6 +431,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
 
                     # Call dec
                     call!(bd, _dec_info.wasm_idx)
+                    p0!("P0A arm=dec")
                     return append_builder!(b, bd)
                 end
             end
@@ -646,6 +663,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             end
 
             # the MethodInstance's function decides self-recursion (as above)
+            local _p0_selfrule_l = is_self_call
+            local _p0l = "none"
             mi_target === nothing || (is_self_call = mi_target.wasm_idx == ctx.func_idx)
 
             # Check for cross-function call within the module first
@@ -686,25 +705,30 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                                                    expected_return=_exp_ret_l isa Type ? _exp_ret_l : nothing)
                         target_info === nothing || break
                     end
+                    target_info === nothing || (_p0l = "sig")
                     if target_info === nothing && closure_self_to_push !== nothing
                         target_info = target_info_early
+                        target_info === nothing || (_p0l = "closure_early")
                     end
                     # the MethodInstance's own function over another method's (as above)
                     if mi_target !== nothing && target_info !== nothing && target_info !== mi_target &&
                        target_info.arg_types == mi_target.arg_types
                         target_info = mi_target
+                        _p0l *= "+mioverride"
                     end
 
                     # Closure/kwarg functions are registered with self-type prepended
                     # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
                     if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
                         target_info = get_function(ctx.func_registry, called_func, _sigs[end])
+                        target_info === nothing || (_p0l = "selfsig")
                     end
                     # A dispatch candidate is also the direct target of the :invoke that names its
                     # MethodInstance: signature lookup (get_function) hides candidates, but the
                     # invoke names its callee exactly, as a dart member is both a dispatch-table
                     # entry and the target of a direct call by its Reference.
                     # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
+                    target_info === nothing && mi_target !== nothing && (_p0l = "mi_fallback")
                     target_info === nothing && (target_info = mi_target)
 
                     if target_info !== nothing
@@ -722,6 +746,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                                            seed_types=_cc_params)   # the placeholder truth IS the contract
                         emit_direct_call!(bcc, ctx.mod, ctx.type_registry, target_info.wasm_idx)
                         cross_call_handled = true
+                        _p0_invoke_record(ctx, node, mi, mi_target, "cross", _p0e, _p0l, _p0_selfrule_e, _p0_selfrule_l,
+                                          target_info.wasm_idx, param_types, closure_self_to_push !== nothing)
                         # If callee returns Union{} (Bottom), it always throws/traps.
                         # The Wasm func type has no result, so code after is unreachable.
                         # Emit unreachable to make stack polymorphic — prevents DROP from
@@ -802,6 +828,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     _ps
                 end
                 bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
+                _p0_invoke_record(ctx, node, mi, mi_target, "self" * (is_self_call_early ? "" : "_LATE_ONLY"), _p0e, _p0l, _p0_selfrule_e, _p0_selfrule_l,
+                                  ctx.func_idx, param_types, closure_self_to_push !== nothing)
                 call!(bsc2, ctx.func_idx)
                 # Bridge return type for self-calls (externref→anyref)
                 if haskey(ctx.ssa_locals, idx)
@@ -855,6 +883,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     end
                     _sc_ok
                 end
+                _p0_invoke_record(ctx, node, mi, mi_target, "ctor", _p0e, _p0l, _p0_selfrule_e, _p0_selfrule_l,
+                                  nothing, param_types, closure_self_to_push !== nothing)
                 # Extract target type from Type{T}
                 local _ctor_target = mi.specTypes.parameters[1].parameters[1]::DataType
                 # Clear pre-compiled args — we re-emit in correct order with typeId
@@ -918,6 +948,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 # unsupported-path trap; no permissive mode exists.
                 # which lets compilation succeed for paths that never reach this method.
                 tracing(:stubargs) && println(stderr, "STUBARGS ", name, " args=", repr(args))
+                _p0_invoke_record(ctx, node, mi, mi_target, "unknown", _p0e, _p0l, _p0_selfrule_e, _p0_selfrule_l,
+                                  nothing, param_types, closure_self_to_push !== nothing)
                 record_unsupported!(ctx, :unsupported_method,
                     "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
                     idx=idx, detail=node)
@@ -931,4 +963,26 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     end
 
     return append_builder!(b, fb)
+end
+
+# THROWAWAY P0a recorder
+function _p0_invoke_record(ctx, node, mi, mi_target, arm::String, e::String, l::String, selfrule_e, selfrule_l,
+                           old_idx, old_params, old_push::Bool)
+    nargs = length(node.operands)
+    fname = ctx.func_registry === nothing ? "?" : string(ctx.func_ref)
+    if mi_target === nothing
+        p0!("P0A arm=$arm mi_fi=no early=$e late=$l", "$(mi) in $(fname)")
+        return
+    end
+    local new_self = mi_target.wasm_idx == ctx.func_idx
+    local new_push = length(mi_target.arg_types) == nargs + 1 && mi_target.arg_types[1] isa DataType &&
+                     is_closure_type(mi_target.arg_types[1])
+    local new_params = Tuple(mi_target.arg_types[(new_push ? 2 : 1):end])
+    local idx_eq = old_idx === nothing ? "na" : (UInt32(old_idx) == mi_target.wasm_idx ? "eq" : "DIFF")
+    local par_eq = old_params === nothing ? "nothing" : (Tuple(old_params) == new_params ? "eq" : "DIFF")
+    local push_eq = old_push == new_push ? "eq" : "DIFF"
+    local self_eq = "selfrule_e=$(selfrule_e) selfrule_l=$(selfrule_l) new_self=$(new_self)"
+    local bad = idx_eq == "DIFF" || par_eq == "DIFF" || push_eq == "DIFF"
+    p0!("P0A arm=$arm mi_fi=yes early=$e late=$l idx=$idx_eq params=$par_eq push=$push_eq $self_eq",
+        (bad || arm in ("ctor", "unknown")) ? "$(mi) in $(fname) old_params=$(old_params) new_params=$(new_params) old_push=$(old_push) target=$(mi_target.name)" : "")
 end

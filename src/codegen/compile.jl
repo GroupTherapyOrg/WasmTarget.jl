@@ -185,7 +185,7 @@ function _standalone_intrinsic_body(f, arg_types::Tuple)::Union{Function,Nothing
     _build_standalone_intrinsic_bodies!()
     isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
     # Julia's own method lookup, which answers `nothing` for no match or an ambiguity
-    hit = Base._which(Tuple{Core.Typeof(f), arg_types...}; raise=false)
+    hit = p0_uwhich("cp188", Tuple{Core.Typeof(f), arg_types...})
     hit === nothing && return nothing
     return get(STANDALONE_INTRINSIC_BODIES, hit.method, nothing)
 end
@@ -512,6 +512,19 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
     _reachable = _collect_reachable_ir_types(function_data)
+    for (k, vs) in P0_NOMETHOD
+        p0!("P0E numbering key_in_reachable=$(k in _reachable) key_in_error_args=$(k in plan.error_args_types)", string(k))
+        for v in vs
+            p0!("P0E numbering value_in_error_args=$(v in plan.error_args_types)")
+        end
+    end
+    let _vals = Set{Any}(v for vs in values(P0_NOMETHOD) for v in vs)
+        local _ea = Set{Any}(T for T in plan.error_args_types if T <: Tuple)
+        p0!("P0E numbering tuples_equal=$(_vals == _ea)", _vals == _ea ? "" : "record_only=$(setdiff(_vals, _ea)) flat_only=$(setdiff(_ea, _vals))")
+        local _keys = Set{Any}(keys(P0_NOMETHOD))
+        local _fs = Set{Any}(T for T in plan.error_args_types if !(T <: Tuple))
+        p0!("P0E numbering ftypes_flat_subset_of_keys=$(issubset(_fs, _keys)) keys_subset_flat=$(issubset(_keys, _fs))", "keys_only=$(setdiff(_keys, _fs)) flat_only=$(setdiff(_fs, _keys))")
+    end
     # the args tuple of each MethodError a dynamic call throws (the collector's no-method tuples)
     union!(_reachable, plan.error_args_types)
     isempty(plan.error_args_types) || push!(_reachable, MethodError, UInt64)
@@ -579,7 +592,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                  isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
                                 for fd in function_data if fd[8] !== nothing]
     merge!(type_registry.box_contents_types,
-           record_capture_contents(_capture_bodies; closure_ir=mi -> get(plan.ir_cache, mi, nothing)))
+           record_capture_contents(_capture_bodies; closure_ir=mi -> p0_irget("compile582", plan.ir_cache, mi)))
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
@@ -630,6 +643,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             push!(trace.probed, Set{Int}())
             trace.ids[func_idx] = length(trace.codes)
             name == trace.entry_name && (trace.entry = length(trace.codes))
+        end
+        let _old = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands)
+            local _cmis = Set{Any}(fn[4] for fn in plan.functions if (fn[1], fn[2]) in _disp_cands)
+            local _new = fd_mi in _cmis
+            p0!("P0B candidate old=$(_old) by_mi=$(_new)", _old == _new ? "" : "$(name) $(arg_types) $(fd_mi)")
         end
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
                            is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
@@ -701,7 +719,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
                 local _ma, _mb = _bs[_a].method, _bs[_b].method
-                (_ma !== _mb && Base.isambiguous(_ma, _mb)) || continue
+                (_ma !== _mb && p0_isamb("cp704", _ma, _mb)) || continue
                 local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
                 _ov === Union{} && continue
                 local _amb = ambiguous_class_tuple(type_registry, _T, _ov, plan.held_type_objects)
@@ -765,6 +783,12 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         func_idx = UInt32(n_imports + n_existing + i - 1)
 
         standalone_body = _standalone_intrinsic_body(f, arg_types)
+        let _m = function_data[i][9]
+            local ka = _m isa Core.MethodInstance && _m.def isa Method && haskey(STANDALONE_INTRINSIC_BODIES, _m.def)
+            local kb = standalone_body !== nothing
+            local kc = f === Base.rethrow
+            p0!("P0C bespoke def_in_table=$ka which_in_table=$kb f_is_rethrow=$kc", (ka == kb == kc) ? "" : "$(f) $(arg_types) $(_m)")
+        end
 
         # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.

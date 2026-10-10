@@ -164,7 +164,7 @@ function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospec
     any(isempty, choices) && return "a position of the overlap $(overlap) has no candidate"
     prod(length, choices; init=1) > 4096 && return "the overlap $(overlap) has more than 4096 candidate tuples"
     for cs in Iterators.product(choices...)
-        Base._which(Tuple{F, cs...}; raise=false) === nothing && return cs
+        p0_uwhich("cl167", Tuple{F, cs...}) === nothing && return cs
     end
     return false
 end
@@ -367,9 +367,17 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
                       (isstructtype(C) || isprimitivetype(C))
     local tuples = DataType[T for T in registry.method_error_args
                             if length(T.parameters) == arity && all(headed, T.parameters) &&
-                               (local ms = Base._methods_by_ftype(Tuple{closure_type, T.parameters...},
+                               (local ms = p0_mbf("cl370", Tuple{closure_type, T.parameters...},
                                                                   nothing, -1, Base.get_world_counter());
                                 ms !== nothing && isempty(ms))]
+    let rec = Set{Any}(T for T in get(P0_NOMETHOD, closure_type, ())
+                       if T isa DataType && length(T.parameters) == arity && all(headed, T.parameters))
+        local same = rec == Set{Any}(tuples)
+        p0!("P0E trampoline record_vs_filter=" * (same ? "equal" : "DIFFER"), same ? "" : "f=$(closure_type) filter=$(tuples) record=$(collect(rec))")
+        for T in tuples
+            T in get(P0_NOMETHOD, closure_type, ()) || p0!("P0E trampoline tuple_from_another_callee", "f=$(closure_type) T=$T")
+        end
+    end
     if base === nothing || isempty(tuples)
         unreachable!(tb)   # structural trap: no numbered args tuple (MARCH 13.17 A3S1)
         return tb

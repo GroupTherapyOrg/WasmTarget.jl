@@ -159,6 +159,10 @@ function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
         error("a fused multiply-add over $(T) reached codegen; the collector enrolls Float32 and Float64 only")
     info = get_function(ctx.func_registry, Base.fma_emulated, (T, T, T))
     info === nothing && error("Base.fma_emulated(::$T, ::$T, ::$T) is not in the closed world")
+    let _mi = CC.specialize_method(which(Base.fma_emulated, (T, T, T)), Tuple{typeof(Base.fma_emulated), T, T, T}, Core.svec())
+        local bm = get_function_by_mi(ctx.func_registry, _mi)
+        p0!("P0A fma by_mi=" * (bm === info ? "same" : bm === nothing ? "NONE" : "DIFFERENT"), bm === info ? "" : "$T $(_mi)")
+    end
     local w = T === Float32 ? F32 : F64
     call!(fb, info.wasm_idx)
     return w

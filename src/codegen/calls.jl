@@ -4663,7 +4663,16 @@ function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationCo
     local tuples = DataType[T for T in reg.method_error_args
                             if length(T.parameters) == n && T.parameters[dpos] <: call_arg_types[dpos] &&
                                all(j -> j == dpos || T.parameters[j] === call_arg_types[j], 1:n) &&
-                               !hasmethod(f, Tuple{T.parameters...})]
+                               !p0_hasmethod("ca4666", f, Tuple{T.parameters...})]
+    let rec = Set{Any}(T for T in get(P0_NOMETHOD, Core.Typeof(f), ())
+                       if T isa DataType && length(T.parameters) == n && T.parameters[dpos] <: call_arg_types[dpos] &&
+                          all(j -> j == dpos || T.parameters[j] === call_arg_types[j], 1:n))
+        local same = rec == Set{Any}(tuples)
+        p0!("P0E switch record_vs_filter=" * (same ? "equal" : "DIFFER"), same ? "" : "f=$(Core.Typeof(f)) filter=$(tuples) record=$(collect(rec))")
+        for T in tuples
+            T in get(P0_NOMETHOD, Core.Typeof(f), ()) || p0!("P0E switch tuple_from_another_callee", "f=$(Core.Typeof(f)) T=$T")
+        end
+    end
     if !isempty(tuples)
         local err_info = register_struct_type!(ctx.mod, reg, MethodError)
         err_info === nothing && error("MethodError layout is unavailable")
@@ -4725,6 +4734,9 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
                                  C -> C isa DataType && isconcretetype(C) && C <: S && !(C <: Type) &&
                                       (isstructtype(C) || isprimitivetype(C)))
         local T = Tuple{(j == p ? C : rt[j] for j in eachindex(rt))...}
+        let inrec = T in get(P0_NOMETHOD, f_type, ()), incls = any(X -> X === C, P0_CLASSES[]), num = haskey(reg.type_ids, T)
+            p0!("P0E byclass numbered=$num in_record=$inrec in_candidate_classes=$incls", "f=$f_type T=$T")
+        end
         haskey(reg.type_ids, T) || continue   # no numbered tuple: this class traps below
         local args_info = register_tuple_type!(ctx.mod, reg, T)
         args_info === nothing && error("$(T) layout is unavailable")

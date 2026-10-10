@@ -944,7 +944,7 @@ parity(quarantine: the callee IR the definite-initialization proof reads, from t
 function _cached_invoke_ir(node::NirInvoke, ctx::AbstractCompilationContext)::Union{Nothing, Core.CodeInfo}
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
-    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
+    local hit = p0_irget("stmts947", ctx.translator.plan.ir_cache, mi)
     return hit === nothing ? nothing : hit[1]
 end
 

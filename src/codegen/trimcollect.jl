@@ -823,8 +823,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             absp = Int[j for j in 1:length(atypes) if !_closed_world_exact_type(atypes[j])]
             if isempty(absp)
                 local concrete_args = Tuple(atypes)
-                hasmethod(g, concrete_args) || continue
-                local m = which(g, concrete_args)
+                p0_hasmethod("tc826", g, concrete_args) || continue
+                local m = p0_which("tc827", g, concrete_args)
                 local ssig = Tuple{Core.Typeof(g), atypes...}
                 ssig <: m.sig || continue
                 # the static parameters' values at ssig, as Julia's match computes them (A8C3)
@@ -858,16 +858,17 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                  target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
                 concrete_args = Tuple{spec...}
-                if !hasmethod(g, concrete_args)
+                if !p0_hasmethod("tc861", g, concrete_args)
                     # the call throws Julia's MethodError for this class: its args tuple
                     # (formal(dev/formal/ClassIdSwitch.tla): ThrowWhereJuliaThrows)
                     if all(t -> isconcretetype(t) && !(t <: Type), spec)
                         push!(error_args, concrete_args)
+                        push!(get!(() -> Set{Any}(), P0_NOMETHOD, Core.Typeof(g)), concrete_args)
                         push!(error_args, Core.Typeof(g))   # the error's `f`, a class too
                     end
                     continue
                 end
-                m = which(g, concrete_args)
+                m = p0_which("tc870", g, concrete_args)
                 ssig = Tuple{Core.Typeof(g), spec...}
                 ssig <: m.sig || continue
                 # the static parameters' values at ssig, as Julia's match computes them
@@ -896,6 +897,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     local observed_classes = sort!(Any[Any[C for C in runtime_types
                                              if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
                                          collect(held_type_objects)]; by=type_order_key)
+    P0_CLASSES[] = observed_classes
     for (_T, ds) in callable_invocations
         # each tuple of candidates for which the callable has no method: the call throws Julia's
         # MethodError there, its args a tuple of the values' classes (a type object's class is
@@ -903,21 +905,21 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
         # ThrowWhereJuliaThrows)
         local _ech = Vector{Any}[dispatch_candidates(P, observed_classes) for P in ds]
         # a method whose signature covers the call's static one leaves no tuple without a method
-        local _all = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
+        local _all = p0_mbf("tc906", Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
         local _covered = _all !== nothing && any(m -> Tuple{_T, ds...} <: m.method.sig, _all)
         if !_covered && !any(isempty, _ech) && prod(length, _ech; init=1) <= 4096
             for cs in Iterators.product(_ech...)
-                local _none = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                local _none = p0_mbf("tc910", Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
                 (_none === nothing || !isempty(_none)) && continue
                 local _rt = Any[(C isa DataType && C.name === Type.body.name) ? typeof(C.parameters[1]) : C for C in cs]
-                all(t -> t isa DataType && isconcretetype(t), _rt) && push!(error_args, Tuple{_rt...})
+                all(t -> t isa DataType && isconcretetype(t), _rt) && (push!(error_args, Tuple{_rt...}); push!(get!(() -> Set{Any}(), P0_NOMETHOD, _T), Tuple{_rt...}))
             end
         end
         local enroll_closure!(cmi, at) = (cmi === nothing || cmi in seen) ? nothing :
             (push!(seen, cmi); push!(out, cmi);
              reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))" * at;
              nothing)
-        local _mms2 = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
+        local _mms2 = p0_mbf("tc920", Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
         for mm in (_mms2 === nothing ? () : _mms2)
             # a match is one signature when its intersection is a DataType and every static
             # parameter has a value; otherwise (a UnionAll, or a static parameter left a TypeVar,
@@ -942,7 +944,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             local choices = [!mentions(p) ? Any[ds[p]] :
                              Any[C for C in dispatch_candidates(ds[p], observed) if admits(C, p)] for p in eachindex(ds)]
             for cs in Iterators.product(choices...)
-                local cms = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                local cms = p0_mbf("tc945", Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
                 for cm in (cms === nothing ? () : cms)
                     (cm.method === mm.method && cm.spec_types isa DataType) || continue
                     enroll_closure!(CC.specialize_method(cm.method, cm.spec_types, cm.sparams),
@@ -977,7 +979,7 @@ function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any
             (T === Float64 || T === Float32) && push!(types, T)
         end
     end
-    return Any[CC.specialize_method(which(Base.fma_emulated, (T, T, T)),
+    return Any[CC.specialize_method(p0_which("tc980fma", Base.fma_emulated, (T, T, T)),
                                     Tuple{typeof(Base.fma_emulated), T, T, T}, Core.svec())
                for T in types]
 end
@@ -1263,7 +1265,7 @@ parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; 
 """
 function entry_method_instance(f, arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
-    m = which(f, arg_types)
+    m = p0_which("tc1266entry", f, arg_types)
     return CC.specialize_method(m, tt, Core.svec())
 end
 
@@ -1333,6 +1335,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         f, arg_types = entry[1], entry[2]
         push!(external_mis, entry_method_instance(f, arg_types))
     end
+    empty!(P0_NOMETHOD)
     local world = collect_closed_world(entry_mis; external_leaves=external_mis)
     codeinfos = world.codeinfos
 

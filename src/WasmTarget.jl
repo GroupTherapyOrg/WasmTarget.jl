@@ -19,6 +19,7 @@ include("builder/instr_builder.jl")
 # Codegen - Julia IR to Wasm bytecode
 include("codegen/diagnostics.jl")  # must precede context.jl (WasmDiagnostic field)
 include("codegen/interpreter.jl")
+include("codegen/p0_instr.jl")
 include("codegen/ir.jl")
 
 # Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
