@@ -2036,6 +2036,28 @@ _g("closed_world_edges", Any[
     ("new_closure_called_dynamically", (n::Int64) -> (fs = Any[_sm_mknew(n)]; fs[1](2)::Int64), Int64(3)),
     ("new_closures_two_classes", (n::Int64) -> (fs = Any[_sm_mknew(n), _sm_mknew2(n)]; (fs[1](2)::Int64) * 100 + (fs[2](2)::Int64)), Int64(3)),
 ])
+# The plan is the one consult: an :invoke calls the function of the MethodInstance it names (two
+# methods share one specialization's argument types: `invoke` names the less specific one); a
+# closure body that is a dispatch candidate is also the target of the :invoke that names it; each
+# callable's MethodError comes from its own no-method record (an answer cannot tell a flat record
+# apart, the rows coming first: test/dispatch_method_error.jl reads the module).
+@noinline _sm_oc(x::Integer) = x + 100
+@noinline _sm_oc(x::Int64) = x + 1
+@noinline _sm_ncf(x::String) = Int64(1)
+@noinline _sm_ncg(x::Int64) = x + 1
+@noinline _sm_ncg(x::String) = Int64(2)
+# A callable whose methods are overlays, called as a value: the vtable pre-pass asks whether two of
+# its rows are ambiguous over the overlay table (wt_methods_ambiguous), and the compile then
+# rejects, located, where Julia answers 3: the generic overlay objectid(x::T) enrolled for a type
+# object reaches its jl_object_id foreigncall, which has no lowering.
+_xf("overlaid_callable_value", Any[
+    ("objectid_as_value", (n::Int64) -> (v = Any[n, :a]; fs = Any[objectid]; fs[1](v[2]) == objectid(:a) ? n : -n), Int64(3)),
+])
+_g("one_consult", Any[
+    ("invoke_names_its_method", (n::Int64) -> invoke(_sm_oc, Tuple{Integer}, n) * 1000 + _sm_oc(n), Int64(3)),
+    ("closure_candidate_and_invoked", (n::Int64) -> (k = n; g = @noinline((x::Int64) -> x + k); a = g(1); fs = Any[g]; a * 100 + (fs[1](2)::Int64)), Int64(3)),
+    ("no_method_record_per_callee", (n::Int64) -> (v = Any[n, "s"]; a = try; _sm_ncf(v[1]); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; a * 100 + (_sm_ncg(v[1])::Int64)), Int64(3)),
+])
 # A finalizer, a `:cfunction` and an `:invoke_modify` have no lowering: the collector enrolls
 # the edge's target, and the statement rejects where it stands (record_unsupported!), never
 # compiled to a plausible value. A finalizer survives Julia's elision only with an object that

@@ -244,3 +244,29 @@ end
         @test e isa WasmTarget.WasmCompileError && occursin("candidate taking Type{Vector}", sprint(showerror, e))
     end
 end
+
+# A dynamic call's MethodError arms are its callee's own no-method record (ClosedWorldPlan's
+# no_method): `ncf` has no method for Int64 and `ncg` has one, and each call's no-row block builds
+# one MethodError per tuple of its own callee's record, so the entry builds exactly as many as the
+# two records hold. A read of every callee's tuples (one flat set) gives both blocks the union, an
+# arm the rows before it make unreachable: no answer tells it apart, the module does.
+module OneConsultRecord
+struct S1; v::Int64; end; struct S2; v::Int64; end; struct S3; v::Int64; end; struct S4; v::Int64; end
+@noinline ncf(x::String) = Int64(1)
+@noinline ncf(x::S1) = x.v; @noinline ncf(x::S2) = x.v; @noinline ncf(x::S3) = x.v; @noinline ncf(x::S4) = x.v
+@noinline ncg(x::Int64) = x + 1
+@noinline ncg(x::String) = Int64(2)
+@noinline ncg(x::S1) = x.v; @noinline ncg(x::S2) = x.v; @noinline ncg(x::S3) = x.v; @noinline ncg(x::S4) = x.v
+pf(n::Int64) = (v = Any[n, "s", S1(n), S2(n), S3(n), S4(n)]; (ncg(v[n])::Int64) + (ncf(v[n + 1])::Int64))
+end
+@testset "a MethodError's arms are its callee's own record" begin
+    M = OneConsultRecord
+    plan = WasmTarget.trim_compile_plan(Any[(M.pf, (Int64,), "pf")])
+    rf, rg = plan.no_method[typeof(M.ncf)], plan.no_method[typeof(M.ncg)]
+    @test Tuple{Int64} in rf && !(Tuple{Int64} in rg)
+    bytes, treg, _, _ = WasmTarget.compile_multi(Any[(M.pf, (Int64,), "pf")]; return_registries=true)
+    me = treg.structs[MethodError].wasm_type_idx
+    printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
+    body = only(filter(b -> startswith(b, "\$pf "), split(printed, r"\n\s*\(func ")))
+    @test count(l -> strip(l) == "struct.new $me", split(body, '\n')) == length(rf) + length(rg)
+end

@@ -16,4 +16,5 @@ MCMOrd == [m \in MCMethods |-> IF m = "mS1" THEN 1 ELSE IF m = "mM1" THEN 2 ELSE
 MCParam == [m \in MCMethods |-> IF m = "mS1" THEN {"S1"} ELSE IF m = "mM1" THEN {"M1"} ELSE {"M3"}]
 MCStatic == "Any"   \* the call's static type, no class of its own
 MCUnnumbered == {}
+MCOverlayOnly == {}
 =============================================================================

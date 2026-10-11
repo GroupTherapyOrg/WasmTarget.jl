@@ -551,9 +551,6 @@ mutable struct TypeRegistry
     closure_vtable_globals::Dict{Type, UInt32}         # closure type -> vtable global
     # the vtable of a closure no dynamic call reaches: no entry (get_empty_closure_vtable!)
     empty_closure_vtable_global::Union{Nothing, UInt32}
-    # the args tuple of each MethodError a dynamic call throws (the plan's error_args_types),
-    # in type order: the classes a no-method entry builds its error from
-    method_error_args::Vector{DataType}
     # step5 THE CLASS-DAG (dart class_info.dart:420 _createStructForClass): synthetic {classId:i32}
     # wasm structs per ABSTRACT Julia type, each sub its parent's synthetic; concrete
     # structs subtype their nearest abstract parent instead of flat $JlBase.
@@ -595,7 +592,6 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{String, Tuple{UInt32, UInt32}}(),  # lazy_string_globals
     nothing, Dict{Int, UInt32}(), Dict{Type, UInt32}(),  # closure layouter
     nothing,                                            # empty_closure_vtable_global
-    DataType[],                                         # method_error_args
     Dict{Type, UInt32}(),                               # step5 class-DAG synthetics
     Dict{Type, UInt32}(),                               # MemoryRef single-value structs
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
@@ -1761,9 +1757,11 @@ Look up a function by reference and argument types (for dispatch).
 parity(functions.dart:25 FunctionCollector._functions / translator.dart:196
 staticParamInfo): the func_ref-keyed core — resolves a callee's identity to
 its compiled ABI, same shape as dart's `Reference` → `w.BaseFunction` map.
-An exact signature only: an `:invoke` names its MethodInstance's registered signature
-(`_invoke_registered_signatures`), and a call whose argument types match no compiled
-specialization exactly is dynamic dispatch, which the call site lowers as such or rejects.
+It serves a `:call` Julia left (no `:invoke` names its callee): dart's singleTarget
+devirtualization (translator.dart:1954), bound by exact signature only. An `:invoke` never asks
+it — its callee is the function of its MethodInstance (get_function_by_mi). A call whose argument
+types match no compiled specialization exactly is dynamic dispatch, which the call site lowers
+as such or rejects.
 Matching by subtyping bound such a call to one specialization compiled for other types, and
 ran it on any value the cast admitted: `RW(::Any)` holding a Symbol ran `RW(::String)`
 (String and Symbol share one wasm struct).

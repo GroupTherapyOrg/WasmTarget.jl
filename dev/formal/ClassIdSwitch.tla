@@ -20,7 +20,12 @@
 (* its specialization; no match throws Julia's MethodError, its `args` a   *)
 (* tuple of the value's runtime class, a class the collector numbers for  *)
 (* each observed class the call has no method for (a class it reads none  *)
-(* for still traps).                                                       *)
+(* for still traps). The rows and the no-method record come from one       *)
+(* consult (`wt_method_matches`, `wt_method_which`, trimcollect.jl):        *)
+(* Julia's matching in the method table the plan compiles with, the        *)
+(* WasmInterpreter's overlay table at its world. The collector records the *)
+(* args tuples per callee (the plan's `no_method`), and the no-row block   *)
+(* reads that record; it asks no method table again.                      *)
 (*                                                                         *)
 (* THE CLAIM. The entry never runs a specialization Julia would not select *)
 (* for the value (NoWrongMethod); throws a MethodError only where Julia    *)
@@ -36,8 +41,13 @@
 (* argument, and a struct of another class with one deduplicated layout    *)
 (* ran this body: native 23, wasm 13, dev/AUDIT.md A4C3); the code before  *)
 (* batch 103, which trapped where Julia throws a MethodError the program  *)
-(* catches (TrapNoMethod: native -1, wasm trap, A3S1); and a MethodError    *)
-(* whose args tuple is built at the call's static type (StaticArgs).       *)
+(* catches (TrapNoMethod: native -1, wasm trap, A3S1); a MethodError       *)
+(* whose args tuple is built at the call's static type (StaticArgs); and   *)
+(* two sources for one fact (OneConsult FALSE): the rows asked of Base's   *)
+(* method table at the latest world while the no-method record reads the  *)
+(* plan's overlay table, so a method only the overlay holds has no row and *)
+(* a value it takes, which the record does not list, traps where Julia     *)
+(* runs that method.                                                       *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Classes, layouts, array types and            *)
 (* specializations are opaque constants; one dispatch position; the        *)
@@ -79,7 +89,9 @@ CONSTANTS
     Unnumbered,       \* SUBSET Classes: no-method classes whose args tuple the collector numbers no
                       \* class for (MARCH 13.17 A3S1: one made for another throw, two open positions)
     TrapNoMethod,     \* BOOLEAN: no row traps (TRUE = broken, before batch 103)
-    StaticArgs        \* BOOLEAN: the MethodError's args built at the static type (TRUE = broken)
+    StaticArgs,       \* BOOLEAN: the MethodError's args built at the static type (TRUE = broken)
+    OneConsult,       \* BOOLEAN: the rows and the no-method record come from one table (FALSE = broken)
+    OverlayOnly       \* SUBSET Methods: the specializations only the plan's overlay table holds
 
 VARIABLES v, outcome, done
 
@@ -96,11 +108,17 @@ Observed == {c \in Classes : c \notin ByBuiltin \/ ObserveBuiltins}
 \* a bare class another numbered bare class shares its array type with
 Shared(c) == c \in Bare /\ \E d \in (Bare \cap Observed) \ {c} : Layout[d] = Layout[c]
 
-Candidates == UNION {Param[m] : m \in Methods}
+\* the rows the entry builds: the specializations the consult gives; asked of another table,
+\* the overlay's own methods are missing
+Rows == IF OneConsult THEN Methods ELSE Methods \ OverlayOnly
 
-\* the args-tuple classes the collector numbers: Tuple{c} for each observed class c the call
-\* has no method for
-ArgsNumbered == {c \in Observed : ~\E m \in Methods : c \in Param[m]} \ Unnumbered
+Candidates == UNION {Param[m] : m \in Rows}
+
+NoMethod(c) == ~\E m \in Methods : c \in Param[m]
+
+\* the plan's no-method record for the callee: Tuple{c} for each observed class c Julia has no
+\* method for, the args-tuple classes the collector numbers; the no-row block reads only this
+Record == {c \in Observed : NoMethod(c)} \ Unnumbered
 
 \* the class a row can read for an erased value of class c: a header's classId, or a bare
 \* array's class when its array type is its own; else no class (the read fails)
@@ -116,19 +134,19 @@ RowMatches(m, c) ==
 \* that tuple class is numbered, else a trap
 NoRow(c) ==
     IF TrapNoMethod THEN Trap
-    ELSE IF ReadClass(c) # Trap /\ ReadClass(c) \in ArgsNumbered
+    ELSE IF ReadClass(c) # Trap /\ ReadClass(c) \in Record
          THEN Err(IF StaticArgs THEN Static ELSE ReadClass(c))
     ELSE Trap
 
 FirstRow(c) ==
-    LET ms == {m \in Methods : RowMatches(m, c)} IN
+    LET ms == {m \in Rows : RowMatches(m, c)} IN
     IF ms = {} THEN NoRow(c) ELSE CHOOSE m \in ms : \A n \in ms : MOrd[m] <= MOrd[n]
 
 Outcome(c) ==
     IF RejectShared /\ \E d \in Candidates : Shared(d) THEN Reject
     ELSE IF ~RejectShared THEN
         \* the old rule: a shared candidate class gets no row
-        LET ms == {m \in Methods : \A d \in Param[m] : ~Shared(d)} IN
+        LET ms == {m \in Rows : \A d \in Param[m] : ~Shared(d)} IN
         LET hit == {m \in ms : RowMatches(m, c)} IN
         IF hit = {} THEN NoRow(c) ELSE CHOOSE m \in hit : \A n \in hit : MOrd[m] <= MOrd[n]
     ELSE FirstRow(c)
@@ -139,8 +157,6 @@ Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run
 Spec == Init /\ [][Step \/ Terminal]_vars
 
 TypeOK == v \in Classes /\ outcome \in Methods \cup Errors \cup {Trap, Reject} /\ done \in BOOLEAN
-
-NoMethod(c) == ~\E m \in Methods : c \in Param[m]
 
 \* a MethodError only where Julia has no method, carrying the value's own class
 ErrorIsJulias == done \in BOOLEAN /\ (done /\ outcome \in Errors => NoMethod(v) /\ outcome = Err(v))

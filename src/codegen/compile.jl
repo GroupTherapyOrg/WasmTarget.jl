@@ -128,7 +128,9 @@ end
 
 # ============================================================================
 # STANDALONE_INTRINSIC_BODIES — Method-keyed, for entries function_data compiles
-# as their OWN body (not a compile_invoke! call-site substitution).
+# as their OWN body (not a compile_invoke! call-site substitution). Filled at load by its
+# definition; trim_compile_plan decides once per MethodInstance (ClosedWorldPlan's `bespoke`),
+# and every reader reads that decision.
 #
 # `rethrow`'s native body is itself just a bare `:foreigncall` to
 # `jl_rethrow`/`jl_rethrow_other` with no lowering, and Julia's own closed-world
@@ -144,19 +146,6 @@ end
 # stack again (jl_rethrow); `rethrow(e)` first overwrites the top entry's exception with `e`
 # (jl_rethrow_other); either, at depth 0, throws Julia's ErrorException (emit_rethrow!).
 # ============================================================================
-# parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
-const STANDALONE_INTRINSIC_BODIES = Dict{Method,Function}()
-
-"""Populate STANDALONE_INTRINSIC_BODIES once, lazily, on first use.
-parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
-function _build_standalone_intrinsic_bodies!()::Nothing
-    isempty(STANDALONE_INTRINSIC_BODIES) || return nothing
-    for m in methods(Base.rethrow)
-        STANDALONE_INTRINSIC_BODIES[m] = _generate_rethrow_standalone_body!
-    end
-    return nothing
-end
-
 """The one standalone body every `Base.rethrow` MethodInstance compiles to when
 function_data needs it as its own entry (see STANDALONE_INTRINSIC_BODIES above): Julia's
 jl_rethrow or jl_rethrow_other over the exception stack (emit_rethrow!).
@@ -176,19 +165,11 @@ function _generate_rethrow_standalone_body!(b::InstrBuilder, arg_types::Tuple, m
     return finish_function!(b)
 end
 
-"""Look up whether (f, arg_types) resolves to a Method registered in
-STANDALONE_INTRINSIC_BODIES, and if so return the generator that emits its body into the
-function's builder, `gen(b, arg_types, mod, type_registry)`.
-parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)"""
-function _standalone_intrinsic_body(f, arg_types::Tuple)::Union{Function,Nothing}
-    f isa Function || return nothing
-    _build_standalone_intrinsic_bodies!()
-    isempty(STANDALONE_INTRINSIC_BODIES) && return nothing
-    # Julia's own method lookup, which answers `nothing` for no match or an ambiguity
-    hit = Base._which(Tuple{Core.Typeof(f), arg_types...}; raise=false)
-    hit === nothing && return nothing
-    return get(STANDALONE_INTRINSIC_BODIES, hit.method, nothing)
-end
+# each method compiled to a bespoke body, with the generator that emits that body into its
+# function's builder, `gen(b, arg_types, mod, type_registry)`: every method of Base.rethrow
+# parity(quarantine: the bespoke bodies L133 allows, each for its stated reason — Base.rethrow's native body is the C runtime's jl_rethrow.)
+const STANDALONE_INTRINSIC_BODIES = IdDict{Method,Function}(
+    m => _generate_rethrow_standalone_body! for m in methods(Base.rethrow))
 
 """
     _check_import_stub_external_types!(mod, registry, name, arg_types, wasm_idx, return_type)
@@ -310,8 +291,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     local translator = Translator(plan, trace)
     type_registry = TypeRegistry()
     recover_module_handles!(type_registry, mod)
-    append!(type_registry.method_error_args,
-            sort!(DataType[T for T in plan.error_args_types if T <: Tuple]; by=type_order_key))
     func_registry = FunctionRegistry()
 
     # Create base struct type FIRST — all other structs will be subtypes — then the $JlType
@@ -322,12 +301,18 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     get_base_struct_type!(mod, type_registry)
     create_jl_type_hierarchy!(mod, type_registry)
 
-    # Pre-register import stubs at their import indices in func_registry.
-    # This enables compiled functions to call imports via cross-function call resolution.
+    # Pre-register import stubs at their import indices in func_registry, each under the
+    # MethodInstance the plan cut as an external leaf (plan.external_leaves), so an :invoke of the
+    # stub names the import as it names any callee.
     for entry in import_stubs
         func_ref, name, arg_types, wasm_idx, return_type = entry
         _check_import_stub_external_types!(mod, type_registry, name, arg_types, wasm_idx, return_type)
-        register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type)
+        local leaf = findfirst(x -> x[1] === func_ref && x[2] == Tuple(arg_types), plan.external_leaves)
+        leaf === nothing && throw(WasmInternalError(String(name), 0, "",
+            String["registering the import stub $(name)$(Tuple(arg_types))"],
+            ErrorException("the plan holds no external leaf for it"), Base.StackTraces.StackFrame[]))
+        register_function!(func_registry, name, func_ref, arg_types, UInt32(wasm_idx), return_type;
+                           mi=plan.external_leaves[leaf][3])
     end
 
     # Pre-register numeric box types for all common numeric Wasm types.
@@ -515,10 +500,15 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # changed field-resolution ORDER and produced duplicate layouts (caught by
     # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
-    _reachable = _collect_reachable_ir_types(function_data)
-    # the args tuple of each MethodError a dynamic call throws (the collector's no-method tuples)
-    union!(_reachable, plan.error_args_types)
-    isempty(plan.error_args_types) || push!(_reachable, MethodError, UInt64)
+    _reachable = _collect_reachable_ir_types(function_data, plan.bespoke)
+    # each MethodError a dynamic call throws: its callee's class and its args tuples (the plan's
+    # per-callee no-method record)
+    for (F, Ts) in plan.no_method
+        isempty(Ts) && continue   # no MethodError: nothing to number
+        push!(_reachable, F)
+        union!(_reachable, Ts)
+    end
+    any(!isempty, values(plan.no_method)) && push!(_reachable, MethodError, UInt64)
 
     # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)
@@ -578,12 +568,13 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Captured variables' types, from the functions that declare them, recorded for every body
     # before any compiles, so no body's box reads depend on which compiled first
-    # (record_capture_contents; CaptureType.tla).
+    # (record_capture_contents; CaptureType.tla). A captor body the closed world does not hold
+    # has no IR here by design: its writes never run, and it erases the box (box_capture.jl).
     local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
                                  isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
                                 for fd in function_data if fd[8] !== nothing]
     merge!(type_registry.box_contents_types,
-           record_capture_contents(_capture_bodies; closure_ir=mi -> get(plan.ir_cache, mi, nothing)))
+           record_capture_contents(_capture_bodies; closure_ir=mi -> plan_ir_or_nothing(plan, mi)))
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
@@ -596,7 +587,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # not) registers as is_candidate=true → visible to the call-site typeId switch (by_ref)
     # and hidden from get_function's signature lookup; an :invoke that names it still
     # reaches it by its MethodInstance (get_function_by_mi).
-    _disp_cands = plan.dispatch_candidates
     # each function's name, given where it is defined: its Julia name, with a `_<k>` suffix for
     # the k-th earlier function of that name, the name the compile asks to export it under
     # (codegen_export_name may rename the export in a host's module; a generated function may
@@ -626,17 +616,17 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         local fd_mi = function_data[i][9]
         # a traced compile traces every function compiled from Julia IR: its id numbers the
         # typed IR its probes report, and the entry's is remembered. A function compiled from
-        # a bespoke body (STANDALONE_INTRINSIC_BODIES: rethrow) is not its IR, so it is not
+        # a bespoke body (the plan's `bespoke`: rethrow) is not its IR, so it is not
         # traced, and the native run calls it as Julia does
         if trace !== nothing && function_data[i][4] isa Core.CodeInfo && fd_mi isa Core.MethodInstance &&
-           !(_build_standalone_intrinsic_bodies!(); fd_mi.def isa Method && haskey(STANDALONE_INTRINSIC_BODIES, fd_mi.def))
+           !haskey(plan.bespoke, fd_mi)
             push!(trace.codes, function_data[i][4]); push!(trace.mis, fd_mi)
             push!(trace.probed, Set{Int}())
             trace.ids[func_idx] = length(trace.codes)
             name == trace.entry_name && (trace.entry = length(trace.codes))
         end
         register_function!(func_registry, name, f, arg_types, func_idx, return_type;
-                           is_candidate = (!isempty(_disp_cands) && (f, arg_types) in _disp_cands),
+                           is_candidate = fd_mi in plan.candidate_mis,
                            mi = fd_mi isa Core.MethodInstance ? fd_mi : nothing,
                            invoke_only = fd_mi in plan.invoke_only)
         # the definition carries the true signature
@@ -705,7 +695,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
                 local _ma, _mb = _bs[_a].method, _bs[_b].method
-                (_ma !== _mb && Base.isambiguous(_ma, _mb)) || continue
+                (_ma !== _mb && wt_methods_ambiguous(_ma, _mb)) || continue
                 local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
                 _ov === Union{} && continue
                 local _amb = ambiguous_class_tuple(type_registry, _T, _ov, plan.held_type_objects)
@@ -733,7 +723,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         "a callable with a candidate taking $(_Tj), which admits a type object or a bare array: no entry row tells its values' classes",
                         nothing, nothing)))
             end
-            build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T])
+            build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T],
+                                  no_method=plan.no_method[_T])
         end
     end
 
@@ -768,7 +759,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     for (i, (f, arg_types, name, _, return_type, global_args, is_closure, fn_nir)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
 
-        standalone_body = _standalone_intrinsic_body(f, arg_types)
+        standalone_body = get(plan.bespoke, function_data[i][9], nothing)
 
         # Check if this function is a dispatch caller (calls a megamorphic function
         # with abstract args). If so, generate a direct dispatch body instead of the normal body.

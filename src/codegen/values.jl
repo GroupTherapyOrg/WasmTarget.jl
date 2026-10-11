@@ -380,6 +380,41 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
 end
 
 """
+    is_closure_context_ref(registry, to) -> Bool
+
+Whether `to` is a closure's captured-context struct (a registered closure type laid out as
+its context, `field_offset == 1`): a value narrowed to it may arrive as the closure OBJECT.
+parity(pkg/dart2wasm/lib/code_generator.dart:2641 CodeGenerator._generateDirectClosureCall):
+a closure value's context, read at a direct call.
+"""
+is_closure_context_ref(registry::TypeRegistry, @nospecialize(to::WasmValType))::Bool =
+    to isa ConcreteRef && any(((T, info),) -> info.wasm_type_idx == to.type_idx && is_closure_type(T) &&
+                                              info.field_offset == 1, registered_structs(registry))
+
+"""
+    emit_closure_context_unwrap!(b, mod, registry, l, to) -> b
+
+THE object→context unwrap: with the value on the stack and in local `l`, narrow it to the
+closure context struct `to` — the closure object's context (field 2) when the value is the
+object (`ref.test` of the closure base), else a cast of the value itself. Every site that
+narrows a value to a closure context calls it (the coercion funnel, a closure entry's argument).
+parity(pkg/dart2wasm/lib/code_generator.dart:2641 CodeGenerator._generateDirectClosureCall):
+a closure value's context, read at a direct call.
+"""
+function emit_closure_context_unwrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                      l::UInt32, to::ConcreteRef)::InstrBuilder
+    local cb = get_closure_base_struct!(mod, registry)
+    ref_test!(b, Int64(cb), false)
+    if_!(b; results=WasmValType[to])
+    local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2))   # .context
+    ref_cast!(b, Int64(to.type_idx), to.nullable)
+    else_!(b)
+    local_get!(b, l); ref_cast!(b, Int64(to.type_idx), to.nullable)
+    end_block!(b)
+    return b
+end
+
+"""
     _narrow_ref!(b, ctx, from, to, from_julia)
 
 Land a ref of type `from` (already in `to`'s hierarchy) on `to` — Coercion.tla `Narrow`:
@@ -430,30 +465,10 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
         local_get!(b, v); ref_cast!(b, Int64(to.type_idx), to.nullable)
         end_block!(b)
     elseif to isa ConcreteRef
-        local _to_closure = begin
-            local _tcj = nothing
-            for (T, info) in registered_structs(ctx.type_registry)
-                if info.wasm_type_idx == to.type_idx && is_closure_type(T) && info.field_offset == 1
-                    _tcj = T; break
-                end
-            end
-            _tcj !== nothing
-        end
-        if _to_closure
-            local _cbase = get_closure_base_struct!(ctx.mod, ctx.type_registry)
-            # if (ref.test base) → base.context → cast; else → cast direct
+        if is_closure_context_ref(ctx.type_registry, to)
             local _uw = allocate_local!(ctx, AnyRef)
             local_tee!(b, UInt32(_uw))
-            ref_test!(b, Int64(_cbase), false)
-            if_!(b; results=WasmValType[to])
-            local_get!(b, UInt32(_uw))
-            ref_cast!(b, Int64(_cbase), false)
-            struct_get!(b, _cbase, UInt32(2))   # .context
-            ref_cast!(b, Int64(to.type_idx), to.nullable)
-            else_!(b)
-            local_get!(b, UInt32(_uw))
-            ref_cast!(b, Int64(to.type_idx), to.nullable)
-            end_block!(b)
+            emit_closure_context_unwrap!(b, ctx.mod, ctx.type_registry, UInt32(_uw), to)
         else
             ref_cast!(b, Int64(to.type_idx), to.nullable)
         end

@@ -938,13 +938,13 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
     return true
 end
 
-"""The collected IR of an `:invoke` target, from the trim collector's cache, keyed by the
-callee FUNCTION OBJECT the node carries and the MethodInstance's argument types.
+"""The collected IR of an `:invoke` target, the plan's for its MethodInstance; none for a
+declared import's, whose body is not the closed world's (the proof then does not hold).
 parity(quarantine: the callee IR the definite-initialization proof reads, from the closed world's collection; see _setfield_of_value.)"""
 function _cached_invoke_ir(node::NirInvoke, ctx::AbstractCompilationContext)::Union{Nothing, Core.CodeInfo}
     mi = node.mi
     mi isa Core.MethodInstance || return nothing
-    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
+    local hit = plan_ir_or_nothing(ctx.translator.plan, mi)
     return hit === nothing ? nothing : hit[1]
 end
 

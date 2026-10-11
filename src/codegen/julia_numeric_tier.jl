@@ -157,7 +157,10 @@ its `fma` runs without one.)
 function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
     (T === Float64 || T === Float32) ||
         error("a fused multiply-add over $(T) reached codegen; the collector enrolls Float32 and Float64 only")
-    info = get_function(ctx.func_registry, Base.fma_emulated, (T, T, T))
+    # the MethodInstance the collector rooted for this lowering (_fused_multiply_add_mis), recorded
+    # on the plan
+    local fma_mi = plan_lowering_callee(ctx.translator.plan, Tuple{typeof(Base.fma_emulated), T, T, T})
+    info = fma_mi === nothing ? nothing : get_function_by_mi(ctx.func_registry, fma_mi)
     info === nothing && error("Base.fma_emulated(::$T, ::$T, ::$T) is not in the closed world")
     local w = T === Float32 ? F32 : F64
     call!(fb, info.wasm_idx)

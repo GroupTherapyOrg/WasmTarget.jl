@@ -287,7 +287,7 @@ _mbv_empty_function!(m, params; name) =
             Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")])
         @test !any(e -> e[1] === unsigned && e[2] == (Int128,) &&
                        any(stmt -> stmt isa Expr && stmt.head === :foreigncall,
-                           plan.ir_cache[(e[1], e[2])][1].code), plan.functions)
+                           MBV.plan_ir(plan, e[4])[1].code), plan.functions)
         bytes = MBV.compile_multi(Any[(_mbv_unsigned_i128, (Int128,), "unsigned_i128")];
                                   validate=false)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -725,8 +725,7 @@ include(joinpath(@__DIR__, "builder_cases.jl"))
             if c.expect === :valid
                 local m = c.program()
                 @test m isa MBV.WasmModule
-                Sys.which("wasm-tools") === nothing ||
-                    @test MBV.validate_wasm_bytes(MBV.to_bytes(m)) isa Vector{UInt8}
+                @test MBV.validate_wasm_bytes(MBV.to_bytes(m)) isa Vector{UInt8}
             else
                 @test_throws c.expect c.program()
             end

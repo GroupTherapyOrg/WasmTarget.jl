@@ -1,41 +1,3 @@
-"""Prove that a concrete constructor is only `%new(T, args...)`: its fields are its
-arguments in order (for a vararg constructor, its fixed slots followed by its one
-vararg-tuple slot), so a bare struct.new of the call's operands is its body.
-
-This is deliberately shape-based, not name-based: the optimized Julia body must
-contain exactly one allocation and a return, and nothing else — a constructor that
-normalizes (UnitRange's last, OneTo's max(0, n), Rational's gcd, a user's `new(abs(x))`)
-or converts its arguments is not direct, and is called as the function it is. The body
-read is the one the invoke calls, keyed by its MethodInstance's specTypes as the
-collection enrolled it.
-parity(pkg/dart2wasm/lib/code_generator.dart:1637 CodeGenerator.visitConstructorInvocation)
-"""
-function _is_direct_struct_constructor(@nospecialize(target), mi::Core.MethodInstance,
-                                       ctx::AbstractCompilationContext)::Bool
-    target isa DataType && isconcretetype(target) && isstructtype(target) || return false
-    mi.def isa Method || return false
-    isva = mi.def.isva
-    fixed_count = isva ? mi.def.nargs - 2 : mi.def.nargs - 1  # exclude #self# (and the vararg slot)
-    fieldcount(target) == fixed_count + (isva ? 1 : 0) || return false
-    local hit = get(ctx.translator.plan.ir_cache, mi, nothing)
-    hit === nothing && return false
-    body = hit[1]
-    nir = build_nir(body)
-    news = NirNew[s.node for s in nir if s.slot == 0 && s.node isa NirNew]
-    length(news) == 1 || return false
-    all(s -> s.slot == 0 && ((s.node isa NirLiteral && s.node.value === nothing) ||
-                             s.node isa NirReturn || s.node isa NirNew ||
-                             (s.node isa NirUnsupported && s.node.kind === :meta)), nir) || return false
-    alloc = only(news)
-    length(alloc.operands) == fieldcount(target) || return false
-    (alloc.type_kind === :literal && alloc.T === target) || return false
-    _is_arg(x, n) = x isa NirArgument && x.n == n
-    for i in 1:fixed_count
-        _is_arg(alloc.operands[i], i + 1) || return false
-    end
-    return !isva || _is_arg(alloc.operands[end], fixed_count + 2)
-end
-
 # parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
     nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : infer_value_type(arg, ctx)
@@ -56,37 +18,6 @@ function _invoke_callee_object(mi::Core.MethodInstance)::Any
     return _invoke_singleton_instance(st.parameters[1])
 end
 
-"""
-    _invoke_registered_signatures(mi) -> Vector{Tuple}
-
-The signatures under which trim_compile_plan registers the specialization an `:invoke` of `mi`
-calls, in the plan's own terms and order: its argument types (a runtime Vararg tail packed into
-its one tuple parameter), the canonical `Type{T}` → declared-formal collapse the plan applies to
-a transitive `Type{T}` copy, and last the callee's own type first (a closure registered with its
-self). The callee is Julia's MethodInstance, so it is found under one of these exactly — the
-operands' types matched loosely once bound a call to a specialization compiled for other types.
-parity(translator.dart:115 directCallMetadata): the call's target is the whole-program analysis's.
-"""
-function _invoke_registered_signatures(mi::Core.MethodInstance)::Vector{Tuple}
-    local sig = mi.specTypes
-    (sig isa DataType && sig <: Tuple && !isempty(sig.parameters)) || return Tuple[]
-    local params = collect(Any, sig.parameters)
-    local args = Tuple(params[2:end])
-    any(T -> T isa Core.TypeofVararg, args) && (args = (Tuple{args...},))
-    local out = Tuple[args]
-    local m = mi.def
-    if m isa Method
-        local msig = Base.unwrap_unionall(m.sig)
-        if msig isa DataType && length(msig.parameters) == length(args) + 1
-            local canon = Tuple(_canonical_type_object_arg(args[j], msig.parameters[j + 1])
-                                for j in eachindex(args))
-            canon == args || push!(out, canon)
-        end
-    end
-    push!(out, Tuple(params))
-    return out
-end
-
 # The function an invoked value names through a global binding: the invoke's own callee
 # when the IR wrote a global there (the NIR boundary resolved it to its object; an unbound
 # one stays a `GlobalRef`), or an SSA alias of a global (optionally through one π) — else
@@ -102,9 +33,13 @@ end
 
 """
 Compile an invoke expression (method invocation) — dart visitor shape:
-emits the invoke INTO the caller's builder.
-The interior accumulates into a FRAGMENT builder `fb` (≡ the old `bytes` buffer,
-same discard semantics: arms that replace it re-init; exits merge typed).
+emits the invoke INTO the caller's builder. Its callee is the function the plan compiles its
+MethodInstance to (`get_function_by_mi`), as dart's static invocation calls its target's one
+function; the only other lowerings are the identity-keyed ones before it (a host binding, a
+signal, a closed-world metadata operation, `Core.eval`'s rejection). A MethodInstance with no
+function rejects at the statement.
+The interior accumulates into a FRAGMENT builder `fb`; exits merge typed.
+formal(dev/formal/README.md): the `:invoke` callee is one lookup by MethodInstance, no algorithm.
 parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)
 """
 function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
@@ -187,7 +122,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         end
     end
 
-    # Get MethodInstance to check parameter types for nothing arguments
+    # The MethodInstance the :invoke names; its function is the callee
     mi = node.mi
 
     # The closed-world metadata operations trim_compile_plan leaves out of the function
@@ -217,224 +152,51 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         return append_builder!(b, fb)
     end
 
-    # Early self-call detection: check if this is a recursive call to ourselves.
-    # The invoked function is the one the callee names through a global (directly, or an
-    # SSA alias of one through a π), else the callee's own constant, else — for a
-    # function parameter — the singleton instance its specialized type names.
-    named_early = _invoke_named_callee(node.callee, ctx; through_pi=true)
-    actual_func_ref_early = named_early !== nothing ? named_early : nir_const(node.callee)
-    if named_early === nothing && node.callee isa NirArgument
-        # Higher-order function calls — extract function from mi.specTypes
-        if mi isa Core.MethodInstance
-            spec = mi.specTypes
-            if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
-                func_type = spec.parameters[1]
-                singleton = _invoke_singleton_instance(func_type)
-                singleton === nothing || (actual_func_ref_early = singleton)
-            end
+    # an :invoke always names its MethodInstance and its Method; one that does not is a
+    # boundary defect, rejected at its statement
+    if !(mi isa Core.MethodInstance && mi.def isa Method)
+        record_unsupported!(ctx, :unsupported_method,
+            "an :invoke whose callee is not a MethodInstance of a Method ($(repr(mi)))"; idx=idx, detail=node)
+        bnm = _ctx_builder(ctx, "compile_invoke")
+        unreachable!(bnm)
+        ctx.last_stmt_was_stub = true
+        return append_builder!(b, append_builder!(fb, bnm))
+    end
+    local name = (mi.def::Method).name
+
+    # THE callee: the function the invoke's MethodInstance compiles to, one per
+    # MethodInstance (dart's getFunction(Reference)). Nothing else names it: a lookup by the
+    # callee's object and argument types bound a call to another method's function when two
+    # methods share a specialization's argument types (`invoke(f, Tuple{Super}, x)`).
+    # parity(functions.dart:90 FunctionCollector.getFunction): one function per Reference.
+    local target = get_function_by_mi(ctx.func_registry, mi)
+    # a capturing closure's function takes its closure object first (its signature's first
+    # parameter is the closure type, compile.jl prepends it): the call pushes the callee's
+    # value there
+    local takes_closure = target !== nothing && length(target.arg_types) == length(args) + 1 &&
+                          first(target.arg_types) isa DataType && is_closure_type(first(target.arg_types))
+    # the parameter types the arguments are pushed as: the callee's own signature, else the
+    # MethodInstance's (a call rejected below, its arguments emitted before its trap)
+    local param_types = if target !== nothing
+        target.arg_types[(takes_closure ? 2 : 1):end]
+    else
+        local spec = mi.specTypes
+        (spec isa DataType && spec <: Tuple) ? spec.parameters[2:end] : nothing
+    end
+
+    # the callee's value, pushed as the closure object: the function the callee names
+    # through a global (directly, or an SSA alias of one through a π), else the callee's own
+    # constant or node, else — for a function parameter — the singleton instance its
+    # specialized type names
+    local closure_self_to_push = nothing
+    if takes_closure
+        local named = _invoke_named_callee(node.callee, ctx; through_pi=true)
+        local callee_value = named !== nothing ? named : nir_const(node.callee)
+        if named === nothing && node.callee isa NirArgument
+            local singleton = _invoke_callee_object(mi)
+            singleton === nothing || (callee_value = singleton)
         end
-    end
-    # the invoked function as an operand the value channel emits: the callee's own node, or
-    # the constant it names
-    early_operand = actual_func_ref_early isa NirNode ? actual_func_ref_early :
-                    NirLiteral(actual_func_ref_early)
-    is_self_call_early = false
-    if ctx.func_ref !== nothing && named_early !== nothing && !(named_early isa GlobalRef)
-            called_func = named_early
-            if called_func === ctx.func_ref
-                # Also check arity — overloaded methods share the same function
-                # object but have different specTypes. A call to a different overload is NOT
-                # a self-call (e.g., parse_comma(ps) calling parse_comma(ps, true)).
-                if mi isa Core.MethodInstance
-                    spec = mi.specTypes
-                    if spec isa DataType && spec <: Tuple
-                        call_nargs = length(spec.parameters) - 1  # subtract typeof(func)
-                        # Check both arity AND parameter types — same-arity overloads
-                        # (e.g., validate_code!(errors, mi, c) vs validate_code!(errors, c, bool))
-                        # share the function object and arity but have different specTypes.
-                        if call_nargs == length(ctx.arg_types)
-                            call_arg_types = spec.parameters[2:end]
-                            is_self_call_early = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
-                        else
-                            is_self_call_early = false
-                        end
-                    else
-                        is_self_call_early = true
-                    end
-                else
-                    is_self_call_early = true
-                end
-            end
-    end
-
-    # An :invoke names its callee exactly: the function its MethodInstance compiles to. When
-    # that function exists it decides self-recursion — two methods can share a
-    # specialization's argument types (Base's `invoke(f, Tuple{Super}, x)`), which the
-    # function-and-type comparison above takes for recursion.
-    # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
-    local mi_target = (ctx.func_registry !== nothing && mi isa Core.MethodInstance) ?
-                      get_function_by_mi(ctx.func_registry, mi) : nothing
-    mi_target === nothing || (is_self_call_early = mi_target.wasm_idx == ctx.func_idx)
-
-    # Get parameter types - for self-calls, use ctx.arg_types (the function's compiled signature)
-    # For other calls, use mi.specTypes (the call site's specialized types)
-    param_types = nothing
-    if is_self_call_early
-        # Self-call: use the function's actual compiled parameter types
-        param_types = ctx.arg_types
-    elseif mi isa Core.MethodInstance
-        spec = mi.specTypes
-        if spec isa DataType && spec <: Tuple
-            # specTypes is Tuple{typeof(func), arg1_type, arg2_type, ...}
-            # We want arg types starting from index 2
-            param_types = spec.parameters[2:end]
-        end
-    end
-
-    # Compute target_info EARLY so we can use its arg_types for proper type checking
-    # during argument compilation. This helps when param_types (from mi.specTypes) differ from
-    # the actual compiled function's parameter types.
-    target_info_early = nothing
-    closure_self_to_push = nothing   # 453393ca4ba4: see below
-    if ctx.func_registry !== nothing && !is_self_call_early
-        called_func_early = nothing
-        if named_early !== nothing
-            called_func_early = named_early isa GlobalRef ? nothing : named_early   # unbound: nothing
-        elseif actual_func_ref_early isa Function
-            # func_ref can be a Function object directly (default-arg methods)
-            called_func_early = actual_func_ref_early
-        elseif mi isa Core.MethodInstance && mi.def isa Method
-            # Fallback: get function from MethodInstance
-            # The function is typically the first arg in specTypes
-            spec = mi.specTypes
-            if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
-                func_type = spec.parameters[1]
-                if func_type isa DataType && func_type.name.name === :typeof
-                    # typeof(f) — extract f
-                    # The instance of typeof(f) is the function itself
-                    isdefined(func_type, :instance) &&
-                        (called_func_early = func_type.instance)
-                end
-            end
-        end
-        if called_func_early !== nothing && mi isa Core.MethodInstance
-            local _sigs_early = _invoke_registered_signatures(mi)
-            _exp_ret = get(ctx.ssa_types, idx, nothing)
-            for _sig in _sigs_early[1:end-1]
-                target_info_early = get_function(ctx.func_registry, called_func_early, _sig;
-                                                 expected_return=_exp_ret isa Type ? _exp_ret : nothing)
-                target_info_early === nothing || break
-            end
-            # Closure/kwarg functions are registered with self-type prepended
-            if target_info_early === nothing && typeof(called_func_early) <: Function && isconcretetype(typeof(called_func_early))
-                target_info_early = get_function(ctx.func_registry, called_func_early, _sigs_early[end])
-                # 453393ca4ba4: a CAPTURING closure entry takes the closure object as
-                # wasm param 1 — the call site must push it (Snapshot.jl newton C-W3:
-                # 6 values for a 7-param functype → "nothing on stack")
-                if target_info_early !== nothing && is_closure_type(typeof(called_func_early))
-                    closure_self_to_push = early_operand
-                end
-            end
-        end
-    end
-
-    # 453393ca4ba4: capturing-closure callees — the function position is a VALUE
-    # (SSA/argument/local); identity-keyed registry lookup can never match the
-    # runtime-constructed instance, so the invoke silently fell through to an
-    # `unreachable` (Snapshot.jl newton C-W3). The callee is the invoke's MethodInstance's
-    # function (mi_target, above), and the closure object is pushed as wasm param 1.
-    tracing(:closure) &&
-        println(stderr, "CLOSDBG ref=", repr(actual_func_ref_early), " :: ", typeof(actual_func_ref_early),
-                " ti_early=", target_info_early !== nothing)
-    if target_info_early === nothing && ctx.func_registry !== nothing && !is_self_call_early &&
-       actual_func_ref_early !== nothing && named_early === nothing
-        ft_early = infer_value_type(early_operand, ctx)
-        if ft_early isa DataType && is_closure_type(ft_early)
-            cat_early = tuple([infer_value_type(arg, ctx) for arg in args]...)
-            ti = mi_target
-            tracing(:closure) &&
-                println(stderr, "CLOSDBG bytype ft=", ft_early, " cat=", cat_early, " hit=", ti !== nothing)
-            if ti !== nothing
-                target_info_early = ti
-                closure_self_to_push = early_operand
-            end
-        end
-    end
-    # the MethodInstance's own function, where the lookup by function and types found another
-    # method's function under the same argument types
-    if mi_target !== nothing && !is_self_call_early && target_info_early !== nothing &&
-       target_info_early !== mi_target && target_info_early.arg_types == mi_target.arg_types
-        target_info_early = mi_target
-    end
-    # self-prepended entries: arg_types are shifted +1 relative to `args`
-    early_argtypes_offset = closure_self_to_push === nothing ? 0 : 1
-    if target_info_early !== nothing
-        first_explicit = 1 + early_argtypes_offset
-        param_types = first_explicit <= length(target_info_early.arg_types) ?
-            target_info_early.arg_types[first_explicit:end] : ()
-    end
-
-    # ================================================================
-    # Early dispatch: Julia Base string operations → str_* intrinsics
-    # These must run BEFORE the pre-push loop to avoid side effects
-    # from compiling unwanted arguments (e.g., function singleton structs).
-    # ================================================================
-    if mi isa Core.MethodInstance
-        meth_early = mi.def
-        if meth_early isa Method
-            _name_early = meth_early.name
-            _spec_early = mi.specTypes
-
-            # BF-4000: #string#403(base, pad, typeof(string), x) → inline dec call
-            # String interpolation "$x" and string(x::Integer) go through this kwarg method.
-            # The typeof(string) arg is phantom (never used in body). Redirect to dec().
-            if _name_early === Symbol("#string#403") && length(args) == 4 &&
-               ctx.func_registry !== nothing
-                _dec_info = get_function(ctx.func_registry, Base.dec, (UInt64, Int64, Bool))
-                if _dec_info !== nothing
-                    bd = _ctx_builder(ctx, "compile_invoke")
-                    _x = args[4]  # the integer value
-
-                    # Push abs(x) as I64 (same bits as UInt64): select(x, -x, x >= 0)
-                    emit_value!(bd, _x, ctx, I64)  # x (true branch)
-                    i64_const!(bd, 0)                                   # 0
-                    emit_value!(bd, _x, ctx, I64)  # x
-                    num!(bd, Opcode.I64_SUB)                            # -x (false branch)
-                    emit_value!(bd, _x, ctx, I64)  # x
-                    i64_const!(bd, 0)                                   # 0
-                    num!(bd, Opcode.I64_GE_S)                           # x >= 0 (i32 condition)
-                    select!(bd, I64)                                    # abs(x)
-
-                    # Push pad (arg 2)
-                    emit_value!(bd, args[2], ctx, I64)
-
-                    # Push x < 0 as i32 Bool
-                    emit_value!(bd, _x, ctx, I64)
-                    i64_const!(bd, 0)
-                    num!(bd, Opcode.I64_LT_S)
-
-                    # Call dec
-                    call!(bd, _dec_info.wasm_idx)
-                    return append_builder!(b, bd)
-                end
-            end
-
-            # repeat/lpad/rpad: deleted (spike, dev/MARCH.md Phase 5.2 item A).
-            # These used to intercept by bare Symbol name BEFORE cross-call/overlay
-            # resolution ever got a chance — for repeat(::Char,::Int) that unconditional
-            # interception was shadowing a REAL bug fix: the
-            # `@overlay WASM_METHOD_TABLE Base.repeat(c::Char,n::Int)` in interpreter.jl
-            # (assembles the char's full UTF-8 bytes) was dead code, permanently shadowed
-            # by this arm's single-byte `char >> 24` fill — confirmed via the spike
-            # (repeat('💊',3) now correct; it silently truncated to one byte before).
-            # repeat(::String,::Int) has its own overlay; lpad/rpad have no overlay — Base's
-            # real bodies (strings/util.jl) compile correctly through the generic path
-            # (verified: the exact `lpad`/`rpad` source, copied under a fresh name so this
-            # interception could not shadow it, differential-passed including the
-            # `utf8proc_charwidth` foreigncall and the `p^q` dynamic-dispatch repeat call —
-            # WT already has table-driven foreigncall lowerings for `utf8proc_charwidth`/
-            # `utf8proc_category`, statements.jl/types.jl).
-        end
+        closure_self_to_push = callee_value isa NirNode ? callee_value : NirLiteral(callee_value)
     end
 
     # 453393ca4ba4: closure callee — the compiled function takes the closure
@@ -578,356 +340,93 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         end
     end
 
-    # mi was already extracted above for parameter type checking
-    if mi isa Core.MethodInstance
-        meth = mi.def
-        if meth isa Method
-            name = meth.name
-
-            # Check if this is a self-recursive call: the invoked function is the one
-            # the callee names through a global (directly or through an SSA alias), else
-            # the callee's own constant, else a parameter's singleton instance.
-            func_ref = node.callee
-            named = _invoke_named_callee(func_ref, ctx; through_pi=false)
-            actual_func_ref = named !== nothing ? named : nir_const(func_ref)
-            if named === nothing && func_ref isa NirArgument
-                # Higher-order function calls (e.g., parse_Nary's `down(ps)`)
-                # func_ref is a function parameter. Extract actual function from mi.specTypes.
-                if mi isa Core.MethodInstance
-                    spec = mi.specTypes
-                    if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
-                        func_type = spec.parameters[1]
-                        singleton = _invoke_singleton_instance(func_type)
-                        singleton === nothing || (actual_func_ref = singleton)
+    if target !== nothing
+        # one call arm, self-recursion included (dart's static invocation has no recursion case)
+        @debug "Cross-call resolved" name=name idx=idx return_type=target.return_type has_ssa_local=haskey(ctx.ssa_locals, idx)
+        # Cross-function call - emit call instruction with target index
+        # fullstrict: the args sit on the PARENT builder — seed the real
+        # param count (readable from the pre-declared placeholder).
+        # The module is authoritative for both imported and local
+        # function signatures. Reuse the builder's sole resolver;
+        # reconstructing only the local-function half here left
+        # imported calls with an unseeded operand stack.
+        local _cc_params = _function_type(ctx.mod, target.wasm_idx).params
+        tracing(:cc) && println(stderr, "CC target=", target.name, " idx=", target.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
+        bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
+                           seed_types=_cc_params)   # the placeholder truth IS the contract
+        emit_direct_call!(bcc, ctx.mod, ctx.type_registry, target.wasm_idx)
+        # If callee returns Union{} (Bottom), it always throws/traps.
+        # The Wasm func type has no result, so code after is unreachable.
+        # Emit unreachable to make stack polymorphic — prevents DROP from
+        # causing "nothing on stack" when the void call has no return value.
+        # NOTE: Do NOT set ctx.last_stmt_was_stub here. The SSA type may not
+        # be Union{} (e.g., Any in unoptimized IR), so setting the flag would
+        # incorrectly trigger dead code detection and skip block structures.
+        if target.return_type === Union{}
+            unreachable!(bcc)  # structural trap (dart-legit dead path)
+        end
+        # Unused cross-call return values are dropped by
+        # the stackifier (builder stack delta + use_count==0).
+        # Do NOT emit DROP here — the stackifier's already_dropped heuristic
+        # has false positives when the LEB128 function index byte coincides
+        # with Opcode.CALL (0x10), causing double DROP and stack underflow.
+        # Check: if function returns externref but caller expects concrete ref,
+        # insert any_convert_extern + ref.cast null to bridge the type gap.
+        # This happens when the function's wasm return type is externref (mapped
+        # from Any/Union via julia_to_wasm_type) but the caller's SSA local uses
+        # a tagged union struct (mapped via get_concrete_wasm_type).
+        if haskey(ctx.ssa_locals, idx)
+            local_idx_val = ctx.ssa_locals[idx]
+            local_arr_idx = local_idx_val - ctx.n_params + 1
+            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
+                target_local_type = ctx.locals[local_arr_idx]
+                local _cc_result = isempty(bcc.v.stack) ? nothing : bcc.v.stack[end]
+                if _cc_result !== nothing && !_wt_is_ref(_cc_result) &&
+                   _wt_is_ref(target_local_type) && isconcretetype(target.return_type)
+                    # parity(code_generator.dart:677 convertType): the call's
+                    # result converts from the CALLEE's output type. A
+                    # union-split call is typed by the whole call's union
+                    # (Union{Nothing,Int64}) while the invoked branch returns
+                    # its own concrete type, which stamps the box's classId.
+                    coerce_stack_top!(bcc, target_local_type, ctx;
+                                      from_julia=target.return_type)
+                elseif target_local_type isa ConcreteRef
+                    ret_wasm = julia_to_wasm_type(target.return_type)
+                    if ret_wasm === ExternRef
+                        # Function returns externref, local expects concrete ref
+                        any_convert_extern!(bcc)
+                        ref_cast!(bcc, Int64(target_local_type.type_idx), true)
+                    end
+                elseif target_local_type === AnyRef
+                    ret_wasm = julia_to_wasm_type(target.return_type)
+                    if ret_wasm === ExternRef
+                        # Function returns externref, local expects anyref
+                        any_convert_extern!(bcc)
+                    end
+                elseif target_local_type === ExternRef && node.callee isa NirArgument
+                    # Higher-order call returns concrete ref but local expects externref
+                    # (SSA type is Any because the function parameter is generic)
+                    # But if the callee already returns externref, skip —
+                    # extern_convert_any expects anyref input, not externref.
+                    callee_ret_wasm = julia_to_wasm_type(target.return_type)
+                    if callee_ret_wasm !== ExternRef
+                        extern_convert_any!(bcc)
                     end
                 end
-            end
-
-            is_self_call = false
-            if ctx.func_ref !== nothing && named !== nothing && !(named isa GlobalRef)
-                # Check if this global refers to the same function
-                    called_func = named
-                    if called_func === ctx.func_ref
-                        # Check arity AND types for overloaded methods
-                        if mi isa Core.MethodInstance
-                            spec = mi.specTypes
-                            if spec isa DataType && spec <: Tuple
-                                call_nargs = length(spec.parameters) - 1
-                                if call_nargs == length(ctx.arg_types)
-                                    call_arg_types = spec.parameters[2:end]
-                                    is_self_call = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
-                                end
-                            else
-                                is_self_call = true
-                            end
-                        else
-                            is_self_call = true
-                        end
-                    end
-            elseif ctx.func_ref !== nothing && named === nothing && actual_func_ref isa Function
-                # Function object direct comparison
-                if actual_func_ref === ctx.func_ref
-                    # Check arity AND types for overloaded methods
-                    if mi isa Core.MethodInstance
-                        spec = mi.specTypes
-                        if spec isa DataType && spec <: Tuple
-                            call_nargs = length(spec.parameters) - 1
-                            if call_nargs == length(ctx.arg_types)
-                                call_arg_types = spec.parameters[2:end]
-                                is_self_call = all(call_arg_types[i] <: ctx.arg_types[i] for i in 1:call_nargs)
-                            end
-                        else
-                            is_self_call = true
-                        end
-                    else
-                        is_self_call = true
-                    end
-                end
-            end
-
-            # the MethodInstance's function decides self-recursion (as above)
-            mi_target === nothing || (is_self_call = mi_target.wasm_idx == ctx.func_idx)
-
-            # Check for cross-function call within the module first
-            cross_call_handled = false
-            if ctx.func_registry !== nothing && !is_self_call
-                # Try to find this function in our registry
-                called_func = nothing
-                if named !== nothing
-                    called_func = named isa GlobalRef ? nothing : named   # unbound: nothing
-                elseif actual_func_ref isa DataType || actual_func_ref isa UnionAll
-                    # For constructor calls, the func_ref might be the type directly
-                    called_func = actual_func_ref
-                elseif actual_func_ref isa Function
-                    # For default-arg methods, func_ref can be a Function object
-                    # (e.g., typeof(next_token) for next_token(lexer, true))
-                    called_func = actual_func_ref
-                elseif actual_func_ref isa NirArgument && mi isa Core.MethodInstance
-                    # Fallback for Core.Argument — extract from mi.specTypes
-                    spec = mi.specTypes
-                    if spec isa DataType && spec <: Tuple && length(spec.parameters) >= 1
-                        func_type = spec.parameters[1]
-                        called_func = _invoke_singleton_instance(func_type)
-                    end
-                end
-
-                if called_func === nothing && closure_self_to_push !== nothing && target_info_early !== nothing
-                    # 453393ca4ba4: closure callee resolved by TYPE in the early
-                    # block; the closure object is already on the stack under the args
-                    called_func = closure_self_to_push
-                end
-                if called_func !== nothing && mi isa Core.MethodInstance
-                    # the callee is the invoke's MethodInstance, under the plan's signature
-                    local _sigs = _invoke_registered_signatures(mi)
-                    _exp_ret_l = get(ctx.ssa_types, idx, nothing)
-                    target_info = nothing
-                    for _sig in _sigs[1:end-1]
-                        target_info = get_function(ctx.func_registry, called_func, _sig;
-                                                   expected_return=_exp_ret_l isa Type ? _exp_ret_l : nothing)
-                        target_info === nothing || break
-                    end
-                    if target_info === nothing && closure_self_to_push !== nothing
-                        target_info = target_info_early
-                    end
-                    # the MethodInstance's own function over another method's (as above)
-                    if mi_target !== nothing && target_info !== nothing && target_info !== mi_target &&
-                       target_info.arg_types == mi_target.arg_types
-                        target_info = mi_target
-                    end
-
-                    # Closure/kwarg functions are registered with self-type prepended
-                    # (e.g., typeof(#SourceFile#40) prepended to arg_types). Retry with self-type.
-                    if target_info === nothing && typeof(called_func) <: Function && isconcretetype(typeof(called_func))
-                        target_info = get_function(ctx.func_registry, called_func, _sigs[end])
-                    end
-                    # A dispatch candidate is also the direct target of the :invoke that names its
-                    # MethodInstance: signature lookup (get_function) hides candidates, but the
-                    # invoke names its callee exactly, as a dart member is both a dispatch-table
-                    # entry and the target of a direct call by its Reference.
-                    # parity(functions.dart:25 FunctionCollector._functions): the callee is its Reference.
-                    target_info === nothing && (target_info = mi_target)
-
-                    if target_info !== nothing
-                        @debug "Cross-call resolved" name=name idx=idx return_type=target_info.return_type has_ssa_local=haskey(ctx.ssa_locals, idx)
-                        # Cross-function call - emit call instruction with target index
-                        # fullstrict: the args sit on the PARENT builder — seed the real
-                        # param count (readable from the pre-declared placeholder).
-                        # The module is authoritative for both imported and local
-                        # function signatures. Reuse the builder's sole resolver;
-                        # reconstructing only the local-function half here left
-                        # imported calls with an unseeded operand stack.
-                        local _cc_params = _function_type(ctx.mod, target_info.wasm_idx).params
-                        tracing(:cc) && println(stderr, "CC target=", target_info.name, " idx=", target_info.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
-                        bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
-                                           seed_types=_cc_params)   # the placeholder truth IS the contract
-                        emit_direct_call!(bcc, ctx.mod, ctx.type_registry, target_info.wasm_idx)
-                        cross_call_handled = true
-                        # If callee returns Union{} (Bottom), it always throws/traps.
-                        # The Wasm func type has no result, so code after is unreachable.
-                        # Emit unreachable to make stack polymorphic — prevents DROP from
-                        # causing "nothing on stack" when the void call has no return value.
-                        # NOTE: Do NOT set ctx.last_stmt_was_stub here. The SSA type may not
-                        # be Union{} (e.g., Any in unoptimized IR), so setting the flag would
-                        # incorrectly trigger dead code detection and skip block structures.
-                        if target_info.return_type === Union{}
-                            unreachable!(bcc)  # structural trap (dart-legit dead path)
-                        end
-                        # Unused cross-call return values are dropped by
-                        # the stackifier (builder stack delta + use_count==0).
-                        # Do NOT emit DROP here — the stackifier's already_dropped heuristic
-                        # has false positives when the LEB128 function index byte coincides
-                        # with Opcode.CALL (0x10), causing double DROP and stack underflow.
-                        # Check: if function returns externref but caller expects concrete ref,
-                        # insert any_convert_extern + ref.cast null to bridge the type gap.
-                        # This happens when the function's wasm return type is externref (mapped
-                        # from Any/Union via julia_to_wasm_type) but the caller's SSA local uses
-                        # a tagged union struct (mapped via get_concrete_wasm_type).
-                        if haskey(ctx.ssa_locals, idx)
-                            local_idx_val = ctx.ssa_locals[idx]
-                            local_arr_idx = local_idx_val - ctx.n_params + 1
-                            if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                                target_local_type = ctx.locals[local_arr_idx]
-                                local _cc_result = isempty(bcc.v.stack) ? nothing : bcc.v.stack[end]
-                                if _cc_result !== nothing && !_wt_is_ref(_cc_result) &&
-                                   _wt_is_ref(target_local_type) && isconcretetype(target_info.return_type)
-                                    # parity(code_generator.dart:677 convertType): the call's
-                                    # result converts from the CALLEE's output type. A
-                                    # union-split call is typed by the whole call's union
-                                    # (Union{Nothing,Int64}) while the invoked branch returns
-                                    # its own concrete type, which stamps the box's classId.
-                                    coerce_stack_top!(bcc, target_local_type, ctx;
-                                                      from_julia=target_info.return_type)
-                                elseif target_local_type isa ConcreteRef
-                                    ret_wasm = julia_to_wasm_type(target_info.return_type)
-                                    if ret_wasm === ExternRef
-                                        # Function returns externref, local expects concrete ref
-                                        any_convert_extern!(bcc)
-                                        ref_cast!(bcc, Int64(target_local_type.type_idx), true)
-                                    end
-                                elseif target_local_type === AnyRef
-                                    ret_wasm = julia_to_wasm_type(target_info.return_type)
-                                    if ret_wasm === ExternRef
-                                        # Function returns externref, local expects anyref
-                                        any_convert_extern!(bcc)
-                                    end
-                                elseif target_local_type === ExternRef && func_ref isa NirArgument
-                                    # Higher-order call returns concrete ref but local expects externref
-                                    # (SSA type is Any because the function parameter is generic)
-                                    # But if the callee already returns externref, skip —
-                                    # extern_convert_any expects anyref input, not externref.
-                                    callee_ret_wasm = julia_to_wasm_type(target_info.return_type)
-                                    if callee_ret_wasm !== ExternRef
-                                        extern_convert_any!(bcc)
-                                    end
-                                end
-                            end
-                        end
-                        append_builder!(fb, bcc)
-                    end
-                end
-            end
-
-            if is_self_call
-                # Self-recursive call - emit call instruction
-                # fullstrict: the args live on fb; the OWN placeholder sig is the contract
-                local _sc_params = begin
-                    local _m = ctx.mod
-                    local _ni = count(imp -> imp.kind == 0x00, _m.imports)
-                    local _fi = Int(ctx.func_idx) - _ni
-                    local _ps = WasmValType[]
-                    if _fi >= 0 && _fi < length(_m.functions)
-                        local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
-                        _ft isa FuncType && (_ps = WasmValType[q for q in _ft.params])
-                    end
-                    _ps
-                end
-                bsc2 = _sub_builder(fb, ctx, "compile_invoke", length(_sc_params); seed_types=_sc_params)
-                call!(bsc2, ctx.func_idx)
-                # Bridge return type for self-calls (externref→anyref)
-                if haskey(ctx.ssa_locals, idx)
-                    local_idx_val = ctx.ssa_locals[idx]
-                    local_arr_idx = local_idx_val - ctx.n_params + 1
-                    if local_arr_idx >= 1 && local_arr_idx <= length(ctx.locals)
-                        target_local_type = ctx.locals[local_arr_idx]
-                        if target_local_type === AnyRef && ctx.return_type !== nothing
-                            ret_wasm = julia_to_wasm_type(ctx.return_type)
-                            if ret_wasm === ExternRef
-                                any_convert_extern!(bsc2)
-                            end
-                        elseif target_local_type isa ConcreteRef && ctx.return_type !== nothing
-                            ret_wasm = julia_to_wasm_type(ctx.return_type)
-                            if ret_wasm === ExternRef
-                                any_convert_extern!(bsc2)
-                                ref_cast!(bsc2, Int64(target_local_type.type_idx), true)
-                            end
-                        end
-                    end
-                end
-                append_builder!(fb, bsc2)
-            elseif cross_call_handled
-                # Already handled above
-
-            # ================================================================
-            # Struct constructor via :invoke — immutable structs with only
-            # reference-type fields (e.g., all-String) use :invoke instead
-            # of :new.  Detect Type{T} as first specTypes parameter and
-            # emit struct.new with the pre-compiled field values.
-            # ================================================================
-            elseif mi !== nothing && begin
-                    local _sc_sig = mi.specTypes
-                    local _sc_ok = false
-                    if _sc_sig isa DataType && _sc_sig <: Tuple && length(_sc_sig.parameters) >= 1
-                        local _sc_fp = _sc_sig.parameters[1]
-                        if _sc_fp isa DataType && _sc_fp <: Type && length(_sc_fp.parameters) >= 1
-                            local _sc_tt = _sc_fp.parameters[1]
-                            # Only a constructor whose body is proven to be `%new(T, args...)`
-                            # is lowered to a bare struct.new: mapping another constructor's
-                            # arguments onto the fields skips its body — a normalizing
-                            # constructor (UnitRange's last, a user's `new(abs(x))`) would
-                            # answer the unnormalized struct, and a non-field-wise one
-                            # (`Dict{K,V}(ps::Pair...)`) emitted invalid wasm. Any other
-                            # constructor is called as its compiled function, or rejects via
-                            # the terminal :unsupported_method.
-                            if is_struct_type(_sc_tt)
-                                _sc_ok = _is_direct_struct_constructor(_sc_tt, mi, ctx)
-                            end
-                        end
-                    end
-                    _sc_ok
-                end
-                # Extract target type from Type{T}
-                local _ctor_target = mi.specTypes.parameters[1].parameters[1]::DataType
-                # Clear pre-compiled args — we re-emit in correct order with typeId
-                fb = _ctx_builder(ctx, "compile_invoke.frag")
-                # Register struct type if not already registered
-                if !haskey(ctx.type_registry.structs, _ctor_target)
-                    register_struct_type!(ctx.mod, ctx.type_registry, _ctor_target)
-                end
-                local _ctor_sinfo = ctx.type_registry.structs[_ctor_target]
-                if _ctor_sinfo !== nothing
-                    emit_struct_prefix!(fb, ctx.type_registry, _ctor_target, _ctor_sinfo)
-                    local _vararg_direct = (mi.def::Method).isva
-                    local _fixed_count = _vararg_direct ? mi.def.nargs - 2 : length(args)
-                    # Compile fixed constructor arguments as their exact struct fields.
-                    for _fi in 1:_fixed_count
-                        local _ftype = _fi <= length(_ctor_sinfo.field_types) ? _ctor_sinfo.field_types[_fi] : Any
-                        local _ctor_def = ctx.mod.types[_ctor_sinfo.wasm_type_idx + 1]
-                        local _field_idx = _fi + Int(_ctor_sinfo.field_offset)
-                        local _expected = (_ctor_def isa StructType && _field_idx <= length(_ctor_def.fields)) ?
-                            _ctor_def.fields[_field_idx].valtype : nothing
-                        _expected === nothing && error(
-                            "constructor field lacks a physical Wasm type: target=$_ctor_target field=$_fi " *
-                            "offset=$(_ctor_sinfo.field_offset) registered_fields=$(length(_ctor_sinfo.field_types)) " *
-                            "physical_fields=$(_ctor_def isa StructType ? length(_ctor_def.fields) : -1)")
-                        emit_value!(fb, args[_fi], ctx, _expected; from_julia=_ftype)
-                    end
-                    if _vararg_direct
-                        local _varargs = args[(_fixed_count + 1):end]
-                        local _vararg_types = tuple((_invoke_arg_static_type(arg, ctx)
-                            for arg in _varargs)...)
-                        local _tuple_type = Tuple{_vararg_types...}
-                        local _tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, _tuple_type)
-                        _tuple_info === nothing && error("vararg tuple layout is unavailable")
-                        emit_struct_prefix!(fb, ctx.type_registry, _tuple_type, _tuple_info)
-                        local _tuple_def = ctx.mod.types[_tuple_info.wasm_type_idx + 1]
-                        for (_vi, _arg) in enumerate(_varargs)
-                            local _wf = _vi + Int(_tuple_info.field_offset)
-                            local _expected = (_tuple_def isa StructType && _wf <= length(_tuple_def.fields)) ?
-                                _tuple_def.fields[_wf].valtype : nothing
-                            _expected === nothing && error("vararg tuple field lacks a physical Wasm type")
-                            emit_value!(fb, _arg, ctx, _expected; from_julia=_vararg_types[_vi])
-                        end
-                        struct_new!(fb, _tuple_info.wasm_type_idx)
-                    end
-                    # Allocation consumes the fields on this same authoritative stack.
-                    struct_new!(fb, _ctor_sinfo.wasm_type_idx)
-                else
-                    # Registration failed — codegen cannot lay out this struct type.
-                    record_unsupported!(ctx, :unsupported_type,
-                        "struct constructor for `$(_ctor_target)` (type registration failed)"; idx=idx, detail=node)
-                    bscnf = _ctx_builder(ctx, "compile_invoke")
-                    record_unsupported!(ctx, :unsupported_method, "struct type registration failed (cannot lay out)"; idx=idx)
-                    unreachable!(bscnf)
-                    append_builder!(fb, bscnf)
-                    ctx.last_stmt_was_stub = true
-                end
-
-            else
-                # Unknown method — codegen has no translation for this invoke target.
-                # This records a source-attributed diagnostic and emits dart's validating
-                # unsupported-path trap; no permissive mode exists.
-                # which lets compilation succeed for paths that never reach this method.
-                tracing(:stubargs) && println(stderr, "STUBARGS ", name, " args=", repr(args))
-                record_unsupported!(ctx, :unsupported_method,
-                    "method `$name`" * (mi !== nothing ? " for $(mi.specTypes)" : "");
-                    idx=idx, detail=node)
-                bunk = _ctx_builder(ctx, "compile_invoke")
-                record_unsupported!(ctx, :unsupported_method, "unknown invoke target (no handler arm)"; idx=idx)
-                unreachable!(bunk)
-                append_builder!(fb, bunk)
-                ctx.last_stmt_was_stub = true
             end
         end
+        append_builder!(fb, bcc)
+    else
+        # The closed world holds no function for this MethodInstance: every :invoke's target is
+        # an edge the collector enrolls (_closed_world_edge), so this is a collector defect, loud at
+        # the statement, never a call to another function or a plausible value.
+        record_unsupported!(ctx, :unsupported_method,
+            "the closed world holds no function for this MethodInstance: method `$name` for $(mi.specTypes)";
+            idx=idx, detail=node)
+        bunk = _ctx_builder(ctx, "compile_invoke")
+        unreachable!(bunk)
+        append_builder!(fb, bunk)
+        ctx.last_stmt_was_stub = true
     end
 
     return append_builder!(b, fb)

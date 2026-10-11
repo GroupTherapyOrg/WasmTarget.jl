@@ -478,7 +478,7 @@ function numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type}
         local selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
         merge!(joins, capture_read_types(ctx.nir, ctx.ssa_types, record, selfT;
                                          spectypes=ctx.slot_types,
-                                         closure_ir=mi -> get(ctx.translator.plan.ir_cache, mi, nothing)))
+                                         closure_ir=mi -> plan_ir_or_nothing(ctx.translator.plan, mi)))
     end
     return joins
 end
@@ -1574,8 +1574,7 @@ function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall
     f isa Core.Builtin && return Any
     argtypes = Tuple(Any[get_ssa_type(ctx, a) for a in call.operands])
     interp = get_wasm_interpreter()
-    table = CC.method_table(interp)
-    lookup = CC.findall(Tuple{Core.Typeof(f), argtypes...}, table; limit=-1)
+    lookup = wt_method_matches(Tuple{Core.Typeof(f), argtypes...})
     (lookup === nothing || lookup.ambig || isempty(lookup.matches)) && return Any
     rt = infer_return_type(f, argtypes; interp=interp)
     isconcretetype(rt) || return Any
@@ -1584,7 +1583,7 @@ function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall
         local sig = (!isempty(info.arg_types) && info.arg_types[1] === Core.Typeof(f) &&
                      length(info.arg_types) == length(argtypes) + 1) ?
                     Tuple{info.arg_types...} : Tuple{Core.Typeof(f), info.arg_types...}
-        local own = CC.findall(sig, table; limit=1)
+        local own = wt_method_matches(sig; limit=1)
         (own === nothing || isempty(own.matches)) || push!(reached, own.matches[1].method)
     end
     all(match -> match.method in reached, lookup.matches) || return Any

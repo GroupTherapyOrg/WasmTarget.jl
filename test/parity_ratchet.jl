@@ -308,8 +308,8 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
     (:ClosedWorld, :codeinfos),         # Core.Compiler.compile!'s output as it hands it: CodeInstance, CodeInfo alternating in a Vector{Any}
     (:ClosedWorldPlan, :functions),     # (callable, argument types, name, MethodInstance) — the callable is open, as FunctionInfo.func_ref
-    (:ClosedWorldPlan, :ir_cache),      # keyed by MethodInstance and by (callable, argument types), both of which get_typed_ir serves
-    (:ClosedWorldPlan, :dispatch_candidates),  # (callable, argument types) keys — the same open callable
+    (:ClosedWorldPlan, :ir_cache),      # MethodInstance → (CodeInfo, return type): Julia's inferred return type is any lattice-widened Type
+    (:ClosedWorldPlan, :external_leaves),  # (callable, argument types, MethodInstance) of each declared import — the callable is open, as FunctionInfo.func_ref
 ])
 
 """
@@ -567,8 +567,6 @@ end
 const R40_ALLOWED_PROCESS_STATE = Dict{String,String}(
     "codegen/builtins.jl BUILTIN_LOWERINGS" =>
         "the lowering registry: filled at load by each @builtin_lowering, read-only after (dart's intrinsic tables, intrinsics.dart, are static)",
-    "codegen/compile.jl STANDALONE_INTRINSIC_BODIES" =>
-        "filled once from Base's rethrow methods on first use: the same table for every compilation",
     "bridge.jl _DESC_CACHE" => "the host bridge's memo of descriptor(T), a pure function of T",
     "bridge.jl _FN_CACHE" => "the host bridge's memo of each type's generated accessor functions",
     "bridge.jl _ARG_CACHE" => "the host bridge's memo of each argument type's converter")
@@ -1150,7 +1148,7 @@ const LOCKS = [
             # unresolved callee is SKIPPED — not swallowed into a table lookup.
             required = ["val.bound || return nothing",
                         "callee_func isa NirNode || callee_func isa GlobalRef",
-                        "called_func = named isa GlobalRef ? nothing : named   # unbound: nothing",
+                        "return def.bound ? def.value : GlobalRef(def.mod, def.name)",
                         "\n        called_func = func isa GlobalRef ? nothing : func"]
             count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
         end),
@@ -1204,11 +1202,11 @@ const LOCKS = [
                         "local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)",
                         "local edge = _closed_world_edge(s.node, pair[2], pair_slot_types, arg_type, interp)",
                         "local edge = _closed_world_edge(n, src, slot_types, arg_type, edge_interp)",
-                        "local table = CC.method_table(interp)",
-                        "if (mi = _apply_iterate_vararg_target_mi(node, slot_types, table)) !== nothing",
-                        "elseif (mi = _invoke_in_world_target_mi(node, arg_type, table)) !== nothing",
+                        "CC.findall(sig, CC.method_table(get_wasm_interpreter()); limit)",
+                        "if (mi = _apply_iterate_vararg_target_mi(node, slot_types)) !== nothing",
+                        "elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing",
                         "kind = :finalizer", "kind = :cfunction", "kind = :new_function", "kind = :invoke_modify",
-                        "matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)",
+                        "local matches = wt_method_matches(Tuple{Core.Typeof(f), arg_types...})",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
                         "collect_new_pairs!",
                         "# the loop only adds: no collected body is ever dropped",
@@ -1672,7 +1670,7 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["result_julia = get(ctx.ssa_types, idx, Any)",
                         "CC.typeinf_type(get_wasm_interpreter(), node.mi)",
-                        "CC.findall(Tuple{Core.Typeof(f), argtypes...}, table; limit=-1)",
+                        "lookup = wt_method_matches(Tuple{Core.Typeof(f), argtypes...})",
                         "lookup.ambig",
                         "rt = infer_return_type(f, argtypes; interp=interp)",
                         "all(match -> match.method in reached, lookup.matches) || return Any",
@@ -1682,8 +1680,8 @@ const LOCKS = [
                         "node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)",
                         "entry.specTypes",
                         "target_type <: atypes[p]",
-                        "concrete_args = Tuple{spec...}",
-                        "m = which(g, concrete_args)",
+                        "ssig = Tuple{Core.Typeof(g), spec...}",
+                        "local selected = wt_method_which(ssig)",
                         "Base.array_subpadding",
                         "Core.bitcast(T, bits)",
                         "% TargetBits",
@@ -1703,9 +1701,9 @@ const LOCKS = [
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             required = ["arg_types = Any[arg_type(a) for a in node.operands]",
                         "a -> _call_site_arg_type(a, slot_types, get!(() -> propagate_numeric_value_types(nir), joins, src))",
-                        "CC.findall(ftype, lookup_table; limit=-1)",
+                        "matches = wt_method_matches(ftype)",
                         "f isa Function || f isa Type",
-                        "param_types = first_explicit <= length(target_info_early.arg_types)",
+                        "target.arg_types[(takes_closure ? 2 : 1):end]",
                         "Push arguments through the resolved target signature",
                         "Base.ReinterpretArray{T,N,S,A,false}"]
             forbidden = ["only handle the case where the LAST arg",
@@ -1937,7 +1935,7 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["container_args = args[3:end]",
                         "for (container_arg, container_type) in zip(container_args, container_types)",
-                        "_emit_apply_method_error!",
+                        "emit_method_error!(bld, ctx.mod, ctx.type_registry, Tuple{},",
                         "MethodError(f, (), world)",
                         "Int64(WASM_WORLD_AGE)",
                         "_get_binary_reduce_opcode(target_value, elem_type)",
@@ -2360,6 +2358,10 @@ const LOCKS = [
         () -> begin
             retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
                        "builder_diagnose",   # the builder's post-mortem printer, with no caller
+                       # 116a: an :invoke's callee is its MethodInstance's function, the plan the one consult
+                       "_invoke_registered_signatures", "mi_target", "target_info_early",
+                       "_build_standalone_intrinsic_bodies!", "_standalone_intrinsic_body",
+                       "method_error_args", "_emit_apply_method_error!", "_is_direct_struct_constructor",
                        # 115b: bodies and initializers are builders the module made, globals held by handle
                        "global_named", "add_global_ref!", "builder_set_local_type!", "locals_fn",
                        "_seed_builder_locals!", "exc_cell_type!", "ensure_exception_top_global!",
@@ -2494,10 +2496,10 @@ const LOCKS = [
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             allowed = Set(["Base.rethrow"])   # native body: a foreigncall to jl_rethrow
-            reg = match(r"(?s)function _build_standalone_intrinsic_bodies!\(\).*?\nend\n", compile_src)
+            reg = match(r"(?s)\nconst STANDALONE_INTRINSIC_BODIES = IdDict\{Method,Function\}\((.*?)\)\n", compile_src)
             reg === nothing && return 1
-            registered = Set(m.captures[1] for m in eachmatch(r"methods\(([A-Za-z_.]+)\)", reg.match))
-            bodies = Set(m.captures[1] for m in eachmatch(r"STANDALONE_INTRINSIC_BODIES\[m\] = ([A-Za-z_!]+)", reg.match))
+            registered = Set(m.captures[1] for m in eachmatch(r"methods\(([A-Za-z_.]+)\)", reg.captures[1]))
+            bodies = Set(m.captures[1] for m in eachmatch(r"m => ([A-Za-z_!]+)", reg.captures[1]))
             unanchored = count(bodies) do fn
                 d = match(Regex("(?s)\"\"\"((?:(?!\"\"\").)*)\"\"\"\\nfunction " * fn * "\\("), compile_src)
                 d === nothing || !occursin("parity(", d.captures[1])
@@ -2510,7 +2512,7 @@ const LOCKS = [
         () -> length(unconsumed_files_outside_src())),
     "L134_the_wasm_runtime_is_required" => ("no test branches on the wasm runtime's absence: test/wasm_runner.jl's one Node detection errors at load when Node ≥ 20 is missing, and no test skips, reports a pass, or answers `skipped` without it (runner_available, :nonode, :no_node, NODE_OK, a `skipped` result field) — every differential lane either runs its wasm or fails (dev/CHARTER.md C5)",
         () -> count_sites(r"runner_available|:nonode\b|:no_node\b|\bNODE_OK\b|NODE_CMD|NEEDS_(EXPERIMENTAL_)?FLAG|\bdetect_node\b|\.skipped\b|\bskipped\s*="; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])),
-    "L135_callee_by_exact_signature" => ("get_function binds a call to a compiled specialization only on its exact argument types (the return-compatibility gate aside): no subtype or reverse-subtype pass between argument types. An :invoke names its MethodInstance's registered signature; any other mismatch is dynamic dispatch, lowered as such or rejected. The reverse pass bound `RW(::Any)` holding a Symbol to `RW(::String)` and answered 1001 for 1100 (smoke xfail dynamic_constructor; dev/CHARTER.md C6)",
+    "L135_callee_by_exact_signature" => ("get_function binds a call to a compiled specialization only on its exact argument types (the return-compatibility gate aside): no subtype or reverse-subtype pass between argument types. An :invoke never asks it: its callee is its MethodInstance's function (L170); any other mismatch is dynamic dispatch, lowered as such or rejected. The reverse pass bound `RW(::Any)` holding a Symbol to `RW(::String)` and answered 1001 for 1100 (smoke xfail dynamic_constructor; dev/CHARTER.md C6)",
         () -> begin
             src = read(joinpath(CODEGEN, "types.jl"), String)
             m = match(r"(?s)\nfunction get_function\(registry::FunctionRegistry.*?\nend\n", src)
@@ -2661,7 +2663,7 @@ const LOCKS = [
             end
             n
         end),
-    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); the box-capture analysis takes its closure bodies as a required lookup (dev/CHARTER.md C1)",
+    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); the box-capture analysis takes its closure bodies as a required lookup (dev/CHARTER.md C1); and a statement's codegen asks no method table either (L171)",
         () -> begin
             local n = count_sites(r"\bget_typed_ir\("; roots=[SRC], exclude_files=["codegen/ir.jl"])
             n += count_sites(r"TRIM_IR_CACHE"; roots=[SRC])
@@ -3248,6 +3250,92 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("cfgs=(MC*.cfg)", read(joinpath(formal, "run_tlc.sh"), String)) ? 0 : 1
             v + body_rows_failing(["a", "b", "c", "d", "e"])
         end),
+    "L170_one_callee_per_method_instance" => ("an :invoke's callee is the function the plan compiles its MethodInstance to, as dart's static invocation calls its target's one function (code_generator.dart:1668, functions.dart:90): compile_invoke! names get_function_by_mi and nothing else, invoke.jl has no get_function( lookup by the callee's object and argument types, no _invoke_registered_signatures, no `<: ctx.arg_types` self rule and no self-call arm (a call of this function is the one call arm's, as dart's static invocation has no recursion case), and a MethodInstance with no function rejects at its statement; every per-function fact the plan holds is keyed by MethodInstance (ClosedWorldPlan's ir_cache, candidate_mis and bespoke), the IR read only through plan_ir / plan_ir_or_nothing (no other `.ir_cache` read in src), and the bespoke decision made once, in trim_compile_plan, from STANDALONE_INTRINSIC_BODIES (no other reader). Behavior: smoke one_consult's invoke_names_its_method (two methods share Int64; `invoke` names the less specific one: native 103004) fails under a signature-first lookup, and test/ir_one_inference_path.jl checks the plan's keys and that a closure body both invoked and called through an `Any` slot is a candidate by its MethodInstance. Until 2026-10-11 the signature lookup ran first and the MethodInstance answered only when it missed (dev/CHARTER.md C1)",
+        () -> begin
+            local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            local n = 0
+            n += occursin("local target = get_function_by_mi(ctx.func_registry, mi)", inv) ? 0 : 1
+            n += occursin("# one call arm, self-recursion included", inv) ? 0 : 1
+            n += occursin("ctx.func_idx", inv) ? 1 : 0   # no self-call arm: a self call is the call
+            n += count(p -> occursin(p, inv), ["get_function(", "_invoke_registered_signatures", "<: ctx.arg_types"])
+            n += count(p -> !occursin(p, trim), ["    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Any}}\n",
+                                                 "    candidate_mis::Set{Core.MethodInstance}\n",
+                                                 "    bespoke::IdDict{Core.MethodInstance,Function}\n"])
+            # the IR read only by plan_ir_or_nothing (plan_ir reads through it)
+            n += abs(count_sites(r"\.ir_cache\b"; roots=[SRC]) - 1)
+            n += occursin("    local hit = get(plan.ir_cache, mi, nothing)\n    return hit === nothing ? nothing : (hit[1], hit[2])", trim) ? 0 : 1
+            # the bespoke table read once, by the planner
+            n += abs(count_sites(r"get\(STANDALONE_INTRINSIC_BODIES\b"; roots=[SRC]) - 1)
+            n += occursin("local gen = mi.def isa Method ? get(STANDALONE_INTRINSIC_BODIES, mi.def, nothing) : nothing", trim) ? 0 : 1
+            n += count_sites(r"STANDALONE_INTRINSIC_BODIES\[|haskey\(STANDALONE_INTRINSIC_BODIES"; roots=[SRC])
+            # the behavior pins
+            n += occursin("(\"invoke_names_its_method\", (n::Int64) -> invoke(_sm_oc, Tuple{Integer}, n) * 1000 + _sm_oc(n), Int64(3))", smoke) ? 0 : 1
+            n += occursin("@test keytype(plan.ir_cache) === Core.MethodInstance", oip) ? 0 : 1
+            n += occursin("@test only(bodies) in plan.candidate_mis", oip) ? 0 : 1
+            n
+        end),
+    "L171_one_method_consult" => ("one consult answers which methods Julia selects: Julia's matching in the WasmInterpreter's overlay table at its world (trimcollect.jl wt_method_matches = CC.findall, wt_method_which = CC.findsup, wt_methods_ambiguous), as dart consults one class hierarchy (translator.dart:108). No hasmethod(, which( (Sys.which aside), _which(, _methods_by_ftype( or isambiguous( outside that block, qualified or not (its ambiguity check is Julia's isambiguous algorithm, base/reflection.jl, run over the consult's matches with the ambiguous ones kept, merged across the overlay table as CC.findall merges it; it calls no Base.isambiguous and never raises), CC.findall( and CC.findsup( (or Core.Compiler.'s) only there, and get_world_counter() only at the interpreter's world (interpreter.jl) and the TypeName world-bound projection (types.jl `host_world`). A statement's codegen asks no table: calls.jl, dispatch.jl, selector_table.jl and invoke.jl name no consult; the vtable pre-pass's ambiguity search, which decides a rejection before any body compiles, asks the one consult (compile.jl wt_methods_ambiguous, closures.jl ambiguous_class_tuple's wt_method_which, its one consult in that file). No flat method_error_args exists; a dynamic call's and a closure entry's MethodError index the plan's per-callee record (no_method), which holds an entry, empty or not, for every callee whose dynamic call the collector enrolled and every planned callable with a vtable, so a missing one raises, and no `get(…no_method…)` default reads it; test/dispatch_method_error.jl reads the module: each no-row block builds one MethodError per tuple of its own callee's record (a flat read adds the other callee's arms, which no answer shows, the rows coming first). Exactly one emitter builds a MethodError (emit_method_error!). Until 2026-10-11 enrollment asked Base's table at the latest world while the plan read the overlay table, and codegen re-asked hasmethod and _methods_by_ftype per switch over one flat set of every callee's tuples (dev/CHARTER.md C1)",
+        () -> begin
+            local n = 0
+            local consult_fns = Set(["wt_method_matches", "wt_method_which", "wt_dispatch_mi", "wt_methods_ambiguous", "_wt_matches_with_ambiguous"])
+            local banned = r"(?<!\w)hasmethod\(|(?<![\w]|Sys\.)which\(|(?<!\w)_which\(|_methods_by_ftype\(|isambiguous\(|(?:CC|Core\.Compiler|Compiler)\.find(?:all|sup)\("
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                local enclosing = ""
+                for line in eachline(joinpath(dir, f))
+                    local d = match(r"^(?:function\s+|)([A-Za-z_][A-Za-z0-9_!]*)\(.*\)(?:::[^=]+)?\s*=|^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = something(d.captures[1], d.captures[2]))
+                    _iscomment(line) && continue
+                    if occursin(banned, line)
+                        (rel == "codegen/trimcollect.jl" && enclosing in consult_fns) || (n += 1)
+                    end
+                    if occursin("get_world_counter()", line)
+                        (rel == "codegen/interpreter.jl" ||
+                         (rel == "codegen/types.jl" && occursin("host_world = Base.get_world_counter()", line))) || (n += 1)
+                    end
+                end
+            end
+            # who asks the consult, in src/codegen and src/frontend: the collector and planner
+            # (trimcollect.jl), the vtable pre-pass's ambiguity search (compile.jl's
+            # _compile_closed_world_plan, closures.jl's ambiguous_class_tuple), and one statement
+            # question left, closed_world_call_result (context.jl, MARCH 13.17 A3C1's remainder, which
+            # 116b deletes); every other site counts
+            local consult_rx = r"\b(wt_method_matches|wt_method_which|wt_dispatch_mi|wt_methods_ambiguous|_wt_matches_with_ambiguous|entry_method_instance)\("
+            local allowed_callers = Set([("codegen/compile.jl", "_compile_closed_world_plan"),
+                                         ("codegen/closures.jl", "ambiguous_class_tuple"),
+                                         ("codegen/context.jl", "closed_world_call_result")])
+            for root in (CODEGEN, joinpath(SRC, "frontend")), (dir, _, fs) in walkdir(root), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                rel == "codegen/trimcollect.jl" && continue
+                local enclosing = ""
+                for line in eachline(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    (_iscomment(line) || d !== nothing) && continue
+                    occursin(consult_rx, line) && !((rel, enclosing) in allowed_callers) && (n += 1)
+                end
+            end
+            n += count_sites(r"\bmethod_error_args\b|\berror_args_types\b"; roots=[SRC])
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            # each reads its callee's record, which the plan holds for every callee it can reach (a
+            # missing one raises), never a default
+            n += occursin("local tuples = DataType[T for T in ctx.translator.plan.no_method[Core.Typeof(f)]", calls) ? 0 : 1
+            n += occursin("no_method=plan.no_method[_T])", read(joinpath(CODEGEN, "compile.jl"), String)) ? 0 : 1
+            n += count_sites(r"get\([^)]*no_method"; roots=[SRC])
+            # the behavior pin: a callable's MethodError arms are its own record's, read from the module
+            # (an answer cannot tell a flat record apart: the rows come first)
+            n += occursin("@test count(l -> strip(l) == \"struct.new \$me\", split(body, '\\n')) == length(rf) + length(rg)",
+                          read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String)) ? 0 : 1
+            # one MethodError builder
+            n += abs(count_sites(r"emit_struct_prefix!\([^,]+,\s*[^,]+,\s*MethodError\b"; roots=[SRC]) - 1)
+            n += abs(count_sites(r"^function emit_method_error!\("; roots=[SRC]) - 1)
+            n
+        end),
     "L169_held_by_handle" => ("the module objects codegen defines once it holds by handle, never finds again, as dart's code generator keeps each GlobalBuilder, FunctionBuilder and Tag it defines as an object (translator.dart:96 Translator): the exception tag and the stack entry type its payload carries, `\$exc_top`, `\$host_imports_open`, `\$import_tops`, its array type and the import_tops save helper are the TypeRegistry's ModuleHandles (codegen's own state; the builder holds none), each defined at its first use or, for what a host framework's setup made before the compile (ensure_provenance_imports!, ensure_host_imports_open!), recovered once at the compile's entry by recover_module_handles!, a quarantined host-framework boundary (dev/MARCH.md 13.16). In text: no `global_named` anywhere in src or test; no find of a function or a global by its `.name ==` (the boundary's refusal of a module already holding a global named `\$exc_top` or `\$import_tops`, in recover_module_handles!, aside), and no `exc_cell_type!` (the entry type found by its content through add_type!'s deduplication) in src/codegen; the entry type's StructType is written once, where ensure_exception_tag! defines the tag; no throw_! or catch_legacy! in codegen names a tag by a literal index; exc_tag and exc_cell_type read the handles; recover_module_handles! is called once, at compile_module's entry, and _imported_global (the boundary's find of an imported global by its import name) only by recover_module_handles!, ensure_host_imports_open! and _refuse_imported_global. Its behavior: the name section names every named global (subsection 7, dart's NameSection, serialize/sections.dart:844), and test/probe_bytes.jl requires every probe module's named globals printed by wasm-tools as `(global \$<name>`, required here as written (dev/AUDIT.md A3B15 = A2B6, A4B4, A2E7; dev/CHARTER.md C7)",
         () -> begin
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
@@ -3372,7 +3460,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
         end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_element_offset!: its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those and divides by the element size. No lowering converts a pointer to an index itself (no `from_julia=Ptr{UInt8}` coercion). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])),
-    "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke becomes a bare struct.new only when its body is proven `%new(T, args...)` (_is_direct_struct_constructor), never on an argument count. Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
+    "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke is called as the function of its MethodInstance, never replaced by a bare struct.new (compile_invoke! emits none; the arm that did when the body was proven `%new(T, args...)` needed a body the plan holds only for a MethodInstance with a function, so it could not run, and is gone). Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
         () -> begin
             structs = read(joinpath(CODEGEN, "structs.jl"), String)
             inv = read(joinpath(CODEGEN, "invoke.jl"), String)
@@ -3384,7 +3472,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             # the four routes that register a field's or a signature's Array
             n += (count(r"register_array_wrapper!\(mod, registry, ft\)", structs) >= 3 ? 0 : 1)
             n += occursin("register_array_wrapper!(mod, registry, T)", structs) ? 0 : 1
-            n += occursin("_sc_ok = _is_direct_struct_constructor(_sc_tt, mi, ctx)", inv) ? 0 : 1
+            n += occursin("struct_new!", inv) ? 1 : 0   # an :invoke is called, never replaced by a struct.new
             n += occursin("fieldcount(_sc_tt) == length(args)", inv) ? 1 : 0
             n
         end),
@@ -3420,8 +3508,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                         "if m.method.sig == mi.def.sig",
                         "if m.method.sig == root_mi.def.sig",
                         "CC.specialize_method(root_mi.def, root_mi.specTypes, root_mi.sparam_vals)",
-                        "mi_target === nothing || (is_self_call_early = mi_target.wasm_idx == ctx.func_idx)",
-                        "mi_target === nothing || (is_self_call = mi_target.wasm_idx == ctx.func_idx)",
+                        "local target = get_function_by_mi(ctx.func_registry, mi)",
+                        "# one call arm, self-recursion included",
                         "get_function_by_mi(registry::FunctionRegistry, mi::Core.MethodInstance)"]
             count(p -> !occursin(p, trim * inv * types), required) +
                 count(p -> occursin(p, trim), ["seen_sigs", "(f, arg_types) in seen_sigs"])

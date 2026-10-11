@@ -6,7 +6,8 @@
 (* S3 has no method. The positive instance runs each method for its classes and  *)
 (* throws S3's MethodError (MCClassIdSwitchUnnumberedBroken: with S3's args tuple *)
 (* numbered no class, it traps, which ThrowWhereJuliaThrows rejects). The Broken instances: a collector that misses builtins traps    *)
-(* for MR; a cast-only row runs mS1 for an S3 (its layout is S1's).              *)
+(* for MR; a cast-only row runs mS1 for an S3 (its layout is S1's); with two     *)
+(* sources, mAbs (an overlay's method) has no row and an S2 traps.               *)
 EXTENDS ClassIdSwitch
 
 MCClasses == {"S1", "S2", "S3", "MR", "M1", "M2", "SV"}
@@ -25,4 +26,5 @@ MCParam == [m \in MCMethods |->
 MCStatic == "Any"   \* the call's static type, no class of its own
 MCUnnumbered == {}
 MCUnnumberedS3 == {"S3"}   \* S3's args tuple numbered no class: it traps
+MCOverlayOnly == {"mAbs"}  \* mAbs is a method of the overlay table only
 =============================================================================

@@ -36,7 +36,7 @@ struct ClosureBody
 end
 
 """
-    build_closure_vtable!(mod, registry, closure_type, bodies; takes_context)
+    build_closure_vtable!(mod, registry, closure_type, bodies; takes_context, no_method)
         -> (vtable_global_idx, vtable_struct_idx)
 
 ONE immutable vtable GLOBAL per closure TYPE (dart ClosureLayouter: one representation
@@ -50,6 +50,8 @@ so a type called through erased bindings at two arities (`string` as a value, wi
 specializations of the SAME arity share one dispatching entry that tests the erased
 arguments' runtime classes (`_closure_dispatch_trampoline!`).
 
+`no_method` is the plan's record of the args tuples the callable has no method for: an entry
+whose arguments no body takes throws Julia's MethodError for them.
 For capturing closures, `params` includes the captured-struct self at slot 0 and
 `takes_context=true`. Static tear-offs have only their public parameters and
 `takes_context=false`; both use the same closure object and vtable ABI.
@@ -58,7 +60,8 @@ parity(translator.dart:1360 Translator.getClosure)
 """
 function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                closure_type::Type, bodies::Vector{ClosureBody};
-                               takes_context::Bool=is_closure_type(closure_type))::Tuple{UInt32, UInt32}
+                               takes_context::Bool=is_closure_type(closure_type),
+                               no_method::Vector{DataType})::Tuple{UInt32, UInt32}
     cache = registry.closure_vtable_globals
     cache === nothing && throw(_closure_layout_error(closure_type, bodies, "the layouter is unavailable on a minimal registry"))
     haskey(cache, closure_type) && throw(_closure_layout_error(closure_type, bodies, "built twice"))
@@ -84,8 +87,8 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     for arity in arities
         local cands = _most_specific_first(by_arity[arity], closure_type)
         tramps[arity] = length(cands) == 1 ?
-            _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info) :
-            _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info)
+            _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info, no_method) :
+            _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info, no_method)
     end
     local max_arity = maximum(keys(tramps))
     vt_struct = get_closure_vtable_struct!(mod, registry, max_arity)
@@ -142,7 +145,7 @@ _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
 
 A tuple of candidates, one per argument of `overlap` (the argument types two methods both
 admit; a position's candidates are the numbered classes and the `Type{X}` of each type object
-the program holds, `held`), for which Julia's dispatch of callable type `F` is ambiguous (`Base._which` finds no one
+the program holds, `held`), for which Julia's dispatch of callable type `F` is ambiguous (`wt_method_which` finds no one
 method), or false when there is none; when WT does not enumerate the tuples, the reason (the
 overlap is not one tuple type, has a Vararg or a position with no candidate, or has more than
 4096 tuples), which the caller rejects with. A position's candidates are dispatch_candidates'.
@@ -164,7 +167,7 @@ function ambiguous_class_tuple(registry::TypeRegistry, @nospecialize(F), @nospec
     any(isempty, choices) && return "a position of the overlap $(overlap) has no candidate"
     prod(length, choices; init=1) > 4096 && return "the overlap $(overlap) has more than 4096 candidate tuples"
     for cs in Iterators.product(choices...)
-        Base._which(Tuple{F, cs...}; raise=false) === nothing && return cs
+        wt_method_which(Tuple{F, cs...}) === nothing && return cs
     end
     return false
 end
@@ -304,7 +307,8 @@ end
 # reads truth (params anyref^(1+arity) → anyref; scratch = the body width).
 # parity(translator.dart:2767 _ClosureTrampolineGenerator)
 function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type, body::ClosureBody,
-                              arity::Int, takes_context::Bool, base_idx::UInt32, captured_info)::UInt32
+                              arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
+                              no_method::Vector{DataType})::UInt32
     tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
                       func_name="closure_trampoline", mod=mod)
     local numeric = !isempty(body.results) && body.results[1] in (I32, I64, F32, F64)
@@ -335,7 +339,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                             captured_info, UInt32(1 + arity); obj_scratch)
         return_!(tb)
         end_block!(tb)
-        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
+        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method)
     else
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
                             captured_info, UInt32(1 + arity); obj_scratch)
@@ -348,12 +352,12 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
 end
 
 """
-    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity) -> tb
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method) -> tb
 
 A vtable entry whose arguments no body takes: Julia's MethodError, `f` the closure (param 0)
-and `args` the tuple of the arguments' classes. Each args tuple the collector numbered for a
-no-method call of this callable (registry.method_error_args) is tested by its elements'
-classIds and built from the erased arguments; arguments of a class with no numbered tuple, or
+and `args` the tuple of the arguments' classes. Each args tuple of this arity the plan records
+the callable has no method for (`no_method`, its own record) is tested by its elements'
+classIds and built from the erased arguments; arguments of a class with no recorded tuple, or
 read by no class header, trap.
 formal(dev/formal/ClassIdSwitch.tla): ErrorIsJulias, ThrowWhereJuliaThrows.
 parity(dynamic_dispatchers.dart:178 _generateMethodCode): the no-match block, which builds the
@@ -361,22 +365,16 @@ call's error from its arguments and throws it (dart calls noSuchMethod with an I
 parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes (methoderror_args_types), so the tuple is chosen by class among those numbered at compile time; dart builds its Invocation at run time from whatever arguments arrive.)
 """
 function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
-                                       @nospecialize(closure_type), arity::Int)::InstrBuilder
+                                       @nospecialize(closure_type), arity::Int,
+                                       no_method::Vector{DataType})::InstrBuilder
     local base = registry.base_struct_idx
     local headed(C) = isconcretetype(C) && !(C <: Type) && !is_bare_array_class(C) &&
                       (isstructtype(C) || isprimitivetype(C))
-    local tuples = DataType[T for T in registry.method_error_args
-                            if length(T.parameters) == arity && all(headed, T.parameters) &&
-                               (local ms = Base._methods_by_ftype(Tuple{closure_type, T.parameters...},
-                                                                  nothing, -1, Base.get_world_counter());
-                                ms !== nothing && isempty(ms))]
+    local tuples = DataType[T for T in no_method if length(T.parameters) == arity && all(headed, T.parameters)]
     if base === nothing || isempty(tuples)
         unreachable!(tb)   # structural trap: no numbered args tuple (MARCH 13.17 A3S1)
         return tb
     end
-    local err_info = register_struct_type!(mod, registry, MethodError)
-    err_info === nothing && error("MethodError layout is unavailable")
-    local err_def = mod.types[Int(err_info.wasm_type_idx) + 1]
     for T in tuples
         for (j, C) in enumerate(T.parameters)
             local_get!(tb, UInt32(j)); ref_test!(tb, Int64(base), false)
@@ -390,21 +388,10 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
             j > 1 && num!(tb, Opcode.I32_AND)
         end
         if_!(tb)
-        local args_info = register_tuple_type!(mod, registry, T)
-        args_info === nothing && error("$(T) layout is unavailable")
-        local tup_def = mod.types[Int(args_info.wasm_type_idx) + 1]
-        emit_struct_prefix!(tb, registry, MethodError, err_info)
-        local_get!(tb, UInt32(0))   # the closure, as the value it was called as
-        local fw = err_def.fields[wasm_field_idx(err_info, 1) + 1].valtype
-        fw === AnyRef || ref_cast!(tb, fw, true)
-        emit_struct_prefix!(tb, registry, T, args_info)
-        for j in 1:arity
-            _closure_narrow_arg!(tb, mod, registry, j, tup_def.fields[wasm_field_idx(args_info, j) + 1].valtype)
-        end
-        struct_new!(tb, args_info.wasm_type_idx)
-        i64_const!(tb, Int64(WASM_WORLD_AGE))
-        struct_new!(tb, err_info.wasm_type_idx)
-        emit_throw_value!(tb, mod, registry)
+        emit_method_error!(tb, mod, registry, T,
+            # the closure, as the value it was called as
+            (b, fw) -> (local_get!(b, UInt32(0)); fw === AnyRef || ref_cast!(b, fw, true)),
+            Function[(b, w) -> _closure_narrow_arg!(b, mod, registry, j, w) for j in 1:arity])
         end_block!(tb)
     end
     unreachable!(tb)   # structural trap: arguments of a class with no numbered args tuple (A3S1)
@@ -414,20 +401,12 @@ end
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`.
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)::InstrBuilder
-    if pt isa ConcreteRef && any(((T, info),) -> info.wasm_type_idx == pt.type_idx && is_closure_type(T) &&
-                                                 info.field_offset == 1, registered_structs(registry))
+    if is_closure_context_ref(registry, pt)
         # a closure argument is its closure object (maybe_wrap_closure!): the body takes its
         # context, field 2, as dart's direct closure call reads it (code_generator.dart:2656
         # _generateDirectClosureCall; it trapped casting the object, MARCH 13.17 A7S1 stage 4)
-        local cb = get_closure_base_struct!(mod, registry)
-        local_get!(tb, UInt32(j)); ref_test!(tb, Int64(cb), false)
-        if_!(tb; results=WasmValType[pt])
-        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(cb), false); struct_get!(tb, cb, UInt32(2))
-        ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
-        else_!(tb)
-        local_get!(tb, UInt32(j)); ref_cast!(tb, Int64(pt.type_idx), pt.nullable)
-        end_block!(tb)
-        return tb
+        local_get!(tb, UInt32(j))
+        return emit_closure_context_unwrap!(tb, mod, registry, UInt32(j), pt)
     end
     local_get!(tb, UInt32(j))
     if pt in (I32, I64, F32, F64)
@@ -514,14 +493,14 @@ function _closure_layout_error(@nospecialize(closure_type), bodies::Vector{Closu
 end
 
 """
-    _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info)
+    _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info, no_method)
 
 The vtable entry for an arity that several specializations of `closure_type` share. Every
 argument arrives erased (anyref); the candidates are tried most specific first
 (`_most_specific_first`), each argument tested against the candidate's Julia parameter type
 (`_emit_closure_arg_tests!`) — and the first match is narrowed, called and its result
-converted exactly as a single-body entry's, then returned. No match traps: Julia would throw
-MethodError for the same call.
+converted exactly as a single-body entry's, then returned. No match throws Julia's MethodError
+for an args tuple the callable's `no_method` record holds, and traps otherwise.
 formal(dev/formal/ClassIdSwitch.tla): the entry runs the specialization Julia selects, or
 traps where Julia has none (a candidate class no test tells apart was rejected before).
 formal(dev/formal/Enrollment.tla): rows are tried most specific first.
@@ -532,7 +511,7 @@ calls it directly)
 """
 function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                                        cands::Vector{ClosureBody}, arity::Int, takes_context::Bool,
-                                       base_idx::UInt32, captured_info)::UInt32
+                                       base_idx::UInt32, captured_info, no_method::Vector{DataType})::UInt32
     local top_idx = registry.base_struct_idx
     top_idx === nothing && throw(_closure_layout_error(closure_type, cands,
         "a dispatching arity-$arity entry needs the class base struct"))
@@ -568,7 +547,7 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
         return_!(tb)
         end_block!(tb)
     end
-    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity)
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method)
     end_block!(tb)
     tramp_idx = add_function!(mod, tb;
                               name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))
@@ -738,27 +717,10 @@ function _closure_body_for(ctx, closure_type::Type)::Union{Nothing, Tuple{UInt32
         local matches = takes_context ? info.func_ref === closure_type :
                         (info.func_ref isa Function && typeof(info.func_ref) === closure_type)
         matches || continue
-        # the function's defined signature is the truth — the same source call!
-        # enforces; the julia re-derivation could disagree (the trampoline then mismatched
-        # at its own call).
-        local _m = ctx.mod
-        local _ni = count(imp -> imp.kind == 0x00, _m.imports)
-        local _fi = Int(info.wasm_idx) - _ni
-        if _fi >= 0 && _fi < length(_m.functions)
-            local _ft = _m.types[Int(_m.functions[_fi + 1].type_idx) + 1]
-            if _ft isa FuncType
-                return (info.wasm_idx, WasmValType[q for q in _ft.params], WasmValType[r for r in _ft.results], takes_context)
-            end
-        end
-        # fallback: the julia derivation (bare registries)
-        local ps = WasmValType[]
-        for T in info.arg_types
-            push!(ps, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry))
-        end
-        local rs = (info.return_type === Nothing || info.return_type === Union{}) ?
-                   WasmValType[] :
-                   WasmValType[get_concrete_wasm_type(info.return_type, ctx.mod, ctx.type_registry)]
-        return (info.wasm_idx, ps, rs, takes_context)
+        # the function's defined signature is the truth (every function is defined before any
+        # body compiles), the same one call! reads
+        local _ft = _function_type(ctx.mod, info.wasm_idx)
+        return (info.wasm_idx, WasmValType[q for q in _ft.params], WasmValType[r for r in _ft.results], takes_context)
     end
     return nothing
 end

@@ -45,8 +45,126 @@
     return T
 end
 
+# ----------------------------------------------------------------------------------------
+# THE consult for which methods Julia selects. Collection, planning and the vtable pre-pass
+# ask it, and only it: Julia's own matching in the method table WT compiles with, the
+# WasmInterpreter's overlay table at its world (get_wasm_interpreter). Base's own table at the
+# latest world is another table, which disagrees wherever an overlay replaces a method. A
+# statement's codegen reads the plan, apart from closed_world_call_result (context.jl), whose
+# question the plan does not answer yet (MARCH 13.17 A3C1).
+# ----------------------------------------------------------------------------------------
+
 """
-    _apply_iterate_vararg_target_mi(node, slot_types, lookup_table) -> MethodInstance | nothing
+    wt_method_matches(sig; limit=-1) -> MethodLookupResult | nothing
+
+Every method Julia's matching gives `sig` (`CC.findall`) in the WasmInterpreter's method table,
+the overlay table at its world, in that table's order: the overlay's matches (most specific
+first, a method a fully covering one makes unreachable left out), then, unless the last of them
+fully covers `sig`, the base table's matches no overlay signature contains, in the base table's
+order; `nothing` past `limit`. For a concrete `sig` the first match is the method a call runs (an
+overlay method that applies covers it).
+parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
+whole compilation consults.
+"""
+wt_method_matches(@nospecialize(sig); limit::Int=-1)::Union{Nothing, CC.MethodLookupResult} =
+    CC.findall(sig, CC.method_table(get_wasm_interpreter()); limit)
+
+"""
+    wt_method_which(sig) -> MethodMatch | nothing
+
+The method Julia's dispatch selects for `sig` in the same table (`CC.findsup`, the lookup
+`hasmethod`, `which` and `Base._which` make in Base's table): the overlay table's most specific
+method covering `sig` when one does, else the base table's, or `nothing` when neither table has
+one covering method (none covers it, or the covering ones are ambiguous).
+parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
+whole compilation consults.
+"""
+wt_method_which(@nospecialize(sig))::Union{Nothing, Core.MethodMatch} =
+    CC.findsup(sig, CC.method_table(get_wasm_interpreter()))[1]
+
+"""
+    wt_dispatch_mi(sig) -> MethodInstance | nothing
+
+The MethodInstance a call of signature `sig` runs: `wt_method_which`'s method, specialized at
+`sig` with the static parameters Julia's match computes.
+parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
+whole compilation consults.
+"""
+function wt_dispatch_mi(@nospecialize(sig))::Union{Nothing, Core.MethodInstance}
+    local m = wt_method_which(sig)
+    return m === nothing ? nothing : CC.specialize_method(m)
+end
+
+"""
+    _wt_matches_with_ambiguous(sig) -> (Vector{MethodMatch}, Bool)
+
+The consult's matching of `sig` with the ambiguous methods kept and the ambiguity reported, the
+query `Base.isambiguous` makes (`_methods_by_ftype` with include_ambiguous), merged across the
+overlay table as `CC.findall` merges it: the overlay's matches, and when the last of them does
+not fully cover `sig`, the base table's matches no overlay signature contains.
+parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
+whole compilation consults.
+"""
+function _wt_matches_with_ambiguous(@nospecialize(sig))::Tuple{Vector{Core.MethodMatch},Bool}
+    local world = get_wasm_interpreter().world
+    local lookup(mt) = (amb = Ref{Int32}(0);
+        ms = Base._methods_by_ftype(sig, mt, -1, world, true, Ref{UInt}(typemin(UInt)), Ref{UInt}(typemax(UInt)), amb);
+        (collect(Core.MethodMatch, ms::Vector), amb[] != 0))
+    local ovl, ovl_amb = lookup(WASM_METHOD_TABLE)
+    (!isempty(ovl) && ovl[end].fully_covers) && return ovl, ovl_amb
+    local base, base_amb = lookup(nothing)
+    local kept = filter(bm -> !any(om -> bm.method.sig <: om.method.sig, ovl), base)
+    return vcat(ovl, kept), ovl_amb | base_amb
+end
+
+"""
+    wt_methods_ambiguous(m1, m2) -> Bool
+
+Whether two methods are ambiguous: some argument types both admit where neither is more specific
+and no other method resolves them. Julia's own algorithm (base/reflection.jl `isambiguous`, the
+same on 1.12 and 1.13), asked of the consult's matches, so a method only the overlay table
+holds takes part as Julia's inference sees it (Base's isambiguous reads Base's table only).
+parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
+ambiguity; a dart closure has one body.)
+"""
+function wt_methods_ambiguous(m1::Method, m2::Method)::Bool
+    m1 === m2 && return false
+    local ti = typeintersect(m1.sig, m2.sig)
+    ti === Union{} && return false
+    function inner(ti)
+        ti === Union{} && return false
+        Base.has_bottom_parameter(ti) && return false
+        local ms, has_ambig = _wt_matches_with_ambiguous(ti)
+        has_ambig || return false
+        filter!(m -> !Base.has_bottom_parameter(m.spec_types), ms)
+        # the ambiguity reported over the intersection involves both methods, or another pair
+        (any(m -> m.method === m1, ms) && any(m -> m.method === m2, ms)) || return false
+        # whether the intersection is fully covered once the Union{}-parameter ambiguities are set aside
+        local minmax = nothing
+        for match in ms
+            match.fully_covers || continue
+            (minmax === nothing || Base.morespecific(match.method, minmax)) && (minmax = match.method)
+        end
+        (minmax === nothing || minmax == m1 || minmax == m2) && return true
+        for match in ms
+            match.method === minmax && continue
+            if !Base.morespecific(minmax, match.method)
+                (match.fully_covers || !Base.morespecific(match.method, minmax)) && return true
+            end
+        end
+        return false
+    end
+    if !(ti <: m1.sig && ti <: m2.sig)
+        # a non-commutative intersection: the reverse may decide it, else Julia answers "not ambiguous"
+        local ti2 = typeintersect(m2.sig, m1.sig)
+        (ti2 <: m1.sig && ti2 <: m2.sig) || return false
+        ti = ti2
+    end
+    return inner(ti)
+end
+
+"""
+    _apply_iterate_vararg_target_mi(node, slot_types) -> MethodInstance | nothing
 
 THE call edge of `Core._apply_iterate(iterate, f, t)` when `t` is a runtime-length
 Vararg tuple — the one splat shape calls.jl lowers to a DIRECT call
@@ -68,8 +186,7 @@ representable layout (`is_runtime_vararg_tuple_type`, structs.jl), and EXACTLY O
 method answers the open-ended signature. An arity-overloaded callee has no single static
 target and stays a loud reject at the call site.
 """
-function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type},
-                                         lookup_table)::Union{Core.MethodInstance,Nothing}
+function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type})::Union{Core.MethodInstance,Nothing}
     (node.callee === Core._apply_iterate && length(node.operands) == 3) || return nothing
     local fref = node.operands[2]
     local f = fref isa NirGlobalRef ? (fref.bound ? fref.value : fref) : nir_const(fref)
@@ -82,7 +199,7 @@ function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type}
               t isa NirLiteral ? (t.value isa Type ? Type{t.value} : typeof(t.value)) : Any
     (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
     local sig = Tuple{Core.Typeof(f), Vararg{vararg_tuple_eltype(T)}}
-    local matches = CC.findall(sig, lookup_table; limit=-1)
+    local matches = wt_method_matches(sig)
     (matches !== nothing && length(matches) == 1) || return nothing
     return CC.specialize_method(matches[1])
 end
@@ -127,7 +244,7 @@ function _invoke_in_world_callee(target::NirNode)::Union{Function,Type,Nothing}
 end
 
 """
-    _invoke_in_world_target_mi(node, arg_type, lookup_table) -> MethodInstance | nothing
+    _invoke_in_world_target_mi(node, arg_type) -> MethodInstance | nothing
 
 THE call edge of `Core.invoke_in_world(world, f, args...)`, which calls `f(args...)`: a
 closed world has one world, so the edge is that call's dispatch in the overlay table — the
@@ -137,8 +254,7 @@ static edge (the call site then rejects as a dynamic call).
 parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age,
 and a closed-world module has exactly one.)
 """
-function _invoke_in_world_target_mi(node::NirCall, arg_type,
-                                    lookup_table)::Union{Core.MethodInstance,Nothing}
+function _invoke_in_world_target_mi(node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
     (length(node.operands) >= 2 && _nir_callee_object(node.callee) === Core.invoke_in_world) ||
         return nothing
     local f = _invoke_in_world_callee(node.operands[2])
@@ -149,7 +265,7 @@ function _invoke_in_world_target_mi(node::NirCall, arg_type,
         T === nothing && return nothing
         push!(arg_types, T)
     end
-    local matches = CC.findall(Tuple{Core.Typeof(f), arg_types...}, lookup_table; limit=-1)
+    local matches = wt_method_matches(Tuple{Core.Typeof(f), arg_types...})
     (matches !== nothing && length(matches) == 1) || return nothing
     return CC.specialize_method(matches[1])
 end
@@ -207,10 +323,9 @@ function _closed_world_edge(node::NirNode, src::Core.CodeInfo, slot_types::Vecto
     if node isa NirInvoke
         mi = node.mi
     elseif node isa NirCall
-        local table = CC.method_table(interp)
-        if (mi = _apply_iterate_vararg_target_mi(node, slot_types, table)) !== nothing
+        if (mi = _apply_iterate_vararg_target_mi(node, slot_types)) !== nothing
             kind = :splat
-        elseif (mi = _invoke_in_world_target_mi(node, arg_type, table)) !== nothing
+        elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing
             kind = :invoke_in_world
         elseif _nir_callee_object(node.callee) === Core.finalizer && 2 <= length(node.operands) <= 4
             kind = :finalizer
@@ -255,7 +370,6 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
     out = Any[]
     numeric_types = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     interp = WasmInterpreter(Base.RefValue(0))
-    lookup_table = CC.method_table(interp)
     for i in 2:2:length(codeinfos)
         src = codeinfos[i]
         src isa Core.CodeInfo || continue
@@ -288,7 +402,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                         # closed-world compiler. An explicit invoke can retain
                         # Base's abstract Vararg MI even though the concrete
                         # call must dispatch to a Wasm overlay specialization.
-                        matches = CC.findall(ftype, lookup_table; limit=-1)
+                        matches = wt_method_matches(ftype)
                         # The invoked method itself (or the overlay sharing its signature),
                         # specialized at the concrete types. An explicit
                         # `invoke(f, Tuple{Super}, x)` names a method that dispatch on x's
@@ -329,7 +443,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                                     for j in eachindex(arg_types)]
                                 canonical_ftype = Tuple{Core.Typeof(f), canonical_args...}
                                 if canonical_ftype != ftype
-                                    canonical_matches = CC.findall(canonical_ftype, lookup_table; limit=-1)
+                                    canonical_matches = wt_method_matches(canonical_ftype)
                                     if canonical_matches !== nothing && !isempty(canonical_matches) &&
                                        canonical_matches[1].method === match.method
                                         ftype = canonical_ftype
@@ -464,7 +578,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                          entry_mis::Vector{Any}=Any[];
                                          reasons::IdDict{Core.MethodInstance,String}=IdDict{Core.MethodInstance,String}(),
                                          held::Set{DataType},
-                                         error_args::Set{DataType}=Set{DataType}())::Vector{Any}
+                                         no_method::IdDict{DataType,Set{DataType}})::Vector{Any}
     out = Any[]
     # dart builds dispatch rows only for classes in the closed component. Mirror that
     # boundary: a Julia method's concrete dispatch type must occur in the collected
@@ -822,14 +936,13 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # ordinary already-collected concrete calls a no-op here.
             absp = Int[j for j in 1:length(atypes) if !_closed_world_exact_type(atypes[j])]
             if isempty(absp)
-                local concrete_args = Tuple(atypes)
-                hasmethod(g, concrete_args) || continue
-                local m = which(g, concrete_args)
                 local ssig = Tuple{Core.Typeof(g), atypes...}
+                local selected = wt_method_which(ssig)
+                selected === nothing && continue
+                local m = selected.method
                 ssig <: m.sig || continue
-                # the static parameters' values at ssig, as Julia's match computes them (A8C3)
-                local cmi = CC.specialize_method(m, ssig,
-                    ccall(:jl_type_intersection_with_env, Any, (Any, Any), ssig, m.sig)[2])
+                # specialized at Julia's match, with its static parameters' values (A8C3)
+                local cmi = CC.specialize_method(selected)
                 if !(cmi in seen)
                     push!(seen, cmi)
                     push!(out, cmi)
@@ -840,6 +953,9 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             # Otherwise exactly one abstract position may use a runtime selector.
             length(absp) == 1 || continue
             p = absp[1]
+            # the callee's no-method record exists from here, empty when it has a method for every
+            # class that reaches the call: its MethodError reads the record, never a default
+            get!(() -> Set{DataType}(), no_method, Core.Typeof(g))
             # Resolve each observed runtime class through Julia's concrete method
             # dispatch. Iterating every abstractly-applicable method and then every
             # runtime class formed a redundant method×class subtype cross-product,
@@ -857,22 +973,19 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                  (isstructtype(target_type) || isprimitivetype(target_type)) &&
                  target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
-                concrete_args = Tuple{spec...}
-                if !hasmethod(g, concrete_args)
-                    # the call throws Julia's MethodError for this class: its args tuple
-                    # (formal(dev/formal/ClassIdSwitch.tla): ThrowWhereJuliaThrows)
-                    if all(t -> isconcretetype(t) && !(t <: Type), spec)
-                        push!(error_args, concrete_args)
-                        push!(error_args, Core.Typeof(g))   # the error's `f`, a class too
-                    end
+                ssig = Tuple{Core.Typeof(g), spec...}
+                local selected = wt_method_which(ssig)
+                if selected === nothing
+                    # the call throws Julia's MethodError for this class: its args tuple, recorded
+                    # for this callee (formal(dev/formal/ClassIdSwitch.tla): ThrowWhereJuliaThrows)
+                    all(t -> isconcretetype(t) && !(t <: Type), spec) &&
+                        _record_no_method!(no_method, Core.Typeof(g), Tuple{spec...})
                     continue
                 end
-                m = which(g, concrete_args)
-                ssig = Tuple{Core.Typeof(g), spec...}
+                m = selected.method
                 ssig <: m.sig || continue
-                # the static parameters' values at ssig, as Julia's match computes them
-                cmi = CC.specialize_method(m, ssig,
-                    ccall(:jl_type_intersection_with_env, Any, (Any, Any), ssig, m.sig)[2])
+                # specialized at Julia's match, with its static parameters' values
+                cmi = CC.specialize_method(selected)
                 cmi in seen && continue
                 push!(seen, cmi)
                 push!(out, cmi)
@@ -889,7 +1002,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     # must not enroll new bodies.
     # formal(dev/formal/Enrollment.tla): for every class that may reach the call, the body
     # Julia selects is enrolled: Julia's own matching of the call's static signature
-    # (Base._methods_by_ftype) gives every method whose parameter types intersect it, each
+    # (wt_method_matches) gives every method whose parameter types intersect it, each
     # specialized at the intersection (a method narrower than an erased argument included;
     # the entry tries them in Julia's specificity order, closures.jl). A method with static
     # parameters a match leaves unfixed is enrolled at each tuple of candidates (below)
@@ -897,28 +1010,29 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
                                              if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
                                          collect(held_type_objects)]; by=type_order_key)
     for (_T, ds) in callable_invocations
+        get!(() -> Set{DataType}(), no_method, _T)   # the callable's record, empty or not
         # each tuple of candidates for which the callable has no method: the call throws Julia's
         # MethodError there, its args a tuple of the values' classes (a type object's class is
         # its kind), numbered for the entry to build (formal(dev/formal/ClassIdSwitch.tla):
         # ThrowWhereJuliaThrows)
         local _ech = Vector{Any}[dispatch_candidates(P, observed_classes) for P in ds]
-        # a method whose signature covers the call's static one leaves no tuple without a method
-        local _all = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
-        local _covered = _all !== nothing && any(m -> Tuple{_T, ds...} <: m.method.sig, _all)
+        # Julia's matching of the call's static signature, asked once: a method whose signature
+        # covers it leaves no tuple without a method
+        local _mms = wt_method_matches(Tuple{_T, ds...})
+        local _covered = _mms !== nothing && any(m -> Tuple{_T, ds...} <: m.method.sig, _mms)
         if !_covered && !any(isempty, _ech) && prod(length, _ech; init=1) <= 4096
             for cs in Iterators.product(_ech...)
-                local _none = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                local _none = wt_method_matches(Tuple{_T, cs...})
                 (_none === nothing || !isempty(_none)) && continue
                 local _rt = Any[(C isa DataType && C.name === Type.body.name) ? typeof(C.parameters[1]) : C for C in cs]
-                all(t -> t isa DataType && isconcretetype(t), _rt) && push!(error_args, Tuple{_rt...})
+                all(t -> t isa DataType && isconcretetype(t), _rt) && _record_no_method!(no_method, _T, Tuple{_rt...})
             end
         end
         local enroll_closure!(cmi, at) = (cmi === nothing || cmi in seen) ? nothing :
             (push!(seen, cmi); push!(out, cmi);
              reasons[cmi] = "the body of the closure $(_T), constructed and called dynamically with ($(join(ds, ", ")))" * at;
              nothing)
-        local _mms2 = Base._methods_by_ftype(Tuple{_T, ds...}, nothing, -1, Base.get_world_counter())
-        for mm in (_mms2 === nothing ? () : _mms2)
+        for mm in (_mms === nothing ? () : _mms)
             # a match is one signature when its intersection is a DataType and every static
             # parameter has a value; otherwise (a UnionAll, or a static parameter left a TypeVar,
             # A8C6) Julia specializes it at each argument's class when it runs
@@ -936,13 +1050,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
             local param(p) = Base.unwrapva(msig.parameters[min(p + 1, length(msig.parameters))])
             local mentions(p) = (P = param(p); P isa TypeVar || Base.has_free_typevars(P))
             local admits(C, p) = (P = param(p); P isa TypeVar && (P = P.ub); typeintersect(C, P) !== Union{})
-            local observed = sort!(Any[Any[C for C in runtime_types
-                                           if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
-                                       collect(held_type_objects)]; by=type_order_key)
             local choices = [!mentions(p) ? Any[ds[p]] :
-                             Any[C for C in dispatch_candidates(ds[p], observed) if admits(C, p)] for p in eachindex(ds)]
+                             Any[C for C in dispatch_candidates(ds[p], observed_classes) if admits(C, p)] for p in eachindex(ds)]
             for cs in Iterators.product(choices...)
-                local cms = Base._methods_by_ftype(Tuple{_T, cs...}, nothing, -1, Base.get_world_counter())
+                local cms = wt_method_matches(Tuple{_T, cs...})
                 for cm in (cms === nothing ? () : cms)
                     (cm.method === mm.method && cm.spec_types isa DataType) || continue
                     enroll_closure!(CC.specialize_method(cm.method, cm.spec_types, cm.sparams),
@@ -953,6 +1064,19 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any},
     end
     return out
 end
+
+"""
+    _record_no_method!(no_method, F, T)
+
+Record that callable type `F` has no method for the args tuple `T` (Julia's matching in the
+consult found none): the callee's no-method record, which the plan carries and the MethodError
+of a dynamic call of `F` reads (`no_method`), never another callee's.
+formal(dev/formal/ClassIdSwitch.tla): the no-row block reads only the callee's Record.
+parity(pkg/dart2wasm/lib/dynamic_dispatchers.dart:178 _generateMethodCode): the call's no-match
+block, its error built from its own arguments.
+"""
+_record_no_method!(no_method::IdDict{DataType,Set{DataType}}, F::DataType, T::DataType)::Nothing =
+    (push!(get!(() -> Set{DataType}(), no_method, F), T); nothing)
 
 """
     _fused_multiply_add_mis(codeinfos, scanned) -> Vector{Any}
@@ -977,9 +1101,7 @@ function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any
             (T === Float64 || T === Float32) && push!(types, T)
         end
     end
-    return Any[CC.specialize_method(which(Base.fma_emulated, (T, T, T)),
-                                    Tuple{typeof(Base.fma_emulated), T, T, T}, Core.svec())
-               for T in types]
+    return Any[wt_dispatch_mi(Tuple{typeof(Base.fma_emulated), T, T, T}) for T in types]
 end
 
 """
@@ -987,8 +1109,9 @@ The closed world one collection built (collect_closed_world): the collected (Cod
 CodeInfo) pairs; the dynamic-dispatch selector roots, distinct from the ordinary dependencies
 their compilation reaches; the callable types whose bodies the candidate fixpoint enrolled;
 why each MethodInstance entered it, for a later failure — declaring its signature — to name;
-and the `Type{X}` of each type object a value may be (`held_type_objects`), a candidate wherever
-a class is.
+the `Type{X}` of each type object a value may be (`held_type_objects`), a candidate wherever
+a class is; per callable type, the args tuples it has no method for; and the `Base.fma_emulated`
+MethodInstance it roots for each fma lowering, by signature.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 struct ClosedWorld
@@ -997,7 +1120,8 @@ struct ClosedWorld
     callable_types::Set{DataType}                    # callable types whose bodies the candidate fixpoint enrolled
     enrolled_as::IdDict{Core.MethodInstance,String}  # why each entered the closed world
     held_type_objects::Set{DataType}                 # the Type{X} of each type object the program holds
-    error_args_types::Set{DataType}                  # the args tuple (and `f`) of each MethodError a dynamic call throws
+    no_method::IdDict{DataType,Set{DataType}}        # per callable type, the args tuples it has no method for
+    lowering_callees::Dict{Type,Core.MethodInstance} # each fma lowering's Base.fma_emulated, by signature
 end
 
 """Cut the bodies of declared imports (external leaves) out of a collection before it merges:
@@ -1091,7 +1215,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     local callable_types = Set{DataType}()
     local dynamic_roots = Set{Core.MethodInstance}()
     local held_types = Set{DataType}()
-    local error_args_types = Set{DataType}()
+    local no_method = IdDict{DataType,Set{DataType}}()
+    local lowering_callees = Dict{Type,Core.MethodInstance}()
     # Fresh cache partition per collection: see cache_token in WasmInterpreter.
     interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
@@ -1145,8 +1270,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             # MethodInstance manufactures the wrong static-parameter environment
             # when an overlay or UnionAll match participates, even when its printed
             # `specTypes` happens to be identical.
-            matches = CC.findall(root_mi.specTypes,
-                CC.method_table(fresh_interp); limit=-1)
+            matches = wt_method_matches(root_mi.specTypes)
             (matches === nothing || isempty(matches)) &&
                 error("no Wasm overlay match for closed-world root $(root_mi.specTypes)")
             # the root's own method (or the overlay that shares its signature): an explicit
@@ -1210,7 +1334,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             codeinfos, invoke_seen; reasons=enrolled_by))
 
         extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,
-                                                error_args=error_args_types)
+                                                no_method)
         # Every candidate is a dispatch root, and its callable type a callable type, whether or
         # not its body is collected already: on 1.13 Julia's queue collects a closure body by
         # its `:new` before the dynamic step names it, and the plan's rows must not depend on
@@ -1225,8 +1349,11 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             end
         end
         changed |= collect_new_pairs!(Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)])
-        fma_mis = Any[mi for mi in _fused_multiply_add_mis(codeinfos, fma_scanned)
-                   if !(mi_key(mi) in base_mi_keys)]
+        local fma_roots = _fused_multiply_add_mis(codeinfos, fma_scanned)
+        for mi in fma_roots
+            lowering_callees[mi.specTypes] = mi   # the lowering's callee, as rooted
+        end
+        fma_mis = Any[mi for mi in fma_roots if !(mi_key(mi) in base_mi_keys)]
         changed |= collect_new_pairs!(fma_mis;
                                       why="the Julia body of the fma/muladd intrinsic lowering")
         changed || break
@@ -1251,7 +1378,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end
-    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, held_types, error_args_types)
+    return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, held_types, no_method, lowering_callees)
 end
 
 """
@@ -1263,32 +1390,44 @@ parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; 
 """
 function entry_method_instance(f, arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
-    m = which(f, arg_types)
-    return CC.specialize_method(m, tt, Core.svec())
+    local m = wt_method_which(tt)
+    # no method: `which`'s error, the MethodError a call would throw
+    m === nothing && throw(ErrorException(sprint(io -> (println(io, "Calling invoke(f, t, args...) would throw:");
+                                                     Base.showerror(io, MethodError(f, arg_types))))))
+    return CC.specialize_method(m)   # at Julia's match, its static parameters' values included
 end
 
 
 """
-The compile inputs one closed world yields (trim_compile_plan): every function to compile as
-(f, arg_types, name, MethodInstance) — entries keep their given names, the rest get deduped
-names; the (f, arg_types) and MethodInstance → (CodeInfo, rettype) cache get_typed_ir serves,
-so every function compiles from the collection's consistent-world IR; the (f, arg_types) keys
-discovered solely as dynamic-dispatch candidates; the MethodInstances reached only through an
-`invoke` of a method dispatch would not select for their argument types; the callable types
-the candidate fixpoint enrolled; why each MethodInstance was enrolled; and the `Type{X}` of each
-type object a value may be (ClosedWorld's `held_type_objects`), which the vtable pre-pass's
-ambiguity search asks about.
-parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
+The compile inputs one closed world yields (trim_compile_plan), every per-function fact keyed by
+its MethodInstance, as dart's TFA metadata is keyed by its tree node: every function to compile
+as (f, arg_types, name, MethodInstance) — entries keep their given names, the rest get deduped
+names; each MethodInstance's (CodeInfo, rettype), so every function compiles from the
+collection's consistent-world IR (plan_ir); the MethodInstances discovered as dynamic-dispatch
+candidates; the MethodInstances reached only through an `invoke` of a method dispatch would not
+select for their argument types; the callable types the candidate fixpoint enrolled; why each
+MethodInstance was enrolled; the `Type{X}` of each type object a value may be (ClosedWorld's
+`held_type_objects`), which the vtable pre-pass's ambiguity search asks about; the
+MethodInstances compiled from a bespoke body (L133) with that body's generator; per callable
+type, the args tuples it has no method for, each sorted by type_order_key (the MethodError of a
+dynamic call reads its callee's, and the numbering takes every key and tuple); and the
+MethodInstance each lowering that calls a Julia function by name calls, keyed by its signature
+(`Base.fma_emulated` for the fma intrinsics).
+parity(pkg/dart2wasm/lib/translator.dart:115 Translator.directCallMetadata): the front end's
+per-node answers, which codegen reads and never recomputes.
 """
 struct ClosedWorldPlan
     functions::Vector{Any}
-    ir_cache::IdDict{Any,Tuple{Core.CodeInfo,Any}}
-    dispatch_candidates::Set{Any}
+    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Any}}
+    candidate_mis::Set{Core.MethodInstance}
     invoke_only::Set{Core.MethodInstance}
     callable_types::Set{DataType}
     enrolled_as::IdDict{Core.MethodInstance,String}
     held_type_objects::Set{DataType}   # the Type{X} of each type object the program holds
-    error_args_types::Set{DataType}    # the args tuple of each MethodError a dynamic call throws
+    bespoke::IdDict{Core.MethodInstance,Function}
+    no_method::IdDict{DataType,Vector{DataType}}
+    lowering_callees::Dict{Type,Core.MethodInstance}
+    external_leaves::Vector{Any}   # (callable, argument types, MethodInstance) of each declared import
 end
 
 """
@@ -1300,11 +1439,36 @@ run another interpreter, at another world, in another cache partition).
 parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm receives Kernel already built by the CFE.)
 """
 function plan_ir(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Tuple{Core.CodeInfo,Any}
-    local hit = get(plan.ir_cache, mi, nothing)
+    local hit = plan_ir_or_nothing(plan, mi)
     hit === nothing && error("$(mi) is outside the collected closed world; codegen reads the " *
                              "collection's IR, never a second inference")
-    return hit[1], hit[2]
+    return hit
 end
+
+"""
+    plan_ir_or_nothing(plan, mi) -> (CodeInfo, return type) | nothing
+
+plan_ir for a lookup that misses by design: a body the closed world does not hold (a declared
+import's, which is not the module's; a captor body no edge reached, whose writes never run).
+The caller states which, and a miss is never a second inference.
+parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm receives Kernel already built by the CFE.)
+"""
+function plan_ir_or_nothing(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Union{Nothing,Tuple{Core.CodeInfo,Any}}
+    local hit = get(plan.ir_cache, mi, nothing)
+    return hit === nothing ? nothing : (hit[1], hit[2])
+end
+
+"""
+    plan_lowering_callee(plan, sig) -> MethodInstance | nothing
+
+The MethodInstance the plan records for a lowering that calls a Julia function by name, at its
+signature `sig` (ClosedWorldPlan's `lowering_callees`), or `nothing` when the closed world holds
+none.
+parity(pkg/dart2wasm/lib/translator.dart:115 Translator.directCallMetadata): the front end's
+per-node answers, which codegen reads and never recomputes.
+"""
+plan_lowering_callee(plan::ClosedWorldPlan, @nospecialize(sig::Type))::Union{Nothing,Core.MethodInstance} =
+    get(plan.lowering_callees, sig, nothing)
 
 """
     trim_compile_plan(entries_named) -> ClosedWorldPlan
@@ -1329,15 +1493,18 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         entry_values[mi] = f
     end
     external_mis = Set{Any}()
+    local external_leaves = Any[]   # (callable, argument types, MethodInstance) of each declared import
     for entry in external_entries
         f, arg_types = entry[1], entry[2]
-        push!(external_mis, entry_method_instance(f, arg_types))
+        local xmi = entry_method_instance(f, arg_types)
+        push!(external_mis, xmi)
+        push!(external_leaves, (f, Tuple(arg_types), xmi))
     end
     local world = collect_closed_world(entry_mis; external_leaves=external_mis)
     codeinfos = world.codeinfos
 
     functions = Any[]
-    ir_cache = IdDict{Any, Tuple{Core.CodeInfo, Any}}()
+    ir_cache = IdDict{Core.MethodInstance, Tuple{Core.CodeInfo, Any}}()
     collected_method_specs = Set{Any}()
     for j in 1:2:length(codeinfos)
         j + 1 <= length(codeinfos) || continue
@@ -1377,8 +1544,14 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         end
     end
     # Functions pulled in only by dispatch-candidate discovery are registered as
-    # candidates rather than ordinary direct-call targets.
-    dispatch_candidates = Set{Any}()
+    # candidates rather than ordinary direct-call targets, keyed by their MethodInstance (a
+    # closure body's planned argument types lack the closure type its function prepends).
+    candidate_mis = Set{Core.MethodInstance}()
+    # the functions compiled from a bespoke body instead of their IR (L133), decided here once
+    bespoke = IdDict{Core.MethodInstance,Function}()
+    # the callable types a vtable is built for (a closure type planned as its body's function, or a
+    # singleton callable the candidate fixpoint enrolled), each with a no-method record
+    planned_callables = Set{DataType}()
     # Pre-seed with entry names: a discovered function processed before its
     # same-named entry must not claim the entry's export name (duplicate-export
     # validation failure in multi-function modules).
@@ -1495,27 +1668,29 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         end
         push!(used_names, name)
         push!(functions, (f, arg_types, name, mi))
+        (f isa DataType && is_closure_type(f)) && push!(planned_callables, f)
+        (f isa Function && typeof(f) in world.callable_types) && push!(planned_callables, typeof(f))
         ir_cache[mi] = (src, ci.rettype)
+        local gen = mi.def isa Method ? get(STANDALONE_INTRINSIC_BODIES, mi.def, nothing) : nothing
+        gen === nothing || (bespoke[mi] = gen)
         # Only discovery ROOTS are selector candidates. Dependencies compiled
         # transitively with a root remain ordinary cross-call-visible functions.
         if mi in world.dynamic_roots && !haskey(entry_keys, mi)
-            push!(dispatch_candidates, (f, arg_types))
+            push!(candidate_mis, mi)
         end
     end
     # (f, arg_types) names the function Julia's dispatch selects for those types: where two
     # collected methods share them, the other one is reached only by its `invoke`
     # (FunctionInfo.invoke_only) and never by a call that names (f, arg_types).
     invoke_only = Set{Core.MethodInstance}()
-    local mt = CC.method_table(get_wasm_interpreter())
-    for (key, mis) in mis_by_sig
+    for (_, mis) in mis_by_sig
         local winner = if length(mis) == 1
             only(mis)
         else
-            local match = CC.findsup(first(mis).specTypes, mt)[1]
+            local match = wt_method_which(first(mis).specTypes)
             local w = match === nothing ? nothing : findfirst(m -> m.def === match.method, mis)
             w === nothing ? nothing : mis[w]
         end
-        winner === nothing || (ir_cache[key] = ir_cache[winner])
         for m in mis
             m === winner || push!(invoke_only, m)
         end
@@ -1527,9 +1702,23 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
             String["planning the closed world: $(fn[3]) was collected with no recorded reason"],
             ErrorException("no enrollment reason for $(fn[4])"), Base.StackTraces.StackFrame[]))
     end
-    return ClosedWorldPlan(functions, ir_cache, dispatch_candidates, invoke_only,
+    # each callee's no-method tuples, in one deterministic order; a planned callable with a
+    # vtable whose dynamic call the collector enrolled no tuple for has its (empty) record too
+    local no_method = IdDict{DataType,Vector{DataType}}(
+        F => sort!(collect(Ts); by=type_order_key) for (F, Ts) in world.no_method)
+    for F in planned_callables
+        haskey(no_method, F) || (no_method[F] = DataType[])
+    end
+    # the function each named-callee lowering calls: the collector's root, which the closed world
+    # holds (one it does not is a collector defect, raised here, naming the root)
+    for (sig, lmi) in world.lowering_callees
+        haskey(ir_cache, lmi) || throw(WasmInternalError(string(sig), 0, "",
+            String["planning the closed world: the fma lowering's root $(lmi) was collected under another MethodInstance or not at all"],
+            ErrorException("a lowering callee outside the closed world"), Base.StackTraces.StackFrame[]))
+    end
+    return ClosedWorldPlan(functions, ir_cache, candidate_mis, invoke_only,
                            world.callable_types, enrolled_as, world.held_type_objects,
-                           world.error_args_types)
+                           bespoke, no_method, copy(world.lowering_callees), external_leaves)
 end
 
 # ============================================================================
@@ -1661,7 +1850,7 @@ function _collected_operand_value(operand::NirNode)::Tuple{Bool, Any}
 end
 
 """
-    _collect_reachable_ir_types(function_data) -> Set{DataType}
+    _collect_reachable_ir_types(function_data, bespoke) -> Set{DataType}
 
 Phase 12B — the CLOSED-WORLD type collector (dart class_info.dart:864
 ClassIdNumbering._number numbers every class of the component ONCE, before codegen, with
@@ -1706,7 +1895,7 @@ statement or slot type on its own.
 parity(class_info.dart:864 ClassIdNumbering._number): the class set the numbering walks, gathered
 before any id is assigned.
 """
-function _collect_reachable_ir_types(function_data)::Set{DataType}
+function _collect_reachable_ir_types(function_data, bespoke::IdDict{Core.MethodInstance,Function})::Set{DataType}
     out = Set{DataType}()
     seen = Set{Any}()
     # a throw_methoderror whose args tuple is typed at run time: (p, static type, rt)
@@ -1784,8 +1973,9 @@ function _collect_reachable_ir_types(function_data)::Set{DataType}
         end
     end
     for fd in function_data
-        # Base.rethrow's body (emit_rethrow!) throws Julia's ErrorException at depth 0
-        fd[1] === Base.rethrow && (reg!(ErrorException); reg!(String))
+        # a bespoke body is rethrow's (L133 holds the table to it), and emit_rethrow! throws
+        # Julia's ErrorException at depth 0
+        haskey(bespoke, fd[9]) && (reg!(ErrorException); reg!(String))
         body = fd[8]
         body === nothing && continue
         for at in fd[2]
