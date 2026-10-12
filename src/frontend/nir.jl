@@ -160,16 +160,27 @@ struct NirPopException <: NirNode
     enter::Union{NirNode,Nothing}
 end
 
-"""`callee` is the RESOLVED function object / Core.IntrinsicFunction when statically known
-(GlobalRef/QuoteNode operand), or a NirNode (NirSSA/NirArgument/...) for a dynamic callee
-that has no static identity — `Any` because both shapes are legitimate.
+"""`callee` is the callee the boundary resolved once (nir_callee): a constant's object (a
+function, a Builtin or intrinsic, a type object, a closure), a NirNode (NirSSA/NirArgument/...) for
+a runtime value with no static identity, or a GlobalRef for an unbound global — never a
+NirLiteral, which the constructor refuses. `self` is a constant callee's value when its type does
+not determine it (a closure or callable object holding captures, nir_callee_self): the operand a
+call of its function passes first; `nothing` otherwise.
 parity(quarantine: Julia's `Expr(:call)` is one node for a builtin, an intrinsic, and a call
 inference did not resolve to a MethodInstance; Kernel splits these among StaticInvocation,
 InstanceInvocation and DynamicInvocation.)"""
 struct NirCall <: NirNode
     callee::Any
+    self::Union{Nothing,NirLiteral}
     operands::Vector{NirNode}
+    function NirCall(callee, self::Union{Nothing,NirLiteral}, operands::Vector{NirNode})::NirCall
+        _refuse_literal_callee(callee)
+        return new(callee, self, operands)
+    end
 end
+# parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node built from its
+# resolved target; a constant's self is the boundary's one rule (nir_callee_self)
+NirCall(callee, operands::Vector{NirNode})::NirCall = NirCall(callee, nir_callee_self(callee), operands)
 
 """`mi`/`method` are `Union{_,Nothing}` — resolve_invoke_mi/resolve_invoke_method are
 deliberately total (never throw) because build_nir must not crash mid-compile on an
@@ -195,8 +206,31 @@ struct NirInvoke <: NirNode
     method::Union{Core.Method,Nothing}
     ci::Union{Core.CodeInstance,Nothing}
     callee::Any
+    self::Union{Nothing,NirLiteral}
     operands::Vector{NirNode}
+    function NirInvoke(mi, method, ci, callee, self::Union{Nothing,NirLiteral}, operands::Vector{NirNode})::NirInvoke
+        _refuse_literal_callee(callee)
+        return new(mi, method, ci, callee, self, operands)
+    end
 end
+# parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the same, for an :invoke
+NirInvoke(mi, method, ci, callee, operands::Vector{NirNode})::NirInvoke =
+    NirInvoke(mi, method, ci, callee, nir_callee_self(callee), operands)
+
+# parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node carries its
+# resolved target, one representation of it; a NirLiteral callee is a second one, refused here.
+_refuse_literal_callee(@nospecialize(callee))::Nothing = callee isa NirLiteral ? throw(ArgumentError(
+    "a call's constant callee is its object, never a NirLiteral ($(repr(callee.value))): resolve it with nir_callee")) : nothing
+
+"""A constant callee's value as the operand a call of its function passes first, when its type
+does not determine it: a closure or callable object holding captures (not a Builtin, and its
+Core.Typeof not a singleton type, Julia's own test of a value its type determines). `nothing` for
+a runtime value (the callee node is the value), an unbound global, a Builtin or a singleton.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2262 FunctionInvocation.receiver): a call of a
+function value carries the value as its receiver; a static invocation carries none."""
+nir_callee_self(@nospecialize(callee))::Union{Nothing,NirLiteral} =
+    (callee isa NirNode || callee isa GlobalRef || callee === nothing || callee isa Core.Builtin ||
+     Base.issingletontype(Core.Typeof(callee))) ? nothing : NirLiteral(callee)
 
 """`%new(T, fields...)`, with `T` resolved ONCE here from whichever operand shape named it.
 
@@ -425,33 +459,32 @@ function resolve_operand(x, types)::NirNode
     end
 end
 
-"""`:call`'s callee (args[1]) resolved to a function object where statically known, else
-kept as the corresponding NirNode operand (dynamic callee — e.g. a closure argument).
-parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode operand; a Kernel
-invocation carries its target member.)"""
-function resolve_call_callee(x, types)::Any
-    if x isa GlobalRef
-        local g = resolve_operand(x, types)::NirGlobalRef   # the one resolution of a global
-        return g.bound ? g.value : x
-    elseif x isa QuoteNode
-        return x.value
-    elseif x isa Function && Base.issingletontype(typeof(x))
-        # a function the IR embeds as the object itself (`(Core.svec)(x, 2)`, a Builtin
-        # constant-propagated into the call) names that function, as its GlobalRef would; a
-        # value of a singleton type is its instance (Julia's own answer). A closure that
-        # captures values is a value, not a name, and stays an operand.
-        return x
-    else
-        return resolve_operand(x, types)
-    end
+"""A callee written as an operand, resolved once to the callee's one representation: a constant
+(a bound global, a quoted value, an object the IR embeds of any kind: a function, an intrinsic, a
+type object, a closure) is its object; an unbound global stays a `GlobalRef`; a runtime value
+stays its node. Read by the boundary (resolve_call_callee) and by a call codegen builds from an
+operand (nir_call).
+parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the call node carries its
+resolved target, one representation of it."""
+function nir_callee(x::NirNode)::Any
+    x isa NirLiteral && return x.value
+    x isa NirGlobalRef && return x.bound ? x.value : GlobalRef(x.mod, x.name)
+    return x
 end
 
-"""A `:call`'s callee resolved to the function it statically names, else kept as its operand
-node. Beyond `resolve_call_callee`, a callee that is a VALUE with a static identity is that
-identity: an SSA use whose defining statement is a global reference (unoptimized IR's
+"""A `:call`'s or `:invoke`'s callee operand resolved by nir_callee over its one resolution as an
+operand (resolve_operand: a global's binding read once, a QuoteNode's value).
+parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode operand; a Kernel
+invocation carries its target member.)"""
+resolve_call_callee(x, types)::Any = nir_callee(resolve_operand(x, types))
+
+"""A `:call`'s or `:invoke`'s callee resolved to what it statically names, else kept as its
+operand node. Beyond `resolve_call_callee`, a callee that is a VALUE with a static identity is
+that identity: an SSA use whose defining statement is a global reference (unoptimized IR's
 `%1 = Base.add_int; (%1)(x, y)`) or whose inferred type is a `Core.Const`, and an argument
 whose inferred slot type is a singleton function type (`mapreduce_first(f::typeof(length),
-…)`'s `f(x)`) — a value of a singleton type IS its instance, Julia's own answer.
+…)`'s `f(x)`) — a value of a singleton type IS its instance, Julia's own answer. One rule for
+both statement kinds, so an :invoke's callee is never resolved again in codegen.
 parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the call node carries
 its resolved target, resolved once."""
 function _resolve_nircall_callee(x, code_info, types, slot_types::Vector{Type})::Any
@@ -469,17 +502,12 @@ function _resolve_nircall_callee(x, code_info, types, slot_types::Vector{Type}):
 end
 
 """The callee OBJECT a NirCall/NirInvoke names, or `nothing` when there is none: a `NirNode`
-callee is dynamic (an SSA/argument value with no static identity), and a `GlobalRef` that
-survived the boundary's resolution was unbound. A callee the IR embeds as the object itself
-is neither a GlobalRef nor a QuoteNode, so the boundary classifies it as a literal operand —
-unwrapped here, and only when it is callable.
+callee is a runtime value with no static identity, and a `GlobalRef` that survived the
+boundary's resolution was unbound.
 parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): Kernel's call node carries
-its resolved target; this reads back the target `resolve_call_callee` resolved once."""
-function _nir_callee_object(@nospecialize(callee))::Any
-    callee isa NirLiteral && return (callee.value isa Function ? callee.value : nothing)
-    (callee isa NirNode || callee isa GlobalRef || callee === nothing) && return nothing
-    return callee
-end
+its resolved target; this reads back the target the boundary resolved once."""
+_nir_callee_object(@nospecialize(callee))::Any =
+    (callee isa NirNode || callee isa GlobalRef) ? nothing : callee
 
 # parity(quarantine: Julia's `%new` names its type by a literal, GlobalRef or QuoteNode operand;
 # Kernel's ConstructorInvocation carries its target.)
@@ -553,15 +581,13 @@ carries its constant."""
 nir_quoted(x)::Bool = x isa NirLiteral && !Base.is_self_quoting(x.value)
 
 """A call codegen builds from an operand that names its callee — `invoke_in_world(w, f,
-xs...)` calls `f` — with the callee resolved as the boundary resolves a written call's: a
-bound global is its object, an unbound one stays a `GlobalRef`, anything else is the operand.
+xs...)` calls `f` — with the callee resolved as the boundary resolves a written call's
+(nir_callee): a constant is its object, an unbound global stays a `GlobalRef`, a runtime value
+is its node.
 parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call node carries its
 resolved target."""
-function nir_call(callee::NirNode, operands::AbstractVector{<:NirNode})::NirCall
-    target = callee isa NirGlobalRef ?
-        (callee.bound ? callee.value : GlobalRef(callee.mod, callee.name)) : callee
-    return NirCall(target, NirNode[operands...])
-end
+nir_call(callee::NirNode, operands::AbstractVector{<:NirNode})::NirCall =
+    NirCall(nir_callee(callee), NirNode[operands...])
 
 """`%new`'s type operand → `(T, naming shape, resolved?, detail)`. A literal/GlobalRef names
 `T` outright. A `Core.apply_type` result names it through the SSA's OWN inferred type, which
@@ -651,7 +677,7 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
             return NirCall(callee, cargs)
         elseif head === :invoke && !isempty(args)
             mi_or_ci = args[1]
-            callee = length(args) >= 2 ? resolve_call_callee(args[2], types) : nothing
+            callee = length(args) >= 2 ? _resolve_nircall_callee(args[2], code_info, types, slot_types) : nothing
             cargs = length(args) >= 3 ? NirNode[resolve_operand(a, types) for a in @view args[3:end]] : NirNode[]
             return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci),
                              mi_or_ci isa Core.CodeInstance ? mi_or_ci : nothing,
@@ -769,6 +795,12 @@ function nir_uses(node::NirNode, subject::NirNode)::Bool
     return _nir_any_operand(x -> nir_uses(x, subject), node)
 end
 
+"""The callee's value a call reads as an operand: a runtime callee's node, or a constant's `self`
+(nir_callee_self); `nothing` for a constant its type determines.
+parity(pkg/kernel/lib/src/ast/expressions.dart:2262 FunctionInvocation.receiver)"""
+nir_callee_value(node::Union{NirCall,NirInvoke})::Union{Nothing,NirNode} =
+    node.callee isa NirNode ? node.callee : node.self
+
 """Is `p` true of any operand `node` reads directly? The one table of which fields of each
 node kind are operands: `nir_uses` and `nir_ssa_users` both walk through it, so the use
 query and the use index cannot disagree about what a node reads.
@@ -783,8 +815,8 @@ function _nir_any_operand(p, node::NirNode)::Bool
     node isa NirGotoIfNot && return _r(node.cond)
     node isa NirUpsilon && return _r(node.value)
     node isa NirThrowUndefIfNot && return _r(node.cond)
-    node isa NirCall && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.operands)
-    node isa NirInvoke && return (node.callee isa NirNode && _r(node.callee)) || any(_r, node.operands)
+    node isa NirCall && return _r(nir_callee_value(node)) || any(_r, node.operands)
+    node isa NirInvoke && return _r(nir_callee_value(node)) || any(_r, node.operands)
     node isa NirNew && return _r(node.type_operand) || any(_r, node.operands)
     node isa NirForeignCall && return any(_r, node.operands)
     node isa NirLeave && return any(_r, node.enters)
@@ -830,7 +862,8 @@ parity(quarantine: the operand list of a Julia Expr statement, the SSA-use censu
 tree shape makes unnecessary.)"""
 function nir_expr_operands(node::NirNode)::Vector{NirNode}
     if node isa NirCall || node isa NirInvoke
-        return node.callee isa NirNode ? NirNode[node.callee; node.operands] : node.operands
+        local v = nir_callee_value(node)
+        return v === nothing ? node.operands : NirNode[v; node.operands]
     end
     node isa NirNew && return NirNode[node.type_operand; node.operands]
     node isa NirForeignCall && return node.operands
@@ -1030,7 +1063,7 @@ function nir_retarget_invoke!(code_info::Core.CodeInfo, nir::Vector{NirStmt}, i:
     stmt = code_info.code[i]
     s.slot > 0 && (stmt = stmt.args[2])   # a slot assignment's right-hand side
     stmt.args[1] = mi
-    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), nothing, node.callee, node.operands),
+    nir[i] = NirStmt(NirInvoke(mi, resolve_invoke_method(mi), nothing, node.callee, node.self, node.operands),
                      s.julia_type, s.slot)
     return nothing
 end

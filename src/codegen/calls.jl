@@ -2784,6 +2784,64 @@ function _emit_typeerror_throw!(b::InstrBuilder, ctx::AbstractCompilationContext
 end
 
 """
+    as_checker!(ctx, target, static_type) -> (function index, parameter) | WasmDiagnostic
+
+The one as-checker of `x::target` for an operand of static type `static_type`: a function of
+that type's register (the parameter it returns with the function) returning the operand, whose
+body tests it (the one isa lowering, which reads the static type as Julia's emit_isa does) and
+throws the one TypeError when it fails. Built on its first use, in a codegen context of its own
+whose one statement is `typeassert(x, target)`, and cached on the module's registry. A body WT
+cannot lower is no function: its rejection is returned (and cached), and each calling statement
+rejects with it, located there.
+parity(pkg/dart2wasm/lib/types.dart:763 AsCheckers.generateAsChecker): one checker function per
+tested type, cached (`_asCheckers`, :758), its body the is-check and the throw (:1094
+AsCheckerCodeGenerator.generate); dart keys it by the operand's representation
+(operandIsNullable), WT by the operand's static type, which Julia's isa reads. dart's other
+as-check, an inline call of its run-time asSubtype for a type no class-id range decides
+(types.dart:562-592), has no WT counterpart: every WT isa is lowered at compile time over the
+closed world, so every target has a checker.
+"""
+function as_checker!(ctx::AbstractCompilationContext, target::Type,
+                     static_type::Type)::Union{Tuple{UInt32,WasmValType}, WasmDiagnostic}
+    local key = (target, static_type)
+    local hit = get(ctx.type_registry.as_checkers, key, nothing)
+    hit === nothing || return hit
+    local x = NirArgument(2)
+    local check = NirCall(Core.typeassert, NirNode[x, NirLiteral(target)])
+    local R = typeintersect(static_type, target)
+    local body = NirBody(NirStmt[NirStmt(check, R, 0), NirStmt(NirReturn(NirSSA(1, R)), Any, 0)],
+                         Type[Any, static_type], nothing)
+    local cctx = CompilationContext(body, (static_type,), static_type, ctx.mod, ctx.type_registry;
+                                    translator=ctx.translator, mi=nothing)
+    cctx.current_stmt_idx = 1
+    local param = only(cctx.wasm_params)
+    local name = generated_function_name(:as_checker, string(target))
+    local cb = InstrBuilder(WasmValType[param], WasmValType[param]; func_name=name, mod=ctx.mod,
+                            locals=cctx.locals)
+    local result = try
+        local_get!(cb, 0)
+        _compile_call_isa(check.operands, cb, cctx)              # the one isa test: i32
+        num!(cb, Opcode.I32_EQZ)
+        if_!(cb)                                                 # not a target → THROW
+        _emit_typeerror_throw!(cb, cctx, target,
+            (bb, w) -> (local_get!(bb, 0); coerce_stack_top!(bb, w, cctx; from_julia=static_type)))
+        end_block!(cb)
+        local_get!(cb, 0)                                        # the value survives the check
+        finish_function!(cb)
+        (add_function!(ctx.mod, cb; name=name), param)
+    catch e
+        # the body's rejection is each caller's (located at its statement there), so the
+        # checker's own copy leaves the ledger
+        e isa WasmCompileError || rethrow()
+        local sink = DIAGNOSTICS_SINK[]
+        sink === nothing || filter!(d -> d !== e.diag, sink)
+        e.diag
+    end
+    ctx.type_registry.as_checkers[key] = result
+    return result
+end
+
+"""
 The callee's module-qualified name for a diagnostic — the object's own home, so the name
 is the same whichever module the IR reached it through (`getglobal` is `Core.getglobal`
 even when the IR names it `Base.getglobal`).
@@ -3334,7 +3392,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # keyed on intrinsic names) — the intrinsics-table route and the quarantine-tier
     # registry route below reuse this SAME local instead of re-deriving it a second time
     # (R19: a data test against `_it_name`, never a fresh `is_func` probe).
-    local _it_name = nir_const(func) isa Core.IntrinsicFunction ? nameof(nir_const(func)) : nothing
+    local _it_name = func isa Core.IntrinsicFunction ? nameof(func) : nothing
 
     for arg in args
         if _skip_arg_prepush
@@ -3630,7 +3688,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # Match both GlobalRef(Core, :_svec_len) and the direct builtin function object.
     # Julia's type inference may resolve length(::SimpleVector) to the builtin directly.
     # args[1] (svec array) is already pre-pushed by the generic loop above.
-    elseif isdefined(Core, :_svec_len) && nir_const(func) === Core._svec_len && length(args) == 1
+    elseif isdefined(Core, :_svec_len) && func === Core._svec_len && length(args) == 1
         # P4-stdlib: fold against host-constant svecs (padding/typename.names)
         local _svl = _try_host_svec(args[1], ctx)
         if _svl isa Core.SimpleVector
@@ -3648,7 +3706,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # args[1] (svec array) and args[2] (i64 index) are already pre-pushed by
     # the generic loop above — do NOT call compile_value again here (causes double-push,
     # leaving 2 orphaned values on the stack → "values remaining" validation error).
-    elseif isdefined(Core, :_svec_ref) && nir_const(func) === Core._svec_ref && length(args) == 2
+    elseif isdefined(Core, :_svec_ref) && func === Core._svec_ref && length(args) == 2
         svec_type_info = register_struct_type!(ctx.mod, ctx.type_registry, Core.SimpleVector)
         svec_arr_idx = svec_type_info.wasm_type_idx
         local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # [svec, i64 idx] on fb
@@ -4219,7 +4277,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # NamedTuple{names}(tuple) - convert tuple to named tuple
     # This pattern appears in keyword argument handling
     # Check: func is UnionAll and func <: NamedTuple
-    elseif (nt_ctor = nir_const(func)) isa UnionAll && nt_ctor <: NamedTuple
+    elseif (nt_ctor = func) isa UnionAll && nt_ctor <: NamedTuple
         # func is NamedTuple{(:name1, :name2, ...)}
         # args[1] should be a tuple with the values
         # The result is a NamedTuple which is a struct with named fields
