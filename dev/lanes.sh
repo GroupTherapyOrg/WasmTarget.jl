@@ -57,7 +57,7 @@ if [ -n "$part" ]; then
   pi=${part%/*}; pn=${part#*/}
   if ! [[ $part =~ ^[0-9]+/[1-9][0-9]*$ ]] || [ "$pi" -ge "$pn" ]; then echo "lanes.sh: --part $part: expected i/N with 0 <= i < N" >&2; exit 2; fi
   case "$only" in
-    smoke|smoke-1.13) export WT_SMOKE_PART="$part" ;;
+    smoke|smoke-1.13) export WT_SMOKE_PART="$part" WT_SMOKE_TIMES=1 ;;
     formal) export TLC_SHARD="$part" ;;
     fuzz) export WT_FUZZ_PART="$part" ;;
     coverage) export WT_COVERAGE_PART="$part" WT_COVERAGE_DIR="$PWD/coverage-parts" ;;
