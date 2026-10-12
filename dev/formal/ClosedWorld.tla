@@ -131,6 +131,23 @@
 (* rejection where the dynamic call has no lowering. `WorldSites` are      *)
 (* those calls, by the abstract slot type a value reaches them at.         *)
 (*                                                                         *)
+(* ROUND-DEPENDENT TYPING (TypedRetargets). Whether an :invoke's operands  *)
+(* are exact, and so whether the scan retargets it, is read from the       *)
+(* typing of the world collected so far: a captured variable's read is     *)
+(* typed by the join of the writes of the captor bodies collected yet, and *)
+(* a captor a later round collects can widen it (a writer reached through  *)
+(* a dynamic call, collected by the round's own dynamic step after its     *)
+(* scan). A TypedRetargets site <<original, replacement, captor>> selects  *)
+(* the replacement only while the captor is not collected. The scan        *)
+(* recomputes every such site each round from the :invoke's original      *)
+(* MethodInstance (ReType), so the IR at the fixpoint holds the target the *)
+(* final world's typing selects (RetargetsSound). InPlaceRetarget = TRUE   *)
+(* is the code before (a retarget made under a round's typing is kept by   *)
+(* every later round, whose operand is no longer exact and so keeps the    *)
+(* IR's stale target): the narrow body is called with the wider value, a   *)
+(* trap where Julia answers. Both are definitions an instance's cfg        *)
+(* overrides; every other instance has no typed site.                      *)
+(*                                                                         *)
 (* REASONS. Every collected body has the reason it entered the world,      *)
 (* recorded by the collector as it follows the edge, candidate or root     *)
 (* that brought it in (`reasoned`); the plan reads the world and writes    *)
@@ -256,10 +273,19 @@ VARIABLES
     dynRoots,         \* SUBSET Methods: `dynamic_roots` -- the dispatch rows' candidates (and the trim's roots, Trim only)
     fmaScanned,       \* SUBSET collected: bodies in `fma_scanned`
     fmaRoots,         \* SUBSET Methods: c7f0c250's `intrinsic_body_roots` -- the trim's roots (Trim only)
-    reasoned          \* SUBSET Methods: the bodies the collector recorded a reason for (`enrolled_as`)
+    reasoned,         \* SUBSET Methods: the bodies the collector recorded a reason for (`enrolled_as`)
+    narrowed          \* the typed sites the IR holds retargeted: <<body, original, replacement, captor>>
 
 vars == <<collected, discarded, status, steps, pruned, invokeScanned, invokeSeen,
-          superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
+          superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned, narrowed>>
+
+(* The round-dependent typing (an instance's cfg overrides both):          *)
+(* TypedRetargets[m] holds <<original, replacement, captor>>: m's :invoke  *)
+(* of original (in InvokeEdges[m]) has exact operands, and retargets to    *)
+(* replacement, while captor is not collected; InPlaceRetarget = TRUE      *)
+(* keeps a retarget once made (broken).                                    *)
+TypedRetargets  == [m \in Methods |-> {}]
+InPlaceRetarget == FALSE
 
 ----------------------------------------------------------------------------
 HiddenTargets(m)  == {p[1] : p \in HiddenEdges[m]}
@@ -272,6 +298,16 @@ FinalInvoke(m)   == (InvokeEdges[m] \ Originals(m)) \cup {p[2] : p \in Retargets
 CurrentInvoke(m) == IF m \in invokeScanned THEN FinalInvoke(m) ELSE InvokeEdges[m]
 (* every original some site retargets *)
 AllOriginals     == UNION {Originals(m) : m \in Methods}
+
+(* the typed sites of m the current world's typing retargets *)
+Wanted(m)    == {<<m, t[1], t[2], t[3]>> : t \in {u \in TypedRetargets[m] : u[3] \notin collected}}
+(* the typed sites of m its IR holds retargeted now *)
+AppliedAt(m) == {x \in narrowed : x[1] = m}
+(* what a scan of m leaves in its IR: recomputed from the originals, or (InPlaceRetarget, *)
+(* broken) the retargets made before kept                                                *)
+Retyped(m)   == IF InPlaceRetarget THEN AppliedAt(m) \cup Wanted(m) ELSE Wanted(m)
+(* the replacements a set of retargeted sites calls *)
+Replacements(N) == {x[3] : x \in N}
 
 (* the edges compile!'s collectinvokes! follows from a body, and the       *)
 (* targets it materializes in a call that materializes the Widened targets *)
@@ -329,6 +365,7 @@ TypeOK ==
     /\ fmaScanned \subseteq collected
     /\ fmaRoots \subseteq Methods
     /\ reasoned \subseteq Methods
+    /\ narrowed \subseteq Methods \X Methods \X Methods \X Methods
 
 (* the first collection: compile! of the entries, always cut *)
 Init ==
@@ -347,6 +384,7 @@ Init ==
     /\ fmaScanned = {}
     /\ fmaRoots = {}
     /\ reasoned = Roots   \* each entry: "a compilation entry"
+    /\ narrowed = {}
 
 ----------------------------------------------------------------------------
 CeilingOpen == RoundCeiling = 0 \/ steps < RoundCeiling
@@ -385,16 +423,35 @@ ScanInvokes(m) ==
     /\ status = "Running"
     /\ CeilingOpen
     /\ m \in collected \ invokeScanned
-    /\ LET proposals == (FinalInvoke(m) \cup CollectorHidden(m)) \ invokeSeen
+    /\ LET targets   == FinalInvoke(m) \cup CollectorHidden(m) \cup Replacements(Retyped(m))
+           proposals == targets \ invokeSeen
        IN  /\ invokeScanned' = invokeScanned \cup {m}
            /\ superseded' = IF Trim THEN superseded \cup (Originals(m) \ Roots) ELSE superseded
            /\ invokeSeen' = invokeSeen \cup proposals
            \* the reason of every edge's target, collected already or not (PlannerWrites,
            \* broken: only the targets this scan enrolls)
-           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN proposals
-                                         ELSE FinalInvoke(m) \cup CollectorHidden(m))
+           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN proposals ELSE targets)
+           /\ narrowed' = (narrowed \ AppliedAt(m)) \cup Retyped(m)
            /\ Enroll(proposals)
     /\ UNCHANGED <<pruned, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
+
+(* A later round's scan of a body scanned before: its typed sites are      *)
+(* recomputed under the current world's typing (`_missing_explicit_invoke_mis` *)
+(* walks every collected body every round), a replacement not yet in       *)
+(* `invoke_seen` enrolled, a site whose captor is now collected restored to *)
+(* its original (InPlaceRetarget, broken: kept).                           *)
+ReType(m) ==
+    /\ status = "Running"
+    /\ CeilingOpen
+    /\ ~PrunePending
+    /\ m \in invokeScanned
+    /\ Retyped(m) # AppliedAt(m)
+    /\ LET proposals == Replacements(Retyped(m)) \ invokeSeen
+       IN  /\ narrowed' = (narrowed \ AppliedAt(m)) \cup Retyped(m)
+           /\ invokeSeen' = invokeSeen \cup proposals
+           /\ reasoned' = reasoned \cup Replacements(Retyped(m))
+           /\ Enroll(proposals)
+    /\ UNCHANGED <<pruned, invokeScanned, superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
 
 (* Trim only (c7f0c250's step 2, `_prune_external_leaf_subgraphs(...;      *)
 (* unreachable=true)`): what its relation reaches from the entries and its *)
@@ -418,7 +475,7 @@ Prune ==
            /\ fmaScanned' = fmaScanned \cap keep
            /\ trimmedFor' = superseded
            /\ UNCHANGED <<discarded, status, steps, invokeSeen, superseded, dynSeen,
-                          dynRoots, fmaRoots, reasoned>>
+                          dynRoots, fmaRoots, reasoned, narrowed>>
 
 (* Is there a dynamic call site, in a collected body, whose candidate for  *)
 (* a currently observed class `seen_disp` has not yet seen? Shared by      *)
@@ -445,7 +502,7 @@ DiscoverDynamic ==
                      /\ UNCHANGED <<collected, discarded, status, steps>>
                 ELSE /\ dynRoots' = dynRoots \cup {n}
                      /\ Enroll({n})
-    /\ UNCHANGED <<pruned, invokeScanned, invokeSeen, superseded, trimmedFor, fmaScanned, fmaRoots>>
+    /\ UNCHANGED <<pruned, invokeScanned, invokeSeen, superseded, trimmedFor, fmaScanned, fmaRoots, narrowed>>
 
 (* Step 3 on one body not in `fma_scanned`: collect the fma_emulated       *)
 (* bodies its intrinsics lower to that are not collected (the trim's roots *)
@@ -460,7 +517,7 @@ ScanFma(m) ==
            /\ fmaRoots' = fmaRoots \cup new
            /\ reasoned' = reasoned \cup (IF PlannerWrites THEN new ELSE FmaEdges[m])
            /\ Enroll(new)
-    /\ UNCHANGED <<pruned, invokeScanned, invokeSeen, superseded, trimmedFor, dynSeen, dynRoots>>
+    /\ UNCHANGED <<pruned, invokeScanned, invokeSeen, superseded, trimmedFor, dynSeen, dynRoots, narrowed>>
 
 (* `changed || break`: stop only once no step can add anything (and, with  *)
 (* the trim, none is pending) -- a real, unconditional fixpoint.           *)
@@ -470,9 +527,10 @@ Finish ==
     /\ collected \subseteq invokeScanned
     /\ collected \subseteq fmaScanned
     /\ ~DynamicWorkAvailable
+    /\ \A m \in invokeScanned : Retyped(m) = AppliedAt(m)
     /\ status' = "Done"
     /\ UNCHANGED <<collected, discarded, steps, pruned, invokeScanned, invokeSeen,
-                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
+                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned, narrowed>>
 
 (* THE ROUND-CEILING VARIANT: a cap forces the plan "done" while work      *)
 (* remains -- the retired `for _round in 1:8` / `length(ms) <= 64` bug     *)
@@ -483,7 +541,7 @@ ForceStopAtCeiling ==
     /\ steps >= RoundCeiling
     /\ status' = "Done"
     /\ UNCHANGED <<collected, discarded, steps, pruned, invokeScanned, invokeSeen,
-                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
+                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned, narrowed>>
 
 Stutter ==
     /\ status # "Running"
@@ -491,6 +549,7 @@ Stutter ==
 
 Next ==
     \/ \E m \in Methods : ScanInvokes(m)
+    \/ \E m \in Methods : ReType(m)
     \/ Prune
     \/ DiscoverDynamic
     \/ \E m \in Methods : ScanFma(m)
@@ -552,6 +611,7 @@ Idempotence == status = "Done" =>
     /\ collected \subseteq invokeScanned
     /\ collected \subseteq fmaScanned
     /\ ~DynamicWorkAvailable
+    /\ \A m \in invokeScanned : Retyped(m) = AppliedAt(m)
 
 (* (6) NoGarbage, minimality in EVERY state: nothing outside Reachable is  *)
 (* collected. The code does not guarantee it: a materialized dead original *)
@@ -579,6 +639,12 @@ LeavesNeverCollected == collected \cap ExternalLeaves = {}
 (* materialized original is dead code (MCClosedWorldGarbage, H9): no live  *)
 (* edge names it, so no reason does.                                       *)
 ReasonsComplete == status = "Done" => collected \subseteq reasoned
+
+(* (10) RetargetsSound: at the fixpoint no :invoke calls a replacement the *)
+(* final world's typing does not select: every typed site the IR holds     *)
+(* retargeted has its captor outside the world (MCClosedWorldTyping;       *)
+(* its InPlaceRetarget variant breaks it).                                 *)
+RetargetsSound == status = "Done" => \A x \in narrowed : x[4] \notin collected
 
 (* Support invariant: the worklist is genuinely finite -- each enrolling   *)
 (* scan adds a body `invoke_seen`, `seen_disp` or an fma root admits once, *)

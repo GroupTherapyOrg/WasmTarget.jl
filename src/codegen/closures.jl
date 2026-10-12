@@ -318,7 +318,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     end
     # locals after the params: the result's re-box scratch (a numeric result), a closure
     # result's object scratch, then the argument tests' anyref and i32 scratch
-    numeric && builder_add_local!(tb, body.results[1])
+    local res_scratch = numeric ? UInt32(builder_add_local!(tb, body.results[1])) : nothing
     local obj_scratch = is_context_type(registry, body.return_type) ? builder_add_local!(tb, AnyRef) : -1
     local tmp, itmp = tested ? (builder_add_local!(tb, AnyRef), builder_add_local!(tb, I32)) : (-1, -1)
     if tested
@@ -326,13 +326,14 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
         _emit_closure_arg_tests!(tb, mod, registry, closure_type, ClosureBody[body], body, arity,
                                  takes_context, UInt32(tmp), UInt32(itmp), lbl)
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
-                            captured_info, UInt32(1 + arity); obj_scratch)
+                            captured_info, res_scratch; obj_scratch, arg_scratch=UInt32(itmp))
         return_!(tb)
         end_block!(tb)
-        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method)
+        _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, UInt32(itmp))
     else
+        # every parameter takes anything (an `Any`), so no argument needs the box scratch
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
-                            captured_info, UInt32(1 + arity); obj_scratch)
+                            captured_info, res_scratch; obj_scratch, arg_scratch=nothing)
     end
     end_block!(tb)   # the function frame's own end
     tramp_idx = add_function!(mod, tb;
@@ -342,7 +343,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
 end
 
 """
-    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method) -> tb
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, scratch) -> tb
 
 A vtable entry whose arguments no body takes: Julia's MethodError, `f` the closure (param 0)
 and `args` the tuple of the arguments' classes. Each args tuple of this arity the plan records
@@ -356,7 +357,7 @@ parity(quarantine: a Julia args tuple is typed by its arguments' runtime classes
 """
 function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                                        @nospecialize(closure_type), arity::Int,
-                                       no_method::Vector{DataType})::InstrBuilder
+                                       no_method::Vector{DataType}, scratch::UInt32)::InstrBuilder
     local base = registry.base_struct_idx
     local headed(C) = isconcretetype(C) && !(C <: Type) && !is_bare_array_class(C) &&
                       (isstructtype(C) || isprimitivetype(C))
@@ -381,7 +382,8 @@ function _emit_trampoline_methoderror!(tb::InstrBuilder, mod::WasmModule, regist
         emit_method_error!(tb, mod, registry, T,
             # the closure, as the value it was called as
             (b, fw) -> (local_get!(b, UInt32(0)); fw === AnyRef || ref_cast!(b, fw, true)),
-            Function[(b, w) -> _closure_narrow_arg!(b, mod, registry, j, w) for j in 1:arity])
+            Function[(b, w) -> _closure_narrow_arg!(b, mod, registry, j, w; julia=T.parameters[j], scratch)
+                     for j in 1:arity])
         end_block!(tb)
     end
     unreachable!(tb)   # structural trap: arguments of a class with no numbered args tuple (A3S1)
@@ -390,7 +392,20 @@ end
 
 # Push the trampoline's erased argument `j` unboxed/cast to the body's parameter `pt`.
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
-function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType)::InstrBuilder
+function _closure_narrow_arg!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, j::Int, pt::WasmValType;
+                              julia::Any, scratch::Union{Nothing,UInt32})::InstrBuilder
+    if julia === Nothing && (pt === I32 || (pt isa ConcreteRef && !pt.nullable))
+        # `nothing`, which the entry's test admitted (the null its form at a reference of the any
+        # hierarchy is, or a value of Nothing's class), taken as the body's parameter holds it:
+        # its placeholder, boxed under Nothing's class at a non-null reference, never unboxed or
+        # cast, as convert_type! takes it (dev/formal/Coercion.tla NothingNeverCast)
+        i32_const!(tb, 0)
+        pt === I32 && return tb
+        scratch === nothing && error("a closure entry's Nothing argument $j has no scratch local for its box")
+        local box = emit_classid_box!(tb, mod, registry, scratch, I32, Nothing)
+        box == pt.type_idx || error("a closure body's Nothing parameter $j is a (ref $(pt.type_idx)), not the box of its placeholder (ref $box)")
+        return tb
+    end
     if is_closure_context_ref(registry, pt)
         # a closure argument is its closure object (maybe_wrap_closure!): the body takes its
         # context, field 2, as dart's direct closure call reads it (code_generator.dart:2656
@@ -417,11 +432,12 @@ end
 # distinguish Bool/Int32 or the other same-width Julia types); a reference passes as is;
 # a Nothing body — no wasm result — yields `nothing` at the top type, null (as a literal
 # `nothing` reaches every reference sink, values.jl emit_value!, and `isa(x, Nothing)`
-# reads it back as ref.is_null); a bottom body never returns — structural trap after it.
+# reads it back, a null); a bottom body never returns — structural trap after it.
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                              body::ClosureBody, arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
-                             scratch::UInt32; obj_scratch::Integer=-1)::InstrBuilder
+                             scratch::Union{Nothing,UInt32}; obj_scratch::Integer=-1,
+                             arg_scratch::Union{Nothing,UInt32})::InstrBuilder
     if takes_context
         local_get!(tb, UInt32(0))
         ref_cast!(tb, Int64(base_idx), false)
@@ -429,7 +445,8 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         ref_cast!(tb, Int64(captured_info.wasm_type_idx), false)   # captured struct
     end
     for j in 1:arity
-        _closure_narrow_arg!(tb, mod, registry, j, body.params[j + (takes_context ? 1 : 0)])
+        _closure_narrow_arg!(tb, mod, registry, j, body.params[j + (takes_context ? 1 : 0)];
+                             julia=body.julia_params[j + (takes_context ? 1 : 0)], scratch=arg_scratch)
     end
     call!(tb, body.body_idx)
     if isempty(body.results)
@@ -446,6 +463,8 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         # not one concrete class (a Union carried in one width) has no box to go in
         isconcretetype(body.return_type) || throw(_closure_layout_error(closure_type, ClosureBody[body],
             "the $(body.results[1]) result of a body returning $(body.return_type) has no single class to box it with"))
+        scratch === nothing && throw(_closure_layout_error(closure_type, ClosureBody[body],
+            "the $(body.results[1]) result has no scratch local declared for its box"))
         emit_classid_box!(tb, mod, registry, scratch, body.results[1], body.return_type)
     elseif is_context_type(registry, body.return_type)
         # a closure result is its object at the entry's anyref result
@@ -516,13 +535,13 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     for c in cands
         local lbl = block!(tb)
         _emit_closure_arg_tests!(tb, mod, registry, closure_type, cands, c, arity, takes_context, tmp, itmp, lbl)
-        local c_scratch = isempty(c.results) ? UInt32(0) : get(scratch_of, c.results[1], UInt32(0))
+        local c_scratch = isempty(c.results) ? nothing : get(scratch_of, c.results[1], nothing)
         _closure_call_body!(tb, mod, registry, closure_type, c, arity, takes_context, base_idx, captured_info, c_scratch;
-                            obj_scratch)
+                            obj_scratch, arg_scratch=itmp)
         return_!(tb)
         end_block!(tb)
     end
-    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method)
+    _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, itmp)
     end_block!(tb)
     tramp_idx = add_function!(mod, tb;
                               name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))

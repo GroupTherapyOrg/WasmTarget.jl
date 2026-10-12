@@ -201,20 +201,40 @@ check.
     boundaries need (dart2wasm throws here; Julia widens).
 
 Returns `b`.
-formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at a nullable single representation is its null (NothingIsNull); only inexpressible pairs reject
+formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at every nullable reference of the any hierarchy is its null, never boxed (NothingIsNull), and a nothing held in a reference is never unboxed or cast, its placeholder (boxed for a non-null reference) taken instead (NothingNeverCast); upcasts emit nothing but a nothing's null; only inexpressible pairs reject
 parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
-    # `nothing` meeting a nullable single representation (a Union{T,Nothing}'s box or struct) is
-    # its null, whichever position's form it arrives in (a field's i32 placeholder, a tuple
-    # field's singleton): never boxed, never cast
-    if from_julia === Nothing && to isa ConcreteRef && to.nullable &&
-       !(from isa ConcreteRef && wasm_subtype(from, to, _mod.types))
+    # `nothing` meeting a nullable reference of the any hierarchy (a Union{T,Nothing}'s box or
+    # struct, anyref, eqref, structref) is its null, whichever position's form it arrives in (a
+    # field's i32 placeholder, a tuple field's singleton, a box): never boxed, never cast, so the
+    # one null test reads it; one already in a nullable reference the sink admits is that null
+    if from_julia === Nothing && from != to && _wt_is_ref(to) && _wt_ref_nullable(to) &&
+       _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
+       !(_wt_is_ref(from) && _wt_ref_nullable(from) && wasm_subtype(from, to, _mod.types))
         drop!(b)
-        ref_null!(b, Int64(to.type_idx))
+        to isa ConcreteRef ? ref_null!(b, Int64(to.type_idx)) : ref_null!(b, to)
+        return b
+    end
+    # a `nothing` held in a reference (the null it is there) bound for its i32 placeholder or a
+    # non-null reference of the any hierarchy is never unboxed or cast, which traps on the null: its
+    # placeholder, boxed under Nothing's class for a reference its box is; any other sink holds no
+    # nothing (formal: NothingNeverCast)
+    if from_julia === Nothing && _wt_is_ref(from) && from != to &&
+       (!_wt_is_ref(to) || (!_wt_ref_nullable(to) && _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
+                            !wasm_subtype(from, to, _mod.types)))
+        (to === I32 || _wt_is_ref(to)) || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "a nothing has no $(to) representation"; detail=from_julia)
+        drop!(b)
+        emit_value!(b, NirLiteral(nothing), ctx, I32)   # the constant `nothing`, its i32 placeholder
+        to === I32 && return b
+        local nbox = emit_classid_box!(b, ctx, I32, Nothing)
+        wasm_subtype(ConcreteRef(UInt32(nbox), false), to, _mod.types) ||
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a nothing has no $(to) representation: its box is no $(to)"; detail=from_julia)
         return b
     end
     # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its

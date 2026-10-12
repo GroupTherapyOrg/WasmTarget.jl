@@ -155,7 +155,7 @@ parity(quarantine: WASM has no scalar FMA instruction; Julia's own software fma 
 its `fma` runs without one.)
 """
 function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
-    (T === Float64 || T === Float32) ||
+    numeric_register(T) in (F32, F64) ||
         error("a fused multiply-add over $(T) reached codegen; the collector enrolls Float32 and Float64 only")
     # the MethodInstance the collector rooted for this lowering (_fused_multiply_add_mis), recorded
     # on the plan
@@ -309,11 +309,11 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
     (F64, I64, :fptoui) => ConvEmit(b -> num!(b, Opcode.I64_TRUNC_F64_U), I64),
     (F32, F64, :fpext)   => ConvEmit(b -> num!(b, 0xBB), F64),   # f64.promote_f32
     (F64, F32, :fptrunc) => ConvEmit(b -> num!(b, 0xB6), F32),   # f32.demote_f64
-    # bitcast reinterpret pairs. Same-width int<->int (Int32<->UInt32, Int64<->
+    # bitcast reinterpret pairs, as dart's doubleToIntBits/intBitsToDouble
+    # (intrinsics.dart:1541, :1548). Same-register pairs (Int32<->UInt32, Int64<->
     # UInt64, Char<->Int32/UInt32 — STACK-003: Char's internal rep IS a packed
-    # UInt32) and Int128<->UInt128 are a no-op in Wasm and carry NO table row —
-    # `emit_conversion!` falls through to a no-op exactly like every op above does
-    # for a (src,dst,op) combination the table doesn't cover.
+    # UInt32) and Int128<->UInt128 are no instruction and carry NO table row
+    # (emit_bitcast! emits nothing where the registers agree).
     (F64, I64, :bitcast) => ConvEmit(b -> num!(b, Opcode.I64_REINTERPRET_F64), I64),
     (I64, F64, :bitcast) => ConvEmit(b -> num!(b, Opcode.F64_REINTERPRET_I64), F64),
     (F32, I32, :bitcast) => ConvEmit(b -> num!(b, Opcode.I32_REINTERPRET_F32), I32),
@@ -326,8 +326,9 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
 Julia's `bitcast(to, x::from)` of a primitive value already on the stack, `from` and `to` of one
 size: the conversion table's `:bitcast` entry between their registers (the width rule's
 julia_to_wasm_type), nothing where the registers agree.
-parity(quarantine: Julia's bitcast intrinsic reinterprets a value's bits as another primitive type;
-dart has no bitcast.)
+parity(pkg/dart2wasm/lib/intrinsics.dart:1541 StaticIntrinsic.doubleToIntBits): dart reinterprets
+a double's bits as an int by i64.reinterpret_f64 (intBitsToDouble :1548 the reverse, floatToIntBits
+:1523 through f32); Julia's bitcast takes both types as operands.
 """
 function emit_bitcast!(b::InstrBuilder, @nospecialize(from), @nospecialize(to))::InstrBuilder
     local fw, tw = julia_to_wasm_type(from), julia_to_wasm_type(to)
@@ -348,8 +349,7 @@ end
 # parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 # translator.dart:346; Julia's sext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_sext!(b::InstrBuilder, ctx,
-                       julia_src, target_type::Type)::ConcreteRef
-    source_type = julia_src isa Type ? julia_src : Int64
+                       source_type::Type, target_type::Type)::ConcreteRef
     if julia_to_wasm_type(source_type) === I32
         # a narrow source's register may hold junk above its width, or its unsigned bits: its
         # sign is the bit at its own width (sext_int(Int128, 0x80) is -128)
@@ -373,11 +373,9 @@ end
 # parity(quarantine: Int128/UInt128 have no dart type — dart's `int` is one i64,
 # translator.dart:346; Julia's zext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_zext!(b::InstrBuilder, ctx,
-                       julia_src, target_type::Type)::ConcreteRef
-    source_type = julia_src isa Type ? julia_src : UInt64
+                       source_type::Type, target_type::Type)::ConcreteRef
     if julia_to_wasm_type(source_type) === I32
-        local w = _julia_int_width(source_type, true)   # a narrow source's dirty high bits masked
-        w < 32 && (i32_const!(b, Int64((1 << w) - 1)); num!(b, Opcode.I32_AND))
+        normalise_narrow!(b, ctx, source_type, false)   # a narrow source's dirty high bits masked
         num!(b, Opcode.I64_EXTEND_I32_U)
     end
     zext_scratch = allocate_local!(ctx, I64)
@@ -398,41 +396,6 @@ function _int128_trunc_lo!(b::InstrBuilder, ctx, source_type::Type)::NumType
     return I64
 end
 
-"""Resolve `bitcast`'s target-type argument (GlobalRef/DataType/unresolved) — a pure
-move of the arm's resolution logic. `record_unsupported!`'s reject stays the
-registry's loud path for an unresolvable GlobalRef (Design item C).
-parity(quarantine: Julia's bitcast intrinsic takes its target type as an argument; dart has no bitcast.)"""
-function _resolve_bitcast_target(ctx, target_type_ref, idx::Int)::Union{Nothing, Type}
-    if target_type_ref isa NirGlobalRef
-        if target_type_ref.name === :Int64 || target_type_ref.name === Symbol("Base.Int64")
-            Int64
-        elseif target_type_ref.name === :UInt64
-            UInt64
-        elseif target_type_ref.name === :Int32 || target_type_ref.name === Symbol("Base.Int32")
-            Int32
-        elseif target_type_ref.name === :UInt32
-            UInt32
-        elseif target_type_ref.name === :Float64
-            Float64
-        elseif target_type_ref.name === :Float32
-            Float32
-        elseif target_type_ref.name === :Int128
-            Int128
-        elseif target_type_ref.name === :UInt128
-            UInt128
-        elseif target_type_ref.bound
-            target_type_ref.value
-        else
-            record_unsupported!(ctx, :unsupported_type,
-                "reinterpret target GlobalRef is not defined"; idx=idx, detail=target_type_ref)
-        end
-    elseif target_type_ref isa DataType
-        target_type_ref
-    else
-        Any
-    end
-end
-
 """
     emit_conversion!(b, ctx, op, julia_src, julia_dst, idx; src_already_wide=false) -> Union{WasmValType,Nothing}
 
@@ -443,76 +406,79 @@ anything else returns `nothing` immediately (not this dispatch's op — mirrors
 `emit_int128_op!`/`emit_julia_numeric!`). For these ten ops this dispatch is
 EXHAUSTIVE (the calls.jl arms it replaces are deleted, so a `nothing`
 "try the next thing" fall-through would reach nothing): every branch below either
-emits (possibly nothing, for an already-canonical width) or calls
-`record_unsupported!`.
+emits (possibly nothing, for a same-register pair) and returns the target's register (the
+128-bit integers' struct reference), or calls `record_unsupported!`: an integer conversion whose
+target is held in no integer register rejects, never a default register.
 
-`julia_dst` is the caller-resolved target Julia type: for sext_int/zext_int/
-trunc_int it is ALREADY VALIDATED (calls.jl keeps that resolution — and its three
-literal diagnostic messages — locally, L77); for sitofp/uitofp/fptosi/fptoui it is
-`args[1]` unresolved (the arms never resolved it either); for bitcast it is the RAW
-`target_type_ref`, resolved here via `_resolve_bitcast_target`; fpext/fptrunc ignore
-it. `src_already_wide` is `get_phi_edge_wasm_type(args[2], ctx) === I64` — a widened
-phi local already occupies the full register, so sext_int/zext_int must not
-re-extend it, and trunc_int must treat it as a 64-bit source even when the Julia
-type looks narrower.
+`julia_src` is the source value's type and `julia_dst` the target type, which the caller
+resolved once from the operand (a literal type, or a constant global naming one) for all ten
+ops, rejecting any other at the statement (calls.jl): each is a type, never a default. A
+register is the one width rule's (julia_to_wasm_type through numeric_register), and the one
+widening rule normalises a source narrower than 32 bits before any op reads it widened:
+sext_int and sitofp read its sign at its own width, zext_int and uitofp its bits, whatever its
+type and whatever register the target has (a narrow register carries junk above its width,
+calls.jl's narrow-register invariant). `src_already_wide` is
+`get_phi_edge_wasm_type(args[2], ctx) === I64` — a widened phi local already occupies the full
+register, so sext_int/zext_int must not re-extend it, and trunc_int must treat it as a 64-bit
+source even when the Julia type looks narrower.
 parity(quarantine: Julia's typed IR carries sext_int/zext_int/trunc_int/sitofp/uitofp/
 fptosi/fptoui/fpext/fptrunc/bitcast as intrinsic calls with an explicit target type and
 narrow Int8/Int16 sources; dart's conversions are per-class methods on one i64 `int`
 (intrinsics.dart:710), so the Julia op/width selection before the table lookup is Julia's.)
 """
 function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
-                          julia_src, julia_dst, idx::Int;
+                          @nospecialize(julia_src), @nospecialize(julia_dst), idx::Int;
                           src_already_wide::Bool=false)::Union{WasmValType,Nothing}
     op in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi, :fptoui,
            :fpext, :fptrunc, :bitcast) || return nothing
 
-    # a type's register is the one width rule's (julia_to_wasm_type); a target given as no type
-    # keeps the register the op's default names
-    local reg(T, default) = T isa Type ? julia_to_wasm_type(T) : default
+    # a located rejection: the statement has no faithful lowering, and the code after its trap
+    # is unreachable (its result, an i32, is the polymorphic stack's, read by nothing)
+    local function reject!(why)
+        record_unsupported!(ctx, :unsupported_type, "$(op) from $(julia_src) to $(julia_dst): $(why)"; idx=idx)
+        unreachable!(b)
+        ctx.last_stmt_was_stub = true
+        return I32
+    end
+    (julia_src isa Type && julia_dst isa Type) ||
+        return reject!("its source or target is not a type")
+    local src_reg, dst_reg = numeric_register(julia_src), numeric_register(julia_dst)
+    local src_128 = _julia_int_width(julia_src, false) == 128
+    local dst_128 = _julia_int_width(julia_dst, false) == 128
+    # a primitive wider than every register that is no 128-bit integer has no representation
+    (isprimitivetype(julia_src) && src_reg === nothing && !src_128) &&
+        return reject!("a $(sizeof(julia_src))-byte primitive other than Int128 and UInt128 has no representation")
+    (isprimitivetype(julia_dst) && dst_reg === nothing && !dst_128) &&
+        return reject!("a $(sizeof(julia_dst))-byte primitive other than Int128 and UInt128 has no representation")
     # the conversion table's entry between two registers, or a located rejection: a pair the table
     # has no entry for (a Float16, held in an i32, converted to or from a float) has no faithful value
     local function table!(src_ty, dst_ty, key)
         local e = get(INTRINSIC_CONVERSIONS, (src_ty, dst_ty, key), nothing)
-        if e === nothing
-            record_unsupported!(ctx, :unsupported_type,
-                "$(op) from $(julia_src) to $(julia_dst): the conversion table has no entry from $(src_ty) to $(dst_ty)";
-                idx=idx)
-            unreachable!(b)
-            ctx.last_stmt_was_stub = true
-            return dst_ty
-        end
+        e === nothing && return reject!("the conversion table has no entry from $(src_ty) to $(dst_ty)")
         e.emit!(b)
         return e.result
     end
+    # an integer conversion's target is a 128-bit integer or held in an i32 or an i64
+    (op in (:sext_int, :zext_int, :trunc_int) && !dst_128 && !(dst_reg === I32 || dst_reg === I64)) &&
+        return reject!("its target is held in no integer register")
     if op === :sext_int
-        if julia_dst === Int128 || julia_dst === UInt128
-            return _int128_sext!(b, ctx, julia_src, julia_dst)
-        elseif reg(julia_dst, I32) === I64 && !src_already_wide
-            julia_src isa Type && normalise_narrow!(b, ctx, julia_src, julia_src <: Signed)
-            e = INTRINSIC_CONVERSIONS[(I32, I64, :sext_int)]
-            e.emit!(b)
-            return e.result
-        end
-        return reg(julia_dst, I32) === I64 ? I64 : I32   # already wide, or a ≤32-bit target: no-op
+        dst_128 && return _int128_sext!(b, ctx, julia_src, julia_dst)
+        src_already_wide && return dst_reg
+        normalise_narrow!(b, ctx, julia_src, true)   # the one widening rule: its sign at its width
+        dst_reg === I64 && return table!(I32, I64, :sext_int)
+        return dst_reg
 
     elseif op === :zext_int
-        if julia_dst === Int128 || julia_dst === UInt128
-            return _int128_zext!(b, ctx, julia_src, julia_dst)
-        elseif reg(julia_dst, I32) === I64 && !src_already_wide
-            julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
-            e = INTRINSIC_CONVERSIONS[(I32, I64, :zext_int)]
-            e.emit!(b)
-            return e.result
-        elseif julia_dst isa Type && _julia_int_width(julia_dst, false) == 32 && !src_already_wide
-            julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
-            return I32
-        end
-        return reg(julia_dst, I32) === I64 ? I64 : I32   # already wide, or a no-op target
+        dst_128 && return _int128_zext!(b, ctx, julia_src, julia_dst)
+        src_already_wide && return dst_reg
+        normalise_narrow!(b, ctx, julia_src, false)   # the one widening rule: its bits
+        dst_reg === I64 && return table!(I32, I64, :zext_int)
+        return dst_reg
 
     elseif op === :trunc_int
-        source_is_64bit = reg(julia_src, I32) === I64 || src_already_wide
-        target_is_32bit = reg(julia_dst, I64) === I32
-        if julia_src === Int128 || julia_src === UInt128
+        source_is_64bit = src_reg === I64 || src_already_wide
+        target_is_32bit = dst_reg === I32
+        if src_128
             _int128_trunc_lo!(b, ctx, julia_src)
             target_is_32bit && INTRINSIC_CONVERSIONS[(I64, I32, :trunc_int)].emit!(b)
         elseif source_is_64bit && target_is_32bit
@@ -524,73 +490,36 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
         if julia_dst === Bool
             i32_const!(b, 1)
             num!(b, Opcode.I32_AND)
-        elseif julia_dst isa Type
+        else
             normalise_narrow!(b, ctx, julia_dst, julia_dst <: Signed)
         end
         return target_is_32bit ? I32 : I64
 
     elseif op === :sitofp
-        # P3 gap 40ed488e7f10: a narrow SIGNED source can sit zero-extended in the
-        # i32 register; sign-extend at the consumer (UInt8/UInt16 never legitimately
-        # reach sitofp — Julia routes those through uitofp — so `<: Signed` alone,
-        # like the arm's own Int8/Int16-only branches, is the exact original set).
-        julia_src isa Type && julia_src <: Signed && normalise_narrow!(b, ctx, julia_src, true)
-        src_ty = reg(julia_src, I64) === I32 ? I32 : I64
-        dst_ty = reg(julia_dst, F64)
-        return table!(src_ty, dst_ty, :sitofp)
+        normalise_narrow!(b, ctx, julia_src, true)    # the one widening rule: its sign at its width
+        return table!(src_reg, dst_reg, :sitofp)
 
     elseif op === :uitofp
-        # dart has no unsigned-source shim to anchor to (dart's int has no unsigned
-        # variant); this normalise is a genuine WT addition (not an original-arm
-        # behaviour) — a narrow UNSIGNED source can carry dirty high bits the same
-        # way a narrow signed one does, and f64.convert_i32_u reads the whole
-        # register.
-        julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
-        src_ty = reg(julia_src, I64) === I32 ? I32 : I64
-        dst_ty = reg(julia_dst, F64)
-        return table!(src_ty, dst_ty, :uitofp)
+        normalise_narrow!(b, ctx, julia_src, false)   # the one widening rule: its bits
+        return table!(src_reg, dst_reg, :uitofp)
 
     elseif op === :fptosi || op === :fptoui
-        src_ty = reg(julia_src, F64)
-        dst_ty = reg(julia_dst, I64)
-        return table!(src_ty, dst_ty, op)
+        return table!(src_reg, dst_reg, op)
 
-    elseif op === :fpext
-        if julia_src === Float16
-            # Float16 is mis-represented end-to-end —
-            # the emulation this replaced silently mishandled zero/-zero/inf/nan/
-            # subnormal (measured: 5/8 cases wrong). No test in test/ relies on
-            # Float16→Float64 for a value (only the wasm_subtype type-lattice checks
-            # reference Float16). A proper fix needs a full Float16 representation
-            # overhaul — loud reject instead of a
-            # silently-wrong value.
-            record_unsupported!(ctx, :unsupported_type,
-                "Float16→Float64 conversion (fpext) is unsupported: Float16 has no faithful representation yet";
-                idx=idx, detail=julia_src)
-            unreachable!(b)
-            ctx.last_stmt_was_stub = true
-            return F64
-        end
-        e = INTRINSIC_CONVERSIONS[(F32, F64, :fpext)]
-        e.emit!(b)
-        return e.result
-
-    elseif op === :fptrunc
-        # fptrunc(TargetType, value): the source is always Float64, target Float32
-        # (the arm never inspected either type argument).
-        e = INTRINSIC_CONVERSIONS[(F64, F32, :fptrunc)]
-        e.emit!(b)
-        return e.result
+    elseif op === :fpext || op === :fptrunc
+        # Float16 is mis-represented end-to-end — the emulation this replaced silently
+        # mishandled zero/-zero/inf/nan/subnormal (measured: 5/8 cases wrong); a proper fix
+        # needs a full Float16 representation overhaul — loud reject instead of a
+        # silently-wrong value.
+        Float16 in (julia_src, julia_dst) &&
+            return reject!("Float16 has no faithful representation yet")
+        return table!(src_reg, dst_reg, op)
 
     else   # :bitcast
-        target_type = _resolve_bitcast_target(ctx, julia_dst, idx)
-        source_type = julia_src isa Type ? julia_src : Any
-        # a primitive held in one register converts by the table's bitcast; any other pair
-        # (Int128<->UInt128, one representation) is no instruction, the arm's fallthrough
-        if numeric_register(source_type) !== nothing && numeric_register(target_type) !== nothing
-            emit_bitcast!(b, source_type, target_type)
-            return numeric_register(target_type)
-        end
-        return something(numeric_register(source_type), I32)
+        # a primitive held in one register converts by the table's bitcast; the two 128-bit
+        # integers share one representation, no instruction
+        src_reg !== nothing && dst_reg !== nothing && (emit_bitcast!(b, julia_src, julia_dst); return dst_reg)
+        (src_128 && dst_128) && return _int128_structref(ctx, julia_src)
+        return reject!("bitcast between registers $(src_reg === nothing ? "none" : src_reg) and $(dst_reg === nothing ? "none" : dst_reg)")
     end
 end

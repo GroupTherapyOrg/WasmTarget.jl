@@ -28,13 +28,26 @@
 (* 2.5). The record joins every field that holds one box: a write through  *)
 (* any of them is a write into each.                                       *)
 (*                                                                         *)
+(* A NESTED CAPTOR. A closure built inside a captor's body from the        *)
+(* captor's own field (`%new(Ti, getfield(#self#, :c))`) holds the same    *)
+(* box through its own field, at any depth. Its writes are writes into the *)
+(* box: a `%new` of a closure type from a captured box field puts the new  *)
+(* type's field in that field's class, so the creator's read, typed by the *)
+(* record, sees them (NestedJoined). Before, the nested field was linked   *)
+(* to nothing and itself erased as not created: the creator's read kept    *)
+(* the direct captors' join, and a nested `c = 2.5` over a box the creator *)
+(* filled with an Int64 unboxed as an Int64 one (illegal cast; Julia       *)
+(* answers 1).                                                             *)
+(*                                                                         *)
 (* THE CLAIM. The type a read carries covers every value the box can hold  *)
-(* at run time (Covered), through every captor. The Broken variants are    *)
-(* the body-local guess and the per-field record.                          *)
+(* at run time (Covered), through every captor and in the creator. The     *)
+(* Broken variants are the body-local guess, the per-field record and the  *)
+(* nested captor left out of the join.                                     *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Two numeric types with Julia's promotion. A  *)
 (* box has one creator write (its initial value, of a fixed type) and      *)
-(* writes by two captor closures, each write either a value of a fixed     *)
+(* writes by three captor closures (two direct, one built inside the first *)
+(* one's body), each write either a value of a fixed                       *)
 (* type or the contents combined with an operand of a fixed type           *)
 (* (`c = c + x`). A closure's reads are consumed by `c + x` for the        *)
 (* operands its writes use. Every combination of creator type (or none:    *)
@@ -51,9 +64,11 @@
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS BodyLocalGuess,  \* TRUE = the broken typing (the closure guesses alone)
-          PerFieldRecord   \* TRUE = the broken record: a captor's field joins only its own writes
+          PerFieldRecord,  \* TRUE = the broken record: a captor's field joins only its own writes
+          NestedJoined     \* FALSE = the broken record: a nested captor's field joins nothing
 
-Captors == {"W", "R"}   \* two closures capturing the one box
+Captors == {"W", "R", "N"}   \* W and R capture the box directly; N is built inside W's body
+Readers == Captors \cup {"creator"}
 
 Types == {"Int64", "Float64"}
 Promote(a, b) == IF a = "Float64" \/ b = "Float64" THEN "Float64" ELSE "Int64"
@@ -63,7 +78,7 @@ Join(S) == S
 \* a closure write: a value of type t, or the contents combined with an operand of type t
 Writes == {[kind |-> "value", t |-> t] : t \in Types} \cup {[kind |-> "combine", t |-> t] : t \in Types}
 
-VARIABLES init, ws, typing, done   \* ws[k]: captor k's writes; typing[k]: the type k's reads carry
+VARIABLES init, ws, typing, done   \* ws[k]: captor k's writes; typing[k]: the type reader k's reads carry
 vars == <<init, ws, typing, done>>
 
 \* the types the box can hold given writes W: the creator's value (none: the box starts
@@ -81,6 +96,10 @@ Runtime == Hold(Start, AllWrites, 4)
 \* iterated to a fixpoint (BoxJoin); the per-field record joins a captor's own writes only
 CreatorJoin == Runtime
 FieldJoin(k) == Hold(Start, ws[k], 4)
+\* the record with the nested captor left out (NestedJoined = FALSE): the direct captors'
+\* writes join, and the nested field, linked to no created box, is erased
+DirectJoin == Hold(Start, ws["W"] \cup ws["R"], 4)
+NestedLeftOut(k) == IF k = "N" THEN Types ELSE DirectJoin
 
 \* the body-local guess: the writes' own value types if any, else the operands the contents
 \* is combined with; verified by typing each write with the guess assumed
@@ -92,8 +111,10 @@ Verified(k) == \A w \in ws[k] : (IF w.kind = "value" THEN {w.t}
 BodyTyping(k) == IF Guess(k) # {} /\ Verified(k) THEN Guess(k) ELSE Types   \* Types = left erased
 
 Init == init \in Types \cup {"none"} /\ ws \in [Captors -> SUBSET Writes] /\ AllWrites # {}
-        /\ typing = [k \in Captors |-> {}] /\ done = FALSE
-Step == ~done /\ typing' = [k \in Captors |-> IF BodyLocalGuess THEN BodyTyping(k)
+        /\ typing = [k \in Readers |-> {}] /\ done = FALSE
+Step == ~done /\ typing' = [k \in Readers |-> IF ~NestedJoined THEN NestedLeftOut(k)
+                                             ELSE IF k = "creator" THEN CreatorJoin
+                                             ELSE IF BodyLocalGuess THEN BodyTyping(k)
                                              ELSE IF PerFieldRecord THEN FieldJoin(k)
                                              ELSE CreatorJoin]
         /\ done' = TRUE /\ UNCHANGED <<init, ws>>
@@ -101,5 +122,5 @@ Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run
 Spec == Init /\ [][Step \/ Terminal]_vars
 
 \* each captor's read type covers every value the box can hold
-Covered == done \in BOOLEAN /\ (done => \A k \in Captors : Runtime \subseteq typing[k])
+Covered == done \in BOOLEAN /\ (done => \A k \in Readers : Runtime \subseteq typing[k])
 =============================================================================

@@ -520,7 +520,9 @@ the creator's signature), and every write through the field: in a body of the cl
 that reads the variable (`c = c + 1`) is typed with the current record, so the join iterates
 to a fixpoint. Several closures can capture one box (a writer and a reader returned
 together), each through its own field: every field that holds one box shares one join, so a
-write through any of them is a write into each. A field whose writes are not one concrete type
+write through any of them is a write into each. A closure a captor's body builds from its own box
+field (`%new(T2, getfield(#self#, f))`, a nested captor, at any depth) holds that box: its field
+joins the field it was built from. A field whose writes are not one concrete type
 records `Any`: its reads stay erased. The record is complete for the closed world because every body that can run is in it,
 which the creator alone is not (a returned closure's writes are invisible to its creator).
 formal(dev/formal/CaptureType.tla): a captured box's read is typed by the join of every write
@@ -540,15 +542,29 @@ function record_capture_contents(bodies::Vector; closure_bodies::Function,
     local created = Set{Tuple{Type,Symbol}}()
     # the fields that hold one box, as classes: a field two boxes' captors share joins both
     local same_box = Dict{Tuple{Type,Symbol},Set{Tuple{Type,Symbol}}}()
-    for (nir, _, _) in bodies, box_id in find_box_news(nir)
-        local fields = _f3_box_captor_fields(nir, box_id)
-        union!(created, fields)
+    local function join_box!(fields)
         local class = Set{Tuple{Type,Symbol}}(fields)
         for tf in fields
             union!(class, get(same_box, tf, ()))
         end
         for tf in class
             same_box[tf] = class
+        end
+    end
+    for (nir, _, _) in bodies, box_id in find_box_news(nir)
+        local fields = _f3_box_captor_fields(nir, box_id)
+        union!(created, fields)
+        join_box!(fields)
+    end
+    # a nested captor: a closure a body builds from a box field it reads (`getfield(#self#, f)`
+    # of its own closure, or of a closure value) holds that box through its own field
+    for (nir, _, selfT) in bodies, s in nir
+        local node = s.node
+        (node isa NirNew && node.type_kind === :literal && node.T !== Core.Box && isstructtype(node.T)) || continue
+        for (j, op) in enumerate(node.operands)
+            j <= fieldcount(node.T) && fieldtype(node.T, j) === Core.Box || continue
+            local from = _captured_box_field(op, nir, selfT)
+            from === nothing || join_box!(Tuple{Type,Symbol}[from, (node.T, fieldname(node.T, j))])
         end
     end
     for _round in 1:32
@@ -587,7 +603,8 @@ function record_capture_contents(bodies::Vector; closure_bodies::Function,
         if next == held
             local out = _capture_finalize(held)
             for key in keys(out)
-                key in created || (out[key] = Any)   # its base is outside the closed world
+                # its base is outside the closed world: no field of its box's class is created
+                any(in(created), get(same_box, key, (key,))) || (out[key] = Any)
             end
             return out
         end

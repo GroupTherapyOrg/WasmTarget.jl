@@ -246,9 +246,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
     functions = plan.functions
-    # Create WasmInterpreter with overlay method table (GPUCompiler pattern).
-    # Must be created here (after user functions exist) so world age is current.
-    interp = get_wasm_interpreter()
 
     # Filter out any discovered functions that are import stubs
     # (import stubs are registered in func_registry at their import indices, not compiled)
@@ -564,11 +561,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             end
         end
     end
-
-    # Captured variables' types, recorded once by the collection over the whole closed world
-    # before any body compiles, so no body's box reads depend on which compiled first
-    # (record_capture_contents; CaptureType.tla): the plan's record.
-    merge!(type_registry.box_contents_types, plan.capture_record)
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1

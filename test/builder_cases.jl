@@ -119,6 +119,14 @@ function builder_cases(W::Module)
         W.trunc_sat!(b, 0x0b) end)
     # A15B5: an imported function is named where it is imported (the name section drops none)
     add("v", "A15B5", ArgumentError, () -> W.WasmImport("host", "f", 0x00, UInt32(0), ""))
+    # A16B2: a constant fragment's ref.func is checked as a global initializer's, so a function
+    # body takes none (its `ref.func f`, f declared nowhere, would reach only wasm-tools)
+    add("w", "A16B2", ArgumentError, () -> begin
+        m = W.WasmModule(); e = W.InstrBuilder(VT[], VT[]; mod=m); W.finish_function!(e)
+        f = W.add_function!(m, e; name="f")
+        b = W.InstrBuilder(VT[], VT[]; mod=m)
+        C = W.InstrBuilder(VT[], VT[]; mod=m, fragment=true, constant_expression=true)
+        W.ref_func!(C, f); W.append_builder!(b, C) end)
     return cases
 end
 

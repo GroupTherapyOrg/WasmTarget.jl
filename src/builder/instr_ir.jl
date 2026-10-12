@@ -105,7 +105,7 @@ struct RefFunc      <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/li
 # ── GC ───────────────────────────────────────────────────────────────────────────
 struct StructNew        <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2393 StructNew)
 struct StructNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2426 StructNewDefault)
-struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET (struct_get! refuses a packed field); parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
+struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; end  # a value-type field (struct_get! refuses a packed one); parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
 struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2358 StructSet)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
@@ -240,7 +240,7 @@ encode!(c::Vector{UInt8}, ::RefEq)::Vector{UInt8}        = push!(c, Opcode.REF_E
 encode!(c::Vector{UInt8}, i::RefFunc)::Vector{UInt8}     = (push!(c, Opcode.REF_FUNC); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::StructNew)::Vector{UInt8}        = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_NEW); _u!(c, i.idx))
 encode!(c::Vector{UInt8}, i::StructNewDefault)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_NEW_DEFAULT); _u!(c, i.idx))
-encode!(c::Vector{UInt8}, i::StructGet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, i.op); _u!(c, i.idx); _u!(c, i.field))
+encode!(c::Vector{UInt8}, i::StructGet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_GET); _u!(c, i.idx); _u!(c, i.field))
 encode!(c::Vector{UInt8}, i::StructSet)::Vector{UInt8} = (push!(c, Opcode.GC_PREFIX); push!(c, Opcode.STRUCT_SET); _u!(c, i.idx); _u!(c, i.field))
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/serialize/serializer.dart:12 Serializable.serialize)

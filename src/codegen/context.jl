@@ -569,7 +569,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
             is_phi_any_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||
                              phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef ||
                              phi_wasm_type === ExternRef || phi_wasm_type === EqRef
-            is_wasm_struct_numeric = phi_julia_type in (Int128, UInt128)
+            is_wasm_struct_numeric = _julia_int_width(phi_julia_type, false) == 128
             if is_phi_any_ref && !is_wasm_struct_numeric
                 for j in ssa_users(ctx, i)   # the statements that use the phi
                     use_rec = nir[j]
@@ -911,6 +911,16 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
 
             # Skip bottom type (Union{}) - unreachable code
             if ssa_type === Union{}
+                continue
+            end
+
+            # a primitive wider than every register that is no 128-bit integer has no
+            # representation (numeric_register answers none): it rejects at its statement
+            if ssa_type isa DataType && isprimitivetype(ssa_type) && numeric_register(ssa_type) === nothing &&
+               _julia_int_width(ssa_type, false) != 128
+                record_unsupported!(ctx, :unsupported_type,
+                    "a $(sizeof(ssa_type))-byte primitive $(ssa_type) has no representation: no register holds it, and it is no Int128 or UInt128";
+                    idx=ssa_id)
                 continue
             end
 

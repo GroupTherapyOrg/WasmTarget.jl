@@ -2922,7 +2922,7 @@ parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrins
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     arg_type = length(args) > 0 ? value_type(ctx, args[1]) : Int64
     is_32bit = operand_register(arg_type) in (I32, F32)
-    is_128bit = arg_type === Int128 || arg_type === UInt128
+    is_128bit = _julia_int_width(arg_type, false) == 128
     return arg_type, is_32bit, is_128bit
 end
 
@@ -2962,7 +2962,8 @@ end
 
 The intrinsic Julia's own method of `f(::T, ::T)` runs, for `f` one of `+`, `-`, `*` (or that
 intrinsic itself) and `T` a type whose wasm arithmetic is Julia's: a 32- or 64-bit BitInteger
-(`add_int`, base/int.jl:86-88) or an IEEE Float32/Float64 (`add_float`, base/float.jl:495-497);
+(`add_int`, base/int.jl:86-88 on 1.12.7, :85-87 on 1.13.1) or an IEEE Float32/Float64 (`add_float`,
+base/float.jl:495-497 on 1.12.7, :492-494 on 1.13.1);
 `nothing` otherwise (a narrow integer wraps at its own width, which no single opcode does). Its
 opcode is the one operator table's, INTRINSIC_BINOPS.
 parity(quarantine: Julia's surface operators are methods whose bodies call intrinsics; dart's
@@ -2970,7 +2971,7 @@ parity(quarantine: Julia's surface operators are methods whose bodies call intri
 """
 function operator_intrinsic(@nospecialize(f), @nospecialize(T))::Union{Nothing, Symbol}
     local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T, false) in (32, 64)
-    local flt = T === Float32 || T === Float64
+    local flt = numeric_register(T) in (F32, F64)
     (int || flt) || return nothing
     # an intrinsic runs as itself, over its own kind only: `add_int` over floats adds their bits,
     # which no float opcode does (it rejects); a surface operator runs its method's intrinsic

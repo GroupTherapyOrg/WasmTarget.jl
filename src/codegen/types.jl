@@ -248,12 +248,12 @@ end
     numeric_register(T) -> Union{Nothing, NumType}
 
 The register a primitive number of type `T` rides in, by the one width rule (julia_to_wasm_type):
-an i32, i64, f32 or f64; `nothing` for a type held in no one numeric register (Int128, a struct,
-an abstract type).
+an i32, i64, f32 or f64; `nothing` for a type held in no one numeric register (Int128, any other
+primitive wider than 64 bits, a struct, an abstract type).
 parity(pkg/dart2wasm/lib/translator.dart:1044 Translator.translateType)
 """
 function numeric_register(@nospecialize(T))::Union{Nothing, NumType}
-    (T isa DataType && isprimitivetype(T)) || return nothing
+    (T isa DataType && isprimitivetype(T) && sizeof(T) <= 8) || return nothing
     local w = julia_to_wasm_type(T)
     return w isa NumType ? w : nothing
 end
@@ -544,10 +544,6 @@ mutable struct TypeRegistry
     # Distinct from numeric_boxes — the contents field is MUTABLE (written via struct.set), so a
     # Box{i64} is a different struct than the immutable {typeId,value} numeric box.
     box_types::Dict{WasmValType, UInt32}
-    # (closure type, captured field) → the captured variable's type (Any: erased), recorded over
-    # every body before any compiles (record_capture_contents; CaptureType.tla); the box reads
-    # of a closure body or a closure value are typed from it (capture_read_types).
-    box_contents_types::Dict{Tuple{Type,Symbol}, Type}
     # THE ensureConstant funnel's registry (dart constants.dart:154 constantInfo — ONE
     # constantInfo map for ALL constant kinds). Keyed by the constant under `===` (a dart
     # Constant equals only one of its own class with equal fields): `isequal` holds across
@@ -611,7 +607,6 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     false,    # egal_filled
     nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
-    Dict{Tuple{Type,Symbol}, Type}(),  # box_contents_types (record_capture_contents)
     IdDict{Any, UInt32}(),        # constant_globals (ensureConstant), keyed by ===
     IdDict{Any, Tuple{UInt32, UInt32}}(), # mutable_constant_globals: value => (global,type)
     UInt32[],                    # module_init_functions
@@ -698,7 +693,7 @@ end
 # parity(constants.dart:908 ConstantCreator.visitInstanceConstant): header fields, then each field's constant.
 function _const_init!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
-    if T === Int128 || T === UInt128
+    if _julia_int_width(T, false) == 128
         # parity(constants.dart:622-655 visitIntConstant valueTypeConstants): a boxed
         # numeric constant gets one cached module global. Int128 is a Julia primitive
         # (not isstructtype), so it cannot take the struct path below.
@@ -3073,7 +3068,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 return ConcreteRef(info.wasm_type_idx, true)
             end
         end
-    elseif T === Int128 || T === UInt128
+    elseif _julia_int_width(T, false) == 128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
         if haskey(registry.structs, T)
             info = registry.structs[T]

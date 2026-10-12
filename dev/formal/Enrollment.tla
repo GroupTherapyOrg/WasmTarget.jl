@@ -49,6 +49,13 @@
 (* `Unreached` are classes the numbering names that no value has (a type   *)
 (* a field is typed by, never allocated). A search that asks about them    *)
 (* (AskNumbered, A7C4: native 3, rejected) rejects a program Julia runs.   *)
+(* `Unseen` are classes a value has that no statement of the program makes *)
+(* (a vararg method's packed tuple, which WT rebuilds from its flattened   *)
+(* parameters): the set observes them from the body's slot (SlotsObserved),*)
+(* and a value of one reaches the call as any other value does. A set      *)
+(* without them (SlotsObserved = FALSE, broken) gives a parametric method  *)
+(* no row for that value: a trap where Julia runs the method. Both are     *)
+(* definitions an instance's cfg overrides (MCEnrollmentUnseen).           *)
 (* A MATCH is one signature (`_match_is_one_signature`, trimcollect.jl)    *)
 (* when a static parameter it leaves a TypeVar is mentioned only where the *)
 (* argument is one value's dispatch type (a concrete class that is not a   *)
@@ -162,8 +169,13 @@ Julia(g, x) == LET ms == {m \in Of(g) : x \in Param[m]} IN
                     THEN CHOOSE m \in ms : \A n \in ms \ {m} : <<m, n>> \in More
                     ELSE Ambig
 
-\* the one class set: every element but the numbered classes no value has
-InSet(x) == x[1] \notin Unreached /\ x[2] \notin Unreached
+\* the classes a value has that no statement makes, and whether the set observes them
+Unseen == {}
+SlotsObserved == TRUE
+\* a value may have the pair x: every element but the numbered classes no value has
+Reaches(x) == x[1] \notin Unreached /\ x[2] \notin Unreached
+\* the one class set: every element a value may have (SlotsObserved, broken: but the unseen)
+InSet(x) == Reaches(x) /\ (SlotsObserved \/ (x[1] \notin Unseen /\ x[2] \notin Unseen))
 \* x is a value's dispatch type for g: no method's match at x leaves a static parameter a TypeVar
 IsValue(g, x) == ~\E m \in Of(g) : \E p \in PFix[m] : x[p] \in NoFix[m]
 \* a match of m at x is one signature: every static parameter m mentions has a value
@@ -245,8 +257,8 @@ Entry(g, S, x) ==
          IF hit = {} THEN Trap
          ELSE (CHOOSE r \in hit : \A q \in hit \ {r} : ~Before(q, r) /\ (Before(r, q) \/ r[1] = q[1]))[1]
 
-\* the value that reaches the call: an element of the one class set, a dispatch type for f
-Init == f \in Callables /\ s \in Statics /\ v \in {x \in s : InSet(x) /\ IsValue(f, x)} /\
+\* the value that reaches the call: any pair a value may have, a dispatch type for f
+Init == f \in Callables /\ s \in Statics /\ v \in {x \in s : Reaches(x) /\ IsValue(f, x)} /\
         outcome = Trap /\ done = FALSE
 Step == ~done /\ outcome' = Entry(f, s, v) /\ done' = TRUE /\ UNCHANGED <<f, s, v>>
 Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run, not a deadlock
@@ -256,7 +268,7 @@ TypeOK == outcome \in Methods \cup {Trap, Reject} /\ done \in BOOLEAN
 NoWrongMethod == done /\ outcome \in Methods => outcome = Julia(f, v)
 TrapOnlyWhenNoMethod == done /\ outcome = Trap => Julia(f, v) = Trap
 RejectOnlyWhenAmbiguous == done /\ outcome = Reject =>
-    \E x \in s : InSet(x) /\ IsValue(f, x) /\ Julia(f, x) = Ambig
+    \E x \in s : Reaches(x) /\ IsValue(f, x) /\ Julia(f, x) = Ambig
 BoundIsLoud == done /\ Unaskable(f, s) => outcome = Reject
 \* past the bound an enrollment's candidate product rejects the call, never enumerated
 \* (ProductUnbounded, broken) or dropped silently

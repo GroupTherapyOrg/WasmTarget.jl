@@ -374,7 +374,7 @@ function _json_hex4(s::String, i::Int)::UInt32
 end
 
 # A JSON value as text, an object's pairs in their order.
-# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart encodes a source map with dart:convert's jsonEncode, compile.dart:639 and io_util.dart:209)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart encodes a source map with dart:convert's jsonEncode, compile.dart:639 and io_util.dart:211)
 function _json_write(v)::String
     v isa Vector{Pair{String,Any}} &&
         return "{" * join(("\"" * _json_string_escape(k) * "\":" * _json_write(x) for (k, x) in v), ",") * "}"

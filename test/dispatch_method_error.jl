@@ -314,3 +314,15 @@ end
     plan0 = WasmTarget.trim_compile_plan(Any[(x::Int64 -> x + 1, (Int64,), "plus_one")])
     @test !(DivideError in plan0.classes.runtime)
 end
+
+# One `Type{X}` element rule (L179): the tuple Core.tuple builds from a `Type{X}` operand and the
+# tuple type registered for the same tuple each type the element by X's kind (type_element_kind),
+# so a second rule in either (every type object a DataType, say) makes them disagree
+@testset "one Type{X} element rule: the tuple Core.tuple builds is the tuple type registered" begin
+    for X in (Int64, Vector, Union{Int64,Float64}, Vector{Int64}, Union{})
+        @test WasmTarget.type_element_kind(Type{X}) === typeof(X)
+        local built = WasmTarget.tuple_runtime_type(Any[WasmTarget.NirSSA(1, Type{X}), WasmTarget.NirLiteral(1)], Type[])
+        @test built === Tuple{typeof(X), Int64}
+        @test WasmTarget._canonical_tuple_type(Tuple{Type{X}, Int64}) === built
+    end
+end

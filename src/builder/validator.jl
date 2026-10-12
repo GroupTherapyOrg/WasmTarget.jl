@@ -449,7 +449,8 @@ Reachability is restored from the label's `reachable_at_entry` — if the block
 entry was reachable, code after the block is reachable (even if the block body
 ended with an unconditional br).
 formal(dev/formal/OperandStack.tla): the builder accepts every program the spec's validation
-algorithm accepts, and rejects every invalid one whose instructions are all reachable.
+algorithm accepts (Complete), and every program it accepts is valid as it records it, the
+instructions emitted while unreachable dropped (Sound).
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:566 InstructionsBuilder._verifyEndOfBlock)
 """
 function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}

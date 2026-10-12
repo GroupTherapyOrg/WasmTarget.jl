@@ -432,7 +432,7 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
         elseif ft === Nothing
             # Nothing is a singleton type — no data, represent as i32 placeholder
             wasm_vt = I32
-        elseif ft === Int128 || ft === UInt128
+        elseif _julia_int_width(ft, false) == 128
             # 128-bit integers are WasmGC {lo,hi} structs, not wasm
             # primitives. register_tuple_type! already maps Int128/UInt128 tuple
             # ELEMENTS to the int128 struct ref; struct FIELDS must do the same, or
@@ -669,7 +669,7 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, T::Type{<
             else
                 julia_to_wasm_type(ft)
             end
-        elseif ft === Int128 || ft === UInt128
+        elseif _julia_int_width(ft, false) == 128
             # 128-bit integers are WasmGC structs — use concrete ref
             int128_info = register_int128_type!(mod, registry, ft)
             ConcreteRef(int128_info.wasm_type_idx, true)

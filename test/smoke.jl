@@ -1796,6 +1796,8 @@ _g("heterogeneous_tuple_read", Any[
     ("string", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n]; v isa String ? length(v) : 0), Int64(3)),
     ("closure", (n::Int64) -> (k = n; t = (n, x -> x + k); v = t[n - 1]; v isa Int64 ? v : (v(1))::Int64), Int64(3)),
     ("nothing", (n::Int64) -> (t = (n, nothing); v = t[n - 1]; v === nothing ? 1 : 2), Int64(3)),
+    # `nothing` read as a three-member union is its null, which isa reads (A16E2: native 1, wasm 2)
+    ("nothing_isa", (n::Int64) -> (t = (n, nothing, 2.5); t[(n % 3) + 1] isa Nothing ? 1 : 2), Int64(1)),
 ])
 # A constant Memory{Any}'s elements are typed by their own classes, never the Memory's element
 # type: a numeric is boxed under its classId (dev/AUDIT.md A12C6: a WasmInternalError where
@@ -1821,6 +1823,53 @@ _g("int128_extends", Any[
     ("sext_int8_high_bit", (n::Int64) -> Int64(Int128(n % Int8)), Int64(200)),
     ("sext_dirty_int8", (n::Int64) -> Int64(Int128(_sm_dirty8(n))), Int64(100)),
     ("zext_dirty_uint8", (n::Int64) -> Int64(Int128(_sm_dirtyu8(n))), Int64(200)),
+])
+# A narrow source widens by its op, into a target of any register: sext_int and sitofp read its
+# sign at its own width, zext_int and uitofp its bits, whatever its type (dev/AUDIT.md A16B1 =
+# A16E1: a dirty Int8 widened to Int32 answered 200, native -56)
+_g("narrow_widening", Any[
+    ("sext_dirty_int8_to_int32", (n::Int64) -> Int64(Int32(_sm_dirty8(n))), Int64(100)),
+    ("sext_dirty_int8_to_int16", (n::Int64) -> Int64(Int16(_sm_dirty8(n))), Int64(100)),
+    ("zext_dirty_uint8_to_uint16", (n::Int64) -> Int64(UInt16(_sm_dirtyu8(n))), Int64(200)),
+    ("sext_rem_int8_to_int32", (n::Int64) -> Int64(Int32((n % Int8) + Int8(100))), Int64(100)),
+    ("zext_rem_uint8_to_uint16", (n::Int64) -> Int64(UInt16((n % UInt8) + 0x64)), Int64(200)),
+    ("sext_uint8_to_int64", (n::Int64) -> Core.Intrinsics.sext_int(Int64, n % UInt8), Int64(128)),
+    ("sitofp_uint8", (n::Int64) -> Core.Intrinsics.sitofp(Float64, n % UInt8), Int64(255)),
+    ("uitofp_dirty_uint8", (n::Int64) -> Float64(_sm_dirtyu8(n)), Int64(200)),
+])
+# A conversion's target is the type its operand names, resolved once (a GlobalRef `Float32`):
+# sitofp to Float32 rounds once (dev/AUDIT.md A16E3: it converted to Float64 and demoted, rounding
+# twice, native 2^60+2^37, wasm 2^60)
+_g("conversion_target", Any[
+    # its bits, read exactly (a Float32 this large reaches the host as a decimal)
+    ("sitofp_float32", (n::Int64) -> Int64(reinterpret(Int32, Core.Intrinsics.sitofp(Float32, n))), Int64(1152921573326323713)),
+])
+# An intrinsic splatted over a vector runs at its own arity: two elements, or Julia's
+# ArgumentError (dev/AUDIT.md A16E4: three elements answered their sum, native throws)
+_g("reduce_intrinsic_arity", Any[
+    ("two_elements", (n::Int64) -> (v = [1, n]; Core.Intrinsics.add_int(v...)), Int64(3)),
+    ("three_elements", (n::Int64) -> (v = [1, n, 3]; try; Core.Intrinsics.add_int(v...); catch e; e isa ArgumentError ? -1 : -2; end), Int64(3)),
+    ("one_element", (n::Int64) -> (v = [n]; try; Core.Intrinsics.add_int(v...); catch e; e isa ArgumentError ? -1 : -2; end), Int64(3)),
+    ("no_element", (n::Int64) -> (v = Int64[]; try; Core.Intrinsics.add_int(v...); catch e; e isa ArgumentError ? -1 : -2; end), Int64(3)),
+])
+# An :invoke retargeted by its operand's capture typing is retargeted by the final world's: a
+# captor collected after the first round widens the variable, and the call keeps Julia's method
+# (dev/AUDIT.md A16C1: the first round's g(::Int64) stayed, a trap where native answers 19)
+@noinline _sm_gn(@nospecialize(x)) = x isa Int ? x + 1 : -1
+_g("capture_typed_invoke", Any[
+    ("captor_collected_later", (n::Int64) -> (c = n; w = y -> (c = y; nothing); fs = Any[w]; fs[1](2.5); _sm_gn(c) + 10 * _sm_gn(Base.inferencebarrier(n))), Int64(1)),
+])
+# A closure built inside a captor from its box field writes into the creator's box: the
+# creator's read joins its writes (dev/AUDIT.md A16C3: the read kept Int64, a trap where native
+# answers 1)
+_g("nested_captor", Any[
+    ("nested_write_read_by_creator", (n::Int64) -> (c = n; o = @noinline () -> (i = @noinline () -> (c = 2.5; nothing); i(); nothing); o(); c isa Float64 ? 1 : 2), Int64(1)),
+])
+# A primitive type wider than any register (a 128-bit one that is no Int128) has no
+# representation: it rejects at its statement (dev/AUDIT.md A16B5: an unlocated error)
+primitive type _SmP128 128 end
+_xf("wide_primitive", Any[
+    ("bitcast_p128", (n::Int64) -> (x = Core.bitcast(_SmP128, Int128(n)); Int64(Core.bitcast(Int128, x))), Int64(3)),
 ])
 # A Float32 stored byte-wise through a pointer into a byte vector and read back: its bits cut
 # from an integer register (emit_bitcast!)
@@ -1997,6 +2046,9 @@ _sm_me_5(x::UInt8) = 4
 _sm_me_5(x::Char) = 5
 _g("method_error", Any[
     ("union_split_caught", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_q(v[n])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(2)),
+    # an erased closure called with `nothing`, which no method takes: its MethodError carries the
+    # nothing, taken as the args tuple holds it, never unboxed (the null trapped)
+    ("closure_nothing_no_method", (n::Int64) -> (k = n; h(x::Int64) = x + k; g = _sm_dh(h)[]; try; g(_sm_dh(nothing)[])::Int64; catch e; (e isa MethodError && e.args === (nothing,)) ? -1 : -2; end), Int64(3)),
     ("union_split_fields", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_q(v[n])::Int64; catch e; (e isa MethodError && e.f === _sm_me_q && e.args isa Tuple{Float64} && e.args[1] == 1.5) ? 1 : 2; end), Int64(2)),
     ("union_split_string_args", (n::Int64) -> (v = Any[n, "s"]; try; _sm_me_q(v[n])::Int64; catch e; (e isa MethodError && typeof(e.args) === Tuple{String} && e.args[1] == "s") ? 1 : 2; end), Int64(2)),
     ("union_split_two_args", (n::Int64) -> (v = Any[n, 1.5]; try; _sm_me_r(n, v[n])::Int64; catch e; (e isa MethodError && e.args === (n, 1.5)) ? 1 : 2; end), Int64(2)),
@@ -2006,9 +2058,6 @@ _g("method_error", Any[
     # read trapped on the null; a tuple holding `nothing` raised a WasmInternalError)
     ("nothing_union_split", (n::Int64) -> (x = n > 0 ? n : nothing; try; _sm_me_q(x)::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(-1)),
     ("nothing_in_any_vector", (n::Int64) -> (v = Any[n, nothing]; try; _sm_me_q(v[n])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(2)),
-    # a Bool a comparison makes, reaching a union-split call with no method for it: its class is
-    # in the one class set where it is made (an intrinsic's result), as the numbered set's fixed
-    # primitives held it before
     # an exception a Base body raises, caught and passed to a call with no method for it
     ("caught_exception_no_method", (n::Int64) -> (e = try; div(n, n - 3); catch err; err; end; try; _sm_me_q(e)::Int64; catch e2; e2 isa MethodError ? -1 : -2; end), Int64(3)),
     # an exception WT's lowering instantiates (a MethodError arm's, an Int32 division's
@@ -2017,6 +2066,9 @@ _g("method_error", Any[
     # unreachable, where native answers -1)
     ("caught_methoderror_union_split", (n::Int64) -> (y = n > 0 ? n : (try; _sm_me_q(Base.inferencebarrier("s")); catch e; e::Exception; end); try; _sm_me_q(y)::Int64; catch e2; e2 isa MethodError ? -1 : -2; end), Int64(-1)),
     ("caught_divideerror_union_split", (n::Int64) -> (y = n > 0 ? n : (try; Int64(div(Int32(n), Int32(n + 1))); catch e; e::Exception; end); try; _sm_me_q(y)::Int64; catch e2; e2 isa MethodError ? -1 : -2; end), Int64(-1)),
+    # a Bool a comparison makes, reaching a union-split call with no method for it: its class is
+    # in the one class set where it is made (an intrinsic's result), as the numbered set's fixed
+    # primitives held it before
     ("bool_union_split", (n::Int64) -> (x = n > 0 ? n : (n < -5); try; _sm_me_q(x)::Int64; catch e; (e isa MethodError && e.args === (false,)) ? -1 : -2; end), Int64(-1)),
     ("class_switch_caught", (n::Int64) -> (v = Any[n, "s", Int32(2), 0x01, 'c', 1.5]; s = _sm_me_5(v[1])::Int64 + _sm_me_5(v[2])::Int64 + _sm_me_5(v[3])::Int64 + _sm_me_5(v[4])::Int64 + _sm_me_5(v[5])::Int64; try; _sm_me_5(v[n])::Int64; catch e; (e isa MethodError && e.args === (1.5,)) ? s + 100 : s; end), Int64(6)),
 ])

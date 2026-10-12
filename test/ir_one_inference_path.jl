@@ -63,6 +63,9 @@ _wt_oip_box(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
 _wt_oip_unused(n::Int64) = (_wt_oip_side(n); n * 2)
 @testset "codegen asks no inference; an unused :invoke reads the plan's rettype" begin
     local calls = Ref(0)
+    # every inference a WasmInterpreter runs, through any entry (Base.infer_return_type, typeinf,
+    # code_typed) and cached or not, asks its cache partition: its queries are counted too
+    local queries = Ref(0)
     local original = which(WasmTarget.infer_return_type, Tuple{Any, Tuple})
     try
         @eval WasmTarget function infer_return_type(@nospecialize(f), argtypes::Tuple;
@@ -70,12 +73,16 @@ _wt_oip_unused(n::Int64) = (_wt_oip_side(n); n * 2)
             $(calls)[] += 1
             return Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
         end
+        @eval WasmTarget CC.cache_owner(interp::WasmInterpreter) = ($(queries)[] += 1; interp.cache_token)
         local plan = Base.invokelatest(WasmTarget.trim_compile_plan,
                                        Any[(_wt_oip_box, (Int64,), "box"), (_wt_oip_unused, (Int64,), "unused")])
         @test calls[] > 0                                 # collection asks Julia's inference
+        @test queries[] > 0
         calls[] = 0
+        queries[] = 0
         @test Base.invokelatest(WasmTarget._compile_closed_world_plan, plan) isa WasmTarget.WasmModule
         @test calls[] == 0                                # the compile of the plan asks none
+        @test queries[] == 0                              # and runs no inference of any entry
         # every planned body's joins are the plan's, keyed by MethodInstance
         @test Set(keys(plan.joins)) == Set(fn[4] for fn in plan.functions)
         # the unused `_wt_oip_side(n)` reads `::Any` in its caller's IR; the type codegen gives
@@ -87,6 +94,7 @@ _wt_oip_unused(n::Int64) = (_wt_oip_side(n); n * 2)
         @test all(mi -> WasmTarget.plan_ir(plan, mi)[2] === Int64, unused)
     finally
         Base.delete_method(only(m for m in methods(WasmTarget.infer_return_type) if m !== original))
+        @eval WasmTarget CC.cache_owner(interp::WasmInterpreter) = interp.cache_token   # interpreter.jl's
     end
     @test which(WasmTarget.infer_return_type, Tuple{Any, Tuple}) === original
 end

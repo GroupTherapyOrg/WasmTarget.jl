@@ -1411,7 +1411,7 @@ double arm (`i64.reinterpret_f64` of both, then `i64.eq`), per Julia primitive w
 """
 function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                           alloc::Function, @nospecialize(P), p1::Function, p2::Function)::InstrBuilder
-    if P === Int128 || P === UInt128
+    if _julia_int_width(P, false) == 128
         local idx = get_int128_type!(mod, registry, P)
         local w = ConcreteRef(UInt32(idx), true)
         local l1, l2 = _egal_local!(b, alloc, p1, w), _egal_local!(b, alloc, p2, w)
@@ -1513,7 +1513,7 @@ would register it), and `anyref` for a value compared by identity.
 parity(translator.dart:1044 translateType): the storage type of a class's values.
 """
 function _egal_rep(@nospecialize(T), mod::WasmModule, registry::TypeRegistry)::WasmValType
-    (T === Int128 || T === UInt128) &&
+    _julia_int_width(T, false) == 128 &&
         return ConcreteRef(UInt32(get_int128_type!(mod, registry, T)), true)
     isprimitivetype(T) && return julia_to_wasm_type(T)
     (T === String || T === Symbol) &&
@@ -1550,7 +1550,7 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
     if concrete && Base.issingletontype(T)
         i32_const!(b, 1)
     elseif concrete && isprimitivetype(T) && !_wt_is_ref(w1) && !_wt_is_ref(w2) ||
-           T === Int128 || T === UInt128
+           _julia_int_width(T, false) == 128
         _emit_bits_egal!(b, mod, registry, alloc, T, p1, p2)
     elseif T === String || T === Symbol
         _emit_string_egal!(b, mod, registry, alloc, p1, p2)
@@ -2074,11 +2074,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     value_arg = args[1]
     type_arg = args[2]
 
-    # Get the type being checked
+    # Get the type being checked: a literal, or a constant global's value (the boundary's one
+    # resolution, NirGlobalRef); a global that is no constant is read at run time, by Julia's
+    # jl_isa, which WT does not have
     check_type = if nir_const(type_arg) isa Type
         nir_const(type_arg)
-    elseif type_arg isa NirGlobalRef
-        Core.eval(type_arg.mod, type_arg.name)
+    elseif type_arg isa NirGlobalRef && type_arg.constant
+        type_arg.value
     else
         nothing
     end
@@ -2087,6 +2089,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     val_jt = value_type(ctx, value_arg)
 
     bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
+    if type_arg isa NirGlobalRef && !type_arg.constant
+        _isa_reject!(bld, ctx, "isa(x, $(type_arg.mod).$(type_arg.name)): the type is a global that is no " *
+                               "constant, read at run time (jl_isa), which WT does not have")
+        append_builder!(fb, bld)
+        return nothing
+    end
 
     # Julia's emit_isa (cgutils.cpp): a value of static type S is a T exactly when it is an
     # S ∩ T. When S <: T every value is; when S ∩ T is empty none is; when S ∩ T is one concrete
@@ -2135,8 +2143,9 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # boxed AnyRef discriminated by classId, so isa flows through the AnyRef path below
     # (emit_isa_class_header!, its header's classId).
     if check_type === Nothing
-        # isa(x, Nothing) -> ref.is_null
-        # Value is already on stack — check if it's actually a ref type
+        # isa(x, Nothing), the value on the stack: a numeric register holds no nothing (0); a
+        # value of any class reads `===`'s one nothing test; a nullable single representation's
+        # only nothing is its null
         local isa_val_wasm = nothing
         if value_arg isa NirSSA
             local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
@@ -2148,11 +2157,19 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 end
             end
         end
+        local _isa_top = isempty(bld.v.stack) ? nothing : bld.v.stack[end]
         if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
             # Numeric value on stack — can never be Nothing. Drop + push false.
             drop!(bld)
             i32_const!(bld, 0)
+        elseif _isa_top isa RefType && _wt_hierarchy_top(_wt_heap_kind(_isa_top, ctx.mod.types)) === :any
+            # a value of any class: the one nothing test, `===`'s (_emit_is_nothing!), a null or
+            # a value of Nothing's class
+            local _isa_l = allocate_local!(ctx, AnyRef)
+            local_set!(bld, _isa_l)
+            _emit_is_nothing!(bld, ctx.type_registry, _isa_l)
         else
+            # a nullable single representation (Union{Nothing,T}'s): null is its only nothing
             ref_is_null!(bld)
         end
     elseif check_type isa Type && is_runtime_vararg_tuple_type(val_jt)
@@ -3275,7 +3292,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
     # 128-bit overflow-checked add/sub/mul (the Tuple{T,Bool} intrinsics) has no limb lowering:
     # reject before the arguments are pushed. Division and remainder are INT128_OPS entries.
-    if (arg_type === Int128 || arg_type === UInt128) && func isa Core.IntrinsicFunction && nameof(func) in
+    if _julia_int_width(arg_type, false) == 128 && func isa Core.IntrinsicFunction && nameof(func) in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -3504,32 +3521,23 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # parity(quarantine: julia_numeric_tier.jl): THE conversions registry route —
     # sext_int/zext_int/trunc_int/sitofp/uitofp/fptosi/fptoui/fpext/fptrunc/bitcast.
     # No dart anchor (dart coerces only through convertType, translator.dart:1597,
-    # and the dart:_wasm shims, intrinsics.dart:710-929). Target-type resolution for
-    # sext_int/zext_int/trunc_int stays HERE, not in the registry file, so L77's
-    # three literal diagnostic messages keep their home; sitofp/uitofp/fptosi/
-    # fptoui pass args[1] unresolved exactly as the arms did; bitcast passes the
-    # raw type reference and resolves inside `emit_conversion!`. Same nullable-
-    # return funnel shape as the routes above; for these ten ops the funnel is
-    # EXHAUSTIVE (their calls.jl arms are deleted).
+    # and the dart:_wasm shims, intrinsics.dart:710-929). The target type of all ten is
+    # resolved once, here: a literal type, or the value of a constant global naming one (the
+    # boundary's one resolution, NirGlobalRef); any other target rejects at the statement (L77's
+    # three literal diagnostic messages keep their home here), never a default register. For
+    # these ten ops the funnel is EXHAUSTIVE (their calls.jl arms are deleted).
     if _it_name in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi,
                     :fptoui, :fpext, :fptrunc, :bitcast)
-        local _cv_julia_dst = length(args) >= 1 ? nir_const(args[1]) : nothing
-        if _it_name === :sext_int || _it_name === :zext_int || _it_name === :trunc_int
-            local _cv_target_ref = _cv_julia_dst
-            _cv_julia_dst = _cv_target_ref isa NirGlobalRef && _cv_target_ref.bound ?
-                _cv_target_ref.value : _cv_target_ref
-            if !(_cv_julia_dst isa Type)
-                if _it_name === :sext_int
-                    record_unsupported!(ctx, :unsupported_type,
-                        "sext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
-                elseif _it_name === :zext_int
-                    record_unsupported!(ctx, :unsupported_type,
-                        "zext_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
-                else
-                    record_unsupported!(ctx, :unsupported_type,
-                        "trunc_int target is not a defined Julia type"; idx=idx, detail=_cv_target_ref)
-                end
-            end
+        local _cv_target_ref = length(args) >= 1 ? nir_const(args[1]) : nothing
+        local _cv_julia_dst = _cv_target_ref isa NirGlobalRef ?
+            (_cv_target_ref.bound && _cv_target_ref.constant ? _cv_target_ref.value : nothing) : _cv_target_ref
+        if !(_cv_julia_dst isa Type)
+            local _cv_why = _it_name === :sext_int ? "sext_int target is not a defined Julia type" :
+                            _it_name === :zext_int ? "zext_int target is not a defined Julia type" :
+                            _it_name === :trunc_int ? "trunc_int target is not a defined Julia type" :
+                            "$(_it_name) target is not a defined Julia type"
+            emit_unsupported_stub!(ctx, fb, :unsupported_type, _cv_why; idx=idx, detail=_cv_target_ref)
+            return append_builder!(b, fb)
         end
         local _cv_julia_src = length(args) >= 2 ? value_type(ctx, args[2]) : nothing
         local _cv_src_wide = length(args) >= 2 && get_phi_edge_wasm_type(args[2], ctx) === I64
@@ -4373,7 +4381,7 @@ specialization takes exactly that struct as its ONE physical parameter
 (`trim_compile_plan`'s packed projection). So the splat IS the call: push `t`, call.
 
 The callee must be in the closed world with that exact packed signature and that exact
-return type — `_apply_iterate_vararg_target_mi` (ir.jl) enrolls it when, and only when,
+return type — `_apply_iterate_vararg_target_mi` (trimcollect.jl) enrolls it when, and only when,
 exactly one method answers the open-ended signature. Anything else (a callee with no
 Vararg specialization, an arity-overloaded callee, a non-function target) is a loud
 reject: `f(t...)` returns a value natively.
@@ -4675,6 +4683,13 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
     elem_local = allocate_local!(ctx, elem_wasm_type)
     i32_const!(bld, 0)
     local_set!(bld, has_value)
+    # an intrinsic callee runs at its own arity, two (Julia's intrinsic_call checks the count)
+    local intrinsic = target_value isa Core.IntrinsicFunction
+    local count_local = intrinsic ? allocate_local!(ctx, I32) : nothing
+    if intrinsic
+        i32_const!(bld, 0)
+        local_set!(bld, count_local)
+    end
 
     for (container_arg, container_type) in zip(container_args, container_types)
         local vec_info = get(ctx.type_registry.structs, container_type, nothing)
@@ -4714,6 +4729,12 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         num!(bld, Opcode.I32_ADD)
         array_get!(bld, arr_type_idx; signed=packed_array_signedness(elem_type))
         local_set!(bld, elem_local)
+        if intrinsic
+            local_get!(bld, count_local)
+            i32_const!(bld, 1)
+            num!(bld, Opcode.I32_ADD)
+            local_set!(bld, count_local)
+        end
         local_get!(bld, has_value)
         if_!(bld; results=WasmValType[elem_wasm_type])
         local_get!(bld, acc_local)
@@ -4736,6 +4757,21 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         end_block!(bld)
     end
 
+    if intrinsic
+        # any other count: the ArgumentError Julia's intrinsic call throws, its message verbatim
+        local_get!(bld, count_local)
+        i32_const!(bld, 2)
+        num!(bld, Opcode.I32_LT_S)
+        if_!(bld)
+        _emit_throw_value!(bld, ctx, ArgumentError("intrinsic_call: too few arguments (expected 2)"))
+        end_block!(bld)
+        local_get!(bld, count_local)
+        i32_const!(bld, 2)
+        num!(bld, Opcode.I32_GT_S)
+        if_!(bld)
+        _emit_throw_value!(bld, ctx, ArgumentError("intrinsic_call: too many arguments (expected 2)"))
+        end_block!(bld)
+    end
     local_get!(bld, has_value)
     num!(bld, Opcode.I32_EQZ)
     if_!(bld)

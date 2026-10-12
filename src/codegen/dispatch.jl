@@ -309,13 +309,14 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                             WasmValType[dt.result_wasm_type] : WasmValType[]
             b = InstrBuilder(copy(dt.slot_types), _wr_res; func_name="emit_dispatch_wrappers!", mod=mod)
             # its one local, after the params: a numeric result's box scratch, or a closure
-            # result's context scratch
+            # result's context scratch, each read by the index its declaration returns
+            local _res_scratch = nothing
             if is_anyref_return
                 local _ewt = julia_to_wasm_type(entry.return_type)
                 if _ewt in (I32, I64, F32, F64)
-                    builder_add_local!(b, _ewt)
+                    _res_scratch = UInt32(builder_add_local!(b, _ewt))
                 elseif is_context_type(type_registry, entry.return_type)
-                    builder_add_local!(b, AnyRef)
+                    _res_scratch = UInt32(builder_add_local!(b, AnyRef))
                 end
             end
             local _tsig = _function_type(mod, entry.target_idx)
@@ -400,7 +401,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 # already a ref — anyref-compatible, pass through; a closure's context is
                 # its object at the anyref result (emit_context_object!, A11E1)
                 if is_context_type(type_registry, entry.return_type)
-                    emit_context_object!(b, mod, type_registry, entry.return_type, dt.arity)
+                    emit_context_object!(b, mod, type_registry, entry.return_type, _res_scratch::UInt32)
                 end
             elseif is_anyref_return
                 entry_wasm_type = julia_to_wasm_type(entry.return_type)
@@ -411,7 +412,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                 elseif entry_wasm_type in (I32, I64, F32, F64)
                     # the numeric result boxed under the return type's classId by the one box
                     # producer, through the wrapper's first local
-                    emit_classid_box!(b, mod, type_registry, UInt32(Int(dt.arity)), entry_wasm_type,
+                    emit_classid_box!(b, mod, type_registry, _res_scratch::UInt32, entry_wasm_type,
                                       entry.return_type)
                 end
             elseif dt.result_wasm_type ∉ (I32, I64, F32, F64, AnyRef) &&

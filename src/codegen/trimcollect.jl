@@ -220,7 +220,7 @@ function wt_methods_ambiguous(m1::Method, m2::Method)::Bool
 end
 
 """
-    _apply_iterate_vararg_target_mi(node, slot_types) -> MethodInstance | nothing
+    _apply_iterate_vararg_target_mi(node, arg_type) -> MethodInstance | nothing
 
 THE call edge of `Core._apply_iterate(iterate, f, t)` when `t` is a runtime-length
 Vararg tuple — the one splat shape calls.jl lowers to a DIRECT call
@@ -233,8 +233,8 @@ It is a static edge: `f` is named right there in the call, and `t`'s
 `{Object, data, size}` representation IS the callee's one packed parameter. But it
 wears a builtin's clothes, so Julia's own collector does not see it. It is the `:splat`
 kind of the one edge relation, `_closed_world_edge`, which the collector enrolls by and the
-external-leaf prune keeps by. The container's type is its operand's NIR type (`slot_types`
-types an argument operand).
+external-leaf prune keeps by. The container is typed by `arg_type`, the call-site type codegen's
+call reads (its joins included), as the other two edges a builtin hides are.
 
 `nothing` unless every condition holds: the callee resolves to an ordinary function
 (never a builtin/intrinsic — those have no compiled body), the container carries the one
@@ -242,12 +242,12 @@ representable layout (`is_runtime_vararg_tuple_type`, structs.jl), and EXACTLY O
 method answers the open-ended signature. An arity-overloaded callee has no single static
 target and stays a loud reject at the call site.
 """
-function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type})::Union{Core.MethodInstance,Nothing}
+function _apply_iterate_vararg_target_mi(node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
     (node.callee === Core._apply_iterate && length(node.operands) == 3) || return nothing
     local fref = node.operands[2]
     local f = fref isa NirGlobalRef ? (fref.bound ? fref.value : fref) : nir_const(fref)
     (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction)) || return nothing
-    local T = value_type(node.operands[3], slot_types, nothing)
+    local T = arg_type(node.operands[3])
     (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
     local sig = Tuple{Core.Typeof(f), Vararg{vararg_tuple_eltype(T)}}
     local matches = wt_method_matches(sig)
@@ -369,7 +369,7 @@ function _closed_world_edge(node::NirNode, src::Core.CodeInfo, slot_types::Vecto
     if node isa NirInvoke
         mi = node.mi
     elseif node isa NirCall
-        if (mi = _apply_iterate_vararg_target_mi(node, slot_types)) !== nothing
+        if (mi = _apply_iterate_vararg_target_mi(node, arg_type)) !== nothing
             kind = :splat
         elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing
             kind = :invoke_in_world
@@ -467,15 +467,21 @@ collected world, each recorded in `seen`. Every edge's target has its reason rec
 `reasons` (the first statement naming it), collected already or not, and the closure type of each
 `:invoke`'s target in `invoked_closures`: the walk is the collection's one walk of the edges, and
 the plan reads what it records. An explicit `:invoke` whose concrete call-site types select
-another MethodInstance is first retargeted in place to it.
+another MethodInstance is retargeted in place to it, recomputed every round from Julia's own
+MethodInstance (the one its IR held before any round retargeted it, kept in `invoke_originals`):
+the operand types are read from the world collected so far, and a captor a later round collects
+can widen them, so a round's retarget is never kept on its own (a site the final world's typing
+does not retarget is restored).
 formal(dev/formal/ClosedWorld.tla): every collected body has the reason the collector recorded
-(ReasonsComplete)
+(ReasonsComplete), and no :invoke at the fixpoint calls a replacement the final world's typing
+does not select (RetargetsSound)
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
 function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                                       numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}},
                                       capture::_CaptureTyping,
                                       reasons::IdDict{Core.MethodInstance,String},
-                                      invoked_closures::Set{DataType})::Vector{Any}
+                                      invoked_closures::Set{DataType},
+                                      invoke_originals::IdDict{Core.CodeInfo,Dict{Int,Core.MethodInstance}})::Vector{Any}
     out = Any[]
     interp = WasmInterpreter(Base.RefValue(0))
     for (host_ci, host_mi, src) in _collected_pairs(codeinfos)
@@ -489,7 +495,11 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
             local kind = edge[1]
             mi = edge[2]
             if kind === :invoke
-                original_mi = mi
+                # the IR's target now, and Julia's own, from which this round recomputes it
+                local current_mi = mi
+                local originals = get(invoke_originals, src, nothing)
+                original_mi = originals === nothing ? mi : get(originals, k, mi)
+                mi = original_mi
                 # Explicit invoke records the selected Method, but Julia may leave
                 # its MethodInstance abstract. WT's subset monomorphizes: rebuild
                 # the MI from the concrete call-site SSA types, exactly as the
@@ -567,13 +577,14 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                         end
                     end
                 end
-                if mi isa Core.MethodInstance && original_mi isa Core.MethodInstance &&
-                   mi !== original_mi
+                if mi isa Core.MethodInstance && mi !== current_mi
                     # Keep the optimized IR valid Julia while making its edge agree
-                    # with the Wasm overlay dispatch selected for the concrete call.
-                    # Nothing is dropped: the original stays collected wherever Julia's
-                    # queue collected it, live if another site still invokes it, dead
-                    # code otherwise (ClosedWorld.tla NoGarbage, MARCH 13.17 H9).
+                    # with the Wasm overlay dispatch selected for the concrete call, or
+                    # restore Julia's target where this round's operand types no longer
+                    # select another. Nothing is dropped: a body an earlier target named
+                    # stays collected, live if another site still invokes it, dead code
+                    # otherwise (ClosedWorld.tla NoGarbage, MARCH 13.17 H9).
+                    get!(() -> Dict{Int,Core.MethodInstance}(), invoke_originals, src)[k] = original_mi
                     nir_retarget_invoke!(src, nir, k, mi)
                 end
             end
@@ -739,7 +750,10 @@ so no statement's type names it) or the exception stack (jl_current_exception, j
 The one list: compile.jl registers its exception structs before the numbering, and the one class
 set holds every class of it as a root in a program that can hold one (closed_world_classes),
 whatever the program's IR names, as dart's flow analysis takes a class the backend instantiates,
-marked with an entry-point pragma, as allocated. (What the lowering materializes for a type
+marked with an entry-point pragma, as allocated. dart allocates such a class unconditionally; the
+gate on a program that can hold one is WT's own, and loses nothing: the lowering's classes are
+numbered by their registration whether or not the set holds them, so an exception that escapes
+uncaught is still named. (What the lowering materializes for a type
 object, its TypeName, Module, SimpleVector, is a value the program reads with a builtin, whose
 result's class the set observes where it is read.)
 parity(pkg/vm/lib/transformations/type_flow/native_code.dart:116 PragmaEntryPointsVisitor.visitClass)
@@ -756,9 +770,11 @@ roots: the class
 of every statement of a collected body whose inferred type is concrete (whatever makes the value:
 a `%new`, a builtin, an intrinsic, a foreign call, an `:invoke`, a declared import's result), with
 the classes its type parameters name; a tuple `Core.tuple` builds, by its elements' runtime types;
-every value a statement, phi or return carries by _collected_operand_value's rule (a literal, a
-quoted GlobalRef's binding, a bound global's value, constant or not) and everything that value
-holds; an entry's argument classes and its own callable; and, in a program that can hold an
+every value a statement, phi or return carries by _collected_operand_value's rule (a literal, its
+value unresolved, a quoted GlobalRef the GlobalRef object; a bound global's value, constant or
+not) and everything that value holds; a vararg method's packed tuple, a value no statement makes
+(WT rebuilds it from the flattened parameters), from the body's slot; an entry's argument classes
+and its own callable; and, in a program that can hold an
 exception, every class WT's lowering instantiates (LOWERING_INSTANTIATED_CLASSES), `runtime`; and the `Type{X}` of each type object a value
 may be (a constant operand's, and each class a `typeof` may return, with its kind), `held`. The
 enrollment, the no-method records, the union-split MethodError tuples and the vtable pre-pass's
@@ -862,7 +878,7 @@ function closed_world_classes(codeinfos::Vector{Any}, entry_mis::Vector{Any},
         # A value a statement carries (an operand, or the statement itself) is one the collected
         # program stores or passes, by the one rule of what a statement carries,
         # _collected_operand_value: a literal (optimized IR constant-folds `%new(T, fields...)`
-        # into the object itself, a quoted GlobalRef read through to its binding) or a bound
+        # into the object itself; a quoted GlobalRef is the GlobalRef object) or a bound
         # global's value, constant or not (values.jl bakes a non-constant one's current value as
         # its mutable global's initializer), whatever it is (`nothing` included); its class is
         # observed and everything it holds walked (hold!). An SSA, argument or slot operand
@@ -961,7 +977,13 @@ function closed_world_classes(codeinfos::Vector{Any}, entry_mis::Vector{Any},
         # its callable too: the `#self#` argument is a value of the entry's own class
         sig isa DataType && foreach(observe_type!, sig.parameters)
     end
-    for (ci_j, _, src_j) in _collected_pairs(codeinfos)
+    for (ci_j, mi_j, src_j) in _collected_pairs(codeinfos)
+        # a vararg method's packed tuple is a value no statement makes (WT rebuilds it from the
+        # flattened parameters): its class is observed from the body's slot
+        if mi_j.def isa Method && mi_j.def.isva
+            local st_j = nir_slot_types(src_j)
+            length(st_j) >= mi_j.def.nargs && observe_type!(st_j[mi_j.def.nargs])
+        end
         for (sidx, s0) in enumerate(nir_for(src_j))
             local node0 = s0.node
             held_site[] = (ci_j, src_j, sidx, s0)
@@ -1324,7 +1346,7 @@ function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any
             f = _nir_callee_object(rec.node.callee)
             (f === Core.Intrinsics.muladd_float || f === Core.Intrinsics.fma_float) || continue
             T = CC.widenconst(rec.julia_type)
-            (T === Float64 || T === Float32) && push!(types, T)
+            numeric_register(T) in (F32, F64) && push!(types, T)
         end
     end
     return Any[wt_dispatch_mi(Tuple{typeof(Base.fma_emulated), T, T, T}) for T in types]
@@ -1480,6 +1502,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         push!(base_mi_keys, mi_key(mi))
     end
     invoke_seen = union(copy(base_mis), external_leaves)
+    # each retargeted :invoke's own MethodInstance, by body and statement: every round recomputes
+    # the site from it (_missing_explicit_invoke_mis)
+    invoke_originals = IdDict{Core.CodeInfo,Dict{Int,Core.MethodInstance}}()
     seen_disp = Set{Any}()
     # why each MethodInstance entered the closed world, for a collection failure to name: the
     # collector's walk of the edges records every target's (_missing_explicit_invoke_mis), the
@@ -1570,7 +1595,8 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         # the round's capture typing, over the world collected so far, before any typer reads it
         _capture_typing!(capture, codeinfos)
         changed = collect_new_pairs!(_missing_explicit_invoke_mis(
-            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures))
+            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,
+            invoke_originals))
 
         # one NIR per collected CodeInfo for this round's two walks (the class set, then the
         # candidates); round-local: `_missing_explicit_invoke_mis` re-targets invoke edges in place
@@ -1658,8 +1684,8 @@ MethodInstances compiled from a bespoke body (L133) with that body's generator; 
 type, the args tuples it has no method for, each sorted by type_order_key (the MethodError of a
 dynamic call reads its callee's, and the numbering takes every key and tuple); and the
 MethodInstance each lowering that calls a Julia function by name calls, keyed by its signature
-(`Base.fma_emulated` for the fma intrinsics); each planned body's joins (plan_joins) and the type
-of every captured variable (`capture_record`), both computed once in collection.
+(`Base.fma_emulated` for the fma intrinsics); and each planned body's joins (plan_joins), its
+captured-box reads typed by the record of every captured variable, computed once in collection.
 parity(pkg/dart2wasm/lib/translator.dart:115 Translator.directCallMetadata): the front end's
 per-node answers, which codegen reads and never recomputes.
 """
@@ -1676,7 +1702,6 @@ struct ClosedWorldPlan
     lowering_callees::Dict{Type,Core.MethodInstance}
     external_leaves::Vector{Any}   # (callable, argument types, MethodInstance) of each declared import
     joins::IdDict{Core.MethodInstance,Dict{Int,Type}}   # each planned body's joins (numeric, capture reads)
-    capture_record::Dict{Tuple{Type,Symbol},Type}         # each captured variable's type (record_capture_contents)
 end
 
 """
@@ -1979,7 +2004,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     return ClosedWorldPlan(functions, ir_cache, candidate_mis, invoke_only,
                            world.callable_types, enrolled_as, world.classes,
                            bespoke, no_method, copy(world.lowering_callees), external_leaves,
-                           joins, world.capture.record)
+                           joins)
 end
 
 # ============================================================================
@@ -2082,7 +2107,9 @@ end
     _collected_operand_value(operand) -> (Bool, value)
 
 The program value an operand materializes when the NIR boundary knows it statically: a
-literal's value (a quoted global read through to its binding), or a bound global's current value (values.jl's global arm bakes a
+literal's value, unresolved (a quoted GlobalRef is the GlobalRef object, as Julia's
+interpreter evaluates a QuoteNode to its payload, jl_quotenode_value, and value_type and codegen
+read it), or a bound global's current value (values.jl's global arm bakes a
 non-const binding's CURRENT value as a mutable-global initializer, so its type is
 reachable too). `(false, nothing)` for an SSA use, an argument, a slot or an unbound
 global — values whose types the inferred types already carry.
@@ -2090,12 +2117,7 @@ parity(constants.dart:298 Constants.ensureConstant): a constant operand is a val
 materializes.
 """
 function _collected_operand_value(operand::NirNode)::Tuple{Bool, Any}
-    if operand isa NirLiteral
-        v = operand.value
-        v isa GlobalRef || return (true, v)
-        local g = resolve_operand(v, Type[])::NirGlobalRef   # the boundary's one resolution
-        return g.bound ? (true, g.value) : (false, nothing)
-    end
+    operand isa NirLiteral && return (true, operand.value)
     (operand isa NirGlobalRef && operand.bound) && return (true, operand.value)
     return (false, nothing)
 end

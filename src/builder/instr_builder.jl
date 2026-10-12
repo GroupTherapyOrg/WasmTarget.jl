@@ -766,15 +766,15 @@ function struct_new_default!(b::InstrBuilder, type_idx::Integer)::InstrBuilder
     validate_gc_instruction!(b.v, Opcode.STRUCT_NEW_DEFAULT, type_idx)
     _emit!(b, InstrIR.StructNewDefault(UInt32(type_idx)))
 end
-# struct.get reads a value-type field; a packed one is read by struct.get_s or struct.get_u (dart
-# asserts `fields[fieldIndex].type is ir.ValueType`)
+# struct.get reads a value-type field, and a packed one is refused: WT has no packed reader, dart
+# asserts `fields[fieldIndex].type is ir.ValueType`
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1657 InstructionsBuilder.struct_get)
 function struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer)::InstrBuilder
     local f = _module_field(b.v.mod, type_idx, field_idx, :struct_get)
     f.valtype isa PackedType &&
-        _module_invalid(:struct_get, "field $field_idx of struct type $type_idx is packed: struct.get_s or struct.get_u reads it")
+        _module_invalid(:struct_get, "field $field_idx of struct type $type_idx is packed, which struct.get does not read")
     validate_gc_instruction!(b.v, Opcode.STRUCT_GET, (type_idx, unpacked(f.valtype)))
-    _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx), Opcode.STRUCT_GET))
+    _emit!(b, InstrIR.StructGet(UInt32(type_idx), UInt32(field_idx)))
 end
 # struct.set writes a mutable field (the spec's rule, which dart leaves to the engine), its value
 # the field's unpacked type
@@ -998,6 +998,11 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     (dst.constant_expression && !src.constant_expression) &&
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): a constant expression " *
                             "takes only a constant fragment"))
+    # and a function body takes no constant fragment: its ref.func was checked as a global
+    # initializer's, which declares the function, and a body's needs another declaration
+    (src.constant_expression && !dst.constant_expression) &&
+        throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): a function body " *
+                            "takes no constant fragment"))
     # Fragment violations PROPAGATE — they were silently dropped here,
     # which is why per-emit strict threw while the top-level harvest saw nothing.
     if has_errors(src.v)

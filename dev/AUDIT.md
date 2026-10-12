@@ -1483,3 +1483,154 @@ Resolution:
   The cases failed at the start and pass; L172, L173, R41 and the changes to L149, L156, L160 and
   L169 were negative-tested; the probes change only by the dead-code drop and the class reader.
 - Everything else is on MARCH 13.17 under its row: A15E1 (the host's catch).
+
+## 2026-10-12 — audited through baae2757 (685c1b93..baae2757: batches 116x, 116b, 116c, 116d-1, 116d-2)
+
+The sixteenth audit covers:
+- 5eacce30, batch 116x, the fifteenth audit's fixes;
+- 0218bffa, batch 116b, one reader of what a node is;
+- b5f5175c, batch 116c, one class set, one match rule, one walk of the edges;
+- 5abb4b1b, batch 116d-1, one conversion and one type test per construct;
+- baae2757, batch 116d-2, one table per construct.
+
+It made 28 findings, one seen from two areas (A16B1 = A16E1). Each program was run native, on
+685c1b93 (before the range) and on baae2757 (Julia 1.12.7, Node 22.23.3). Silent wrong answers at
+baae2757, older than the range but claimed fixed by it or beside a fix it made, but one the range
+introduced:
+- A16B1 = A16E1. sext_int and zext_int into a target of 32 bits or fewer left a narrow source's
+  junk in place, and sext_int into Int64 and sitofp normalised by the source's type, not by the
+  op: `Int64(Int32(d8(n)))` with `d8(n) = Int8(n) + Int8(100)` answered 200 (native -56),
+  `Int64(UInt16(du8(n)))` 300 (native 44), `sext_int(Int64, n % UInt8)` 128 (native -128),
+  `sitofp(Float64, n % UInt8)` 255.0 (native -1.0); 685c1b93 answered the same.
+- A16E2 (introduced by 5abb4b1b). `isa(x, Nothing)` read only ref.is_null, and the funnel boxed a
+  nothing bound for an abstract reference: `t = (n, nothing, 2.5); t[(n % 3) + 1] isa Nothing`
+  answered 2 at 5abb4b1b and baae2757 (native 1), where b5f5175c and 685c1b93 raised a
+  WasmInternalError: inside the range it went from loud to wrong. The program the report gives (a
+  nothing into an `Any` field) answered 1 on every tree, and so did three variants.
+- A16E3. sitofp's target named by a GlobalRef took the default register, F64, and demoted:
+  `sitofp(Float32, 2^60 + 2^36 + 1)` rounded twice (2^60, native 2^60 + 2^37), on both trees.
+- A16E4. An intrinsic splatted over a vector folded at any length: three elements answered their
+  sum and one element itself (native ArgumentError), on both trees.
+Traps where Julia answers:
+- A16C1 (introduced by 0218bffa). The report's program does not reach the path: its `g(c)` is a
+  dynamic call, and both trees answer 19. With `g(@nospecialize(x))`, an :invoke Julia leaves
+  abstract, the first round retargeted it to g(::Int64) before the round's dynamic step collected
+  the captor that writes 2.5, and no later round undid it: an illegal cast at baae2757, 19 at
+  685c1b93.
+- A16C3. A closure built inside a captor from its box field wrote into the creator's box unseen:
+  the creator's read stayed Int64, an illegal cast on both trees (native 1).
+- A16C2. No program reproduced a wrong answer: nine variants (the report's, real erasures, a
+  parametric method, a class only a vararg slot names) answer as native at baae2757; 685c1b93
+  trapped or rejected four of them. The class reached the set through another statement's type in
+  each (a memoryrefset!, an :invoke specialized at the tuple); the gap is the model's.
+- A16B5. A 128-bit primitive that is no Int128 raised an unlocated error from the width rule, on
+  both trees.
+While reproducing A16C1, a closure created in one function and called dynamically in another
+(`run_any(f, y) = (f(y); nothing)`) trapped on both trees (native 19): A7S1's remainder on 13.17.
+
+Area: builder — (A16B1) above. (A16B2) A constant fragment holding a ref.func the module declares
+nowhere was accepted into a function body (unreachable today). (A16B3) "dart has no bitcast" was
+false: dart reinterprets by doubleToIntBits (intrinsics.dart:1541). (A16B4) A closure
+trampoline's, the dispatch wrapper's and the dispatch trampoline's scratch locals were indices
+computed beside the declaration path (`1 + arity`, `dt.arity`, a default 0). (A16B5) above.
+(A16B6) struct_get!'s comment named struct.get_s/u, gone, and StructGet's `op` held one value.
+(A16B7) validate_block_end!'s formal sentence kept the claim before 116x. (A16B8) source_map.jl
+cited io_util.dart:209 for jsonEncode, at :211.
+
+Area: collection and planning — (A16C1) above. (A16C2) The one class set missed a vararg
+method's packed tuple, a value no statement makes, though its docstring said only H13 was missed;
+Enrollment.tla drew every value from the set. (A16C3) above; BoxJoin.tla's TransitiveDiscovery
+describes box_contents_type, which the plan's reads do not use, and CaptureType.tla modeled two
+direct captors only. (A16C4) The plan's capture record was copied into a registry field nothing
+read. (A16C5) A quoted GlobalRef was read through to its binding, where Julia evaluates a
+QuoteNode to the GlobalRef itself. (A16C6) The `:splat` edge typed its container with no joins,
+though its docstring said by arg_type; calls.jl cited ir.jl for it. (A16C7) 13.17's A12C1 named a
+walk 116c deleted; LOWERING_INSTANTIATED_CLASSES attributed WT's holds_exceptions gate to dart.
+
+Area: emission and diagnostics — (A16E1) = A16B1. (A16E2), (A16E3), (A16E4) above. (A16E5) The
+operator citations named no Julia version: base/int.jl:86-88 holds `- + *` on 1.12.7 and :85-87 on
+1.13.1 (the report's :85-87 for both is right for 1.13.1 only); base/float.jl:495-497 on 1.12.7 is
+:492-494 on 1.13.1.
+
+Area: enforcement and prose — (A16P1) L180 saw no 128-bit or float width list and no `=>` table:
+twelve 128-bit lists, four float lists and TRACED_STATEMENT_TYPES were uncounted, so 13.4's width
+item was removed unearned. (A16P2) L180's allowlist was a count per file. (A16P3) _compile_call_isa
+re-read a global's binding with Core.eval, which L175's needle did not cover. (A16P4) L152 exempted
+a qualified `Base.infer_return_type(` and named no other inference entry; its behavior test
+counted only WasmTarget's. (A16P5) L178, L179 and L180 cited cases that passed before their fixes.
+(A16P6) L180 said sext_int(Int128, 0x80) answered 128 (it raised a StackImbalanceError); L179 cited
+types.dart:907 for loadClassId (code_generator.dart:6076); smoke's Bool comment sat above another
+case; compile.jl kept a dead interpreter local under a false comment. (A16P7) Three xfails lacked
+their native answer on 13.10. (A16P8) 116b and 116c moved forward without an evaluator PASS on
+their last round, and two landed commits differ from the trees gated (b5f5175c from 13700fd4, a
+docstring and MARCH; 5eacce30 from 2a6c5d22, R41's broadened needle).
+
+Resolution: in batch 116dx (the commit carrying this entry), each case added and run on both trees
+first:
+- A16B1 = A16E1: one widening rule in emit_conversion!: a source narrower than 32 bits is
+  normalised before sext_int, zext_int, sitofp or uitofp reads it, signed for sext_int and
+  sitofp, unsigned for zext_int and uitofp, whatever the target's register (smoke
+  narrow_widening, eight cases; seven failed on both trees). A16E3: the target of all ten
+  conversions is resolved once, at the call, from a literal type or a constant global, an
+  unresolved one rejecting at its statement; `reg(T, default)`, every default register and the
+  bitcast name ladder are gone (an integer conversion whose target is held in no integer register
+  rejects), fpext and fptrunc read the conversion table (smoke conversion_target). A16B5:
+  numeric_register answers `nothing` for a primitive wider than 64 bits, and a conversion to or
+  from one that is no Int128, or a statement whose value is one, rejects at its statement (smoke
+  xfail wide_primitive, loud); held in a parameter or a field it still raises
+  julia_to_wasm_type's unlocated error, on 13.17 (A16B5). L180 checks the rule,
+  the resolution and its cases.
+- A16E2: model first, Coercion.tla's NothingIsNull covers every nullable reference of the any
+  hierarchy, MCCoercionBoxNothingBroken (a nothing boxed at an abstract sink, the code before)
+  violates it; convert_type! makes such a nothing null, and `isa(x, Nothing)` of a value of any
+  class reads `===`'s one test, _emit_is_nothing! (smoke heterogeneous_tuple_read/nothing_isa;
+  test/diagnostic_attribution.jl's 'nothing at every nullable reference of the any hierarchy is
+  its null'; L178). The first fast lane of this batch found the other half: a closure entry
+  unboxed an erased nothing for the body's Nothing parameter, and the null trapped (smoke
+  closure_union_nothing_erased). The model gained NothingNeverCast (a nothing held in a reference
+  is never unboxed, cast to a non-null type or made non-null: its placeholder, boxed under
+  Nothing's class for a non-null reference its box is, any other sink rejecting), and
+  MCCoercionUnboxNothingBroken violates it; convert_type!, the closure entry's narrowing and its
+  MethodError's arguments take a nothing so (smoke method_error/closure_nothing_no_method).
+- A16C1: model first, ClosedWorld.tla's typed sites retarget while their captor is uncollected,
+  each scan recomputing them (ReType), RetargetsSound at the fixpoint; MCClosedWorldTyping holds
+  and its InPlaceRetarget variant violates it. _missing_explicit_invoke_mis recomputes each
+  retarget every round from the :invoke's own MethodInstance (invoke_originals), restoring a site
+  the round's typing no longer retargets (smoke capture_typed_invoke; L40).
+- A16C3: model first, CaptureType.tla's nested captor and the creator's read,
+  MCCaptureTypeNestedCaptorBroken violating Covered; record_capture_contents puts a nested
+  captor's field in the class of the field it was built from, at any depth, and a class with a
+  created field is created (smoke nested_captor).
+- A16C2: model first, Enrollment.tla draws a value a class no statement makes may have
+  (Reaches), and MCEnrollmentUnseenSlotDroppedBroken violates TrapOnlyWhenNoMethod; the one class
+  set observes a vararg method's packed tuple from its slot (L176). No case: no program reproduced.
+- A16E4: an intrinsic splatted over vectors runs at its arity, two, else throws Julia's
+  ArgumentError (smoke reduce_intrinsic_arity).
+- A16B2: append_builder! refuses a constant fragment into a function body (row w of
+  test/builder_cases.jl failed and holds; L166). A16B4: the three scratch locals are read by the
+  index their declaration returns, none by arithmetic or a default (L173). A16B3, A16B6 (no `op`
+  field), A16B7, A16B8: the texts are true.
+- A16C4: the registry field and its merge, and the plan's copy, are gone. A16C5: a literal is its
+  value, unresolved (L176). A16C6: the `:splat` edge types its container by arg_type. A16C7:
+  13.17's A12C1 is re-measured and restated (the hang is ensure_constant_global!'s `===` table,
+  whose jl_object_id recurses along every path: past 360 s at baae2757 with this batch's draft),
+  and the gate is stated as WT's own.
+- A16P1, A16P2: L180 counts 8- to 128-bit integer and float lists, `<: Union{…}` and `=>` tables,
+  each line on one exact allowlist with its reason; sixteen lists read the rule now
+  (`_julia_int_width(T, false) == 128`, `numeric_register(T) in (F32, F64)`), and 13.4's width
+  item stays closed. A16P3: the isa reads the boundary's value of a constant global and rejects
+  any other; L175 counts `eval(`, `get_binding_type(` and `isdefinedglobal(`. A16P4: L152 counts a
+  qualified call and typeinf, typeinf_ext, typeinf_frame, code_typed and abstract_call; its test
+  counts every query of the interpreter's cache (CC.cache_owner), 0 during the plan's compile.
+  A16P5: L178, L179 and L180 cite cases that fail with their fixes reverted (L179 a unit test of
+  the one `Type{X}` element rule, test/dispatch_method_error.jl) and name the others regression
+  cases. A16P6: the four texts are true, the dead local gone. A16P7: 13.10 states the three native
+  answers. A16E5: both versions' lines are cited.
+- A16P8, a process finding: no push without an evaluator PASS on the exact final tree (the
+  orchestrator's rule of 2026-10-12); 116d-1 and 116d-2 have PASS on their exact trees (116d-1
+  re-checked after its rebase onto b5f5175c).
+  The cases failed at the start and pass; each tightened lock (L40, L152, L166, L173, L175, L176,
+  L178, L179, L180) was negative-tested on the exact commit; the probes change in one function.
+- Everything else is on MARCH 13.17 under its row: A7S1's remainder (the callable created in one
+  function and called in another), A12C1 (restated) and A16B5's remainder (a wide primitive in a
+  parameter or a field).
