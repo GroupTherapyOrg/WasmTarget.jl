@@ -175,11 +175,12 @@ using Dates: Dates, @dateformat_str
 # before the ~hour-long codegen suite spins up. (Each on one shard — it's process-wide.)
 _wt_qa_include("test_aqua.jl")
 _wt_qa_include("test_explicit_imports.jl")
-_wt_qa_include("diagnostics_sink.jl")
 _wt_qa_include("m8_selector_table.jl")
 _wt_qa_include("m11_intrinsics_table.jl")
-# the suite's helpers, before the files that check a module's host-import calls with them
+# the suite's helpers, before the files that check a module's host-import calls with them (and
+# diagnostics_sink.jl, which runs a module through WasmRunner)
 include("utils.jl")
+_wt_qa_include("diagnostics_sink.jl")
 _wt_qa_include("module_builder_validation.jl")
 _wt_qa_include("grapheme_break.jl")
 _wt_qa_include("nir_use_index.jl")

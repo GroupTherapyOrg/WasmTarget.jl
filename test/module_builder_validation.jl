@@ -813,6 +813,25 @@ _mbv_e4_plus(x::Int64) = x + 1
     MBV.add_global!(m, MBV.I32, true, 0; name="\$exc_top")
     err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=m); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("already defines a global named \"\\\$exc_top\"", err.msg)
+    # the host module is checked at the entry, before the closed world is collected (A2C7): an
+    # entry the collection would refuse (no method of sin takes a String) is never collected —
+    # the module's mismatch is the error, named, at once
+    local t_check = @elapsed (err = try; MBV.compile_multi(Any[(sin, (String,), "s")]; existing_module=m); nothing; catch e; e; end)
+    @test err isa ArgumentError && occursin("already defines a global named \"\\\$exc_top\"", err.msg)
+    @info "existing_module refused at the entry" seconds=t_check
+    # the setup's two refusals are the entry's too: a module that defines a tag but exports none as
+    # wasmtarget.exception, and one whose host-declared import has no count imported before its
+    # defined global, are refused before the collection (the entry `sin(::String)` it would refuse)
+    mtag = MBV.WasmModule()
+    MBV.add_tag!(mtag, MBV.add_type!(mtag, MBV.FuncType(MBV.WasmValType[MBV.I32], MBV.WasmValType[])))
+    err = try; MBV.compile_multi(Any[(sin, (String,), "s")]; existing_module=mtag); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("exports none as wasmtarget.exception", err.msg)
+    mcount = MBV.WasmModule()
+    MBV.ensure_provenance_imports!(mcount)
+    MBV.add_import!(mcount, "host", "cb_entry", MBV.WasmValType[], MBV.WasmValType[])
+    MBV.add_global!(mcount, MBV.I32, true, 0; name="host_state")
+    err = try; MBV.compile_multi(Any[(sin, (String,), "s")]; existing_module=mcount); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("must precede the module's defined global", err.msg)
     # a module a compile built from exception-free code holds no `$exc_top`, yet exports the class
     # reader every compile defines last: a second compile into it is refused at its entry, naming
     # the reader, not at the end by a duplicate export
@@ -835,7 +854,7 @@ _mbv_e4_plus(x::Int64) = x + 1
     r = MBV.recover_module_handles!(MBV.TypeRegistry(), mw)
     @test r.handles.exc_tag == only(e.idx for e in mw.exports if e.name == "wasmtarget.exception")
     # a module's builders trace as it was constructed: a compile asking otherwise is refused
-    mtr = MBV.WasmModule(; builder_trace=!MBV.OPTIONS[].builder_trace)
+    mtr = MBV.WasmModule(; builder_trace=!MBV.options_from_env().builder_trace)
     err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=mtr); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("WasmModule(; builder_trace)", err.msg)
     # a return in a function's builder is checked against the function's results

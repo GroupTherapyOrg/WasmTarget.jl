@@ -130,16 +130,6 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     return info
 end
 
-# ── Task-local per-compile state ─────────────────────────────────────────────
-# The string/IO/RNG lazy caches below are PER-COMPILE state: each compile task gets its own
-# copy, so concurrent compiles (the test suite spawns one task per Phase) can't corrupt each
-# other. Struct registration keeps its state on the TypeRegistry (PendingTypes).
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-mutable struct TaskLocalRef{T}; key::Symbol; default::T; end
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-Base.getindex(r::TaskLocalRef{T}) where {T} = get(task_local_storage(), r.key, r.default)::T
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-Base.setindex!(r::TaskLocalRef, v) = (task_local_storage()[r.key] = v)
 
 """
     begin_pending!(registry, field, key) -> id

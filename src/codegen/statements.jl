@@ -235,7 +235,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
     # Walk through recognized storage-relative operations looking only for the
     # backing object's identity. Offsets remain runtime values and are compiled
     # by the consumer; no raw host address is ever synthesized.
-    _mm_dbg = tracing(:mm)
+    _mm_dbg = tracing(ctx, :mm)
     _fail = function (why, what)
         _mm_dbg && println(stderr, "  MMtrace FAIL [", why, "]: ", repr(what)[1:min(end, 110)])
         return nothing
@@ -621,7 +621,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         if node isa NirCall
             compile_call!(_sf, node, idx, ctx)
             stmt_bytes = builder_code(_sf)
-            if tracing(:mm) && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
+            if tracing(ctx, :mm) && !isempty(stmt_bytes) && stmt_bytes[1] == Opcode.UNREACHABLE
                 println(stderr, "UNREACH idx=$idx stmt=", first(_nir_text(node), 110))
             end
         elseif node isa NirInvoke
@@ -1898,7 +1898,7 @@ end
 
 # parity(quarantine: the jl_hrtime foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_hrtime!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
-        perf_now_idx = ensure_perf_now_import!(ctx.mod)
+        perf_now_idx = ensure_perf_now_import!(ctx.mod, ctx.type_registry)
         call!(b, perf_now_idx)
         # performance.now() returns f64 milliseconds → multiply by 1e6 for nanoseconds
         f64_const!(b, 1.0e6)

@@ -24,8 +24,12 @@ include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first dive
 const FILTER = lowercase.(ARGS)
 _want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER)
 # WT_SMOKE_PART=i/N (dev/lanes.sh --lane smoke --part i/N, one job of dev/gate.sh's matrix): the
-# groups are dealt round-robin in file order, the k-th of GROUPS (and, separately, of XFAIL) to
-# part (k-1) % N, so the N parts together run every group exactly once. Unset: every group.
+# groups are dealt by their recorded durations (test/smoke_times.tsv, measured on CI's runners per
+# Julia version, as runtests.jl deals the suite's phases by test/phase_times.tsv): the longest
+# first, each to the part whose load is least so far, then the xfail groups onto the loads the
+# groups left; a group with no recorded duration takes the median of its list. The dealing is a
+# pure function of the file, the lists and N, so the N parts together run every group exactly
+# once. Unset: every group.
 const SMOKE_PART = let s = get(ENV, "WT_SMOKE_PART", "")
     m = match(r"^([0-9]+)/([1-9][0-9]*)$", s)
     if isempty(s)
@@ -36,8 +40,46 @@ const SMOKE_PART = let s = get(ENV, "WT_SMOKE_PART", "")
         (parse(Int, m[1]), parse(Int, m[2]))
     end
 end
+# the recorded durations, "<seconds on 1.12>\t<seconds on 1.13>\t<group>" per group ("xfail <group>"
+# for an xfail group), this Julia version's column
+const SMOKE_TIMES_TSV = joinpath(@__DIR__, "smoke_times.tsv")
+const SMOKE_RECORDED = let d = Dict{String,Float64}(), col = VERSION >= v"1.13-" ? 2 : 1
+    if isfile(SMOKE_TIMES_TSV)
+        for ln in eachline(SMOKE_TIMES_TSV)
+            (isempty(ln) || startswith(ln, '#')) && continue
+            local f = split(ln, '\t'; limit = 3)
+            length(f) == 3 || error("test/smoke_times.tsv: a line is not \"<1.12 s>\\t<1.13 s>\\t<group>\": $ln")
+            local t = tryparse(Float64, f[col])
+            t === nothing || (d[String(f[3])] = t)
+        end
+    end
+    d
+end
+_smoke_median(v) = (local c = sort!(collect(Float64, v)); isempty(c) ? 1.0 : c[(length(c) + 1) ÷ 2])
+# the part (0-based) each group of GROUPS and each of XFAIL is dealt to, for n parts
+function _smoke_owners(n::Int)
+    local key(prefix, g) = prefix * first(g)
+    local load = zeros(n)
+    local owners = Dict{String,Int}()
+    for (prefix, list) in (("", GROUPS), ("xfail ", XFAIL))
+        local recorded = [get(SMOKE_RECORDED, key(prefix, g), nothing) for g in list]
+        local med = _smoke_median(t for t in recorded if t !== nothing)
+        local dur = [something(t, med) for t in recorded]
+        for k in sort(collect(eachindex(list)); by = j -> (-dur[j], j))
+            local p = argmin(load)
+            owners[key(prefix, list[k])] = p - 1
+            load[p] += dur[k]
+        end
+    end
+    return owners
+end
 # the entries of `list` (GROUPS or XFAIL) part i of n runs
-_smoke_part(list, i = SMOKE_PART[1], n = SMOKE_PART[2]) = [list[k] for k in eachindex(list) if (k - 1) % n == i]
+function _smoke_part(list, i = SMOKE_PART[1], n = SMOKE_PART[2])
+    n == 1 && return list
+    local owners = _smoke_owners(n)
+    local prefix = list === XFAIL ? "xfail " : ""
+    return [g for g in list if owners[prefix * first(g)] == i]
+end
 
 # Each case: (name, f, args...). Compared native-vs-wasm via compare_julia_wasm.
 const GROUPS = Vector{Pair{String,Vector{Any}}}()
@@ -2422,7 +2464,8 @@ function main()
         # checked by the part its group is dealt to; a tag naming no xfail group, by part 0
         local g = String(first(split(tag, '/')))
         local k = findfirst(p -> first(p) == g, XFAIL)
-        _want(g) && (k === nothing ? 0 : (k - 1) % SMOKE_PART[2]) == SMOKE_PART[1] && !(tag in xf_seen) &&
+        local owner = (k === nothing || SMOKE_PART[2] == 1) ? 0 : _smoke_owners(SMOKE_PART[2])["xfail " * g]
+        _want(g) && owner == SMOKE_PART[1] && !(tag in xf_seen) &&
             push!(xf_mismatch, "$tag: listed in XFAIL_RUNTIME, but no xfail case has that name")
     end
     dt = round(time() - t0; digits = 1)

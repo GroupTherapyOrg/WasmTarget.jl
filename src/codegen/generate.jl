@@ -163,9 +163,7 @@ parity(quarantine: Julia's stack entries have identity and outlive an unwind (on
 function ensure_exception_tag!(mod::WasmModule)::UInt32
     local e = findfirst(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports)
     e === nothing || return mod.exports[e].idx
-    isempty(mod.tags) || throw(ArgumentError(
-        "the module defines $(length(mod.tags)) tag(s) and exports none as wasmtarget.exception: " *
-        "call WasmTarget.ensure_provenance_imports!(mod) right after creating it, before defining a tag"))
+    _refuse_tags_without_wt_tag(mod)
     # THE TYPED TAG — dart's _defineDartExceptionTag carries
     # (exception, stackTrace) as the tag payload (tags.dart:37);
     # the value travels WITH the unwind, not via a pre-set global (re-entrancy).
@@ -182,36 +180,32 @@ function ensure_exception_tag!(mod::WasmModule)::UInt32
 end
 
 """
-    recover_module_handles!(registry, mod) -> registry
+    check_existing_module(mod, source_map_url, options)
 
-At a compile's entry, after its setup (ensure_host_imports_open!, ensure_provenance_imports!):
-hold the module objects that setup made, which a host framework may have made before the
-compile, by handle: the exception tag (the one exported as `wasmtarget.exception`, refused unless
-its payload is the exception, its stack and its entry, ensure_exception_tag!'s), the stack entry
-type its payload's third value has, and `\$host_imports_open` (the global imported as
-`wasmtarget.host_imports_open`), if any. A module already holding a global named `\$exc_top` or
-`\$import_tops`, the names the compile gives its own, or exporting `wasmtarget.class_id`, the
-reader every compile defines last (ensure_class_id_reader!), is refused, naming it (a module a
-compile built, or a host's object of that name). Codegen reads each through `registry.handles` only.
+A host's module is checked at the compile's entry, before the closed world is collected, so a
+mismatch fails at once and names the module's object: its source-map URL and its builders' trace
+are the compile's (WasmModule(; source_map_url, builder_trace)); it declares the imports every
+module has before any function it defines (ensure_provenance_imports!); it holds no global named
+`\$exc_top` or `\$import_tops` and exports no `wasmtarget.class_id`, the objects a compile gives
+itself (a module is compiled into once); a tag it exports as `wasmtarget.exception` carries
+WasmTarget's payload (anyref, externref, (ref null \$cell)), and it defines no tag without
+exporting that one; and a host-declared import it holds has its count, wasmtarget.host_imports_open,
+imported before any defined global.
 parity(quarantine: a host framework prepares the module it compiles into (existing_module,
-dev/MARCH.md 13.16) through the public setup entries before the compile, so the compile takes the
-objects that setup made from the module, once, at its entry; dart's translator defines its tag
-and globals itself, tags.dart:37.)
+dev/MARCH.md 13.16) through the public setup entries before the compile; dart's translator builds
+its module whole, so it has no host module to check.)
 """
-function recover_module_handles!(registry::TypeRegistry, mod::WasmModule)::TypeRegistry
-    local h = registry.handles
-    local e = findfirst(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports)
-    e === nothing && throw(ArgumentError("the module has no exception tag: ensure_provenance_imports!(mod) defines it"))
-    local tag = mod.exports[e].idx
-    local tag_ft = mod.types[Int(mod.tags[Int(tag) + 1].type_idx) + 1]
-    local payload = tag_ft isa FuncType ? tag_ft.params : WasmValType[]
-    local cell = length(payload) == 3 && payload[3] isa ConcreteRef && payload[3].nullable ?
-                 mod.types[Int(payload[3].type_idx) + 1] : nothing
-    (tag_ft isa FuncType && isempty(tag_ft.results) && payload[1] === AnyRef && payload[2] === ExternRef &&
-     cell isa StructType && cell.supertype_idx === nothing &&
-     cell.fields == [FieldType(AnyRef, true), FieldType(ExternRef, false)]) || throw(ArgumentError(
-        "the tag exported as wasmtarget.exception (tag $tag) does not carry WasmTarget's payload " *
-        "(anyref, externref, (ref null \$cell)): ensure_provenance_imports!(mod) defines it"))
+function check_existing_module(mod::WasmModule, source_map_url::Union{Nothing,String},
+                               options::CompilerOptions)::Nothing
+    mod.source_map_url == source_map_url || throw(ArgumentError(
+        "existing_module records source maps for $(repr(mod.source_map_url)), the compile for " *
+        "$(repr(source_map_url)): construct it with WasmModule(; source_map_url)"))
+    mod.builder_trace == options.builder_trace || throw(ArgumentError(
+        "existing_module's builders trace=$(mod.builder_trace), the compile's trace=$(options.builder_trace) " *
+        "(WT_BUILDER_TRACE): construct it with WasmModule(; builder_trace)"))
+    (_stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
+        throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
+                            "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
     for name in ("\$exc_top", "\$import_tops")
         local g = findfirst(x -> x.name == name, mod.globals)
         g === nothing || throw(ArgumentError(
@@ -222,6 +216,76 @@ function recover_module_handles!(registry::TypeRegistry, mod::WasmModule)::TypeR
     c === nothing || throw(ArgumentError(
         "existing_module already exports \"wasmtarget.class_id\" (export $(c - 1)), the class reader a compile " *
         "defines last: a module is compiled into once, and a host names its exports otherwise"))
+    local e = findfirst(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports)
+    e === nothing ? _refuse_tags_without_wt_tag(mod) : _exception_tag_payload(mod, mod.exports[e].idx)
+    _refuse_late_host_imports_open(mod)
+    return nothing
+end
+
+# a module that defines tags but exports none as `wasmtarget.exception` (a host tag defined before
+# the setup): refused, at the compile's entry (check_existing_module) and by ensure_exception_tag!
+# parity(quarantine: a host framework prepares the module it compiles into (existing_module, dev/MARCH.md 13.16); dart's translator defines its tags itself, tags.dart:37.)
+function _refuse_tags_without_wt_tag(mod::WasmModule)::Nothing
+    any(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports) && return nothing
+    isempty(mod.tags) || throw(ArgumentError(
+        "the module defines $(length(mod.tags)) tag(s) and exports none as wasmtarget.exception: " *
+        "call WasmTarget.ensure_provenance_imports!(mod) right after creating it, before defining a tag"))
+    return nothing
+end
+
+# a module holding a host-declared import without the imported count wasmtarget.host_imports_open,
+# when a defined global already precedes where the count must go: refused, at the compile's entry
+# (check_existing_module) and by ensure_host_imports_open!
+# parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; the count the host's glue keeps is imported before any defined global, dev/MARCH.md 13.16.)
+function _refuse_late_host_imports_open(mod::WasmModule)::Nothing
+    _imported_global(mod, "wasmtarget", "host_imports_open") === nothing || return nothing
+    local host = findfirst(_is_host_declared_import, mod.imports)
+    host === nothing && return nothing
+    local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
+    defined === nothing || throw(ArgumentError(
+        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) needs the " *
+        "imported count wasmtarget.host_imports_open, which must precede the module's defined global " *
+        "$(defined - 1)$(mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))"): " *
+        "call WasmTarget.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
+    return nothing
+end
+
+# the exception tag's payload, refused unless it is WasmTarget's (anyref, externref, (ref null $cell))
+# parity(tags.dart:37 ExceptionTags._defineDartExceptionTag): the tag's payload, as dart defines it
+function _exception_tag_payload(mod::WasmModule, tag::UInt32)::Vector{WasmValType}
+    local tag_ft = mod.types[Int(mod.tags[Int(tag) + 1].type_idx) + 1]
+    local payload = tag_ft isa FuncType ? tag_ft.params : WasmValType[]
+    local cell = length(payload) == 3 && payload[3] isa ConcreteRef && payload[3].nullable ?
+                 mod.types[Int(payload[3].type_idx) + 1] : nothing
+    (tag_ft isa FuncType && isempty(tag_ft.results) && payload[1] === AnyRef && payload[2] === ExternRef &&
+     cell isa StructType && cell.supertype_idx === nothing &&
+     cell.fields == [FieldType(AnyRef, true), FieldType(ExternRef, false)]) || throw(ArgumentError(
+        "the tag exported as wasmtarget.exception (tag $tag) does not carry WasmTarget's payload " *
+        "(anyref, externref, (ref null \$cell)): ensure_provenance_imports!(mod) defines it"))
+    return payload
+end
+
+"""
+    recover_module_handles!(registry, mod) -> registry
+
+At a compile's entry, after its setup (ensure_host_imports_open!, ensure_provenance_imports!):
+hold the module objects that setup made, which a host framework may have made before the
+compile, by handle: the exception tag (the one exported as `wasmtarget.exception`, refused unless
+its payload is the exception, its stack and its entry, ensure_exception_tag!'s), the stack entry
+type its payload's third value has, and `\$host_imports_open` (the global imported as
+`wasmtarget.host_imports_open`), if any. A host's module was checked at the entry, before the
+collection (check_existing_module). Codegen reads each through `registry.handles` only.
+parity(quarantine: a host framework prepares the module it compiles into (existing_module,
+dev/MARCH.md 13.16) through the public setup entries before the compile, so the compile takes the
+objects that setup made from the module, once, at its entry; dart's translator defines its tag
+and globals itself, tags.dart:37.)
+"""
+function recover_module_handles!(registry::TypeRegistry, mod::WasmModule)::TypeRegistry
+    local h = registry.handles
+    local e = findfirst(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports)
+    e === nothing && throw(ArgumentError("the module has no exception tag: ensure_provenance_imports!(mod) defines it"))
+    local tag = mod.exports[e].idx
+    local payload = _exception_tag_payload(mod, tag)
     h.exc_tag = tag
     h.exc_cell = payload[3].type_idx
     h.host_imports_open = _imported_global(mod, "wasmtarget", "host_imports_open")
@@ -453,7 +517,7 @@ Nothing, a bare array whose wasm type one class has answers that class, and a va
 header (a bare array whose wasm type classes share) traps at the cast, never a guessed class.
 Defined at the end of compile_module, over the final numbering, the last of the module's
 functions; a module that already exports one was compiled by WasmTarget already, which a compile
-into it refuses at its entry (recover_module_handles!).
+into it refuses at its entry (check_existing_module).
 parity(quarantine: WT's export boundary is the host's glue (L156: an export entry holds no try and no local), so the catch dart's `\$invokeMain` makes inside wasm, invoke_main_patch.dart:43-52, is made by the host, which reads the escaped value's class through this one exported reader, code_generator.dart:6076 loadClassId)
 """
 function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, translator::Translator)::Nothing
@@ -663,14 +727,8 @@ parity(quarantine: Julia's host call starts with an empty exception stack and a 
 """
 function ensure_host_imports_open!(mod::WasmModule)::Nothing
     _imported_global(mod, "wasmtarget", "host_imports_open") === nothing || return nothing
-    local host = findfirst(_is_host_declared_import, mod.imports)
-    host === nothing && return nothing
-    local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
-    defined === nothing || throw(ArgumentError(
-        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) needs the " *
-        "imported count wasmtarget.host_imports_open, which must precede the module's defined global " *
-        "$(defined - 1)$(mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))"): " *
-        "call WasmTarget.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
+    findfirst(_is_host_declared_import, mod.imports) === nothing && return nothing
+    _refuse_late_host_imports_open(mod)
     add_global_import!(mod, "wasmtarget", "host_imports_open", I32, true; name="\$host_imports_open")
     return nothing
 end
