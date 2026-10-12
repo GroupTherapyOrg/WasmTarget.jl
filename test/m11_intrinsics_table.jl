@@ -16,3 +16,24 @@
     # coverage: the table carries the full i64/i32 integer core + f64/f32 float core
     @test length(WasmTarget.INTRINSIC_BINOPS) >= 51   # shifts excluded (mixed-width amounts)
 end
+
+# operator_intrinsic is Julia's answer (L180): for every surface operator and type it admits, the
+# one intrinsic Julia's own typed body of `f(::T, ::T)` runs; an intrinsic callee is accepted for
+# its own kind only (`add_int` over a Float64 adds bits: no float opcode, so `nothing`, a rejection)
+@testset "operator_intrinsic is the intrinsic Julia's method runs" begin
+    for f in (+, -, *), T in (Int32, UInt32, Int64, UInt64, Float32, Float64)
+        local ci = Base.code_typed(f, (T, T); optimize=true)[1][1]
+        local calls = [s.args[1] for s in ci.code if s isa Expr && s.head === :call]
+        local intr = [c isa GlobalRef ? getglobal(c.mod, c.name) : c for c in calls]
+        filter!(c -> c isa Core.IntrinsicFunction, intr)
+        @test length(intr) == 1
+        @test WasmTarget.operator_intrinsic(f, T) === nameof(only(intr))
+        @test WasmTarget.operator_intrinsic(only(intr), T) === nameof(only(intr))
+    end
+    for T in (Int8, UInt16, Bool, Char, Float16, Int128)
+        @test WasmTarget.operator_intrinsic(+, T) === nothing
+    end
+    @test WasmTarget.operator_intrinsic(Core.Intrinsics.add_int, Float64) === nothing
+    @test WasmTarget.operator_intrinsic(Core.Intrinsics.mul_float, Int64) === nothing
+    @test WasmTarget.operator_intrinsic(Core.Intrinsics.sub_int, Float32) === nothing
+end

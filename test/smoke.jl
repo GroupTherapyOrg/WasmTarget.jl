@@ -1812,6 +1812,43 @@ _g("tuple_type_element", Any[
     ("typeof", (n::Int64) -> (t = (Int64, n); typeof(t) === Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
     ("erased", (n::Int64) -> (v = Any[(Int64, n)]; v[1] isa Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
 ])
+# A narrow source's register is normalised before it widens into Int128 (13.1: sext of a UInt8
+# with its high bit set is -128; a dirty Int8 or UInt8 register holds junk above its width)
+@noinline _sm_dirty8(n::Int64) = Int8(n) + Int8(100)
+@noinline _sm_dirtyu8(n::Int64) = UInt8(n) + UInt8(100)
+_g("int128_extends", Any[
+    ("sext_uint8_high_bit", (n::Int64) -> Int64(Core.Intrinsics.sext_int(Int128, UInt8(n))), Int64(128)),
+    ("sext_int8_high_bit", (n::Int64) -> Int64(Int128(n % Int8)), Int64(200)),
+    ("sext_dirty_int8", (n::Int64) -> Int64(Int128(_sm_dirty8(n))), Int64(100)),
+    ("zext_dirty_uint8", (n::Int64) -> Int64(Int128(_sm_dirtyu8(n))), Int64(200)),
+])
+# A Float32 stored byte-wise through a pointer into a byte vector and read back: its bits cut
+# from an integer register (emit_bitcast!)
+_g("pointer_float_bytes", Any[
+    ("float32_store_load", (n::Int64) -> (v = zeros(UInt8, 8); GC.@preserve v unsafe_store!(Ptr{Float32}(pointer(v)), Float32(n) + 0.5f0); GC.@preserve v Float64(unsafe_load(Ptr{Float32}(pointer(v))))), Int64(3)),
+])
+# A dynamic call whose every method takes one number class at a slot: the dispatch slot carries
+# its register (the one width rule), a narrow integer, an enum; a Float16 is no faithful value
+@noinline _sm_s8(x::Int8, y::Int64) = Int64(x) + y
+@noinline _sm_s8(x::Int8, y::Float64) = Int64(x) + 2 * Int64(round(y))
+@enum _SmCol _sm_red = 1 _sm_green = 2
+@noinline _sm_se(c::_SmCol, y::Int64) = Int64(Int(c)) + y
+@noinline _sm_se(c::_SmCol, y::Float64) = Int64(Int(c)) * 10 + Int64(round(y))
+@noinline _sm_sf(x::Float16, y::Int64) = Float64(x) + y
+@noinline _sm_sf(x::Float16, y::Float64) = Float64(x) * y
+_g("dispatch_slot_registers", Any[
+    ("int8_slot", (n::Int64) -> (v = Any[n, 2.5]; _sm_s8(Int8(n), v[1]) + _sm_s8(Int8(n), v[2])), Int64(3)),
+    ("enum_slot", (n::Int64) -> (v = Any[n, 2.5]; _sm_se(_sm_green, v[1]) + _sm_se(_sm_red, v[2])), Int64(3)),
+])
+# a Float16 is no faithful value (its fpext rejects at its statement), at a dispatch slot too
+_xf("dispatch_slot_float16", Any[
+    ("float16_slot", (n::Int64) -> (v = Any[n, 2.5]; _sm_sf(Float16(1.5), v[1]) + _sm_sf(Float16(2.0), v[2])), Int64(3)),
+])
+# An intrinsic splatted over a vector runs as itself: `add_int` over Float64 elements adds their
+# bits, never their values, which no float opcode does: it rejects at its statement (native NaN)
+_xf("reduce_intrinsic_kind", Any[
+    ("add_int_over_floats", (n::Int64) -> (v = [1.0, Float64(n)]; Core.Intrinsics.add_int(v...)), Int64(3)),
+])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId
 # (dev/AUDIT.md A5E4 = A5B3: two indices for one type, and `ref.test` answered 1 where native

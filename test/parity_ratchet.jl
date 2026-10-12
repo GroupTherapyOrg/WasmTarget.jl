@@ -1969,8 +1969,8 @@ const LOCKS = [
                         "emit_method_error!(bld, ctx.mod, ctx.type_registry, Tuple{},",
                         "MethodError(f, (), world)",
                         "Int64(WASM_WORLD_AGE)",
-                        "_get_binary_reduce_opcode(target_value, elem_type)",
-                        "func === (+)",
+                        "reduce_op = operator_intrinsic(target_value, elem_type)",
+                        "reduce_op in (:sub_int, :sub_float) && (reduce_op = nothing)",
                         "local_set!(bld, has_value)"]
             forbidden = ["_get_binary_reduce_opcode(func_name"]
             count(p -> !occursin(p, calls_src), required) +
@@ -3605,6 +3605,48 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for c in ("_g(\"tuple_type_element\"", "(\"kind_partition_static_type\"", "_g(\"union_nothing\"", "_g(\"typeassert_checks\"")
                 v += occursin(c, smoke) ? 0 : 1
             end
+            v
+        end),
+    "L180_one_table_per_construct" => ("each lowering reads one table: one operator table, INTRINSIC_BINOPS (dart's `_binaryOperatorMap`, intrinsics.dart:437, its lookup :995), which the surface `+ - *` lowering and the `_apply_iterate` reduce reach through operator_intrinsic (the intrinsic Julia's own method runs, base/int.jl:86-88, base/float.jl:495-497; no `_OPERATOR_OPCODES`, no `_get_binary_reduce_opcode`), and one conversion table, INTRINSIC_CONVERSIONS, whose bitcast every reinterpretation reads (emit_bitcast!: no `*_REINTERPRET_*` opcode outside julia_numeric_tier.jl); one width rule, julia_to_wasm_type for a value's register (dart's translateType, translator.dart:1044; numeric_register, and exact_register for a register that holds exactly its value) and `_julia_int_width` for a BitInteger's bits, which every width decision in codegen reads: no list of two or more numeric types deciding a width, as an `||` chain, an `in (…)` tuple or an `isa Union{…}`, outside the rule's own body, packed_array_storage (the packed storage rule), translate_external_type (the numbers the JS boundary carries unboxed), assign_type_ids!'s fixed primitive classes (which classes are numbered), `_struct_fields!` (13.4's one struct-field translation, 116f), the constant encoders (values.jl's, `_const_init!`'s: each constant's bits, as dart's constant visitors encode each class), the getfield constant fold's constant kinds (calls.jl) and calls.jl's one-byte pointer-element tests (a byte layout); one operand table, `_nir_any_operand`, which count_ssa_uses! and the local allocation's second pass read (an upsilon's value is a use), and the use index (ssa_users) answers every whole-body use scan; and one loop-bounds definition, loop_bounds (a loop's header and its last back edge), which the local allocation and the branching-loop index read (no loop-header bitmap, no first-goto table). Behavior: test/m11_intrinsics_table.jl's 'operator_intrinsic is the intrinsic Julia's method runs' (for every admitted operator and type, the one intrinsic in Julia's typed body; an intrinsic callee only for its own kind, so smoke's xfail reduce_intrinsic_kind rejects where it added floats), test/nir_use_index.jl's 'the use count and the loop bounds read one table each' (count_ssa_uses! equals the one table's count on a body with an upsilon carrying an SSA value; a loop entered by a forward goto keeps its last back edge), smoke int128_extends (a narrow source normalised before it widens: sext_int(Int128, 0x80) answered 128), pointer_float_bytes and dispatch_slot_registers (an Int8 and an enum slot carried in their register; a Float16 rejects at its statement, xfail dispatch_slot_float16) (dev/AUDIT.md the first audit's side notes; 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local v = count_sites(r"_OPERATOR_OPCODES|_get_binary_reduce_opcode")
+            v += count("function operator_intrinsic(", blt) == 1 ? 0 : 1
+            # an intrinsic callee over its own kind only
+            v += occursin("f === g && return int ? sym : nothing", blt) && occursin("f === g && return flt ? sym : nothing", blt) ? 0 : 1
+            v += occursin("emit_intrinsic_binop!(fb, wt, wt, op, ctx, _julia_int_width(T, wt === I32))", blt) ? 0 : 1
+            v += occursin("emit_intrinsic_binop!(bld, elem_wasm_type, elem_wasm_type, reduce_op, ctx,", calls) ? 0 : 1
+            v += count_sites(r"REINTERPRET_"; roots=[CODEGEN], exclude_files=["codegen/julia_numeric_tier.jl"])
+            # the width rule: a list of numeric types deciding a width, by file, exactly the allowlist
+            local num = raw"\b(U?Int(8|16|32|64)|Float(16|32|64)|Bool|Char)\b"
+            local wrx = Regex(raw"=== U?Int(8|16|32|64)\b[^\n]*\|\||\|\|[^\n]*=== U?Int(8|16|32|64)\b|isa U?Int(8|16|32|64) \|\||=== Float(32|64) \? F" *
+                              raw"|\bin \((?:[^()]*?" * num * raw"){2}|\bisa Union\{(?:[^{}]*?" * num * raw"){2}")
+            local allow = Dict("codegen/types.jl" => 10, "codegen/structs.jl" => 3, "codegen/values.jl" => 2,
+                               "codegen/calls.jl" => 5)
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                local rel = "codegen/" * relpath(joinpath(dir, f), CODEGEN)
+                local n = count(l -> !_iscomment(l) && occursin(wrx, l), eachline(joinpath(dir, f)))
+                v += abs(n - get(allow, rel, 0))
+            end
+            v += occursin("    _count(rec.node)\n    _nir_any_operand(_count, rec.node)", ctxs) ? 0 : 1
+            v += occursin("_nir_any_operand(x -> (x isa NirSSA && push!(needs_local_set, x.id); false), node)", ctxs) ? 0 : 1
+            v += count_sites(r"for use_rec in nir\b|any\(nir\) do|for \(phic_idx, phic_rec\) in enumerate")
+            v += occursin(r"loop_headers|first_goto_to", ctxs) ? 1 : 0   # (the stackifier's own, block-level loops are 116d-3's one CFG)
+            v += occursin("for phic_idx in ssa_users(ctx, idx)", stm) && occursin("for j in ssa_users(ctx, idx)   # the statements that use the new object", stm) ? 0 : 1
+            v += count("function loop_bounds(nir::Vector{NirStmt})", ctxs) == 1 ? 0 : 1
+            local m11 = read(joinpath(ROOT, "test", "m11_intrinsics_table.jl"), String)
+            v += occursin("operator_intrinsic is the intrinsic Julia's method runs", m11) ? 0 : 1
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            for c in ("_g(\"int128_extends\"", "_g(\"pointer_float_bytes\"", "_g(\"dispatch_slot_registers\"", "_xf(\"reduce_intrinsic_kind\"", "_xf(\"dispatch_slot_float16\"")
+                v += occursin(c, smk) ? 0 : 1
+            end
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("the use count and the loop bounds read one table each", nui) &&
+                 occursin("@test WasmTarget.loop_bounds(synth) == [(3, 6)]", nui) ? 0 : 1
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",

@@ -742,10 +742,10 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
                     # numeric riding a ref local narrows HERE too, and the reported type
                     # becomes the numeric so the phi store boxes through the funnel.
                     local _cpv_refined = value_type(ctx, val)
-                    if _cpv_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
+                    if exact_register(_cpv_refined) !== nothing &&
                        ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
                         # funnel-unbox directly on the builder (no byte seam)
-                        coerce_stack_top!(pvb, julia_to_wasm_type(_cpv_refined), ctx;
+                        coerce_stack_top!(pvb, exact_register(_cpv_refined), ctx;
                                           from_julia=_cpv_refined)
                     end
                 end

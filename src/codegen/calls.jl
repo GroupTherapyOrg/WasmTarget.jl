@@ -271,8 +271,9 @@ function _emit_fpiseq!(b::InstrBuilder, ctx::AbstractCompilationContext, t::Wasm
     local_get!(b, la); local_get!(b, la); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(a)
     local_get!(b, lb); local_get!(b, lb); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(b)
     num!(b, Opcode.I32_AND)
-    local_get!(b, la); num!(b, wide ? Opcode.I64_REINTERPRET_F64 : Opcode.I32_REINTERPRET_F32)
-    local_get!(b, lb); num!(b, wide ? Opcode.I64_REINTERPRET_F64 : Opcode.I32_REINTERPRET_F32)
+    local F, U = wide ? (Float64, UInt64) : (Float32, UInt32)
+    local_get!(b, la); emit_bitcast!(b, F, U)
+    local_get!(b, lb); emit_bitcast!(b, F, U)
     num!(b, wide ? Opcode.I64_EQ : Opcode.I32_EQ)
     num!(b, Opcode.I32_OR)
     return nothing
@@ -1425,12 +1426,12 @@ function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
     local w = julia_to_wasm_type(P)
     local nbits = 8 * sizeof(P)
     if w === F64
-        p1(); num!(b, Opcode.I64_REINTERPRET_F64)
-        p2(); num!(b, Opcode.I64_REINTERPRET_F64)
+        p1(); emit_bitcast!(b, P, UInt64)
+        p2(); emit_bitcast!(b, P, UInt64)
         num!(b, Opcode.I64_EQ)
     elseif w === F32
-        p1(); num!(b, Opcode.I32_REINTERPRET_F32)
-        p2(); num!(b, Opcode.I32_REINTERPRET_F32)
+        p1(); emit_bitcast!(b, P, UInt32)
+        p2(); emit_bitcast!(b, P, UInt32)
         num!(b, Opcode.I32_EQ)
     elseif w === I64
         p1(); p2(); num!(b, Opcode.I64_EQ)
@@ -2201,8 +2202,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # regardless of the (anyref) local. The refined type drives the fold.
             local _isa2_refined = value_type(ctx, value_arg)
             isconcretetype(_isa2_refined) && (isa2_julia = _isa2_refined)
-            if _isa2_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
-                isa2_val_wasm = julia_to_wasm_type(_isa2_refined)
+            if exact_register(_isa2_refined) !== nothing
+                isa2_val_wasm = exact_register(_isa2_refined)
             else
             local isa2_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
             # Fix: isa2_local_idx includes n_params, but ctx.locals only has non-param locals
@@ -2299,8 +2300,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # numeric is on the stack unboxed whatever its local's type
             local _refined3 = value_type(ctx, value_arg)
             isconcretetype(_refined3) && (isa3_julia = _refined3)
-            if _refined3 in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
-                isa3_val_wasm = julia_to_wasm_type(_refined3)
+            if exact_register(_refined3) !== nothing
+                isa3_val_wasm = exact_register(_refined3)
             else
                 local _idx3 = get(ctx.ssa_locals, value_arg.id, nothing)
                 if _idx3 !== nothing
@@ -2961,7 +2962,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # Assemble the word little-endian from s consecutive bytes.
             local _prw_s = sizeof(_pr_tp0)
             local _prw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
-            local _prw_w64 = _prw_s == 8 || _pr_tp0 === Float64
+            local _prw_w64 = julia_to_wasm_type(_pr_tp0) in (I64, F64)
             # scratch: arr ref + base index
             local _prw_la = allocate_local!(ctx, ConcreteRef(_prw_arr, true))
             local _prw_lb = allocate_local!(ctx, I32)
@@ -2993,11 +2994,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     end
                 end
             end
-            if _pr_tp0 === Float64
-                num!(_prwb, Opcode.F64_REINTERPRET_I64)
-            elseif _pr_tp0 === Float32
-                num!(_prwb, Opcode.F32_REINTERPRET_I32)
-            end
+            emit_bitcast!(_prwb, _prw_w64 ? UInt64 : UInt32, _pr_tp0)   # the assembled bytes as the type read
             append_builder!(fb, _prwb)
             return append_builder!(b, fb)
         end
@@ -3082,15 +3079,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             ConcreteRef(UInt32(_prr_info.wasm_type_idx), true))
                 ref_cast!(_prrb, Int64(_prr_info.wasm_type_idx), true)
                 struct_get!(_prrb, _prr_info.wasm_type_idx, wasm_field_idx(_prr_info, 1))
-                if _prr_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
-                    num!(_prrb, Opcode.I64_REINTERPRET_F64)
-                elseif (_prr_te === UInt64 || _prr_te === Int64) && _prg_tp === Float64
-                    num!(_prrb, Opcode.F64_REINTERPRET_I64)
-                elseif _prr_te === Float32 && (_prg_tp === UInt32 || _prg_tp === Int32)
-                    num!(_prrb, Opcode.I32_REINTERPRET_F32)
-                elseif (_prr_te === UInt32 || _prr_te === Int32) && _prg_tp === Float32
-                    num!(_prrb, Opcode.F32_REINTERPRET_I32)
-                end
+                emit_bitcast!(_prrb, _prr_te, _prg_tp)   # the element's bits read as the pointer's type
                 append_builder!(fb, _prrb)
                 return append_builder!(b, fb)
             end
@@ -3110,15 +3099,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 i32_const!(_prgb, Int64(trailing_zeros(sizeof(_prg_te))))
                 num!(_prgb, Opcode.I32_SHR_U)
                 array_get!(_prgb, _prg_arr; signed=packed_array_signedness(_prg_te))
-                if _prg_te === Float64 && (_prg_tp === UInt64 || _prg_tp === Int64)
-                    num!(_prgb, Opcode.I64_REINTERPRET_F64)
-                elseif (_prg_te === UInt64 || _prg_te === Int64) && _prg_tp === Float64
-                    num!(_prgb, Opcode.F64_REINTERPRET_I64)
-                elseif _prg_te === Float32 && (_prg_tp === UInt32 || _prg_tp === Int32)
-                    num!(_prgb, Opcode.I32_REINTERPRET_F32)
-                elseif (_prg_te === UInt32 || _prg_te === Int32) && _prg_tp === Float32
-                    num!(_prgb, Opcode.F32_REINTERPRET_I32)
-                end
+                emit_bitcast!(_prgb, _prg_te, _prg_tp)   # the element's bits read as the pointer's type
                 append_builder!(fb, _prgb)
                 return append_builder!(b, fb)
             end
@@ -3177,15 +3158,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                             ConcreteRef(UInt32(_psr_info.wasm_type_idx), true))
                 ref_cast!(_psrb, Int64(_psr_info.wasm_type_idx), true)
                 emit_value!(_psrb, args[2], ctx, julia_to_wasm_type(_psg_tp))
-                if _psr_te === Float64 && (_psg_tp === UInt64 || _psg_tp === Int64)
-                    num!(_psrb, Opcode.F64_REINTERPRET_I64)
-                elseif (_psr_te === UInt64 || _psr_te === Int64) && _psg_tp === Float64
-                    num!(_psrb, Opcode.I64_REINTERPRET_F64)
-                elseif _psr_te === Float32 && (_psg_tp === UInt32 || _psg_tp === Int32)
-                    num!(_psrb, Opcode.F32_REINTERPRET_I32)
-                elseif (_psr_te === UInt32 || _psr_te === Int32) && _psg_tp === Float32
-                    num!(_psrb, Opcode.I32_REINTERPRET_F32)
-                end
+                emit_bitcast!(_psrb, _psg_tp, _psr_te)   # the pointer's type's bits stored as the element's
                 struct_set!(_psrb, _psr_info.wasm_type_idx, wasm_field_idx(_psr_info, 1))
                 emit_value!(_psrb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psrb)
@@ -3224,15 +3197,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 i32_const!(_psgb, Int64(trailing_zeros(sizeof(_psg_te))))
                 num!(_psgb, Opcode.I32_SHR_U)
                 emit_value!(_psgb, args[2], ctx, julia_to_wasm_type(_psg_tp))
-                if _psg_te === Float64 && (_psg_tp === UInt64 || _psg_tp === Int64)
-                    num!(_psgb, Opcode.F64_REINTERPRET_I64)
-                elseif (_psg_te === UInt64 || _psg_te === Int64) && _psg_tp === Float64
-                    num!(_psgb, Opcode.I64_REINTERPRET_F64)
-                elseif _psg_te === Float32 && (_psg_tp === UInt32 || _psg_tp === Int32)
-                    num!(_psgb, Opcode.F32_REINTERPRET_I32)
-                elseif (_psg_te === UInt32 || _psg_te === Int32) && _psg_tp === Float32
-                    num!(_psgb, Opcode.I32_REINTERPRET_F32)
-                end
+                emit_bitcast!(_psgb, _psg_tp, _psg_te)   # the pointer's type's bits stored as the element's
                 array_set!(_psgb, _psg_arr)
                 emit_value!(_psgb, _ps_ptr, ctx, I64)
                 append_builder!(fb, _psgb)
@@ -3275,8 +3240,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 else
                     local _psw_vw = julia_to_wasm_type(_psg_tp)
                     emit_value!(_pswb, args[2], ctx, _psw_vw)
-                    _psw_vw === I32 && num!(_pswb, Opcode.I64_EXTEND_I32_U)
-                    _psw_vw === F64 && num!(_pswb, Opcode.I64_REINTERPRET_F64)
+                    # its bits in an integer register, widened to the i64 the bytes are cut from
+                    emit_bitcast!(_pswb, _psg_tp, _psw_vw in (I32, F32) ? UInt32 : UInt64)
+                    _psw_vw in (I32, F32) && num!(_pswb, Opcode.I64_EXTEND_I32_U)
                 end
                 local_set!(_pswb, _psw_lv)
                 for _psw_k in 0:(_psw_s - 1)
@@ -3440,9 +3406,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # with M11. (`_it_name` is already in scope — hoisted above, so there is only ONE
     # extraction site.)
     if _it_name !== nothing && !is_128bit
-        # floats classify FIRST (is_32bit is true for Float32 — an INT-width flag)
-        local _it_w = arg_type === Float64 ? F64 :
-                      arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
+        local _it_w = operand_register(arg_type)
         if haskey(INTRINSIC_BINOPS, (_it_w, _it_w, _it_name))
             # Comparisons and div/rem observe FULL register width — narrow pairs
             # (Int8/Int16 on i32) normalise first (sign-extend for signed/equality/
@@ -3489,8 +3453,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         num!(fb, Opcode.I32_EQZ)
         return append_builder!(b, fb)
     elseif _it_name !== nothing && !is_128bit
-        local _ut_w = arg_type === Float64 ? F64 :
-                      arg_type === Float32 ? F32 : (is_32bit ? I32 : I64)
+        local _ut_w = operand_register(arg_type)
         local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)
         if _ut_result !== nothing
             # (The rebox link, mirroring the binop route above.)
@@ -3782,8 +3745,10 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # `[v...]` ⇒ Base.vect(v...) ⇒ a shallow copy of the vector.
                 _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx)
             else
-                # Resolve target function to a WASM opcode for binary reduce
-                reduce_op = _get_binary_reduce_opcode(target_value, elem_type)
+                # the reduce's operator: the intrinsic Julia's `+`/`*` method runs (a `-` is no
+                # reduction), its opcode the one operator table's
+                reduce_op = operator_intrinsic(target_value, elem_type)
+                reduce_op in (:sub_int, :sub_float) && (reduce_op = nothing)
                 if reduce_op !== nothing
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
                     _emit_apply_iterate_reduce!(fb, container_args, container_types,
@@ -4541,31 +4506,6 @@ end
 # _apply_iterate helpers (vector splatting)
 # ============================================================================
 
-"""
-Map a resolved known binary function object to its WASM reduce opcode for the given element type.
-Returns nothing if the function is not a known binary reduce operation.
-parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
-"""
-function _get_binary_reduce_opcode(func, elem_type::Type)::Union{UInt8, Nothing}
-    local is_add = func === (+) || func === Core.Intrinsics.add_int ||
-                   func === Core.Intrinsics.add_float
-    local is_mul = func === (*) || func === Core.Intrinsics.mul_int ||
-                   func === Core.Intrinsics.mul_float
-    if elem_type === Int64 || elem_type === UInt64
-        is_add && return Opcode.I64_ADD
-        is_mul && return Opcode.I64_MUL
-    elseif elem_type === Int32 || elem_type === UInt32
-        is_add && return Opcode.I32_ADD
-        is_mul && return Opcode.I32_MUL
-    elseif elem_type === Float64
-        is_add && return Opcode.F64_ADD
-        is_mul && return Opcode.F64_MUL
-    elseif elem_type === Float32
-        is_add && return Opcode.F32_ADD
-        is_mul && return Opcode.F32_MUL
-    end
-    return nothing
-end
 
 """
     emit_method_error!(b, mod, registry, T, push_f, push_args) -> b
@@ -4711,7 +4651,7 @@ end
 # parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
 function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
                                       container_types::Vector{DataType}, elem_type::Type,
-                                      reduce_op::UInt8, target_value, ctx)::Union{Nothing, InstrBuilder}
+                                      reduce_op::Symbol, target_value, ctx)::Union{Nothing, InstrBuilder}
     bld = _ctx_builder(ctx, "_emit_apply_iterate_reduce!")
     arr_type_idx = get(ctx.type_registry.arrays, elem_type, nothing)
     if arr_type_idx === nothing
@@ -4778,7 +4718,9 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         if_!(bld; results=WasmValType[elem_wasm_type])
         local_get!(bld, acc_local)
         local_get!(bld, elem_local)
-        num!(bld, reduce_op)
+        emit_intrinsic_binop!(bld, elem_wasm_type, elem_wasm_type, reduce_op, ctx,
+                              _julia_int_width(elem_type, elem_wasm_type === I32)) === nothing &&
+            error("the operator table has no $(reduce_op) over $(elem_wasm_type)")
         else_!(bld)
         local_get!(bld, elem_local)
         end_block!(bld)
