@@ -3637,7 +3637,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += count_sites(r"for use_rec in nir\b|any\(nir\) do|for \(phic_idx, phic_rec\) in enumerate")
             v += occursin(r"loop_headers|first_goto_to", ctxs) ? 1 : 0   # (the stackifier's own, block-level loops are 116d-3's one CFG)
             v += occursin("for phic_idx in ssa_users(ctx, idx)", stm) && occursin("for j in ssa_users(ctx, idx)   # the statements that use the new object", stm) ? 0 : 1
-            v += count("function loop_bounds(nir::Vector{NirStmt})", ctxs) == 1 ? 0 : 1
+            v += count("function loop_bounds(cfg::NirCFG)", ctxs) == 1 ? 0 : 1
             local m11 = read(joinpath(ROOT, "test", "m11_intrinsics_table.jl"), String)
             v += occursin("operator_intrinsic is the intrinsic Julia's method runs", m11) ? 0 : 1
             local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
@@ -3646,10 +3646,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("the use count and the loop bounds read one table each", nui) &&
-                 occursin("@test WasmTarget.loop_bounds(synth) == [(3, 6)]", nui) ? 0 : 1
+                 occursin("@test WasmTarget.loop_bounds(WasmTarget.nir_cfg(synth)) == [(3, 6)]", nui) ? 0 : 1
             v
         end),
-    "L181_one_cfg" => ("a body's control-flow graph is one, Julia's own: nir_cfg (frontend/nir.jl), a port of Compiler's basic_blocks_starts and compute_basic_blocks (Compiler/src/ssair/ir.jl:46, :93; an Enter starts and ends a block, its catch destination a successor; a :leave ends one), built once per compiled body (the context's `cfg`) and read by generate_body, the stackifier (its blocks, successors and predecessors, the boundscheck fold the only edit; no region split, no handler edges of its own), the trampoline threading (nir_cfg of each round's rewritten statements), the proven-dead proof (its reachability, which now sees a handler through its catch edge, so a body with a try is no longer excluded), the definite-initialization proof (its statement successors) and the statement visitor's stub reset (a block start); one dominator computation, cfg_dominators, read by the trampolines and the loop labels. No analyze_blocks, no _split_blocks_for_regions, no successor rule outside nir_cfg, no second dominator loop. Behavior: test/nir_use_index.jl's 'nir_cfg is Julia's compute_basic_blocks' (its blocks and edges equal Compiler's over bodies with loops, phis and try/catch), dev/formal/ProvenDead.tla (MCProvenDeadNoCatchEdgeBroken: an Enter's catch edge dropped proves a handler dead) and DefiniteInit.tla (MCDefiniteInitNoCatchEdgeBroken), and the probes byte-identical across the move (the first audit's side notes; 13.4's one CFG; dev/CHARTER.md C1)",
+    "L181_one_cfg" => ("a body's control-flow graph is one, Julia's own: nir_cfg (frontend/nir.jl), a port of Compiler's basic_blocks_starts and compute_basic_blocks (Compiler/src/ssair/ir.jl:46, :93; an Enter starts and ends a block, its catch destination a successor; a :leave ends one), built once per compiled body (the context's `cfg`) and read by generate_body, the stackifier (its blocks, successors and predecessors, the boundscheck fold the only edit; no region split, no handler edges of its own), the trampoline threading (nir_cfg of each round's rewritten statements), the proven-dead proof (the context's CFG; its reachability sees a handler through its catch edge, so a body with a try is no longer excluded), the definite-initialization proof (its statement successors), the statement visitor's stub reset (a block start), the loop bounds (a back edge is a successor block at or before its own, a backward goto-if-not too) and the stackifier's jump targets (its folded successors); one dominator computation, cfg_dominators (Julia's naive_idoms, Compiler/src/ssair/domtree.jl:681), read by the trampolines and the loop labels. No analyze_blocks, no _split_blocks_for_regions, no successor rule outside nir_cfg (no back-edge test on a jump's raw target; the emission reads a jump's target only to emit its branch), no second dominator loop. Behavior: test/nir_use_index.jl's 'nir_cfg is Julia's compute_basic_blocks' (its blocks and edges equal Compiler's over bodies with loops, phis and try/catch, and trailing `nothing` statements in no block, ir.jl:84) and 'the proven-dead proof sees a try body through the one CFG' (a handler's first statement is not proven dead; a statement after an `unreachable` inside a try body is), 'the use count and the loop bounds read one table each' (a loop whose only back edge is a goto-if-not), dev/formal/ProvenDead.tla (MCProvenDeadNoCatchEdgeBroken: an Enter's catch edge dropped proves a handler dead) and DefiniteInit.tla (MCDefiniteInitNoCatchEdgeBroken), and the probes byte-identical across the move (the first audit's side notes; 13.4's one CFG; dev/CHARTER.md C1)",
         () -> begin
             local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
             local stk = read(joinpath(CODEGEN, "stackified.jl"), String)
@@ -3658,7 +3658,17 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = count_sites(r"analyze_blocks|_split_blocks_for_regions")
             v += count("function nir_cfg(nir::Vector{NirStmt})::NirCFG", nirs) == 1 ? 0 : 1
             v += occursin("edge!(k, block_of[t.catch_target])", nirs) && occursin("push!(starts, idx); push!(starts, idx + 1)", nirs) ? 0 : 1
-            v += count_sites(r"\bnir_cfg\("; roots=[CODEGEN]) == 4 ? 0 : 1   # the context, the trampolines, the two proofs
+            v += count_sites(r"\bnir_cfg\("; roots=[CODEGEN]) == 3 ? 0 : 1   # the context, the trampolines, the definite-initialization proof over a callee's body
+            local diag = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            v += count("stmt_is_proven_unreachable(_ctx_cfg(ctx), idx)", diag) == 2 ? 0 : 1   # the proven-dead proof reads the context's CFG
+            # no successor rule from a jump's raw target: no back-edge test on a target, the loop
+            # bounds and the stackifier's jump targets read the CFG's successors
+            v += count_sites(r"\.target\s*<"; roots=[CODEGEN])
+            local ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            local lb = match(r"function loop_bounds\(cfg::NirCFG\).*?\nend\n"s, ctxs)
+            v += lb !== nothing && !occursin(".target", lb.match) && occursin("for k in eachindex(cfg.blocks), s in cfg.succs[k]", lb.match) ? 0 : 1
+            local ntt = match(r"non_trivial_targets = Set\{Int\}\(\).*?\n\n"s, stk)
+            v += ntt !== nothing && !occursin(".target", ntt.match) && occursin("for s in successors[block_idx]", ntt.match) ? 0 : 1
             v += occursin("return generate_structured(b, ctx, ctx.cfg)", gen) ? 0 : 1
             v += occursin("successors = Dict{Int, Vector{Int}}(k => copy(cfg.succs[k]) for k in eachindex(blocks))", stk) ? 0 : 1
             v += occursin("ctx.cfg.blocks[ctx.cfg.block_of[idx]].start_idx == idx", stm) ? 0 : 1
@@ -3669,6 +3679,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += count(r"while changed", stk) == 1 ? 0 : 1
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("nir_cfg is Julia's compute_basic_blocks", nui) ? 0 : 1
+            v += occursin("the proven-dead proof sees a try body through the one CFG", nui) ? 0 : 1
             for f in ("MCProvenDeadNoCatchEdgeBroken.cfg", "MCDefiniteInitNoCatchEdgeBroken.cfg")
                 v += isfile(joinpath(ROOT, "dev", "formal", f)) ? 0 : 1
             end

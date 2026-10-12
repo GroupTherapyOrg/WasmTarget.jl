@@ -77,7 +77,11 @@ end
     synth = [S(WasmTarget.NirGoto(3)), S(WasmTarget.NirGotoIfNot(lit, 7)), S(WasmTarget.NirLiteral(0)),
              S(WasmTarget.NirGoto(3)), S(WasmTarget.NirGotoIfNot(lit, 3)), S(WasmTarget.NirGoto(3)),
              S(WasmTarget.NirReturn(nothing))]
-    @test WasmTarget.loop_bounds(synth) == [(3, 6)]
+    @test WasmTarget.loop_bounds(WasmTarget.nir_cfg(synth)) == [(3, 6)]
+    # a loop whose only back edge is a goto-if-not: 1: entry; 2: header; 3: goto 2 if not (back); 4: return
+    synth2 = [S(WasmTarget.NirLiteral(0)), S(WasmTarget.NirLiteral(1)), S(WasmTarget.NirGotoIfNot(lit, 2)),
+              S(WasmTarget.NirReturn(nothing))]
+    @test WasmTarget.loop_bounds(WasmTarget.nir_cfg(synth2)) == [(2, 3)]
 end
 
 # The one CFG is Julia's own (L181): nir_cfg's blocks and edges equal Compiler's
@@ -100,4 +104,35 @@ end
         @test [Set(p) for p in cfg.preds] == [Set(filter(!=(0), b.preds)) for b in jc.blocks]
     end
     @test tries >= 2
+    # trailing `nothing` statements lie in no block (ir.jl:84): the last block ends at the last
+    # statement that is not `nothing`
+    S(n) = WasmTarget.NirStmt(n, Any, 0)
+    code = Any[Core.GotoIfNot(Core.Argument(2), 3), Core.ReturnNode(1), Core.ReturnNode(2), nothing, nothing]
+    nir = [S(WasmTarget.NirGotoIfNot(WasmTarget.NirArgument(2), 3)), S(WasmTarget.NirReturn(WasmTarget.NirLiteral(1))),
+           S(WasmTarget.NirReturn(WasmTarget.NirLiteral(2))), S(WasmTarget.NirLiteral(nothing)), S(WasmTarget.NirLiteral(nothing))]
+    cfg = WasmTarget.nir_cfg(nir)
+    jc = Core.Compiler.compute_basic_blocks(code)
+    @test [(b.start_idx, b.end_idx) for b in cfg.blocks] == [(first(b.stmts), last(b.stmts)) for b in jc.blocks] == [(1, 1), (2, 2), (3, 3)]
+    @test cfg.block_of == [1, 2, 3, 0, 0]
+end
+
+# The proven-dead proof reads the one CFG (L181): a handler is reached through its Enter's catch
+# edge, and a body with a try is no longer excluded, so a statement after an `unreachable` inside
+# the try body is proven dead
+@testset "the proven-dead proof sees a try body through the one CFG" begin
+    S(n) = WasmTarget.NirStmt(n, Any, 0)
+    # 1: enter, catch at 5; 2: the try body; 3: unreachable; 4: after it, in the try body;
+    # 5: the handler's first statement; 6: return
+    nir = [S(WasmTarget.NirEnter(5)), S(WasmTarget.NirLiteral(0)), S(WasmTarget.NirReturn(nothing)),
+           S(WasmTarget.NirLiteral(1)), S(WasmTarget.NirLiteral(2)), S(WasmTarget.NirReturn(WasmTarget.NirLiteral(0)))]
+    cfg = WasmTarget.nir_cfg(nir)
+    @test !WasmTarget.stmt_is_proven_unreachable(cfg, 5)
+    @test WasmTarget.stmt_is_proven_unreachable(cfg, 4)
+    @test !WasmTarget.stmt_is_proven_unreachable(cfg, 2)
+    # a compiled body's handler
+    ci, _ = WasmTarget.get_typed_ir(_nui_catching, (Int,))
+    body = WasmTarget.nir_body(ci).stmts
+    enters = [rec.node for rec in body if rec.node isa WasmTarget.NirEnter]
+    @test !isempty(enters)
+    @test !any(e -> WasmTarget.stmt_is_proven_unreachable(WasmTarget.nir_cfg(body), e.catch_target), enters)
 end

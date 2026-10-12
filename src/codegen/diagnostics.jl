@@ -219,6 +219,8 @@ Base.showerror(io::IO, e::WasmValidationError) =
 
 # parity(code_generator.dart:190 setSourceMapFileOffset): the NIR a located report reads.
 _ctx_nir(ctx)::Vector{NirStmt} = ctx.nir
+# parity(quarantine: Julia's IR is a CFG of gotos; dart's TFA removes unreachable code before codegen): the body's one CFG, which the proven-dead proof reads.
+_ctx_cfg(ctx)::NirCFG = ctx.cfg
 # parity(code_generator.dart:190 setSourceMapFileOffset): the DebugInfo a located report decodes.
 _ctx_debuginfo(ctx)::Union{Core.DebugInfo,Nothing} = ctx.debuginfo
 
@@ -414,7 +416,7 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
     push!(ctx.diagnostics, diag)
     DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
     fatal = soundness_fatal === nothing ?
-            !stmt_is_proven_unreachable(_ctx_nir(ctx), idx) :
+            !stmt_is_proven_unreachable(_ctx_cfg(ctx), idx) :
             soundness_fatal
     if fatal
         _sink = DIAGNOSTICS_SINK[]
@@ -445,7 +447,7 @@ parity(code_generator.dart:5084 UnreachableCodeGenerator)
 function emit_unsupported_stub!(ctx, b::InstrBuilder, kind::Symbol,
                                 construct::AbstractString; idx::Int=0, detail=nothing,
                                 soundness_fatal::Bool=true)::Nothing
-    local _dead2 = stmt_is_proven_unreachable(_ctx_nir(ctx), idx)
+    local _dead2 = stmt_is_proven_unreachable(_ctx_cfg(ctx), idx)
     record_unsupported!(ctx, kind, construct; idx=idx, detail=detail,
                         soundness_fatal=(soundness_fatal && !_dead2))
     unreachable!(b)  # structural trap after recorded, proven-dead unsupported lowering

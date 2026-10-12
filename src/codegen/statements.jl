@@ -838,8 +838,8 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
             return false
         end
 
-        local bk = cfg.block_of[pc]
-        successors = pc < cfg.blocks[bk].end_idx ? Int[pc + 1] :
+        local bk = cfg.block_of[pc]   # 0: a trailing `nothing`, in no block and followed by none
+        successors = bk == 0 ? Int[] : pc < cfg.blocks[bk].end_idx ? Int[pc + 1] :
             Int[cfg.blocks[s].start_idx for s in cfg.succs[bk]]
         for dest in successors
             start_pc <= dest <= length(nir) || return false

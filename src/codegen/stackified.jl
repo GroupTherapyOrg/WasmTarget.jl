@@ -20,7 +20,13 @@ end
 Each block's dominators among `nodes`, by the iterative intersection over its predecessors in
 `nodes` (`preds`, a CFG's): the entry dominates only itself; a block with no predecessor among
 `nodes`, which no path reaches, keeps every node. The one dominator computation the trampoline
-threading and the stackifier's loop labels read.
+threading and the stackifier's loop labels read. It is Julia's naive_idoms
+(Compiler/src/ssair/domtree.jl:681, the same line on 1.12.7 and 1.13.1), its dominator-set phase:
+the entry's set is itself, every other starts at all nodes, and each takes the intersection over
+its predecessors plus itself until nothing changes. Compiler's construct_domtree is not called:
+it takes Compiler's own BasicBlocks (statement ranges, a virtual entry predecessor) and answers
+immediate dominators over the whole graph, where the stackifier asks for dominator sets over the
+folded CFG's live blocks of statements it rewrote (the trampolines), which have no Compiler blocks.
 parity(quarantine: Julia's IR is a CFG of gotos; the stackifier reconstructs wasm's structure from
 it (dev/formal/Stackifier.tla), where dart's kernel tree carries its structure.)
 """
@@ -67,8 +73,8 @@ function _thread_backward_trampolines!(cfg::NirCFG, nir::Vector{NirStmt}, try_re
         push!(region_bounds, r.enter_idx); push!(region_bounds, r.catch_dest)
     end
     # fast path: no one-statement goto block that jumps backwards → nothing to thread
-    any(b -> b.terminator isa NirGoto && b.start_idx == b.end_idx &&
-             b.terminator.target < b.start_idx, cfg.blocks) || return cfg
+    any(k -> cfg.blocks[k].terminator isa NirGoto && cfg.blocks[k].start_idx == cfg.blocks[k].end_idx &&
+             only(cfg.succs[k]) < k, eachindex(cfg.blocks)) || return cfg
     for _ in 1:16   # each round threads one trampoline and re-derives the CFG
         blocks, preds = cfg.blocks, cfg.preds
         dom = cfg_dominators(preds, eachindex(blocks), 1)
@@ -175,7 +181,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
     # ========================================================================
 
     # statement index -> block index, the CFG's
-    stmt_to_block = Dict{Int, Int}(i => cfg.block_of[i] for i in eachindex(cfg.block_of))
+    stmt_to_block = Dict{Int, Int}(i => k for (i, k) in enumerate(cfg.block_of) if k != 0)
 
     # Slice B: region → block-event maps. A region OPENS at the end of the
     # block containing its EnterNode and CLOSES at the start of its handler block.
@@ -233,11 +239,6 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
         end
     end
 
-    # Compute block dominators from the real CFG. Numeric block intervals are
-    # not loop membership: Julia 1.13 may lay a loop-exit merge between the
-    # header and a late latch even though an outer branch reaches that merge
-    # without passing through the header. Such a target must not receive a
-    # label nested inside the loop.
     # Compute block dominators from the real CFG. Numeric block intervals are
     # not loop membership: Julia 1.13 may lay a loop-exit merge between the
     # header and a late latch even though an outer branch reaches that merge
@@ -331,39 +332,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
     # For very complex functions, use a dispatcher-style approach
     # Create a big block structure with all targets as labeled positions
 
-    # Collect all unique forward jump targets (excluding immediate fall-through)
-    # Also exclude dead blocks and treat boundscheck-based jumps correctly
+    # Every block a branch reaches other than by falling through: the folded CFG's successors
+    # (an always-taken boundscheck branch keeps only its target; a dead block has none and is
+    # none), except an Enter's catch edge, whose handler its try structures (no label).
     non_trivial_targets = Set{Int}()
     for (block_idx, block) in enumerate(blocks)
-        # Skip dead blocks
-        if block_idx in dead_blocks
-            continue
-        end
-
-        term = block.terminator
-        term_idx = block.end_idx
-
-        if term isa NirGotoIfNot
-            # Check if this is a boundscheck always-jump
-            if term_idx in boundscheck_jumps
-                # Boundscheck jumps ALWAYS go to dest, so it's like an unconditional jump
-                # Only record it as non-trivial if it's not immediate fall-through
-                dest_block = get(stmt_to_block, term.target, nothing)
-                if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
-                    push!(non_trivial_targets, dest_block)
-                end
-            else
-                # Real conditional - the false branch destination
-                dest_block = get(stmt_to_block, term.target, nothing)
-                if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
-                    push!(non_trivial_targets, dest_block)
-                end
-            end
-        elseif term isa NirGoto
-            dest_block = get(stmt_to_block, term.target, nothing)
-            if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
-                push!(non_trivial_targets, dest_block)
-            end
+        nir[block.end_idx].node isa NirEnter && continue
+        for s in successors[block_idx]
+            s != block_idx + 1 && push!(non_trivial_targets, s)
         end
     end
 

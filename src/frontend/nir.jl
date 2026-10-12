@@ -878,7 +878,8 @@ end
 The one CFG of a body, by Julia's own rule (Compiler basic_blocks_starts, ir.jl:46, and
 compute_basic_blocks, :93): a block starts at statement 1, after a goto, a goto-if-not, a return
 or a :leave, at an Enter and after it, at every jump target and catch destination, and at a phi
-one of whose edges is the statement before it. A goto's successor is its target's block; a
+one of whose edges is the statement before it; the last block ends at the last statement that is
+not `nothing` (ir.jl:84), so trailing `nothing` statements lie in no block (`block_of` 0). A goto's successor is its target's block; a
 goto-if-not's are the next block and its target's (one edge when they are the same block); an
 Enter's are the next block and its catch destination's; a return has none; any other block falls
 through. The stackifier, the proven-dead proof, the definite-initialization proof and the
@@ -906,11 +907,14 @@ function nir_cfg(nir::Vector{NirStmt})::NirCFG
         end
         s isa NirPhi && any(==(idx - 1), s.edges) && push!(starts, idx)
     end
-    local st = Int[i for i in starts if i <= n]
+    # and one more block start after the last statement that is not `nothing`
+    local last = findlast(rec -> !(rec.node isa NirLiteral && rec.node.value === nothing), nir)
+    last === nothing || push!(starts, last + 1)
+    local st = collect(starts)
     local blocks = BasicBlock[]
     local block_of = zeros(Int, n)
-    for (k, a) in enumerate(st)
-        local z = k < length(st) ? st[k + 1] - 1 : n
+    for k in 1:length(st) - 1
+        local a, z = st[k], st[k + 1] - 1
         local t = nir[z].node
         push!(blocks, BasicBlock(a, z, t isa Union{NirGotoIfNot, NirGoto, NirReturn} ? t : nothing))
         block_of[a:z] .= k

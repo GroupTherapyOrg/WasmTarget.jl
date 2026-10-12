@@ -115,10 +115,10 @@ parity(quarantine: Julia's typed IR marks a try as a flat Core.EnterNode stateme
 has_try_catch(nir::Vector{NirStmt})::Bool = any(rec -> rec.node isa NirEnter, nir)
 
 """
-    stmt_is_proven_unreachable(nir, idx) -> Bool
+    stmt_is_proven_unreachable(cfg, idx) -> Bool
 
-Return `true` only when Julia's CFG (nir_cfg, whose Enter blocks reach their catch destinations)
-proves that `idx` cannot be reached from entry.  This is the sole condition under which an
+Return `true` only when the body's CFG (the context's `cfg`, nir_cfg: Julia's, whose Enter blocks
+reach their catch destinations) proves that `idx` cannot be reached from entry.  This is the sole condition under which an
 unsupported lowering may be kept as a diagnosed validating trap instead of rejecting compilation.
 
 parity(quarantine: Julia's typed IR is a goto CFG that can keep blocks no edge reaches, and a
@@ -127,9 +127,9 @@ trap is sound only in such a block; dart's TFA removes unreachable members befor
 reachability proof.)
 formal(dev/formal/ProvenDead.tla): a statement proven dead has no control-flow path from entry
 """
-function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
-    1 <= idx <= length(nir) || return false
-    local cfg = nir_cfg(nir)
+function stmt_is_proven_unreachable(cfg::NirCFG, idx::Int)::Bool
+    1 <= idx <= length(cfg.block_of) || return false
+    cfg.block_of[idx] == 0 && return true   # a trailing `nothing`: in no block, reached by no edge
     reachable = falses(length(cfg.blocks))
     reachable[1] = true
     work = Int[1]
