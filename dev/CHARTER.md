@@ -57,7 +57,8 @@ with the per-clause status. A clause is never closed by argument.
   table, one conversion table, one width rule, one operand table, one loop-bounds definition)
   `L181` (one CFG, Julia's own, nir_cfg; one dominator computation) `L182` (a constant callee's
   one representation, its object, resolved once at the boundary) `L183` (one as-checker per
-  target and static type).
+  target and static type) `R40` (one owner of a compile's state, its Translator and its module's
+  registries: no process-global compile state).
   Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
@@ -68,8 +69,8 @@ with the per-clause status. A clause is never closed by argument.
   `L31` `L32` `L43` `L44` `L46` `L50` `L55` `L77` `L83` `L84` `L86` `L88` `L95` `L110` `L132`
   (anchors resolve: each cited line exists at the pinned commit and names the cited symbol; CI
   fetches the pinned sources and a missing checkout fails, never skips) `L149` (the builder
-  holds no Julia compiler object) `R32` `R40` (no process-global compile state: one
-  compilation's state lives on its Translator). Planned: dev/MARCH.md 13.7, 13.17 — inventions
+  holds no Julia compiler object) `R32` (and R40, cited under C1: no process-global compile
+  state, one compilation's state on its Translator). Planned: dev/MARCH.md 13.7, 13.17 — inventions
   without a Julia necessity.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never

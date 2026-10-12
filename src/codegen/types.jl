@@ -140,7 +140,22 @@ struct Translator
     # a traced compile's record; nothing otherwise
     # parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
     trace::Union{Nothing,StatementTrace}
+    # the compile's options, read once by its entry (translator.dart:98 `options`)
+    options::CompilerOptions
+    # the caller's diagnostics ledger, every recorded WasmDiagnostic mirrored into it; nothing
+    # when the caller passed none (dart's diagnostics handler is a parameter of its one entry)
+    diagnostics::Union{Nothing,Vector{WasmDiagnostic}}
+    # the constant objects being emitted, innermost last: a cyclic or unboundedly deep constant
+    # graph rejects, never recurses without end
+    # parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep; dart's CFE constants are acyclic canonical trees, so constants.dart needs no in-progress stack.)
+    constants_in_progress::Vector{Any}
 end
+# parity(pkg/dart2wasm/lib/translator.dart:470 Translator): one Translator per compile, its
+# options and diagnostics ledger given (default: none asked, none routed)
+Translator(plan::ClosedWorldPlan, trace::Union{Nothing,StatementTrace};
+           options::CompilerOptions=CompilerOptions(),
+           diagnostics::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Translator =
+    Translator(plan, trace, options, diagnostics, Any[])
 
 # ============================================================================
 # Julia types to wasm value types (the translator side of dart's translateType)
@@ -488,6 +503,23 @@ end
 ModuleHandles()::ModuleHandles = ModuleHandles(nothing, nothing, nothing, nothing, nothing, nothing, nothing)
 
 """
+RNG state stored in 4 mutable i64 Wasm globals.
+Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
+We store these in Wasm globals instead.
+
+parity(quarantine: Julia's rand() reads Xoshiro256++ state from the fields rngState0..3 of
+the Task that the jl_get_current_task foreigncall returns; the module has no Task object, so
+the four state words are module globals.)
+"""
+struct RNGGlobals
+    rng0_idx::UInt32  # global index for rngState0 (i64)
+    rng1_idx::UInt32  # global index for rngState1 (i64)
+    rng2_idx::UInt32  # global index for rngState2 (i64)
+    rng3_idx::UInt32  # global index for rngState3 (i64)
+    seed_import_idx::UInt32  # import index for env.random_i64
+end
+
+"""
 Registry for struct and array type mappings within a module.
 
 parity(translator.dart:96 Translator): the translator's per-compile type state — classInfo
@@ -590,6 +622,10 @@ mutable struct TypeRegistry
     has_typevar_func_idx::Union{Nothing, UInt32}
     # 128-bit unsigned division over two i64 limbs (get_u128_divrem_function!, int128.jl)
     u128_divrem_func_idx::Union{Nothing, UInt32}
+    # the module's `env.perf_now` import (ensure_perf_now_import!) and its RNG state globals
+    # (ensure_rng_globals!), made once per module on first use, as the egal function is
+    perf_now_idx::Union{Nothing, UInt32}
+    rng_globals::Union{Nothing, RNGGlobals}
     # the types being registered right now (PendingTypes)
     pending::PendingTypes
     # the module objects codegen holds by handle (ModuleHandles)
@@ -623,6 +659,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     IdDict{TypeVar, UInt32}(),                          # TypeVar constants
     nothing,                                            # has_typevar_func_idx
     nothing,                                            # u128_divrem_func_idx
+    nothing,                                            # perf_now_idx
+    nothing,                                            # rng_globals
     PendingTypes(),                                     # types being registered
     ModuleHandles()                                     # the module's handles
 )
@@ -1696,12 +1734,14 @@ mutable struct FunctionRegistry
     functions::Vector{Tuple{String, FunctionInfo}}       # name -> info (linear scan)
     by_ref::Vector{Tuple{Any, Vector{FunctionInfo}}}     # func_ref -> infos (linear scan)
     by_mi::IdDict{Core.MethodInstance, FunctionInfo}     # the function each MethodInstance compiles to
+    log::Bool                                            # WT_LOG_REGISTRY: log each registration
 end
 
 # parity(functions.dart:25 FunctionCollector._functions): the collector starts with an empty
-# callee-to-function map.
-FunctionRegistry()::FunctionRegistry = FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[],
-                                                       IdDict{Core.MethodInstance, FunctionInfo}())
+# callee-to-function map; `log` is the compile's registration-log option.
+FunctionRegistry(; log::Bool=false)::FunctionRegistry =
+    FunctionRegistry(Tuple{String, FunctionInfo}[], Tuple{Any, Vector{FunctionInfo}}[],
+                     IdDict{Core.MethodInstance, FunctionInfo}(), log)
 
 """
     serialize_function_table(registry::FunctionRegistry) -> Vector{Dict{String, Any}}
@@ -1734,8 +1774,7 @@ function register_function!(registry::FunctionRegistry, name::String, func_ref, 
                             invoke_only::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
     # arg types, index) — for hunting call-site/callee signature divergence
-    OPTIONS[].log_registry &&
-        println(stderr, "WTREG\t", name, "\t", wasm_idx, "\t", arg_types)
+    registry.log && println(stderr, "WTREG\t", name, "\t", wasm_idx, "\t", arg_types)
     info = FunctionInfo(name, func_ref, arg_types, wasm_idx, return_type, is_candidate, mi, invoke_only)
     mi === nothing || (registry.by_mi[mi] = info)
 
