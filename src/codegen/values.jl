@@ -91,19 +91,6 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         # Handle nothing specially - compile_value(nothing) produces i32_const 0
         if lit === nothing
             return I32
-        elseif lit isa Int64 || lit isa UInt64
-            return I64
-        elseif lit isa Int32 || lit isa UInt32 || lit isa Bool ||
-               lit isa Int8 || lit isa UInt8 || lit isa Int16 || lit isa UInt16
-            # Narrow ints were MISSING here — a literal like 0x00
-            # fell through to AnyRef, so `return 0x00` failed
-            # return_type_compatible(AnyRef, I32) and compiled to `unreachable`
-            # (gap 46fd6782e95c). compile_value already emits i32.const for these.
-            return I32
-        elseif lit isa Float64
-            return F64
-        elseif lit isa Float32
-            return F32
         elseif lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
             # D-001: an IR reference type carried as a literal VALUE is a literal struct,
             # not an IR ref.
@@ -118,12 +105,9 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             # a 128-bit constant is its {classId, lo, hi} struct, built or read from its global
             return ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(lit)), false)
         elseif isprimitivetype(typeof(lit))
-            # Char and every other primitive constant is its bits, as the emitter pushes them:
-            # i32 up to 4 bytes, i64 at 8
-            local nbytes = sizeof(typeof(lit))
-            nbytes <= 4 && return I32
-            nbytes == 8 && return I64
-            error("a $(nbytes)-byte primitive constant ($(typeof(lit))) has no Wasm representation")
+            # every other primitive constant is its bits in the register the one width rule
+            # names (julia_to_wasm_type), as the emitter pushes them
+            return julia_to_wasm_type(typeof(lit))
         # Every reference constant below is non-null, as every dart constant is
         # (constants.dart:821 `assert(!type.nullable)`; TypeOfConstantVisitor's _typeOfClass).
         elseif lit isa TypeVar && ctx.type_registry.jl_typevar_idx !== nothing

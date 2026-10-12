@@ -21,7 +21,6 @@ mutable struct CompilationContext <: AbstractCompilationContext
     ssa_types::IntKeyMap{Type}   # SSA value -> Julia type
     ssa_locals::IntKeyMap{Int}   # SSA value -> local index (for multi-use SSAs)
     phi_locals::IntKeyMap{Int}   # PhiNode SSA -> local index
-    loop_headers::Vector{Bool}   # Line numbers that are loop headers (bitmap)
     mod::WasmModule              # The module being built
     translator::Translator       # the compilation's shared state (dart: CodeGenerator.translator)
     type_registry::TypeRegistry  # Struct type mappings
@@ -126,7 +125,6 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         IntKeyMap{Type}(n_stmts),
         IntKeyMap{Int}(n_stmts),
         IntKeyMap{Int}(n_stmts),
-        fill(false, n_stmts),
         mod,
         translator,
         type_registry,
@@ -485,13 +483,6 @@ parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its loops and phis,
 function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     nir = ctx.nir
 
-    # Find loop headers (targets of backward jumps — an unconditional goto back)
-    for (i, rec) in enumerate(nir)
-        if rec.node isa NirGoto && rec.node.target < i
-            ctx.loop_headers[rec.node.target] = true
-        end
-    end
-
     # The numeric joins, computed once (numeric_local_joins): they type the phi locals below
     # and the SSA locals in allocate_ssa_locals!, and each refines an erased (Any or Union)
     # SSA type so every consumer sees the proven type.
@@ -558,9 +549,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
 
             if is_func_ret_numeric && is_phi_ref
                 # Check if this phi is used in a ReturnNode
-                phi_used_in_return = any(nir) do other
-                    other.node isa NirReturn && other.node.value isa NirSSA &&
-                        other.node.value.id == i
+                phi_used_in_return = any(ssa_users(ctx, i)) do j
+                    nir[j].node isa NirReturn && nir[j].node.value isa NirSSA &&
+                        nir[j].node.value.id == i
                 end
                 if phi_used_in_return
                     # Override phi type to match function return type
@@ -580,7 +571,8 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
                              phi_wasm_type === ExternRef || phi_wasm_type === EqRef
             is_wasm_struct_numeric = phi_julia_type in (Int128, UInt128)
             if is_phi_any_ref && !is_wasm_struct_numeric
-                for use_rec in nir
+                for j in ssa_users(ctx, i)   # the statements that use the phi
+                    use_rec = nir[j]
                     use_node = use_rec.node
                     # Check if used as GotoIfNot condition
                     if use_node isa NirGotoIfNot && use_node.cond isa NirSSA && use_node.cond.id == i
@@ -664,14 +656,6 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
         count_ssa_uses!(rec, ssa_uses)
     end
 
-    # Find loop bounds (header to backward goto)
-    loop_bounds = Dict{Int, Int}()  # header => back_edge_idx
-    for (i, rec) in enumerate(nir)
-        if rec.node isa NirGoto && rec.node.target < i
-            # This is a backward jump
-            loop_bounds[rec.node.target] = i
-        end
-    end
     _is_jump(k) = nir[k].node isa NirGoto || nir[k].node isa NirGotoIfNot
 
     # First pass: allocate locals for SSAs used more than once or with intervening ops
@@ -681,7 +665,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
 
     # Find SSAs defined inside a loop but used outside
     # These need locals because stack values don't persist across Wasm block boundaries
-    for (header, back_edge) in loop_bounds
+    for (header, back_edge) in q.loops
         for i in max(header, 1):min(back_edge, length(nir))
             # SSA i is defined inside this loop; its last use (in a return or any other
             # statement) after the loop needs a local
@@ -775,16 +759,14 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
     # flow generator may insert block boundaries between the SSA definition and its use.
     for rec in nir
         node = rec.node
-        # All SSA values a statement lists directly need locals
+        # All SSA values a statement lists directly need locals, and so do the operands of the
+        # IR node kinds (a return's value, a branch condition, a pi's source, an upsilon's
+        # value: the one operand table's); a phi's and a PhiC's are their edges', above
         for arg in nir_direct_operands(rec)
             arg isa NirSSA && push!(needs_local_set, arg.id)
         end
-        if node isa NirReturn && node.value isa NirSSA
-            push!(needs_local_set, node.value.id)
-        elseif node isa NirGotoIfNot && node.cond isa NirSSA
-            push!(needs_local_set, node.cond.id)
-        elseif node isa NirPi && node.value isa NirSSA
-            push!(needs_local_set, node.value.id)
+        if !_nir_from_expr(node) && !(node isa NirPhi || node isa NirPhiC)
+            _nir_any_operand(x -> (x isa NirSSA && push!(needs_local_set, x.id); false), node)
         end
         rec.slot == 0 || continue
 
@@ -1081,7 +1063,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
             # type the local based on the Julia type inference to match the expected operand type.
             # This handles dead code after UNREACHABLE and Any-typed struct fields used in comparisons.
             if wasm_type === ExternRef
-                for use_rec in nir
+                for j in ssa_users(ctx, ssa_id)   # the statements that use the value
+                    use_rec = nir[j]
                     use_node = use_rec.node
                     # Check if used as GotoIfNot condition
                     if use_node isa NirGotoIfNot && use_node.cond isa NirSSA && use_node.cond.id == ssa_id
@@ -1178,14 +1161,31 @@ end
 
 The facts `allocate_ssa_locals!` and `needs_local` ask about every SSA value, computed once
 per function instead of rescanning the body per value: running counts of the jumps and of the stack-value producers (a range holds one when
-`_count_between` is positive), and the loops (header, first back-edge `goto`) whose body
-branches other than at its header.
+`_count_between` is positive), the loops (loop_bounds), and those whose body branches other
+than at its header.
 parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR once for it.)
 """
 struct _LocalQueryIndex
     jumps::Vector{Int}        # jumps[k + 1]: the goto/goto-if-not statements in 1:k
     producers::Vector{Int}    # producers[k + 1]: the statements in 1:k that produce_stack_value
+    loops::Vector{Tuple{Int,Int}}            # loop_bounds
     branching_loops::Vector{Tuple{Int,Int}}
+end
+
+"""
+    loop_bounds(nir) -> Vector{Tuple{Int,Int}}
+
+Each loop of the body as its header and its last back edge (the last backward `goto` to the
+header), in header order: the one loop-bounds definition, read by the local allocation (a
+value defined in a loop and used after it, and a loop that branches inside).
+parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its loops, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
+"""
+function loop_bounds(nir::Vector{NirStmt})::Vector{Tuple{Int,Int}}
+    local last_back_edge = Dict{Int,Int}()
+    for (i, rec) in enumerate(nir)
+        rec.node isa NirGoto && rec.node.target < i && (last_back_edge[rec.node.target] = i)
+    end
+    return sort!(Tuple{Int,Int}[(h, be) for (h, be) in last_back_edge])
 end
 
 # parity(quarantine: WT decides stack residency per Julia SSA value, a question dart2wasm's expression-tree codegen never asks; this indexes the Julia IR once for it.)
@@ -1198,22 +1198,14 @@ function _LocalQueryIndex(ctx::AbstractCompilationContext)::_LocalQueryIndex
         jumps[k + 1] = jumps[k] + (rec.node isa NirGoto || rec.node isa NirGotoIfNot)
         producers[k + 1] = producers[k] + produces_stack_value(rec)
     end
-    # the first `goto` to each target: a loop header's back-edge
-    first_goto_to = Dict{Int,Int}()
-    for (i, rec) in enumerate(nir)
-        node = rec.node
-        node isa NirGoto && !haskey(first_goto_to, node.target) && (first_goto_to[node.target] = i)
-    end
+    local loops = loop_bounds(nir)
     branching_loops = Tuple{Int,Int}[]
-    for header in 1:length(ctx.loop_headers)
-        ctx.loop_headers[header] || continue
-        back_edge = get(first_goto_to, header, nothing)
-        back_edge === nothing && continue
+    for (header, back_edge) in loops
         # a conditional in the loop other than its exit test at the header
         any(i -> nir[i].node isa NirGotoIfNot && i != header && i != header + 1, header:back_edge) &&
             push!(branching_loops, (header, back_edge))
     end
-    return _LocalQueryIndex(jumps, producers, branching_loops)
+    return _LocalQueryIndex(jumps, producers, loops, branching_loops)
 end
 
 # the statements that use SSA `id`, ascending
@@ -1329,29 +1321,16 @@ function is_passthrough_statement(node::NirNode, ctx::AbstractCompilationContext
 end
 
 """
-Count the SSA uses one statement makes: every SSA operand an expression reads (its dynamic
-callee included), a return's value, a branch condition, a phi's incoming values and a pi's
-source. A statement that is itself an SSA value (or a slot assigned from one) is a use.
+Count the SSA uses one statement makes, each operand once per position: the operands the one
+operand table names (`_nir_any_operand`: an expression's operands and dynamic callee, a return's
+value, a branch condition, a phi's, a PhiC's and an upsilon's values, a pi's source, ...). A
+statement that is itself an SSA value (or a slot assigned from one) is a use.
 parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
 """
 function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})::Nothing
-    _count(x) = (x isa NirSSA && (uses[x.id] = get(uses, x.id, 0) + 1); nothing)
-    node = rec.node
-    if node isa NirPhi
-        foreach(v -> v === nothing || _count(v), node.values)
-    elseif node isa NirPi
-        # PiNode references a source value — count it so phi nodes
-        # that are only referenced by PiNodes get their ssa_locals mapping
-        _count(node.value)
-    elseif node isa NirReturn
-        node.value === nothing || _count(node.value)
-    elseif node isa NirGotoIfNot
-        _count(node.cond)
-    elseif node isa NirSSA
-        _count(node)
-    else
-        foreach(_count, nir_expr_operands(node))
-    end
+    _count(x) = (x isa NirSSA && (uses[x.id] = get(uses, x.id, 0) + 1); false)
+    _count(rec.node)
+    _nir_any_operand(_count, rec.node)
     return nothing
 end
 

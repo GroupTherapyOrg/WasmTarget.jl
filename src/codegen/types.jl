@@ -290,14 +290,12 @@ parity(quarantine: the members of a Julia Union, joined; see resolve_union_type.
 function find_common_wasm_type(types::Vector)::WasmValType
     # Check if all are numeric
     if all(t -> t <: Number, types)
-        # Prefer i64 over i32, f64 over f32
-        has_i64 = any(t -> t === Int64 || t === UInt64 || t === Int, types)
-        has_f64 = any(t -> t === Float64, types)
-        has_f32 = any(t -> t === Float32, types)
+        # Prefer i64 over i32, f64 over f32, each member's register the one width rule's
+        local reg(t) = (t isa DataType && isprimitivetype(t)) ? julia_to_wasm_type(t) : nothing
+        has_i64 = any(t -> reg(t) === I64, types)
+        has_f64 = any(t -> reg(t) === F64, types)
+        has_f32 = any(t -> reg(t) === F32, types)
         has_float = has_f64 || has_f32
-        has_int = any(t -> t === Int32 || t === UInt32 || t === Int64 || t === UInt64 ||
-                         t === Int || t === Bool || t === Int8 || t === UInt8 ||
-                         t === Int16 || t === UInt16, types)
 
         if has_float
             return has_f64 ? F64 : F32
@@ -702,9 +700,11 @@ function _const_init!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, 
         local _fw = _wst.fields[k + Int(info.field_offset)].valtype
         local _fv = isdefined(val, k) ? getfield(val, k) : nothing
         _fv === nothing && return nothing
-        local _want = _fv isa Int64 || _fv isa UInt64 ? I64 :
-                      _fv isa Float64 ? F64 : _fv isa Float32 ? F32 :
-                      (_fv isa Integer || _fv isa Bool || _fv isa Char) ? I32 : nothing
+        # a number field's register, the one width rule's (an Int128 is its struct)
+        local _want = (_fv isa Union{Base.BitInteger, Bool, Char, Float32, Float64} &&
+                       !(_fv isa Union{Int128, UInt128})) ? julia_to_wasm_type(typeof(_fv)) : nothing
+        # an integer in no one register (Int128, BigInt) is no constant expression here
+        _want === nothing && _fv isa Integer && return nothing
         if _want === nothing
             # nested immutable: the registered slot must be a concrete ref
             (_fw isa ConcreteRef) || return nothing

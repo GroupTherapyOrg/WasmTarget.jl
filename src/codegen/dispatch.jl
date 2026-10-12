@@ -218,11 +218,11 @@ function build_dispatch_tables(func_registry::FunctionRegistry,
             end
             if length(_tys) == 1
                 _t = first(_tys)
+                # a number in one register is carried in it (the one width rule's), any other
+                # value as anyref
                 push!(slot_types,
-                    _t === Int64 || _t === UInt64 ? I64 :
-                    _t === Float64 ? F64 :
-                    _t === Int32 || _t === UInt32 || _t === Bool || _t === Char ? I32 :
-                    _t === Float32 ? F32 : AnyRef)
+                    (_t isa DataType && isprimitivetype(_t) && julia_to_wasm_type(_t) isa NumType) ?
+                        julia_to_wasm_type(_t) : AnyRef)
             elseif all(T -> T isa DataType && isconcretetype(T) && isstructtype(T) &&
                             haskey(type_registry.structs, T), _tys)
                 # the struct-LUB: intersect the declared chains

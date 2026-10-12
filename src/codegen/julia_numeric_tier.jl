@@ -162,7 +162,7 @@ function _emit_fused_multiply_add!(fb::InstrBuilder, ctx, T)::WasmValType
     local fma_mi = plan_lowering_callee(ctx.translator.plan, Tuple{typeof(Base.fma_emulated), T, T, T})
     info = fma_mi === nothing ? nothing : get_function_by_mi(ctx.func_registry, fma_mi)
     info === nothing && error("Base.fma_emulated(::$T, ::$T, ::$T) is not in the closed world")
-    local w = T === Float32 ? F32 : F64
+    local w = julia_to_wasm_type(T)
     call!(fb, info.wasm_idx)
     return w
 end
@@ -240,8 +240,7 @@ of `julia_type`'s own signedness (e.g. `ult_int` normalises an Int8 operand unsi
 """
 function normalise_narrow!(b::InstrBuilder, ctx,
                            julia_type::Type, signed::Bool)::InstrBuilder
-    julia_width = julia_type === Int8 || julia_type === UInt8 ? 8 :
-                  julia_type === Int16 || julia_type === UInt16 ? 16 : 32
+    julia_width = _julia_int_width(julia_type, true)
     if julia_width < 32
         if signed
             num!(b, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
@@ -321,6 +320,24 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
     (I32, F32, :bitcast) => ConvEmit(b -> num!(b, Opcode.F32_REINTERPRET_I32), F32),
 )
 
+"""
+    emit_bitcast!(b, from, to) -> b
+
+Julia's `bitcast(to, x::from)` of a primitive value already on the stack, `from` and `to` of one
+size: the conversion table's `:bitcast` entry between their registers (the width rule's
+julia_to_wasm_type), nothing where the registers agree.
+parity(quarantine: Julia's bitcast intrinsic reinterprets a value's bits as another primitive type;
+dart has no bitcast.)
+"""
+function emit_bitcast!(b::InstrBuilder, @nospecialize(from), @nospecialize(to))::InstrBuilder
+    local fw, tw = julia_to_wasm_type(from), julia_to_wasm_type(to)
+    fw === tw && return b
+    local e = get(INTRINSIC_CONVERSIONS, (fw, tw, :bitcast), nothing)
+    e === nothing && error("no bitcast from $(from) to $(to): their registers are $(fw) and $(tw)")
+    e.emit!(b)
+    return b
+end
+
 # Int128/UInt128 conversion bodies for sext_int/zext_int/trunc_int — pure moves of
 # the struct_new!/struct_get! logic the arms had. Kept OUT of INT128_OPS (whose
 # `(b, ctx, t) -> WasmValType` signature is for a same-type arithmetic/bitwise op; a
@@ -333,10 +350,7 @@ const INTRINSIC_CONVERSIONS = Dict{Tuple{WasmValType,WasmValType,Symbol},ConvEmi
 function _int128_sext!(b::InstrBuilder, ctx,
                        julia_src, target_type::Type)::ConcreteRef
     source_type = julia_src isa Type ? julia_src : Int64
-    if source_type === Int32 || source_type === UInt32 || source_type === Int16 ||
-       source_type === Int8 || source_type === Bool
-        num!(b, Opcode.I64_EXTEND_I32_S)
-    end
+    julia_to_wasm_type(source_type) === I32 && num!(b, Opcode.I64_EXTEND_I32_S)
     scratch_idx = allocate_local!(ctx, I64)
     local_tee!(b, scratch_idx)
     i64_const!(b, 63)
@@ -356,13 +370,9 @@ end
 function _int128_zext!(b::InstrBuilder, ctx,
                        julia_src, target_type::Type)::ConcreteRef
     source_type = julia_src isa Type ? julia_src : UInt64
-    zx_mask = (source_type === UInt8 || source_type === Int8) ? Int64(0xFF) :
-              (source_type === UInt16 || source_type === Int16) ? Int64(0xFFFF) : Int64(0)
-    if zx_mask != 0
-        i32_const!(b, zx_mask)
-        num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I64_EXTEND_I32_U)
-    elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
+    if julia_to_wasm_type(source_type) === I32
+        local w = _julia_int_width(source_type, true)   # a narrow source's dirty high bits masked
+        w < 32 && (i32_const!(b, Int64((1 << w) - 1)); num!(b, Opcode.I32_AND))
         num!(b, Opcode.I64_EXTEND_I32_U)
     end
     zext_scratch = allocate_local!(ctx, I64)
@@ -451,38 +461,37 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
     op in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi, :fptoui,
            :fpext, :fptrunc, :bitcast) || return nothing
 
+    # a type's register is the one width rule's (julia_to_wasm_type); a target given as no type
+    # keeps the register the op's default names
+    local reg(T, default) = T isa Type ? julia_to_wasm_type(T) : default
     if op === :sext_int
         if julia_dst === Int128 || julia_dst === UInt128
             return _int128_sext!(b, ctx, julia_src, julia_dst)
-        elseif (julia_dst === Int64 || julia_dst === UInt64) && !src_already_wide
+        elseif reg(julia_dst, I32) === I64 && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, julia_src <: Signed)
             e = INTRINSIC_CONVERSIONS[(I32, I64, :sext_int)]
             e.emit!(b)
             return e.result
         end
-        return julia_dst === Int64 || julia_dst === UInt64 ? I64 : I32   # already wide, or a ≤32-bit target: no-op
+        return reg(julia_dst, I32) === I64 ? I64 : I32   # already wide, or a ≤32-bit target: no-op
 
     elseif op === :zext_int
         if julia_dst === Int128 || julia_dst === UInt128
             return _int128_zext!(b, ctx, julia_src, julia_dst)
-        elseif (julia_dst === Int64 || julia_dst === UInt64) && !src_already_wide
+        elseif reg(julia_dst, I32) === I64 && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
             e = INTRINSIC_CONVERSIONS[(I32, I64, :zext_int)]
             e.emit!(b)
             return e.result
-        elseif (julia_dst === Int32 || julia_dst === UInt32) && !src_already_wide
+        elseif julia_dst isa Type && _julia_int_width(julia_dst, false) == 32 && !src_already_wide
             julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
             return I32
         end
-        return julia_dst === Int64 || julia_dst === UInt64 ? I64 : I32   # already wide, or a no-op target
+        return reg(julia_dst, I32) === I64 ? I64 : I32   # already wide, or a no-op target
 
     elseif op === :trunc_int
-        source_is_64bit = julia_src === Int64 || julia_src === UInt64 || julia_src === Int ||
-                          src_already_wide
-        target_is_32bit = julia_dst === Int32 || julia_dst === UInt32 ||
-                          julia_dst === Int16 || julia_dst === UInt16 ||
-                          julia_dst === Int8 || julia_dst === UInt8 ||
-                          julia_dst === Bool || julia_dst === Char
+        source_is_64bit = reg(julia_src, I32) === I64 || src_already_wide
+        target_is_32bit = reg(julia_dst, I64) === I32
         if julia_src === Int128 || julia_src === UInt128
             _int128_trunc_lo!(b, ctx, julia_src)
             target_is_32bit && INTRINSIC_CONVERSIONS[(I64, I32, :trunc_int)].emit!(b)
@@ -506,12 +515,8 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
         # reach sitofp — Julia routes those through uitofp — so `<: Signed` alone,
         # like the arm's own Int8/Int16-only branches, is the exact original set).
         julia_src isa Type && julia_src <: Signed && normalise_narrow!(b, ctx, julia_src, true)
-        source_is_32bit = julia_src === Int32 || julia_src === UInt32 || julia_src === Char ||
-                          julia_src === Int16 || julia_src === UInt16 ||
-                          julia_src === Int8 || julia_src === UInt8 ||
-                          (julia_src isa Type && isprimitivetype(julia_src) && sizeof(julia_src) <= 4)
-        src_ty = source_is_32bit ? I32 : I64
-        dst_ty = julia_dst === Float32 ? F32 : F64
+        src_ty = reg(julia_src, I64) === I32 ? I32 : I64
+        dst_ty = reg(julia_dst, F64)
         e = INTRINSIC_CONVERSIONS[(src_ty, dst_ty, :sitofp)]
         e.emit!(b)
         return e.result
@@ -523,21 +528,15 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
         # way a narrow signed one does, and f64.convert_i32_u reads the whole
         # register.
         julia_src isa Type && normalise_narrow!(b, ctx, julia_src, false)
-        source_is_32bit = julia_src === Int32 || julia_src === UInt32 || julia_src === Char ||
-                          julia_src === Int16 || julia_src === UInt16 ||
-                          julia_src === Int8 || julia_src === UInt8 ||
-                          (julia_src isa Type && isprimitivetype(julia_src) && sizeof(julia_src) <= 4)
-        src_ty = source_is_32bit ? I32 : I64
-        dst_ty = julia_dst === Float32 ? F32 : F64
+        src_ty = reg(julia_src, I64) === I32 ? I32 : I64
+        dst_ty = reg(julia_dst, F64)
         e = INTRINSIC_CONVERSIONS[(src_ty, dst_ty, :uitofp)]
         e.emit!(b)
         return e.result
 
     elseif op === :fptosi || op === :fptoui
-        src_ty = julia_src === Float32 ? F32 : F64
-        dst_ty = (op === :fptosi ? (julia_dst === Int32 || julia_dst === Int16 || julia_dst === Int8) :
-                                    (julia_dst === UInt32 || julia_dst === UInt16 || julia_dst === UInt8)) ?
-                 I32 : I64
+        src_ty = reg(julia_src, F64)
+        dst_ty = reg(julia_dst, I64)
         e = INTRINSIC_CONVERSIONS[(src_ty, dst_ty, op)]
         e.emit!(b)
         return e.result
@@ -572,19 +571,13 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
     else   # :bitcast
         target_type = _resolve_bitcast_target(ctx, julia_dst, idx)
         source_type = julia_src isa Type ? julia_src : Any
-        src_ty = source_type === Float64 ? F64 : source_type === Float32 ? F32 :
-                 (source_type === Int64 || source_type === UInt64) ? I64 :
-                 (source_type === Int32 || source_type === UInt32) ? I32 : nothing
-        dst_ty = target_type === Float64 ? F64 : target_type === Float32 ? F32 :
-                 (target_type === Int64 || target_type === UInt64) ? I64 :
-                 (target_type === Int32 || target_type === UInt32) ? I32 : nothing
-        # STACK-003 / Int128<->UInt128 / anything the table doesn't cover: a no-op
-        # in Wasm (same representation) — the arm's documented fallthrough.
-        if src_ty !== nothing && dst_ty !== nothing
-            e = get(INTRINSIC_CONVERSIONS, (src_ty, dst_ty, :bitcast), nothing)
-            e !== nothing && e.emit!(b)
-            return dst_ty
+        # a primitive held in one register converts by the table's bitcast; any other pair
+        # (Int128<->UInt128, one representation) is no instruction, the arm's fallthrough
+        local onereg(T) = T isa DataType && isprimitivetype(T) && julia_to_wasm_type(T) isa NumType
+        if onereg(source_type) && onereg(target_type)
+            emit_bitcast!(b, source_type, target_type)
+            return julia_to_wasm_type(target_type)
         end
-        return src_ty === nothing ? I32 : src_ty
+        return onereg(source_type) ? julia_to_wasm_type(source_type) : I32
     end
 end

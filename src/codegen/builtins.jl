@@ -2922,12 +2922,21 @@ parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrins
 """
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     arg_type = length(args) > 0 ? value_type(ctx, args[1]) : Int64
-    is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
-               arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
-               (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
+    is_32bit = operand_register(arg_type) in (I32, F32)
     is_128bit = arg_type === Int128 || arg_type === UInt128
     return arg_type, is_32bit, is_128bit
 end
+
+"""
+    operand_register(T) -> WasmValType
+
+The register an intrinsic's operand of Julia type `T` rides in: the width rule's
+(julia_to_wasm_type) for a primitive, i64 for any other type (an operand no intrinsic's IR
+gives, which its lowering then rejects or reads as Julia's IR states).
+parity(translator.dart:1044 Translator.translateType): a type's representation, decided once.
+"""
+operand_register(@nospecialize(T))::WasmValType =
+    (T isa DataType && isprimitivetype(T)) ? julia_to_wasm_type(T) : I64
 
 # `===` / `!==`: THE egal lowering, `emit_egal!` (calls.jl); `!==` is its negation.
 # parity(intrinsics.dart:1409 StaticIntrinsic.identical)
@@ -2949,21 +2958,36 @@ function _lower_egal!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,N
     return append_builder!(b, fb)
 end
 
-# The high-level operator fallback: a `+`/`-`/`*` call that reached codegen
-# unspecialised (a closure-compiled body presents `Base.:+` as a plain call,
-# not an invoke). ONE (callee → per-width opcode) table replaces three copies
-# of the same ladder; `*` additionally routes String/Symbol operands to
-# concatenation. parity(intrinsics.dart:995 `_binaryOperatorMap`, which is
-# likewise a table from (receiver type, operator) to one opcode.)
-const _OPERATOR_OPCODES = IdDict{Any,NamedTuple{(:f32, :f64, :i32, :i64),NTuple{4,UInt8}}}(
-    (+) => (f32=Opcode.F32_ADD, f64=Opcode.F64_ADD, i32=Opcode.I32_ADD, i64=Opcode.I64_ADD),
-    (-) => (f32=Opcode.F32_SUB, f64=Opcode.F64_SUB, i32=Opcode.I32_SUB, i64=Opcode.I64_SUB),
-    (*) => (f32=Opcode.F32_MUL, f64=Opcode.F64_MUL, i32=Opcode.I32_MUL, i64=Opcode.I64_MUL),
-)
+"""
+    operator_intrinsic(f, T) -> Union{Nothing, Symbol}
 
+The intrinsic Julia's own method of `f(::T, ::T)` runs, for `f` one of `+`, `-`, `*` (or that
+intrinsic itself) and `T` a type whose wasm arithmetic is Julia's: a 32- or 64-bit BitInteger
+(`add_int`, base/int.jl:86-88) or an IEEE Float32/Float64 (`add_float`, base/float.jl:495-497);
+`nothing` otherwise (a narrow integer wraps at its own width, which no single opcode does). Its
+opcode is the one operator table's, INTRINSIC_BINOPS.
+parity(quarantine: Julia's surface operators are methods whose bodies call intrinsics; dart's
+`_binaryOperatorMap` (intrinsics.dart:437) is keyed by the operator's name directly.)
+"""
+function operator_intrinsic(@nospecialize(f), @nospecialize(T))::Union{Nothing, Symbol}
+    local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T, false) in (32, 64)
+    local flt = T === Float32 || T === Float64
+    (int || flt) || return nothing
+    (f === (+) || f === Core.Intrinsics.add_int || f === Core.Intrinsics.add_float) &&
+        return int ? :add_int : :add_float
+    (f === (-) || f === Core.Intrinsics.sub_int || f === Core.Intrinsics.sub_float) &&
+        return int ? :sub_int : :sub_float
+    (f === (*) || f === Core.Intrinsics.mul_int || f === Core.Intrinsics.mul_float) &&
+        return int ? :mul_int : :mul_float
+    return nothing
+end
+
+# The high-level operator fallback: a `+`/`-`/`*` call that reached codegen unspecialised (a
+# closure-compiled body presents `Base.:+` as a plain call, not an invoke) lowers through the
+# intrinsic Julia's method runs and the one operator table; `*` additionally routes String/Symbol
+# operands to concatenation.
 # parity(pkg/dart2wasm/lib/intrinsics.dart:995 _binaryOperatorMap)
 function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
-    local ops = _OPERATOR_OPCODES[callee]
     # Each value operand's Julia type, read from its node (Julia's answer or a proven join).
     local vals = NirNode[a for a in args if !_is_type_operand(a)]
     local ts = Any[value_type(ctx, a) for a in vals]
@@ -2984,9 +3008,8 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
     # the runtime types, or wraps a narrow integer at its own width), which needs the typed
     # value channel; it rejects here instead of choosing an opcode or an unbox width.
     local T = isempty(ts) ? nothing : ts[1]
-    local wt = T === Int32 || T === UInt32 ? I32 : T === Int64 || T === UInt64 ? I64 :
-               T === Float32 ? F32 : T === Float64 ? F64 : nothing
-    if wt === nothing || length(vals) != 2 || any(t -> t !== T, ts)
+    local op = operator_intrinsic(callee, T)
+    if op === nothing || length(vals) != 2 || any(t -> t !== T, ts)
         emit_unsupported_stub!(ctx, fb, :unsupported_type,
             "`$(callee)` on operands typed ($(join((t === nothing ? "Any" : string(t) for t in ts), ", "))) has no single opcode: " *
             "arithmetic on values not of one concrete machine type needs the typed value channel";
@@ -2996,6 +3019,7 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
 
     # The operands; one held boxed (an AnyRef local) unboxes at T's width, the width of
     # the type the node states.
+    local wt = julia_to_wasm_type(T)
     local boxed_operand_unboxed = false
     for arg in vals
         emit_call_operand!(fb, ctx, arg)
@@ -3004,7 +3028,8 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
             boxed_operand_unboxed = true
         end
     end
-    num!(fb, wt === F32 ? ops.f32 : wt === F64 ? ops.f64 : wt === I32 ? ops.i32 : ops.i64)
+    emit_intrinsic_binop!(fb, wt, wt, op, ctx, _julia_int_width(T, wt === I32)) === nothing &&
+        error("the operator table has no $(op) over $(wt)")
 
     # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT
     # side of the anyref-OPERAND unbox above — a numeric arith result flowing

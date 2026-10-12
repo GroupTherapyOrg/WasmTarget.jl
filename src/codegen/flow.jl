@@ -93,21 +93,12 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
         # Handle nothing literal - compile_value(nothing) emits i32_const 0
         if lit === nothing
             return I32
-        elseif lit isa Int64 || lit isa UInt64 || lit isa Int
-            return I64
-        elseif lit isa Int32 || lit isa UInt32 || lit isa Bool || lit isa UInt8 || lit isa Int8 || lit isa UInt16 || lit isa Int16
-            return I32
-        elseif lit isa Float64
-            return F64
-        elseif lit isa Float32
-            return F32
+        elseif lit isa Union{Base.BitInteger, Bool, Char, Float32, Float64} && !(lit isa Union{Int128, UInt128})
+            return julia_to_wasm_type(typeof(lit))   # a number in one register: the one width rule
         elseif lit isa Symbol || lit isa String
             # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
             str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
             return ConcreteRef(str_type_idx, false)
-        elseif lit isa Char
-            # Char is a 4-byte primitive, compiled as I32
-            return I32
         elseif lit isa Type
             # Type{T} values are now represented as DataType struct refs (global.get).
             # Use $JlDataType when hierarchy is available

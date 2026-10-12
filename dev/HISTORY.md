@@ -148,13 +148,12 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - SimpleDiffEq's oracle allows muladd's rounding in every case, checked against each solver's step; on Julia 1.13.1 the Vector-state RK4/Tsit5 solves compile and run bit-exact.
 - titlecase is Julia's rule over utf8proc's grapheme breaks, ported and checked against the C library; String(::SubString) copied a byte late — one storage-pointer rule now (L143).
 - Every definition in src names its dart counterpart or Julia necessity (R32 0, C2 closed); typed IR is read only through the NIR (R29a, R29b); a type nothing extends is final (dart's subtyping prefix).
-- C10 closed: a trap names each frame (L159, L157), one compile entry (L158), rethrow(e) keeps
-  its stack (L145), an escaped exception names its type (L160), the statement lane is strict on
-  throws (L161), the locator follows every closure (L147), the gate has a 20-minute budget (L162).
+- C10 closed: a trap names each frame (L159, L157), one compile entry (L158), rethrow(e) keeps its stack (L145), an escaped exception names its type (L160), the statement lane is strict on throws (L161), the locator follows every closure (L147), the gate has a 20-minute budget (L162).
 - An :invoke calls its MethodInstance's function (L170); one consult for which methods Julia selects (L171); no instruction is recorded in dead code, as dart's `_add` (L172); a local is declared through one path, its type checked (L173, R41).
 - One reader of an operand's type, Julia's argextype (L174, R3 locked); codegen asks no inference, its joins and capture record the plan's (L152); a global resolved once (L175).
 - One class set, closed_world_classes, read by the enrollment, the no-method records, the ambiguity search and the numbering (L176); one rule for a match that is one signature (L177); one bound for a call's candidate products; the plan writes nothing into the world (L78); an invoke_in_world no one method covers is a dynamic call.
 - A value meets a sink through one conversion typed by its own type: one widening check, the funnel's (L178); no ladder beside it, one box producer; one TypeError builder, one `Type{X}` element rule, the type-object test over the static type, one class test (L179).
+- One table per construct: the operator table and the conversion table, one width rule, one operand table, one loop-bounds definition (L180).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.
