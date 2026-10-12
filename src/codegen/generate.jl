@@ -45,6 +45,60 @@ parity(code_generator.dart:38 CodeGenerator.generate)
 function generate_body(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
     # Analyze control flow to find basic block structure
     blocks = analyze_blocks(ctx.nir)
+    let nir = ctx.nir, lbl = p0lbl(ctx), cfg = p0_nir_cfg(ctx.nir)
+        local hit = (ctx isa CompilationContext && ctx.mi !== nothing) ? plan_ir_or_nothing(ctx.translator.plan, ctx.mi) : nothing
+        if hit !== nothing && hit[1] isa Core.CodeInfo && length(hit[1].code) == length(nir)
+            local jc = Core.Compiler.compute_basic_blocks(hit[1].code)
+            local js = Set(first(bb.stmts) for bb in jc.blocks)
+            local jsucc = Set((first(jc.blocks[k].stmts), first(jc.blocks[s].stmts)) for k in eachindex(jc.blocks) for s in jc.blocks[k].succs)
+            local psucc = Set((cfg.blocks[k][1], cfg.blocks[s][1]) for k in eachindex(cfg.blocks) for s in cfg.succs[k])
+            p0!("G0 the NIR port == Julia's CFG: " * (js == cfg.starts && jsucc == psucc ? "yes" : "NO"), js == cfg.starts && jsucc == psucc ? "" : "$(lbl) :: starts only Julia $(first(sort!(collect(setdiff(js, cfg.starts))), 6)) only port $(first(sort!(collect(setdiff(cfg.starts, js))), 6)) edges only Julia $(first(collect(setdiff(jsucc, psucc)), 4)) only port $(first(collect(setdiff(psucc, jsucc)), 4))")
+        end
+        local regions = has_try_catch(nir) ? find_try_regions(nir) : TryRegion[]
+        local wb = isempty(regions) ? blocks : _split_blocks_for_regions(blocks, regions)
+        local ws = Set(bk.start_idx for bk in wb)
+        local kind(i) = nir[i].node isa NirEnter ? "at an Enter" : (i > 1 && nir[i - 1].node isa NirEnter) ? "after an Enter" :
+            any(r -> r.catch_dest == i, regions) ? "a catch destination" : (i > 1 && nir[i - 1].node isa NirLeave) ? "after a leave" :
+            (nir[i].node isa NirPhi && (i - 1) in nir[i].node.edges) ? "a phi with an edge from the statement before" : "other"
+        for i in setdiff(cfg.starts, ws); p0!("G1 a start only Julia's: $(kind(i)) try=$(!isempty(regions))", "$(lbl) %$(i) n=$(length(nir))"); end
+        for i in setdiff(ws, cfg.starts); p0!("G1 a start only WT's (after the region split): $(kind(i))", "$(lbl) %$(i)"); end
+        local wends = Set(bk.end_idx for bk in wb)
+        for (i, rec) in enumerate(nir)
+            rec.node isa NirPhi || continue
+            for e in rec.node.edges
+                p0!("G2 a phi edge naming " * (e in wends ? "a WT block end" : "a statement that ends NO WT block ($(nameof(typeof(nir[e].node))))"),
+                    e in wends ? "" : "$(lbl) phi %$(i) edge %$(e)")
+            end
+        end
+        # G2b: WT's statement successor relation (blocks + region split + its edges + handler edges) vs the port's
+        local wbof = Dict{Int,Int}(); for (k, bk) in enumerate(wb), i in bk.start_idx:bk.end_idx; wbof[i] = k; end
+        local wsucc = Set{Tuple{Int,Int}}()
+        for (k, bk) in enumerate(wb)
+            local t = bk.terminator
+            if t isa NirGotoIfNot
+                k < length(wb) && push!(wsucc, (bk.start_idx, wb[k + 1].start_idx))
+                haskey(wbof, t.target) && push!(wsucc, (bk.start_idx, wb[wbof[t.target]].start_idx))
+            elseif t isa NirGoto
+                haskey(wbof, t.target) && push!(wsucc, (bk.start_idx, wb[wbof[t.target]].start_idx))
+            elseif !(t isa NirReturn)
+                k < length(wb) && push!(wsucc, (bk.start_idx, wb[k + 1].start_idx))
+            end
+        end
+        for r in regions
+            local eb, hb = get(wbof, r.enter_idx, nothing), get(wbof, r.catch_dest, nothing)
+            (eb === nothing || hb === nothing) && continue
+            push!(wsucc, (wb[eb].start_idx, wb[hb].start_idx))
+            eb < length(wb) && push!(wsucc, (wb[eb].start_idx, wb[eb + 1].start_idx))
+        end
+        # compare as statement-level reachability edges: map each block edge to (last stmt of src, first of dst)
+        local wse = Set((wb[wbof[a]].end_idx, b2) for (a, b2) in wsucc)
+        local pse = Set((cfg.blocks[k][2], cfg.blocks[s][1]) for k in eachindex(cfg.blocks) for s in cfg.succs[k])
+        # the port's fall-through edges inside one WT block are no WT edge: compare only edges whose source ends a WT block
+        local pse_w = Set(e for e in pse if e[1] in wends)
+        local wse_p = Set(e for e in wse if e[1] in Set(z for (_, z) in cfg.blocks))
+        p0!("G2b block edges (sources ending blocks in both): " * (pse_w == wse_p ? "same" : "DIFFER"),
+            pse_w == wse_p ? "" : "$(lbl) only port $(first(collect(setdiff(pse_w, wse_p)), 4)) only WT $(first(collect(setdiff(wse_p, pse_w)), 4)) try=$(!isempty(regions))")
+    end
 
     # the function's entry, before any instruction, maps to its definition, as dart sets the
     # member's offset before it generates the body (code_generator.dart:3625)
@@ -141,6 +195,15 @@ reachability proof.)
 formal(dev/formal/ProvenDead.tla): a statement proven dead has no control-flow path from entry
 """
 function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
+    let w = _p0_wt_proven(nir, idx), cfg = p0_nir_cfg(nir)
+        local reach = falses(length(cfg.blocks)); reach[1] = true; local work = [1]
+        while !isempty(work); local k = pop!(work); for s in cfg.succs[k]; reach[s] || (reach[s] = true; push!(work, s)); end; end
+        local a = 1 <= idx <= length(nir) && !reach[cfg.bof[idx]]
+        p0!("G4 proven dead: WT=$(w) port=$(a) try=$(has_try_catch(nir))")
+        return w
+    end
+end
+function _p0_wt_proven(nir::Vector{NirStmt}, idx::Int)::Bool
     1 <= idx <= length(nir) || return false
     has_try_catch(nir) && return false
     blocks = analyze_blocks(nir)

@@ -471,6 +471,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
                 end
             end
         end
+        p0!("G5 stub reset: WT=$(_should_reset) port=$(idx in p0_nir_cfg(ctx.nir).starts)")
         if _should_reset
             ctx.last_stmt_was_stub = false
         end
@@ -837,6 +838,40 @@ end
 # Dart's definite assignment is a front-end guarantee, so dart2wasm never proves it.)
 # formal(dev/formal/DefiniteInit.tla): an answer of true means every path stores each missing field before the object is read
 function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
+                                        subject::NirNode, T::DataType,
+                                        missing::Set{Int}; p0_port::Bool=false)::Bool
+    if !p0_port
+        local a = _definitely_initializes_in_nir(nir, start_pc, subject, T, missing; p0_port=true)
+        local w = _definitely_initializes_in_nir_wt(nir, start_pc, subject, T, missing)
+        p0!("G3 the definite-initialization proof: WT=$(w) port=$(a) try=$(has_try_catch(nir))", a == w ? "" : "$(T) start %$(start_pc)")
+        return w
+    end
+    1 <= start_pc <= length(nir) || return false
+    local cfg = p0_nir_cfg(nir)
+    incoming = Dict{Int,Set{Int}}(start_pc => Set{Int}())
+    queue = Int[start_pc]
+    while !isempty(queue)
+        pc = popfirst!(queue)
+        assigned = copy(incoming[pc])
+        node = nir[pc].node
+        written = _setfield_of_value(node, subject, T)
+        if written !== nothing && written in missing
+            push!(assigned, written)
+        elseif nir_uses(node, subject) && !issubset(missing, assigned)
+            return false
+        end
+        for dest in p0_stmt_succs(cfg, pc)
+            start_pc <= dest <= length(nir) || return false
+            next_state = haskey(incoming, dest) ? intersect(incoming[dest], assigned) : copy(assigned)
+            if !haskey(incoming, dest) || next_state != incoming[dest]
+                incoming[dest] = next_state
+                push!(queue, dest)
+            end
+        end
+    end
+    return true
+end
+function _definitely_initializes_in_nir_wt(nir::Vector{NirStmt}, start_pc::Int,
                                         subject::NirNode, T::DataType,
                                         missing::Set{Int})::Bool
     1 <= start_pc <= length(nir) || return false
