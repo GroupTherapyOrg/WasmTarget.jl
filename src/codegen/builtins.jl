@@ -1942,6 +1942,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     # one: a numeric static type is concrete, decided by the static arms above)
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
+    P0_TA[] += 1
     local _ta_chk = as_checker!(ctx, _ta_target, _ta_static)
     if _ta_chk isa WasmDiagnostic
         emit_unsupported_stub!(ctx, fb, _ta_chk.kind, _ta_chk.construct; idx=idx, detail=_ta_chk.detail)
