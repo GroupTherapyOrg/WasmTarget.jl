@@ -245,6 +245,36 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
 end
 
 """
+    numeric_register(T) -> Union{Nothing, NumType}
+
+The register a primitive number of type `T` rides in, by the one width rule (julia_to_wasm_type):
+an i32, i64, f32 or f64; `nothing` for a type held in no one numeric register (Int128, a struct,
+an abstract type).
+parity(pkg/dart2wasm/lib/translator.dart:1044 Translator.translateType)
+"""
+function numeric_register(@nospecialize(T))::Union{Nothing, NumType}
+    (T isa DataType && isprimitivetype(T)) || return nothing
+    local w = julia_to_wasm_type(T)
+    return w isa NumType ? w : nothing
+end
+
+"""
+    exact_register(T) -> Union{Nothing, NumType}
+
+numeric_register(T) when `T` is a number whose register holds exactly its value: a Bool (0 or 1)
+or a Number whose bits fill it (32 or 64 of them); `nothing` for a narrower integer, whose
+register may carry junk above its width until normalise_narrow! clears it, and for a value that
+is no number (a Char, a pointer), which the join of numbers never types.
+parity(pkg/dart2wasm/lib/translator.dart:1044 Translator.translateType)
+"""
+function exact_register(@nospecialize(T))::Union{Nothing, NumType}
+    local w = numeric_register(T)
+    (w === nothing || !(T <: Number)) && return nothing
+    T === Bool && return w
+    return 8 * sizeof(T) == ((w === I32 || w === F32) ? 32 : 64) ? w : nothing
+end
+
+"""
 Resolve a Union type to a common Wasm type.
 parity(quarantine: a Julia Union of unrelated types has one wasm representation; dart's types are
 classes and their nullable forms, which translateType maps one by one.)
@@ -290,14 +320,11 @@ parity(quarantine: the members of a Julia Union, joined; see resolve_union_type.
 function find_common_wasm_type(types::Vector)::WasmValType
     # Check if all are numeric
     if all(t -> t <: Number, types)
-        # Prefer i64 over i32, f64 over f32
-        has_i64 = any(t -> t === Int64 || t === UInt64 || t === Int, types)
-        has_f64 = any(t -> t === Float64, types)
-        has_f32 = any(t -> t === Float32, types)
+        # Prefer i64 over i32, f64 over f32, each member's register the one width rule's
+        has_i64 = any(t -> numeric_register(t) === I64, types)
+        has_f64 = any(t -> numeric_register(t) === F64, types)
+        has_f32 = any(t -> numeric_register(t) === F32, types)
         has_float = has_f64 || has_f32
-        has_int = any(t -> t === Int32 || t === UInt32 || t === Int64 || t === UInt64 ||
-                         t === Int || t === Bool || t === Int8 || t === UInt8 ||
-                         t === Int16 || t === UInt16, types)
 
         if has_float
             return has_f64 ? F64 : F32
@@ -702,9 +729,10 @@ function _const_init!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, 
         local _fw = _wst.fields[k + Int(info.field_offset)].valtype
         local _fv = isdefined(val, k) ? getfield(val, k) : nothing
         _fv === nothing && return nothing
-        local _want = _fv isa Int64 || _fv isa UInt64 ? I64 :
-                      _fv isa Float64 ? F64 : _fv isa Float32 ? F32 :
-                      (_fv isa Integer || _fv isa Bool || _fv isa Char) ? I32 : nothing
+        # a number field's register, the one width rule's (an Int128 is its struct)
+        local _want = numeric_register(typeof(_fv))
+        # an integer in no one register (Int128, BigInt) is no constant expression here
+        _want === nothing && _fv isa Integer && return nothing
         if _want === nothing
             # nested immutable: the registered slot must be a concrete ref
             (_fw isa ConcreteRef) || return nothing

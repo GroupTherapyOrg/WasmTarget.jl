@@ -523,8 +523,8 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # The association is: PhiCNode.values contains SSAValue(this_upsilon_idx).
         # Find which PhiCNode references this UpsilonNode.
         if node.value !== nothing
-            for (phic_idx, phic_rec) in enumerate(ctx.nir)
-                local phic = phic_rec.node
+            for phic_idx in ssa_users(ctx, idx)   # the statements that name this upsilon
+                local phic = ctx.nir[phic_idx].node
                 if phic isa NirPhiC && haskey(ctx.phi_locals, phic_idx)
                     for v in phic.values
                         if v isa NirSSA && v.id == idx
@@ -904,8 +904,8 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
         _definitely_initializes_in_nir(ctx.nir, idx + 1, subject, T, missing) &&
         return true
     uses = Tuple{NirInvoke,Int}[]
-    for rec in ctx.nir
-        nir_uses(rec.node, subject) || continue
+    for j in ssa_users(ctx, idx)   # the statements that use the new object
+        local rec = ctx.nir[j]
         rec.node isa NirInvoke || return false
         positions = findall(o -> o isa NirSSA && o.id == idx, rec.node.operands)
         length(positions) == 1 || return false
