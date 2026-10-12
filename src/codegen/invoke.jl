@@ -18,19 +18,6 @@ function _invoke_callee_object(mi::Core.MethodInstance)::Any
     return _invoke_singleton_instance(st.parameters[1])
 end
 
-# The function an invoked value names through a global binding: the invoke's own callee
-# when the IR wrote a global there (the NIR boundary resolved it to its object; an unbound
-# one stays a `GlobalRef`), or an SSA alias of a global (optionally through one π) — else
-# `nothing` (a literal, a parameter, a runtime value).
-# parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): a call's target.
-function _invoke_named_callee(callee, ctx::AbstractCompilationContext; through_pi::Bool)::Any
-    callee isa NirNode || return callee
-    def = _ssa_def(callee, ctx)
-    through_pi && def isa NirPi && def.value isa NirSSA && (def = _ssa_def(def.value, ctx))
-    def isa NirGlobalRef || return nothing
-    return def.bound ? def.value : GlobalRef(def.mod, def.name)
-end
-
 """
 Compile an invoke expression (method invocation) — dart visitor shape:
 emits the invoke INTO the caller's builder. Its callee is the function the plan compiles its
@@ -184,19 +171,12 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         (spec isa DataType && spec <: Tuple) ? spec.parameters[2:end] : nothing
     end
 
-    # the callee's value, pushed as the closure object: the function the callee names
-    # through a global (directly, or an SSA alias of one through a π), else the callee's own
-    # constant or node, else — for a function parameter — the singleton instance its
-    # specialized type names
+    # the callee's value, pushed as the closure object: the value the boundary carries (a
+    # runtime callee's node, a constant's self, nir_callee_value), else the constant the
+    # callee names, whose type determines it
     local closure_self_to_push = nothing
     if takes_closure
-        local named = _invoke_named_callee(node.callee, ctx; through_pi=true)
-        local callee_value = named !== nothing ? named : nir_const(node.callee)
-        if named === nothing && node.callee isa NirArgument
-            local singleton = _invoke_callee_object(mi)
-            singleton === nothing || (callee_value = singleton)
-        end
-        closure_self_to_push = callee_value isa NirNode ? callee_value : NirLiteral(callee_value)
+        closure_self_to_push = something(nir_callee_value(node), NirLiteral(node.callee))
     end
 
     # 453393ca4ba4: closure callee — the compiled function takes the closure

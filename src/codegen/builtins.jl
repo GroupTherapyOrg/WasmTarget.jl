@@ -48,14 +48,6 @@ function _register_builtin!(callee, lowering::Function)::Function
     return lowering
 end
 
-"""The concrete Core/Base function OBJECT a call's callee names, mirroring dart's
-`StaticIntrinsic.fromProcedure` lookup — the registry is keyed on that object's identity, never on the bare
-name Symbol. The NIR boundary already resolved a bound global to its object; a callee the
-IR embedded literally is unwrapped here. An unbound global (left a `GlobalRef` by the
-boundary) and a runtime value (an SSA use, an argument) are explicit non-matches.
-parity(intrinsics.dart:414 StaticIntrinsic.fromProcedure)"""
-_resolve_builtin_callee(func)::Any = nir_const(func)
-
 """THE funnel: resolve `func`'s callee identity once and, if it names a
 registered Core/Base builtin, run its lowering. Returns the handled
 `InstrBuilder` or `nothing` (generic/dynamic-call path continues) — dart's
@@ -66,7 +58,10 @@ formal(dev/formal/ConsultChain.tla).
 parity(intrinsics.dart:1194 generateStaticIntrinsic)"""
 function _try_builtin_lowering!(b::InstrBuilder, fb::InstrBuilder, ctx::AbstractCompilationContext,
                                  call::NirCall, idx::Int, args, func)::Union{InstrBuilder,Nothing}
-    callee = _resolve_builtin_callee(func)
+    # the callee the boundary resolved once, its object (an unbound global's GlobalRef and a
+    # runtime value's node match no entry), keyed by identity as dart's
+    # StaticIntrinsic.fromProcedure (intrinsics.dart:414) keys its lookup by member
+    callee = func
     lowering = get(BUILTIN_LOWERINGS, callee, nothing)
     lowering === nothing && return nothing
     return lowering(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
@@ -1941,17 +1936,18 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
         _emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))
         return append_builder!(b, fb)
     end
+    # the run-time check: the one as-checker of (target, static type), called on the operand
+    # (types.dart:552 emitAsCheck → generateAsChecker), which returns it; a check WT cannot
+    # lower rejects here, at this statement
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
-    local _ta_tmp = allocate_local!(ctx, _ta_ty)
-    local_tee!(fb, UInt32(_ta_tmp))
-    _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
-    num!(fb, Opcode.I32_EQZ)
-    if_!(fb)                                          # not a T → THROW
-    _emit_typeerror_throw!(fb, ctx, _ta_target,
-        (bb, w) -> (local_get!(bb, UInt32(_ta_tmp)); coerce_stack_top!(bb, w, ctx; from_julia=_ta_static)))
-    end_block!(fb)
-    local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
+    local _ta_chk = as_checker!(ctx, _ta_target, _ta_static)
+    if _ta_chk isa WasmDiagnostic
+        emit_unsupported_stub!(ctx, fb, _ta_chk.kind, _ta_chk.construct; idx=idx, detail=_ta_chk.detail)
+        return append_builder!(b, fb)
+    end
+    coerce_stack_top!(fb, _ta_chk[2], ctx; from_julia=_ta_static)
+    emit_direct_call!(fb, ctx.mod, ctx.type_registry, _ta_chk[1])
     return append_builder!(b, fb)
 end
 
