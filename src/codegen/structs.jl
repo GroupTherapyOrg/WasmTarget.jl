@@ -482,25 +482,15 @@ end
 """
 Register a Julia tuple type in the Wasm module.
 Tuples are represented as WasmGC structs with numbered fields.
-Rewrite a Type{X} tuple parameter to X's kind, `typeof(X)` (DataType, Union, UnionAll or
-Core.TypeofBottom), so
-every spelling of a type-object-carrying tuple shares one registry entry / wasm struct type.
+Rewrite a Type{X} tuple parameter to X's kind by the one `Type{X}` element rule
+(type_element_kind, which tuple_runtime_type reads), so every spelling of a
+type-object-carrying tuple shares one registry entry / wasm struct type.
 parity(quarantine: Julia inference spells one runtime tuple element as Type{X} or as its
 kind; a Dart record's field types have one spelling.)
 """
 function _canonical_tuple_type(T::DataType)::Type
-    changed = false
-    ps = Any[]
-    for P in T.parameters
-        X = (P isa DataType && P.name === Type.body.name) ? P.parameters[1] : nothing
-        if X isa DataType || X isa Union || X isa UnionAll || X === Union{}
-            push!(ps, typeof(X))
-            changed = true
-        else
-            push!(ps, P)
-        end
-    end
-    return changed ? Tuple{ps...} : T
+    local ps = Any[something(type_element_kind(P), P) for P in T.parameters]
+    return any(((P, Q),) -> P !== Q, zip(T.parameters, ps)) ? Tuple{ps...} : T
 end
 
 # parity(quarantine: Julia's Tuple{Vararg{E}} is a tuple type whose length is a runtime value;

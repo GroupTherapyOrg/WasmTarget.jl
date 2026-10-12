@@ -446,13 +446,7 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         # not one concrete class (a Union carried in one width) has no box to go in
         isconcretetype(body.return_type) || throw(_closure_layout_error(closure_type, ClosureBody[body],
             "the $(body.results[1]) result of a body returning $(body.return_type) has no single class to box it with"))
-        local rw = body.results[1]
-        local box_idx = get_numeric_box_type!(mod, registry, rw)
-        local body_return_type = body.return_type
-        local_set!(tb, scratch)
-        i32_const!(tb, Int64(ensure_type_id!(registry, body_return_type)))
-        local_get!(tb, scratch)
-        struct_new!(tb, box_idx)
+        emit_classid_box!(tb, mod, registry, scratch, body.results[1], body.return_type)
     elseif is_context_type(registry, body.return_type)
         # a closure result is its object at the entry's anyref result
         obj_scratch >= 0 || throw(_closure_layout_error(closure_type, ClosureBody[body],
@@ -728,10 +722,9 @@ function maybe_wrap_closure!(b::InstrBuilder, ctx, from_julia)::Bool
         local actual = b.v.stack[end]
         actual isa ConcreteRef && actual.type_idx == base_idx && return true
     end
-    # a closure's context reaching a slot of any class with no Julia type stated rejects: its
-    # class cannot be guessed from a layout another type may share (A11B3; no program reaching
-    # this was found, every erasure site measured states its type)
-    if from_julia === nothing && !isempty(b.v.stack) && b.v.stack[end] isa ConcreteRef
+    # a closure's context reaching a slot of any class with no class stated (source_class) rejects:
+    # its class cannot be guessed from a layout another type may share
+    if source_class(from_julia) === nothing && !isempty(b.v.stack) && b.v.stack[end] isa ConcreteRef
         local idx = b.v.stack[end].type_idx
         if any(((T, info),) -> T isa DataType && info.wasm_type_idx == idx && is_context_type(ctx.type_registry, T),
                registered_structs(ctx.type_registry))

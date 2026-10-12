@@ -34,14 +34,10 @@
 
 # parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 @inline function _canonical_type_object_arg(@nospecialize(T), @nospecialize(formal))::Union{Type, Core.TypeofVararg}
-    if T isa DataType && T <: Type && length(T.parameters) == 1 &&
-       !(T.parameters[1] isa TypeVar)
-        # `Core.Typeof(value)` intentionally preserves Type{value} singleton
-        # precision; the Wasm runtime representation class is ordinary
-        # `typeof(value)` (DataType, UnionAll, ...).
-        runtime_class = typeof(T.parameters[1])
-        formal === runtime_class && T <: formal && return formal
-    end
+    # `Core.Typeof(value)` intentionally preserves Type{value} singleton precision; the Wasm
+    # runtime representation class is its kind, the one `Type{X}` element rule's answer
+    local runtime_class = type_element_kind(T)
+    runtime_class !== nothing && formal === runtime_class && T <: formal && return formal
     return T
 end
 
@@ -1226,7 +1222,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             for cs in _candidate_product(_ech, _T, ds, invocation_site[(_T, ds)])
                 local _none = wt_method_matches(Tuple{_T, cs...})
                 (_none === nothing || !isempty(_none)) && continue
-                local _rt = Any[(C isa DataType && C.name === Type.body.name) ? typeof(C.parameters[1]) : C for C in cs]
+                local _rt = Any[something(type_element_kind(C), C) for C in cs]
                 all(t -> t isa DataType && isconcretetype(t), _rt) && _record_no_method!(no_method, _T, Tuple{_rt...})
             end
         end
@@ -1970,6 +1966,21 @@ const _IR_META_TYPES = Set{DataType}([
 ])
 
 """
+    type_element_kind(P) -> Union{Nothing, Type}
+
+The runtime type of a value of static type `P = Type{X}`: X's kind, `typeof(X)` (DataType,
+Union, UnionAll or Core.TypeofBottom), as jl_f_tuple types a type object element; `nothing` for
+any other `P`. The one `Type{X}` element rule: tuple_runtime_type, a tuple type's registration
+(_canonical_tuple_type), a MethodError's args tuple and a type-object argument's canonical
+signature (_canonical_type_object_arg) read it.
+parity(quarantine: Julia types a type object element by its kind; a dart record's field types
+are static.)
+"""
+type_element_kind(@nospecialize(P))::Union{Nothing, Type} =
+    (P isa DataType && P.name === Type.body.name && length(P.parameters) == 1 &&
+     P.parameters[1] isa Type) ? typeof(P.parameters[1]) : nothing
+
+"""
     tuple_runtime_type(operands, slot_types) -> Union{Nothing, DataType}
 
 The type of the tuple `Core.tuple` builds from these operands, as jl_f_tuple types it, by each
@@ -1995,9 +2006,9 @@ function tuple_runtime_type(operands::AbstractVector, slot_types::AbstractVector
             continue
         end
         local T = value_type(a, slot_types, nothing)
-        if T isa DataType && T.name === Type.body.name && length(T.parameters) == 1 &&
-           T.parameters[1] isa Type && !(T.parameters[1] isa TypeVar)
-            push!(rt, typeof(T.parameters[1]))
+        local K = type_element_kind(T)
+        if K !== nothing
+            push!(rt, K)
         elseif T isa DataType && isconcretetype(T)
             push!(rt, T)
         else

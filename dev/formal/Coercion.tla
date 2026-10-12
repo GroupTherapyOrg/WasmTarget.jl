@@ -45,11 +45,19 @@
 (*    counterpart for. The typing claim is unchanged by them.                  *)
 (*  - Instruction sequences are abstract ops with the wasm typing rule of the  *)
 (*    real opcode (ResultType folds them); the byte encoding is irrelevant.    *)
-(*  - `from_julia` collapses to one BOOLEAN — whether a concrete Julia source  *)
-(*    type is known — since the boxing arm reads nothing else from it.         *)
+(*  - `from_julia`, the source value's own Julia type, collapses to what the  *)
+(*    funnel reads from it (source_class): "none" (not stated), "class" (a     *)
+(*    concrete type, the value's class), "nothing" (Nothing, a class too) and  *)
+(*    "notclass" (an abstract type: the runtime-length tuple's own type, or a  *)
+(*    sink's type a caller gave in its place, the A7E4 shape). Boxing needs a  *)
+(*    class; so does a representation another class's layout shares (Tv: its  *)
+(*    widening to a top type passes only for another class's struct).        *)
+(*  - The runtime-length tuple's widening check lives in this funnel alone:   *)
+(*    every sink converts through it, so the model's walk over every pair IS  *)
+(*    the check's whole domain.                                               *)
 (*                                                                           *)
-(* The spec walks the pair list deterministically (one pair per step) so a    *)
-(* violation names its pair in a one-step trace.                              *)
+(* Every triple is an initial state, its emission computed in it, so TLC     *)
+(* checks each one and a violation's trace is the one offending triple.       *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -58,10 +66,19 @@ CONSTANTS
                             \* (the silent fallthrough fixed in 752ad55e)
     CastBeforeUpcastCheck,  \* Broken: ref→ref downcasts before asking wasm_subtype
     IgnoreNullability,      \* Broken: wasm_subtype ignores nullability (the P2 bug)
-    CastTuple               \* Broken: a value bound for the runtime-length tuple is cast to
+    CastTuple,              \* Broken: a value bound for the runtime-length tuple is cast to
                             \* it, never built (batches 97 and 99: an NTuple trapped, A9E4, A10E4)
+    TrustStatedSource,      \* Broken: the widening check passes any stated source type, so a
+                            \* sink's abstract type given as the source's lets the runtime-length
+                            \* tuple reach a top type (A7E4)
+    CastNothing             \* Broken: `nothing` reaching a nullable single representation is
+                            \* converted as a value (boxed, or cast), not made its null
 
 NumKinds == {"i32", "i64", "f32", "f64"}
+
+\* what the funnel reads from `from_julia` (source_class)
+SrcKinds == {"none", "class", "nothing", "notclass"}
+SrcClass(c) == c \in {"class", "nothing"}
 
 Kinds == {"any", "eq", "struct", "array", "i31", "extern", "func", "exn",
           "S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr", "Tf", "Tv"}
@@ -132,6 +149,7 @@ DropNull(t) == IF IsRef(t) THEN Ref(t.k, FALSE) ELSE t
 \*                           runtime-length tuple: (ref null? Tf) → (ref Tv)
 \*   <<"tuple_narrow", n>>   the narrowing to the runtime-length tuple (_narrow_ref!): the
 \*                           value is Tv, or an NTuple built into it: any-hierarchy → (ref null? Tv)
+\*   <<"drop_null", k>>      drop the value, ref.null of the nullable concrete k: any → (ref null k)
 INVALID == [k |-> "INVALID", n |-> FALSE]   \* an opcode whose operand is outside its hierarchy: not valid wasm
 
 \* Every cast-family op (ref.cast, the unbox cast, the string data cast) casts WITHIN
@@ -148,6 +166,7 @@ StepOK(t, op) ==
       [] op[1] = "num"                            -> IsNum(t)
       [] op[1] = "tuple_build"                    -> IsRef(t) /\ t.k = "Tf"
       [] op[1] = "tuple_narrow"                   -> IsRef(t) /\ t.k \in {"any", "eq", "struct"}
+      [] op[1] = "drop_null"                      -> TRUE
 
 Step(t, op) ==
     IF t = INVALID \/ ~StepOK(t, op) THEN INVALID ELSE
@@ -162,6 +181,7 @@ Step(t, op) ==
       [] op[1] = "num"                -> op[2]
       [] op[1] = "tuple_build"        -> Ref("Tv", FALSE)
       [] op[1] = "tuple_narrow"       -> Ref("Tv", op[2])
+      [] op[1] = "drop_null"          -> Ref(op[2], TRUE)
 
 RECURSIVE Fold(_, _)
 Fold(t, ops) == IF ops = << >> THEN t ELSE Fold(Step(t, Head(ops)), Tail(ops))
@@ -170,7 +190,7 @@ ResultType(from, ops) == Fold(from, ops)
 REJECT == <<"REJECT">>
 
 \* ---------------------------------------------------------------------------
-\* convert_type!(from, to; from_julia concrete?) — values.jl:406, arm by arm.
+\* convert_type!(from, to; from_julia) — values.jl, arm by arm; c is source_class's reading.
 BoxKind(t) == CASE t.k = "i32" -> "Bi32" [] t.k = "i64" -> "Bi64"
                 [] t.k = "f32" -> "Bf32" [] t.k = "f64" -> "Bf64"
 
@@ -207,10 +227,16 @@ Bridgeable(from, to) ==
     \/ (from.k = "extern" /\ Hier(to.k) = "any")
     \/ (to.k = "extern" /\ Hier(from.k) = "any")
 
+Top == {"any", "eq", "struct", "extern"}
+
 RECURSIVE Emit(_, _, _)
 Emit(from, to, conc) ==
-    IF IsNum(from) /\ IsRef(to) THEN
-        IF ~conc THEN REJECT
+    \* `nothing` meeting a nullable single representation is its null, whatever form it came in
+    IF conc = "nothing" /\ ~CastNothing /\ IsRef(to) /\ to.k \in Concrete /\ to.n /\
+       ~(IsRef(from) /\ from.k \in Concrete /\ Sub(from, to))
+    THEN <<<<"drop_null", to.k>>>>
+    ELSE IF IsNum(from) /\ IsRef(to) THEN
+        IF ~SrcClass(conc) THEN REJECT
         ELSE IF AbsKind(to.k) \in {"array", "i31"} THEN REJECT   \* a box is a struct
         ELSE LET boxed == Ref(BoxKind(from), FALSE)
                  rest == Emit(boxed, to, conc)
@@ -223,7 +249,9 @@ Emit(from, to, conc) ==
         \* the runtime-length tuple arms: widened to a slot of any class it rejects (its class
         \* is an NTuple{n,E} for its run-time n); a concrete struct bound for it is built into
         \* it when it is an NTuple of its element (Tf), else rejects
-        IF from.k = "Tv" /\ to.k \in {"any", "eq", "struct", "extern"} THEN REJECT
+        \* (the one widening check: only another class's struct, its class stated, passes)
+        IF from.k = "Tv" /\ to.k \in Top /\
+           (IF TrustStatedSource THEN conc = "none" ELSE ~SrcClass(conc)) THEN REJECT
         ELSE IF to.k = "Tv" /\ from.k \in Concrete /\ from.k # "Tv" /\ ~CastTuple THEN
             IF from.k = "Tf" THEN <<<<"tuple_build">>>> ELSE REJECT
         \* the string arms
@@ -248,11 +276,11 @@ Emit(from, to, conc) ==
     ELSE Ladder(from, to)
 
 \* ---------------------------------------------------------------------------
-\* The walk: one (from, to, conc) triple per step, in a fixed order.
-Triples == {<<f, t, c>> : f \in Types, t \in Types, c \in BOOLEAN}
+\* Every (from, to, source) triple, each an initial state.
+Triples == {<<f, t, c>> : f \in Types, t \in Types, c \in SrcKinds}
 
-VARIABLES todo, checked, last, bad
-vars == <<todo, checked, last, bad>>
+VARIABLE last
+vars == <<last>>
 
 \* One triple's verdicts (the claims, applied to a computed emission `out`).
 TotalOK(f, t, c, out) == f = t \/ out = REJECT
@@ -274,7 +302,7 @@ NoTupleCastOK(f, t, c, out) == out = REJECT \/ ~IsRef(f) \/
 \* The funnel rejects only what the wasm type system cannot express, and the runtime-length
 \* tuple's own two rejections.
 RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
-    \/ (IsNum(f) /\ IsRef(t) /\ ~c)                          \* boxing without a concrete Julia type
+    \/ (IsNum(f) /\ IsRef(t) /\ ~SrcClass(c))                \* boxing without the value's class
     \/ (IsNum(f) /\ IsNum(t))                                 \* a pair Julia never converts implicitly
     \/ (IsNum(f) /\ IsRef(t) /\ (AbsKind(t.k) \in {"array", "i31"}     \* a box is a struct, never an array/i31,
                                  \/ Hier(t.k) \in {"func", "exn"}))   \* and lives in the any hierarchy
@@ -282,43 +310,32 @@ RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
         /\ ~(f.k = "extern" /\ Hier(t.k) = "any")
         /\ ~(t.k = "extern" /\ Hier(f.k) = "any"))            \* cross-hierarchy, no bridge op
     \/ (IsRef(f) /\ IsNum(t) /\ Hier(f.k) # "any" /\ f.k # "extern")   \* unboxing a func/exn ref
-    \/ (IsRef(f) /\ f.k = "Tv" /\ t.k \in {"any", "eq", "struct", "extern"})   \* its class is known only at run time
+    \/ (IsRef(f) /\ f.k = "Tv" /\ t.k \in Top /\ ~SrcClass(c))   \* its class is known only at run time
     \/ (t.k = "Tv" /\ (IsNum(f) \/ f.k \in Concrete \ {"Tf", "Tv"}))       \* only an NTuple of its element converts
 
-Init == /\ todo = Triples
-        /\ checked = {}
-        /\ last = << >>
-        /\ bad = {}
+\* A runtime-length tuple's representation reaches a slot of any class only as another class's
+\* struct whose class the source type states: an abstract source type (the sink's, A7E4) or none
+\* rejects, so no class read answers for Tuple{Vararg{E}}, which no value has.
+NoUnclassedWideningOK(f, t, c, out) == out = REJECT \/
+    ~(IsRef(f) /\ f.k = "Tv" /\ IsRef(t) /\ t.k \in Top /\ ~SrcClass(c))
 
-Next == /\ todo # {}
-        /\ LET tr == CHOOSE x \in todo : TRUE
-               out == Emit(tr[1], tr[2], tr[3])
-               ok == /\ TotalOK(tr[1], tr[2], tr[3], out)
-                     /\ NoRedundantCastOK(tr[1], tr[2], tr[3], out)
-                     /\ RejectsOnlyInexpressibleOK(tr[1], tr[2], tr[3], out)
-                     /\ NoTupleCastOK(tr[1], tr[2], tr[3], out)
-           IN /\ todo' = todo \ {tr}
-              /\ checked' = checked \cup {tr}
-              /\ last' = <<tr[1], tr[2], tr[3], out>>
-              /\ bad' = IF ok THEN bad ELSE bad \cup {<<tr[1], tr[2], tr[3], out>>}
+\* `nothing` bound for a nullable single representation is its null: never boxed, never cast.
+NothingIsNullOK(f, t, c, out) == out = REJECT \/
+    ~(c = "nothing" /\ IsRef(t) /\ t.k \in Concrete /\ t.n /\ ~(IsRef(f) /\ f.k \in Concrete /\ Sub(f, t))) \/
+    \A i \in 1..Len(out) : out[i][1] \notin {"box", "cast", "unbox"}
 
-\* every triple checked: the end of the walk, not a deadlock
-Done == todo = {}
-Terminal == Done /\ UNCHANGED vars
+\* one state per triple: the triple and the funnel's emission for it
+Init == last \in {<<tr[1], tr[2], tr[3], Emit(tr[1], tr[2], tr[3])>> : tr \in Triples}
+Next == UNCHANGED vars
+Spec == Init /\ [][Next]_vars
 
-Spec == Init /\ [][Next \/ Terminal]_vars
+TypeOK == Len(last) = 4 /\ <<last[1], last[2], last[3]>> \in Triples
 
-TypeOK == /\ todo \subseteq Triples
-          /\ checked \subseteq Triples
-          /\ last = << >> \/ Len(last) = 4
-
-\* Per-step claims (a one-step trace names the first offending triple) …
-Total == last = << >> \/ TotalOK(last[1], last[2], last[3], last[4])
-NoRedundantCast == last = << >> \/ NoRedundantCastOK(last[1], last[2], last[3], last[4])
-RejectsOnlyInexpressible == last = << >> \/ RejectsOnlyInexpressibleOK(last[1], last[2], last[3], last[4])
-NoTupleCast == last = << >> \/ NoTupleCastOK(last[1], last[2], last[3], last[4])
-
-\* … and the whole-lattice claim: at the end of the walk nothing was flagged. Checked
-\* on its own (without the per-step invariants) it lists EVERY offending triple at once.
-AllPairsOK == todo # {} \/ bad = {}
+\* The claims, each checked in every triple's state
+Total == TotalOK(last[1], last[2], last[3], last[4])
+NoRedundantCast == NoRedundantCastOK(last[1], last[2], last[3], last[4])
+RejectsOnlyInexpressible == RejectsOnlyInexpressibleOK(last[1], last[2], last[3], last[4])
+NoTupleCast == NoTupleCastOK(last[1], last[2], last[3], last[4])
+NoUnclassedWidening == NoUnclassedWideningOK(last[1], last[2], last[3], last[4])
+NothingIsNull == NothingIsNullOK(last[1], last[2], last[3], last[4])
 =============================================================================

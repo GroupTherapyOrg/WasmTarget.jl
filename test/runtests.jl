@@ -362,8 +362,8 @@ end
 # Union{Bool,Int8,Int32}; the value was COLLAPSED to a raw i32 local (unboxed), so every
 # `isa` mis-fired (Int8 & Int32 both matched `isa Bool`). Fixed by: needs_anyref_boxing now
 # boxes same-rep unions (value stays a boxed ref), emit_classid_box! stores the field's REAL
-# classId, and emit_isa_classid! reads the classId off the box (not ref.test of the shared
-# struct). i=1→Bool, 2→Int8, 3→Int32.
+# classId, and the class test (emit_isa_class_header!) reads the classId off the box's header
+# (not ref.test of the shared struct). i=1→Bool, 2→Int8, 3→Int32.
 _wt_htup_disc(i::Int64)::Int64 = begin
     t = (true, Int8(7), Int32(9))
     v = t[i]
@@ -372,7 +372,7 @@ end
 # WASMTARGET-FUZZ (Loop B/B4): same-WASM-REP Vector{Any} distinguishability. Bool/Int8
 # used a ref.i31 fast path (no classId struct) so isa on them returned false (the whole
 # chain fell through to 0). B4 removed i31 — Bool/Int8/UInt8 now box with their REAL
-# classId like everything else, and emit_isa_classid! distinguishes them. i=1→Bool,2→Int8,3→Int32.
+# classId like everything else, and the class test (emit_isa_class_header!) distinguishes them. i=1→Bool,2→Int8,3→Int32.
 _wt_vany_disc(i::Int64)::Int64 = begin
     a = Any[true, Int8(7), Int32(9)]
     v = a[i]

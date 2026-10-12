@@ -1096,69 +1096,19 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
                            isconcretetype(mset_val_T)
     # a MemoryRef is emitted by the sink's own funnel below, never as a bare value here
     local _mv_b = mset_val_is_mr ? _ctx_builder(ctx, "compile_call") : _compile_value_b(value_arg, ctx)
-    local mset_val_ty = isempty(_mv_b.v.stack) ? nothing : _mv_b.v.stack[end]
-    # If array element type is anyref/externref (elem_type is Any OR abstract type), box numeric values
-    # Check the actual wasm element type, not just elem_type === Any
-    # Abstract types like CallInfo also map to ExternRef
-    # PHASE-1-004: AnyRef arrays (Memory{Any}) need numeric→anyref boxing via struct.new
     local wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
     if mset_val_is_mr
         # a MemoryRef stored in a slot that holds any value is its single-value struct
         # (emit_value!'s MemoryRef arm); in a Memory{MemoryRef{T}} slot it is its Memory,
         # at offset 0 only (emit_memoryref_single! rejects the rest)
         emit_value!(_msb, value_arg, ctx, wasm_elem_type)
-    elseif wasm_elem_type === AnyRef
-        # AnyRef array element — box numeric values to anyref via struct.new.
-        # dart2wasm carries the type with the value rather than scanning bytes.
-        local mset_src_wasm_any = mset_val_ty
-        local is_numeric_mset_any = mset_src_wasm_any === I64 || mset_src_wasm_any === I32 || mset_src_wasm_any === F64 || mset_src_wasm_any === F32
-        local is_already_anyref = mset_src_wasm_any === AnyRef || mset_src_wasm_any === StructRef || mset_src_wasm_any isa ConcreteRef
-        if is_numeric_mset_any
-            emit_numeric_to_anyref!(_msb, value_arg, mset_src_wasm_any, ctx)
-        else
-            append_builder!(_msb, _mv_b)
-            # A KNOWN closure erasing into a Memory{Any} slot wraps into
-            # the closure OBJECT (dart convertType at the erasure seam)
-            maybe_wrap_closure!(_msb, ctx, value_type(ctx, value_arg))
-            if !is_already_anyref && mset_src_wasm_any === ExternRef
-                any_convert_extern!(_msb)
-            end
-        end
-    elseif wasm_elem_type === ExternRef
-        # Determine source value's wasm type to decide conversion.
-        # dart2wasm carries the type with the value rather than scanning bytes.
-        local mset_src_wasm = mset_val_ty
-        local is_numeric_mset = mset_src_wasm === I64 || mset_src_wasm === I32 || mset_src_wasm === F64 || mset_src_wasm === F32
-        local is_already_externref_mset = mset_src_wasm === ExternRef
-        if is_numeric_mset
-            emit_numeric_to_externref!(_msb, value_arg, mset_src_wasm, ctx)
-        else
-            append_builder!(_msb, _mv_b)
-            # Skip extern_convert_any if value is already externref.
-            # externref is NOT a subtype of anyref, so extern_convert_any would fail.
-            if !is_already_externref_mset
-                extern_convert_any!(_msb)
-            end
-        end
-    elseif wasm_elem_type isa ConcreteRef
-        # Array of concrete ref types (struct/array refs, or a nullable numeric's box):
-        # `nothing` is the element type's null; a numeric value is boxed with its Julia
-        # classId by the value wrap (never replaced by a null).
-        if is_nothing_value(value_arg, ctx)
-            ref_null!(_msb, Int64(wasm_elem_type.type_idx))
-        elseif mset_val_ty === I64 || mset_val_ty === I32 || mset_val_ty === F64 || mset_val_ty === F32
-            emit_value!(_msb, value_arg, ctx, wasm_elem_type)   # the wrap boxes it
-        else
-            append_builder!(_msb, _mv_b)
-            # If value is externref but array element is concrete ref,
-            # convert externref → anyref → ref.cast (ref null $elem_type)
-            if mset_val_ty === ExternRef
-                any_convert_extern!(_msb)
-                ref_cast!(_msb, Int64(wasm_elem_type.type_idx), true)
-            end
-        end
+    elseif is_nothing_value(value_arg, ctx) && _wt_is_ref(wasm_elem_type)
+        emit_value!(_msb, NirLiteral(nothing), ctx, wasm_elem_type)   # `nothing` is the slot's null
     else
+        # the element converts through the one conversion, typed by the value's own type: a
+        # numeric boxed under its classId, a closure's context its object, a host value bridged
         append_builder!(_msb, _mv_b)
+        coerce_stack_top!(_msb, wasm_elem_type, ctx; from_julia=mset_val_T)
     end
 
     # array.set consumes [array_ref, i32_index, value] and returns nothing
@@ -1176,17 +1126,11 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
         local_set!(_msb, ctx.memoryref_offset_locals[idx])
         emit_memoryref_mem!(_msb, ctx, value_arg)
     elseif haskey(ctx.ssa_locals, idx)
-        local _rv2_b = _compile_value_b(value_arg, ctx)
-        local ret_val_ty = isempty(_rv2_b.v.stack) ? nothing : _rv2_b.v.stack[end]
-        append_builder!(_msb, _rv2_b)
-        # An externref-typed result local needs the GC value converted; the
-        # typed channel says what the pushed value is.
-        local mset_ret_local = ctx.ssa_locals[idx]
-        local mset_ret_arr_idx = mset_ret_local - ctx.n_params + 1
-        if mset_ret_arr_idx >= 1 && mset_ret_arr_idx <= length(ctx.locals) &&
-           ctx.locals[mset_ret_arr_idx] === ExternRef &&
-           (ret_val_ty isa ConcreteRef || ret_val_ty === StructRef || ret_val_ty === ArrayRef || ret_val_ty === AnyRef)
-            extern_convert_any!(_msb)
+        # the stored value is the call's result, converted to its local through the one conversion
+        append_builder!(_msb, _compile_value_b(value_arg, ctx))
+        local mset_ret_arr_idx = ctx.ssa_locals[idx] - ctx.n_params + 1
+        if 1 <= mset_ret_arr_idx <= length(ctx.locals) && !isempty(_msb.v.stack)
+            coerce_stack_top!(_msb, ctx.locals[mset_ret_arr_idx], ctx; from_julia=mset_val_T)
         end
     end
     append_builder!(fb, _msb)
@@ -1777,11 +1721,6 @@ function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospe
     return b
 end
 
-# `typeassert` is NOT registered here: `_emit_typeerror_throw!(fb, args[1],
-# _ta_target, idx, ctx)` — its runtime-check call site — is pinned VERBATIM in
-# `calls.jl` by ratchet lock L57_exact_typeassert_exception, which reads only
-# `calls.jl` (+ the real_bottom_exceptions.jl test). It stays an in-place arm.
-
 # parity(intrinsics.dart:1409 identical): two storage pointers (Base.dataids' `UInt(m.ptr)`,
 # `pointer(A) == pointer(B)`) are equal exactly when their backing objects are identical —
 # `ref.eq`, as dart compares references — or, per Julia, both are the one empty Memory of
@@ -1999,7 +1938,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
         return append_builder!(b, fb)
     end
     if _ta_static isa DataType && isconcretetype(_ta_static)
-        _emit_typeerror_throw!(fb, args[1], _ta_target, idx, ctx)
+        _emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))
         return append_builder!(b, fb)
     end
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
@@ -2009,22 +1948,8 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
     num!(fb, Opcode.I32_EQZ)
     if_!(fb)                                          # not a T → THROW
-    local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
-    local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
-    _te_def isa StructType || error("TypeError did not register as a Wasm struct")
-    emit_struct_prefix!(fb, ctx.type_registry, TypeError, _te_info)
-    local _te_values = Any[:typeassert, "", _ta_target]
-    for _te_i in 1:3
-        local _te_w = _te_def.fields[wasm_field_idx(_te_info, _te_i) + 1].valtype
-        emit_value!(fb, NirLiteral(_te_values[_te_i]), ctx, _te_w;
-                    from_julia=fieldtype(TypeError, _te_i))
-    end
-    local_get!(fb, UInt32(_ta_tmp))
-    local _te_got_w = _te_def.fields[wasm_field_idx(_te_info, 4) + 1].valtype
-    coerce_stack_top!(fb, _te_got_w, ctx;
-                      from_julia=(_ta_static isa Type && isconcretetype(_ta_static) ? _ta_static : nothing))
-    struct_new!(fb, _te_info.wasm_type_idx)
-    emit_throw_value!(fb, ctx.mod, ctx.type_registry)   # typed (exn, trace) tag
+    _emit_typeerror_throw!(fb, ctx, _ta_target,
+        (bb, w) -> (local_get!(bb, UInt32(_ta_tmp)); coerce_stack_top!(bb, w, ctx; from_julia=_ta_static)))
     end_block!(fb)
     local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
     return append_builder!(b, fb)
@@ -2704,39 +2629,21 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             local_set!(_hetb, idx_local)
 
                             n_fields = length(elem_types)
+                            # each field read converts to the union's representation through the
+                            # one conversion, typed by the field's own class (a numeric is boxed
+                            # under its classId, so Bool/Int8/Int32 stay told apart; a closure's
+                            # context becomes its object; `nothing` is a nullable single
+                            # representation's null), as dart converts every value it reads
+                            # (translator.dart:1597 convertType); a function's singleton is a
+                            # classed object already and is held as it is, the representation a
+                            # union of singletons is narrowed and cast to (A7S1's closure object,
+                            # MARCH 13.17, is not yet every function value's)
                             emit_field_wrap = i -> begin
                                 local_get!(_hetb, tuple_local)
                                 struct_get!(_hetb, info.wasm_type_idx, i + Int(info.field_offset))
-                                # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
-                                # Coerce the raw field value to U's canonical wasm rep.
-                                fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
-                                if union_wasm === AnyRef
-                                    if fw === I64 || fw === I32 || fw === F32 || fw === F64
-                                        # THE single-source box producer with the field's REAL classId
-                                        # (same-wasm-rep members Bool/Int8/Int32 stay isa-distinguishable).
-                                        emit_classid_box!(_hetb, ctx, fw, elem_types[i + 1])
-                                    elseif fw === ExternRef
-                                        any_convert_extern!(_hetb)
-                                    elseif is_closure_type(elem_types[i + 1])
-                                        # a closure's captured-fields context (no class header)
-                                        # becomes its object (maybe_wrap_closure!); a function's
-                                        # singleton is a classed object already
-                                        coerce_stack_top!(_hetb, AnyRef, ctx; from_julia=elem_types[i + 1])
-                                    end
-                                elseif union_wasm === StructRef && is_closure_type(elem_types[i + 1])
-                                    coerce_stack_top!(_hetb, StructRef, ctx; from_julia=elem_types[i + 1])
-                                elseif union_wasm isa ConcreteRef
-                                    # a nullable single representation (a Union{T,Nothing}'s box):
-                                    # `nothing` is its null, a T converts through the funnel (a raw
-                                    # i64 here did not validate, a WasmInternalError, A11 c4)
-                                    if elem_types[i + 1] === Nothing
-                                        drop!(_hetb)
-                                        ref_null!(_hetb, Int64(union_wasm.type_idx))
-                                    else
-                                        coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=elem_types[i + 1])
-                                    end
-                                end
-                                # union_wasm numeric: push as-is.
+                                local T = elem_types[i + 1]
+                                (T <: Function && !is_closure_type(T)) ||
+                                    coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=T)
                             end
                             # nested if-chain: idx==0 ? wrap(f0) : idx==1 ? wrap(f1) : … : wrap(fN-1)
                             for i in 0:(n_fields - 2)

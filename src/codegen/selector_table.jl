@@ -316,14 +316,9 @@ function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_r
         rts = Set{Type}(e.return_type for e in dt.entries)
         jt = length(rts) == 1 ? first(rts) : nothing
         if jt !== nothing
-            # the ONE box shape (emit_classid_box!): save value · classId · value · struct.new
-            box_idx = get_numeric_box_type!(mod, type_registry, dt.result_wasm_type)
-            tid = ensure_type_id!(type_registry, jt)
-            scratch = builder_add_local!(b, dt.result_wasm_type)   # after the classId
-            local_set!(b, scratch)
-            i32_const!(b, Int64(tid))
-            local_get!(b, scratch)
-            struct_new!(b, box_idx)
+            # the one box producer (convertType's boxing arm)
+            emit_classid_box!(b, mod, type_registry, builder_add_local!(b, dt.result_wasm_type),
+                              dt.result_wasm_type, jt)
         end
     end
     return finish_function!(b)

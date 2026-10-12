@@ -1981,9 +1981,7 @@ function _emit_egal_class!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     end
     local rep = _egal_rep(C, mod, registry)
     if !_wt_is_ref(rep)
-        local box = get_numeric_box_type!(mod, registry, rep)
-        local payload(l) = () -> (local_get!(b, l); ref_cast!(b, Int64(box), false);
-                                  struct_get!(b, box, UInt32(1)))
+        local payload(l) = () -> (local_get!(b, l); emit_classid_unbox!(b, mod, registry, rep))
         return _emit_bits_egal!(b, mod, registry, alloc, C, payload(0), payload(1))
     end
     if !(rep isa ConcreteRef)
@@ -2134,7 +2132,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # NOTE: The value argument is already on the stack from the loop that pushes all args
     # B4/U2: the tagged-union isa branch (struct.get tag) is RETIRED — a Union value is a
     # boxed AnyRef discriminated by classId, so isa flows through the AnyRef path below
-    # (emit_isa_classid! / ref.test on the classId box & struct refs).
+    # (emit_isa_class_header!, its header's classId).
     if check_type === Nothing
         # isa(x, Nothing) -> ref.is_null
         # Value is already on stack — check if it's actually a ref type
@@ -2248,7 +2246,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             isa2_val_wasm === ExternRef && any_convert_extern!(bld)
             local _tk_local = allocate_local!(ctx, AnyRef)
             local_set!(bld, _tk_local)
-            _emit_isa_type_object_kinds!(bld, ctx, _tk_local, check_type)
+            _emit_isa_type_object_kinds!(bld, ctx, _tk_local, check_type, val_jt)
         elseif isa2_val_wasm === ExternRef
             # an externref holds a Julia value crossed to the host, or a host value: a class whose
             # values are objects is its header's classId, as dart's is checker loads it; a bare
@@ -2360,7 +2358,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 num!(bld, Opcode.I32_EQZ)
                 # if (not $JlBase) { its type-object kind } else { dfs range check }
                 if_!(bld; results=WasmValType[I32])  # i32 result type
-                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type)
+                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type, val_jt)
                 else_!(bld)
                 local_get!(bld, _isa_guard_local)
                 emit_typeof!(bld, _base_idx)
@@ -2372,7 +2370,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
                 # A type object (DataType, Union, …) is not a numbered class; test its kind.
                 local _isa_guard_local = allocate_local!(ctx, AnyRef)
                 local_set!(bld, _isa_guard_local)
-                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type)
+                _emit_isa_type_object_kinds!(bld, ctx, _isa_guard_local, check_type, val_jt)
             end
         else
             _isa_reject!(bld, ctx, "isa(x, $(check_type)) has no runtime test for a $(something(isa3_val_wasm, "stack")) value")
@@ -2446,22 +2444,25 @@ function _isa_reject!(bld::InstrBuilder, ctx::AbstractCompilationContext, constr
     return nothing
 end
 
-"""The i32 answer to `isa(x, check_type)` for a value in `local_idx` that is not a numbered
-class (not `\$JlBase`): a Julia type object, tested by emit_type_object_test! (X's identity
-for a pointer-unique `Type{X}`, else its kind, a TypeVar first), or a bare array (a Memory, a
-SimpleVector, a String's CodeUnits), tested by its array type; `0` when it is none under
-`check_type`. When a bare-array class under `check_type` shares its wasm array with one that is
-not (`Memory{Int64}`/`Memory{UInt64}` under `AbstractVector{Int64}`), no test can tell them
-apart and the `isa` rejects.
+"""The i32 answer to `isa(x, check_type)` for a value of static type `static_type` in
+`local_idx` that is not a numbered class (not `\$JlBase`): a Julia type object, tested by
+emit_type_object_test! (X's identity for a pointer-unique `Type{X}`, else its kind among those the
+static type admits, a TypeVar first), or a bare array (a Memory, a SimpleVector, a String's CodeUnits) the static type admits,
+tested by its array type; `0` when it is none under `check_type`. When a bare-array class under
+`check_type` shares its wasm array with one that is not and that the value may be
+(`Memory{Int64}`/`Memory{UInt64}` under `AbstractVector{Int64}`), no test can tell them apart and
+the `isa` rejects; a class the static type excludes is no value's, as in every other class read
+over a static type (bare_array_partition).
 parity(quarantine: Julia's type objects and Memory are values; WT represents a type
 object's kind as its own struct under \$JlType and a Memory as a wasm array, outside the
 numbered class hierarchy.)"""
 function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilationContext,
-                                      local_idx::Integer, @nospecialize(check_type))::Nothing
+                                      local_idx::Integer, @nospecialize(check_type),
+                                      @nospecialize(static_type))::Nothing
     reg = ctx.type_registry
     kinds = UInt32[]   # the bare-array representations (Memory, SimpleVector) under check_type
     outside = UInt32[]
-    for (C, arr) in bare_array_partition(ctx.mod, reg, nothing).all
+    for (C, arr) in bare_array_partition(ctx.mod, reg, static_type).all
         C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
     end
     if any(in(outside), kinds)
@@ -2470,6 +2471,7 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
     end
     # a value that is no type object is one of the bare arrays under check_type, or not a T
     emit_type_object_test!(bld, ctx.mod, reg, local_idx, check_type, () -> allocate_local!(ctx, I32);
+        static_type=static_type,
         otherwise = b -> if isempty(kinds)
             i32_const!(b, 0)
         else
@@ -2489,7 +2491,8 @@ Push the i32 answer to whether the value in anyref local `v` is a type object of
 a `Type{X}` whose values are one pointer (jl_pointer_egal: X's identity, as emit_isa tests it)
 or a type whose type objects its kinds tell (DataType, Union, UnionAll, typeof(Union{}),
 TypeVar, `Type`, a union of them): a TypeVar is its own struct, tested first, since its
-`\$kind` is never written; any other type object is a `\$JlType` whose `\$kind` names it. A
+`\$kind` is never written; any other type object is a `\$JlType` whose `\$kind` names it, among
+the kinds under `T` that a value of `static_type` may be (every kind when it is not given). A
 value that is no type object answers `otherwise(b)` (0 when not given). `scratch()` gives the
 i32 local the kind is read into, asked for only when a kind is read. The one type-object test
 of isa and of a closure entry's rows.
@@ -2497,7 +2500,8 @@ parity(quarantine: Julia type objects are values without a class header; WT repr
 as a `\$JlType` hierarchy, so their kind, not a classId, tells them.)
 """
 function emit_type_object_test!(b::InstrBuilder, mod::WasmModule, reg::TypeRegistry, v::Integer,
-                                @nospecialize(T), scratch::Function; otherwise=nothing)::InstrBuilder
+                                @nospecialize(T), scratch::Function; otherwise=nothing,
+                                @nospecialize(static_type=Any))::InstrBuilder
     local tv, jt = reg.jl_typevar_idx, reg.jl_type_idx
     if is_pointer_egal_type_type(T)
         local tg = get_type_constant_global!(mod, reg, T.parameters[1])
@@ -2515,7 +2519,7 @@ function emit_type_object_test!(b::InstrBuilder, mod::WasmModule, reg::TypeRegis
     end
     local codes = Int32[code for (K, code) in ((DataType, JL_TYPE_KIND_DATATYPE),
                         (Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
-                        (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM)) if K <: T]
+                        (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM)) if K <: T && typeintersect(K, static_type) !== Union{}]
     local_get!(b, UInt32(v))
     ref_test!(b, Int64(tv), false)
     if_!(b; results=WasmValType[I32])
@@ -2751,20 +2755,28 @@ function emit_closed_world_isvisible!(b::InstrBuilder, symbol, parent, from, own
     return b
 end
 
-# parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
-function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
-                                ctx::AbstractCompilationContext; func::Symbol=:typeassert)::InstrBuilder
+"""
+    _emit_typeerror_throw!(b, ctx, target, push_got!; func=:typeassert) -> b
+
+Throw Julia's `TypeError(func, "", target, got)` (jl_type_error): its three constant fields,
+each typed by its own value, then the value that failed the test, which `push_got!(b, w)` pushes
+converted to the field's wasm type `w`. The one TypeError builder: a typeassert's failed test
+(the always-failing static arm and the runtime arm, builtins.jl) and the UnionAll constructor
+(statements.jl) call it, as dart's as-checker throws its one TypeError (types.dart:758
+AsCheckers.generateAsChecker).
+parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
+"""
+function _emit_typeerror_throw!(b::InstrBuilder, ctx::AbstractCompilationContext, target::Type,
+                                push_got!::Function; func::Symbol=:typeassert)::InstrBuilder
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
     def isa StructType || error("TypeError did not register as a Wasm struct")
+    local field(i) = def.fields[wasm_field_idx(info, i) + 1].valtype
     emit_struct_prefix!(b, ctx.type_registry, TypeError, info)
-    local values = NirNode[NirLiteral(func), NirLiteral(""), NirLiteral(target), got]
-    for i in 1:4
-        local expected = def.fields[wasm_field_idx(info, i) + 1].valtype
-        local source_type = i == 4 ? value_type(ctx, got) : fieldtype(TypeError, i)
-        emit_value!(b, values[i], ctx, expected;
-                    from_julia=(source_type isa Type ? source_type : fieldtype(TypeError, i)))
+    for (i, v) in enumerate((func, "", target))
+        emit_value!(b, NirLiteral(v), ctx, field(i))
     end
+    push_got!(b, field(4))
     struct_new!(b, info.wasm_type_idx)
     emit_throw_value!(b, ctx.mod, ctx.type_registry)
     return b
