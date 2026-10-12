@@ -1353,6 +1353,9 @@ struct WasmInterpreter <: CC.AbstractInterpreter
     # inferred by earlier interps whose codegen CodeInfos were never stashed,
     # tripping compile!'s `use_const_api || haskey(interp.codegen)` invariant.
     cache_token::Any
+    # the host-layout reads of the specializations this interpreter has asked about
+    # (ir_reads_host_layout), one memo per interpreter, so none outlives its compilation
+    layout_reads::IdDict{Any, Bool}
 end
 
 function WasmInterpreter(; world::UInt=Base.get_world_counter())::WasmInterpreter
@@ -1365,13 +1368,13 @@ function WasmInterpreter(; world::UInt=Base.get_world_counter())::WasmInterprete
         inline_nonleaf_penalty=100,
     )
     WasmInterpreter(world, mt, CC.InferenceResult[], inf_params, opt_params,
-                    IdDict{Core.CodeInstance, Core.CodeInfo}(), :wasm_target)
+                    IdDict{Core.CodeInstance, Core.CodeInfo}(), :wasm_target, IdDict{Any, Bool}())
 end
 
 function WasmInterpreter(cache_token; world::UInt=Base.get_world_counter())::WasmInterpreter
     base = WasmInterpreter(; world)
     WasmInterpreter(base.world, base.method_table, base.inf_cache,
-                    base.inf_params, base.opt_params, base.codegen, cache_token)
+                    base.inf_params, base.opt_params, base.codegen, cache_token, base.layout_reads)
 end
 
 # Required AbstractInterpreter API
@@ -1530,7 +1533,7 @@ function CC.concrete_eval_eligible(interp::WasmInterpreter,
         return :none
     elseif !_wt_type_level_call(arginfo.argtypes, result.rt)
         return :none
-    elseif _wt_reads_host_layout(result.edge)
+    elseif _wt_reads_host_layout(interp, result.edge)
         return :none
     end
     return :concrete_eval
@@ -1545,9 +1548,9 @@ end
 # foreigncall into libjulia (`allocatedinline` → jl_stored_inline) answers for the host
 # too. Decided mechanically from the callee's own typed IR (the one inference path),
 # transitively through its invokes, memoized per specialization.
-function _wt_reads_host_layout(@nospecialize(edge))::Bool
+function _wt_reads_host_layout(interp::WasmInterpreter, @nospecialize(edge))::Bool
     edge isa Core.CodeInstance || return true    # no edge to inspect: never fold blind
-    return ir_reads_host_layout(edge)
+    return ir_reads_host_layout(edge, interp.layout_reads)
 end
 
 # WT folds TYPE-LEVEL calls only — a call with a Type among its constant arguments, or

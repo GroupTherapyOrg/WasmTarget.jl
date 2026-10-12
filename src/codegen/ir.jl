@@ -58,31 +58,8 @@ function infer_return_type(@nospecialize(f), argtypes::Tuple;
     return Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
 end
 
-# parity(quarantine: the memo of Julia's host-layout reads, per specialization, installed for
-# one compilation.) A process-wide memo answered a later compilation with the body an earlier one
-# saw: after a method was redefined in the same session, its specialization kept the stale
-# answer and the module differed from the one a fresh session builds (measured 2026-09-23).
-const _IR_LAYOUT_READ_MEMO = Ref{Union{Nothing, IdDict{Any, Bool}}}(nothing)
-
 """
-    with_layout_read_memo(f)
-
-Run `f()` — one compilation — with a fresh host-layout-read memo installed, and remove it
-afterwards. Outside such a scope every `ir_reads_host_layout` query memoizes only within
-itself, so no answer outlives the compilation that computed it.
-parity(quarantine: the lifetime of the host-layout-read memo: one compilation.)
-"""
-function with_layout_read_memo(f::Function)::Any
-    previous = _IR_LAYOUT_READ_MEMO[]
-    _IR_LAYOUT_READ_MEMO[] = IdDict{Any, Bool}()
-    try
-        return f()
-    finally
-        _IR_LAYOUT_READ_MEMO[] = previous
-    end
-end
-"""
-    ir_reads_host_layout(ci::Core.CodeInstance) -> Bool
+    ir_reads_host_layout(ci::Core.CodeInstance, memo) -> Bool
 
 Whether the specialization's inferred source — transitively through its invokes — reads
 `DataType.layout`, calls `Core.sizeof` on a type, or makes a foreigncall: the ways a
@@ -90,15 +67,15 @@ type-level computation can answer for the HOST's memory layout rather than for t
 program (the constant-evaluation rule in interpreter.jl refuses to fold such a call).
 Reads the CodeInstance's own `inferred` source (the result of the inference that just
 ran — never a nested inference from inside an eligibility query); memoized per
-specialization; a CodeInstance without retained source, or a chain deeper than six
-invokes, counts as a read (never fold blind).
+specialization in `memo` (the interpreter's, `layout_reads`: one per inference, so no answer
+outlives the compilation that computed it; a process-wide memo answered a later compilation with
+the body an earlier one saw after a method was redefined, measured 2026-09-23); a CodeInstance
+without retained source, or a chain deeper than six invokes, counts as a read (never fold blind).
 parity(quarantine: whether a Julia specialization reads the host's `DataType.layout`, `sizeof` or
 a foreigncall — Julia's concrete evaluation would otherwise fold a host answer into the module.)
 """
-function ir_reads_host_layout(ci::Core.CodeInstance)::Bool
-    memo = _IR_LAYOUT_READ_MEMO[]
-    return _ir_reads_host_layout(ci, 0, memo === nothing ? IdDict{Any, Bool}() : memo)
-end
+ir_reads_host_layout(ci::Core.CodeInstance, memo::IdDict{Any, Bool})::Bool =
+    _ir_reads_host_layout(ci, 0, memo)
 
 # parity(quarantine: Julia's type-structure predicates, answered by Julia at compile time.)
 const _TYPE_STRUCTURE_FOREIGNCALLS = (:jl_has_free_typevars,)

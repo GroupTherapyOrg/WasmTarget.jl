@@ -2204,7 +2204,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         # Handle Task.rngState0..3 field access → Wasm global.get
         # Julia's rand() accesses task-local Xoshiro state via getfield(task, :rngStateN)
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
-            rng_global = get_rng_global_idx(field_sym)
+            rng_global = get_rng_global_idx(ctx.type_registry, field_sym)
             if rng_global !== nothing
                 global_get!(fb, rng_global)
                 return append_builder!(b, fb)
@@ -2694,7 +2694,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 
         # Handle Task.rngState0..3 field assignment → Wasm global.set
         if obj_type === Task && field_sym in (:rngState0, :rngState1, :rngState2, :rngState3)
-            rng_global = get_rng_global_idx(field_sym)
+            rng_global = get_rng_global_idx(ctx.type_registry, field_sym)
             if rng_global !== nothing
                 emit_value!(fb, value_arg, ctx, ctx.mod.globals[Int(rng_global) + 1].valtype)
                 global_set!(fb, rng_global)

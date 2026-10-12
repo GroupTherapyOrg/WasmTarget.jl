@@ -15,7 +15,7 @@
 (* statement/call site reaching codegen. Real `record_unsupported!` is a       *)
 (* single sequential Julia function: it unconditionally pushes a               *)
 (* `WasmDiagnostic` onto `ctx.diagnostics` (and mirrors it to                  *)
-(* `DIAGNOSTICS_SINK` when the caller supplied one — that mirroring is a       *)
+(* the Translator's ledger when the caller supplied one — that mirroring is a *)
 (* strict superset of the `ctx.diagnostics` write and adds no new decision,    *)
 (* so only the always-populated ledger is modeled), THEN resolves `fatal` and  *)
 (* either throws `WasmCompileError` or warns-and-returns. We split that one    *)
@@ -141,7 +141,7 @@ EmitNormal(t) ==
     /\ UNCHANGED ledger
 
 (* record_unsupported!'s unconditional `push!(ctx.diagnostics, diag)` (and the  *)
-(* DIAGNOSTICS_SINK mirror, abstracted away -- see header). *)
+(* Translator's ledger mirror, abstracted away -- see header). *)
 RecordDiagnostic(t) ==
     /\ state[t] = "Lowering"
     /\ Kind[t] # "normal"

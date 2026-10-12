@@ -365,15 +365,15 @@ end
 # --- The choke point --------------------------------------------------------
 
 """
-    DIAGNOSTICS_SINK
+    _ctx_diagnostics(ctx) -> Union{Nothing, Vector{WasmDiagnostic}}
 
-When set (see `compile(...; diagnostics_sink=...)`), every `WasmDiagnostic` recorded by any
-compilation context is mirrored here.
-This is the caller-facing ledger: tools like Snapshot.jl read it to explain *why* a
-compilation degraded, with source attribution per diagnostic.
+The caller's ledger (see `compile(...; diagnostics_sink=...)`), which the compile's Translator
+holds: every `WasmDiagnostic` any of its compilation contexts records is mirrored there. Tools
+like Snapshot.jl read it to explain *why* a compilation degraded, with source attribution per
+diagnostic.
 parity(pkg/dart2wasm/lib/target.dart:719 DiagnosticReporter.report)
 """
-const DIAGNOSTICS_SINK = Base.RefValue{Union{Nothing,Vector{WasmDiagnostic}}}(nothing)
+_ctx_diagnostics(ctx)::Union{Nothing,Vector{WasmDiagnostic}} = ctx.translator.diagnostics
 
 
 """
@@ -414,13 +414,13 @@ function record_unsupported!(ctx, kind::Symbol, construct::AbstractString;
                           idx, _stmt_text(ctx, idx),
                           idx > 0 ? stmt_frames(_ctx_debuginfo(ctx), idx) : String[])
     push!(ctx.diagnostics, diag)
-    DIAGNOSTICS_SINK[] !== nothing && push!(DIAGNOSTICS_SINK[]::Vector{WasmDiagnostic}, diag)
+    local sink = _ctx_diagnostics(ctx)
+    sink === nothing || push!(sink, diag)
     fatal = soundness_fatal === nothing ?
             !stmt_is_proven_unreachable(_ctx_cfg(ctx), idx) :
             soundness_fatal
     if fatal
-        _sink = DIAGNOSTICS_SINK[]
-        throw(WasmCompileError(diag, _sink === nothing ? WasmDiagnostic[diag] : copy(_sink)))
+        throw(WasmCompileError(diag, sink === nothing ? WasmDiagnostic[diag] : copy(sink)))
     else
         @warn "WasmTarget unsupported path emits a validating trap" diagnostic=diag
     end

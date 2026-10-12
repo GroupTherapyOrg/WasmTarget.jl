@@ -172,7 +172,6 @@ _smt_host_entry(x::Int64)::Int64 = _smt_host_stub(x) * 2
         err = try; entry(_smt_reject, (Any,); diagnostics_sink=sink); nothing; catch e; e; end
         @test err isa _SMT.WasmCompileError
         @test !isempty(sink) && err.diag in sink
-        @test _SMT.DIAGNOSTICS_SINK[] === nothing
     end
     # an unknown keyword raises, never dropped
     @test_throws MethodError _SMT.compile_with_sourcemap(_smt_entry, (Int64,); no_such_keyword=1)

@@ -521,7 +521,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
         # circular-phi temp locals at the plain local.get branches.
         pvb = _ctx_builder(ctx, "compile_phi_value")
         _cpv_ret() = begin
-            if OPTIONS[].audit_value_stack && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
+            if ctx.translator.options.audit_value_stack && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
                 println(stderr, "PHI-VALUE-LIAR n=$(length(pvb.v.stack)) stack=$(pvb.v.stack) val=$(first(repr(val), 80)) phi=$phi_idx instrs=$(join(builder_disasm(pvb), "; ")) philoc=$(haskey(ctx.phi_locals, phi_idx) ? ctx.locals[ctx.phi_locals[phi_idx] - ctx.n_params + 1] : :none) errs=$(pvb.v.errors)")
             end
             (pvb,
@@ -866,7 +866,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
     # trace function name for debugging.
     # Ctx has no func_name field — use func_ref (the function object),
     # otherwise WT_DBG_FN can never match and the traces below are unreachable.
-    _debug_fn_pattern = OPTIONS[].debug_fn
+    _debug_fn_pattern = ctx.translator.options.debug_fn
     _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
     if _debug_stackified
         @warn "STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"

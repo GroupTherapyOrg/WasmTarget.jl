@@ -27,7 +27,7 @@
         # ── Core Compilation ──
         H2(:id => "compile", :class => "text-xl font-semibold text-warm-800 dark:text-warm-200", "Core Compilation"),
         api_entry(
-            "compile(f, arg_types::Tuple; optimize=false, optimize_ir=true, validate=false) -> Vector{UInt8}",
+            "compile(f, arg_types::Tuple; optimize=false, validate=false) -> Vector{UInt8}",
             "Compile a single Julia function for the given concrete argument-type tuple to a self-contained WASM module. \
              The result is a binary `Vector{UInt8}` ready to write to disk and instantiate via `WebAssembly.instantiate`. \
              `optimize=true` runs the Binaryen_jll-provided `wasm-opt` for an ~80–90% size reduction; no system Binaryen installation is required. \
