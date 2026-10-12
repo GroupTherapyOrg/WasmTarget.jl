@@ -83,6 +83,8 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # For each SSA id, the statements that use it, ascending (nir_ssa_users) — built with the
     # context; `nir` is never rewritten after (the stackifier threads its own copy).
     ssa_users::Dict{Int,Vector{Int}}
+    # the body's CFG, Julia's own (nir_cfg), built with the context
+    cfg::NirCFG
     # each statement's source-map provenance, computed once (map_to_statement!)
     stmt_sources::Dict{Int,Union{Nothing,SourceInfo}}
     # Julia inference's type for every IR slot, widened once at the boundary
@@ -154,6 +156,7 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         Dict{Int, Int}(),              # exc_saved_locals
         body.stmts,             # NIR boundary — built first, from the typed IR alone
         nir_ssa_users(body.stmts),
+        nir_cfg(body.stmts),
         Dict{Int,Union{Nothing,SourceInfo}}(),
         body.slot_types,
         body.debuginfo,
@@ -1173,17 +1176,22 @@ struct _LocalQueryIndex
 end
 
 """
-    loop_bounds(nir) -> Vector{Tuple{Int,Int}}
+    loop_bounds(cfg) -> Vector{Tuple{Int,Int}}
 
-Each loop of the body as its header and its last back edge (the last backward `goto` to the
-header), in header order: the one loop-bounds definition, read by the local allocation (a
-value defined in a loop and used after it, and a loop that branches inside).
+Each loop of the body as its header and its last back edge, in header order, read off the one
+CFG (nir_cfg): a back edge is a successor block at or before its own block, the header is that
+successor's first statement and the latch the last statement of the block the edge leaves (a
+backward goto or goto-if-not alike); a header's last back edge is its latest latch. The one
+loop-bounds definition, read by the local allocation (a value defined in a loop and used after
+it, and a loop that branches inside).
 parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its loops, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
 """
-function loop_bounds(nir::Vector{NirStmt})::Vector{Tuple{Int,Int}}
+function loop_bounds(cfg::NirCFG)::Vector{Tuple{Int,Int}}
     local last_back_edge = Dict{Int,Int}()
-    for (i, rec) in enumerate(nir)
-        rec.node isa NirGoto && rec.node.target < i && (last_back_edge[rec.node.target] = i)
+    for k in eachindex(cfg.blocks), s in cfg.succs[k]
+        s <= k || continue
+        local header = cfg.blocks[s].start_idx
+        last_back_edge[header] = max(get(last_back_edge, header, 0), cfg.blocks[k].end_idx)
     end
     return sort!(Tuple{Int,Int}[(h, be) for (h, be) in last_back_edge])
 end
@@ -1198,7 +1206,7 @@ function _LocalQueryIndex(ctx::AbstractCompilationContext)::_LocalQueryIndex
         jumps[k + 1] = jumps[k] + (rec.node isa NirGoto || rec.node isa NirGotoIfNot)
         producers[k + 1] = producers[k] + produces_stack_value(rec)
     end
-    local loops = loop_bounds(nir)
+    local loops = loop_bounds(ctx.cfg)
     branching_loops = Tuple{Int,Int}[]
     for (header, back_edge) in loops
         # a conditional in the loop other than its exit test at the header

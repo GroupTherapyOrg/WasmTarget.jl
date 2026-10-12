@@ -4,7 +4,7 @@ For simple if-then-else patterns, we use the `if` instruction.
 parity(code_generator.dart:228 AstCodeGenerator.generate)
 """
 function generate_structured(b::InstrBuilder, ctx::AbstractCompilationContext,
-                             blocks::Vector{BasicBlock})::InstrBuilder
+                             cfg::NirCFG)::InstrBuilder
     emit_trace_enter!(b, ctx)   # a traced compile: the host sees this function's entry
     # parity(code_generator.dart:28 CodeGenerator) ONE LOWERING (dart: one CodeGenerator, one structured lowering, no strategy
     # choice): every CFG shape, including a single block and try/catch, goes through
@@ -14,7 +14,7 @@ function generate_structured(b::InstrBuilder, ctx::AbstractCompilationContext,
     # Try regions are first-class stackifier metadata; handler blocks remain plain
     # CFG blocks and the same phi machinery owns all of their edges.
     regions = has_try_catch(ctx.nir) ? Vector{Any}(find_try_regions(ctx.nir)) : Any[]
-    generate_stackified_flow!(b, ctx, blocks; try_regions=regions)
+    generate_stackified_flow!(b, ctx, cfg; try_regions=regions)
 
     # Close exactly the seeded function frame. Any remaining block/loop is a
     # stackifier bug and must fail here, never serialize into malformed Wasm.
