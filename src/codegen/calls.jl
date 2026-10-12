@@ -468,9 +468,9 @@ end
 
 # Narrow an i64 shift AMOUNT to i32 for an i32-represented value, SATURATING any
 # out-of-range amount (≥ julia_width, unsigned) to julia_width so the over-shift
-# guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
-# shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
-# the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
+# guard maps it to 0, or to the sign fill for ashr. A plain I32_WRAP_I64 drops the
+# amount's high bits, so a huge shift like `x << typemin(Int64)` (low 32 bits = 0)
+# would wrap to a no-op and leak the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
 # parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)::InstrBuilder
     amt = UInt32(allocate_local!(ctx, I64))
@@ -978,9 +978,9 @@ THE shift dispatch — SHIFT_OPS's single implementation for `:shl`/`:ashr`/
 `:lshr` (128-bit operands are fully handled by THE Int128 registry route
 before this is ever reached). Shift-COUNT coercion first (Julia often uses an
 Int64/UInt64 amount even for an Int32 value — Wasm requires the amount and
-the value to share a type): shl/lshr saturate an oversized i64 amount down to
-i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
-unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
+the value to share a type): an oversized i64 amount saturates down to i32 for
+every kind (a plain wrap would let e.g. `x << typemin(Int64)` or `x >> typemin(Int64)`
+alias 0 and leak the unshifted value). Then
 `_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
 parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 """
@@ -991,8 +991,13 @@ function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext,
         # amount is a struct and is left to the Int128 route)
         local _cnt = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
         local _want = is_32bit ? I32 : I64
+        # a narrow amount is read at its own width, unsigned (the intrinsic's amount is unsigned):
+        # its register's junk above that width is no part of it (a constant's register holds its
+        # value, no junk)
+        ((_cnt === I32 || _cnt === I64) && !(nir_const(args[2]) isa Integer && nir_const(args[2]) >= 0)) &&
+            normalise_narrow!(fb, ctx, value_type(ctx, args[2]), false)
         if _cnt === I32 || _cnt === I64
-            if kind !== :ashr && is_32bit && _cnt === I64
+            if is_32bit && _cnt === I64
                 _emit_wrap_shift_amount_saturating!(fb, ctx, _operand_width(arg_type))
             else
                 coerce_stack_top!(fb, _want, ctx; from_julia=value_type(ctx, args[2]))
@@ -1294,8 +1299,10 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         x_local = allocate_local!(ctx, is_32bit ? I32 : I64)
         local_set!(bld, x_local)
 
-        # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
+        # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative); a narrow
+        # y's sign is the bit at its own width, in an i32 or an i64 (the one width rule)
         local_get!(bld, y_local)
+        normalise_narrow!(bld, ctx, arg_type, true)
         if is_32bit
             i32_const!(bld, 31)
             num!(bld, Opcode.I32_SHR_S)
@@ -3555,7 +3562,25 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         return append_builder!(b, fb)
     elseif _it_name !== nothing && !is_128bit
         local _ut_w = operand_register(arg_type)
+        # a narrow operand's bits are counted over its own width, in an i32 or an i64 (the one
+        # width rule): masked to it (the register's junk above it is no part of the value), a
+        # trailing count stopped at the width by a bit set there, and a leading count less the
+        # register's bits above the width
+        local _ut_bits = _ut_w === I64 ? 64 : 32
+        local _ut_count = (_ut_w === I32 || _ut_w === I64) && _it_name in (:ctlz_int, :cttz_int, :ctpop_int) &&
+                          _operand_width(arg_type) < _ut_bits
+        if _ut_count
+            normalise_narrow!(fb, ctx, arg_type, false)
+            if _it_name === :cttz_int
+                _ut_w === I64 ? i64_const!(fb, Int64(1) << _operand_width(arg_type)) : i32_const!(fb, Int64(1) << _operand_width(arg_type))
+                num!(fb, _ut_w === I64 ? Opcode.I64_OR : Opcode.I32_OR)
+            end
+        end
         local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)
+        if _ut_count && _it_name === :ctlz_int && _ut_result !== nothing
+            _ut_w === I64 ? i64_const!(fb, Int64(_ut_bits - _operand_width(arg_type))) : i32_const!(fb, Int64(_ut_bits - _operand_width(arg_type)))
+            num!(fb, _ut_w === I64 ? Opcode.I64_SUB : Opcode.I32_SUB)
+        end
         if _ut_result !== nothing
             # (The rebox link, mirroring the binop route above.)
             local _rbx_li2 = get(ctx.ssa_locals, idx, nothing)
@@ -3833,10 +3858,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # `[v...]` ⇒ Base.vect(v...) ⇒ a shallow copy of the vector.
                 _emit_apply_iterate_vect!(fb, container_arg, container_type, ctx)
             else
-                # the reduce's operator: the intrinsic Julia's `+`/`*` method runs (a `-` is no
-                # reduction), its opcode the one operator table's
-                reduce_op = operator_intrinsic(target_value, elem_type)
-                reduce_op in (:sub_int, :sub_float) && (reduce_op = nothing)
+                reduce_op = reduce_intrinsic(target_value, elem_type)
                 if reduce_op !== nothing
                     # Emit inline reduce loop: acc = v[1]; for i in 2:length(v), acc = op(acc, v[i])
                     _emit_apply_iterate_reduce!(fb, container_args, container_types,
@@ -4734,6 +4756,14 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
     end
     unreachable!(bld)   # structural trap: a class with no numbered args tuple (A3S1)
     return bld
+end
+
+# The reduce's operator over a vector of T: the intrinsic Julia's `+`/`*` method runs, its opcode
+# the one operator table's (a `-` is no reduction); `nothing` rejects at the statement.
+# parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
+function reduce_intrinsic(@nospecialize(f), @nospecialize(T))::Union{Nothing,Symbol}
+    local op = operator_intrinsic(f, T)
+    return op in (:sub_int, :sub_float) ? nothing : op
 end
 
 # parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)

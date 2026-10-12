@@ -23,6 +23,7 @@ using Random, SHA   # seeded streams, as the full suite loads them
 using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
 include(joinpath(@__DIR__, "utils.jl"))
 include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first divergent statement
+include(joinpath(@__DIR__, "emission_fingerprint.jl"))   # the emission-diff check's head side
 
 const FILTER = lowercase.(ARGS)
 const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
@@ -92,6 +93,33 @@ end
 # Each case: (name, f, args...). Compared native-vs-wasm via compare_julia_wasm.
 const GROUPS = Vector{Pair{String,Vector{Any}}}()
 _g(name, cases) = push!(GROUPS, name => cases)
+# A generated case's inputs, by "group/case": it runs over each (compare_julia_wasm_inputs)
+const CASE_INPUTS = Dict{String,Vector{Tuple}}()
+# A lazy group (test/registry_cases.jl's: cases generated from the lowering tables) is declared by
+# name, its entry in GROUPS or XFAIL empty, and built when a run selects it: _build! includes the
+# file that builds it (once) and fills the entry from the file's builder (LAZY_BUILDERS[file], a
+# Dict of every group it builds). An unselected lazy group costs no include and no compile. A
+# reader of every case (registry coverage, the emission base, block_impact) builds them all first.
+const LAZY_FILE = Dict{String,String}()       # a lazy group => the file in test/ that builds it
+const LAZY_BUILDERS = Dict{String,Function}()  # a file => its builder, set by the file
+const LAZY_BUILT = Set{String}()
+_lazy_g(name, file) = (LAZY_FILE[name] = file; _g(name, Any[]))
+_lazy_xf(name, file) = (LAZY_FILE[name] = file; _xf(name, Any[]))
+function _build!(names)
+    for n in names
+        (haskey(LAZY_FILE, n) && !(n in LAZY_BUILT)) || continue
+        local file = LAZY_FILE[n]
+        haskey(LAZY_BUILDERS, file) || Base.include(@__MODULE__, joinpath(@__DIR__, file))
+        local built = Base.invokelatest(LAZY_BUILDERS[file])
+        local k = findfirst(p -> first(p) == n, GROUPS)
+        append!(last(k === nothing ? XFAIL[findfirst(p -> first(p) == n, XFAIL)] : GROUPS[k]), built[n])
+        push!(LAZY_BUILT, n)
+    end
+    return nothing
+end
+# the lazy groups a run selects (its part and its filter), built before main runs
+_selected_lazy() = [first(g) for g in vcat(_selected(_smoke_part(GROUPS)), _selected(_smoke_part(XFAIL)))
+                    if haskey(LAZY_FILE, first(g))]
 
 # ---- numerics -------------------------------------------------------------
 _g("numerics", Any[
@@ -2010,6 +2038,13 @@ _g("narrow_primitive", Any[
     ("ashr_dirty_p40", (n::Int64) -> Core.Intrinsics.sext_int(Int64, Core.Intrinsics.ashr_int(Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0x000000fffffffff0), 1)), Int64(2)),
     ("ult_dirty_p40", (n::Int64) -> Core.Intrinsics.ult_int(Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0xffffff0000000000), Core.Intrinsics.trunc_int(_SmP40, UInt64(3))) ? 1 : 2, Int64(2)),
     ("egal_dirty_p40", (n::Int64) -> Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0x0000010000000000) === Core.Intrinsics.trunc_int(_SmP40, n % UInt64) ? 1 : 2, Int64(2)),
+    # its bits counted and its sign read at its own width, in an i64 as in an i32 (measured with
+    # 117a's W2 and W7 normalising an i32-held operand alone: ctlz answered 62, native 38; cttz of
+    # 0 64, native 40; ctpop of a dirty value 2, native 1; flipsign 5, native -5)
+    ("ctlz_p40", (n::Int64) -> Core.Intrinsics.zext_int(Int64, Core.Intrinsics.ctlz_int(Core.Intrinsics.trunc_int(_SmP40, n % UInt64))), Int64(2)),
+    ("cttz_zero_p40", (n::Int64) -> Core.Intrinsics.zext_int(Int64, Core.Intrinsics.cttz_int(Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) << 41))), Int64(3)),
+    ("ctpop_dirty_p40", (n::Int64) -> (p = Core.Intrinsics.trunc_int(_SmP40, n); Core.Intrinsics.zext_int(Int64, Core.Intrinsics.ctpop_int(Core.Intrinsics.add_int(p, p)))), Int64(2)^39 + 1),
+    ("flipsign_p40", (n::Int64) -> Core.Intrinsics.sext_int(Int64, Core.Intrinsics.flipsign_int(Core.Intrinsics.trunc_int(_SmP40, UInt64(5)), Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0x000000fffffffff0))), Int64(2)),
     # into a 128-bit integer from a 40-bit one in an i64, by the one width rule (dev/AUDIT.md
     # A18E2 (c), measured on 25e6a5b7: the sext answered 2, native 1; the zext of a dirty value
     # 1099511627778, native 2)
@@ -2591,6 +2626,31 @@ _xf("closed_world_edge_rejects", Any[
     ("atomic_modify_operator", (n::Int64) -> (a = _SmAtom(n); @atomic a.v _sm_atom_op n; @atomic a.v), Int64(3)),
 ])
 
+# Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
+# (keys spread) and its radix sort (two passes over keys 4000 ulps apart), and the errors a zero-textwidth pad and
+# an embedded NUL raise (their messages' escape_string), each caught (native -1)
+_g("entered_paths", Any[
+    ("sort_quick", (x::Float64) -> (v = sort([x, 355.5, 202.5, 49.5, -103.5, -256.5, -409.5, 446.5, 293.5, 140.5, -12.5, -165.5, -318.5, -471.5, 384.5, 231.5, 78.5, -74.5, -227.5, -380.5, 475.5, 322.5, 169.5, 16.5, -136.5, -289.5, -442.5, 413.5, 260.5, 107.5, -45.5, -198.5, -351.5, 504.5, 351.5, 198.5, 45.5, -107.5, -260.5, -413.5, 442.5, 289.5, 136.5, -16.5, -169.5, -322.5, -475.5, 380.5, 227.5, 74.5, -78.5, -231.5, -384.5, 471.5, 318.5, 165.5, 12.5, -140.5, -293.5, -446.5, 409.5, 256.5, 103.5, -49.5, -202.5, -355.5, 500.5, 347.5, 194.5, 41.5, -111.5, -264.5, -417.5, 438.5, 285.5, 132.5, -20.5, -173.5, -326.5, -479.5, 376.5, 223.5, 70.5, -82.5, -235.5, -388.5, 467.5, 314.5, 161.5, 8.5, -144.5, -297.5, -450.5, 405.5, 252.5, 99.5, -53.5, -206.5, -359.5, 496.5, 343.5, 190.5, 37.5, -115.5, -268.5, -421.5, 434.5, 281.5, 128.5, -24.5, -177.5, -330.5, -483.5, 372.5, 219.5, 66.5, -86.5, -239.5, -392.5, 463.5, 310.5, 157.5, 4.5, -148.5, -301.5, -454.5, 401.5, 248.5, 95.5, -57.5, -210.5, -363.5, 492.5, 339.5, 186.5, 33.5, -119.5, -272.5, -425.5, 430.5, 277.5, 124.5, -28.5, -181.5, -334.5, -487.5, 368.5, 215.5, 62.5, -90.5, -243.5, -396.5, 459.5, 306.5, 153.5, 0.5, -152.5, -305.5, -458.5, 397.5, 244.5, 91.5, -61.5, -214.5, -367.5, 488.5, 335.5, 182.5, 29.5, -123.5, -276.5, -429.5, 426.5, 273.5, 120.5, -32.5, -185.5, -338.5, -491.5, 364.5, 211.5, 58.5, -94.5, -247.5, -400.5, 455.5, 302.5, 149.5, -3.5, -156.5, -309.5, -462.5, 393.5, 240.5, 87.5, -65.5, -218.5, -371.5, 484.5, 331.5, 178.5, 25.5, -127.5, -280.5, -433.5, 422.5, 269.5, 116.5, -36.5, -189.5, -342.5, -495.5, 360.5, 207.5, 54.5, -98.5, -251.5, -404.5, 451.5, 298.5, 145.5, -7.5, -160.5, -313.5, -466.5, 389.5, 236.5, 83.5, -69.5, -222.5, -375.5, 480.5, 327.5, 174.5, 21.5, -131.5, -284.5, -437.5, 418.5, 265.5, 112.5, -40.5, -193.5, -346.5, -499.5, 356.5, 203.5, 50.5, -102.5, -255.5, -408.5, 447.5, 294.5, 141.5, -11.5, -164.5, -317.5, -470.5, 385.5, 232.5, 79.5, -73.5, -226.5, -379.5, 476.5, 323.5, 170.5, 17.5, -135.5, -288.5, -441.5, 414.5, 261.5, 108.5, -44.5, -197.5, -350.5, 505.5, 352.5, 199.5, 46.5, -106.5, -259.5, -412.5, 443.5, 290.5, 137.5, -15.5, -168.5, -321.5, -474.5, 381.5, 228.5, 75.5, -77.5, -230.5, -383.5, 472.5, 319.5, 166.5, 13.5]); v[1] + 2 * v[end] + v[150]), 0.25),
+    ("sort_radix_two_passes", (x::Float64) -> (v = sort([x, 1.0, 1.0000000000002747, 1.0000000000005493, 1.000000000000824, 1.0000000000002103, 1.000000000000485, 1.0000000000007596, 1.0000000000001459, 1.0000000000004206, 1.0000000000006952, 1.0000000000000815, 1.0000000000003562, 1.0000000000006308, 1.000000000000017, 1.0000000000002918, 1.0000000000005664, 1.000000000000841, 1.0000000000002274, 1.000000000000502, 1.0000000000007767, 1.000000000000163, 1.0000000000004376, 1.0000000000007123, 1.0000000000000986, 1.0000000000003733, 1.000000000000648, 1.0000000000000342, 1.0000000000003089, 1.0000000000005835, 1.0000000000008582, 1.0000000000002445, 1.0000000000005191, 1.0000000000007938, 1.00000000000018, 1.0000000000004547, 1.0000000000007294, 1.0000000000001157, 1.0000000000003904, 1.000000000000665, 1.0000000000000513, 1.000000000000326, 1.0000000000006006, 1.0000000000008753, 1.0000000000002616, 1.0000000000005362, 1.000000000000811, 1.0000000000001972, 1.0000000000004718, 1.0000000000007465, 1.0000000000001328, 1.0000000000004075, 1.0000000000006821, 1.0000000000000684, 1.000000000000343, 1.0000000000006177, 1.000000000000004, 1.0000000000002787, 1.0000000000005533, 1.000000000000828, 1.0000000000002143]); (v[end] - v[1]) / eps(1.0) + 10000 * (v[2] - v[1]) / eps(1.0)), 1.0000000000000004),
+    ("lpad_zero_width_string", (n::Int64) -> (try; ncodeunits(lpad(string(n), 6, "\u0301")); catch; -1; end), Int64(4)),
+    ("lpad_rpad_zero_width", (n::Int64) -> (try; ncodeunits(lpad(string(n), 6, "\u0301")) * 100 + ncodeunits(rpad("x", n, '\u0301')); catch; -1; end), Int64(4)),
+    ("operator_embedded_nul", (x::Int64) -> (try; Int64(Base._isoperator(string(Char(x), Char(0)))); catch; -1; end), Int64(0x2b)),
+])
+
+# the numeric lowering tables' generated groups, last in GROUPS: built from test/registry_cases.jl
+# when a run selects one (_build!); registry_sample is the blocking gate's (Amendment 117-14)
+_lazy_g("registry_foreign", "registry_cases.jl")
+_lazy_g("registry_binops", "registry_cases.jl")
+_lazy_g("registry_unops", "registry_cases.jl")
+_lazy_g("registry_conversions", "registry_cases.jl")
+_lazy_g("registry_checked", "registry_cases.jl")
+_lazy_g("registry_shift", "registry_cases.jl")
+_lazy_g("registry_fma", "registry_cases.jl")
+_lazy_g("registry_misc", "registry_cases.jl")
+_lazy_g("registry_operators", "registry_cases.jl")
+_lazy_xf("registry_operators_rejected", "registry_cases.jl")
+_lazy_g("registry_sample", "registry_cases.jl")
+
 # ============================================================================
 
 # A WRONG answer located at its first divergent statement (TraceLocalize.first_divergence);
@@ -2631,6 +2691,11 @@ function main()
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
     ngroups = 0
+    # the emission-diff check's head side: each case's bodies, and which a passing run entered
+    local edir = get(ENV, "WT_EMISSION_DIR", "")
+    local rec = isempty(edir) ? nothing :
+        EmissionFingerprint.recorder(edir, SMOKE_PART[1], SMOKE_PART[2];
+                                     run_driver=WasmRunner.run_driver_batch, merge_js=WasmRunner.host_runtime_merge_js)
     for (group, cases) in _selected(_smoke_part(GROUPS))
         ngroups += 1
         local tg = time()
@@ -2638,19 +2703,33 @@ function main()
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"
             local tc = time()
+            rec === nothing || (EMITTED_MODULES[] = Any[])
+            local passed = false
             try
-                r = isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
+                r = haskey(CASE_INPUTS, tag) ? compare_julia_wasm_inputs(f, CASE_INPUTS[tag]; admit=_rc_admit) :
+                    isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
                 if r.pass
-                    npass += 1
+                    npass += 1; passed = true
                 else
                     nfail += 1
-                    push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)\n    " *
+                    haskey(CASE_INPUTS, tag) && (args = r.input)   # a generated case: its first wrong input
+                    push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)" *
+                                    (haskey(CASE_INPUTS, tag) ? "  input=$(r.input)" : "") * "\n    " *
                                     replace(_smoke_locate(f, args), "\n" => "\n    "))
                 end
             catch e
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
             end
             push!(case_secs, time() - tc)
+            if rec !== nothing
+                try
+                    EmissionFingerprint.record!(rec, tag, passed, EmissionFingerprint.case_hash(f, Tuple(map(typeof, case[3:end]))),
+                                                EMITTED_MODULES[])
+                catch e
+                    nerr += 1; push!(failures, "ERROR $tag  (its emission fingerprint) $(_smoke_error_text(e))")
+                end
+                EMITTED_MODULES[] = nothing
+            end
         end
         _smoke_time("group $group", tg)
     end
@@ -2700,5 +2779,8 @@ function main()
     println("smoke: $npass passed, $nfail wrong, $nerr errored  ($(dt)s)")
     exit((nfail + nerr + length(xf_mismatch)) == 0 ? 0 : 1)
 end
-# main() runs when smoke.jl is the program; test/registry_coverage.jl includes it for GROUPS only
+# main() runs when smoke.jl is the program, the lazy groups it selects built first (a statement of
+# their own: main runs in the world their cases are defined in); test/registry_coverage.jl includes
+# it for GROUPS only
+abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())
 abspath(PROGRAM_FILE) == (@__FILE__) && main()

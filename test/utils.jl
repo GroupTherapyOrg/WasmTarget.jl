@@ -352,10 +352,11 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 2. Compile to Wasm (with optional binaryen optimization), with its source map: a trap
     #    names the Julia statement of every wasm frame it unwound through
     arg_types = Tuple(map(typeof, args))
-    bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)
+    bytes, source_map, meta = _emission_compile(f, arg_types; optimize=optimize)
 
     # 3. Run in Node.js to get actual result (no host imports)
     func_name = string(nameof(f))
+    _emitted!(bytes, func_name, [join(map(format_js_arg, args), ", ")], meta)
     imports = Dict{String,Any}()
     actual = try
         run_wasm_with_imports(bytes, func_name, imports, args...; source_map=source_map)
@@ -372,6 +373,91 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
     # 4. Compare, bit-exact: 0.0 and -0.0 differ, NaN is NaN
 
     return (pass=isequal(expected, actual), expected=expected, actual=actual, wasm_size=length(bytes))
+end
+
+# The modules a differential run compiled, each with the export it called, the JS argument list
+# of every input it ran and what its compile named (_emission_compile's meta), while the
+# emission-diff check records them (test/emission_fingerprint.jl; smoke.jl sets it per case under
+# WT_EMISSION_DIR); `nothing` otherwise.
+const EMITTED_MODULES = Ref{Union{Nothing,Vector{Any}}}(nothing)
+_emitted!(bytes, fname, inputs::Vector{String}, meta::NamedTuple) =
+    (m = EMITTED_MODULES[]; m === nothing || push!(m, (bytes, String(fname), inputs, meta)); nothing)
+
+# The differential runners' one compile, compile_with_sourcemap's bytes and source map from the
+# one compile entry, with what the module's fingerprints name that its bytes do not
+# (EmissionFingerprint.Meta): each registered function's specialization by its wasm index, each
+# classId's type and the object root's type index, read from the same compile's registries. The
+# emission-diff check's base side compiles with it too, and dev/emission_diff.sh hashes it into
+# the cached base's key.
+function _emission_compile(f, arg_types::Tuple; optimize::Bool)
+    local r = WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url="module.wasm.map",
+                                  optimize, return_registries=true)
+    local tr, fr, _ = r.registries
+    local specs = Dict{Int,String}(Int(info.wasm_idx) => (info.mi === nothing ? string(info.func_ref, info.arg_types) :
+                                                          string(info.mi.specTypes)) for (_, info) in fr.functions)
+    return r.bytes, something(r.source_map),
+           (specs=specs, classes=WasmTarget._class_names(tr), top=tr.base_struct_idx === nothing ? -1 : Int(tr.base_struct_idx))
+end
+
+# a host value of a number or Bool as a JS argument: an integer exactly (a 64-bit one a BigInt of
+# its signed bits), a float as the shortest decimal its Float64 reads back as (an f32 parameter
+# rounds it to itself), NaN, ±Infinity and -0 by name
+function _js_number(x)::String
+    x isa Bool && return x ? "1" : "0"
+    x isa Union{Int64,UInt64} && return "BigInt(\"$(reinterpret(Int64, x))\")"
+    x isa Integer && return string(x isa Unsigned && sizeof(x) == 4 ? reinterpret(Int32, x) : x)
+    local d = Float64(x)
+    isnan(d) && return "NaN"
+    isinf(d) && return d > 0 ? "Infinity" : "-Infinity"
+    (iszero(d) && signbit(d)) && return "-0"
+    return repr(d)
+end
+
+"""
+    compare_julia_wasm_inputs(f, inputs; admit) -> NamedTuple
+
+`f` compiled once (as compare_julia_wasm compiles it) and run on every input in one instance; each
+native answer `admit(ok, value_or_exception)` accepts is compared bit-exactly with wasm's, and
+the first that differs is the verdict: `(pass, expected, actual, input, n)`, `n` the inputs
+compared. An input whose native answer `admit` refuses is not run; no admitted input raises.
+"""
+function compare_julia_wasm_inputs(f, inputs::Vector; admit::Function)
+    local arg_types = Tuple(map(typeof, inputs[1]))
+    all(inp -> Tuple(map(typeof, inp)) == arg_types, inputs) || error("compare_julia_wasm_inputs: the inputs' types differ")
+    local native = Tuple{Tuple,Any}[]
+    for inp in inputs
+        local ok, v = try (true, f(inp...)) catch e; (false, e) end
+        admit(ok, v) && push!(native, (inp, v))
+    end
+    isempty(native) && error("compare_julia_wasm_inputs: no input's native answer is admitted")
+    local bytes, _, meta = _emission_compile(f, arg_types; optimize=false)
+    local fname = string(nameof(f))
+    local js = [join(map(_js_number, inp), ", ") for (inp, _) in native]
+    _emitted!(bytes, fname, js, meta)
+    local src = """
+    $(WasmRunner._ENC_JS)
+    const importObject = {};
+    $(WasmRunner.host_runtime_merge_js(bytes))
+    const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
+    const f = instance.exports[$(repr(fname))];
+    const out = [];
+    for (const args of [$(join(("[" * a * "]" for a in js), ", "))]) {
+      try { const v = f(...args); out.push({ ok: JSON.parse(JSON.stringify(v === undefined ? null : v, enc)) }); }
+      catch (e) { out.push({ trap: String(e && e.message || e) }); }
+    }
+    return out;
+    """
+    local status, results = WasmRunner.run_driver_batch(bytes, src; ninputs=length(native), deadline=8.0 + 0.05 * length(native))
+    status === :ok || error("compare_julia_wasm_inputs: the runner answered $status: $results")
+    for (k, (inp, expected)) in enumerate(native)
+        local r = results[k]
+        local actual = haskey(r, "ok") ? unmarshal_result(r["ok"]) : "trap: " * String(r["trap"])
+        # a float the host printed without a fraction (JSON writes 2^60 as an integer) is read back
+        # as the float its shortest decimal names
+        (expected isa AbstractFloat && actual isa Integer) && (actual = Float64(actual))
+        isequal(expected, actual) || return (pass=false, expected=expected, actual=actual, input=inp, n=k)
+    end
+    return (pass=true, expected=native[1][2], actual=native[1][2], input=nothing, n=length(native))
 end
 
 """

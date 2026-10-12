@@ -1,0 +1,96 @@
+name: Emission base
+# The emission-diff check's base file (dev/emission_diff.sh, L190) for a base no gate.yml run
+# published: `bash dev/emission_diff.sh bootstrap` pushes a commit to emission-base/<name>, and
+# this compiles every smoke case with the merge base's src and the pushed commit's tests, in K = 10
+# parts, and publishes the file under its key (90 days). gate.yml's emission-plan then reads it.
+on:
+  push:
+    branches: ['emission-base/**']
+
+permissions:
+  contents: read
+  actions: write   # julia-actions/cache deletes this branch's superseded caches
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  part:
+    name: base ${{ matrix.part }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        part: ['0/10', '1/10', '2/10', '3/10', '4/10', '5/10', '6/10', '7/10', '8/10', '9/10']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: CI's Node major
+        id: ci
+        run: |
+          echo "node=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.ci.outputs.node }}
+      - name: Julia (juliaup)
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+      - name: Runner CPU model
+        id: cpu
+        run: |
+          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/cache@v2
+        with:
+          cache-name: gate-lanes-${{ steps.cpu.outputs.model }}
+          include-matrix: false
+      - name: dev/emission_diff.sh bootstrap-part ${{ matrix.part }}
+        run: |
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
+          bash dev/emission_diff.sh bootstrap-part ${{ matrix.part }} emission-parts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emission-bpart-${{ strategy.job-index }}
+          path: emission-parts/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: part
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Julia (juliaup)
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: emission-bpart-*
+          path: emission-parts
+          merge-multiple: true
+      - name: dev/emission_diff.sh bootstrap-publish
+        id: publish
+        run: |
+          bash dev/emission_diff.sh bootstrap-publish emission-parts emission-base | tee publish.log
+          grep '^name=' publish.log >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.publish.outputs.name }}
+          path: emission-base/base.tsv
+          if-no-files-found: error
+          retention-days: 90
