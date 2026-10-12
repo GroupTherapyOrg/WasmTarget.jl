@@ -67,6 +67,9 @@ if [ -n "$part" ]; then
     *) echo "lanes.sh: --part needs --lane smoke, smoke-1.13, formal, suite, fuzz or coverage" >&2; exit 2 ;;
   esac
 fi
+# smoke on 1.12 as one lane (a CI job) writes the emission-diff check's head side to
+# emission-parts/: each case's bodies and which a passing run entered (dev/emission_diff.sh)
+[ "$only" = smoke ] && export WT_EMISSION_DIR="$PWD/emission-parts"
 if [ $merge -eq 1 ]; then
   [ "$only" = coverage ] && [ -z "$part" ] || { echo "lanes.sh: --merge needs --lane coverage and no --part" >&2; exit 2; }
   export WT_COVERAGE_MERGE=1 WT_COVERAGE_DIR="$PWD/coverage-parts"

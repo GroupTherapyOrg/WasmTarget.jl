@@ -1768,7 +1768,7 @@ Register a function in the registry.
 
 parity(functions.dart:90 FunctionCollector.getFunction): the callee's entry in _functions.
 """
-function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any;
+function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type;
                             is_candidate::Bool=false, mi::Union{Nothing, Core.MethodInstance}=nothing,
                             invoke_only::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,

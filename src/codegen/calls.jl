@@ -966,9 +966,9 @@ THE shift dispatch — SHIFT_OPS's single implementation for `:shl`/`:ashr`/
 `:lshr` (128-bit operands are fully handled by THE Int128 registry route
 before this is ever reached). Shift-COUNT coercion first (Julia often uses an
 Int64/UInt64 amount even for an Int32 value — Wasm requires the amount and
-the value to share a type): shl/lshr saturate an oversized i64 amount down to
-i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
-unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
+the value to share a type): an oversized i64 amount saturates down to i32 for
+every kind (a plain wrap would let e.g. `x << typemin(Int64)` or `x >> typemin(Int64)`
+alias 0 and leak the unshifted value). Then
 `_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
 parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 """
@@ -979,8 +979,13 @@ function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext,
         # amount is a struct and is left to the Int128 route)
         local _cnt = isempty(fb.v.stack) ? nothing : fb.v.stack[end]
         local _want = is_32bit ? I32 : I64
+        # a narrow amount is read at its own width, unsigned (the intrinsic's amount is unsigned):
+        # its register's junk above that width is no part of it (a constant's register holds its
+        # value, no junk)
+        (_cnt === I32 && !(nir_const(args[2]) isa Integer && nir_const(args[2]) >= 0)) &&
+            normalise_narrow!(fb, ctx, value_type(ctx, args[2]), false)
         if _cnt === I32 || _cnt === I64
-            if kind !== :ashr && is_32bit && _cnt === I64
+            if is_32bit && _cnt === I64
                 _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
             else
                 coerce_stack_top!(fb, _want, ctx)
@@ -1282,8 +1287,10 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         x_local = allocate_local!(ctx, is_32bit ? I32 : I64)
         local_set!(bld, x_local)
 
-        # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
+        # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative); a narrow
+        # y's sign is the bit at its own width
         local_get!(bld, y_local)
+        is_32bit && normalise_narrow!(bld, ctx, arg_type, true)
         if is_32bit
             i32_const!(bld, 31)
             num!(bld, Opcode.I32_SHR_S)
@@ -3548,7 +3555,23 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         return append_builder!(b, fb)
     elseif _it_name !== nothing && !is_128bit
         local _ut_w = operand_register(arg_type)
+        # a narrow operand's bits are counted over its own width: masked to it (the register's
+        # junk above it is no part of the value), a trailing count stopped at the width by a bit
+        # set there, and a leading count less the register's bits above the width
+        local _ut_jw = _julia_int_width(arg_type, _ut_w === I32)
+        local _ut_count = _ut_w === I32 && _ut_jw < 32 && _it_name in (:ctlz_int, :cttz_int, :ctpop_int)
+        if _ut_count
+            normalise_narrow!(fb, ctx, arg_type, false)
+            if _it_name === :cttz_int
+                i32_const!(fb, Int64(1) << _ut_jw)
+                num!(fb, Opcode.I32_OR)
+            end
+        end
         local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)
+        if _ut_count && _it_name === :ctlz_int && _ut_result !== nothing
+            i32_const!(fb, 32 - _ut_jw)
+            num!(fb, Opcode.I32_SUB)
+        end
         if _ut_result !== nothing
             # (The rebox link, mirroring the binop route above.)
             local _rbx_li2 = get(ctx.ssa_locals, idx, nothing)

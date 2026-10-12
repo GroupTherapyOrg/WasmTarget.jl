@@ -141,8 +141,7 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 
 ## Phase 13 — layouts by structure (2026-09-29 …)
 
-- A concrete struct is laid out by its fields whatever it subtypes (L142): a Diagonal took the
-  Matrix layout, and a struct's Matrix field the Vector one. Six LinearAlgebra overlays went.
+- A concrete struct is laid out by its fields whatever it subtypes (L142): a Diagonal took the Matrix layout, and a struct's Matrix field the Vector one. Six LinearAlgebra overlays went.
 - The builder carries what codegen emits, each node anchored to its dart class: 20 unused
   emitters and emit_raw! (L13) went; br_on_null/br_on_non_null check their target (dart).
 - SimpleDiffEq's oracle allows muladd's rounding in every case, checked against each solver's step; on Julia 1.13.1 the Vector-state RK4/Tsit5 solves compile and run bit-exact.
@@ -155,6 +154,7 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - A value meets a sink through one conversion typed by its own type: one widening check, the funnel's (L178); no ladder beside it, one box producer; one TypeError builder, one `Type{X}` element rule, the type-object test over the static type, one class test (L179).
 - One table per construct: the operator table and the conversion table, one width rule, one operand table, one loop-bounds definition (L180). One CFG, Julia's own (nir_cfg: compute_basic_blocks over the NIR), read by the stackifier (its blocks, edges and jump targets), the trampolines, the loop bounds, the proven-dead and definite-initialization proofs and the stub reset; one dominator computation, Julia's naive_idoms (L181). A constant callee is its object, resolved once at the boundary, a capture-holding one's self in its own field (L182); one as-checker per (target, static type), its rejection each caller's (L183). One owner of a compile's state, its Translator and its module's registries (R40 locked at 0); a host's module checked at the entry, before collection; the `optimize_ir` keyword removed (public API); E5 and A13E5 found resolved.
 - Audit #16's fixes: one widening rule into any register and every conversion target resolved once (L180); `nothing` null at every nullable reference of the any hierarchy (L178); a retarget recomputed every round (L40); a nested captor joins its box.
+- The numeric lowering tables generate their cases, dirty narrow operands among the inputs, a float compared by its bits (L191, R42); every body a change's emission alters is entered by a passing case at function entry, in the fast lane and the full gate, its base side published once per landed head (L190); a narrow bit count, shift amount and flipsign read at their width, an oversized shift amount saturated for every kind; no parameter defaults to a type, a register, a width, an index or a sentinel outside its allowlist (L192, R43).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

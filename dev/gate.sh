@@ -11,8 +11,8 @@
 #   bash dev/gate.sh <rev> [<name>]  # a branch or commit, on gate/<name>
 #   bash dev/gate.sh --fast [<rev>] [<name>]   # the inner loop, not the push gate: pushes to
 #       gate-fast/<name>, where .github/workflows/gate-fast.yml runs only the ratchet and smoke
-#       on 1.12 and 1.13 (L163), and prints `FAST green` or `FAST red`; its budget is
-#       gate-fast.yml's lane timeout
+#       on 1.12 and 1.13 (L163), with the emission-diff check (dev/emission_diff.sh, L190), and
+#       prints `FAST green` or `FAST red`; its budget is gate-fast.yml's lane timeout
 #
 # The commit is pushed as it is: uncommitted changes are not in it. A gate branch keeps its
 # julia caches from push to push (GitHub scopes a cache to its branch and the default branch);
@@ -75,7 +75,7 @@ api gh run view "$id" --json jobs --jq '.jobs[] | [.conclusion, .name,
   awk -F'\t' -v B="$budget" '{ v = $1 == "success" ? "ok  " : $1 == "failure" ? "FAIL" : "--  ";
                  past = ($3 != "" && $3 + 0 >= B * 60) ? sprintf("  PAST THE %d-MINUTE BUDGET", B) : "";
                  printf "  %s %-16s %6s  %s%s\n", v, $2, ($3 == "" ? "" : $3 "s"), ($1 == "success" ? "" : $1), past
-                 if ($2 != "coverage-merge" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
+                 if ($2 != "coverage-merge" && $2 != "emission-plan" && $2 != "emission" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
                END { if (slowest != "") printf "gate: slowest lane job %s %d s of the budget %d min (%d s)%s\n",
                        slowest, slow, B, B * 60, (slow >= B * 60 ? ", PAST IT" : "") }'
 conclusion=$(api gh run view "$id" --json conclusion --jq .conclusion)

@@ -278,7 +278,7 @@ parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
 function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_registry,
                                         base_struct_idx::UInt32;
-                                        caller_return_type::Type=Any, mod::WasmModule,
+                                        caller_return_type::Type, mod::WasmModule,
                                         type_registry::TypeRegistry)::InstrBuilder
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
