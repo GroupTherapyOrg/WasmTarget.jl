@@ -1939,6 +1939,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
                 name = string(base, "_", n)
                 n += 1
             end
+            name == base || p0!("N trim_compile_plan suffixes a repeated method name", "$(base) -> $(name)")
         end
         push!(used_names, name)
         push!(functions, (f, arg_types, name, mi))
