@@ -406,3 +406,31 @@ end
         @test r == String[]   # 1.12's queue does not follow a :new, and neither does WT
     end
 end
+
+# One as-checker per (target, static type) (types.dart:763 generateAsChecker, L183): a check WT
+# cannot lower rejects at each calling statement, never at the checker's own body, and once
+@noinline _da_ar_cell(x::Int64) = x > 0 ? Ref{Any}(Vector{Int64}) : Ref{Any}(x)
+const _DaArT = Type{<:AbstractVector}
+_da_ar_f(x::Int64) = (_da_ar_cell(x)[]::_DaArT; Int64(1))
+@testset "an as-checker's rejection is its caller's" begin
+    err = try
+        WasmTarget.compile(_da_ar_f, (Int64,)); nothing
+    catch e
+        e isa WasmTarget.WasmCompileError ? e : rethrow()
+    end
+    @test err isa WasmTarget.WasmCompileError
+    @test err.diag.func_name == "_da_ar_f"
+    @test occursin("typeassert(", err.diag.stmt) && occursin("_DaArT", err.diag.stmt)
+    @test occursin("by type equality at run time", err.diag.construct)
+    @test length(err.all) == 1
+end
+
+# One as-checker per (target, static type) (L183): two statements and two functions of one
+# program checking `x::Int64` over an `Any` operand call one function, "<obj> as Int64"
+@noinline _da_ac_cell(x::Int64) = x > 0 ? Ref{Any}(1.5) : Ref{Any}(x)
+@noinline _da_ac_g(x::Int64) = _da_ac_cell(x)[]::Int64
+_da_ac_f(x::Int64) = (_da_ac_cell(x)[]::Int64) + (_da_ac_cell(-x)[]::Int64) + _da_ac_g(x)
+@testset "one as-checker per (target, static type)" begin
+    m = WasmTarget.compile_module([(_da_ac_f, (Int64,), "f")])
+    @test count(fn -> fn.name == "<obj> as Int64", m.functions) == 1
+end

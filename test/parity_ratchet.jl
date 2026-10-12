@@ -184,10 +184,8 @@ const R30_ANY_SEAMS = Dict{Symbol,String}(
     :_resolve_nircall_callee => "a call's callee resolved to its object: a function, a type or any callable value",
     :_nir_callee_object => "a callee operand's object: a function, a type or any callable value",
     :resolve_call_callee => "a :call's callee resolved to its object, or the operand of a dynamic callee",
-    :_resolve_builtin_callee => "the object a builtin call names, compared by identity against the registry",
-    :_invoke_callee_object => "the function object a MethodInstance specializes",
-    :_invoke_named_callee => "the callee object an :invoke names",
-    :_invoke_singleton_instance => "the one instance of a singleton type, any value",
+    :nir_callee => "a callee operand resolved to its one representation: a constant's object, an unbound GlobalRef or a runtime value's node",
+    :nir_operand_callee => "a callee operand resolved by the one rule over its static type: a constant's object, an unbound GlobalRef, a singleton's instance or a runtime value's node",
     :nir_const => "a literal operand's value, any Julia value",
     :_nir_const_operand => "a constant operand's value, any Julia value",
     :_nir_field_name => "a getfield operand's literal, whatever the IR wrote there",
@@ -1164,9 +1162,12 @@ const LOCKS = [
             # unresolved callee is SKIPPED — not swallowed into a table lookup.
             required = ["val.bound || return nothing",
                         "callee_func isa NirNode || callee_func isa GlobalRef",
-                        "return def.bound ? def.value : GlobalRef(def.mod, def.name)",
                         "\n        called_func = func isa GlobalRef ? nothing : func"]
-            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
+            # an :invoke's callee is resolved at the boundary too (nir_callee, one rule for
+            # every call kind), so an unbound global reaches codegen as its GlobalRef
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required) +
+                (occursin("x isa NirGlobalRef && return x.bound ? x.value : GlobalRef(x.mod, x.name)", nirs) ? 0 : 1)
         end),
     "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; receiver-free print/println/show compile Julia's own bodies and reject loudly at their statement — no console builder exists that could disappear or fabricate question-mark output",
         () -> begin
@@ -1177,7 +1178,10 @@ const LOCKS = [
                          "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
                          "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup",
                          "_compile_invoke_print", "_invoke_print_b", "_invoke_println_b"]
-            required = ["_invoke_singleton_instance", "Base.issingletontype(T)"]
+            # the singleton predicate is the boundary's one callee rule (nir_operand_callee), which
+            # an :invoke's callee is resolved by too
+            local nir_src = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            required = String[]
             # receiver-free print/println/show compile Julia's own bodies, whose console
             # write rejects loudly at its statement — pinned behaviorally
             diag_required = ["(DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,))",
@@ -1185,6 +1189,7 @@ const LOCKS = [
                              "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
             count(p -> occursin(p, codegen_src), forbidden) +
                 count(p -> !occursin(p, invoke_src), required) +
+                (occursin("(static_type isa DataType && Base.issingletontype(static_type) && static_type <: Function)", nir_src) ? 0 : 1) +
                 count(p -> !occursin(p, diag_src), diag_required)
         end),
     "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
@@ -3501,7 +3506,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = count_sites(r"\b(isdefined|isconst|getglobal|getfield|eval|get_binding_type|isdefinedglobal)\(\s*[\w.\[\]]+\.mod\s*,\s*[\w.\[\]]+\.name\b";
                                   roots=[SRC], exclude_files=["frontend/nir.jl"])
             v += occursin("    bound::Bool\n    constant::Bool\n    julia_type::Type\nend", nir) ? 0 : 1
-            v += count(r"resolve_operand\(x, (types|Type\[\])\)::NirGlobalRef", nir) == 2 ? 0 : 1
+            v += count(r"resolve_operand\(x, (types|Type\[\])\)::NirGlobalRef", nir) == 1 ? 0 : 1   # _resolve_type_operand's
+            v += occursin("resolve_call_callee(x, types)::Any = nir_callee(resolve_operand(x, types))", nir) ? 0 : 1
             v += count(r"isdefined\(x\.mod, x\.name\)", nir) == 1 ? 0 : 1
             v
         end),
@@ -3594,7 +3600,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                  occursin("for src in (Any, Union{Nothing,Tuple{Vararg{Int64}}}, Tuple{Vararg{Int64}}, nothing)", diag) ? 0 : 1
             v
         end),
-    "L179_one_type_test" => ("each type test has one lowering: one TypeError builder, _emit_typeerror_throw! (its three constant fields typed by their values, the value that failed pushed by its caller), which a typeassert's always-failing and runtime arms and the UnionAll constructor call, as dart's as-checker throws one TypeError (types.dart:763 generateAsChecker), and the only `register_struct_type!(…TypeError)` in codegen; one `Type{X}` element rule, type_element_kind (X's kind, as jl_f_tuple types the element), read by tuple_runtime_type, a tuple type's registration (_canonical_tuple_type), a MethodError's args tuple and a type-object argument's canonical signature (_canonical_type_object_arg); the type-object test partitions the bare arrays and the kinds over the value's static type, as every class read does (bare_array_partition), never over every class; and a phi edge's class test is the one class test, emit_isa_class_header! (it reads the header's classId, code_generator.dart:6076 loadClassId), the box-layout test beside it deleted. Behavior: test/dispatch_method_error.jl's 'one Type{X} element rule: the tuple Core.tuple builds is the tuple type registered' (a second rule in either reader, every type object a DataType, fails it for Vector, a Union and Union{}); the regression cases smoke tuple_type_element, kind_isa's kind_partition_static_type, union_nothing (the phi edges whose class flow.jl tests), typeassert_checks and test/real_bottom_exceptions.jl's TypeError fields (L57) answered as native before the lock's fixes too, which were restructurings (dev/AUDIT.md A4E5, A5E5, A5E8, A9E6, A16P5, A16P6; dev/CHARTER.md C1)",
+    "L179_one_type_test" => ("each type test has one lowering: one TypeError builder, _emit_typeerror_throw! (its three constant fields typed by their values, the value that failed pushed by its caller), which a typeassert's always-failing arm, its as-checker's body (as_checker!, L183) and the UnionAll constructor call, as dart's as-checker throws one TypeError (types.dart:763 generateAsChecker), and the only `register_struct_type!(…TypeError)` in codegen; one `Type{X}` element rule, type_element_kind (X's kind, as jl_f_tuple types the element), read by tuple_runtime_type, a tuple type's registration (_canonical_tuple_type), a MethodError's args tuple and a type-object argument's canonical signature (_canonical_type_object_arg); the type-object test partitions the bare arrays and the kinds over the value's static type, as every class read does (bare_array_partition), never over every class; and a phi edge's class test is the one class test, emit_isa_class_header! (it reads the header's classId, code_generator.dart:6076 loadClassId), the box-layout test beside it deleted. Behavior: test/dispatch_method_error.jl's 'one Type{X} element rule: the tuple Core.tuple builds is the tuple type registered' (a second rule in either reader, every type object a DataType, fails it for Vector, a Union and Union{}); the regression cases smoke tuple_type_element, kind_isa's kind_partition_static_type, union_nothing (the phi edges whose class flow.jl tests), typeassert_checks and test/real_bottom_exceptions.jl's TypeError fields (L57) answered as native before the lock's fixes too, which were restructurings (dev/AUDIT.md A4E5, A5E5, A5E8, A9E6, A16P5, A16P6; dev/CHARTER.md C1)",
         () -> begin
             local calls = read(joinpath(CODEGEN, "calls.jl"), String)
             local flow = read(joinpath(CODEGEN, "flow.jl"), String)
@@ -3756,6 +3762,49 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for f in ("MCProvenDeadNoCatchEdgeBroken.cfg", "MCDefiniteInitNoCatchEdgeBroken.cfg")
                 v += isfile(joinpath(ROOT, "dev", "formal", f)) ? 0 : 1
             end
+            v
+        end),
+    "L182_one_callee_representation" => ("a call's constant callee has one representation, its object, resolved once at the NIR boundary by one rule for a :call, an :invoke and a call codegen builds (nir_callee over resolve_operand, and _resolve_nircall_callee's SSA, Core.Const and singleton-argument arms for both statement kinds), as Kernel's StaticInvocation carries its resolved target (expressions.dart:2820): an intrinsic the IR embeds as the object, a type object an :invoke embeds and a function a singleton-typed argument names are their objects; NirCall and NirInvoke refuse a NirLiteral callee at construction (_refuse_literal_callee); a callee passed as an operand (a call codegen builds, nir_call; invoke_in_world's `f`; `_apply_iterate`'s function) is read by the same rule over the operand's static type (nir_operand_callee: a runtime value of a singleton function type is its instance); a constant whose type does not determine it (Compiler's singleton_type over its Core.Typeof answers nothing: not a function singleton, not a type object, not a Builtin) carries its self operand in the node's own field `self` (nir_callee_self, FunctionInvocation.receiver, expressions.dart:2262), which an :invoke of a closure's function pushes first (nir_callee_value) and the operand walkers read; no callee is unwrapped or resolved in codegen (no nir_const of a callee, no `callee isa NirLiteral`, no manual global resolution of a callee operand, no _resolve_builtin_callee, _invoke_in_world_callee) and no :invoke callee is resolved again from its MethodInstance (no _invoke_named_callee, _invoke_callee_object). Behavior: test/nir_use_index.jl's 'a call's constant callee has one representation' (expm1's embedded have_fma, Dict's constructor, a singleton-typed argument's :invoke, a const closure's self; a NirLiteral callee refused) and smoke constant_callees (dev/AUDIT.md A4C5; dev/CHARTER.md C1)",
+        () -> begin
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            local v = count("        _refuse_literal_callee(callee)\n", nirs) == 2 ? 0 : 1
+            v += count("function nir_callee(x::NirNode)::Any", nirs) == 1 ? 0 : 1
+            v += occursin("callee = length(args) >= 2 ? _resolve_nircall_callee(args[2], code_info, types, slot_types) : nothing", nirs) ? 0 : 1
+            v += occursin("NirCall(nir_operand_callee(callee, static_type), NirNode[operands...])", nirs) ? 0 : 1
+            v += count("nir_callee_self(@nospecialize(callee))::Union{Nothing,NirLiteral} =", nirs) == 1 ? 0 : 1
+            v += occursin("closure_self_to_push = something(nir_callee_value(node), NirLiteral(node.callee))", inv) ? 0 : 1
+            v += count_sites(r"nir_const\((func|f|fref|target_func|[\w.]*callee[\w.]*)\)|\b(fref|target_func|target)\s+isa\s+NirGlobalRef|_resolve_builtin_callee|_invoke_named_callee|_invoke_callee_object|_invoke_in_world_callee|callee\.value\b|callee isa NirLiteral|isa NirLiteral \? [\w.]*callee";
+                             exclude_files=["frontend/nir.jl"])
+            # every callee passed as an operand is read by the one rule (nir_operand_callee): the
+            # boundary's argument arm, nir_call, invoke_in_world's and _apply_iterate's
+            v += count_sites(r"\bnir_operand_callee\("; roots=[SRC]) == 8 ? 0 : 1
+            v += occursin("CC.singleton_type(Core.Typeof(callee)) !== nothing", nirs) ? 0 : 1
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("a call's constant callee has one representation", nui) ? 0 : 1
+            v += occursin("_g(\"constant_callees\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1
+            v
+        end),
+    "L183_one_as_checker" => ("a typeassert's run-time check is one function per (target, static type), as dart's as-check calls one checker per tested type (types.dart:763 AsCheckers.generateAsChecker, cached in `_asCheckers`, :758): as_checker! builds it on its first use in a codegen context of its own (its one statement `typeassert(x, T)`), with dart's shape: from the top type (anyref, types.dart:784) to the register of S ∩ T (:783), its body narrowing the argument to the static type's register, the one isa lowering over that type (Julia's emit_isa tests S ∩ T, which is why the key holds the static type), the one TypeError throw and the argument converted to S ∩ T's register (:1172-1173); the calling statement converts its operand to the top type; the module's registry caches it (`as_checkers`, the function and its parameter, or the rejection its body raised) and names it as dart does, \"<obj> as T\" (types.dart:1039); _lower_typeassert!'s run-time arm calls it and lowers no isa and allocates no local of its own; a check WT cannot lower rejects at each calling statement with the body's rejection (the checker's own copy leaves the ledger). Behavior: test/diagnostic_attribution.jl's 'an as-checker's rejection is its caller's' (x::Type{<:AbstractVector} over Any: one diagnostic, at the caller's statement) and 'one as-checker per (target, static type)' (two statements and two functions, one function), smoke as_checkers and typeassert_checks (dev/AUDIT.md A4E5; dev/CHARTER.md C1)",
+        () -> begin
+            local bi = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local ta = match(r"function _lower_typeassert!.*?\nend\n"s, bi)
+            local v = ta === nothing ? 1 : 0
+            ta === nothing || (v += occursin("as_checker!(ctx, _ta_target, _ta_static)", ta.match) &&
+                                    !occursin("_compile_call_isa", ta.match) && !occursin("allocate_local!", ta.match) ? 0 : 1)
+            v += count_sites(r"\bas_checker!\(") == 3 ? 0 : 1   # its definition, docstring and the one caller
+            v += occursin("ctx.type_registry.as_checkers[key] = result", calls) ? 0 : 1
+            v += occursin("_compile_call_isa(check.operands, cb, cctx)", calls) ? 0 : 1
+            # dart's shape: from the top type (types.dart:784) to S ∩ T's register (:783, :1172-1173)
+            v += occursin("local cb = InstrBuilder(WasmValType[AnyRef], results;", calls) &&
+                 occursin("coerce_stack_top!(cb, only(results), cctx; from_julia=(R === Nothing ? static_type : R))", calls) ? 0 : 1
+            v += (ta !== nothing && occursin("coerce_stack_top!(fb, AnyRef, ctx; from_julia=_ta_static)", ta.match)) ? 0 : 1
+            v += occursin("as_checker = GeneratedConstruct(\"as-checker\", \"<obj> as \", \"\", true)", read(joinpath(CODEGEN, "diagnostics.jl"), String)) ? 0 : 1
+            local da = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            v += occursin("an as-checker's rejection is its caller's", da) && occursin("one as-checker per (target, static type)", da) ? 0 : 1
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            v += occursin("_g(\"as_checkers\"", smk) && occursin("(\"empty_intersection_throws\"", smk) ? 0 : 1
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
