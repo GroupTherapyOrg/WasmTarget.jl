@@ -1943,6 +1943,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     end
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
+    P0_TA[] += 1
     local _ta_tmp = allocate_local!(ctx, _ta_ty)
     local_tee!(fb, UInt32(_ta_tmp))
     _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
