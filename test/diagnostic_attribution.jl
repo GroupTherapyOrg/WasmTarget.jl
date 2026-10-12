@@ -231,6 +231,58 @@ end
                    occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(world.enrolled_as))
 end
 
+# an interrupt or exhausted memory raised while a root is inferred again is the process's, never a
+# root's failure, and passes through; an ArgumentError raised by inference is located as any other
+# failure is, at the root that fails alone (dev/AUDIT.md A2C2)
+@testset "diagnostics: a collection failure passes the process's errors and locates an ArgumentError" begin
+    mi_sin = WasmTarget.entry_method_instance(sin, (Float64,))
+    batch = Tuple{Any,String}[(mi_sin, "the call `sin(x)` in f(::Float64) (statement %2 @ a.jl:3)")]
+    err = try
+        WasmTarget.throw_located_collection_failure(batch, ArgumentError("the batch failed"), Base.backtrace(),
+                                                    mi -> throw(ArgumentError("planted in inference")))
+    catch e
+        e
+    end
+    @test err isa WasmTarget.WasmInternalError
+    msg = sprint(showerror, err)
+    @test occursin("inferring sin(::Float64), enrolled as the call `sin(x)`", msg) && occursin("planted in inference", msg)
+    @test_throws InterruptException WasmTarget.throw_located_collection_failure(batch, ErrorException("x"),
+        Base.backtrace(), mi -> throw(InterruptException()))
+    @test_throws OutOfMemoryError WasmTarget.throw_located_collection_failure(batch, ErrorException("x"),
+        Base.backtrace(), mi -> throw(OutOfMemoryError()))
+end
+
+# the first collection fails as every later round does, located at the entry that fails alone:
+# an entry Julia's compile! cannot take (an empty ccallable signature, a BoundsError inside the
+# Compiler, the class of internal error an ArgumentError is) is named with why it was enrolled,
+# where it escaped unlocated before (dev/AUDIT.md A2C2)
+@testset "diagnostics: a failure of the first collection names its entry" begin
+    err = try WasmTarget.collect_closed_world(Any[Core.svec()]) catch e; e end
+    @test err isa WasmTarget.WasmInternalError
+    msg = sprint(showerror, err)
+    @test occursin("enrolled as a compilation entry", msg) && occursin("BoundsError", msg)
+end
+
+# planning reads the closed world and writes none of it: the reasons and the joins memo the
+# collection recorded are the plan's, unchanged by planning (dev/AUDIT.md A2C4; ClosedWorld.tla
+# ReasonsComplete)
+module DiagPlan
+@noinline _pd(@nospecialize(x)) = Ref{Any}(x)
+plan_world(n::Int64) = (k = n; f = _pd(x -> x + k)[]; v = Any[n, "s"]; f(n)::Int64 + (v[1] == n ? 1 : 0) + length(string(n)))
+end
+@testset "planning writes nothing into the collected world" begin
+    entry = WasmTarget.entry_method_instance(DiagPlan.plan_world, (Int64,))
+    world = WasmTarget.collect_closed_world(Any[entry])
+    local reasons = copy(world.enrolled_as)
+    local joins = copy(world.numeric_joins)
+    plan = WasmTarget.plan_closed_world(world, Dict{Any,String}(entry => "plan_world"),
+                                        Dict{Any,Any}(entry => DiagPlan.plan_world), Any[])
+    @test world.enrolled_as == reasons
+    @test keys(world.numeric_joins) == keys(joins) && all(k -> world.numeric_joins[k] === joins[k], keys(joins))
+    # and every planned function's reason is the one the collection recorded
+    @test all(fn -> haskey(reasons, fn[4]), plan.functions)
+end
+
 # getfield by a name known only at run time answers as jl_f_getfield or rejects with why: WT's
 # layouts of DataType and TypeName are projections (reading by Julia's field order would read
 # another field), and a Module's getfield reads a global binding. Until 2026-09-29 the first

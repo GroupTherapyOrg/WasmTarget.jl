@@ -49,7 +49,9 @@ with the per-clause status. A clause is never closed by argument.
   `L171` (one consult for which methods Julia selects, asked by collection, planning and the
   vtable pre-pass; a statement's codegen asks it nowhere) `L174` (one reader of an operand's
   Julia type, value_type, Julia's argextype) `L175` (a global's binding resolved once, at the
-  boundary).
+  boundary) `L176` (one class set, closed_world_classes, read by the enrollment, the no-method
+  records, the ambiguity search and the numbering) `L177` (one rule for a match that is one
+  signature).
   Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a

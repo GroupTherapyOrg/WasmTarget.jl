@@ -45,4 +45,6 @@ MCCollectorKinds  == HiddenKinds
 MCTrim            == FALSE
 
 RejectReachable == <>(status = "Rejected")
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================

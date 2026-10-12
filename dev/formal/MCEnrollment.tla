@@ -61,4 +61,7 @@ MCPFix == [m \in MCMethods |-> CASE m \in {"hP", "aP", "pP", "pU"} -> {1, 2}
 MCStatics == {MCX \X MCX, {<<"I", "I">>}, {<<"I", "T">>}}
 \* T is made by a `typeof` (`h(typeof(x))`), held as no literal; U is held as a literal
 MCLiterals == {"U"}
+\* every numbered class is one a value may have; every match fixes its static parameters
+MCUnreached == {}
+MCNoFix == [m \in MCMethods |-> {}]
 =============================================================================

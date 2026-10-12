@@ -293,7 +293,8 @@ const _SMT_UNMAPPED_112 = Dict(
     "loop with phis" => Dict("_smt_loop" => 10),
     "try/catch" => Dict("_smt_try" => 7),
     "closure" => Dict("_smt_clo" => 3, "_smt_apply" => 3),
-    "selector caller" => Dict(n => 3 for n in ("mkA", "mkB", "mkC", "mkD", "f2", "f2_1", "f2_2", "f2_3", "convert")),
+    # (convert_1 is the dynamic convert's row for Bool, a class of the program's one class set)
+    "selector caller" => Dict(n => 3 for n in ("mkA", "mkB", "mkC", "mkD", "f2", "f2_1", "f2_2", "f2_3", "convert", "convert_1")),
     "standalone rethrow body" => Dict("_smt_fin" => 3),
     "code after a statement in its block" => Dict("_smt_counter" => 24, "_smt_cap" => 3, "+" => 3))
 

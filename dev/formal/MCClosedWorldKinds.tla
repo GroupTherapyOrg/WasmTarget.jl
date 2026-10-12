@@ -61,4 +61,6 @@ ASSUME JuliaKinds \subseteq {p[2] : p \in UNION {MCHiddenEdges[m] : m \in MCMeth
 
 (* this instance's original is never materialized *)
 ASSUME OriginalsUnmaterialized
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================

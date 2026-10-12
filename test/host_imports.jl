@@ -149,3 +149,23 @@ _hi_c2_f(x::Int64)::Int64 = 2 * _hi_c2_g(x)
               occursin("not a host-declared function import", err.msg)
     end
 end
+
+# A declared import's result is a value the host makes, which no collected body builds: its class
+# is in the one class set by the statement rule (a statement concretely typed Int32), so the
+# union-split MethodError for it is built (without it the call trapped where native answers -1)
+@noinline _hi_int32_stub()::Int32 = Base.inferencebarrier(Int32(5))::Int32
+_hi_int64_only(x::Int64) = 1
+_hi_import_no_method(n::Int64) = (y = n > 0 ? n : _hi_int32_stub();
+                                   try; _hi_int64_only(y)::Int64; catch e; e isa MethodError ? -1 : -2; end)
+@testset "an import's result is a class of the one class set" begin
+    @test _hi_import_no_method(Int64(-1)) == -1
+    mod = WasmTarget.WasmModule()
+    idx = WasmTarget.add_import!(mod, "host", "int32_stub", WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.I32])
+    m = WasmTarget.compile_module(Any[(_hi_import_no_method, (Int64,), "_hi_import_no_method")];
+                                  existing_module=mod,
+                                  import_stubs=Any[(_hi_int32_stub, "int32_stub", (), idx, Int32)])
+    @test unsaved_host_import_calls(m) == 0   # every call of the import saved and restored (L156)
+    bytes = WasmTarget.to_bytes(m)
+    imports = Dict{String,Any}("host" => Dict{String,Any}("int32_stub" => "() => 5"))
+    @test run_wasm_with_imports(bytes, "_hi_import_no_method", imports, Int64(-1)) == -1
+end

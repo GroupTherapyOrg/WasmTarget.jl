@@ -479,12 +479,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Exception objects synthesized by lowering must join the closed component
     # before DFS class IDs freeze; late registration makes catch-side `isa`
-    # structurally unable to classify an otherwise real payload.
-    for _exn_T in (ErrorException, ArgumentError, OverflowError, DivideError,
-                   StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
-                   DomainError, InexactError, KeyError, MethodError,
-                   AssertionError, UndefVarError, FieldError)
-        register_struct_type!(mod, type_registry, _exn_T)
+    # structurally unable to classify an otherwise real payload. The one list
+    # (LOWERING_INSTANTIATED_CLASSES), whose classes the one class set holds too; its String is
+    # classed by the numbering's fixed list, not a struct registered here.
+    for _exn_T in LOWERING_INSTANTIATED_CLASSES
+        _exn_T <: Exception && register_struct_type!(mod, type_registry, _exn_T)
     end
 
     # JIB-IR001: Pre-register Core IR types for self-hosting dispatch
@@ -500,7 +499,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # changed field-resolution ORDER and produced duplicate layouts (caught by
     # WasmMakie's E-001); numbering needs no wasm struct to exist, and a type
     # registered lazily later receives its pre-assigned id via ensure_type_id!.
-    _reachable = _collect_reachable_ir_types(function_data, plan.bespoke)
+    _reachable = _collect_reachable_ir_types(function_data, plan.bespoke, plan.classes)
     # each MethodError a dynamic call throws: its callee's class and its args tuples (the plan's
     # per-callee no-method record)
     for (F, Ts) in plan.no_method
@@ -628,8 +627,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         local _pp, _rr = try
             function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
         catch err
-            # located at the function whose signature this is, and why it is in the module
-            (err isa WasmCompileError || err isa WasmInternalError) && rethrow()
+            # located at the function whose signature this is, and why it is in the module; an
+            # interrupt or exhausted memory is the process's
+            (err isa WasmCompileError || err isa WasmInternalError || err isa InterruptException ||
+             err isa OutOfMemoryError) && rethrow()
             throw(WasmInternalError(name, 0, "",
                 String["declaring the wasm signature of $(name)($(join(("::" * string(T) for T in arg_types), ", "))) -> $(return_type)",
                        "enrolled as " * plan.enrolled_as[fd_mi]],
@@ -680,8 +681,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                               Type[T2 for (j, T2) in enumerate(_ats) if !(j in _gas)], _mi.def))
         end
         for _T in _cv_types
-            # a tuple of candidates (the numbered classes and the type objects the program holds)
-            # for which Julia's dispatch over two rows' methods is ambiguous is a call Julia
+            # a tuple of candidates (the one class set's classes and type objects,
+            # closed_world_classes) for which Julia's dispatch over two rows' methods is ambiguous is a call Julia
             # rejects: no row order answers it, so the callable rejects (formal(dev/formal/
             # Enrollment.tla): RejectOnlyWhenAmbiguous; an ambiguity no candidate reaches is no
             # reason, AllTypesAmbig). An overlap WT does not enumerate rejects too, ambiguous or
@@ -693,7 +694,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                 (_ma !== _mb && wt_methods_ambiguous(_ma, _mb)) || continue
                 local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
                 _ov === Union{} && continue
-                local _amb = ambiguous_class_tuple(type_registry, _T, _ov, plan.held_type_objects)
+                local _amb = ambiguous_class_tuple(_T, _ov, plan.classes)
                 _amb === false && continue
                 throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                     "a dynamic call of $(_T) reaches $(_ma) and $(_mb), which are ambiguous" *

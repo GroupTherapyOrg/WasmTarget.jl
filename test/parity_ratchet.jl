@@ -1205,19 +1205,28 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
-    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and edge discovery share one unconditional fixpoint with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure: the loop only adds, so no collected body is ever dropped (the superseded trim, `unreachable=true` with its `prune_roots`, `pruned_superseded` and `intrinsic_body_roots`, was deleted in batch 111 and may not return), and every compile! output, the first and each later round's, is cut by the declared imports before it merges (an import's native body never enters the plan); every edge of the closed world — an :invoke, a call a builtin hides (invoke_in_world, a runtime-Vararg splat) and each edge Julia's collectinvokes! follows besides :invoke (a finalizer, a :cfunction, 1.13's :new of a Function, an :invoke_modify) — is ONE edge relation, _closed_world_edge, that the collector enrolls its target by, the external-leaf cut keeps it by and the plan names its reason by, resolved in the overlay table (never the native `which`). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and edge discovery share one unconditional fixpoint with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure: the loop only adds, so no collected body is ever dropped (the superseded trim, `unreachable=true` with its `prune_roots`, `pruned_superseded` and `intrinsic_body_roots`, was deleted in batch 111 and may not return), and every compile! output, the first and each later round's, is cut by the declared imports before it merges (an import's native body never enters the plan); every edge of the closed world — an :invoke, a call a builtin hides (invoke_in_world, a runtime-Vararg splat) and each edge Julia's collectinvokes! follows besides :invoke (a finalizer, a :cfunction, 1.13's :new of a Function, an :invoke_modify) — is ONE edge relation, _closed_world_edge, that the collector enrolls its target by, the external-leaf cut keeps it by and the collector's walk records its reason by (the plan reads the world and writes none of it), resolved in the overlay table (never the native `which`); every root's reason is the one its enrollment recorded, the fma roots' included: collect_new_pairs! takes no reason (no default) and raises a WasmInternalError for a root with none; plan_closed_world reads the world and writes none of it, which test/diagnostic_attribution.jl's \"planning writes nothing into the collected world\" pins over a program with a closure, a dynamic call and an edge (dev/AUDIT.md A2C4, A2C5). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String) *
+                        read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
             forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
                          "try CC.specialize_method", "try collect(methods", "which(f, ats)",
                          "unreachable=true", "unreachable::Bool", "pruned_superseded",
                          "superseded_invokes", "prune_roots", "intrinsic_body_roots",
-                         "_builtin_call_edge_mi"]
+                         "_builtin_call_edge_mi",
+                         # every reason is recorded by the collection (no default), the plan writes none
+                         "why::String=", "get(enrolled_by, root_mi, why)", "enrolled_as[edge[2]] =",
+                         "_closed_world_edge(n, src, slot_types, arg_type, edge_interp)"]
             required = ["while true",
                         "local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)",
                         "local edge = _closed_world_edge(s.node, pair[2], pair_slot_types, arg_type, interp)",
-                        "local edge = _closed_world_edge(n, src, slot_types, arg_type, edge_interp)",
+                        "function collect_new_pairs!(mis)\n",
+                        # the plan reads the world, its behavior pinned (diagnostic_attribution.jl)
+                        "return plan_closed_world(world, entry_keys, entry_values, external_leaves)",
+                        "@testset \"planning writes nothing into the collected world\" begin",
+                        "@test world.enrolled_as == reasons",
+                        "local why = get(enrolled_by, root_mi, nothing)\n            why === nothing && throw(WasmInternalError(",
                         "CC.findall(sig, CC.method_table(get_wasm_interpreter()); limit)",
                         "if (mi = _apply_iterate_vararg_target_mi(node, slot_types)) !== nothing",
                         "elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing",
@@ -1232,7 +1241,9 @@ const LOCKS = [
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
             count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                count(p -> !occursin(p, all_src), required) +
+                # no code writes a reason into the plan's record (the world's), anywhere in src
+                count_sites(r"enrolled_as\[[^\]]*\]\s*=[^=]"; roots=[SRC])
         end),
     "L79_partial_new_requires_definite_initialization" => ("Wasm physical defaults for missing primitive fields are emitted only when a closed-world CFG must-analysis proves every field is written before read or escape",
         () -> begin
@@ -1692,8 +1703,8 @@ const LOCKS = [
                         "local target = get_function_by_mi(ctx.func_registry, rec.node.mi)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
-                        # the explicit-`%new` runtime class, now read off the boundary (Phase 12D)
-                        "node0 isa NirNew && node0.type_kind === :literal && observe_type!(node0.T)",
+                        # a `%new`'s class, as every concretely typed statement's (the one class set's statement rule)
+                        "(made isa DataType && isconcretetype(made)) && observe_type!(made)",
                         "entry.specTypes",
                         "target_type <: atypes[p]",
                         "ssig = Tuple{Core.Typeof(g), spec...}",
@@ -2356,10 +2367,10 @@ const LOCKS = [
             end
             n
         end),
-    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the walk of the constants past its bound (trimcollect.jl _held_bound_rejection), made while planning and located at the statement holding the constant with its source line and inline chain (audit #13 A13C7). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02)",
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the collection's rejection (trimcollect.jl _collection_rejection), made while collecting and located at a statement with its source line and inline chain, for the walk of the constants past its bound at the statement holding the constant (audit #13 A13C7) and for a dynamic call's candidate tuples past _CANDIDATE_BOUND at the first statement making it (A9C2). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02)",
         () -> begin
-            local allowed = [("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(:unsupported_type, _collection_host_text(ci),") =>
-                                 "the walk of the constants runs while planning, before codegen; the rejection is located at the statement holding the constant"]
+            local allowed = [("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(kind, _collection_host_text(ci), why,") =>
+                                 "the collection runs before codegen; its rejection is located at a statement (the constant's, or the dynamic call's)"]
             local n = count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
                                   exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])
             abs(n - length(allowed)) +
@@ -2598,24 +2609,30 @@ const LOCKS = [
             abs(throws - 1) + throw_refs + count(((text, needle),) -> !occursin(needle, text), required) +
                 (sort(callers) == ["emit_rethrow!", "emit_throw_value!"] ? 0 : 1)
         end),
-    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, at each caller that enrolls by it — the collector and the plan — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
+    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, the collector's one walk of the edges records each target's, collected already or not, and the plan reads it — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! and the first collection throw a failure through throw_located_collection_failure (an interrupt or exhausted memory, the process's, passing through it and through the re-inference; test/diagnostic_attribution.jl plants a failure in the first collection and an ArgumentError in a re-inference), which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
             trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node)",
-                        "(enrolled_as[edge[2]] = _enrollment_text(_EDGE_ENROLLMENT[edge[1]], eci, src, k, n))",
+            required = ["haskey(reasons, mi) || (reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node))",
                         "const _EDGE_ENROLLMENT = (invoke = \"the call\", splat = \"the call\", invoke_in_world = \"the call\",",
                         "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
                         "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
                         "reasons[cmi] = \"the body of the closure",
                         "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
-                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by)",
-                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,"]
+                        "throw_located_collection_failure(Tuple{Any,String}[(e, \"a compilation entry\") for e in entries],",
+                        "(err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()\n        throw_located_collection_failure(Tuple{Any,String}[",
+                        "(e isa InterruptException || e isa OutOfMemoryError) && rethrow()\n            throw(WasmInternalError(",
+                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures)",
+                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is
             # located too: at the module's entries, or at the function and why it is there
             required_comp = ["String[\"while planning the module (no statement was being compiled)\"],",
                              "\"enrolled as \" * plan.enrolled_as[fd_mi]]"]
-            count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp)
+            diag = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            required_diag = ["@testset \"diagnostics: a failure of the first collection names its entry\" begin",
+                             "@testset \"diagnostics: a collection failure passes the process's errors and locates an ArgumentError\" begin"]
+            count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp) +
+                count(p -> !occursin(p, diag), required_diag)
         end),
     "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) traces every function compiled from Julia IR — each reports its entry (emit_trace_enter!) and, for each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local), its value after the store (emit_statement_trace!), through imports added before any definition, recording each function's probed statements; test/trace_localize.jl runs each traced function's CodeInfo natively as an OpaqueClosure with the same probes, every traced call routed to its callee's closure with the callee value it was invoked with, each closure taking its function's own `#self#` as an explicit first argument (Argument(n) becomes Argument(n + 1)), so the native run follows WT's IR all the way down into every traced function, closures included, each call reading its own instance's captures (until batch 114 a closure that read its own captures stayed native, `_reads_self`, and its events were dropped), compares the two event streams on what both report, and names the first divergent event — its function, text, inline chain, iteration and both values — or, when every event agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration, in the entry, inside a separately compiled callee and inside a closure that reads its capture, and a closure built per iteration runs with each instance (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
         () -> begin
@@ -3481,6 +3498,64 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("    bound::Bool\n    constant::Bool\n    julia_type::Type\nend", nir) ? 0 : 1
             v += count(r"resolve_operand\(x, (types|Type\[\])\)::NirGlobalRef", nir) == 2 ? 0 : 1
             v += count(r"isdefined\(x\.mod, x\.name\)", nir) == 1 ? 0 : 1
+            v
+        end),
+    "L176_one_class_set" => ("the classes a value of the closed world may have are one set, computed by one function, closed_world_classes (trimcollect.jl), once per round of the collection's fixpoint over the world collected so far, the last round's carried by the ClosedWorld and the plan (`classes`), as dart's ClassInfoCollector numbers one class list whose allocated classes every selector's targets range over (class_info.dart:666, dispatch_table.dart:501): the enrollment (runtime_types and the candidates, class_candidates), the union-split MethodError tuples (_collect_reachable_ir_types over closed_world_class_list), the vtable pre-pass's ambiguity search (ambiguous_class_tuple over class_candidates, never the numbered classes) read it, and the numbering numbers every class of it (_collect_reachable_ir_types reg!s each); a constant's contents are walked once, by hold!, the class of every value reached observed whatever it is, its one bound a loud rejection past 10^6 own objects, and no second contents walk exists (contents!, whose silent stop at 4096 objects was A13C10, is gone); one statement rule observes the class of every statement whose inferred type is concrete (whatever makes it: a builtin, an intrinsic, a foreign call, an invoke of a declared import), one statement_operands rule says a callee is no evidence of a class (A4C4), and every value a statement carries is observed by the numbering's own rule of what a statement carries, _collected_operand_value (a literal, a quoted GlobalRef's binding, a bound global's value, constant or not, a statement that is a value), everything it holds walked by hold!. Its behavior: smoke's closure_ambiguity_numbered_unreached_class (a class a field's type numbers and no value has: asked about over the numbered classes it rejected a program Julia runs, native 3) and closure_union_nothing_erased (the constant `nothing` a statement passes, a value the candidate set missed: a trap where native answers 1) (dev/AUDIT.md A7C4, A3S3, A11C7; dev/formal/Enrollment.tla AskNumbered; dev/CHARTER.md C1)",
+        () -> begin
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local clo = read(joinpath(CODEGEN, "closures.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = 0
+            # one function computes the set, called once (the fixpoint's round)
+            v += abs(count_sites(r"\bclosed_world_classes\("; roots=[SRC], exclude_line=r"^function closed_world_classes\(|^\s*closed_world_classes\(codeinfos, entry_mis, nir_for\) ->") - 1)
+            v += count("runtime_types = Set{DataType}()", trim) == 1 ? 0 : 1
+            # its readers
+            for (src, needle) in ((trim, "local runtime_types = classes.runtime"),
+                                  (trim, "local observed_classes = class_candidates(classes)"),
+                                  (trim, "for (p, S, rt) in error_args, C in closed_world_class_list(classes)"),
+                                  (trim, "    for C in closed_world_class_list(classes)\n        C in LOWERING_INSTANTIATED_CLASSES || reg!(C)\n    end"),
+                                  (trim, "            local made = CC.widenconst(s0.julia_type)\n            (made isa DataType && isconcretetype(made)) && observe_type!(made)\n"),
+                                  (trim, "    holds_exceptions && foreach(observe_type!, LOWERING_INSTANTIATED_CLASSES)\n"),
+                                  (comp, "    for _exn_T in LOWERING_INSTANTIATED_CLASSES\n"),
+                                  (comp, "_reachable = _collect_reachable_ir_types(function_data, plan.bespoke, plan.classes)"),
+                                  (comp, "local _amb = ambiguous_class_tuple(_T, _ov, plan.classes)"),
+                                  (clo, "local candidates = class_candidates(classes)"),
+                                  (trim, "        local has, v = _collected_operand_value(node)\n        (has && !(v isa Expr)) || return\n        hold!(v)"),
+                                  (trim, "(node0 isa NirLiteral || node0 isa NirGlobalRef) && observe_runtime_operand!(node0)"),
+                                  (trim, "(node isa NirCall || node isa NirInvoke || node isa NirNew || node isa NirForeignCall) &&\n            return node.operands"),
+                                  (smoke, "(\"closure_ambiguity_numbered_unreached_class\""),
+                                  (smoke, "(\"closure_union_nothing_erased\""),
+                                  (read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String),
+                                   "@testset \"a constant's contents are classes of the one set\" begin"),
+                                  (read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String),
+                                   "@testset \"the classes lowering instantiates are in the one class set\" begin"),
+                                  (smoke, "(\"caught_methoderror_union_split\""),
+                                  (read(joinpath(ROOT, "test", "host_imports.jl"), String),
+                                   "@testset \"an import's result is a class of the one class set\" begin"),
+                                  (trim, "            observe_type!(typeof(v))\n            (isbits(v) || v isa Module) && continue"))
+                v += occursin(needle, src) ? 0 : 1
+            end
+            # no reader iterates another class source: not the numbered classes, not the numbering's own set
+            v += occursin("registry.type_ids", clo) ? 1 : 0
+            v += occursin("local classes = collect(out)", trim) ? 1 : 0
+            # one walk of what a constant holds (hold!): no second contents walk for the numbering
+            v += count_sites(r"\bcontents!\("; roots=[SRC])
+            v += occursin("held::Set{DataType},", trim * clo * comp) ? 1 : 0   # a reader handed another set
+            v += occursin("held::Set{DataType})", trim * clo * comp) ? 1 : 0
+            v
+        end),
+    "L177_one_match_rule" => ("one definition decides whether a match of Julia's is one signature, the MethodInstance a call at its types runs, _match_is_one_signature (trimcollect.jl): its intersection is one DataType and every static parameter it leaves a TypeVar is mentioned only where the argument is one value's dispatch type (a concrete class that is not a kind, or a Type{X}): a TypeVar left there Julia leaves at run time too (`h(x::Union{T,Nothing}) where T` at Nothing), one left at an abstract argument or a kind it fixes per value. The static signature's match, each candidate tuple's and each per-class candidate's (the dynamic call of a function) call it, and no other test of a match's spec_types or sparams exists in src. Its behavior: smoke's closure_type_parameter_at_kind (a match at the kind DataType facing Type{S} built a body whose static parameter rejected, native 8) and closure_union_nothing_erased (dev/AUDIT.md A9C6; dev/formal/Enrollment.tla NoTypeVarCheck; dev/CHARTER.md C1)",
+        () -> begin
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = abs(count_sites(r"spec_types isa"; roots=[SRC]) - 1)
+            v += abs(count_sites(r"sparams[^\n]*isa TypeVar|isa TypeVar[^\n]*sparams"; roots=[SRC]) - 1)
+            v += count("function _match_is_one_signature(m::Core.MethodMatch)::Bool", trim) == 1 ? 0 : 1
+            v += occursin("if _match_is_one_signature(mm)", trim) ? 0 : 1
+            v += occursin("(cm.method === mm.method && _match_is_one_signature(cm)) || continue", trim) ? 0 : 1
+            v += count("(ssig <: m.sig && _match_is_one_signature(selected)) || continue", trim) == 2 ? 0 : 1
+            v += occursin("(\"closure_type_parameter_at_kind\"", smoke) ? 0 : 1
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
