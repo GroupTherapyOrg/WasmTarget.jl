@@ -842,6 +842,103 @@ function nir_expr_operands(node::NirNode)::Vector{NirNode}
     return NirNode[]
 end
 
+"""
+A basic block of a body's CFG (nir_cfg): its first and last statement and its terminator.
+parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
+(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+dart2wasm lowers it statement by statement and has no CFG.)
+"""
+struct BasicBlock
+    start_idx::Int
+    end_idx::Int
+    terminator::Union{NirGotoIfNot, NirGoto, NirReturn, Nothing}   # nothing: falls through
+end
+
+"""
+    NirCFG
+
+A body's control-flow graph, Julia's own: its basic blocks (`blocks`), each block's successor and
+predecessor blocks (`succs`, `preds`; an Enter's catch destination among its successors, Julia's
+virtual entry predecessors left out) and the block of each statement (`block_of`). A block's
+successors list its fall-through first, then its jump or catch edge.
+parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
+(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+dart2wasm lowers it statement by statement and has no CFG.)
+"""
+struct NirCFG
+    blocks::Vector{BasicBlock}
+    succs::Vector{Vector{Int}}
+    preds::Vector{Vector{Int}}
+    block_of::Vector{Int}
+end
+
+"""
+    nir_cfg(nir) -> NirCFG
+
+The one CFG of a body, by Julia's own rule (Compiler basic_blocks_starts, ir.jl:46, and
+compute_basic_blocks, :93): a block starts at statement 1, after a goto, a goto-if-not, a return
+or a :leave, at an Enter and after it, at every jump target and catch destination, and at a phi
+one of whose edges is the statement before it; the last block ends at the last statement that is
+not `nothing` (ir.jl:84), so trailing `nothing` statements lie in no block (`block_of` 0). A goto's successor is its target's block; a
+goto-if-not's are the next block and its target's (one edge when they are the same block); an
+Enter's are the next block and its catch destination's; a return has none; any other block falls
+through. The stackifier, the proven-dead proof, the definite-initialization proof and the
+statement visitor's block test read it.
+parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
+(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+dart2wasm lowers it statement by statement and has no CFG.)
+"""
+function nir_cfg(nir::Vector{NirStmt})::NirCFG
+    local n = length(nir)
+    local starts = BitSet(1)
+    for (idx, rec) in enumerate(nir)
+        local s = rec.node
+        if s isa NirGotoIfNot
+            push!(starts, idx + 1); push!(starts, s.target)
+        elseif s isa NirReturn
+            idx < n && push!(starts, idx + 1)
+        elseif s isa NirGoto
+            idx < n && push!(starts, idx + 1); push!(starts, s.target)
+        elseif s isa NirEnter
+            push!(starts, idx); push!(starts, idx + 1)
+            s.catch_target != 0 && push!(starts, s.catch_target)
+        elseif s isa NirLeave
+            push!(starts, idx + 1)
+        end
+        s isa NirPhi && any(==(idx - 1), s.edges) && push!(starts, idx)
+    end
+    # and one more block start after the last statement that is not `nothing`
+    local last = findlast(rec -> !(rec.node isa NirLiteral && rec.node.value === nothing), nir)
+    last === nothing || push!(starts, last + 1)
+    local st = collect(starts)
+    local blocks = BasicBlock[]
+    local block_of = zeros(Int, n)
+    for k in 1:length(st) - 1
+        local a, z = st[k], st[k + 1] - 1
+        local t = nir[z].node
+        push!(blocks, BasicBlock(a, z, t isa Union{NirGotoIfNot, NirGoto, NirReturn} ? t : nothing))
+        block_of[a:z] .= k
+    end
+    local succs = [Int[] for _ in blocks]
+    local preds = [Int[] for _ in blocks]
+    local edge!(k, d) = (d in succs[k]) || (push!(succs[k], d); push!(preds[d], k))
+    for (k, bk) in enumerate(blocks)
+        local t = nir[bk.end_idx].node
+        t isa NirReturn && continue
+        if t isa NirGoto
+            edge!(k, block_of[t.target])
+            continue
+        end
+        k < length(blocks) && edge!(k, k + 1)
+        if t isa NirGotoIfNot
+            edge!(k, block_of[t.target])
+        elseif t isa NirEnter && t.catch_target != 0
+            edge!(k, block_of[t.catch_target])
+        end
+    end
+    return NirCFG(blocks, succs, preds, block_of)
+end
+
 """One NIR record printed in Julia's IR notation (`%3`, `_2`, `callee(args…)`, `goto #7 if
 not %5`, …) — what a located diagnostic shows as the statement codegen was compiling. A
 slot assignment prints as `_n = …`; an unclassified statement prints its source form.

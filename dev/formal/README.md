@@ -32,7 +32,7 @@ anchor in `src/` has a row.)
 
 | Component | Functions | Model |
 |---|---|---|
-| Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `emit_duplicated_terminal!` (stackified.jl) | Stackifier |
+| Stackifier | `generate_stackified_flow!`, `generate_stackified_flow`, `_thread_backward_trampolines!`, `cfg_dominators`, `emit_duplicated_terminal!` (stackified.jl), reading the one CFG (`nir_cfg`, its input) | Stackifier |
 | ClassId numbering | `assign_type_ids!` (types.jl) | ClassIdDispatch |
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
 | Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis` (every edge's reason recorded, ReasonsComplete), `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_called_function` (an invoke_in_world no one method covers is a dynamic site, WorldSites), `_prune_external_leaf_subgraphs`, `plan_closed_world` (reads the world, writes none of it) (trimcollect.jl) | ClosedWorld |
@@ -46,8 +46,8 @@ anchor in `src/` has a row.)
 | Box-derived value types | `f3_box_value_types` (box_capture.jl) | BoxValueTypes |
 | Numeric accumulator types | `propagate_numeric_value_types` (box_capture.jl) | NumericJoin |
 | Storage-relative pointers | `_storage_relative_pointer_is_closed`, `_trace_memmove_ptr` (statements.jl) | StoragePointer |
-| Dead-statement proof | `stmt_is_proven_unreachable`, `analyze_blocks` (generate.jl) | ProvenDead |
-| Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl) | DefiniteInit |
+| Dead-statement proof | `stmt_is_proven_unreachable` (generate.jl) over the one CFG, `nir_cfg` (nir.jl: Julia's compute_basic_blocks, an Enter's catch edge included) | ProvenDead |
+| Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl), its successors the one CFG's (`nir_cfg`) | DefiniteInit |
 | Native sidecar protocol | test/sidecar | Sidecar |
 | Captured-variable types | `record_capture_contents`, `capture_read_types` (box_capture.jl) | CaptureType |
 | External-leaf cut at every merge (ClosedWorld's ExternalLeaves, LeavesNeverCollected) | `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |
