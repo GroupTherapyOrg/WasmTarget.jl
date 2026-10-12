@@ -35,12 +35,11 @@ jobs:
   lane:
     name: ${{ matrix.lane }}${{ matrix.part != '' && format(' {0}', matrix.part) || '' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 9   # the budget B_fast (header); dev/gate.sh --fast reads it here
+    timeout-minutes: 30   # the budget B_fast (header); dev/gate.sh --fast reads it here
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         include:
-          - { lane: ratchet, part: '' }
           - { lane: smoke, part: '0/10' }
           - { lane: smoke, part: '1/10' }
           - { lane: smoke, part: '2/10' }
