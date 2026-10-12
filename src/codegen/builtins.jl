@@ -54,7 +54,7 @@ name Symbol. The NIR boundary already resolved a bound global to its object; a c
 IR embedded literally is unwrapped here. An unbound global (left a `GlobalRef` by the
 boundary) and a runtime value (an SSA use, an argument) are explicit non-matches.
 parity(intrinsics.dart:414 StaticIntrinsic.fromProcedure)"""
-_resolve_builtin_callee(func)::Any = nir_const(func)
+_resolve_builtin_callee(func)::Any = (func isa NirLiteral && p0!("U the builtin funnel unwraps " * p0_callee_kind(func) * (haskey(BUILTIN_LOWERINGS, func.value) ? " (a registered builtin)" : ""), p0_short(func.value)); nir_const(func))
 
 """THE funnel: resolve `func`'s callee identity once and, if it names a
 registered Core/Base builtin, run its lowering. Returns the handled
@@ -1924,6 +1924,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     local _ta_target = nir_const(args[2]) isa Type ? nir_const(args[2]) :
         (args[2] isa NirGlobalRef && args[2].bound && args[2].value isa Type) ? args[2].value : nothing
     if !(_ta_target isa Type)
+        p0!("T typeassert target unknown")
         record_unsupported!(ctx, :unsupported_method,
             "typeassert(x, T) with a T known only at run time"; idx=idx)
         unreachable!(fb)
@@ -1932,17 +1933,23 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     end
     local _ta_static = value_type(ctx, args[1])
     if _ta_static isa Type && _ta_static <: _ta_target
+        p0!("T typeassert static pass")
         emit_value!(fb, args[1], ctx, isconcretetype(_ta_static) && isconcretetype(_ta_target) ?
                     get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry) :
                     static_wasm_type(args[1], ctx))
         return append_builder!(b, fb)
     end
     if _ta_static isa DataType && isconcretetype(_ta_static)
+        p0!("T typeassert static throw")
         _emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))
         return append_builder!(b, fb)
     end
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
+    p0!("T typeassert runtime", p0lbl(ctx) * " %$(idx)")
+    p0set!("T runtime (target, static type, register)", "T=$(_ta_target) | S=$(_ta_static) | w=$(_ta_ty)")
+    p0set!("T runtime (target)", "T=$(_ta_target)")
+    p0set!("T runtime (target, register)", "T=$(_ta_target) | w=$(_ta_ty)")
     local _ta_tmp = allocate_local!(ctx, _ta_ty)
     local_tee!(fb, UInt32(_ta_tmp))
     _compile_call_isa(args, fb, ctx)                  # the one isa test: i32

@@ -476,6 +476,8 @@ unwrapped here, and only when it is callable.
 parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): Kernel's call node carries
 its resolved target; this reads back the target `resolve_call_callee` resolved once."""
 function _nir_callee_object(@nospecialize(callee))::Any
+    callee isa NirLiteral && p0!("U _nir_callee_object unwraps " * p0_callee_kind(callee), p0_short(callee.value))
+    (callee isa Function && !(callee isa Core.Builtin) && !Base.issingletontype(typeof(callee))) && p0!("U _nir_callee_object returns a raw capture-holding function", p0_short(callee))
     callee isa NirLiteral && return (callee.value isa Function ? callee.value : nothing)
     (callee isa NirNode || callee isa GlobalRef || callee === nothing) && return nothing
     return callee
@@ -647,11 +649,13 @@ function _nir_classify(stmt, i::Int, code_info, types::Vector{Type},
         args = stmt.args
         if head === :call && !isempty(args)
             callee = _resolve_nircall_callee(args[1], code_info, types, slot_types)
+            p0!("B call " * p0_arm(args[1], code_info, slot_types) * " -> " * p0_callee_kind(callee))
             cargs = NirNode[resolve_operand(a, types) for a in @view args[2:end]]
             return NirCall(callee, cargs)
         elseif head === :invoke && !isempty(args)
             mi_or_ci = args[1]
             callee = length(args) >= 2 ? resolve_call_callee(args[2], types) : nothing
+            p0!("B invoke " * (length(args) >= 2 ? p0_arm(args[2], code_info, slot_types) : "none") * " -> " * p0_callee_kind(callee))
             cargs = length(args) >= 3 ? NirNode[resolve_operand(a, types) for a in @view args[3:end]] : NirNode[]
             return NirInvoke(resolve_invoke_mi(mi_or_ci), resolve_invoke_method(mi_or_ci),
                              mi_or_ci isa Core.CodeInstance ? mi_or_ci : nothing,

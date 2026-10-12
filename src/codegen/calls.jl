@@ -2817,6 +2817,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     args = node.operands
     # the callee Julia reached through a binding (every name-keyed call below)
     named = !(func isa NirNode)
+    local _p0k = p0_callee_kind(func)
+    p0!("C call " * _p0k, p0_plain(_p0k) ? "" : p0lbl(ctx) * " %$(idx) " * p0_short(func))
+    func isa NirLiteral && func.value isa Core.IntrinsicFunction && p0set!("C call NirLiteral intrinsics", string(nameof(func.value)))
 
     # THE identity-keyed Core/Base builtin funnel (builtins.jl), consulted ONCE
     # on the ONE resolved callee — dart resolves a call's target a single time
@@ -2832,6 +2835,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # self-capture skip, `:signal` skip) on the exact callee identity that
     # satisfied them.
     let _bl = _try_builtin_lowering!(b, fb, ctx, node, idx, args, func)
+        p0_plain(_p0k) || p0!("C call " * _p0k * (_bl === nothing ? " past the funnel" : " handled by the funnel"), p0lbl(ctx) * " %$(idx) " * p0_short(func))
         _bl === nothing || return _bl
     end
 
@@ -2887,6 +2891,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # was created at the erasure seam; entry[arity] → call_ref (dart: fieldIndexFor-
     # Signature + call_ref). Devirtualizable callees (concrete/small-union types)
     # never reach here — the existing paths outrank.
+    func isa NirLiteral && p0!("C call NirLiteral reaches the dynamic-closure test (not a runtime value) " * _p0k, p0lbl(ctx) * " %$(idx) " * p0_short(func))
     if is_runtime_ir_value(func)
         local _dfc_t = value_type(ctx, func)
         if is_callable_julia_type(_dfc_t) &&
@@ -3335,6 +3340,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # registry route below reuse this SAME local instead of re-deriving it a second time
     # (R19: a data test against `_it_name`, never a fresh `is_func` probe).
     local _it_name = nir_const(func) isa Core.IntrinsicFunction ? nameof(nir_const(func)) : nothing
+    func isa NirLiteral && func.value isa Core.IntrinsicFunction && p0!("C call NirLiteral intrinsic reaches _it_name", p0lbl(ctx) * " %$(idx) " * p0_short(func.value))
 
     for arg in args
         if _skip_arg_prepush
@@ -4011,6 +4017,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # The callee by identity (functions.dart:25): an unbound global names nothing, and a
         # call of it rejects below, where Julia throws UndefVarError.
         called_func = func isa GlobalRef ? nothing : func
+        p0_plain(_p0k) || p0!("C call named-registry arm " * _p0k, p0lbl(ctx) * " %$(idx) " * p0_short(func))
 
         if called_func !== nothing
             # Infer argument types BEFORE pushing (need for type checking)
@@ -4310,6 +4317,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         @debug "Stubbing unsupported call: $func (will trap at runtime) (in func_$(ctx.func_idx))"
         # Clear pre-pushed args before UNREACHABLE
         local _urb = _ctx_builder(ctx, "compile_call")
+        p0!("C call unknown-call rejection " * _p0k, p0lbl(ctx) * " %$(idx) " * p0_short(func))
         record_unsupported!(ctx, :unsupported_method, "unknown function call (no handler arm)";
                             idx=idx, detail=node)
         unreachable!(_urb)  # structural trap after recorded unsupported

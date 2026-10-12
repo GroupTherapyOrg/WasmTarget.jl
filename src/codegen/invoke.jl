@@ -45,6 +45,8 @@ parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvoc
 function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     fb = _ctx_builder(ctx, "compile_invoke.frag")
     args = node.operands
+    local _p0k = p0_callee_kind(node.callee)
+    p0!("C invoke " * _p0k, p0_plain(_p0k) ? "" : p0lbl(ctx) * " %$(idx) " * p0_short(node.callee))
 
     # Early skip check — before compiling arguments.
     # Skipped statements emit nothing (NOP). This prevents argument values
@@ -197,6 +199,9 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             singleton === nothing || (callee_value = singleton)
         end
         closure_self_to_push = callee_value isa NirNode ? callee_value : NirLiteral(callee_value)
+        p0!("I invoke self: " * (named !== nothing ? (node.callee isa NirNode ? "named through an SSA alias of a global" : "the boundary's object") :
+             (node.callee isa NirArgument && callee_value isa NirNode ? "an argument value" :
+              node.callee isa NirArgument ? "the MethodInstance's singleton" : node.callee isa NirLiteral ? "a literal" : "a node")) * " -> " * p0_callee_kind(closure_self_to_push), p0lbl(ctx) * " %$(idx) " * p0_short(node.callee))
     end
 
     # 453393ca4ba4: closure callee — the compiled function takes the closure
