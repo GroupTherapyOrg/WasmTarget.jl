@@ -114,6 +114,6 @@ _f3_l0_mk_writer(n::Int64) = (x = n; w = () -> (x = x + 0.5; nothing); x += 1; (
     @test !any(s -> s.node isa WasmTarget.NirInvoke, nir)   # the creator calls neither closure
     bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_bodies=_f3_bodies_l0)
     @test length(bodies) == 2
-    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_bodies=_f3_bodies_l0,
-                                       rettype=WasmTarget.infer_return_type) === nothing
+    @test WasmTarget.box_contents_type(nir, nir, box_id; spectypes=WasmTarget.nir_slot_types(ci),
+                                       closure_bodies=_f3_bodies_l0, rettype=WasmTarget.infer_return_type) === nothing
 end

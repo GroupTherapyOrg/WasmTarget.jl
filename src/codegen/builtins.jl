@@ -2189,7 +2189,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             elseif mem_T.name.name === :GenericMemory && length(mem_T.parameters) >= 2
                 mem_T.parameters[2]
             else
-                Int32  # default
+                error("$(mem_T).instance: a Memory type without its element type")
             end
 
             # Get or create array type for this element type
@@ -2810,8 +2810,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 
                 field_idx = findfirst(==(field_sym), info.field_names)
                 if field_idx !== nothing
-                    # Check if field is Any type (maps to externref in Wasm)
-                    field_type = field_idx <= length(info.field_types) ? info.field_types[field_idx] : Any
+                    field_type = info.field_types[field_idx]   # one type per field name
 
                     # struct.set expects: [ref, value]
                     local _sfsb = _ctx_builder(ctx, "compile_call")
