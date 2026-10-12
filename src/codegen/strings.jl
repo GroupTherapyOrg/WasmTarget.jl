@@ -2,30 +2,17 @@
 # Performance Timer — jl_hrtime via performance.now()
 # ============================================================================
 
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-const _PERF_NOW_IDX = TaskLocalRef{Union{Nothing, UInt32}}(:_wt_perf_now_idx, nothing)
-
 """
-    ensure_perf_now_import!(mod) -> UInt32
+    ensure_perf_now_import!(mod, registry) -> UInt32
 
-Import env.perf_now() → f64 for high-resolution timing. Idempotent.
+Import env.perf_now() → f64 for high-resolution timing, once per module (the registry holds it).
 
 parity(quarantine: Julia's time_ns() is the jl_hrtime foreigncall into libuv's clock, which
 wasm does not have; the host clock import stands in for it.)
 """
-function ensure_perf_now_import!(mod::WasmModule)::UInt32
-    existing = _PERF_NOW_IDX[]
-    if existing !== nothing
-        return existing
-    end
-    idx = add_import!(mod, "env", "perf_now", WasmValType[], WasmValType[F64])
-    _PERF_NOW_IDX[] = idx
-    return idx
-end
-
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-function clear_perf_now!()::Nothing
-    _PERF_NOW_IDX[] = nothing
+function ensure_perf_now_import!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.perf_now_idx === nothing || return registry.perf_now_idx
+    return registry.perf_now_idx = add_import!(mod, "env", "perf_now", WasmValType[], WasmValType[F64])
 end
 
 # ============================================================================
@@ -33,57 +20,21 @@ end
 # ============================================================================
 
 """
-RNG state stored in 4 mutable i64 Wasm globals.
-Julia's rand() uses Xoshiro256++ with task-local state (rngState0..3).
-We store these in Wasm globals instead.
-
-parity(quarantine: Julia's rand() reads Xoshiro256++ state from the fields rngState0..3 of
-the Task that the jl_get_current_task foreigncall returns; the module has no Task object, so
-the four state words are module globals.)
-"""
-struct RNGGlobals
-    rng0_idx::UInt32  # global index for rngState0 (i64)
-    rng1_idx::UInt32  # global index for rngState1 (i64)
-    rng2_idx::UInt32  # global index for rngState2 (i64)
-    rng3_idx::UInt32  # global index for rngState3 (i64)
-    seed_import_idx::UInt32  # import index for env.random_i64
-end
-
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-const _RNG_GLOBALS = TaskLocalRef{Union{Nothing, RNGGlobals}}(:_wt_rng_globals, nothing)
-
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-function get_rng_globals()::Union{Nothing, RNGGlobals}
-    return _RNG_GLOBALS[]
-end
-
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-function set_rng_globals!(rng::RNGGlobals)::RNGGlobals
-    _RNG_GLOBALS[] = rng
-end
-
-# parity(quarantine: a process-wide side channel for one compilation's host-import state (dev/MARCH.md 13.7 makes it per-compilation); dart2wasm keeps such state on its Translator.)
-function clear_rng_globals!()::Nothing
-    _RNG_GLOBALS[] = nothing
-end
-
-"""
-    ensure_rng_globals!(mod) -> RNGGlobals
+    ensure_rng_globals!(mod, registry) -> RNGGlobals
 
 The four mutable i64 globals that hold the Task's Xoshiro256++ state words, and the host
-entropy import `env.random_i64` that seeds them (rng_seed_initializer!). Idempotent.
+entropy import `env.random_i64` that seeds them (rng_seed_initializer!), made once per module (the registry holds them).
 
 parity(sdk/lib/_internal/wasm/standalone/math_externs_patch.dart:54 _initialSeed): dart2wasm
 seeds its default Random from the embedder's random integer.
 """
-function ensure_rng_globals!(mod::WasmModule)::RNGGlobals
-    existing = get_rng_globals()
-    existing === nothing || return existing
+function ensure_rng_globals!(mod::WasmModule, registry::TypeRegistry)::RNGGlobals
+    registry.rng_globals === nothing || return registry.rng_globals
     seed_idx = add_import!(mod, "env", "random_i64", WasmValType[], WasmValType[I64])
     # const-expr init via the builder's ONE global-def channel (i64.const 0; end); the start
     # function stores the host's seed before any code reads them
     g = UInt32[add_global!(mod, I64, true, Int64(0)) for _ in 1:4]
-    return set_rng_globals!(RNGGlobals(g[1], g[2], g[3], g[4], seed_idx))
+    return registry.rng_globals = RNGGlobals(g[1], g[2], g[3], g[4], seed_idx)
 end
 
 """
@@ -108,15 +59,15 @@ function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
 end
 
 """
-    get_rng_global_idx(field_name::Symbol) -> Union{UInt32, Nothing}
+    get_rng_global_idx(registry, field_name::Symbol) -> Union{UInt32, Nothing}
 
 Map rngState field name to global index. Returns nothing if field is not an RNG field.
 
 parity(quarantine: redirects getfield(current_task(), :rngStateN) to the module global that
 holds that word, see RNGGlobals.)
 """
-function get_rng_global_idx(field_name::Symbol)::Union{UInt32, Nothing}
-    rng = get_rng_globals()
+function get_rng_global_idx(registry::TypeRegistry, field_name::Symbol)::Union{UInt32, Nothing}
+    rng = registry.rng_globals
     if rng === nothing
         return nothing
     end

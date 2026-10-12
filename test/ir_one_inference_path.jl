@@ -80,7 +80,7 @@ _wt_oip_unused(n::Int64) = (_wt_oip_side(n); n * 2)
         @test queries[] > 0
         calls[] = 0
         queries[] = 0
-        @test Base.invokelatest(WasmTarget._compile_closed_world_plan, plan) isa WasmTarget.WasmModule
+        @test Base.invokelatest(WasmTarget._compile_closed_world_plan, plan; options=WasmTarget.CompilerOptions(), diagnostics=nothing) isa WasmTarget.WasmModule
         @test calls[] == 0                                # the compile of the plan asks none
         @test queries[] == 0                              # and runs no inference of any entry
         # every planned body's joins are the plan's, keyed by MethodInstance
@@ -107,7 +107,7 @@ end
 _wt_oip_unused_s(n::Int64) = (_wt_oip_side_s("ab"); n * 2)
 @testset "an unused :invoke's type in its caller's context is its callee's registered return type" begin
     local plan = WasmTarget.trim_compile_plan(Any[(_wt_oip_unused_s, (Int64,), "unused")])
-    local mod, treg, freg, _ = WasmTarget._compile_closed_world_plan(plan; return_registries=true)
+    local mod, treg, freg, _ = WasmTarget._compile_closed_world_plan(plan; return_registries=true, options=WasmTarget.CompilerOptions(), diagnostics=nothing)
     local fn = only(fn for fn in plan.functions if fn[3] == "unused")
     local src, rt = WasmTarget.plan_ir(plan, fn[4])
     local body = WasmTarget.nir_body(src)
@@ -116,7 +116,7 @@ _wt_oip_unused_s(n::Int64) = (_wt_oip_side_s("ab"); n * 2)
     @test idx !== nothing
     local callee = body.stmts[idx].node.mi
     local ctx = WasmTarget.CompilationContext(body, fn[2], rt, mod, treg;
-                                              translator=WasmTarget.Translator(plan, nothing),
+                                              translator=WasmTarget.Translator(plan, nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing),
                                               func_registry=freg, mi=fn[4])
     @test ctx.ssa_types[idx] === WasmTarget.get_function_by_mi(freg, callee).return_type
     @test ctx.ssa_types[idx] === WasmTarget.plan_ir(plan, callee)[2] === Int64

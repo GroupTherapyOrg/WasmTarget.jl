@@ -1,0 +1,126 @@
+# seconds per smoke group on CI's runners, 1.12 then 1.13, for test/smoke.jl's dealing (a
+# fast-lane run's "smoke time:" lines, which dev/lanes.sh's smoke parts print; - = not measured)
+10.8	7.9	abstract_isa
+8.4	7.4	abstract_receivers
+4.5	1.2	any_return_boundary
+4.6	9.1	anyarray_boxing
+7.0	8.4	arrays
+2.3	2.3	as_checkers
+23.2	17.7	bit_exact_math
+25.2	19.2	builtins
+1.6	1.9	builtins_invoked
+2.0	1.8	byte_reinterpret
+1.7	2.0	capture_typed_invoke
+7.1	6.5	captured_variables
+6.5	5.0	class_test_any_order
+7.4	5.2	closed_world_edges
+4.3	3.3	closed_world_reflection
+3.1	3.2	closure_egal
+21.3	15.0	closure_values
+9.6	15.0	closures
+5.4	4.6	codeunits_values
+5.4	3.9	constant_callees
+3.4	2.2	constant_identity
+1.2	1.2	constant_memory_elements
+4.4	5.3	controlflow
+0.4	0.4	conversion_target
+4.3	7.0	conversions
+7.7	10.0	dicts
+16.9	21.9	dispatch
+10.5	9.2	dispatch_slot_registers
+58.9	57.7	dynamic_enrollment
+4.7	4.3	exception_stack
+1.0	1.1	exceptions
+8.9	6.7	filtered_fold
+2.6	2.2	float32_fastmath
+9.1	7.2	foreign_calls
+5.0	4.7	getfield_runtime_name
+4.1	4.6	heterogeneous_tuple_read
+14.9	13.9	higherorder
+23.1	24.5	identity
+6.3	3.0	immutable_objectid
+1.7	1.4	int128_extends
+3.2	2.6	int128_limbs
+3.1	2.2	intrinsics_int
+9.0	8.5	invoke_in_world
+6.0	1.9	isa_exact
+1.9	2.0	isomorphic_recursive_classes
+19.5	18.6	julia_bit_bodies
+83.5	75.4	julia_collection_bodies
+33.0	26.9	julia_print_bodies
+127.5	85.3	julia_string_bodies
+1.5	1.6	kind_isa
+1.5	1.4	long_constants
+5.1	2.6	loop_backward_branch
+17.7	24.1	memory
+0.4	0.4	memory_length
+14.9	11.6	memoryref_array_offset
+10.9	6.2	memoryref_erased
+4.4	3.4	memoryref_field
+4.9	4.6	memoryref_offset
+3.1	2.7	memoryref_pair
+4.4	4.8	memoryref_snapshot
+14.5	9.8	memoryref_storage
+33.1	34.6	method_error
+2.1	1.9	method_error_value
+3.9	2.8	mutable_capture
+4.1	3.2	narrow_widening
+0.8	0.7	narrowed_union_arithmetic
+2.2	2.0	nested_captor
+5.2	6.6	numerics
+7.2	7.4	one_consult
+12.0	8.7	one_type_reader
+50.5	44.0	overlays
+2.3	5.5	phi_union
+0.6	0.5	pointer_float_bytes
+5.8	6.7	recursive_types
+1.7	2.3	reduce_intrinsic_arity
+12.7	10.6	runtime_length_tuple
+11.3	21.7	seeded_random
+7.3	6.8	show_type
+3.1	3.3	simplevector_values
+4.2	3.1	sizeof_values
+2.0	2.7	storage_pointers
+12.5	6.3	string_identity
+5.4	1.9	strings_classed
+16.3	17.2	struct_by_structure
+4.7	5.4	structs_tuples
+17.7	17.8	symbol_class
+20.1	20.3	symbol_syntax
+7.1	4.7	tuple_runtime_types
+0.9	0.8	tuple_type_element
+5.7	4.7	type_isa
+20.0	15.0	type_object_kinds
+10.2	8.6	type_object_rows
+5.0	6.1	typeassert_checks
+11.1	13.1	union_fields
+16.0	19.2	union_nothing
+1.4	1.2	union_register
+10.4	11.9	unionall_constructor
+3.5	3.6	varargs
+5.4	3.1	vector_growth_offsets
+3.5	2.9	xfail abstract_tuple_values
+0.5	0.4	xfail apply_type_union
+5.4	3.9	xfail box_type_recovery
+6.2	6.0	xfail builtin_crashes
+1.5	1.8	xfail captured_mixed_step
+2.4	2.9	xfail closed_world_edge_rejects
+5.2	6.5	xfail dispatch_slot_float16
+1.6	1.9	xfail dynamic_constructor
+1.9	1.9	xfail dynamic_eq_erased
+0.8	1.1	xfail dynamic_single_class
+11.1	8.1	xfail erased_arithmetic
+3.9	2.8	xfail erased_operand_arithmetic
+0.4	0.3	xfail functor_invoke
+0.7	0.8	xfail isa_runtime_type
+0.4	0.8	xfail memoryref_unbox
+3.0	2.5	xfail overlaid_callable_value
+1.1	0.8	xfail partial_new_handler_read
+1.4	1.2	xfail pointer_foreigncalls
+1.1	0.6	xfail reduce_intrinsic_kind
+3.2	2.6	xfail runtime_length_tuple_class
+5.8	4.3	xfail shared_bare_arrays
+1.1	1.0	xfail string_identity_gaps
+0.6	0.7	xfail type_isa_equality
+3.0	4.6	xfail union_nothing_containers
+0.3	0.4	xfail wide_primitive
