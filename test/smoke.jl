@@ -1579,6 +1579,39 @@ _g("typeassert_checks", Any[
     ("static_intersection_throws", (x::Int64) -> (try; t = _sm_ta_pair(x); (t::Tuple{Any,Any})[1]::Int64; catch e; _sm_ta_kind(e); end), Int64(-3)),
 ])
 @noinline _sm_ta_pair(x::Int64) = x > 0 ? (x, 2) : nothing
+# One as-checker per (target, operand type) (types.dart:763 generateAsChecker): the same check
+# from two statements and from two functions calls one function; its rejection or TypeError is
+# each caller's
+@noinline _sm_ac_int(x::Int64) = (r = _sm_ta_num(x); (r[]::Int64) + (r[]::Int64))
+@noinline _sm_ac_int2(x::Int64) = _sm_ta_num(x)[]::Int64
+_g("as_checkers", Any[
+    ("same_check_twice", (x::Int64) -> _sm_ac_int(x), Int64(-2)),
+    ("same_check_twice_throws", (x::Int64) -> (try; _sm_ac_int(x); catch e; _sm_ta_kind(e); end), Int64(3)),
+    ("same_check_two_functions", (x::Int64) -> _sm_ac_int(x) + _sm_ac_int2(x), Int64(-2)),
+    ("throws_in_second_caller", (x::Int64) -> (try; _sm_ac_int(-x) + _sm_ac_int2(x); catch e; _sm_ta_kind(e); end), Int64(3)),
+])
+# A call's constant callee, one representation (A4C5): an intrinsic the IR embeds as the object
+# (have_fma in expm1, ctlz_int in _growend!), a type object an :invoke embeds (Dict's
+# constructor), a function a specialized argument names (a singleton-typed parameter), and a
+# constant callee holding captures, whose self the :invoke passes (a closure's; a callable
+# struct's is xfail functor_invoke)
+struct _SmCC; a::Int64; end
+@noinline (c::_SmCC)(x::Int64) = x + c.a
+const _SM_CCI = _SmCC(5)
+const _SM_CLO = let a = 3; @noinline (x::Int64) -> x * a; end
+@noinline _sm_apply(f, x) = f(x)
+_g("constant_callees", Any[
+    ("embedded_intrinsic_fma", (x::Float64) -> expm1(x), 0.5),
+    ("embedded_intrinsic_ctlz", (x::Int64) -> (v = String[]; for i in 1:x; push!(v, "a"); end; length(v)), Int64(5)),
+    ("embedded_type_object", (x::Int64) -> (d = Dict{Int64,Int64}(); d[x] = 2; d[x] + length(d)), Int64(3)),
+    ("singleton_argument", (x::Int64) -> _sm_apply(abs, x), Int64(-4)),
+    ("closure_constant", (x::Int64) -> _SM_CLO(x) + 1, Int64(4)),
+])
+# a callable struct's :invoke: the closed world holds no function for the functor's
+# MethodInstance, a located rejection (dev/MARCH.md 13.10)
+_xf("functor_invoke", Any[
+    ("functor_constant", (x::Int64) -> _SM_CCI(x), Int64(4)),
+])
 # A SimpleVector is dart's immutable array of its elements, a wasm type of its own; a
 # Memory{Any} is a mutable one, so a value of either is told apart (Core.svec as the IR embeds
 # it is the builtin it names)

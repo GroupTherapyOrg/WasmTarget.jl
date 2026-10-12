@@ -178,8 +178,7 @@ function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand::N
         node isa NirSSA && 1 <= node.id <= length(ctx.nir) && ctx.nir[node.id].slot == 0 || return false
         def = ctx.nir[node.id].node
         def isa NirForeignCall && return def.c_symbol === :jl_object_id
-        def isa NirInvoke && def.mi isa Core.MethodInstance &&
-            return _invoke_callee_object(def.mi) === Base.objectid
+        def isa NirInvoke && return _nir_callee_object(def.callee) === Base.objectid
         def isa NirCall && def.callee === Core.Intrinsics.bitcast && length(def.operands) == 2 || return false
         node = def.operands[2]
     end

@@ -136,3 +136,31 @@ end
     @test !isempty(enters)
     @test !any(e -> WasmTarget.stmt_is_proven_unreachable(WasmTarget.nir_cfg(body), e.catch_target), enters)
 end
+
+# A call's constant callee has one representation, its object (L182): an intrinsic the IR embeds
+# as the object, a type object an :invoke embeds, a function a singleton-typed argument names; a
+# constant holding captures carries its self; a NirLiteral callee is refused at construction
+@noinline _nui_apply(f, x) = f(x)
+@noinline _nui_neg(x::Int64) = -x
+struct _NuiP; a::Int64; @noinline _NuiP(a::Int64) = new(a + 1); end
+_nui_mkp(x::Int64) = _NuiP(x)
+const _NUI_CLO = let a = 3; @noinline (x::Int64) -> x * a; end
+_nui_clo(x::Int64) = _NUI_CLO(x)
+@testset "a call's constant callee has one representation" begin
+    callees(f, argtypes) = [rec.node for rec in WasmTarget.nir_body(first(WasmTarget.get_typed_ir(f, argtypes))).stmts
+                            if rec.node isa Union{WasmTarget.NirCall,WasmTarget.NirInvoke}]
+    all_callees = Any[]
+    for (f, argtypes) in ((expm1, (Float64,)), (Dict{Int64,Int64}, ()), (_nui_apply, (typeof(_nui_neg), Int64)), (_nui_clo, (Int64,)))
+        append!(all_callees, callees(f, argtypes))
+    end
+    @test !any(n -> n.callee isa WasmTarget.NirLiteral, all_callees)
+    @test any(n -> n.callee === Core.Intrinsics.have_fma, callees(expm1, (Float64,)))
+    @test any(n -> n isa WasmTarget.NirInvoke && n.callee === _nui_neg, callees(_nui_apply, (typeof(_nui_neg), Int64)))
+    clo = [n for n in callees(_nui_clo, (Int64,)) if n isa WasmTarget.NirInvoke && n.callee === _NUI_CLO]
+    @test length(clo) == 1 && clo[1].self isa WasmTarget.NirLiteral && clo[1].self.value === _NUI_CLO
+    @test all(n -> n.self === nothing, callees(expm1, (Float64,)))
+    # a type object (a constructor's callee) carries no self
+    ctor = [n for n in callees(_nui_mkp, (Int64,)) if n isa WasmTarget.NirInvoke && n.callee === _NuiP]
+    @test length(ctor) == 1 && ctor[1].self === nothing
+    @test_throws ArgumentError WasmTarget.NirCall(WasmTarget.NirLiteral(Core.Intrinsics.add_int), WasmTarget.NirNode[])
+end
