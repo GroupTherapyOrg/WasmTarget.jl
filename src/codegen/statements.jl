@@ -448,56 +448,6 @@ function compile_statement!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationC
     end
 end
 
-"""
-    _erased_vararg_tuple_operand(ctx, rec) -> Union{Nothing, Tuple{Type, Type}}
-
-The first operand of statement `rec` that is a runtime-length tuple (`Tuple{Vararg{E}}`, its
-static type in Julia's IR) and that the statement puts in a slot of another type, with that
-slot's type: a return, a phi, an invoked callee's parameter, a dynamic call's argument, a
-Memory element, a field (setfield!, %new). A runtime-length tuple has an NTuple{n,E} class
-chosen by its length at run time; WT's representation carries Tuple{Vararg{E}}, so it never
-leaves slots typed by it.
-parity(quarantine: Julia's runtime-length tuple is typed by its length at run time; a dart
-record's shape is static.)
-"""
-function _erased_vararg_tuple_operand(ctx::AbstractCompilationContext, rec::NirStmt)::Union{Nothing, Tuple{Type, Type}}
-    local node = rec.node
-    local vt(v) = v isa NirNode ? value_type(ctx, v) : nothing
-    local isvt(T) = T isa DataType && is_runtime_vararg_tuple_type(T)
-    local check(v, slot) = (T = vt(v); (isvt(T) && !(slot isa DataType && is_runtime_vararg_tuple_type(slot))) ? (T, slot) : nothing)
-    local first_hit(pairs) = (for (v, slot) in pairs; h = check(v, slot); h === nothing || return h; end; nothing)
-    if node isa NirReturn
-        return node.value === nothing ? nothing : check(node.value, ctx.return_type)
-    elseif node isa NirPhi
-        return first_hit((v, rec.julia_type) for v in node.values if v !== nothing)
-    elseif node isa NirNew
-        return first_hit(zip(node.operands, node.field_types))
-    elseif node isa NirInvoke
-        local sig = node.mi === nothing ? nothing : node.mi.specTypes
-        sig isa DataType || return first_hit((v, Any) for v in node.operands)
-        local ps = sig.parameters
-        # a parameter at or after a Vararg tail is the tail's element type (Base.unwrapva)
-        local slot(i) = (k = min(i + 1, length(ps));
-                         k < i + 1 && !(k >= 1 && ps[k] isa Core.TypeofVararg) ? Any : Base.unwrapva(ps[k]))
-        return first_hit((v, slot(i)) for (i, v) in enumerate(node.operands))
-    elseif node isa NirCall
-        local f = node.callee
-        if f === Core.memoryrefset! && length(node.operands) >= 2
-            local R = vt(node.operands[1])
-            return check(node.operands[2], (R isa DataType && R <: Core.GenericMemoryRef) ? eltype(R) : Any)
-        elseif (f === Core.setfield! || f === Base.setfield!) && length(node.operands) >= 3
-            local O, name = vt(node.operands[1]), nir_const(node.operands[2])
-            local has = O isa DataType && isconcretetype(O) &&
-                        (name isa Symbol ? hasfield(O, name) : (name isa Int && 1 <= name <= fieldcount(O)))
-            local slot = has ? fieldtype(O, name) : Any
-            return check(node.operands[3], slot)
-        elseif f isa NirNode || (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction))
-            # a call Julia's inference did not resolve: its arguments are erased
-            return first_hit((v, Any) for v in node.operands)
-        end
-    end
-    return nothing
-end
 # parity(pkg/dart2wasm/lib/code_generator.dart:717 Statement.accept)
 function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder
     rec = ctx.nir[idx]     # THE statement's node — the visitor never re-reads the raw IR
@@ -534,18 +484,6 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         unreachable!(b)   # structural trap (dead-block continuation; keeps stack polymorphic)
         return b
     end
-    # a runtime-length tuple widened, by this statement, to a slot Julia's IR types otherwise:
-    # its header class is Tuple{Vararg{E}}, no value's type, so where any class may be a class
-    # read would answer for it
-    local erased = _erased_vararg_tuple_operand(ctx, rec)
-    if erased !== nothing
-        emit_unsupported_stub!(ctx, b, :unsupported_type,
-            "a runtime-length tuple ($(erased[1])) stored where a $(erased[2]) is held: its class is " *
-            "NTuple{n,$(vararg_tuple_eltype(erased[1]))} for the n it has at run time, which its representation does not carry";
-            idx=idx)
-        return b
-    end
-
     # Unoptimized IR (may_optimize=false) assigns into a slot: the boundary already
     # separated the SlotNumber from the RHS, so `node` IS the value-producing operation.
     _slot_assign_id = rec.slot   # SlotNumber.id if this is a slot assignment, 0 otherwise
@@ -1231,19 +1169,8 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             end
 
             if _cn_field_is_anyref
-                # Field is anyref — concrete/struct refs are subtypes of anyref.
-                # No extern.convert_any needed. Numerics need boxing.
-                val_julia_type = value_type(ctx, val)
-                val_wasm_type = julia_to_wasm_type(val_julia_type)
-                if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
-                    emit_numeric_to_anyref!(b, val, val_wasm_type, ctx)
-                else
-                    emit_value!(b, val, ctx, AnyRef;
-                                from_julia=(val_julia_type isa Type && isconcretetype(val_julia_type)) ? val_julia_type : nothing)
-                    if val_wasm_type === ExternRef
-                        any_convert_extern!(b)
-                    end
-                end
+                # the one conversion: a numeric boxed under its classId, a ref upcast
+                emit_value!(b, val, ctx, AnyRef)
             else
                 # Legacy ExternRef path — THE wrap chokepoint: emit typed, coerce to externref
                 # through the ONE funnel (numeric → classId box → extern_convert_any; GC ref →
@@ -1263,10 +1190,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             (struct_type_def isa StructType && wasm_field <= length(struct_type_def.fields)) ||
                 error("registered struct field $i has no physical Wasm type")
             expected = struct_type_def.fields[wasm_field].valtype
-            julia_field = struct_type isa DataType && i <= fieldcount(struct_type) ?
-                fieldtype(struct_type, i) : nothing
-            emit_value!(b, val, ctx, expected;
-                        from_julia=(julia_field isa Type ? julia_field : nothing))
+            emit_value!(b, val, ctx, expected)   # typed by the value's own type, never the field's
         end
     end
 
@@ -2352,7 +2276,7 @@ function _fc_jl_type_unionall!(b::InstrBuilder, node::NirForeignCall, idx::Int, 
     # a body that is neither a type nor a TypeVar (a TypeVar is a $JlType)
     local_get!(b, t); ref_test!(b, Int64(jt), false); num!(b, Opcode.I32_EQZ)
     if_!(b)
-    _emit_typeerror_throw!(b, node.operands[2], Type, idx, ctx; func=:UnionAll)
+    _emit_typeerror_throw!(b, ctx, Type, (bb, w) -> emit_value!(bb, node.operands[2], ctx, w); func=:UnionAll)
     end_block!(b)
     done = block!(b; results=WasmValType[AnyRef])
     # `T where T<:S` is S

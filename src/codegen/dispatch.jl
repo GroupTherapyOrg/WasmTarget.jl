@@ -411,16 +411,10 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # Push ref.null none as the anyref return value.
                     ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
                 elseif entry_wasm_type in (I32, I64, F32, F64)
-                    # Box numeric result into a WasmGC struct: (struct (field classId:i32) (field val:T))
-                    box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
-                    # Stack has the numeric value; save it, push the return type's REAL classId (was a
-                    # hardcoded 0 = non-discriminable — an isa/typeof on this result would wrongly fail),
-                    # reload, struct.new {classId, value}. (dispatch carries mod+registry, not ctx, so it
-                    # cannot share emit_classid_box!'s ctx-allocated scratch local — same shape inline.)
-                    local_set!(b, UInt32(Int(dt.arity)))  # the box scratch, the first local
-                    i32_const!(b, Int64(ensure_type_id!(type_registry, entry.return_type)))
-                    local_get!(b, UInt32(Int(dt.arity)))
-                    struct_new!(b, box_idx)   # mod-resolved fields
+                    # the numeric result boxed under the return type's classId by the one box
+                    # producer, through the wrapper's first local
+                    emit_classid_box!(b, mod, type_registry, UInt32(Int(dt.arity)), entry_wasm_type,
+                                      entry.return_type)
                 end
             elseif dt.result_wasm_type ∉ (I32, I64, F32, F64, AnyRef) &&
                    entry.return_type !== Nothing && entry.return_type !== Union{}
