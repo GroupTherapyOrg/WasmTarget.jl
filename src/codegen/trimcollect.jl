@@ -1960,6 +1960,25 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             push!(candidate_mis, mi)
         end
     end
+    let names = Dict{String,Vector{Any}}(), oldb = 0, newb = 0
+        for (f0, a0, nm0, mi0) in functions
+            local sig = if haskey(entry_keys, mi0)
+                nm0
+            else
+                local io = IOBuffer()
+                mi0.def isa Method ? Base.StackTraces.show_spec_sig(IOContext(io, :color => false), mi0.def, mi0.specTypes) : print(io, mi0)
+                String(take!(io))
+            end
+            push!(get!(() -> Any[], names, sig), mi0)
+            oldb += ncodeunits(nm0); newb += ncodeunits(sig)
+        end
+        p0add("S name bytes, the planner's names", oldb); p0add("S name bytes, the signatures", newb)
+        p0!("S plans")
+        p0add("S functions named", length(functions))
+        for (sig, ms) in names
+            length(ms) > 1 && (p0!("S two MethodInstances print alike", sig * " :: " * join(string.(ms), " | ")); p0set!("S colliding signatures", sig))
+        end
+    end
     # (f, arg_types) names the function Julia's dispatch selects for those types: where two
     # collected methods share them, the other one is reached only by its `invoke`
     # (FunctionInfo.invoke_only) and never by a call that names (f, arg_types).
