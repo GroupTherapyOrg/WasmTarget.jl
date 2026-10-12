@@ -1319,7 +1319,7 @@ const LOCKS = [
                          "wasm_type === I32 ? Int32", "emit_classid_box!(b, ctx, src_type, nothing)",
                          "emit_classid_box!(_xcb, ctx, ret_wasm, nothing)"]
             required = ["julia_type::Type", "isconcretetype(julia_type)",
-                        "emit_type_id!(b, ctx.type_registry, julia_type)",
+                        "emit_type_id!(b, registry, julia_type)",
                         "There is no width-based fallback"]
             count(p -> occursin(p, all_codegen), forbidden) +
             count(p -> !occursin(p, values_src), required)
@@ -1620,9 +1620,9 @@ const LOCKS = [
                         read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
             required = ["function _emit_typeerror_throw!", "func::Symbol=:typeassert",
-                        "NirNode[NirLiteral(func), NirLiteral(\"\"), NirLiteral(target), got]",
-                        "i == 4 ? value_type(ctx, got)",
-                        "_emit_typeerror_throw!(fb, args[1], _ta_target",
+                        "for (i, v) in enumerate((func, \"\", target))",
+                        "push_got!(b, field(4))",
+                        "_emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))",
                         "err.expected === String", "err.got isa Int64"]
             forbidden = ["null-payload throw", "union_bottom_throw_stub shape"]
             count(p -> !occursin(p, calls_src * test_src), required) +
@@ -2140,7 +2140,7 @@ const LOCKS = [
                 "StructType(fields, object)",
                 "struct_get!(tb, base_idx, UInt32(2))",
                 "struct_get!(b, base_idx, UInt32(3))",
-                "ensure_type_id!(registry, body_return_type)",
+                "emit_classid_box!(tb, mod, registry, scratch, body.results[1], body.return_type)",
             ]
             all_src = types_src * stmt_src * closure_src
             missing = count(p -> !occursin(p, all_src), required)
@@ -3544,6 +3544,55 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("if _match_is_one_signature(mm)", trim) ? 0 : 1
             v += occursin("(cm.method === mm.method && _match_is_one_signature(cm)) || continue", trim) ? 0 : 1
             v += occursin("(\"closure_type_parameter_at_kind\"", smoke) ? 0 : 1
+            v
+        end),
+    "L178_one_conversion" => ("a value meets a sink through one conversion, convert_type! (dart's convertType, translator.dart:1597), typed by the source value's own static type, never the sink's: the runtime-length tuple's widening check is the funnel's alone (no statement check beside it, no _erased_vararg_tuple_operand), and it and a closure context's erasure read the value's class through one rule, source_class (a concrete source type; an abstract one, as a sink's type a caller gave, names none and rejects); the heterogeneous tuple read converts each field through the funnel (no box, extern bridge or null of its own; a function's singleton, a classed object already, is held as it is, as before, A7S1's open representation), as does memoryrefset!'s element (no ladder of numeric boxes, closure wraps and extern bridges); no hand box: every numeric box is built or read by emit_classid_box!/emit_classid_unbox! (get_numeric_box_type! named only in values.jl's two, types.jl and compile.jl's pre-registration), and the numeric-to-anyref/externref helpers are gone; no caller passes a Memory's element type or a field's type as from_julia; `nothing` meeting a nullable single representation is its null in the funnel. Behavior: test/diagnostic_attribution.jl's 'the one widening check rejects a source type that names no class' testset (the representation into anyref with from_julia Any, a union, its own type or none: each a located rejection), smoke runtime_length_tuple_class's into_any_field and erased_isa_ntuple reject loud (the second, through a Memory{Any} store, answered wrong with the statement check off before memoryrefset! converted through the funnel), runtime_length_tuple's into_union_field answers native's 1, and heterogeneous_tuple_read's five fields read as native (dev/AUDIT.md A7E4, A6E4, A11E7; dev/formal/Coercion.tla NoUnclassedWidening, NothingIsNull; dev/CHARTER.md C1)",
+        () -> begin
+            local vals = read(joinpath(CODEGEN, "values.jl"), String)
+            local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = count_sites(r"_erased_vararg_tuple_operand")
+            v += abs(count_sites(r"source_class\(from_julia\) === nothing") - 2)
+            v += occursin("source_class(@nospecialize(from_julia))::Union{DataType, Nothing} =", vals) ? 0 : 1
+            v += count_sites(r"emit_numeric_to_anyref!|emit_numeric_to_externref!")
+            v += count("coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=T)", blt) == 1 ? 0 : 1
+            v += count_sites(r"emit_classid_box!\(_hetb|any_convert_extern!\(_hetb|ref_null!\(_hetb|maybe_wrap_closure!\(_msb|any_convert_extern!\(_msb|extern_convert_any!\(_msb")
+            v += occursin("coerce_stack_top!(_msb, wasm_elem_type, ctx; from_julia=mset_val_T)", blt) ? 0 : 1
+            v += count_sites(r"get_numeric_box_type!\("; exclude_files=["codegen/values.jl", "codegen/types.jl", "codegen/compile.jl"])
+            v += abs(count(r"get_numeric_box_type!\(", vals) - 2)
+            v += count_sites(r"from_julia=elem_type\b|from_julia=\(julia_field")
+            v += occursin("if from_julia === Nothing && to isa ConcreteRef && to.nullable &&", vals) ? 0 : 1
+            for c in ("(\"into_any_field\"", "(\"erased_isa_ntuple\"", "(\"into_union_field\"", "_g(\"heterogeneous_tuple_read\"")
+                v += occursin(c, smoke) ? 0 : 1
+            end
+            local diag = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            v += occursin("the one widening check rejects a source type that names no class", diag) &&
+                 occursin("for src in (Any, Union{Nothing,Tuple{Vararg{Int64}}}, Tuple{Vararg{Int64}}, nothing)", diag) ? 0 : 1
+            v
+        end),
+    "L179_one_type_test" => ("each type test has one lowering: one TypeError builder, _emit_typeerror_throw! (its three constant fields typed by their values, the value that failed pushed by its caller), which a typeassert's always-failing and runtime arms and the UnionAll constructor call, as dart's as-checker throws one TypeError (types.dart:763 generateAsChecker), and the only `register_struct_type!(…TypeError)` in codegen; one `Type{X}` element rule, type_element_kind (X's kind, as jl_f_tuple types the element), read by tuple_runtime_type, a tuple type's registration (_canonical_tuple_type), a MethodError's args tuple and a type-object argument's canonical signature (_canonical_type_object_arg); the type-object test partitions the bare arrays and the kinds over the value's static type, as every class read does (bare_array_partition), never over every class; and a phi edge's class test is the one class test, emit_isa_class_header! (types.dart:907 loadClassId), the box-layout test beside it deleted. Behavior: smoke tuple_type_element, kind_isa's kind_partition_static_type, union_nothing (the phi edges whose class flow.jl tests) and typeassert_checks answer as native, and test/real_bottom_exceptions.jl's TypeError fields (L57) (dev/AUDIT.md A4E5, A5E5, A5E8, A9E6; dev/CHARTER.md C1)",
+        () -> begin
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local flow = read(joinpath(CODEGEN, "flow.jl"), String)
+            local structs = read(joinpath(CODEGEN, "structs.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = abs(count_sites(r"register_struct_type!\([^)]*TypeError\)"; roots=[CODEGEN]) - 1)
+            v += abs(count_sites(r"_emit_typeerror_throw!\(") - 5)   # its definition, docstring and three callers
+            v += count("type_element_kind(@nospecialize(P))::Union{Nothing, Type} =", trim) == 1 ? 0 : 1
+            v += occursin("Any[something(type_element_kind(P), P) for P in T.parameters]", structs) ? 0 : 1
+            v += occursin("local K = type_element_kind(T)", trim) ? 0 : 1
+            v += occursin("Any[something(type_element_kind(C), C) for C in cs]", trim) ? 0 : 1
+            v += occursin("local runtime_class = type_element_kind(T)", trim) ? 0 : 1
+            v += count_sites(r"Type\.body\.name\) \? (typeof\(|P\.parameters\[1\])")
+            v += abs(count("check_type, val_jt)", calls) - 3)
+            v += occursin("bare_array_partition(ctx.mod, reg, nothing)", calls) ? 1 : 0
+            v += occursin("if K <: T && typeintersect(K, static_type) !== Union{}]", calls) ? 0 : 1
+            v += count_sites(r"emit_isa_classid!")
+            v += occursin("emit_isa_class_header!(b, ctx, phi_julia)", flow) ? 0 : 1
+            for c in ("_g(\"tuple_type_element\"", "(\"kind_partition_static_type\"", "_g(\"union_nothing\"", "_g(\"typeassert_checks\"")
+                v += occursin(c, smoke) ? 0 : 1
+            end
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",

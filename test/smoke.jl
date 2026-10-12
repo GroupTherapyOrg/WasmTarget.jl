@@ -1716,6 +1716,9 @@ _g("kind_isa", Any[
     ("type_of_type_isa_datatype", (x::Int64) -> (t = _sm_ki(x); t isa DataType ? 1 : 2), Int64(3)),
     ("unionall_isa_datatype", (x::Int64) -> (T = _sm_kv(x); T isa DataType ? 1 : 2), Int64(3)),
     ("unionall_isa_unionall", (x::Int64) -> (T = _sm_kv(x); T isa UnionAll ? 1 : 2), Int64(3)),
+    # a value whose static type admits one kind is tested for that kind only (dev/AUDIT.md
+    # A5E8: the partition was over every kind under the type tested)
+    ("kind_partition_static_type", (n::Int64) -> (v = n > 2 ? typeof(_sm_dh(n)[]) : (n > 1 ? :a : n); v isa Type ? 1 : 2), Int64(3)),
 ])
 # A runtime-length tuple (`Core.tuple(v...)`) is an NTuple{n,E} for its run-time n
 # (jl_f_tuple); its representation's header names Tuple{Vararg{E}}, which no value has, so
@@ -1725,6 +1728,9 @@ _g("kind_isa", Any[
 @noinline _sm_mk8(v::Vector{Int8}) = Core.tuple(v...)
 @noinline _sm_mkbool(v::Vector{Bool}) = Core.tuple(v...)
 struct _SmMT; m::Memory{Int64}; t::Tuple{Int64}; end
+struct _SmWA; x::Any; end
+@noinline _sm_wa(x) = _SmWA(x)
+struct _SmWU; x::Union{Nothing,Tuple{Vararg{Int64}}}; end
 _g("runtime_length_tuple", Any[
     ("isa_ntuple_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
     ("isa_ntuple_other_length", (n::Int64) -> _sm_mk([n, 2, 3]) isa NTuple{2,Int64} ? 1 : 2, Int64(3)),
@@ -1753,6 +1759,9 @@ _g("runtime_length_tuple", Any[
     ("erased_asserted_runtime_length", (n::Int64) -> (v = Any[(n,)]; t = v[1]::Tuple{Vararg{Int64}}; t[1]), Int64(3)),
     # a struct whose layout is the representation's widens to Any as any struct does
     ("same_layout_struct_erased", (n::Int64) -> (m = Memory{Int64}(undef, 1); m[1] = n; v = Any[_SmMT(m, (n,))]; (v[1]::_SmMT).t[1]), Int64(3)),
+    # held in a field typed by a union of Nothing and itself, read under that type
+    ("into_union_field", (n::Int64) -> (w = _SmWU(_sm_mk([n, 2])); w.x isa NTuple{2,Int64} ? 1 : 2), Int64(3)),
+    ("into_union_field_length", (n::Int64) -> (w = _SmWU(_sm_mk([n, 2])); x = w.x; x === nothing ? 0 : length(x)), Int64(3)),
 ])
 _xf("runtime_length_tuple_class", Any[
     ("typeof_ntuple", (n::Int64) -> typeof(_sm_mk([n, 2, 3])) === Tuple{Int64,Int64,Int64} ? 1 : 2, Int64(3)),
@@ -1760,6 +1769,34 @@ _xf("runtime_length_tuple_class", Any[
     ("erased_isa_ntuple", (n::Int64) -> Any[_sm_mk([n, 2, 3])][1] isa NTuple{3,Int64} ? 1 : 2, Int64(3)),
     # a failed typeassert's TypeError carries the value as `got`, a slot of any class (A6E2)
     ("typeassert_got", (n::Int64) -> (try; _sm_mk([n, 2, 3])::NTuple{2,Int64}; 0; catch e; e isa TypeError && e.got isa NTuple{3,Int64} ? 1 : 2; end), Int64(3)),
+    # into a field of any class through a constructor call: the one widening check, the
+    # funnel's, rejects it at the call (dev/AUDIT.md A7E4: the check trusted a sink's type)
+    ("into_any_field", (n::Int64) -> (w = _sm_wa(_sm_mk([n, 2])); w.x isa NTuple{2,Int64} ? 1 : 2), Int64(3)),
+])
+# A heterogeneous tuple read by a runtime index: each field converts to the union's
+# representation through the one conversion, a box, a string, a closure's object, and
+# `nothing` a nullable representation's null (dev/AUDIT.md A11E7: its own ladder)
+_g("heterogeneous_tuple_read", Any[
+    ("box", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n - 2]; v isa Int64 ? 1 : v isa Float64 ? 2 : 3), Int64(3)),
+    ("float", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n - 1]; v isa Int64 ? 1 : v isa Float64 ? 2 : 3), Int64(3)),
+    ("string", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n]; v isa String ? length(v) : 0), Int64(3)),
+    ("closure", (n::Int64) -> (k = n; t = (n, x -> x + k); v = t[n - 1]; v isa Int64 ? v : (v(1))::Int64), Int64(3)),
+    ("nothing", (n::Int64) -> (t = (n, nothing); v = t[n - 1]; v === nothing ? 1 : 2), Int64(3)),
+])
+# A constant Memory{Any}'s elements are typed by their own classes, never the Memory's element
+# type: a numeric is boxed under its classId (dev/AUDIT.md A12C6: a WasmInternalError where
+# native answers, the element converted as an `Any`)
+const _SM_CM = let m = Memory{Any}(undef, 3); m[1] = Int64; m[2] = 7; m[3] = 2.5; m; end
+_g("constant_memory_elements", Any[
+    ("numeric", (n::Int64) -> (x = _SM_CM[n - 2]; x isa Int64 ? x : 2), Int64(4)),
+    ("type_object", (n::Int64) -> (x = _SM_CM[n - 2]; x === Int64 ? 1 : 2), Int64(3)),
+    ("float", (n::Int64) -> (x = _SM_CM[n]; x isa Float64 ? x : 0.0), Int64(3)),
+])
+# A tuple with a type object element is typed by its kind, one rule (type_element_kind)
+# for the tuple's runtime type and its registration (dev/AUDIT.md A5E5)
+_g("tuple_type_element", Any[
+    ("typeof", (n::Int64) -> (t = (Int64, n); typeof(t) === Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
+    ("erased", (n::Int64) -> (v = Any[(Int64, n)]; v[1] isa Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
 ])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId

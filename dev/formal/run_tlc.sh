@@ -42,11 +42,12 @@ cfgs=(MC*.cfg)
 # of one list: the N shards together check every instance exactly once. The list deals the HEAVY
 # instances first, round-robin, then the rest in sorted order, so no shard holds two of the
 # slowest by the coincidence of their names. HEAVY is every instance measured over ~60 s on a CI
-# runner (formal.yml run 37900951923: 321, 145, 452, 77, 137, 76, 138 and 125 s, in this order),
-# ordered so that, with the rest's measured times, formal.yml's three shards (N = 3) come to
-# ~685 s each; any other N deals the same list the same way, its loads not tuned. A name here that
+# runner (formal.yml run 37900951923: 321, 145, 452, 77, 137, 138 and 125 s, in this order),
+# ordered so that, with the rest's measured times, formal.yml's three shards (N = 3) came to
+# ~685 s each in that run (the Coercion instances, ~600 s of it then, now each check in about a
+# second: every pair is an initial state); any other N deals the same list the same way, its loads not tuned. A name here that
 # is no instance fails every run, sharded or not. This is the one statement of the dealing.
-HEAVY="${TLC_HEAVY:-MCExceptionStackValueIdentityBroken.cfg MCOperandStackIf.cfg MCExceptionStackDeep.cfg MCClassIdDispatchCascade.cfg MCExceptionStack.cfg MCCoercionNullabilityBroken.cfg MCClassIdDispatchTotal.cfg MCExceptionStackPlain.cfg}"
+HEAVY="${TLC_HEAVY:-MCExceptionStackValueIdentityBroken.cfg MCOperandStackIf.cfg MCExceptionStackDeep.cfg MCClassIdDispatchCascade.cfg MCExceptionStack.cfg MCClassIdDispatchTotal.cfg MCExceptionStackPlain.cfg}"
 for h in $HEAVY; do
   [[ " ${cfgs[*]} " == *" $h "* ]] || { echo "TLC_HEAVY names $h, which is no instance" >&2; exit 1; }
 done

@@ -142,6 +142,30 @@ end
     @test length(ctx.diagnostics) == 1 && ctx.diagnostics[1].stmt_idx == 1
 end
 
+@testset "diagnostics: the one widening check rejects a source type that names no class (A7E4, Coercion.tla NoUnclassedWidening)" begin
+    # the runtime-length tuple's representation into a slot of any class: its class is told only
+    # by its source type, and a type that is no class (a sink's `Any`, a union, its own) rejects
+    ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
+    for src in (Any, Union{Nothing,Tuple{Vararg{Int64}}}, Tuple{Vararg{Int64}}, nothing)
+        ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
+                                            translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing), mi=nothing)
+        ctx.current_stmt_idx = 1
+        local info = WasmTarget.register_vararg_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Vararg{Int64}})
+        local from = WasmTarget.ConcreteRef(UInt32(info.wasm_type_idx), true)
+        b = WasmTarget._ctx_builder(ctx, "widening_negative")
+        WasmTarget.ref_null!(b, Int64(info.wasm_type_idx))
+        err = try
+            WasmTarget.convert_type!(b, from, WasmTarget.AnyRef, ctx; from_julia=src)
+            nothing
+        catch e
+            e
+        end
+        @test err isa WasmTarget.WasmCompileError
+        @test occursin("runtime-length tuple", sprint(showerror, err))
+        @test length(ctx.diagnostics) == 1 && ctx.diagnostics[1].stmt_idx == 1
+    end
+end
+
 @testset "diagnostics: the funnel rejects a cross-hierarchy ref pair and lands non-null abstract sinks (Coercion.tla)" begin
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin

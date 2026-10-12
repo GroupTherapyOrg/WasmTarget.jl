@@ -210,9 +210,8 @@ function _emit_phi_edge_guarded_unbox!(b::InstrBuilder, ctx::AbstractCompilation
     # the edge value, held for the class test and the unbox
     local val_local = allocate_local!(ctx, AnyRef)
     local_set!(b, val_local)
-    local box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, phi_local_type)
     local_get!(b, val_local)
-    emit_isa_classid!(b, ctx, box_idx, phi_julia)
+    emit_isa_class_header!(b, ctx, phi_julia)   # the one class test: its header's classId
     if_!(b; results=WasmValType[phi_local_type])
     local_get!(b, val_local)
     emit_classid_unbox!(b, ctx, phi_local_type)

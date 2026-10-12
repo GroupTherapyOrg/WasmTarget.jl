@@ -201,8 +201,11 @@ rejection, an upcast emits nothing, a value that may be a fixed tuple is built i
 runtime-length tuple and never cast to it, and only pairs the wasm type system cannot
 express are rejected (cross-hierarchy without the extern bridge; a numeric into an array/
 i31/func/exn sink; a numeric without a concrete Julia source type to stamp the box's
-classId), with the runtime-length tuple's two (widened to a slot of any class; a struct that
-is no NTuple of its element bound for it).
+classId), with the runtime-length tuple's two (widened to a slot of any class with no class
+stated; a struct that is no NTuple of its element bound for it). `from_julia` is the source
+value's own static type, never the sink's: the funnel reads the value's class from it
+(source_class) where the representation cannot tell it, and its check is the one widening
+check.
 
   * numeric→ref: BOX through `emit_classid_box!`, then this funnel again for the box ref.
   * ref→numeric: `any.convert_extern` if extern, then UNBOX through `emit_classid_unbox!`.
@@ -214,20 +217,31 @@ is no NTuple of its element bound for it).
     boundaries need (dart2wasm throws here; Julia widens).
 
 Returns `b`.
-formal(dev/formal/Coercion.tla): for every (from, to) pair the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); only inexpressible pairs reject
+formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; upcasts emit nothing; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at a nullable single representation is its null (NothingIsNull); only inexpressible pairs reject
 parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
+    # `nothing` meeting a nullable single representation (a Union{T,Nothing}'s box or struct) is
+    # its null, whichever position's form it arrives in (a field's i32 placeholder, a tuple
+    # field's singleton): never boxed, never cast
+    if from_julia === Nothing && to isa ConcreteRef && to.nullable &&
+       !(from isa ConcreteRef && wasm_subtype(from, to, _mod.types))
+        drop!(b)
+        ref_null!(b, Int64(to.type_idx))
+        return b
+    end
     # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
     # representation's header names Tuple{Vararg{E}}, a class no Julia value has: widened to a
-    # slot of any class, a class read would answer for that class, so it rejects here (the
-    # widenings Julia's IR shows reject at their statement, _erased_vararg_tuple_operand)
-    # (a known Julia source type decides: another struct may share the representation's layout)
+    # slot of any class, a class read would answer for that class, so it rejects here: the one
+    # widening check, which a sink meets only by converting through this funnel. Only the
+    # source's own class passes it (source_class: another struct may share the
+    # representation's layout); a source type that is no class (the runtime-length tuple's, a
+    # sink's abstract type) does not
     if from isa ConcreteRef && (to === AnyRef || to === EqRef || to === StructRef || to === ExternRef) &&
-       (from_julia === nothing || (from_julia isa DataType && is_runtime_vararg_tuple_type(from_julia)))
+       source_class(from_julia) === nothing
         local vt = vararg_tuple_of_struct(ctx.type_registry, from.type_idx)
         vt === nothing || return emit_unsupported_stub!(ctx, b, :unsupported_type,
             "a runtime-length tuple ($(vt)) held as a value of any class: its class is " *
@@ -376,6 +390,22 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
     end
     return b
 end
+
+"""
+    source_class(from_julia) -> Union{DataType, Nothing}
+
+The class a converted value has, read from its Julia source type where its representation
+cannot tell it (a struct type another class's layout shares, a closure's captured-fields
+context): the source type when it is concrete, else `nothing`. Every caller of the funnel passes
+the source value's own static type, never the sink's; an abstract one names no class, so the
+two checks that need a class (the runtime-length tuple's widening, a closure context's erasure)
+reject where it is not known.
+parity(quarantine: dart's every value carries its class in its header; WT's runtime-length tuple
+and closure context share their layouts with other classes, so their class comes from Julia's
+static type.)
+"""
+source_class(@nospecialize(from_julia))::Union{DataType, Nothing} =
+    (from_julia isa DataType && isconcretetype(from_julia)) ? from_julia : nothing
 
 """
     is_closure_context_ref(registry, to) -> Bool
@@ -533,16 +563,21 @@ source type where dart reads `boxedClasses[from]` (:1623).
 """
 function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
                            wasm_type::WasmValType, julia_type::Type)::UInt32
+    return emit_classid_box!(b, ctx.mod, ctx.type_registry, boxing_scratch_local!(ctx, wasm_type),
+                             wasm_type, julia_type)
+end
+# Core (mod, registry) method, the scratch local the caller's own: the dispatch wrappers, the
+# selector callers and the closure entries build their functions without a codegen context.
+# parity(translator.dart:1597 convertType): the boxing arm — save the value, the classId, the
+# value, struct.new (:1640-1644).
+function emit_classid_box!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                           scratch::Integer, wasm_type::WasmValType, julia_type::Type)::UInt32
     isconcretetype(julia_type) || error(
         "numeric boxing requires a concrete Julia source type, got $julia_type")
-    box_idx = get_numeric_box_type!(ctx.mod, ctx.type_registry, wasm_type)
-    sc = boxing_scratch_local!(ctx, wasm_type)
-    local_set!(b, sc)                       # save the value
-    emit_type_id!(b, ctx.type_registry, julia_type)
-    local_get!(b, sc)                       # reload the value (field 1)
-    # Declare the REAL stack effect ([classId:i32, value] → box ref) — an empty field list
-    # left the operands undeclared, so typed callers saw a phantom 3-value stack and the
-    # wrap templates mis-fired their multi-value guard (any_push_mixed_dyn → ref.null).
+    box_idx = get_numeric_box_type!(mod, registry, wasm_type)
+    local_set!(b, scratch)                  # save the value
+    emit_type_id!(b, registry, julia_type)
+    local_get!(b, scratch)                  # reload the value (field 1)
     struct_new!(b, box_idx)
     return box_idx
 end
@@ -664,34 +699,6 @@ function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, 
         num!(b, Opcode.I32_EQ)
         i > 1 && num!(b, Opcode.I32_OR)
     end
-    return b
-end
-
-"""
-    emit_isa_classid!(b, ctx, box_idx, check_type)
-
-Is the value a `box_idx` struct (a numeric box, the classed string layout, a MemoryRef box,
-a closure's context) AND is its classId (field 0) `check_type`'s? Guarded by `ref.test`, so
-another value answers 0 (no trap). Classes sharing one layout (Bool/Int8/Int16/Int32/Char in
-the i32 box; String and Symbol) are told by the classId read, not the layout. A class whose
-values carry the object header is tested through the header (emit_isa_class_header!).
-parity(pkg/dart2wasm/lib/types.dart:434 Types.emitIsTest)
-"""
-function emit_isa_classid!(b::InstrBuilder, ctx::AbstractCompilationContext,
-                           box_idx::Integer, check_type::Type)::InstrBuilder
-    tid = ensure_type_id!(ctx.type_registry, check_type)
-    tmp = allocate_local!(ctx, AnyRef)
-    local_tee!(b, tmp)
-    ref_test!(b, Int64(box_idx), false)
-    if_!(b; results=WasmValType[I32])
-    local_get!(b, tmp)
-    ref_cast!(b, Int64(box_idx), false)
-    struct_get!(b, UInt32(box_idx), UInt32(0))   # field 0 = classId
-    i32_const!(b, Int64(tid))
-    num!(b, Opcode.I32_EQ)
-    else_!(b)
-    i32_const!(b, 0)
-    end_block!(b)
     return b
 end
 
@@ -1754,7 +1761,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 evt isa WasmValType || record_unsupported!(ctx, :value_stub,
                     "Memory constant of type $T has no physical element type";
                     detail=val, soundness_fatal=true)
-                emit_value!(b, NirLiteral(mem[i]), ctx, evt; from_julia=elem_type)
+                emit_value!(b, NirLiteral(mem[i]), ctx, evt)   # typed by the element's own type
             end
             # `array.new_fixed 0` is the real non-null empty array representation.
             array_new_fixed!(b, array_type_idx, n_mem)

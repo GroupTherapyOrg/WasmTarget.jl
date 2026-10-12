@@ -5,7 +5,7 @@
 (*   (a) the DFS classId numbering with subtype ranges                       *)
 (*       formal(src/codegen/types.jl assign_type_ids!)   -- the ONE DFS      *)
 (*       formal(src/codegen/compile.jl _collect_reachable_ir_types)          *)
-(*       read by  values.jl:714 emit_isa_classid!  (concrete `isa`: id ==)   *)
+(*       read by  values.jl emit_isa_class_header! (concrete `isa`: id ==)   *)
 (*       and      calls.jl:1978-2006             (abstract `isa`: range)     *)
 (*       parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange)*)
 (*                                                                           *)

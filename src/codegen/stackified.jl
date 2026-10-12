@@ -7,54 +7,6 @@
 # the void-without-loops fast-path → generate_void_flow (whose missing pre-loop phi init was
 # The stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
 
-"""builder-native (THE implementation): value → classId box → externref.
-`nothing` values become ref.null extern (dart: null, not a boxed zero).
-parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)"""
-function emit_numeric_to_externref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
-    if is_nothing_value(val, ctx)
-        ref_null!(b, ExternRef)
-        return b
-    end
-    # The value's static Julia type (for the box's real classId).
-    local _jl_type = value_type(ctx, val)
-    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
-    # SINGLE-SOURCE producer with their REAL classId, so same-wasm-rep types stay distinguishable
-    # (dart2wasm uses NO i31). Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx, val_wasm;
-                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
-    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
-        "numeric-to-extern boxing lacks a concrete Julia source type: $_jl_type")
-    emit_classid_box!(b, ctx, val_wasm, _jl_type)
-    extern_convert_any!(b)
-    return b
-end
-
-"""
-    emit_numeric_to_anyref!(b, val, val_wasm, ctx)
-
-Like emit_numeric_to_externref! but produces anyref (no extern_convert_any) —
-builder-native (THE implementation): value → real-classId box (already anyref).
-`nothing` values become ref.null any (dart: null, not a boxed zero).
-parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
-"""
-function emit_numeric_to_anyref!(b::InstrBuilder, val, val_wasm::WasmValType, ctx::AbstractCompilationContext)::InstrBuilder
-    if is_nothing_value(val, ctx)
-        ref_null!(b, AnyRef)  # any heap type (0x6E)
-        return b
-    end
-    # The value's static Julia type (for the box's real classId).
-    local _jl_type = value_type(ctx, val)
-    # B4: ALL numerics (incl. Bool/Int8/UInt8 — formerly a ref.i31 fast path) box through the
-    # SINGLE-SOURCE producer with their REAL classId (dart2wasm uses NO i31). The box struct is
-    # already an anyref subtype. Concrete → real classId; Union/abstract → wasm-rep fallback.
-    emit_value!(b, val, ctx, val_wasm;
-                from_julia=(_jl_type isa Type && isconcretetype(_jl_type)) ? _jl_type : nothing)
-    (_jl_type isa Type && isconcretetype(_jl_type)) || error(
-        "numeric-to-anyref boxing lacks a concrete Julia source type: $_jl_type")
-    emit_classid_box!(b, ctx, val_wasm, _jl_type)
-    return b  # No extern_convert_any — struct ref is already anyref
-end
-
 """parity(code_generator.dart:38 CodeGenerator.generate): THE flow front — the ONE seam where a stackified region's bytes
 enter a typed builder. All drivers route here."""
 function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)::InstrBuilder
