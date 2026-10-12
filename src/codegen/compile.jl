@@ -561,6 +561,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             end
             export_name = string(name, "_", k)
             export_name_counts[name] = k + 1
+            p0!("N the planner suffixes a repeated name", "$(name) -> $(export_name)")
         end
         push!(given_names, export_name)
         push!(defined_names, export_name)
@@ -812,6 +813,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         for k in hook_exports_from:length(mod.exports)
             local e = mod.exports[k]
             (e.kind == 0x00 && e.idx >= num_imported_funcs(mod)) || continue
+            p0!("N a hook export retargeted to its entry", e.name)
             mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, type_registry, e.idx, e.name))
         end
     end
@@ -824,6 +826,15 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # the class reader of an escaped exception, over the final numbering, as the egal function's
     # body is filled once codegen has numbered every class
     ensure_class_id_reader!(mod, type_registry, translator)
+    p0!("I modules compiled")
+    existing_module === nothing || p0!("I modules compiled into a host module")
+    link_roots === nothing || p0!("I modules with a link_roots hook")
+    for imp in mod.imports
+        p0!("I imports " * imp.module_name * "." * imp.field_name * (_is_host_declared_import(imp) ? " (host-declared)" : ""))
+    end
+    for (m, f, _) in HOST_RUNTIME
+        any(imp -> imp.module_name == m && imp.field_name == f, mod.imports) || p0!("I a HOST_RUNTIME field the module does not import: " * m * "." * f)
+    end
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
@@ -949,6 +960,7 @@ function codegen_export_names(mod::WasmModule, names::Vector{String}, requested:
             "request another name, or leave the module's export out"))
     end
     local decided = union(taken, Set{String}(names))
+    for n in names; n in taken && p0!("N codegen_export_names renames a name the module exports", n); end
     return map(names) do n
         n in taken || return n
         local k = 2

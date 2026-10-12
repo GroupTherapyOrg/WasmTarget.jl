@@ -825,6 +825,7 @@ formal(dev/formal/ExceptionStack.tla): ImportCall and ImportReturn (ReturnRestor
 parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
 """
 function emit_direct_call!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, func_idx::Integer)::InstrBuilder
+    p0!("Q emit_direct_call!'s per-call import filter")
     local imports = filter(imp -> imp.kind == 0x00, mod.imports)
     local host = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1])
     host && call!(b, import_tops_save!(mod, registry))
