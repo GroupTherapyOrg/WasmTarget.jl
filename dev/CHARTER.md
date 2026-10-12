@@ -91,8 +91,19 @@ with the per-clause status. A clause is never closed by argument.
   the edit site (load-time typing, the enforcing builder, the locks) or by the minute-scale
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
-  missing wasm runtime. Checks: `L16` `L94` `L134` `L155` `R33` `R36`.
-  Planned: dev/MARCH.md 13.3, 13.14, 13.17 — the checks the audits found pinning text.
+  missing wasm runtime. Checks: `L16` `L94` `L134` `L155` `R33` `R36` `L190` (every body a
+  change's emission alters is entered by a passing differential case, at function entry, no
+  finer: the emission-diff check, in the fast lane and the full gate) `L191` (the numeric lowering
+  tables generate their cases, one per type each key serves, dirty narrow operands among the
+  inputs) `L192` (a scan of six forms, a parameter's default, a something/coalesce/get/get!
+  fallback, a function's answers (its early returns, its fall-through value and its tail branch's
+  arms), a value-position branch's arms (ternary or if/elseif/else), a branch and a short-circuit
+  under a nothing test: each site that chooses a type, a register, a width, an index or a sentinel is on
+  its exact allowlist or counted by R43; the guarantee against a wrong default is L190 and L191)
+  `R42` (the numeric types the generated cases hold out) `R43` (the wrong defaults L192's scan
+  finds).
+  Planned: dev/MARCH.md 13.1, 13.3, 13.4, 13.14, 13.17 — the checks the audits found pinning text,
+  the numeric types the generated cases hold out, and the wrong defaults.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`

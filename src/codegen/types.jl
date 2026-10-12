@@ -305,8 +305,7 @@ function resolve_union_type(T::Union)::WasmValType
     non_nothing = filter(t -> t !== Nothing, types)
 
     if isempty(non_nothing)
-        # Union of just Nothing - shouldn't happen but handle it
-        return I32
+        error("resolve_union_type($T): a union of Nothing alone is Nothing, never a Union")
     elseif length(non_nothing) == 1
         # Union{Nothing, T} -> T's reference form: a numeric T is held in its nullable box
         # struct (translator.dart:1141; the concrete box is get_concrete_wasm_type's answer).
@@ -1768,7 +1767,7 @@ Register a function in the registry.
 
 parity(functions.dart:90 FunctionCollector.getFunction): the callee's entry in _functions.
 """
-function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type=Any;
+function register_function!(registry::FunctionRegistry, name::String, func_ref, arg_types::Tuple, wasm_idx::UInt32, return_type::Type;
                             is_candidate::Bool=false, mi::Union{Nothing, Core.MethodInstance}=nothing,
                             invoke_only::Bool=false)::FunctionInfo
     # campaign diagnostics: WT_LOG_REGISTRY=1 logs every registration (name,
