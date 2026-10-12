@@ -214,8 +214,6 @@ module Opcode
     const STRUCT_NEW = 0x00       # struct.new $t : [field types] -> [(ref $t)]
     const STRUCT_NEW_DEFAULT = 0x01  # struct.new_default $t : [] -> [(ref $t)]
     const STRUCT_GET = 0x02       # struct.get $t $i : [(ref null $t)] -> [field type]
-    const STRUCT_GET_S = 0x03     # struct.get_s $t $i (packed signed)
-    const STRUCT_GET_U = 0x04     # struct.get_u $t $i (packed unsigned)
     const STRUCT_SET = 0x05       # struct.set $t $i : [(ref null $t) value] -> []
 
     # Array operations
@@ -309,6 +307,12 @@ struct WasmImport
     type_idx::UInt32  # For functions, the type index
     # parity(pkg/wasm_builder/lib/src/ir/function.dart:37 BaseFunction.functionName): an imported function's name
     function_name::String
+    function WasmImport(module_name::String, field_name::String, kind::UInt8, type_idx::UInt32,
+                        function_name::String)::WasmImport
+        (kind == 0x00 && isempty(function_name)) &&
+            throw(ArgumentError("WasmImport($(module_name).$(field_name); function_name=\"\"): a function is named where it is imported, and the name section drops an empty name"))
+        return new(module_name, field_name, kind, type_idx, function_name)
+    end
 end
 
 """
@@ -1142,18 +1146,19 @@ parity(pkg/wasm_builder/lib/src/ir/module.dart:98 Module.serialize)
 to_bytes(mod::WasmModule)::Vector{UInt8} = first(to_bytes_mapped(mod))
 
 """
-    to_bytes_with_source_map(mod) -> (bytes, source_map_json)
+    to_bytes_with_source_map(mod; class_names) -> (bytes, source_map_json)
 
 Serialize `mod` — which records source maps (`mod.source_map_url`) — with its
 `sourceMappingURL` section, and the Source Map v3 JSON of its functions' mappings at their
-module byte offsets.
+module byte offsets, naming `class_names` when given (source_map_json).
 parity(pkg/wasm_builder/lib/source_map.dart:94 SourceMapSerializer.serializeAsJson)
 """
-function to_bytes_with_source_map(mod::WasmModule)::Tuple{Vector{UInt8},String}
+function to_bytes_with_source_map(mod::WasmModule;
+                                  class_names::Union{Nothing,Vector{Union{Nothing,String}}}=nothing)::Tuple{Vector{UInt8},String}
     mod.source_map_url === nothing &&
         throw(ArgumentError("the module records no source maps (it has no source_map_url)"))
     local bytes, mappings = to_bytes_mapped(mod)
-    return bytes, source_map_json(mappings)
+    return bytes, source_map_json(mappings; class_names)
 end
 
 """
@@ -1439,7 +1444,8 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
     end
 
     # Name section (custom section): each function's own name, the one it was imported or
-    # defined with, in index order; a function with none ("") is not named. An export's name
+    # defined with, in index order; every function has one (WasmImport and WasmFunction refuse
+    # an empty name). An export's name
     # names no function (dart's NameSection reads `functions[i].functionName` only). Then each
     # global's name, imported or defined, in index order (subsection 7, `globals[i].globalName`)
     # parity(pkg/wasm_builder/lib/src/serialize/sections.dart:844 NameSection)
@@ -1447,7 +1453,7 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
     func_idx = UInt32(0)
     for imp in mod.imports
         imp.kind == 0x00 || continue  # a function import
-        isempty(imp.function_name) || push!(func_names, func_idx => imp.function_name)
+        push!(func_names, func_idx => imp.function_name)   # never empty (WasmImport refuses one)
         func_idx += 1
     end
     for f in mod.functions

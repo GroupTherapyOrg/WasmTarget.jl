@@ -20,10 +20,13 @@
 (* every throw does. Leaving a try body normally, and landing in a catch,  *)
 (* leave the stack as it is. The stack belongs to the task, so it outlives *)
 (* a call. The host is the catching frame of the call it makes: its JL_TRY *)
-(* records jl_excstack_state at the call's entry and its JL_CATCH ends in  *)
-(* jl_restore_excstack (julia.h:2548 and :2555, Julia 1.12.7). So a        *)
-(* top-level call starts with an empty stack whatever the previous call    *)
-(* did (J1). A re-entrant call (the host calls an export from inside a     *)
+(* records jl_excstack_state at the call's entry and its JL_CATCH runs     *)
+(* jl_restore_excstack after its catch block (julia.h:2548 and :2555,      *)
+(* Julia 1.12.7). So while the host's catch block runs, the escaped entry  *)
+(* is the top, and a call the host makes from inside it starts with that   *)
+(* stack (HostCallInCatch); once the block ends, a top-level call starts   *)
+(* with an empty stack whatever the previous call did (J1). A re-entrant   *)
+(* call (the host calls an export from inside a                            *)
 (* host import an open call made) starts with its caller's stack; if its   *)
 (* exception propagates through the import into the caller's catch, that   *)
 (* catch reads it, and if the host catches it, the stack is back to the    *)
@@ -97,8 +100,17 @@
 (* each a program of nested try, catch, rethrow and host-declared import   *)
 (* calls (bounded by MaxFrames and MaxSteps), every `the_exception` read   *)
 (* and every raised value is Julia's (Agrees, read in every state of the   *)
-(* run, so over every call), for every kind of escape. Outside it are two  *)
-(* rows of dev/MARCH.md 13.17. H8: Julia raises a StackOverflowError that  *)
+(* run, so over every call), for every kind of escape. Outside it are      *)
+(* three rows of dev/MARCH.md 13.17. A15E1 (HostCallInCatch), pinned as an *)
+(* instance that violates the claim: an export the host calls from inside  *)
+(* its catch block. Julia's stack still holds the escaped entry there;     *)
+(* WT's entry cannot, since wasm does not see where a JS catch block ends, *)
+(* so it starts as after the host's restore: `rethrow()` in it raises      *)
+(* Julia's ErrorException where Julia rethrows the escaped exception. WT's *)
+(* host contract states it (host_glue_js, host_runtime_js): an export the  *)
+(* host calls from inside its catch starts as after JL_CATCH's restore,    *)
+(* which is a call made after the catch block, inside the claim. H8: Julia *)
+(* raises a StackOverflowError that                                        *)
 (* a Julia catch catches, which WT's RangeError is not, so the model lets  *)
 (* stack exhaustion unwind every region on Julia's side too and does not   *)
 (* claim the catch. H11 (ReraiseShared), pinned as an instance that        *)
@@ -129,7 +141,7 @@
 (* "values"); a rethrow at                                                 *)
 (* depth 0 that throws the top (RethrowChecksDepth = FALSE); a push at the *)
 (* catch's landing instead of at the throw (PushAtLanding). ReraiseShared  *)
-(* pins H11 above.                                                         *)
+(* pins H11 above, HostCallInCatch A15E1.                                  *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Two exception values. A cell's stack slot is *)
 (* left out, and a cell is its exn alone: the claim is about exception     *)
@@ -160,8 +172,10 @@
 (*                                                                         *)
 (* formal(src/codegen/generate.jl emit_export_entry!, emit_direct_call!,   *)
 (* host_glue_js; the one-time export in src/codegen/compile.jl): every     *)
-(* escape leaves the stack as Julia's host leaves it, except dev/MARCH.md  *)
-(* 13.17 H11 (pinned by MCExceptionStackReraiseSharedBroken); H8 is        *)
+(* escape leaves the stack as Julia's host leaves it once the host's catch *)
+(* block ends, except dev/MARCH.md 13.17 H11 (pinned by                    *)
+(* MCExceptionStackReraiseSharedBroken); a call from inside that block is  *)
+(* 13.17 A15E1 (pinned by MCExceptionStackHostCallInCatchBroken); H8 is    *)
 (* outside the model.                                                      *)
 (*                                                                         *)
 (* parity(quarantine: Julia's per-task exception stack outlives a call;    *)
@@ -193,7 +207,9 @@ CONSTANTS Vals, MaxFrames, MaxSteps, MaxCalls,
           ImportExhausts,     \* a host-declared import may overflow the JS stack
           ExhaustReentrant,   \* a re-entrant call's wasm code may exhaust the stack
           ReraiseShared,      \* the host may re-raise an escape whose cell its caller's stack holds
-          HostCallsGlued      \* the host may call a glued import outside every call of the module
+          HostCallsGlued,     \* the host may call a glued import outside every call of the module
+          HostCallInCatch     \* the host may call an export from inside its catch block, where
+                              \* Julia's stack still holds the escaped entry
 
 Nothing == "nothing"
 ErrR == "errR"   \* ErrorException("rethrow() not allowed outside a catch block")
@@ -211,9 +227,12 @@ VARIABLES frames,   \* the open try, catch and import frames of every open call,
           slots,    \* WT's `$import_tops`: slots[i + 1] is index i, the top (and, Impl =
                     \* "values", `$current_exn`) at a call made with the count at i
           cur,      \* Impl = "values": the one `$current_exn`
+          hcatches, \* the host's open catch blocks, innermost last: the call level it runs at (0:
+                    \* the top level; k: inside the import frame of call k) and the depth its
+                    \* JL_CATCH restores when the block ends (HostCallInCatch only)
           obsS, obsI,  \* the last observation, Julia's and WT's
           steps
-vars == <<frames, calls, pending, spec, cells, top, cnt, slots, cur, obsS, obsI, steps>>
+vars == <<frames, calls, pending, spec, cells, top, cnt, slots, cur, hcatches, obsS, obsI, steps>>
 
 \* a host call: Julia's depth at its entry (the host's jl_excstack_state), and the frames below
 \* it (its caller's, ending in the caller's import frame)
@@ -233,11 +252,12 @@ ImportFrame == [kind |-> "import", depth |-> 0, ptr |-> 0, val |-> Nothing, held
 TypeOK == /\ frames \in Seq(Frame) /\ calls \in Seq(Call) /\ pending \in Pending
           /\ spec \in Seq(AllVals) /\ cells \in Seq([exn : AllVals])
           /\ top \in Nat /\ cnt \in Nat /\ slots \in Seq(Slot) /\ cur \in AllVals
-          /\ steps \in Nat
+          /\ hcatches \in Seq([level : Nat, depth : Nat]) /\ steps \in Nat
 
 \* the run begins at the top level, with no call open
 Init == /\ frames = <<>> /\ calls = <<>> /\ pending = None
         /\ spec = <<>> /\ cells = <<>> /\ top = 0 /\ cnt = 0 /\ slots = <<>> /\ cur = Nothing
+        /\ hcatches = <<>>
         /\ obsS = <<"start">> /\ obsI = <<"start">> /\ steps = 0
 
 JuliaTop == IF spec = <<>> THEN Nothing ELSE spec[Len(spec)]
@@ -253,6 +273,10 @@ Running == /\ InCall /\ pending.kind = "none"
 \* the innermost call is inside a host-declared import, with no call of the host's open
 ImportOpen == /\ InCall /\ pending.kind = "none"
               /\ Len(frames) > Base /\ Last.kind = "import"
+
+\* no catch block of the host is open at the innermost call's level: the host's code there (the
+\* import's) cannot return, throw or re-raise from the middle of its catch block
+NoOpenCatchHere == IF hcatches = <<>> THEN TRUE ELSE hcatches[Len(hcatches)].level # Len(calls)
 
 \* `$import_tops` index i, read (TLC refuses an index never stored: the code's array.get traps)
 SlotAt(i) == slots[i + 1]
@@ -271,7 +295,7 @@ Unwind(kind, sv, iv, pc, fr, spec2, c2, t2, n2) ==
     LET k == IF kind = "tag" THEN HandlerIn(fr) ELSE 0 IN
     IF k # 0 THEN
         /\ obsS' = <<"land", sv>> /\ obsI' = <<"land", iv>>
-        /\ calls' = calls /\ pending' = None /\ spec' = spec2 /\ cnt' = n2
+        /\ calls' = calls /\ pending' = None /\ spec' = spec2 /\ cnt' = n2 /\ hcatches' = hcatches
         /\ frames' = [j \in 1..k |-> IF j = k THEN [fr[k] EXCEPT !.kind = "catch"] ELSE fr[j]]
         /\ IF Impl = "values"
            THEN /\ cur' = iv /\ cells' = c2 /\ top' = t2
@@ -289,8 +313,13 @@ Unwind(kind, sv, iv, pc, fr, spec2, c2, t2, n2) ==
         /\ calls' = SubSeq(calls, 1, Len(calls) - 1)
         /\ cells' = c2 /\ top' = t2 /\ cur' = cur /\ cnt' = n2
         /\ IF Len(calls) = 1
-           THEN spec' = SubSeq(spec2, 1, c.depth) /\ pending' = None
-           ELSE spec' = spec2
+           THEN /\ pending' = None
+                \* the host catches it: its JL_CATCH restores the call's entry depth after its
+                \* catch block (HostCallInCatch: the block stays open, HostCatchEnd ends it)
+                /\ IF HostCallInCatch
+                   THEN spec' = spec2 /\ hcatches' = Append(hcatches, [level |-> 0, depth |-> c.depth])
+                   ELSE spec' = SubSeq(spec2, 1, c.depth) /\ hcatches' = hcatches
+           ELSE spec' = spec2 /\ hcatches' = hcatches
                 /\ pending' = [kind |-> kind, sv |-> sv, iv |-> iv, pc |-> pc, depth |-> c.depth,
                                shared |-> kind = "tag" /\ pc # 0 /\ pc <= c.ncells]
 
@@ -312,7 +341,7 @@ HostCall ==
                     ELSE kept
        IN top' = entry.ptr /\ cur' = entry.val
     /\ calls' = Append(calls, [depth |-> Len(spec), base |-> Len(frames), ncells |-> Len(cells)])
-    /\ UNCHANGED <<frames, pending, spec, cells, cnt, slots>>
+    /\ UNCHANGED <<frames, pending, spec, cells, cnt, slots, hcatches>>
     /\ obsS' = <<"call">> /\ obsI' = <<"call">>
 
 \* HostCallsGlued: the host calls a glued import itself, outside every call of the module (as a
@@ -323,19 +352,19 @@ HostCall ==
 \* out once, to the instantiation that reads it, so the host never holds a glued import.
 HostGluedCall == /\ HostCallsGlued /\ calls = <<>> /\ pending.kind = "none" /\ cnt < Len(slots)
                  /\ cnt' = cnt + 1
-                 /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur>>
+                 /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur, hcatches>>
                  /\ obsS' = <<"glued">> /\ obsI' = <<"glued">>
 
 HostGluedReturn == /\ HostCallsGlued /\ calls = <<>> /\ pending.kind = "none" /\ cnt > 0
                    /\ cnt' = cnt - 1
-                   /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur>>
+                   /\ UNCHANGED <<frames, calls, pending, spec, cells, top, slots, cur, hcatches>>
                    /\ obsS' = <<"glued return">> /\ obsI' = <<"glued return">>
 
 \* The call returns normally once every region it entered is closed; the results leave on the
 \* stack and the entry touches nothing.
 Return == /\ Running /\ Len(frames) = Base
           /\ calls' = SubSeq(calls, 1, Len(calls) - 1)
-          /\ UNCHANGED <<frames, pending, spec, cells, top, cnt, slots, cur>>
+          /\ UNCHANGED <<frames, pending, spec, cells, top, cnt, slots, cur, hcatches>>
           /\ obsS' = <<"return">> /\ obsI' = <<"return">>
 
 \* A call of a host-declared import: the call site stores the top at index count, growing the
@@ -345,16 +374,16 @@ ImportCall == /\ Running /\ HasImport /\ Len(frames) < MaxFrames
               /\ slots' = IF cnt < Len(slots)
                           THEN [slots EXCEPT ![cnt + 1] = [ptr |-> top, val |-> cur]]
                           ELSE Append(slots, [ptr |-> top, val |-> cur])
-              /\ UNCHANGED <<calls, pending, spec, cells, top, cur>>
+              /\ UNCHANGED <<calls, pending, spec, cells, top, cur, hcatches>>
               /\ obsS' = <<"import">> /\ obsI' = <<"import">>
 
 \* Its normal return: the glue's finally lowers the count to its value at the call, and the call
 \* site (ReturnRestores) sets the top from that index.
-ImportReturn == /\ ImportOpen
+ImportReturn == /\ ImportOpen /\ NoOpenCatchHere
                 /\ frames' = SubSeq(frames, 1, Len(frames) - 1) /\ cnt' = cnt - 1
                 /\ top' = IF ReturnRestores THEN SlotAt(cnt - 1).ptr ELSE top
                 /\ cur' = IF ReturnRestores THEN SlotAt(cnt - 1).val ELSE cur
-                /\ UNCHANGED <<calls, pending, spec, cells, slots>>
+                /\ UNCHANGED <<calls, pending, spec, cells, slots, hcatches>>
                 /\ obsS' = <<"import return">> /\ obsI' = <<"import return">>
 
 \* The count as an escape leaves an import's frame: the glue's finally lowers it, whatever the
@@ -364,7 +393,7 @@ GlueCnt == IF GlueFinally THEN cnt - 1 ELSE cnt
 \* The import throws into its caller: a JS exception (ImportThrows), or the RangeError of
 \* a JS stack it overflowed (ImportExhausts).
 ImportThrow(kind) ==
-    /\ ImportOpen
+    /\ ImportOpen /\ NoOpenCatchHere
     /\ \/ kind = "foreign" /\ ImportThrows
        \/ kind = "exhaust" /\ ImportExhausts
     /\ UNCHANGED slots
@@ -376,13 +405,17 @@ ImportThrow(kind) ==
 \* corrected at the next point that reads the top (the import's return, or the next entry).
 HostCatch == /\ pending.kind # "none"
              /\ pending.kind # "trap" \/ HostCatchesTrap
-             /\ spec' = SubSeq(spec, 1, pending.depth) /\ pending' = None
+             /\ pending' = None
+             \* HostCallInCatch: the catch block stays open, its restore at HostCatchEnd
+             /\ IF HostCallInCatch
+                THEN spec' = spec /\ hcatches' = Append(hcatches, [level |-> Len(calls), depth |-> pending.depth])
+                ELSE spec' = SubSeq(spec, 1, pending.depth) /\ hcatches' = hcatches
              /\ frames' = [frames EXCEPT ![Len(frames)].held = pending]
              /\ UNCHANGED <<calls, cells, top, cnt, slots, cur>>
              /\ obsS' = <<"caught">> /\ obsI' = <<"caught">>
 
 \* Or it propagates through the import into the caller, unwinding on from the import's frame.
-HostPropagate == /\ pending.kind # "none"
+HostPropagate == /\ pending.kind # "none" /\ NoOpenCatchHere
                  /\ pending.kind # "trap" \/ PropagatesTrap
                  /\ UNCHANGED slots
                  /\ Unwind(pending.kind, pending.sv, pending.iv, pending.pc,
@@ -392,34 +425,45 @@ HostPropagate == /\ pending.kind # "none"
 \* import (a host `finally` that calls an export first, say): a Julia host's throw pushes it,
 \* and WT's landing takes the payload's cell. ReraiseShared: also one whose cell existed when
 \* the call it left was entered, an entry of the caller's stack (dev/MARCH.md 13.17 H11).
-HostReraise == /\ ImportOpen /\ Last.held.kind # "none"
+HostReraise == /\ ImportOpen /\ NoOpenCatchHere /\ Last.held.kind # "none"
                /\ ~Last.held.shared \/ ReraiseShared
                /\ UNCHANGED slots
                /\ LET h == Last.held IN
                   Unwind(h.kind, h.sv, h.iv, h.pc, SubSeq(frames, 1, Len(frames) - 1),
                          IF h.kind = "tag" THEN Append(spec, h.sv) ELSE spec, cells, top, GlueCnt)
 
+\* The host's innermost catch block ends, at the level it runs at: its JL_CATCH restores the
+\* depth its call was entered with (jl_restore_excstack). WT sees nothing (wasm does not see a
+\* JS catch block end).
+HostCatchEnd == /\ hcatches # <<>> /\ pending.kind = "none"
+                /\ LET h == hcatches[Len(hcatches)] IN
+                   /\ h.level = Len(calls) /\ (h.level = 0 \/ ImportOpen)
+                   /\ spec' = SubSeq(spec, 1, h.depth)
+                /\ hcatches' = SubSeq(hcatches, 1, Len(hcatches) - 1)
+                /\ UNCHANGED <<frames, calls, pending, cells, top, cnt, slots, cur>>
+                /\ obsS' = <<"catch ends">> /\ obsI' = <<"catch ends">>
+
 Enter == /\ Running /\ Len(frames) < MaxFrames
          /\ frames' = Append(frames, [kind |-> "try", depth |-> Len(spec), ptr |-> top,
                                       val |-> cur, held |-> None])
-         /\ UNCHANGED <<calls, pending, spec, cells, top, cnt, slots, cur>>
+         /\ UNCHANGED <<calls, pending, spec, cells, top, cnt, slots, cur, hcatches>>
          /\ obsS' = <<"enter">> /\ obsI' = <<"enter">>
 
 Leave == /\ Running /\ Len(frames) > Base /\ Last.kind = "try"
          /\ frames' = SubSeq(frames, 1, Len(frames) - 1)
-         /\ UNCHANGED <<calls, pending, spec, cells, top, cnt, slots, cur>>
+         /\ UNCHANGED <<calls, pending, spec, cells, top, cnt, slots, cur, hcatches>>
          /\ obsS' = <<"leave">> /\ obsI' = <<"leave">>
 
 PopException ==
     /\ Running /\ Len(frames) > Base /\ Last.kind = "catch"
     /\ spec' = SubSeq(spec, 1, Last.depth) /\ top' = Last.ptr /\ cur' = Last.val
     /\ frames' = SubSeq(frames, 1, Len(frames) - 1)
-    /\ UNCHANGED <<calls, pending, cells, cnt, slots>>
+    /\ UNCHANGED <<calls, pending, cells, cnt, slots, hcatches>>
     /\ obsS' = <<"pop">> /\ obsI' = <<"pop">>
 
 Read == /\ Running
         /\ obsS' = <<"read", JuliaTop>> /\ obsI' = <<"read", WTTop>>
-        /\ UNCHANGED <<frames, calls, pending, spec, cells, top, cnt, slots, cur>>
+        /\ UNCHANGED <<frames, calls, pending, spec, cells, top, cnt, slots, cur, hcatches>>
 
 \* a trap, or stack exhaustion in wasm code (the engine's RangeError, the only exception
 \* wasm code raises by itself): in a top-level call, or (ExhaustReentrant) in a re-entrant one
@@ -463,7 +507,7 @@ Step == /\ steps < MaxSteps /\ steps' = steps + 1
         /\ (Rethrow \/ Enter \/ Leave \/ PopException \/ Read \/ HostCall \/ Return
             \/ ImportCall \/ ImportReturn \/ ImportThrow("exhaust") \/ ImportThrow("foreign")
             \/ HostCatch \/ HostPropagate \/ HostReraise \/ Abort("trap") \/ Abort("exhaust")
-            \/ HostGluedCall \/ HostGluedReturn
+            \/ HostGluedCall \/ HostGluedReturn \/ HostCatchEnd
             \/ \E v \in Vals : Throw(v) \/ RethrowOther(v))
 
 Stop == steps = MaxSteps /\ UNCHANGED vars   \* the bound, not a deadlock

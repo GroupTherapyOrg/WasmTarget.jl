@@ -189,6 +189,9 @@ end
     mapped, json = _SMT.compile_multi_with_sourcemap([(_smt_host_entry, (Int64,), "host_entry")];
                        sourcemap_url="m.map", existing_module=m2,
                        import_stubs=Any[(_smt_host_stub, "stub", (Int64,), i2, Int64)])
+    # every call of the import saved and restored in both modules (L156)
+    @test unsaved_host_import_calls(m1) == 0
+    @test unsaved_host_import_calls(m2) == 0
     @test length(mapped) > length(plain)
     @test mapped[1:length(plain)] == plain
     @test mapped[length(plain) + 1] == 0x00          # a custom section
@@ -213,7 +216,7 @@ _smt_try(x::Int64) = try; x > 0 ? error("e") : x; catch; -1; end
 @noinline _smt_apply(f, y::Int64) = f(y)
 _smt_clo(x::Int64) = _smt_apply(y -> y * x, 3)
 _smt_fin(x::Int64) = (r = 0; try; try; x > 0 && error("a"); finally; r += 1; end; catch; r += 10; end; r)
-_smt_tu(x::Int64) = x > 0 ? x * 2 : throw(DomainError(x))   # its body ends in a structural unreachable
+_smt_tu(x::Int64) = x > 0 ? x * 2 : throw(DomainError(x))   # code between its statements is its definition's
 # a closure that writes its captured cell: code follows a statement inside its block, which maps
 # to the definition only through compile_statement!'s `finally`
 @noinline _smt_cap(x::Int64) = (c = x; () -> (c = c + 1; c))
@@ -334,13 +337,18 @@ end
     mod = _SMT.compile_module([(_smt_tu, (Int64,))]; source_map_url="m.map")
     bytes, mms, funcs = _smt_layout(mod)
     k = findfirst(f -> f.name == "_smt_tu", funcs)
-    body = mod.functions[k].body
-    @test body[end - 1] == _SMT.Opcode.UNREACHABLE   # the trailing structural unreachable
+    fn = mod.functions[k]
+    # its body ends in its return: the structural unreachable the stackifier emits after it is
+    # dead code, which the builder does not record (dart's `_add`)
+    @test fn.body[end - 1] == _SMT.Opcode.RETURN
     json = _SMT.source_map_json(mms)
     idx = _SMT.num_imported_funcs(mod) + k - 1
     frame(o) = "Error\n    at _smt_tu (wasm://wasm/0123abcd:wasm-function[$idx]:0x$(string(o; base=16)))"
-    # the trailing unreachable: unmapped before, it printed "no statement" (then E9's line)
-    located = WasmRunner.located_frames(frame(funcs[k].stop - 2), json, bytes)
+    # code after its entry and outside every statement: once unmapped, it printed "no statement"
+    def = _SMT.definition_source_info(which(_smt_tu, (Int64,)))
+    o = findfirst(m -> m.offset > 0 && m.info == def, fn.mappings)
+    @test o !== nothing
+    located = WasmRunner.located_frames(frame(funcs[k].start + fn.mappings[o].offset), json, bytes)
     @test length(located) == 1
     @test occursin(r"\._smt_tu @ .*source_maps\.jl:\d+$", located[1])
 end
@@ -367,16 +375,19 @@ end
 end
 
 # An escaped exception names its type. The host reads the escaped value's class through the
-# module's one exported reader (`wasmtarget.class_id`, emit_class_id!'s rule over `Any`) from
+# module's one exported reader (`wasmtarget.class_id`, the class of the value's typeof) from
 # the tag's payload, after any rethrow(e) replaced it, and prints it as dart's minified build
 # does, `minified:Class<id>` (type.dart:344); the source map carries the class names
-# (dart's addMinifiedClassNames, source_map_utils.dart:15), so the runner names the type, and
+# (dart's addMinifiedClassNames, source_map_utils.dart:15, before the map is encoded), so the runner names the type, and
 # wasm-opt's map gets them back (io_util.dart:162-171, :206-211).
 struct _SmtEscErr <: Exception; x::Int; end
 _smt_esc_arg(x::Int64) = x > 0 ? throw(ArgumentError("a")) : x
 _smt_esc_dom(x::Int64) = x > 0 ? throw(DomainError(x)) : x
 _smt_esc_user(x::Int64) = x > 0 ? throw(_SmtEscErr(x)) : x
 _smt_esc_nothing(x::Int64) = x > 0 ? throw(nothing) : x
+# a type object: Julia's typeof(Int64) is DataType, its kind's class (the reader reads the kind
+# as typeof does)
+_smt_esc_type(x::Int64) = x > 0 ? throw(Int64) : x
 function _smt_esc_rethrow(x::Int64)
     try
         x > 0 && throw(ArgumentError("first"))                           # the first throw
@@ -396,7 +407,8 @@ end
 @testset "source maps: an escaped exception names its type" begin
     # (i) each named through the map; with no map, dart's minified text, whose id the map names
     for (f, name) in ((_smt_esc_arg, "ArgumentError"), (_smt_esc_dom, "DomainError"),
-                      (_smt_esc_user, string(_SmtEscErr)), (_smt_esc_nothing, "Nothing"))
+                      (_smt_esc_user, string(_SmtEscErr)), (_smt_esc_nothing, "Nothing"),
+                      (_smt_esc_type, "DataType"))
         @test try; f(1); false; catch e; string(typeof(e)) == name; end
         bytes, json = _SMT.compile_with_sourcemap(f, (Int64,))
         status, msg = WasmRunner.run_wasm_single(bytes, string(nameof(f)), "1n"; source_map=json)
@@ -448,18 +460,15 @@ _smt_late_entry(n::Int64)::Int64 = (s = Int64(0); for x in _smt_late_shapes(n); 
     bytes, json = _SMT.compile_multi_with_sourcemap([(_smt_late_entry, (Int64,), "late_entry")];
                       sourcemap_url="m.map", existing_module=m,
                       import_stubs=Any[(_smt_late_stub, "stub", (Int64,), idx, Int64)])
+    # every call of the import, in the later round's body too, is saved and restored (L156)
+    @test unsaved_host_import_calls(m) == 0
     @test try; _smt_late_entry(3); false; catch e; e isa _SmtLateErr; end
     status, msg = WasmRunner.run_wasm_single(bytes, "late_entry", "3n";
                       import_js="const importObject = { host: { stub: (x) => x + 1n } };", source_map=json)
     @test status === :trap && startswith(msg, "uncaught Julia exception $(string(_SmtLateErr))\n")
-    # every call of the import, in the later round's body too, is saved and restored (L156)
-    m2 = _SMT.WasmModule()
-    idx2 = _SMT.add_import!(m2, "host", "stub", _SMT.WasmValType[_SMT.I64], _SMT.WasmValType[_SMT.I64])
-    @test unsaved_host_import_calls(_SMT.compile_module([(_smt_late_entry, (Int64,), "late_entry")]; existing_module=m2,
-              import_stubs=Any[(_smt_late_stub, "stub", (Int64,), idx2, Int64)])) == 0
 end
 
-# The source map's JSON reader (src has no JSON dependency) reads JSON's grammar and nothing else:
+# The source map's JSON reader (Base and the stdlib have no JSON codec) reads JSON's grammar and nothing else:
 # an escape outside `"\/bfnrtu`, a number token JSON does not allow, a surrogate without its
 # other half, a raw control character in a string and a duplicate key are refused, never read as
 # something else.

@@ -308,7 +308,6 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
     (:ClosedWorld, :codeinfos),         # Core.Compiler.compile!'s output as it hands it: CodeInstance, CodeInfo alternating in a Vector{Any}
     (:ClosedWorldPlan, :functions),     # (callable, argument types, name, MethodInstance) — the callable is open, as FunctionInfo.func_ref
-    (:ClosedWorldPlan, :ir_cache),      # MethodInstance → (CodeInfo, return type): Julia's inferred return type is any lattice-widened Type
     (:ClosedWorldPlan, :external_leaves),  # (callable, argument types, MethodInstance) of each declared import — the callable is open, as FunctionInfo.func_ref
 ])
 
@@ -889,16 +888,19 @@ const METRICS = [
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
 ]
 
-# The builder alone: src/builder/*.jl, with the options file it reads first, loaded in the order
-# src/WasmTarget.jl includes them into a module of their own (named WasmTarget, as InstrIR's
-# `using ..WasmTarget` asks). The builder's behavioral locks (L151, L164-L168) run its
+# The builder alone: src/builder/*.jl, from builder/types.jl to builder/instr_builder.jl, loaded
+# in the order src/WasmTarget.jl includes them into a module of their own (named WasmTarget, as
+# InstrIR's `using ..WasmTarget` asks), without codegen/options.jl: the builder reads no OPTIONS
+# (L149), so a builder function that read it fails here. The builder's behavioral locks (L151, L164-L168, L172) run its
 # checks here in seconds, without loading the package.
 const _BUILDER_SANDBOX = Ref{Union{Nothing,Module}}(nothing)
 function builder_sandbox()::Module
     _BUILDER_SANDBOX[] === nothing || return _BUILDER_SANDBOX[]
     local files = String[]
+    local started = false
     for m in eachmatch(r"^include\(\"([^\"]+)\"\)"m, read(joinpath(SRC, "WasmTarget.jl"), String))
-        push!(files, m[1])
+        m[1] == "builder/types.jl" && (started = true)
+        started && push!(files, m[1])
         m[1] == "builder/instr_builder.jl" && break
     end
     local W = Module(:WasmTarget)
@@ -919,11 +921,25 @@ end
 body_rows_failing(rows=nothing)::Int = in_builder_sandbox() do W
     count(c -> (rows === nothing || c.row in rows) && !builder_case_holds(W, c), body_cases(W))
 end
+# how many of test/builder_cases.jl's dead_cases rows do not hold over the sandbox
+dead_rows_failing()::Int = in_builder_sandbox() do W
+    count(c -> !builder_case_holds(W, c), dead_cases(W))
+end
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
     # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
     # each ratchet it cites "has reached 0 and been converted to a lock"), 2026-09-30
+    "R41_raw_local_declarations" => ("codegen sites that declare a local by pushing onto a function's locals list themselves (a push!/append!/pushfirst!/insert! onto any list named `locals`, bare or as a field, in src or ext), each computing its own index, beside the one declaration path, declare_local! (allocate_local!, builder_add_local!), which checks the local's type against the module (dart declares a local only through addLocal, instructions.dart:382). Reached 0 on 2026-10-11, when the last 165 sites moved to allocate_local! and builder_add_local!; stays 0 (dev/AUDIT.md A15B2; dev/CHARTER.md C7)",
+        () -> begin
+            # any push!/append!/pushfirst!/insert! onto a list named `locals` (bare or as a field), in src
+            # and ext, beside declare_local!'s own one push
+            local raw = r"(?:push|append|pushfirst|insert)!\(\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?locals\s*,"
+            local n = count_sites(raw; roots=[SRC, joinpath(ROOT, "ext")])
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local m = match(r"function declare_local!\(.*?\nend"s, ib)
+            n - (m === nothing ? 0 : count(raw, m.match))
+        end),
     "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`, and through any alias of the table, `@overlay WMT`: both went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
         () -> length(overlays_without_reason())),
     "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
@@ -2623,9 +2639,11 @@ const LOCKS = [
             count(((text, needle),) -> !occursin(needle, text), required) +
                 length(collect(eachmatch(r"_reads_self|routable|haskey\(_OCS", loc)))
         end),
-    "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context: dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl) (dev/CHARTER.md C2)",
-        () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b";
-                          roots=[joinpath(SRC, "builder")])),
+    "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context, and no compile option (no OPTIONS read, audit #2 A2B8): dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl). The builder sandbox the builder's behavioral locks run in loads src/builder from builder/types.jl, without codegen/options.jl, so a builder function that reads OPTIONS fails there (dev/CHARTER.md C2)",
+        () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b|\bOPTIONS\b";
+                          roots=[joinpath(SRC, "builder")]) +
+              (occursin("        m[1] == \"builder/types.jl\" && (started = true)\n        started && push!(files, m[1])",
+                        read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)) ? 0 : 1)),
     "L150_every_host_import_has_its_runtime" => ("every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src), is answered by HOST_RUNTIME (generate.jl) or by the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and HOST_RUNTIME answers none that no code creates: a module's imports and its runtime are one list, as dart2wasm generates its runtime's JS methods from what it translated (runtime_generator.dart:128); the glue reads its exclusion list, the imports it does not wrap, from HOST_RUNTIME, the list _is_host_declared_import reads; a traced compile's `wasmtarget.trace_*` imports are its harness's (dev/CHARTER.md C1)",
         () -> begin
             local created = Set{Tuple{String,String}}()
@@ -2806,7 +2824,7 @@ const LOCKS = [
             end
             n
         end),
-    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted, by the host: the glue (host_glue_js) raises the imported count `wasmtarget.host_imports_open` around it and lowers it in a finally, and in wasm the call sits directly between the save of the top at its slot (`import_tops save`, index count of `\$import_tops`) and the restore of the top from that slot after a normal return (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an unsaved call leaves an export the host calls back from inside it a stale top, and an unrestored one leaves its caller the callee's (Julia's J2: native 1, 2). The boundary is the host's: no wasm code writes the count, and no export entry (a function named \"<name> (export)\") holds a try or a try_table or declares a local (a prologue that passes every escape untouched, emit_export_entry!). Both are checked on the code itself, not on its text: test/utils.jl's unsaved_host_import_calls and wasm_boundary_sites read a module as wasm-tools prints it, its name section stripped; the first counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) not directly between the save and the restore, the second each `global.set` of the count and each try, try_table or local of an entry; test/real_bottom_exceptions.jl asserts both 0 on the export boundary's module, test/host_imports.jl the first on its module whose import a later round's dispatch candidate calls, and every other module the suite builds with import_stubs asserts the first (host_boundary_types.jl, module_builder_validation.jl, source_maps.jl's later-round module, the sidecar's; until batch 114 two modules held the claim, audit #14 A14P2). This lock requires the assertions and the helpers' bodies as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
+    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted, by the host: the glue (host_glue_js) raises the imported count `wasmtarget.host_imports_open` around it and lowers it in a finally, and in wasm the call sits directly between the save of the top at its slot (`import_tops save`, index count of `\$import_tops`) and the restore of the top from that slot after a normal return (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an unsaved call leaves an export the host calls back from inside it a stale top, and an unrestored one leaves its caller the callee's (Julia's J2: native 1, 2). The boundary is the host's: no wasm code writes the count, and no export entry (a function named \"<name> (export)\") holds a try or a try_table or declares a local (a prologue that passes every escape untouched, emit_export_entry!). Both are checked on the code itself, not on its text: test/utils.jl's unsaved_host_import_calls and wasm_boundary_sites read a module as wasm-tools prints it, its name section stripped; the first counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) not directly between the save and the restore, the second each `global.set` of the count and each try, try_table or local of an entry; test/real_bottom_exceptions.jl asserts both 0 on the export boundary's module, and every module the suite builds with import_stubs asserts the first: in each test file the `import_stubs=` compile sites, less its refusals (a compile in `try … nothing catch`, which builds no module), number exactly its `@test unsaved_host_import_calls(` assertions, so a module built and not asserted fires it (until 2026-10-11 the lock pinned a count of assertion texts per file, and five modules built with import_stubs, two in real_bottom_exceptions.jl and source_maps.jl's two host modules and its later-round one, went unasserted, audit #15 A15P1). This lock requires the assertions and the helpers' bodies as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
         () -> begin
             local t(f) = read(joinpath(ROOT, "test", f), String)
             local norm(x) = filter(!isempty, map(strip, split(x, '\n')))
@@ -2863,14 +2881,24 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     m === nothing || norm(m.match) != norm(h)
                 end, helpers)
             missing_ += occursin(strip(printed), u) ? 0 : 1
-            local asserted = ["@test unsaved_host_import_calls(m) == 0" => ["real_bottom_exceptions.jl", "host_imports.jl"],
-                              "@test wasm_boundary_sites(m) == 0" => ["real_bottom_exceptions.jl"]]
-            # every other test file that compiles a module with import_stubs asserts the first on
-            # each module it builds (the refusals aside, which build none)
-            local each = ["host_boundary_types.jl" => 2, "module_builder_validation.jl" => 3, "source_maps.jl" => 1,
-                          joinpath("sidecar", "sidecar_test.jl") => 1]
-            missing_ + sum(count(f -> length(findall(a, t(f))) != 1, fs) for (a, fs) in asserted) +
-                sum(abs(length(findall("@test unsaved_host_import_calls(", t(f))) - n) for (f, n) in each)
+            missing_ += length(findall("@test wasm_boundary_sites(m) == 0", t("real_bottom_exceptions.jl"))) == 1 ? 0 : 1
+            # in every test file, each compile site with import_stubs that builds a module (not a
+            # refusal: a compile in `try … nothing catch`) has its assertion
+            local unasserted = 0
+            for (dir, _, fs) in walkdir(joinpath(ROOT, "test")), f in fs
+                (endswith(f, ".jl") && f != "parity_ratchet.jl") || continue
+                local lines = readlines(joinpath(dir, f))
+                local sites = 0
+                for (k, l) in enumerate(lines)
+                    (_iscomment(l) || !occursin(r"\bimport_stubs=", l)) && continue
+                    local after = lines[k + 1:min(k + 4, length(lines))]
+                    local j = findfirst(x -> occursin(r"^\s*nothing\s*$", x), after)
+                    (j !== nothing && j < length(after) && occursin(r"^\s*catch\b", after[j + 1])) && continue
+                    sites += 1
+                end
+                unasserted += abs(sites - count(l -> occursin("@test unsaved_host_import_calls(", l), lines))
+            end
+            missing_ + unasserted
         end),
     "L157_every_function_named" => ("every function codegen defines is named where it is defined, so the name section names every frame of a trap: define_function!'s and add_function!'s `name` is a required keyword (no default), and every `define_function!(` and `add_function!(` call in src and ext passes `name=` (read to its closing paren across lines; the definitions, comment lines and a docstring's signature line are not calls). A function compiled from Julia IR takes its Julia name; one the compiler generates takes its construct's, from generated_function_name's one vocabulary (GENERATED_CONSTRUCTS, diagnostics.jl): dart's text where dart has the construct (\"\$name trampoline\", \"\${selector.name} (polymorphic dispatcher)\", \"\$name (lazy initializer)\", \"\$memberName field initializer\", \"#init\"), what it ports where it is Julia's alone (jl_egal, jl_has_typevar, __udivmodti4, Random.__init__). Julia raises UndefKeywordError only when a call runs, so this lock carries the requirement to the edit site; a function's body is filled into it under the name it was defined with (fill_function!); an empty name, which the name section cannot carry, is refused with an ArgumentError naming the call by define_function! (which add_function! calls) and by WasmFunction's inner constructor, and the name-section writer writes every function's name, skipping none. 18 sites once defined an unnamed function, and a trap there printed \"no statement (the function's entry, or code the compiler generated)\" (test/generated_names.jl; dev/CHARTER.md C10)",
         () -> begin
@@ -2977,7 +3005,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local nodes = fbody(diag, "_stmt_line_nodes")
             v + (isempty(nodes) || occursin(r"-=\s*1|\bwhile\b|\bfor\b", nodes) ? 1 : 0)
         end),
-    "L160_an_escape_names_its_type" => ("an escaped Julia exception names its type, as dart's minified build names a class through its source map: every module compile_module builds defines one exported reader, `wasmtarget.class_id: (anyref) -> i32` (ensure_class_id_reader!, generate.jl), at the end of compile_module over the final numbering, its body emit_class_id!'s rule over `Any` (code_generator.dart:6076 loadClassId), so null is Nothing, a bare array one class has answers its class, and a value with no header traps at the cast, never a guessed class; the host's one escape helper (host_escape_js) reads the class from the payload's exception (`getArg(tag, 0)`, after any rethrow(e) replaced it; invoke_main_patch.dart:43-52) and answers `minified:Class<id>` (type.dart:344), or a trap saying the class could not be read; _compile hands compile_module's class names (`string(T)` per classId, compile.dart:617) to _emit_module, which adds them to every mapped build's source map after serialization (add_minified_class_names, source_map_utils.dart:15; compile.dart:633), and _run_wasm_opt reads them from the input map and adds them to the output map (minified_class_names, source_map_utils.dart:63; io_util.dart:162-171, :206-211); in test/, `getArg(tag, 0)` appears nowhere (the helper is the one reader), every fuzz runner, run_wasm_single and the locator catch through the helper, and the runner alone writes \"uncaught Julia exception <type>\", resolved through the map (escaped_class_name). test/source_maps.jl runs it: ArgumentError, DomainError, a user exception and `nothing` escape named, with and without wasm-opt, a rethrow(e) names its replacement while its stack names the first throw, a shared bare array reports its class unreadable in the reader's frame, and a class numbered in a later collection round of a host-import module is named (dev/CHARTER.md C10)",
+    "L160_an_escape_names_its_type" => ("an escaped Julia exception names its type, as dart's minified build names a class through its source map: every module compile_module builds defines one exported reader, `wasmtarget.class_id: (anyref) -> i32` (ensure_class_id_reader!, generate.jl), at the end of compile_module over the final numbering, its body the class of the value's typeof: a type object's class its kind's (emit_type_object_kind!, the kind rule typeof reads), then emit_class_id!'s rule over `Any` (code_generator.dart:6076 loadClassId), so null is Nothing, a bare array one class has answers its class, and a value with no header traps at the cast, never a guessed class; the host's one escape helper (host_escape_js) reads the class from the payload's exception (`getArg(tag, 0)`, after any rethrow(e) replaced it; invoke_main_patch.dart:43-52) and answers `minified:Class<id>` (type.dart:344), or a trap saying the class could not be read; _compile hands compile_module's class names (`string(T)` per classId, compile.dart:617) to _emit_module, which has every mapped build's source map name them after serialization and before the map is encoded (source_map_json's add_minified_class_names!, source_map_utils.dart:15; compile.dart:633-639), and _run_wasm_opt reads them from the input map and adds them to the decoded output map (minified_class_names, source_map_utils.dart:63; io_util.dart:162-171, :206-211); in test/, `getArg(tag, 0)` appears nowhere (the helper is the one reader), every fuzz runner, run_wasm_single and the locator catch through the helper, and the runner alone writes \"uncaught Julia exception <type>\", resolved through the map (escaped_class_name). test/source_maps.jl runs it: ArgumentError, DomainError, a user exception, `nothing` and a type object (DataType) escape named, with and without wasm-opt, a rethrow(e) names its replacement while its stack names the first throw, a shared bare array reports its class unreadable in the reader's frame, and a class numbered in a later collection round of a host-import module is named (dev/CHARTER.md C10)",
         () -> begin
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local comp = read(joinpath(CODEGEN, "compile.jl"), String)
@@ -2988,14 +3016,16 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local reader = fbody(gen, "ensure_class_id_reader!")
             local helper = fbody(gen, "host_escape_js")
             local required = [(reader, "add_export!(mod, \"wasmtarget.class_id\", 0,"),
-                              (reader, "local_get!(b, 0)\n    emit_class_id!(b, ctx, Any)\n    finish_function!(b)"),
+                              (reader, "emit_type_object_kind!(b, registry, 0, allocate_local!(ctx, I32), done, id!)"),
+                              (reader, "local_get!(b, 0)\n    emit_class_id!(b, ctx, Any)\n    end_block!(b)\n    finish_function!(b)"),
                               (comp, "    ensure_class_id_reader!(mod, type_registry, translator)\n"),
                               (helper, "exports['wasmtarget.class_id'](e.getArg(tag, 0))"),
                               (helper, "return { throw: 'minified:Class' + id, stack }"),
                               (fbody(api, "_compile"), "_emit_module(result[1]; optimize, validate, class_names=_class_names(result[2]))"),
-                              (fbody(api, "_emit_module"), "json === nothing || (json = add_minified_class_names(json, class_names))"),
+                              (fbody(api, "_emit_module"), "to_bytes_with_source_map(mod; class_names)"),
+                              (smap, "    class_names === nothing || add_minified_class_names!(sm, class_names)\n    return _json_write(sm)"),
                               (fbody(api, "_run_wasm_opt"), "minified_class_names(source_map_json)"),
-                              (fbody(api, "_run_wasm_opt"), "add_minified_class_names(out_map, class_names)"),
+                              (fbody(api, "_run_wasm_opt"), "_json_write(add_minified_class_names!(_json_read(out_map)::Vector{Pair{String,Any}}, class_names))"),
                               (smap, "const _SOURCE_MAP_EXTENSION_NAME = \"x_org_dartlang_dart2js\""),
                               (smap, "\"minified_names\" => "),
                               (smap, "\"Class\$("),
@@ -3261,7 +3291,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             n += occursin("# one call arm, self-recursion included", inv) ? 0 : 1
             n += occursin("ctx.func_idx", inv) ? 1 : 0   # no self-call arm: a self call is the call
             n += count(p -> occursin(p, inv), ["get_function(", "_invoke_registered_signatures", "<: ctx.arg_types"])
-            n += count(p -> !occursin(p, trim), ["    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Any}}\n",
+            n += count(p -> !occursin(p, trim), ["    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Type}}\n",
                                                  "    candidate_mis::Set{Core.MethodInstance}\n",
                                                  "    bespoke::IdDict{Core.MethodInstance,Function}\n"])
             # the IR read only by plan_ir_or_nothing (plan_ir reads through it)
@@ -3336,7 +3366,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             n += abs(count_sites(r"^function emit_method_error!\("; roots=[SRC]) - 1)
             n
         end),
-    "L169_held_by_handle" => ("the module objects codegen defines once it holds by handle, never finds again, as dart's code generator keeps each GlobalBuilder, FunctionBuilder and Tag it defines as an object (translator.dart:96 Translator): the exception tag and the stack entry type its payload carries, `\$exc_top`, `\$host_imports_open`, `\$import_tops`, its array type and the import_tops save helper are the TypeRegistry's ModuleHandles (codegen's own state; the builder holds none), each defined at its first use or, for what a host framework's setup made before the compile (ensure_provenance_imports!, ensure_host_imports_open!), recovered once at the compile's entry by recover_module_handles!, a quarantined host-framework boundary (dev/MARCH.md 13.16). In text: no `global_named` anywhere in src or test; no find of a function or a global by its `.name ==` (the boundary's refusal of a module already holding a global named `\$exc_top` or `\$import_tops`, in recover_module_handles!, aside), and no `exc_cell_type!` (the entry type found by its content through add_type!'s deduplication) in src/codegen; the entry type's StructType is written once, where ensure_exception_tag! defines the tag; no throw_! or catch_legacy! in codegen names a tag by a literal index; exc_tag and exc_cell_type read the handles; recover_module_handles! is called once, at compile_module's entry, and _imported_global (the boundary's find of an imported global by its import name) only by recover_module_handles!, ensure_host_imports_open! and _refuse_imported_global. Its behavior: the name section names every named global (subsection 7, dart's NameSection, serialize/sections.dart:844), and test/probe_bytes.jl requires every probe module's named globals printed by wasm-tools as `(global \$<name>`, required here as written (dev/AUDIT.md A3B15 = A2B6, A4B4, A2E7; dev/CHARTER.md C7)",
+    "L169_held_by_handle" => ("the module objects codegen defines once it holds by handle, never finds again, as dart's code generator keeps each GlobalBuilder, FunctionBuilder and Tag it defines as an object (translator.dart:96 Translator): the exception tag and the stack entry type its payload carries, `\$exc_top`, `\$host_imports_open`, `\$import_tops`, its array type and the import_tops save helper are the TypeRegistry's ModuleHandles (codegen's own state; the builder holds none), each defined at its first use or, for what a host framework's setup made before the compile (ensure_provenance_imports!, ensure_host_imports_open!), recovered once at the compile's entry by recover_module_handles!, a quarantined host-framework boundary (dev/MARCH.md 13.16). In text: no `global_named` anywhere in src or test; no find of a function or a global by its `.name ==` (the boundary's refusal of a module already holding a global named `\$exc_top` or `\$import_tops`, in recover_module_handles!, aside), and no `exc_cell_type!` (the entry type found by its content through add_type!'s deduplication) in src/codegen; the entry type's StructType is written once, where ensure_exception_tag! defines the tag; no throw_! or catch_legacy! in codegen names a tag by a literal index; exc_tag and exc_cell_type read the handles; recover_module_handles! is called once, at compile_module's entry, and _imported_global (the boundary's find of an imported global by its import name) only by recover_module_handles!, ensure_host_imports_open! and _refuse_imported_global. Its behavior: the name section names every named global (subsection 7, dart's NameSection, serialize/sections.dart:844), and test/probe_bytes.jl requires every global the probe's module object names (compile_module, then each global's `name`, never names read back from the section it checks) printed by wasm-tools as `(global \$<name>`, required here as written (dev/AUDIT.md A3B15 = A2B6, A4B4, A2E7; dev/CHARTER.md C7)",
         () -> begin
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local v = count_sites(r"\bglobal_named\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "ext")], exclude_files=["parity_ratchet.jl"])
@@ -3372,12 +3402,46 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v += sort(unique(finders)) == ["_refuse_imported_global", "ensure_host_imports_open!", "recover_module_handles!"] ? 0 : 1
             local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
-            for req in ("    count(n -> !occursin(\"(global \\\$\" * n * \" \", printed), _global_names(bytes))",
-                        "        _unnamed_globals(bytes, printed) == 0 || push!(unnamed, name)",
+            for req in ("    count(g -> g.name !== nothing && !occursin(\"(global \\\$\" * g.name * \" \", printed), m.globals)",
+                        "        m = WasmTarget.compile_module([(f, argtypes, name)])\n        bytes = WasmTarget.to_bytes(m)",
+                        "        _unnamed_globals(m, printed) == 0 || push!(unnamed, name)",
                         "    if !isempty(unnamed)")
                 occursin(req, probe) || (v += 1)
             end
             v
+        end),
+    "L172_dead_code_is_not_recorded" => ("an instruction added while the code is unreachable is not recorded, as dart's `_add` returns when `!_reachable` (instructions.dart:363-368), so the builder holds no dead code, which it does not type, and wasm-tools never meets an instruction the builder did not check: `_emit!` returns (through _check!, so a validation error still throws) before it records anything while `b.v.reachable` is false; unreachable!, _br_depth!, return_! and throw_! record their instruction before they make the code unreachable (dart's unreachable :676, br :863, return_ :933 and throw_ :820 call `_add` first), and end_block!, else_! and catch_legacy! record theirs after their validator restores the frame's entry reachability (end :842, else_ :767, catch_legacy :799), so a frame entered in dead code is dropped whole; append_builder! records no instruction of a fragment appended where its function's code is unreachable; nothing in src/builder sets `.reachable = false` before an `_emit!` on one line. dev/formal/OperandStack.tla's Sound (the program the builder records for one it accepts is valid) has its Broken instance MCOperandStackDeadCodeBroken (every instruction recorded). Its behavior, over src/builder alone: every row of test/builder_cases.jl's dead_cases holds (each program's builder holds exactly the instructions it wants: `unreachable; f64.const 0; i32.eqz; drop` holds `unreachable` alone), which test/module_builder_validation.jl's testset 'dead code is not recorded' also runs with wasm-tools (dev/AUDIT.md A15B1; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local fbody(name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), ib); m === nothing ? "" : m.match)
+            local v = 0
+            local em = match(r"(?s)\n@inline function _emit!\(.*?\nend\n", ib)
+            v += em !== nothing && occursin("    b.v.reachable || return _check!(b)\n    push!(b.instrs, instr)", em.match) ? 0 : 1
+            v += occursin("unreachable!(b::InstrBuilder)::InstrBuilder = (_emit!(b, InstrIR.Unreachable()); b.v.reachable = false; b)", ib) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Br(UInt32(depth)))\n    b.v.reachable = false", fbody("_br_depth!")) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Return())\n    b.v.reachable = false", fbody("return_!")) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Throw(UInt32(tag)))\n    b.v.reachable = false", fbody("throw_!")) ? 0 : 1
+            local ab = fbody("append_builder!")
+            local k1, k2 = findfirst("    lands || return _check!(dst)", ab), findfirst("push!(dst.instrs, ins)", ab)
+            v += (k1 !== nothing && k2 !== nothing && first(k1) < first(k2) && occursin("    local lands = dst.v.reachable\n", ab)) ? 0 : 1
+            v += count_sites(r"\.reachable\s*=\s*false\s*;\s*_emit!"; roots=[joinpath(SRC, "builder")])
+            v += occursin("function validate_br!(", read(joinpath(SRC, "builder", "validator.jl"), String)) ? 1 : 0
+            local formal = joinpath(ROOT, "dev", "formal")
+            local cfg = joinpath(formal, "MCOperandStackDeadCodeBroken.cfg")
+            v += isfile(cfg) && startswith(read(cfg, String), "\\* expect: Sound\n") ? 0 : 1
+            v += occursin("Sound == done \\in BOOLEAN /\\ (WtAccepts(prog) => SpecAccepts(Emitted(prog)))", read(joinpath(formal, "OperandStack.tla"), String)) ? 0 : 1
+            v + dead_rows_failing()
+        end),
+    "L173_one_local_declaration" => ("a local is declared through one path, as dart declares one only through addLocal (instructions.dart:382): declare_local! (src/builder/instr_builder.jl) checks its type against the module and appends it to the function's one locals list, returning its index; builder_add_local! and allocate_local!(ctx, ::WasmValType) are each that call, allocate_local!(ctx, ::Type) translates its type and calls the other, and src/builder pushes onto a locals list nowhere else; no codegen site pushes one itself (R41). Its behavior, over src/builder alone: test/builder_cases.jl's row c (a local of a type index the module does not define) rejects at its declaration (dev/AUDIT.md A15B2; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local cx = read(joinpath(CODEGEN, "context.jl"), String)
+            local v = abs(count_sites(r"push!\(\s*[\w.]*locals\s*,"; roots=[joinpath(SRC, "builder")]) - 1)
+            v += occursin("    typ isa ConcreteRef && _module_type(mod, typ.type_idx, :add_local)   # a type the module defines\n    push!(locals, typ)\n    return Int(nparams) + length(locals) - 1", ib) ? 0 : 1
+            v += occursin("builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int = declare_local!(b.v.mod, b.locals, length(b.params), typ)", ib) ? 0 : 1
+            v += occursin("allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int =\n    declare_local!(ctx.mod, ctx.locals, ctx.n_params, wasm_type)", cx) ? 0 : 1
+            v += occursin("allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int =\n    allocate_local!(ctx, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true))", cx) ? 0 : 1
+            v + builder_rows_failing(["c"])
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin

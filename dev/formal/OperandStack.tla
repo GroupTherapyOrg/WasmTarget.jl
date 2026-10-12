@@ -3,7 +3,8 @@
 (* A TLA+ model of the builder's operand-stack and control-frame check:    *)
 (* WT's validator (src/builder/validator.jl: validate_push!/_pop!,         *)
 (* validate_block_start!/_end!, validate_if_start!, validate_else!,        *)
-(* validate_br!, the reachability flag) set against the WebAssembly        *)
+(* validate_branch_types!, the reachability flag, and _emit!'s drop of     *)
+(* dead code, instr_builder.jl) set against the WebAssembly                *)
 (* specification's own validation algorithm (spec appendix "Validation     *)
 (* Algorithm": vals, ctrls, push_ctrl/pop_ctrl, unreachable).              *)
 (*                                                                         *)
@@ -11,10 +12,14 @@
 (* (_verifyTypes returns early when !_reachable), WT checks types only in  *)
 (* reachable code: after `unreachable` or `br` its pops answer the expected *)
 (* type and a block's end skips its checks, restoring the stack to the     *)
-(* block's entry height plus its results. The spec keeps checking dead     *)
-(* code (its stack is bottomless only below the frame's height), so wasm-  *)
-(* tools validation of every emitted module is the alarm there (C7).       *)
-(* Every type check is by subtyping (wasm_subtype), here Sub.              *)
+(* block's entry height plus its results. And like dart's `_add`, which    *)
+(* returns when !_reachable, WT records no instruction emitted in dead     *)
+(* code (`_emit!`): `unreachable` and `br` are recorded, then the code is  *)
+(* dead; `end` and `else` restore the reachability their frame was entered *)
+(* with before they are recorded, so a frame entered in dead code is       *)
+(* dropped whole. The module holds the recorded program (Emitted), whose   *)
+(* every instruction the spec sees reachable. Every type check is by       *)
+(* subtyping (wasm_subtype), here Sub.                                     *)
 (*                                                                         *)
 (* IF AND ELSE. `if [ins]->[res]` pops an i32 and its inputs, and opens a  *)
 (* frame whose arms start from the inputs; `else` checks the then arm      *)
@@ -30,12 +35,15 @@
 (* which rejects the valid                                                 *)
 (* `const sub; const i32; if [sub]->[super] end; drop`.                    *)
 (*                                                                         *)
-(* THE CLAIM. Complete: WT accepts every program the spec accepts. Sound   *)
-(* where reachable: a program WT accepts and that has no instruction in    *)
-(* dead code, the spec accepts. The Broken variants: DropBlockResults      *)
-(* drops a block's (and an if's) declared result types from the tracker,   *)
-(* which then holds the block type the bytes carry but not its results, so *)
-(* a frame's value is lost at its end; ElseLessExact is the equality rule. *)
+(* THE CLAIM. Complete: WT accepts every program the spec accepts. Sound:  *)
+(* the program WT records for one it accepts, the spec accepts. The Broken *)
+(* variants: DropBlockResults drops a block's (and an if's) declared       *)
+(* result types from the tracker, which then holds the block type the      *)
+(* bytes carry but not its results, so a frame's value is lost at its end; *)
+(* ElseLessExact is the equality rule; EmitsDeadCode records every         *)
+(* instruction, dead ones included, which the builder checks nowhere: in   *)
+(* a function with no results `unreachable; i32.const` is recorded, and    *)
+(* the spec rejects the i32 left above the frame at its end.               *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Four value types, i32, i64 and the pair      *)
 (* "sub" <: "super" (a reference type and its supertype); the instructions *)
@@ -47,18 +55,19 @@
 (* program of it up to MaxLen instructions, inside one function frame with *)
 (* no results.                                                             *)
 (*                                                                         *)
-(* formal(src/builder/validator.jl validate_block_end!): the builder's     *)
-(* check agrees with the spec's algorithm on every program whose           *)
-(* instructions are reachable, and never rejects a valid one.              *)
+(* formal(src/builder/validator.jl validate_block_end!): the builder       *)
+(* never rejects a valid program, and the program it records for one it    *)
+(* accepts is valid.                                                       *)
 (*                                                                         *)
 (* parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494           *)
-(* InstructionsBuilder._verifyTypes).                                      *)
+(* InstructionsBuilder._verifyTypes, :363 InstructionsBuilder._add).       *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS MaxLen,
           DropBlockResults,  \* TRUE = the broken tracker
           ElseLessExact,     \* TRUE = the equality rule for an else-less if (input_types != result_types)
+          EmitsDeadCode,     \* TRUE = every instruction recorded, dead ones included
           Instrs             \* the instance's instruction set (CoreInstrs, IfInstrs below)
 
 Types == {"i32", "i64", "sub", "super"}
@@ -83,7 +92,7 @@ IfInstrs ==
     {[op |-> "if", ins |-> bt[1], res |-> bt[2]] : bt \in IfBlockTypes}
 
 \* ---------------- the specification's validation algorithm ----------------
-\* frame: [op, start, out, height, unreachable]; state: [vals, ctrls, err, dead]
+\* frame: [op, start, out, height, unreachable]; state: [vals, ctrls, err]
 
 SPopVal(s) ==   \* returns [s |-> state, v |-> value]
     LET top == s.ctrls[Len(s.ctrls)] IN
@@ -117,26 +126,24 @@ SPopCtrl(s) ==   \* returns [s, frame]
     IN [s |-> [s2 EXCEPT !.ctrls = SubSeq(s2.ctrls, 1, Len(s2.ctrls) - 1)], f |-> top]
 
 SStep(s, i) ==
-    LET s0 == IF s.ctrls[Len(s.ctrls)].unreachable /\ i.op \notin {"end", "else"}
-              THEN [s EXCEPT !.dead = TRUE] ELSE s IN
-    CASE i.op = "const" -> [s0 EXCEPT !.vals = Append(s0.vals, i.t)]
-      [] i.op = "drop"  -> SPopVal(s0).s
-      [] i.op = "add"   -> LET s1 == SPopExpect(SPopExpect(s0, i.t), i.t) IN
+    CASE i.op = "const" -> [s EXCEPT !.vals = Append(s.vals, i.t)]
+      [] i.op = "drop"  -> SPopVal(s).s
+      [] i.op = "add"   -> LET s1 == SPopExpect(SPopExpect(s, i.t), i.t) IN
                            [s1 EXCEPT !.vals = Append(s1.vals, i.t)]
-      [] i.op = "block" -> SPushCtrl(s0, "block", <<>>, i.res)
-      [] i.op = "if"    -> SPushCtrl(SPopVals(SPopExpect(s0, "i32"), i.ins), "if", i.ins, i.res)
-      [] i.op = "else"  -> IF s0.ctrls[Len(s0.ctrls)].op # "if" THEN [s0 EXCEPT !.err = TRUE]
-                           ELSE LET r == SPopCtrl(s0) IN SPushCtrl(r.s, "else", r.f.start, r.f.out)
-      [] i.op = "end"   -> IF Len(s0.ctrls) = 1 THEN [s0 EXCEPT !.err = TRUE]   \* no open block
-                           ELSE LET r == SPopCtrl(s0)
+      [] i.op = "block" -> SPushCtrl(s, "block", <<>>, i.res)
+      [] i.op = "if"    -> SPushCtrl(SPopVals(SPopExpect(s, "i32"), i.ins), "if", i.ins, i.res)
+      [] i.op = "else"  -> IF s.ctrls[Len(s.ctrls)].op # "if" THEN [s EXCEPT !.err = TRUE]
+                           ELSE LET r == SPopCtrl(s) IN SPushCtrl(r.s, "else", r.f.start, r.f.out)
+      [] i.op = "end"   -> IF Len(s.ctrls) = 1 THEN [s EXCEPT !.err = TRUE]   \* no open block
+                           ELSE LET r == SPopCtrl(s)
                                     \* an if with no else ends through its implicit empty else
                                     r2 == IF r.f.op = "if"
                                           THEN SPopCtrl(SPushCtrl(r.s, "else", r.f.start, r.f.out)).s
                                           ELSE r.s
                                 IN [r2 EXCEPT !.vals = r2.vals \o r.f.out]
-      [] i.op = "br"    -> IF i.d >= Len(s0.ctrls) - 1 THEN [s0 EXCEPT !.err = TRUE]
-                           ELSE SUnreachable(SPopVals(s0, s0.ctrls[Len(s0.ctrls) - i.d].out))
-      [] i.op = "unreachable" -> SUnreachable(s0)
+      [] i.op = "br"    -> IF i.d >= Len(s.ctrls) - 1 THEN [s EXCEPT !.err = TRUE]
+                           ELSE SUnreachable(SPopVals(s, s.ctrls[Len(s.ctrls) - i.d].out))
+      [] i.op = "unreachable" -> SUnreachable(s)
 
 \* ---------------- WT's validator (validator.jl) ----------------
 \* label: [kind, ins, results, height, reach, hasElse]; state: [stack, labels, reachable, err]
@@ -213,14 +220,22 @@ WStep(w, i) ==
       [] i.op = "unreachable" -> [w EXCEPT !.reachable = FALSE]
 
 \* ---------------- running a program to its function end ----------------
-RECURSIVE SRun(_, _), WRun(_, _)
+RECURSIVE SRun(_, _), WRun(_, _), WEmit(_, _, _)
 SRun(p, s) == IF p = <<>> THEN s ELSE SRun(Tail(p), SStep(s, Head(p)))
 WRun(p, w) == IF p = <<>> THEN w ELSE WRun(Tail(p), WStep(w, Head(p)))
+\* _emit! (dart _add): an instruction is recorded when the code is reachable as it is added,
+\* which for end and else is after they restore their frame's entry reachability, and for
+\* every other instruction before its own effect (unreachable and br are recorded)
+Recorded(w, i, w2) == EmitsDeadCode \/ (IF i.op \in {"end", "else"} THEN w2.reachable ELSE w.reachable)
+WEmit(p, w, out) ==
+    IF p = <<>> THEN out
+    ELSE LET w2 == WStep(w, Head(p))
+         IN WEmit(Tail(p), w2, IF Recorded(w, Head(p), w2) THEN Append(out, Head(p)) ELSE out)
 
 SInit == [vals |-> <<>>,
           ctrls |-> <<[op |-> "func", start |-> <<>>, out |-> <<>>, height |-> 0,
                        unreachable |-> FALSE]>>,
-          err |-> FALSE, dead |-> FALSE]
+          err |-> FALSE]
 WInit == [stack |-> <<>>, labels |-> <<>>, reachable |-> TRUE, err |-> FALSE]
 
 \* the function's own end: every block closed, the frame's results (none) on the stack
@@ -228,7 +243,8 @@ SpecAccepts(p) == LET s == SRun(p, SInit) IN
     ~s.err /\ Len(s.ctrls) = 1 /\ ~SPopCtrl(s).s.err
 WtAccepts(p) == LET w == WRun(p, WInit) IN
     ~w.err /\ Len(w.labels) = 0 /\ (~w.reachable \/ Len(w.stack) = 0)
-AllReachable(p) == ~SRun(p, SInit).dead
+\* the program WT records, which the module holds
+Emitted(p) == WEmit(p, WInit, <<>>)
 
 VARIABLES prog, done
 vars == <<prog, done>>
@@ -241,5 +257,5 @@ Terminal == done /\ UNCHANGED vars   \* the one step has run: the end of the run
 Spec == Init /\ [][Step \/ Terminal]_vars
 
 Complete == done \in BOOLEAN /\ (SpecAccepts(prog) => WtAccepts(prog))
-SoundWhereReachable == done \in BOOLEAN /\ ((WtAccepts(prog) /\ AllReachable(prog)) => SpecAccepts(prog))
+Sound == done \in BOOLEAN /\ (WtAccepts(prog) => SpecAccepts(Emitted(prog)))
 =============================================================================

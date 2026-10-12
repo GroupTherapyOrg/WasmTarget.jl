@@ -106,6 +106,19 @@ function builder_cases(W::Module)
         W.call!(b, 999) end)
     # A3B5: every builder has its module
     add("s", "A3B5", UndefKeywordError, () -> W.InstrBuilder(VT[], VT[W.I64]; func_name="g"))
+    # A15B3: a fragment that shares its function's locals carries its function's parameters (one
+    # with none types local 0 as the function's first declared local, not its parameter)
+    add("t", "A15B3", ArgumentError, () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(VT[W.I32], VT[]; mod=m); W.builder_add_local!(b, W.I64)
+        F = W.InstrBuilder(; mod=m, locals=b.locals, fragment=true); W.local_get!(F, 0); W.drop!(F)
+        W.append_builder!(b, F) end)
+    # A15B4: trunc_sat! emits a saturating truncation, never another FC instruction (0x0b is
+    # memory.fill)
+    add("u", "A15B4", ArgumentError, () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(VT[], VT[]; mod=m); W.f64_const!(b, 1.0)
+        W.trunc_sat!(b, 0x0b) end)
+    # A15B5: an imported function is named where it is imported (the name section drops none)
+    add("v", "A15B5", ArgumentError, () -> W.WasmImport("host", "f", 0x00, UInt32(0), ""))
     return cases
 end
 
@@ -179,8 +192,64 @@ function body_cases(W::Module)
     return cases
 end
 
-# run one case: `true` when it throws what it expects, or (a valid one) returns its module
+# Dead code as programs (dev/CHARTER.md C7): an instruction emitted while the code is unreachable
+# is dropped, as dart's `_add` drops it (instructions.dart:368 `if (!_reachable) return;`), so the
+# builder holds only instructions wasm validates where they stand. `end`, `else` and `catch` of a
+# frame entered reachable restore reachability before they are recorded (instructions.dart:851,
+# :783, :815); a frame entered in dead code is dropped whole. Each program returns its finished
+# builder and `want`, the kinds of the instructions it must hold; the ratchet runs these over
+# src/builder alone (L172), test/module_builder_validation.jl with wasm-tools.
+function dead_cases(W::Module)
+    VT = W.WasmValType
+    cases = Any[]
+    add(row, id, want, program) = push!(cases, (row = row, id = id, expect = :holds, want = want, program = program))
+    done(m, b) = (W.finish_function!(b); W.add_function!(m, b; name="f"); b)
+    # A15B1: after unreachable, an f64 under i32.eqz (wasm-tools rejects it where it stands)
+    add("a", "A15B1", [:Unreachable, :End], () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(; mod=m)
+        W.unreachable!(b); W.f64_const!(b, 0); W.num!(b, W.Opcode.I32_EQZ); W.drop!(b)
+        done(m, b) end)
+    # a block entered in dead code is dropped with its end
+    add("b", "A15B1", [:Unreachable, :End], () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(; mod=m)
+        W.unreachable!(b); W.block!(b); W.i64_const!(b, 1); W.drop!(b); W.end_block!(b)
+        done(m, b) end)
+    # br makes the rest of its block dead; the block's end, entered reachable, is recorded
+    add("c", "A15B1", [:Block, :Br, :End, :I32Const, :Drop, :End], () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(; mod=m)
+        l = W.block!(b); W.br!(b, l); W.f64_const!(b, 0); W.drop!(b); W.end_block!(b)
+        W.i32_const!(b, 2); W.drop!(b)
+        done(m, b) end)
+    # return and throw are recorded, what follows each is not; else of an if entered reachable is
+    add("d", "A15B1", [:I32Const, :If, :Return, :Else, :Nop, :End, :End], () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(; mod=m)
+        W.i32_const!(b, 1); W.if_!(b); W.return_!(b); W.f32_const!(b, 0); W.else_!(b); W.nop!(b)
+        W.end_block!(b)
+        done(m, b) end)
+    # a catch of a try entered reachable is recorded after a throw in the body
+    add("e", "A15B1", [:BeginTry, :Throw, :CatchLegacy, :End, :End], () -> begin
+        m = W.WasmModule(); tag = W.add_tag!(m, W.add_type!(m, W.FuncType(VT[], VT[])))
+        b = W.InstrBuilder(; mod=m)
+        W.try_legacy!(b); W.throw_!(b, tag); W.i64_const!(b, 3); W.drop!(b); W.catch_legacy!(b, tag)
+        W.end_block!(b)
+        done(m, b) end)
+    # a fragment appended where its function's code is unreachable adds nothing
+    add("f", "A15B1", [:Unreachable, :End], () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(; mod=m)
+        F = W.InstrBuilder(; mod=m, locals=b.locals, fragment=true)
+        W.f64_const!(F, 0); W.drop!(F)
+        W.unreachable!(b); W.append_builder!(b, F)
+        done(m, b) end)
+    return cases
+end
+
+# run one case: `true` when it throws what it expects, (a valid one) returns its module, or (a
+# dead_cases row) returns a builder holding exactly the instruction kinds it wants
 function builder_case_holds(W::Module, c)::Bool
+    if c.expect === :holds
+        local b = c.program()
+        return b isa W.InstrBuilder && Symbol[nameof(typeof(i)) for i in b.instrs] == c.want
+    end
     if c.expect === :valid
         local m = c.program()
         return m isa W.WasmModule && !isempty(W.to_bytes(m))

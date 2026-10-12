@@ -337,13 +337,11 @@ function _int128_sext!(b::InstrBuilder, ctx,
        source_type === Int8 || source_type === Bool
         num!(b, Opcode.I64_EXTEND_I32_S)
     end
-    scratch_idx = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I64)
+    scratch_idx = allocate_local!(ctx, I64)
     local_tee!(b, scratch_idx)
     i64_const!(b, 63)
     num!(b, Opcode.I64_SHR_S)
-    scratch2_idx = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, I64)
+    scratch2_idx = allocate_local!(ctx, I64)
     local_set!(b, scratch2_idx)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, target_type)))
     local_get!(b, scratch_idx)
@@ -367,8 +365,7 @@ function _int128_zext!(b::InstrBuilder, ctx,
     elseif source_type === Int32 || source_type === UInt32 || source_type === Bool
         num!(b, Opcode.I64_EXTEND_I32_U)
     end
-    zext_scratch = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, I64)
+    zext_scratch = allocate_local!(ctx, I64)
     local_set!(b, zext_scratch)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, target_type)))
     local_get!(b, zext_scratch)

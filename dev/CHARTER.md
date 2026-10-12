@@ -98,7 +98,8 @@ with the per-clause status. A clause is never closed by argument.
   `L164` (one subtype relation, in the builder) `L165` (dart's storage types: no raw byte or
   packed type as a value type) `L166` (every operand typed by the module's own types) `L167`
   (every body is a builder the module made) `L168` (locals initialized before use) `L169`
-  (module objects held by handle).
+  (module objects held by handle) `L172` (no instruction recorded in dead code)
+  `L173` (one declaration path for a local, its type checked) `R41` (no local declared beside it).
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:

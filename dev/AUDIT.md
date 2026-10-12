@@ -1381,3 +1381,105 @@ Resolution:
   case again, and L156's extension was negative-tested; the probes change only by batch 114's
   exported class reader.
 - Everything else is on MARCH 13.17 under its row: none of this entry's findings.
+
+## 2026-10-11 — audited through 685c1b93 (f071e55a..685c1b93: batches 114, 112b-2, 115a, 115b, 116a)
+
+The fifteenth audit covers:
+- 92527cc1, batch 114, the fourteenth audit's fixes;
+- bd40fafe, batch 112b-2, Julia's try regions in dart's legacy form;
+- 3f062ec8, batch 115a, every instruction typed as dart types it;
+- 3ceb2065, batch 115b, every body a builder the module made;
+- 685c1b93, batch 116a, the plan as the one consult, read at its reviewed tree (ebdb70b0).
+
+It made 28 findings, two of them seen from two areas (A15C3 = A15P2, A15C6 = A15P3). One was a
+silent wrong answer, measured on Node 26.11.0:
+- A15E1. Julia's JL_CATCH restores the exception stack only after the host's catch block
+  (julia.h:2555); WT's export entry starts as after the restore. With the host calling `r` from
+  inside its catch of `b`'s escape, `rethrow()` in `r` answers 2 where native answers 3; with the
+  import calling `r` inside its catch of a re-entrant escape, `o(1)` answers 1 where native
+  answers 3. Outside the range (batch 112b-1); audit #14's check of the entry missed it.
+One was an unlocated internal error: A15C1, a callable whose methods are overlays called as a value
+raised from the vtable pre-pass's ambiguity check.
+
+Area: builder — (A15B1) The builder recorded dead code unchecked, where dart's `_add` drops every
+instruction emitted while unreachable (instructions.dart:363-368): `unreachable; f64.const 0;
+i32.eqz; drop` built, and only wasm-tools rejected it; OperandStack.tla claimed soundness only where
+reachable. (A15B2) 161 codegen sites pushed onto the locals list the builder shares, beside
+builder_add_local!'s type check. (A15B3) append_builder! accepted a parameterless fragment sharing
+its function's locals, typing local k by the wrong list. (A15B4) trunc_sat! accepted any FC
+sub-op, encoding memory and table instructions it does not type; STRUCT_GET_S/U arms were dead.
+(A15B5) The name section skipped an unnamed import silently. (A15B6) add_minified_class_names
+re-parsed the map WT had just written (dart adds the names before encoding), and the JSON reader's
+quarantine gave a dependency choice as its reason. (A15B7) global_get!'s globals.dart:56 citation
+and the validator's "i64 family" comment were false.
+
+Area: collection and planning — (A15C1) above: the pre-pass asked Base's isambiguous where an
+overlay method lies in the intersection. (A15C2) entry_method_instance and the enrollment sites
+specialized with an empty svec, not Julia's match. (A15C3) "codegen asks no method table" was
+false (closed_world_call_result asks it). (A15C4) An import stub's MethodInstance was derived a
+second time at codegen. (A15C5) The consult's docstrings stated an order the overlay table does
+not give. (A15C6) The per-callee no-method record was called pinned by a behavior no answer shows.
+(A15C7) The plan dropped a rooted lowering callee silently.
+
+Area: emission and diagnostics — (A15E1) above. (A15E2) compile_invoke! kept a self-call arm,
+_closure_body_for a julia fallback, and dispatch.jl indexed functions by the import count.
+(A15E3) The exported class reader trapped on an escaped type object, where Julia names its kind
+(DataType). (A15E4) A second compile into a module compiled from exception-free code failed at its
+end, on a duplicate `wasmtarget.class_id` export, not at its entry. (A15E5)
+generate_selector_caller_body!'s type_registry had a `nothing` default.
+
+Area: enforcement and prose — (A15P1) L156 pinned a count of assertion texts: five modules built
+with import_stubs went unasserted (two in real_bottom_exceptions.jl, source_maps.jl's two host
+modules and its later-round one), so A14P2's resolution was false. (A15P2) = A15C3. (A15P3) =
+A15C6. (A15P4) L169's behavior half read the expected global names from the section it checks.
+(A15P5) The import-order quarantines cited a 13.7 that did not hold them. (A15P6) ref_func!
+refused a valid module (a global initializer declares its ref.func's function), and a test pinned
+the rule. (A15P7) codegen_export_names and the source-map JSON reader had no Components row.
+(A15P8) MARCH's order of work and a 13.17 label still froze work on clauses since closed;
+runtests.jl:1304 credited `_const_init!`; the builder sandbox loaded options.jl, so nothing caught
+a builder OPTIONS read (A2B8). (A15P9) R31's reason for ClosedWorldPlan.ir_cache argued for `Type`.
+
+Resolution:
+- In batch 116a (685c1b93), its own changes, before it landed: A15C1-A15C7, A15P2, A15P3 and
+  A15E2 (Amendment 4 of its contract).
+- In batch 116x (the commit carrying this entry), each case run at the start first:
+  - A15B1: _emit! records nothing while the code is unreachable; unreachable, br, return and throw
+    are recorded before they end reachability, end, else and catch after they restore it, and a
+    fragment appended where its function's code is unreachable adds nothing. Model first:
+    OperandStack.tla's claim is Sound, over the recorded program, with
+    MCOperandStackDeadCodeBroken (every instruction recorded) violating it. test/builder_cases.jl's
+    dead_cases rows a-f failed and hold; L172. The probes lose dead instructions only: 225
+    changed, every change a deletion, each module valid, the 1,593 lines removed 1,576
+    `unreachable` and 17 `return`, each right after an unreachable, a throw or a return;
+  - A15E1: model first, ExceptionStack.tla's HostCallInCatch keeps Julia's escaped entry until the
+    host's catch block ends, and MCExceptionStackHostCallInCatchBroken violates Agrees in four
+    steps (a call, its escape, a call inside the catch, a read: native the escaped exception, wasm
+    nothing); the design instances are unchanged. host_glue_js's and host_runtime_js's docstrings
+    state the contract (an export called inside a host's catch starts as after JL_CATCH's restore),
+    and test/real_bottom_exceptions.jl measures both sequences (wasm 2 and 1, native 3 and 3). The
+    wrong answer stays on 13.17 (A15E1); a host API mirroring JL_CATCH is Dale's decision;
+  - A15E3: the reader answers a type object's class by its kind (emit_type_object_kind!, the rule
+    typeof reads), so `throw(Int64)` escapes named DataType (the case reported the class
+    unreadable at the start); A15E4: recover_module_handles! refuses a module exporting
+    `wasmtarget.class_id`, naming it (a case); A15E5: the keyword is required;
+  - A15B2: one declaration path, declare_local!, which builder_add_local! and allocate_local! call
+    (L173); all 165 raw sites declare through it (int128.jl 109, calls.jl 23, context.jl 9,
+    statements.jl 9, builtins.jl 6, closures.jl's trampolines 6, julia_numeric_tier.jl 3), and
+    R41, counting a raw push, is a lock at 0; the probes are byte-identical across the move;
+  - A15B3: a fragment sharing its function's locals must carry its parameters; A15B4: trunc_sat!
+    refuses a sub-op above 0x07, and the dead STRUCT_GET_S/U arms and constants go; A15B5:
+    WasmImport refuses an unnamed function import, and the writer names every import (rows t, u
+    and v of test/builder_cases.jl failed and hold); A15B6: source_map_json names the classes before
+    encoding (add_minified_class_names!, dart's map-object form), the wasm-opt path decodes,
+    names and encodes, and the reader's reason is a Julia fact; A15B7: both comments are true;
+  - A15P1: L156 counts each test file's import_stubs compile sites, refusals excepted, against its
+    assertions, and the five modules are asserted; A15P4: probe_bytes.jl takes the names from the
+    module object (compile_module, whose bytes equal compile_multi's on all 225 probes); A15P5:
+    13.7 holds the import numbering; A15P6: a ref.func in a global's initializer needs no other
+    declaration, a body's names one an element segment or an export names, and the test says so;
+    A15P7: both rows; A15P8: the order of work states Dale's 2026-10-09 priority, the label and
+    the runtests comment are true, and the sandbox starts at builder/types.jl, L149 counting an
+    OPTIONS read in src/builder; A15P9: ir_cache's return type is `Type`, its R31 entry gone.
+  The cases failed at the start and pass; L172, L173, R41 and the changes to L149, L156, L160 and
+  L169 were negative-tested; the probes change only by the dead-code drop and the class reader.
+- Everything else is on MARCH 13.17 under its row: A15E1 (the host's catch).

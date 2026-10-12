@@ -1302,8 +1302,6 @@ begin
             total = sum(countraw(joinpath(cgdir, f)) for f in readdir(cgdir) if endswith(f, ".jl"))
             # Baseline residual is ~50 (all out-of-scope). Ceiling catches any real regression;
             # LOWER it as the residual is cleaned (it must only trend down).
-            # march16: +4 in closures.jl — the vtable-global INIT bytes (constant-expression
-            # serialization, the same out-of-scope class as types.jl's _const_init!).
             @test total <= 65
             # the three fully-migrated mega-dispatchers must STAY fully migrated:
             for f in ("calls.jl", "invoke.jl", "statements.jl", "int128.jl")
@@ -3609,21 +3607,20 @@ begin
             validate_block_start!(v, :loop)
             validate_push!(v, I32)  # loop counter
             validate_pop_any!(v)    # consume it
-            validate_br!(v, 0)  # br back to loop start
+            WasmTarget.validate_branch_types!(v, 0)  # br back to loop start
             validate_block_end!(v)
             @test !has_errors(v)
 
-            # Nested block + br to outer
-            v = _p29_v("test_blocks_4")
-            validate_block_start!(v, :block, WasmValType[I32])  # outer
-            validate_block_start!(v, :block)                     # inner (void)
-            validate_push!(v, I32)
-            validate_br!(v, 1)  # br to outer block (depth 1) — needs I32 result
-            validate_block_end!(v)  # end inner
-            validate_push!(v, I32)  # outer still needs its result
-            validate_block_end!(v)  # end outer
-            @test !has_errors(v)
-            @test stack_height(v) == 1
+            # Nested block + br to outer, through the builder (br's reachability is the builder's)
+            b = WasmTarget.InstrBuilder(; func_name="test_blocks_4", mod=_p29_mod())
+            outer = WasmTarget.block!(b; results=WasmValType[I32])
+            WasmTarget.block!(b)                                         # inner (void)
+            WasmTarget.i32_const!(b, 1)
+            WasmTarget.br!(b, outer)        # br to outer block (depth 1) — needs I32 result
+            WasmTarget.end_block!(b)        # end inner
+            WasmTarget.i32_const!(b, 2)     # outer still needs its result
+            WasmTarget.end_block!(b)        # end outer
+            @test stack_height(b.v) == 1
         end
 
         @testset "validator cannot be disabled or skip unknown opcodes" begin
@@ -3636,15 +3633,15 @@ begin
         end
 
         @testset "reachability after unconditional br" begin
-            v = _p29_v("test_reachability")
-
-            validate_block_start!(v, :block)
-            validate_br!(v, 0)  # unconditional branch
-            @test v.reachable == false
-            # Code after br is unreachable — pops/pushes should be skipped
-            validate_block_end!(v)
-            @test !has_errors(v)
-            @test v.reachable == true  # restored after block end
+            b = WasmTarget.InstrBuilder(; func_name="test_reachability", mod=_p29_mod())
+            l = WasmTarget.block!(b)
+            WasmTarget.br!(b, l)  # unconditional branch
+            @test b.v.reachable == false
+            # Code after br is unreachable: its pops check nothing and it is not recorded
+            WasmTarget.f64_const!(b, 0); WasmTarget.drop!(b)
+            WasmTarget.end_block!(b)
+            @test b.v.reachable == true  # restored after block end
+            @test Symbol[nameof(typeof(i)) for i in b.instrs] == [:Block, :Br, :End]
         end
     end
 

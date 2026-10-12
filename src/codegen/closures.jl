@@ -317,24 +317,15 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     local tested = any(1:arity) do j
         body.julia_params[j + (takes_context ? 1 : 0)] !== Any
     end
-    # locals after the params: the result's re-box scratch (a numeric result), then the
-    # argument tests' anyref and i32 scratch
-    tramp_locals = WasmValType[]
-    numeric && push!(tramp_locals, body.results[1])
-    local obj_scratch = -1   # a closure result's object scratch, before the tests' last two
-    if is_context_type(registry, body.return_type)
-        push!(tramp_locals, AnyRef)
-        obj_scratch = arity + length(tramp_locals)
-    end
-    tested && append!(tramp_locals, WasmValType[AnyRef, I32])
-    for t in tramp_locals
-        builder_add_local!(tb, t)                         # declared after the params, in order
-    end
+    # locals after the params: the result's re-box scratch (a numeric result), a closure
+    # result's object scratch, then the argument tests' anyref and i32 scratch
+    numeric && builder_add_local!(tb, body.results[1])
+    local obj_scratch = is_context_type(registry, body.return_type) ? builder_add_local!(tb, AnyRef) : -1
+    local tmp, itmp = tested ? (builder_add_local!(tb, AnyRef), builder_add_local!(tb, I32)) : (-1, -1)
     if tested
         local lbl = block!(tb)
         _emit_closure_arg_tests!(tb, mod, registry, closure_type, ClosureBody[body], body, arity,
-                                 takes_context, UInt32(arity + length(tramp_locals) - 1),
-                                 UInt32(arity + length(tramp_locals)), lbl)
+                                 takes_context, UInt32(tmp), UInt32(itmp), lbl)
         _closure_call_body!(tb, mod, registry, closure_type, body, arity, takes_context, base_idx,
                             captured_info, UInt32(1 + arity); obj_scratch)
         return_!(tb)
@@ -519,25 +510,16 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
                       func_name="closure_dispatch_trampoline", mod=mod)
     # locals after the params: the classed-value scratch for the tests, then one re-box
     # scratch per numeric result width the candidates return
-    local tmp = UInt32(1 + arity)
-    local tramp_locals = WasmValType[AnyRef]
+    local tmp = UInt32(builder_add_local!(tb, AnyRef))
     local scratch_of = Dict{WasmValType, UInt32}()
     for c in cands
         if !isempty(c.results) && c.results[1] in (I32, I64, F32, F64) && !haskey(scratch_of, c.results[1])
-            push!(tramp_locals, c.results[1])
-            scratch_of[c.results[1]] = UInt32(arity + length(tramp_locals))
+            scratch_of[c.results[1]] = UInt32(builder_add_local!(tb, c.results[1]))
         end
     end
-    push!(tramp_locals, I32)                              # the argument tests' i32 scratch
-    local itmp = UInt32(arity + length(tramp_locals))
-    local obj_scratch = -1
-    if any(c -> is_context_type(registry, c.return_type), cands)
-        push!(tramp_locals, AnyRef)                       # a closure result's object scratch
-        obj_scratch = arity + length(tramp_locals)
-    end
-    for t in tramp_locals
-        builder_add_local!(tb, t)                         # declared after the params, in order
-    end
+    local itmp = UInt32(builder_add_local!(tb, I32))      # the argument tests' i32 scratch
+    # a closure result's object scratch
+    local obj_scratch = any(c -> is_context_type(registry, c.return_type), cands) ? builder_add_local!(tb, AnyRef) : -1
     for c in cands
         local lbl = block!(tb)
         _emit_closure_arg_tests!(tb, mod, registry, closure_type, cands, c, arity, takes_context, tmp, itmp, lbl)

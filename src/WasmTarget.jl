@@ -213,7 +213,7 @@ end
 
 The name of every class the compile numbered, `[id + 1]` for classId `id`: `string(T)` as Julia
 prints it (the text serialize_type_ids writes), `nothing` for an id no class has. A source map
-carries them (add_minified_class_names) so an escaped exception's `minified:Class<id>` names its
+carries them (add_minified_class_names!) so an escaped exception's `minified:Class<id>` names its
 type.
 parity(pkg/dart2wasm/lib/compile.dart:617 classNames): one name per classId, `translator.classes[classId].cls?.name` (:621)
 """
@@ -234,19 +234,19 @@ end
 
 The one serialization of a compiled module, shared by every compile entry: its bytes —
 validated, or optimized by wasm-opt — and, for a module that records source maps
-(`mod.source_map_url`), its source map, with the names of its classes added after
-serialization (WT never carries type names in the module, which is dart's minified build;
-compile.dart:633), threaded through wasm-opt as dart threads it (io_util.dart:133). `nothing`
+(`mod.source_map_url`), its source map, with the names of its classes added to the map before
+it is encoded (WT never carries type names in the module, which is dart's minified build;
+compile.dart:633-639), threaded through wasm-opt as dart threads it (io_util.dart:133). `nothing`
 for the map otherwise.
 parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
 """
 function _emit_module(mod::WasmModule; optimize, validate::Bool,
                       class_names::Vector{Union{Nothing,String}})::Tuple{Vector{UInt8},Union{Nothing,String}}
     local source_map_url = mod.source_map_url
+    # parity(pkg/dart2wasm/lib/compile.dart:635 addMinifiedClassNames): after serialization (:633),
+    # before the map is encoded (:639)
     local bytes, json = source_map_url === nothing ? (to_bytes(mod), nothing) :
-                                                     to_bytes_with_source_map(mod)
-    # parity(pkg/dart2wasm/lib/compile.dart:635 addMinifiedClassNames): after serialization (:633)
-    json === nothing || (json = add_minified_class_names(json, class_names))
+                                                     to_bytes_with_source_map(mod; class_names)
     if optimize === false
         # Soundness gate: validate the emitted module (raises WasmValidationError on reject)
         validate && validate_wasm_bytes(bytes; label="compiled module")
@@ -522,7 +522,9 @@ function _run_wasm_opt(bytes::Vector{UInt8}, source_map_json::Union{Nothing,Stri
 
         source_map_json === nothing && return opt_bytes, nothing
         local out_map = read(joinpath(dir, "output.wasm.map"), String)
-        return opt_bytes, class_names === nothing ? out_map : add_minified_class_names(out_map, class_names)
+        class_names === nothing && return opt_bytes, out_map
+        # the output map, decoded, names the classes, and is encoded again (io_util.dart:206-211)
+        return opt_bytes, _json_write(add_minified_class_names!(_json_read(out_map)::Vector{Pair{String,Any}}, class_names))
     end
 end
 

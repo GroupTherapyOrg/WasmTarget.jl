@@ -50,8 +50,7 @@ function _ensure_typeof_scratch_local!(ctx::AbstractCompilationContext)::UInt32
         return ctx.typeof_scratch_local
     end
     # Allocate a new i32 local
-    local_idx = UInt32(ctx.n_params + length(ctx.locals))
-    push!(ctx.locals, I32)
+    local_idx = UInt32(allocate_local!(ctx, I32))
     ctx.typeof_scratch_local = local_idx
     return local_idx
 end
@@ -1030,8 +1029,7 @@ function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
     local _bsbits = 8 * sizeof(_bsT)
     _bsbits == 8 && return I32   # one byte: the swap is the identity
     # Allocate a scratch local to hold the input value (need it 4 times)
-    scratch_local = length(ctx.locals) + ctx.n_params
-    push!(ctx.locals, is_32bit ? I32 : I64)
+    scratch_local = allocate_local!(ctx, is_32bit ? I32 : I64)
     local _bswb = _sub_builder(fb, ctx, "compile_call", 1)   # consumes the input
     # Store input value
     local_set!(_bswb, scratch_local)
@@ -1228,13 +1226,11 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         struct_rt = get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true)
 
         # Pop y struct to local
-        y_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        y_struct_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, y_struct_local)
 
         # Pop x struct to local
-        x_struct_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        x_struct_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, x_struct_local)
 
         # Get y's hi part to check sign
@@ -1246,8 +1242,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         num!(bld, Opcode.I64_LT_S)
 
         # Store condition
-        is_neg_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, I32)
+        is_neg_local = allocate_local!(ctx, I32)
         local_set!(bld, is_neg_local)
 
         # Compute -x using emit_int128_neg
@@ -1255,13 +1250,11 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         emit_int128_neg!(bld, ctx, arg_type)
 
         # Store negated x
-        neg_x_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        neg_x_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
         local_set!(bld, neg_x_local)
 
         # Allocate result local
-        result_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        result_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
 
         # if is_neg { result = neg_x } else { result = x }
         local_get!(bld, is_neg_local)
@@ -1282,12 +1275,10 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
 
     else
         # Pop y to local, check sign, conditionally negate x
-        y_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, is_32bit ? I32 : I64)
+        y_local = allocate_local!(ctx, is_32bit ? I32 : I64)
         local_set!(bld, y_local)
 
-        x_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, is_32bit ? I32 : I64)
+        x_local = allocate_local!(ctx, is_32bit ? I32 : I64)
         local_set!(bld, x_local)
 
         # Compute signbit = y >> (bits-1) (arithmetic shift gives all 1s if negative)
@@ -1300,8 +1291,7 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
             num!(bld, Opcode.I64_SHR_S)
         end
 
-        signbit_local = length(ctx.locals) + ctx.n_params
-        push!(ctx.locals, is_32bit ? I32 : I64)
+        signbit_local = allocate_local!(ctx, is_32bit ? I32 : I64)
         local_set!(bld, signbit_local)
 
         # result = (x xor signbit) - signbit
@@ -2648,14 +2638,14 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
             emit_value!(bld, arg, ctx, aw;
                         from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
         end
-        l = length(ctx.locals) + ctx.n_params; push!(ctx.locals, aw)
+        l = allocate_local!(ctx, aw)
         local_set!(bld, l)
         push!(arg_locals, l)
     end
     # Read dispatch typeId into a local.
     local_get!(bld, arg_locals[dpos])
     emit_class_id!(bld, ctx, call_arg_types[dpos])
-    tid_local = length(ctx.locals) + ctx.n_params; push!(ctx.locals, I32)
+    tid_local = allocate_local!(ctx, I32)
     local_set!(bld, tid_local)
 
     emit_branch = (eb, tid, cw, c) -> begin
@@ -2699,7 +2689,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     for _ in 1:nb; end_block!(bld); end
     # Heuristic-safe tail: land result in a scratch local, end with local.get.
     if result_wasm !== nothing
-        rl = length(ctx.locals) + ctx.n_params; push!(ctx.locals, result_wasm)
+        rl = allocate_local!(ctx, result_wasm)
         local_set!(bld, rl)
         local_get!(bld, rl)
     end
@@ -2961,10 +2951,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _prw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _prw_w64 = _prw_s == 8 || _pr_tp0 === Float64
             # scratch: arr ref + base index
-            local _prw_la = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, ConcreteRef(_prw_arr, true))
-            local _prw_lb = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
+            local _prw_la = allocate_local!(ctx, ConcreteRef(_prw_arr, true))
+            local _prw_lb = allocate_local!(ctx, I32)
             local _prwb = _ctx_builder(ctx, "compile_call")
             _emit_backing_array!(_prwb, _pr_vec, ctx, _prw_arr)
             local_set!(_prwb, _prw_la)
@@ -3019,8 +3007,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _prb_arr = get_array_type!(ctx.mod, ctx.type_registry, _prb_te)
             local _prb_w64 = _prb_s == 8
             # scratch: byte offset (i32)
-            local _prb_lb = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
+            local _prb_lb = allocate_local!(ctx, I32)
             local _prbb = _ctx_builder(ctx, "compile_call")
             # byte offset = ptr - base + (i-1)   (pointer target is 1 byte wide)
             _emit_storage_pointer_offset!(_prbb, ctx, ptr_arg, length(args) >= 2 ? args[2] : nothing, _prb_vec, 1)
@@ -3253,12 +3240,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 local _psw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
                 local _psw_s = sizeof(_psg_tp)
                 # scratch locals: array ref, base byte index, value (i64)
-                local _psw_la = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, ConcreteRef(_psw_arr, true))
-                local _psw_li = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, I32)
-                local _psw_lv = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, I64)
+                local _psw_la = allocate_local!(ctx, ConcreteRef(_psw_arr, true))
+                local _psw_li = allocate_local!(ctx, I32)
+                local _psw_lv = allocate_local!(ctx, I64)
                 local _pswb = _ctx_builder(ctx, "compile_call")
                 # array ref
                 _emit_backing_array!(_pswb, _psw_vec, ctx, _psw_arr)
@@ -4847,10 +4831,10 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     size_type_idx = size_info.wasm_type_idx
     size_field_offset = size_info.field_offset
 
-    vec_ref_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(vec_type_idx, true))
-    src_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
-    len_local     = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, I32)
-    new_arr_local = UInt32(ctx.n_params + length(ctx.locals)); push!(ctx.locals, ConcreteRef(arr_type_idx, true))
+    vec_ref_local = UInt32(allocate_local!(ctx, ConcreteRef(vec_type_idx, true)))
+    src_arr_local = UInt32(allocate_local!(ctx, ConcreteRef(arr_type_idx, true)))
+    len_local     = UInt32(allocate_local!(ctx, I32))
+    new_arr_local = UInt32(allocate_local!(ctx, ConcreteRef(arr_type_idx, true)))
     src_off_local = UInt32(allocate_local!(ctx, I32))
 
     # vec_ref = container

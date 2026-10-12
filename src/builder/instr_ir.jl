@@ -105,7 +105,7 @@ struct RefFunc      <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/li
 # ── GC ───────────────────────────────────────────────────────────────────────────
 struct StructNew        <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2393 StructNew)
 struct StructNewDefault <: WasmInstr; idx::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2426 StructNewDefault)
-struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET/_S/_U; parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
+struct StructGet <: WasmInstr; idx::UInt32; field::UInt32; op::UInt8; end  # op = STRUCT_GET (struct_get! refuses a packed field); parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2253 StructGet)
 struct StructSet <: WasmInstr; idx::UInt32; field::UInt32; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:2358 StructSet)
 # end parity-region
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)

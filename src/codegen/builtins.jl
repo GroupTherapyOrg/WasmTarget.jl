@@ -1619,19 +1619,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
             local k = allocate_local!(ctx, I32)
             local_set!(_tofb, v)
             local kdone = block!(_tofb; results=WasmValType[AnyRef])
-            local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_typevar_idx), false)
-            if_!(_tofb); konst!(TypeVar); br!(_tofb, kdone); end_block!(_tofb)
-            local_get!(_tofb, v); ref_test!(_tofb, Int64(reg.jl_type_idx), false)
-            if_!(_tofb)
-            local_get!(_tofb, v); ref_cast!(_tofb, Int64(reg.jl_type_idx), false)
-            struct_get!(_tofb, reg.jl_type_idx, UInt32(0)); local_set!(_tofb, k)
-            for (K, code) in ((Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
-                              (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
-                local_get!(_tofb, k); i32_const!(_tofb, Int64(code)); num!(_tofb, Opcode.I32_EQ)
-                if_!(_tofb); konst!(K); br!(_tofb, kdone); end_block!(_tofb)
-            end
-            konst!(DataType); br!(_tofb, kdone)
-            end_block!(_tofb)
+            emit_type_object_kind!(_tofb, reg, v, k, kdone, konst!)
             # a Memory or a SimpleVector is a bare wasm array, which carries no classId: its
             # class is the one closed-world class whose array type it is
             for (C, arr) in bare
@@ -1653,6 +1641,37 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
     end
     append_builder!(fb, _tofb)
     return append_builder!(b, fb)
+end
+
+"""
+    emit_type_object_kind!(b, reg, v, k, done, answer!) -> b
+
+A type object's class is its kind's (typeof(Int64) === DataType): when the value in local `v`
+is a TypeVar (its own struct, a subtype of `\$JlType`, tested first) or a `\$JlType`, whose
+`\$kind` field names Union, UnionAll, TypeofBottom or else DataType (Union and UnionAll share
+one wasm struct), `answer!(K)` is emitted for its kind K and the code branches to `done`; any
+other value falls through. `k` is an i32 scratch local. The one kind rule typeof and the
+exported class reader share.
+parity(quarantine: a Julia type object is a value whose type is its kind (jl_typeof of a
+DataType, Union, UnionAll or TypeVar); WT holds it as a `\$JlType` struct outside the numbered
+classes, where dart's type objects are classed instances, type.dart.)
+"""
+function emit_type_object_kind!(b::InstrBuilder, reg::TypeRegistry, v::Integer, k::Integer,
+                                done::ControlLabel, answer!::Function)::InstrBuilder
+    local_get!(b, v); ref_test!(b, Int64(reg.jl_typevar_idx), false)
+    if_!(b); answer!(TypeVar); br!(b, done); end_block!(b)
+    local_get!(b, v); ref_test!(b, Int64(reg.jl_type_idx), false)
+    if_!(b)
+    local_get!(b, v); ref_cast!(b, Int64(reg.jl_type_idx), false)
+    struct_get!(b, reg.jl_type_idx, UInt32(0)); local_set!(b, k)
+    for (K, code) in ((Union, JL_TYPE_KIND_UNION), (UnionAll, JL_TYPE_KIND_UNIONALL),
+                      (Core.TypeofBottom, JL_TYPE_KIND_BOTTOM))
+        local_get!(b, k); i32_const!(b, Int64(code)); num!(b, Opcode.I32_EQ)
+        if_!(b); answer!(K); br!(b, done); end_block!(b)
+    end
+    answer!(DataType); br!(b, done)
+    end_block!(b)
+    return b
 end
 
 """
@@ -2585,8 +2604,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 
                         # The struct is on the stack, we need to convert struct fields to array
                         # Store in local, then create array from fields
-                        tuple_local = length(ctx.locals) + ctx.n_params
-                        push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                        tuple_local = allocate_local!(ctx, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                         local_set!(_htb, tuple_local)
 
                         # Push all fields onto stack (account for typeId at field 0)
@@ -2599,8 +2617,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         array_new_fixed!(_htb, array_type_idx, length(elem_types))
 
                         # Store array in local - use concrete ref to specific array type
-                        array_local = length(ctx.locals) + ctx.n_params
-                        push!(ctx.locals, ConcreteRef(array_type_idx, true))
+                        array_local = allocate_local!(ctx, ConcreteRef(array_type_idx, true))
                         local_set!(_htb, array_local)
 
                         # Now compile the index and access the array
@@ -2614,8 +2631,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         num!(_htb, Opcode.I32_WRAP_I64)
 
                         # Store index in local
-                        idx_local = length(ctx.locals) + ctx.n_params
-                        push!(ctx.locals, I32)
+                        idx_local = allocate_local!(ctx, I32)
                         local_set!(_htb, idx_local)
 
                         # Access array: array.get (use ARRAY_GET_U for packed i8 arrays)
@@ -2674,8 +2690,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             # tuple value → tuple_local
                             emit_value!(_hetb, obj_arg, ctx,
                                         ConcreteRef(UInt32(info.wasm_type_idx), true))
-                            tuple_local = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                            tuple_local = allocate_local!(ctx, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
                             local_set!(_hetb, tuple_local)
 
                             # index (1-based i64) → 0-based i32 → idx_local
@@ -2683,8 +2698,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             i64_const!(_hetb, 1)
                             num!(_hetb, Opcode.I64_SUB)
                             num!(_hetb, Opcode.I32_WRAP_I64)
-                            idx_local = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, I32)
+                            idx_local = allocate_local!(ctx, I32)
                             local_set!(_hetb, idx_local)
 
                             n_fields = length(elem_types)
@@ -2741,8 +2755,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             # instruction to infer the produced type) mis-parse — they'd
                             # drop the value and substitute ref.null. A trailing local.get
                             # of the correctly-typed scratch is unambiguous.
-                            result_local = length(ctx.locals) + ctx.n_params
-                            push!(ctx.locals, union_wasm)
+                            result_local = allocate_local!(ctx, union_wasm)
                             local_set!(_hetb, result_local)
                             local_get!(_hetb, result_local)
                             append_builder!(fb, _hetb)

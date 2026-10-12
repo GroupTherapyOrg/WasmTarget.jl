@@ -1418,7 +1418,7 @@ per-node answers, which codegen reads and never recomputes.
 """
 struct ClosedWorldPlan
     functions::Vector{Any}
-    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Any}}
+    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Type}}
     candidate_mis::Set{Core.MethodInstance}
     invoke_only::Set{Core.MethodInstance}
     callable_types::Set{DataType}
@@ -1438,7 +1438,7 @@ A MethodInstance outside the closed world is an error, never a second inference 
 run another interpreter, at another world, in another cache partition).
 parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm receives Kernel already built by the CFE.)
 """
-function plan_ir(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Tuple{Core.CodeInfo,Any}
+function plan_ir(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Tuple{Core.CodeInfo,Type}
     local hit = plan_ir_or_nothing(plan, mi)
     hit === nothing && error("$(mi) is outside the collected closed world; codegen reads the " *
                              "collection's IR, never a second inference")
@@ -1453,7 +1453,7 @@ import's, which is not the module's; a captor body no edge reached, whose writes
 The caller states which, and a miss is never a second inference.
 parity(quarantine: Julia's typed IR is WT's frontend input, asked of Julia's own inference; dart2wasm receives Kernel already built by the CFE.)
 """
-function plan_ir_or_nothing(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Union{Nothing,Tuple{Core.CodeInfo,Any}}
+function plan_ir_or_nothing(plan::ClosedWorldPlan, mi::Core.MethodInstance)::Union{Nothing,Tuple{Core.CodeInfo,Type}}
     local hit = get(plan.ir_cache, mi, nothing)
     return hit === nothing ? nothing : (hit[1], hit[2])
 end
@@ -1504,7 +1504,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     codeinfos = world.codeinfos
 
     functions = Any[]
-    ir_cache = IdDict{Core.MethodInstance, Tuple{Core.CodeInfo, Any}}()
+    ir_cache = IdDict{Core.MethodInstance, Tuple{Core.CodeInfo, Type}}()
     collected_method_specs = Set{Any}()
     for j in 1:2:length(codeinfos)
         j + 1 <= length(codeinfos) || continue

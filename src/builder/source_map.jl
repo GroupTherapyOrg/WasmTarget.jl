@@ -78,15 +78,18 @@ shift_by(m::SourceMapping, shift::Int)::SourceMapping =
     shift == 0 ? m : SourceMapping(m.offset + shift, m.info)
 
 """
-    source_map_json(mappings) -> String
+    source_map_json(mappings; class_names) -> String
 
 The Source Map v3 JSON of `mappings` (module byte offsets, in order): the `sources` and
 `names` tables, and the `mappings` string of VLQ deltas — one segment per mapping, its
 generated column the byte offset (a module is one generated line). Unmapped code before the
-first mapped segment is left implicit, as dart leaves it.
+first mapped segment is left implicit, as dart leaves it. With `class_names` (the module's
+classes, a minified build's), the map names them (add_minified_class_names!) before it is
+encoded, as dart adds them to the map object before jsonEncode (compile.dart:635-639).
 parity(pkg/wasm_builder/lib/source_map.dart:97 _sourceMapToJson)
 """
-function source_map_json(mappings::Vector{SourceMapping})::String
+function source_map_json(mappings::Vector{SourceMapping};
+                         class_names::Union{Nothing,Vector{Union{Nothing,String}}}=nothing)::String
     local sources = String[]
     local source_index = Dict{String,Int}()
     local names = String[]
@@ -118,12 +121,13 @@ function source_map_json(mappings::Vector{SourceMapping})::String
         end
         i != length(mappings) && write(io, ',')
     end
-    local quoted(v) = join(("\"" * _json_string_escape(s) * "\"" for s in v), ",")
-    return string("{\"version\":3,\"sources\":[", quoted(sources), "],\"names\":[", quoted(names),
-                  "],\"mappings\":\"", String(take!(io)), "\"}")
+    local sm = Pair{String,Any}["version" => 3, "sources" => Any[sources...], "names" => Any[names...],
+                                "mappings" => String(take!(io))]
+    class_names === nothing || add_minified_class_names!(sm, class_names)
+    return _json_write(sm)
 end
 
-# parity(quarantine: the JSON text of a source map is written by hand, as src/ has no JSON dependency; dart writes it with dart:convert's jsonEncode.)
+# parity(quarantine: the JSON text of a source map is written by hand, as Base and the stdlib have no JSON codec; dart writes it with dart:convert's jsonEncode.)
 function _json_string_escape(s::AbstractString)::String
     local io = IOBuffer()
     for c in s
@@ -177,17 +181,17 @@ end
 const _SOURCE_MAP_EXTENSION_NAME = "x_org_dartlang_dart2js"
 
 """
-    add_minified_class_names(source_map_json, class_names) -> String
+    add_minified_class_names!(sm, class_names) -> sm
 
-The source map with the names of the module's classes, so a `minified:Class<id>` a host prints
-for an escaped exception (host_escape_js) reads as the class's name: `class_names[id + 1]` is
-class `id`'s name, `nothing` for an id no class has. A name already in `names` is reused,
-the rest are appended, and the extension's `global` lists "Class<id>,<name index>" pairs
-(its `instance` list empty, as tools expect it present).
+Add the names of the module's classes to the source map object `sm` (as _json_read reads one),
+so a `minified:Class<id>` a host prints for an escaped exception (host_escape_js) reads as the
+class's name: `class_names[id + 1]` is class `id`'s name, `nothing` for an id no class has. A
+name already in `names` is reused, the rest are appended, and the extension's `global` lists
+"Class<id>,<name index>" pairs (its `instance` list empty, as tools expect it present).
 parity(pkg/dart2wasm/lib/source_map_utils.dart:15 addMinifiedClassNames)
 """
-function add_minified_class_names(source_map_json::String, class_names::Vector{Union{Nothing,String}})::String
-    local sm = _json_read(source_map_json)::Vector{Pair{String,Any}}
+function add_minified_class_names!(sm::Vector{Pair{String,Any}},
+                                   class_names::Vector{Union{Nothing,String}})::Vector{Pair{String,Any}}
     local names = _json_field(sm, "names")::Vector{Any}
     local name_indices = Dict{String,Int}()
     for (i, n) in enumerate(names)
@@ -208,13 +212,13 @@ function add_minified_class_names(source_map_json::String, class_names::Vector{U
     local at = findfirst(p -> p.first == _SOURCE_MAP_EXTENSION_NAME, sm)
     at === nothing ? push!(sm, _SOURCE_MAP_EXTENSION_NAME => extension) :
                      (sm[at] = _SOURCE_MAP_EXTENSION_NAME => extension)
-    return _json_write(sm)
+    return sm
 end
 
 """
     minified_class_names(source_map_json) -> Union{Nothing, Vector{Union{Nothing,String}}}
 
-The class names add_minified_class_names wrote into a source map, `[id + 1]` for class `id`
+The class names add_minified_class_names! wrote into a source map, `[id + 1]` for class `id`
 (trailing ids no class has dropped), or `nothing` for a map without the extension.
 parity(pkg/dart2wasm/lib/source_map_utils.dart:63 getMinifiedClassNames)
 """
@@ -243,18 +247,18 @@ end
 
 # A source map's JSON value: an object as its (key => value) pairs in order, an array, a string,
 # an integer or a float, true, false and null (nothing).
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 const _JsonValue = Union{Vector{Pair{String,Any}}, Vector{Any}, String, Int, Float64, Bool, Nothing}
 
 # A source map's JSON text, read into its value.
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 function _json_read(s::String)::_JsonValue
     local v, i = _json_value(s, _json_skip(s, 1))
     _json_skip(s, i) > ncodeunits(s) || error("source map: text after its JSON value, at byte $i")
     return v
 end
 
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 function _json_skip(s::String, i::Int)::Int
     while i <= ncodeunits(s) && codeunit(s, i) in (0x20, 0x09, 0x0a, 0x0d)
         i += 1
@@ -262,7 +266,7 @@ function _json_skip(s::String, i::Int)::Int
     return i
 end
 
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 function _json_value(s::String, i::Int)::Tuple{_JsonValue,Int}
     i <= ncodeunits(s) || error("source map: its JSON ends inside a value")
     local c = codeunit(s, i)
@@ -317,7 +321,7 @@ function _json_value(s::String, i::Int)::Tuple{_JsonValue,Int}
     return parse(Float64, word), j
 end
 
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 function _json_string(s::String, i::Int)::Tuple{String,Int}
     codeunit(s, i) == UInt8('"') || error("source map: a string expected at byte $i")
     local io = IOBuffer()
@@ -360,7 +364,7 @@ function _json_string(s::String, i::Int)::Tuple{String,Int}
 end
 
 # the four hex digits of the `\u` escape at byte `i`
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode, io_util.dart:168)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart decodes a source map with dart:convert's jsonDecode to read it back from disk around wasm-opt, io_util.dart:168)
 function _json_hex4(s::String, i::Int)::UInt32
     (i + 5 <= ncodeunits(s) && all(k -> codeunit(s, k) in UInt8('0'):UInt8('9') ||
                                        codeunit(s, k) in UInt8('a'):UInt8('f') ||
@@ -370,7 +374,7 @@ function _json_hex4(s::String, i::Int)::UInt32
 end
 
 # A JSON value as text, an object's pairs in their order.
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart encodes a source map with dart:convert's jsonEncode, io_util.dart:209)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart encodes a source map with dart:convert's jsonEncode, compile.dart:639 and io_util.dart:209)
 function _json_write(v)::String
     v isa Vector{Pair{String,Any}} &&
         return "{" * join(("\"" * _json_string_escape(k) * "\":" * _json_write(x) for (k, x) in v), ",") * "}"
@@ -384,7 +388,7 @@ function _json_write(v)::String
 end
 
 # the value of `key` in a JSON object read by _json_read, or nothing
-# parity(quarantine: src/ has no JSON dependency (as _json_string_escape); dart reads a decoded map by key, source_map_utils.dart:19)
+# parity(quarantine: Base and the stdlib have no JSON codec (as _json_string_escape); dart reads a decoded map by key, source_map_utils.dart:19)
 function _json_field(object::Vector{Pair{String,Any}}, key::String)::_JsonValue
     local at = findfirst(p -> p.first == key, object)
     return at === nothing ? nothing : object[at].second

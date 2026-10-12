@@ -7,7 +7,7 @@
 export WasmStackValidator, validate_push!, validate_pop!, validate_pop_any!,
        stack_height, has_errors, validate_instruction!,
        ControlLabel, ValidatorLabel, validate_block_start!, validate_block_end!,
-       validate_br!, validate_br_if!, validate_if_start!, validate_else!,
+       validate_br_if!, validate_if_start!, validate_else!,
        validate_catch_legacy!, validate_gc_instruction!, reset_local_initialization!
 
 """Symbolic structured-control target, matching dart2wasm's `Label` API. parity(pkg/wasm_builder/lib/src/builder/instructions.dart:31 Label)"""
@@ -353,7 +353,7 @@ function validate_instruction!(v::WasmStackValidator, opcode::UInt8)::Union{Noth
     elseif opcode == Opcode.F64_CONVERT_I64_S || opcode == Opcode.F64_CONVERT_I64_U
         validate_pop!(v, I64); validate_push!(v, F64)
 
-    # --- Sign-extension (i32; the i64 family was already tracked) ---
+    # --- Sign-extension (i32 only: Opcode holds no i64 sign-extension, so num! refuses it) ---
     elseif opcode == Opcode.I32_EXTEND8_S || opcode == Opcode.I32_EXTEND16_S
         validate_pop!(v, I32); validate_push!(v, I32)
 
@@ -477,22 +477,6 @@ function validate_block_end!(v::WasmStackValidator)::Union{Nothing, Bool}
 
     # Restore reachability: code after block is reachable if block entry was reachable
     v.reachable = label.reachable_at_entry
-end
-
-"""
-    validate_br!(v, label_depth)
-
-Validate an unconditional branch. Checks that:
-1. The target label exists at the given depth
-2. The stack has the correct types for the target (a block's or if's results, a loop's inputs)
-
-After br, code is unreachable. Mirrors dart2wasm's `br(label)`.
-parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
-"""
-function validate_br!(v::WasmStackValidator, label_depth::Int)::Nothing
-    validate_branch_types!(v, label_depth)
-    v.reachable = false
-    return nothing
 end
 
 """
@@ -673,7 +657,7 @@ function validate_gc_instruction!(v::WasmStackValidator, gc_opcode::UInt8, type_
         type_idx = type_info isa Tuple ? type_info[1] : type_info
         validate_push!(v, ConcreteRef(UInt32(type_idx), false))
 
-    elseif gc_opcode == Opcode.STRUCT_GET || gc_opcode == Opcode.STRUCT_GET_S || gc_opcode == Opcode.STRUCT_GET_U
+    elseif gc_opcode == Opcode.STRUCT_GET
         # struct.get $t $i: pop (ref null $t), push field_type
         type_idx, field_type = type_info
         validate_pop!(v, ConcreteRef(UInt32(type_idx), true))

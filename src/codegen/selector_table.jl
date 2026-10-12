@@ -284,7 +284,7 @@ parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_registry,
                                         base_struct_idx::UInt32;
                                         caller_return_type::Type=Any, mod::WasmModule,
-                                        type_registry=nothing)::InstrBuilder
+                                        type_registry::TypeRegistry)::InstrBuilder
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
     arity = Int(dt.arity)
@@ -312,8 +312,7 @@ function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_r
     # Result seam: the caller's DECLARED result may be anyref (dynamic-call inference)
     # while the selector signature is typed — box through the ONE producer.
     declared = julia_to_wasm_type(caller_return_type)
-    if _wt_is_ref(declared) && dt.result_wasm_type in (I32, I64, F32, F64) &&
-       mod !== nothing && type_registry !== nothing
+    if _wt_is_ref(declared) && dt.result_wasm_type in (I32, I64, F32, F64)
         rts = Set{Type}(e.return_type for e in dt.entries)
         jt = length(rts) == 1 ? first(rts) : nothing
         if jt !== nothing

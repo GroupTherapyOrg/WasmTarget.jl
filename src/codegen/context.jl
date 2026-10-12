@@ -297,23 +297,14 @@ function allocate_string_scratch!(ctx::AbstractCompilationContext)::Nothing
     str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
     str_ref_type = ConcreteRef(str_type_idx, true)
 
-    # Calculate indices BEFORE adding locals (indices are n_params + current local count)
-    scratch_base = ctx.n_params + length(ctx.locals)
-    result_local = scratch_base      # ref for result
-    str1_local = scratch_base + 1    # ref for str1
-    str2_local = scratch_base + 2    # ref for str2
-    len1_local = scratch_base + 3    # i32 for len1
-    i_local = scratch_base + 4       # i32 for len2/index
+    result_local = allocate_local!(ctx, str_ref_type)   # ref for result
+    str1_local = allocate_local!(ctx, str_ref_type)     # ref for str1
+    str2_local = allocate_local!(ctx, str_ref_type)     # ref for str2
+    len1_local = allocate_local!(ctx, I32)              # i32 for len1
+    i_local = allocate_local!(ctx, I32)                 # i32 for len2/index
 
     # Store the indices in context
     ctx.scratch_locals = (result_local, str1_local, str2_local, len1_local, i_local)
-
-    # Now add the locals
-    push!(ctx.locals, str_ref_type)  # result/scratch ref 1
-    push!(ctx.locals, str_ref_type)  # scratch ref 2
-    push!(ctx.locals, str_ref_type)  # scratch ref 3
-    push!(ctx.locals, I32)           # scratch i32 1 (len1)
-    push!(ctx.locals, I32)           # scratch i32 2 (len2/i)
     return nothing
 end
 
@@ -356,19 +347,13 @@ Allocate a new local variable of the given Julia type and return its index.
 The index is relative to the function's locals, accounting for parameters.
 parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 """
-function allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int
-    wasm_type = get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true)
-    local_idx = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, wasm_type)
-    return local_idx
-end
+allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int =
+    allocate_local!(ctx, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true))
 
+# the function's one declaration path (declare_local!, builder_add_local!'s)
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
-function allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int
-    local_idx = ctx.n_params + length(ctx.locals)
-    push!(ctx.locals, wasm_type)
-    return local_idx
-end
+allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int =
+    declare_local!(ctx.mod, ctx.locals, ctx.n_params, wasm_type)
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
 function boxing_scratch_local!(ctx::AbstractCompilationContext,
@@ -625,13 +610,12 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
                 end
             end
 
-            local_idx = ctx.n_params + length(ctx.locals)
+            local_idx = allocate_local!(ctx, phi_wasm_type)
             # Trace externref phi allocations
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
                 n_stmts = length(nir)
                 @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            push!(ctx.locals, phi_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -643,8 +627,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
         if rec.node isa NirPhiC
             phic_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             phic_wasm_type = get_concrete_wasm_type(phic_julia_type, ctx.mod, ctx.type_registry; for_local=true)
-            local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, phic_wasm_type)
+            local_idx = allocate_local!(ctx, phic_wasm_type)
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -1163,13 +1146,12 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 end
             end
 
-            local_idx = ctx.n_params + length(ctx.locals)
+            local_idx = allocate_local!(ctx, wasm_type)
             # Trace externref allocations for diagnostics
             if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
                 n_stmts = length(nir)
                 @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
             end
-            push!(ctx.locals, wasm_type)
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end
@@ -1200,8 +1182,7 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
             # Determine type from the SSA type of this statement
             ssa_type = get(ctx.ssa_types, i, Any)
             wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
-            local_idx = ctx.n_params + length(ctx.locals)
-            push!(ctx.locals, wasm_type)
+            local_idx = allocate_local!(ctx, wasm_type)
             ctx.slot_locals[slot_id] = local_idx
         end
     end

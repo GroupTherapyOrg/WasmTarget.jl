@@ -208,11 +208,17 @@ set_context!(b::InstrBuilder, ctx::AbstractString)::InstrBuilder = (b.context = 
 _stack_snapshot(b::InstrBuilder)::Vector{String} = String[string(t) for t in b.v.stack]
 
 # Record an instruction (ir/ layer) + trace, then enforce strictness. Validation has
-# already run against the operand-stack model by the calling method.
+# already run against the operand-stack model by the calling method. An instruction added while
+# the code is unreachable is not recorded (dart `_add`: `if (!_reachable) return;`), so the
+# builder holds no dead code, which it does not type: unreachable, br, return and throw are
+# recorded before they make the code unreachable, and end, else and catch after they restore
+# their frame's entry reachability, so a frame entered in dead code is dropped whole.
+# formal(dev/formal/OperandStack.tla): Sound, the program recorded for an accepted one is valid.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:363 InstructionsBuilder._add)
 @inline function _emit!(b::InstrBuilder, instr::InstrIR.WasmInstr)::InstrBuilder
     (b.constant_expression && !InstrIR.is_constant(instr)) &&
         _reject!(b, "$(mnemonic(instr)) is not a constant instruction, and a global's initializer is a constant expression")
+    b.v.reachable || return _check!(b)
     push!(b.instrs, instr)
     if b.trace !== nothing
         top = isempty(b.v.stack) ? "-" : string(b.v.stack[end])
@@ -239,10 +245,21 @@ end
 # its index (0-based). A local is set where it is declared exactly when its type has a default
 # (a number, or a nullable reference); any other local is set by its first local.set or tee.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
-function builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int
-    typ isa ConcreteRef && _module_type(b.v.mod, typ.type_idx, :add_local)   # a type the module defines
-    push!(b.locals, typ)
-    return length(b.params) + length(b.locals) - 1
+builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int = declare_local!(b.v.mod, b.locals, length(b.params), typ)
+
+"""
+    declare_local!(mod, locals, nparams, typ) -> Int
+
+The one declaration of a local: `typ` (a type `mod` defines, when a defined type's reference)
+appended to `locals`, the function's one list, which its builders and its compilation context
+share, and its index after the function's `nparams` parameters returned. builder_add_local!
+declares through it, and so does a compilation's allocate_local!, before or between its builders.
+parity(pkg/wasm_builder/lib/src/builder/instructions.dart:382 InstructionsBuilder.addLocal)
+"""
+function declare_local!(mod::WasmModule, locals::Vector{WasmValType}, nparams::Integer, typ::WasmValType)::Int
+    typ isa ConcreteRef && _module_type(mod, typ.type_idx, :add_local)   # a type the module defines
+    push!(locals, typ)
+    return Int(nparams) + length(locals) - 1
 end
 
 # Reject the instruction being emitted, at its call, with the builder's context.
@@ -277,9 +294,14 @@ f64_const!(b::InstrBuilder, x::Real)::InstrBuilder = (validate_push!(b.v, F64); 
 num!(b::InstrBuilder, op::UInt8)::InstrBuilder = (validate_instruction!(b.v, op); _emit!(b, InstrIR.NumOp(op)))
 
 # Saturating truncation (FC-prefixed, sub-op 0x00–0x07): pop a float, push an int. The
-# sub-op encodes both: to = i32 (<0x04) or i64; from = f32 (0x00,0x01,0x04,0x05) or f64.
+# sub-op encodes both: to = i32 (<0x04) or i64; from = f32 (0x00,0x01,0x04,0x05) or f64. A
+# sub-op above 0x07 is another FC instruction (memory.init, data.drop, memory.copy, memory.fill,
+# a table instruction), each with its own stack effect, and is refused: dart has one method per
+# saturating truncation (i32_trunc_sat_f32_s … i64_trunc_sat_f64_u).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:3808 InstructionsBuilder.i32_trunc_sat_f32_s)
 function trunc_sat!(b::InstrBuilder, sub_op::UInt8)::InstrBuilder
+    sub_op <= 0x07 || throw(ArgumentError("trunc_sat! emits a saturating truncation (sub-op 0x00-0x07), not the " *
+                                          "FC instruction 0x$(string(sub_op, base=16, pad=2))"))
     to   = sub_op < 0x04 ? I32 : I64
     from = (sub_op == 0x00 || sub_op == 0x01 || sub_op == 0x04 || sub_op == 0x05) ? F32 : F64
     validate_pop!(b.v, from)
@@ -369,8 +391,7 @@ end
 function global_get!(b::InstrBuilder, idx::Integer)::InstrBuilder
     local g = _module_global(b.v.mod, idx, :global_get)
     # a constant expression reads an immutable global defined before the one it initializes
-    # (the spec's rule; dart orders its globals so each initializer reads earlier ones,
-    # globals.dart:56)
+    # (the spec's rule, which dart's builder leaves to the engine)
     if b.constant_expression
         idx < b.readable_globals || _reject!(b, "global.get $idx in the initializer of global " *
             "$(b.readable_globals): a constant expression reads only a global defined before it")
@@ -396,7 +417,7 @@ end
 
 # ── Control flow ────────────────────────────────────────────────────────────────
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:676 InstructionsBuilder.unreachable)
-unreachable!(b::InstrBuilder)::InstrBuilder = (b.v.reachable = false; _emit!(b, InstrIR.Unreachable()))
+unreachable!(b::InstrBuilder)::InstrBuilder = (_emit!(b, InstrIR.Unreachable()); b.v.reachable = false; b)
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:690 InstructionsBuilder.nop)
 nop!(b::InstrBuilder)::InstrBuilder = _emit!(b, InstrIR.Nop())
 
@@ -480,9 +501,16 @@ function finish_function!(b::InstrBuilder)::InstrBuilder
           _stack_snapshot(b), _byte_len(b)))
     return b
 end
+# br to the label `depth` frames out: the values it carries checked against the label's target
+# types, the br recorded, then nothing after it reachable (dart br: _verifyBranchTypes, _add,
+# `_reachable = false`)
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:863 InstructionsBuilder.br)
-_br_depth!(b::InstrBuilder, depth::Int)::InstrBuilder =
-    (validate_br!(b.v, depth); _emit!(b, InstrIR.Br(UInt32(depth))))
+function _br_depth!(b::InstrBuilder, depth::Int)::InstrBuilder
+    validate_branch_types!(b.v, depth)
+    _emit!(b, InstrIR.Br(UInt32(depth)))
+    b.v.reachable = false
+    return b
+end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:878 InstructionsBuilder.br_if)
 _br_if_depth!(b::InstrBuilder, depth::Int)::InstrBuilder =
     (validate_br_if!(b.v, depth); _emit!(b, InstrIR.BrIf(UInt32(depth))))
@@ -507,9 +535,10 @@ function return_!(b::InstrBuilder)::InstrBuilder
     if b.v.reachable
         for t in reverse(b.v.labels[1].result_types); validate_pop!(b.v, t); end
     end
-    b.v.reachable = false
     b.returns = true
     _emit!(b, InstrIR.Return())
+    b.v.reachable = false
+    return b
 end
 
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:947 InstructionsBuilder.call)
@@ -629,8 +658,9 @@ function throw_!(b::InstrBuilder, tag::Integer)::InstrBuilder
     if b.v.reachable
         for t in reverse(ft.params); validate_pop!(b.v, t); end
     end
-    b.v.reachable = false
     _emit!(b, InstrIR.Throw(UInt32(tag)))
+    b.v.reachable = false
+    return b
 end
 
 # ── Reference ───────────────────────────────────────────────────────────────────
@@ -661,13 +691,19 @@ end
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1632 InstructionsBuilder.ref_eq)
 ref_eq!(b::InstrBuilder)::InstrBuilder =
     (validate_pop!(b.v, EqRef); validate_pop!(b.v, EqRef); validate_push!(b.v, I32); _emit!(b, InstrIR.RefEq()))
-# ref.func: the non-null reference to function `f`'s type; the function is declared for
-# reference (declare_funcs! or an element segment), as the spec requires of every ref.func
+# ref.func: the non-null reference to function `f`'s type. The spec's C.refs, the functions a
+# function body's ref.func may name, are those the module names outside function bodies: in a
+# global's initializer (a constant expression, so a ref.func there needs no other declaration),
+# an element segment (declare_funcs!) or an export. A body's ref.func of a function named by
+# none of an element segment and an export is refused (one named only in a global's initializer
+# is refused too, the module keeping no record of it; dart checks no declaration).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1594 InstructionsBuilder.ref_func)
 function ref_func!(b::InstrBuilder, f::Integer)::InstrBuilder
     local m = b.v.mod
-    any(seg -> UInt32(f) in seg.func_indices, m.elem_segments) ||
-        _module_invalid(:ref_func, "function $f is not declared for reference (declare_funcs!)")
+    (b.constant_expression || any(seg -> UInt32(f) in seg.func_indices, m.elem_segments) ||
+     any(x -> x.kind == 0x00 && x.idx == UInt32(f), m.exports)) ||
+        _module_invalid(:ref_func, "function $f is not declared for reference (declare_funcs!, an export, " *
+                        "or a global's initializer)")
     validate_push!(b.v, ConcreteRef(UInt32(_function_type_idx(m, f)), false))
     _emit!(b, InstrIR.RefFunc(UInt32(f)))
 end
@@ -950,9 +986,12 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     (src.locals === dst.locals || isempty(src.locals)) ||
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment declares " *
                             "locals of its own, not in its function's list"))
-    (isempty(src.params) || src.params == dst.params) ||
+    # a fragment that shares its function's locals types local k by its function's parameters
+    # and locals, so it carries those parameters; one with none of its own declares no local
+    (src.params == dst.params || (isempty(src.params) && src.locals !== dst.locals)) ||
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment's parameters " *
-                            "$(src.params) are not its function's, $(dst.params)"))
+                            "$(src.params) are not its function's, $(dst.params)" *
+                            (src.locals === dst.locals ? ", whose locals it shares" : "")))
     (src.returns && builder_results(src) != builder_results(dst)) &&
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): the fragment returns " *
                             "$(builder_results(src)), its function $(builder_results(dst))"))
@@ -979,8 +1018,13 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
     for t in src.v.stack
         validate_push!(dst.v, t)
     end
+    # dst unreachable: the fragment's code is dead where it lands and is not recorded, as an
+    # instruction added in dead code is not (_emit!); its record of local initialization has
+    # replayed above, as dart checks a dead local.get and sets on a dead local.set
+    local lands = dst.v.reachable
     src.v.reachable || (dst.v.reachable = false)
     dst.returns |= src.returns
+    lands || return _check!(dst)
     # the fragment's source mappings, shifted to where its instructions land (dart has one
     # builder per function; WT merges fragments, as dart's serializer merges a body's
     # mappings into the module's, function.dart:123 copyMappings); after them dst's own

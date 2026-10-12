@@ -1628,10 +1628,8 @@ function _fc_jl_genericmemory_to_string!(b::InstrBuilder, node::NirForeignCall, 
                 str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
                 # Allocate locals for dest array and length
-                dest_local = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, ConcreteRef(str_arr_type))
-                len_local = length(ctx.locals) + ctx.n_params
-                push!(ctx.locals, I32)
+                dest_local = allocate_local!(ctx, ConcreteRef(str_arr_type))
+                len_local = allocate_local!(ctx, I32)
 
                 # Compile n and convert to i32
                 emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
@@ -1713,10 +1711,8 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
                     str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
                     # Allocate locals for dest array and length
-                    dest_local = length(ctx.locals) + ctx.n_params
-                    push!(ctx.locals, ConcreteRef(str_arr_type))
-                    len_local = length(ctx.locals) + ctx.n_params
-                    push!(ctx.locals, I32)
+                    dest_local = allocate_local!(ctx, ConcreteRef(str_arr_type))
+                    len_local = allocate_local!(ctx, I32)
 
                     # Compile n and convert to i32
                     emit_value!(b, len_arg, ctx, I32)   # a Julia Int length narrows through the funnel
@@ -1822,16 +1818,11 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
             # Allocate locals for the loop (same pattern as scratch_local allocation)
-            str_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, ConcreteRef(str_arr_type))
-            current_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I64)
-            end_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I64)
-            result_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I64)
-            byte_local = length(ctx.locals) + ctx.n_params
-            push!(ctx.locals, I32)
+            str_local = allocate_local!(ctx, ConcreteRef(str_arr_type))
+            current_local = allocate_local!(ctx, I64)
+            end_local = allocate_local!(ctx, I64)
+            result_local = allocate_local!(ctx, I64)
+            byte_local = allocate_local!(ctx, I32)
 
             # Store string ref
             emit_value!(b, str_ssa, ctx, ConcreteRef(UInt32(str_arr_type), true))   # parity(translator.dart:1597 convertType): funnel → DATA array

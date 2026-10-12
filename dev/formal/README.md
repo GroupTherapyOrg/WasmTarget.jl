@@ -58,7 +58,7 @@ anchor in `src/` has a row.)
 | Type identity under iso-recursive canonicalization | `add_type!`, `add_type_group!`, `_group_member_equal` (instructions.jl), `finish_pending!` (structs.jl) | TypeIdentity |
 | `===` over representations | `emit_egal!`, `get_egal_function!`, `fill_egal_function!`, `_egal_body` (calls.jl) | EgalDispatch |
 | Recursive type groups | `begin_pending!`, `finish_pending!` (structs.jl), `recursion_groups`, `add_type_group!` (instructions.jl) | RecGroup |
-| Builder operand stack and control frames | `InstrBuilder` (instr_builder.jl), `validate_block_end!`, `validate_br!` (validator.jl) | OperandStack |
+| Builder operand stack and control frames | `InstrBuilder`, `_emit!`, `_br_depth!` (instr_builder.jl), `validate_block_end!`, `validate_branch_types!` (validator.jl) | OperandStack |
 | Local initialization | `local_get!`, `local_set!`, `local_tee!`, the reset at `end_block!`, `else_!` and `catch_legacy!`, `append_builder!`'s replay (instr_builder.jl) | LocalInit |
 | Int128 over i64 limbs | `emit_int128_*`, `get_u128_divrem_function!` (int128.jl) | Int128Limbs |
 | Julia's exception stack | `emit_throw_value!`, `emit_rethrow!`, `emit_current_exception!`, `exc_saved_local!`, `emit_export_entry!` (a prologue), `emit_direct_call!` (the slot save and restore around a host-declared import call), `host_glue_js` (the count, the host's) (generate.jl), the one-time export of each function in `_compile_closed_world_plan` (compile.jl), a region's enter and pop_exception (statements.jl), the catch landing (stackified.jl) | ExceptionStack |
@@ -70,6 +70,8 @@ anchor in `src/` has a row.)
 | Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
 | Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
 | LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl) | — encodings; wasm-tools parses every module |
+| Export names | `codegen_export_names` (compile.jl) | — one pass over the names, each its own or the first free `name_d<k>`; its claims (no taken name reused, a requested taken name refused) are per name, test/real_bottom_exceptions.jl "each export is made once" |
+| Source-map JSON reader | `_json_read`, `_json_value`, `_json_skip` and the readers below them (builder/source_map.jl) | — a recursive-descent recognizer of JSON's grammar (RFC 8259) with no state beyond its position; test/source_maps.jl "the map's JSON reader refuses what JSON does not allow" |
 
 ## Rules
 

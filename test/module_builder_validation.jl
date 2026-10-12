@@ -769,8 +769,25 @@ include(joinpath(@__DIR__, "builder_cases.jl"))
     @test_throws MBV.ModuleValidationError MBV.struct_get!(mk(), 99, 0)
 end
 
+@testset "dead code is not recorded" begin
+    # an instruction added while the code is unreachable is dropped, as dart's `_add` drops it
+    # (instructions.dart:368), so every module holds only code wasm validates where it stands:
+    # row a's `unreachable; f64.const 0; i32.eqz; drop` once reached the module and only
+    # wasm-tools refused it (dev/CHARTER.md C7). The rows are test/builder_cases.jl's dead_cases,
+    # which the ratchet also runs over src/builder alone (L172).
+    for c in dead_cases(MBV)
+        @testset "row $(c.row) ($(c.id))" begin
+            local b = c.program()
+            @test Symbol[nameof(typeof(i)) for i in b.instrs] == c.want
+            @test MBV.validate_wasm_bytes(MBV.to_bytes(b.v.mod)) isa Vector{UInt8}
+        end
+    end
+end
+
 # row k's program: a throw, whose compile defines the exception stack's top
 _mbv_k_throw(x::Int64) = x > 0 ? x : throw(DomainError(x))
+# an exception-free program, whose compile defines no `$exc_top`
+_mbv_e4_plus(x::Int64) = x + 1
 
 @testset "115b: every body is a builder the module made" begin
     # each invalid body throws at its emitting call (or at its fill) where it once reached the
@@ -796,6 +813,13 @@ _mbv_k_throw(x::Int64) = x > 0 ? x : throw(DomainError(x))
     MBV.add_global!(m, MBV.I32, true, 0; name="\$exc_top")
     err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=m); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("already defines a global named \"\\\$exc_top\"", err.msg)
+    # a module a compile built from exception-free code holds no `$exc_top`, yet exports the class
+    # reader every compile defines last: a second compile into it is refused at its entry, naming
+    # the reader, not at the end by a duplicate export
+    m = MBV.WasmModule()
+    MBV.compile_multi(Any[(_mbv_e4_plus, (Int64,), "p")]; existing_module=m)
+    err = try; MBV.compile_multi(Any[(_mbv_e4_plus, (Int64,), "q")]; existing_module=m); nothing; catch e; e; end
+    @test err isa ArgumentError && occursin("already exports \"wasmtarget.class_id\"", err.msg)
     # the tag is the one WT exported: a host tag defined first is never taken for it, and a tag
     # exported under WT's name that does not carry its payload is refused at the compile's entry
     mt = MBV.WasmModule()
@@ -838,14 +862,19 @@ _mbv_k_throw(x::Int64) = x > 0 ? x : throw(DomainError(x))
     f6 = MBV.define_function!(m4, MBV.WasmValType[], MBV.WasmValType[]; name="g")
     b6 = MBV.InstrBuilder(; mod=m4, fragment=true); MBV.finish_function!(b6)
     @test_throws MBV.ModuleValidationError MBV.fill_function!(m4, f6, b6)
-    # ref.func pushes the function's non-null reference, declared for reference
+    # ref.func pushes the function's non-null reference. A global's initializer names a function
+    # for reference itself (the spec's C.refs), so its ref.func needs no element segment (A15P6:
+    # the builder refused this valid module); a function body's names one an element segment or
+    # an export names
     m7 = MBV.WasmModule(); f7 = MBV.define_function!(m7, MBV.WasmValType[], MBV.WasmValType[]; name="f")
     b7 = MBV.function_builder(m7, f7); MBV.finish_function!(b7); MBV.fill_function!(m7, f7, b7)
     g7, init7 = MBV.define_global!(m7, MBV.FuncRef, false)
-    @test_throws MBV.ModuleValidationError MBV.ref_func!(init7, f7)
-    MBV.declare_funcs!(m7, UInt32[f7])
     MBV.ref_func!(init7, f7); MBV.finish_function!(init7); MBV.fill_global!(m7, g7, init7)
     @test MBV.validate_wasm_bytes(MBV.to_bytes(m7)) isa Vector{UInt8}
+    h7 = MBV.InstrBuilder(MBV.WasmValType[], MBV.WasmValType[MBV.FuncRef]; mod=m7)
+    @test_throws MBV.ModuleValidationError MBV.ref_func!(h7, MBV.define_function!(m7, MBV.WasmValType[], MBV.WasmValType[]; name="u"))
+    MBV.declare_funcs!(m7, UInt32[f7])
+    MBV.ref_func!(h7, f7); MBV.finish_function!(h7); MBV.add_function!(m7, h7; name="h")
     # a global's name is in the name section (subsection 7, dart's NameSection)
     m8 = MBV.WasmModule(); MBV.add_global!(m8, MBV.I32, false, 3; name="answer")
     @test occursin("(global \$answer", read(pipeline(`wasm-tools print`; stdin=IOBuffer(MBV.to_bytes(m8))), String))

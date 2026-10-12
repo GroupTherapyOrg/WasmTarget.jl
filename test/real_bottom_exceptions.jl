@@ -236,6 +236,7 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
         import_stubs=Any[(_wt_hb_cbo, "cbo", (Int64,), ids["cbo"], Nothing), (_wt_hb_cb, "cb", (Int64,), ids["cb"], Nothing),
                          (_wt_hb_cbg, "cbg", (Int64,), ids["cbg"], Int64), (_wt_hb_cb6, "cb6", (Int64,), ids["cb6"], Nothing),
                          (_wt_hb_cb7, "cb7", (Int64,), ids["cb7"], Nothing)])
+    @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     host = """
     importObject.host = { cbo: (x) => { const f = (n) => f(n + 1) + 1; return f(0); },
@@ -295,6 +296,40 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
     @test results[1]["ok"] == Any[declared, ["wasmtarget.host_imports_open"], true]
 end
 
+# The host contract at a host's catch (dev/MARCH.md 13.17 A15E1; ExceptionStack.tla
+# HostCallInCatch): Julia's JL_CATCH restores the exception stack only after its catch block
+# (julia.h:2555), so a call the host makes from inside that block still sees the escaped
+# exception; wasm does not see where a JS catch block ends, so WT's entry starts as after the
+# restore. Both host sequences answer WT's current values, asserted as such beside Julia's.
+@noinline _wt_cc_cbq(x::Int64) = (try; Base.invokelatest(_wt_eb_b, x)::Int64; catch; Base.invokelatest(_wt_eb_r, 0)::Int64; end)
+_wt_cc_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_cc_cbq(x); end
+@testset "the host contract: an export called inside a host's catch starts as after its restore" begin
+    # Julia: r's rethrow() rethrows the escaped DomainError (3), top-level and re-entrant; after
+    # the catch block a top-level r answers 2
+    @test (try; _wt_eb_b(1); catch; _wt_eb_r(0); end) == 3
+    @test _wt_cc_o(1) == 3 && _wt_eb_r(0) == 2
+    mod = WasmTarget.WasmModule()
+    idx = WasmTarget.add_import!(mod, "host", "cbq", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
+    m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_b, (Int64,), "b"), (_wt_cc_o, (Int64,), "o")];
+                                  existing_module=mod, import_stubs=Any[(_wt_cc_cbq, "cbq", (Int64,), idx, Int64)])
+    @test unsaved_host_import_calls(m) == 0
+    bytes = WasmTarget.to_bytes(m)
+    status, results = WasmRunner.run_driver_batch(bytes, """
+    const importObject = $(WasmTarget.host_runtime_js());
+    let inst;
+    importObject.host = { cbq: (x) => { try { return inst.exports.b(x); } catch (e) { return inst.exports.r(0n); } } };
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+    inst = instance; const ex = instance.exports;
+    let top; try { ex.b(1n); top = 'returned'; } catch (e) { top = String(ex.r(0n)); }
+    const after = String(ex.r(0n));
+    return [{ ok: [top, after, String(ex.o(1n))] }];
+    """; ninputs=1)
+    @test status === :ok
+    # WT's answers: inside the catch, 2 (top-level, native 3) and 1 (re-entrant: r's entry takes
+    # o's ArgumentError at its slot, native 3); after the block, Julia's 2
+    @test results[1]["ok"] == ["2", "2", "1"]
+end
+
 # Every refusal the host's count brings names both the items it is between: the count import
 # after a defined global, a host-declared import added after setup, and a global index that names
 # the imported count, at each of the four entries that take one. A framework that defines its own
@@ -318,6 +353,7 @@ _wt_gl_p(x::Int64) = x + 100
     idx = WasmTarget.add_import!(mod, "host", "cbr", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
     m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_o, (Int64,), "o"), (_wt_gl_p, (Int64,), "p")];
                                   existing_module=mod, import_stubs=Any[(_wt_eb_cbr, "cbr", (Int64,), idx, Int64)])
+    @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     glue = WasmTarget.host_glue_js()
     status, results = WasmRunner.run_driver_batch(bytes, """

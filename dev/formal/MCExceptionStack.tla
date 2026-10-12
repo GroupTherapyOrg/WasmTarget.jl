@@ -14,6 +14,7 @@
 (* nulling the top (ResetAtEntry), a glued import the host calls itself or a glued    *)
 (* object two instances share (HostCallsGlued), no entry (KeepsEntry), the value-save *)
 (* lowering, a rethrow at depth 0 that throws the top, a push at the landing;         *)
-(* ReraiseShared pins the open residual dev/MARCH.md 13.17 H11.                       *)
+(* ReraiseShared pins the open residual dev/MARCH.md 13.17 H11, HostCallInCatch the    *)
+(* host's call from inside its catch block, 13.17 A15E1.                              *)
 EXTENDS ExceptionStack
 =============================================================================
