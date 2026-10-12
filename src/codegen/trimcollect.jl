@@ -605,7 +605,11 @@ body that brought it in, with its statement and source line), its own error and 
 it was raised through. When no root fails alone, the batch's roots and the original error
 are reported. L78: a specialization failure aborts the collection, loudly.
 formal(dev/formal/ClosedWorld.tla): a reachable specialization failure ends the run Rejected
-parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError): the crash it reports, with the error and
+the stack it was raised on.
+parity(quarantine: Julia's compile! infers a batch of roots and its failure names none of them, so
+WT infers the batch's roots again one at a time, on the failure path only, to name the one that
+fails; dart's CFE reports the member it crashed on.)
 """
 function throw_located_collection_failure(batch::Vector{Tuple{Any,String}}, err, bt,
                                           compile_one::Function)::Union{}
@@ -626,7 +630,7 @@ function throw_located_collection_failure(batch::Vector{Tuple{Any,String}}, err,
 end
 
 # infer one root in a fresh partition, as collect_new_pairs! would (the failure path only)
-# parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
+# parity(quarantine: the re-inference throw_located_collection_failure names a failing root by; Julia's compile! names none of a batch's roots.)
 function _compile_root_alone(mi)::Nothing
     local interp = WasmInterpreter(Base.RefValue(0))
     local ci = Any[]

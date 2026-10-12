@@ -813,6 +813,12 @@ _mbv_e4_plus(x::Int64) = x + 1
     MBV.add_global!(m, MBV.I32, true, 0; name="\$exc_top")
     err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=m); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("already defines a global named \"\\\$exc_top\"", err.msg)
+    # the host module is checked at the entry, before the closed world is collected (A2C7): an
+    # entry the collection would refuse (no method of sin takes a String) is never collected —
+    # the module's mismatch is the error, named, at once
+    local t_check = @elapsed (err = try; MBV.compile_multi(Any[(sin, (String,), "s")]; existing_module=m); nothing; catch e; e; end)
+    @test err isa ArgumentError && occursin("already defines a global named \"\\\$exc_top\"", err.msg)
+    @info "existing_module refused at the entry" seconds=t_check
     # a module a compile built from exception-free code holds no `$exc_top`, yet exports the class
     # reader every compile defines last: a second compile into it is refused at its entry, naming
     # the reader, not at the end by a duplicate export
@@ -835,7 +841,7 @@ _mbv_e4_plus(x::Int64) = x + 1
     r = MBV.recover_module_handles!(MBV.TypeRegistry(), mw)
     @test r.handles.exc_tag == only(e.idx for e in mw.exports if e.name == "wasmtarget.exception")
     # a module's builders trace as it was constructed: a compile asking otherwise is refused
-    mtr = MBV.WasmModule(; builder_trace=!MBV.OPTIONS[].builder_trace)
+    mtr = MBV.WasmModule(; builder_trace=!MBV.options_from_env().builder_trace)
     err = try; MBV.compile_multi(Any[(_mbv_k_throw, (Int64,), "k")]; existing_module=mtr); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("WasmModule(; builder_trace)", err.msg)
     # a return in a function's builder is checked against the function's results

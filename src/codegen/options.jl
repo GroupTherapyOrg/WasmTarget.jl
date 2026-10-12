@@ -6,8 +6,8 @@
 # threaded through the translator (`printKernel`, `printWasm`, `verbose`,
 # `verifyTypeChecks`, `watchPoints: List<int>`). WasmTarget instead had 17
 # scattered `ENV["WT_..."]` reads across src/. This file is the single typed
-# replacement: one struct, one env-parsing function, one global holding the
-# active options — read from everywhere else, ENV read from nowhere else.
+# replacement: one struct, one env-parsing function, read once by the compile's entry
+# into its Translator — read from there, ENV read from nowhere else.
 # ============================================================================
 
 """
@@ -31,7 +31,7 @@ end
 
 The only place ENV is read for compiler debug switches. `WT_TRACE` is a
 comma-separated list of trace points (`mm`, `strarg`, `closure`, `cc`,
-`stubargs`, `retcompat`, `condstub`, `deadval`) replacing the eight ad-hoc
+`stubargs`, `condstub`, `deadval`) replacing the eight ad-hoc
 `WT_TRACE_*`/`WT_DBG_*` variables it consolidates.
 
 parity(dart2wasm.dart:251 parseArguments): the options object is built once from the
@@ -48,17 +48,11 @@ function options_from_env()::CompilerOptions
     )
 end
 
-# The active options, set once per compile by the one compile entry (`_compile`, WasmTarget.jl),
-# whose call every exported compile entry is — never read piecemeal. compile_module, the step
-# below it, sets none: called directly, it reads what the last entry set.
-# parity(pkg/dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions)
-const OPTIONS = Ref{CompilerOptions}(CompilerOptions())
-
 """
-    tracing(s::Symbol) -> Bool
+    tracing(ctx, s::Symbol) -> Bool
 
-Is trace point `s` active in the current [`OPTIONS`](@ref)? dart's `watchPoints`
+Is trace point `s` active in the compile's options (its Translator's)? dart's `watchPoints`
 analogue.
 parity(pkg/dart2wasm/lib/compiler_options.dart:35 WasmCompilerOptions)
 """
-tracing(s::Symbol)::Bool = s in OPTIONS[].trace
+tracing(ctx, s::Symbol)::Bool = s in ctx.translator.options.trace
