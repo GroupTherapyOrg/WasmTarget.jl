@@ -2009,6 +2009,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
     num!(fb, Opcode.I32_EQZ)
     if_!(fb)                                          # not a T → THROW
+    p0!("E TypeError built inline by _lower_typeassert!", "$(p0lbl(ctx)) %$(idx) :: $(_ta_target)")
     local _te_info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local _te_def = ctx.mod.types[Int(_te_info.wasm_type_idx) + 1]
     _te_def isa StructType || error("TypeError did not register as a Wasm struct")
@@ -2710,6 +2711,8 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                                 # M3: dead tagged-union wrapper arm DELETED (needs_tagged_union ≡ false).
                                 # Coerce the raw field value to U's canonical wasm rep.
                                 fw = get_concrete_wasm_type(elem_types[i + 1], ctx.mod, ctx.type_registry; for_local=true)
+                                p0!("L ladder field: target=$(union_wasm isa ConcreteRef ? "ConcreteRef" : union_wasm) field=$(fw isa ConcreteRef ? "ConcreteRef" : fw) T=$(p0_kindof(elem_types[i + 1]))$(elem_types[i + 1] === Nothing ? " (Nothing)" : "")",
+                                    "$(p0lbl(ctx)) %$(idx) :: $(elem_types) -> $(_ssa_t)")
                                 if union_wasm === AnyRef
                                     if fw === I64 || fw === I32 || fw === F32 || fw === F64
                                         # THE single-source box producer with the field's REAL classId

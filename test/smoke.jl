@@ -1761,6 +1761,23 @@ _xf("runtime_length_tuple_class", Any[
     # a failed typeassert's TypeError carries the value as `got`, a slot of any class (A6E2)
     ("typeassert_got", (n::Int64) -> (try; _sm_mk([n, 2, 3])::NTuple{2,Int64}; 0; catch e; e isa TypeError && e.got isa NTuple{3,Int64} ? 1 : 2; end), Int64(3)),
 ])
+# batch 116d's cases, measured on the base (throwaway smoke group; the batch adds them to their groups)
+struct _SmWA; x::Any; end
+@noinline _sm_wa(x) = _SmWA(x)
+struct _SmWU; x::Union{Nothing,Tuple{Vararg{Int64}}}; end
+_g("p0_116d", Any[
+    ("rt_tuple_into_any_field", (n::Int64) -> (w = _sm_wa(_sm_mk([n, 2])); w.x isa NTuple{2,Int64} ? 1 : 2), Int64(3)),
+    ("rt_tuple_into_union_field", (n::Int64) -> (w = _SmWU(_sm_mk([n, 2])); w.x isa NTuple{2,Int64} ? 1 : 2), Int64(3)),
+    ("rt_tuple_into_union_field_len", (n::Int64) -> (w = _SmWU(_sm_mk([n, 2])); x = w.x; x === nothing ? 0 : length(x)), Int64(3)),
+    ("het_tuple_box", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n - 2]; v isa Int64 ? 1 : v isa Float64 ? 2 : 3), Int64(3)),
+    ("het_tuple_float", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n - 1]; v isa Int64 ? 1 : v isa Float64 ? 2 : 3), Int64(3)),
+    ("het_tuple_string", (n::Int64) -> (t = (n, 2.5, "ab"); v = t[n]; v isa String ? length(v) : 0), Int64(3)),
+    ("het_tuple_closure", (n::Int64) -> (k = n; t = (n, x -> x + k); v = t[n - 1]; v isa Int64 ? v : (v(1))::Int64), Int64(3)),
+    ("het_tuple_nothing", (n::Int64) -> (t = (n, nothing); v = t[n - 1]; v === nothing ? 1 : 2), Int64(3)),
+    ("tuple_type_element_typeof", (n::Int64) -> (t = (Int64, n); typeof(t) === Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
+    ("tuple_type_element_erased", (n::Int64) -> (v = Any[(Int64, n)]; v[1] isa Tuple{DataType,Int64} ? 1 : 2), Int64(3)),
+    ("kind_partition_static_type", (n::Int64) -> (u = Memory{UInt64}(undef, 1); m = n > 0 ? Memory{Int64}(undef, 2) : Int64; (m isa AbstractVector{Int64} ? 1 : 2) + length(u)), Int64(3)),
+])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId
 # (dev/AUDIT.md A5E4 = A5B3: two indices for one type, and `ref.test` answered 1 where native

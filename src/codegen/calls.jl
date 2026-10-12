@@ -1981,6 +1981,7 @@ function _emit_egal_class!(b::InstrBuilder, mod::WasmModule, registry::TypeRegis
     end
     local rep = _egal_rep(C, mod, registry)
     if !_wt_is_ref(rep)
+        p0!("X hand unbox: _emit_egal_class!")
         local box = get_numeric_box_type!(mod, registry, rep)
         local payload(l) = () -> (local_get!(b, l); ref_cast!(b, Int64(box), false);
                                   struct_get!(b, box, UInt32(1)))
@@ -2086,6 +2087,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
 
     # Get the type of the value being checked (for detecting tagged unions)
     val_jt = value_type(ctx, value_arg)
+    P0_ISA_STATIC[] = val_jt
 
     bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
 
@@ -2464,6 +2466,15 @@ function _emit_isa_type_object_kinds!(bld::InstrBuilder, ctx::AbstractCompilatio
     for (C, arr) in bare_array_partition(ctx.mod, reg, nothing).all
         C <: check_type ? (arr in kinds || push!(kinds, arr)) : push!(outside, arr)
     end
+    let S = P0_ISA_STATIC[], k2 = UInt32[], o2 = UInt32[]
+        for (C, arr) in bare_array_partition(ctx.mod, reg, nothing).all
+            S isa Type && typeintersect(C, S) === Union{} && continue
+            C <: check_type ? (arr in k2 || push!(k2, arr)) : push!(o2, arr)
+        end
+        local rj1, rj2 = any(in(outside), kinds), any(in(o2), k2)
+        p0!("K kind partition: " * (rj1 == rj2 ? (sort(kinds) == sort(k2) ? "same answer" : "same reject decision, fewer arrays tested") : "REJECT DIFFERS (all=$(rj1) static=$(rj2))"),
+            "$(p0lbl(ctx)) %$((hasproperty(ctx, :current_stmt_idx) ? ctx.current_stmt_idx : 0)) :: static $(S) check $(check_type) kinds $(length(kinds))/$(length(k2))")
+    end
     if any(in(outside), kinds)
         _isa_reject!(bld, ctx, "isa(x, $(check_type)) cannot tell a Memory under it from one that is not: both are the same wasm array")
         return nothing
@@ -2754,6 +2765,7 @@ end
 # parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx::Int,
                                 ctx::AbstractCompilationContext; func::Symbol=:typeassert)::InstrBuilder
+    p0!("E TypeError built by _emit_typeerror_throw! func=$(func)", "$(p0lbl(ctx)) %$(idx) :: $(target)")
     local info = register_struct_type!(ctx.mod, ctx.type_registry, TypeError)
     local def = ctx.mod.types[Int(info.wasm_type_idx) + 1]
     def isa StructType || error("TypeError did not register as a Wasm struct")

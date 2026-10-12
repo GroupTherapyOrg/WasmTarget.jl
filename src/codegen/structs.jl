@@ -489,6 +489,14 @@ parity(quarantine: Julia inference spells one runtime tuple element as Type{X} o
 kind; a Dart record's field types have one spelling.)
 """
 function _canonical_tuple_type(T::DataType)::Type
+    for P in T.parameters
+        local a = (P isa DataType && P.name === Type.body.name) ?
+            (let X = P.parameters[1]; (X isa DataType || X isa Union || X isa UnionAll || X === Union{}) ? typeof(X) : P end) : P
+        local r = (P isa DataType && P.name === Type.body.name && length(P.parameters) == 1 &&
+                   P.parameters[1] isa Type && !(P.parameters[1] isa TypeVar)) ? typeof(P.parameters[1]) : P
+        p0!("T _canonical_tuple_type element: " * (a === r ? (P isa DataType && P.name === Type.body.name ? "Type{X}, rules agree" : "not Type{X}") : "RULES DIFFER"),
+            a === r ? "" : "$(T) :: $(P) canonical=$(a) runtime=$(r)")
+    end
     changed = false
     ps = Any[]
     for P in T.parameters

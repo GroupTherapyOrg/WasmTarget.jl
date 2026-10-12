@@ -317,6 +317,7 @@ function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_r
         jt = length(rts) == 1 ? first(rts) : nothing
         if jt !== nothing
             # the ONE box shape (emit_classid_box!): save value · classId · value · struct.new
+            p0!("X hand box: selector_table")
             box_idx = get_numeric_box_type!(mod, type_registry, dt.result_wasm_type)
             tid = ensure_type_id!(type_registry, jt)
             scratch = builder_add_local!(b, dt.result_wasm_type)   # after the classId

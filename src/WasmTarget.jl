@@ -28,6 +28,7 @@ include("frontend/nir.jl")
 
 # The closed-world collector reads the boundary (its discovery dispatches on NirNode),
 # so it loads after it.
+include("codegen/p0_instr.jl")
 include("codegen/trimcollect.jl")
 
 include("codegen/int_key_map.jl")

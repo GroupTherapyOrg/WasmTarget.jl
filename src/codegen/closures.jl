@@ -447,6 +447,7 @@ function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRe
         isconcretetype(body.return_type) || throw(_closure_layout_error(closure_type, ClosureBody[body],
             "the $(body.results[1]) result of a body returning $(body.return_type) has no single class to box it with"))
         local rw = body.results[1]
+        p0!("X hand box: closures")
         local box_idx = get_numeric_box_type!(mod, registry, rw)
         local body_return_type = body.return_type
         local_set!(tb, scratch)

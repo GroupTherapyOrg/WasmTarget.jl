@@ -221,6 +221,16 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
+    if from isa ConcreteRef && (to === AnyRef || to === EqRef || to === StructRef || to === ExternRef)
+        local _p0vt = vararg_tuple_of_struct(ctx.type_registry, from.type_idx)
+        if _p0vt !== nothing
+            local _p0k = from_julia === nothing ? "rejects(from_julia nothing)" :
+                (from_julia isa DataType && is_runtime_vararg_tuple_type(from_julia)) ? "rejects(from_julia runtime-length)" :
+                (from_julia isa Type && isconcretetype(from_julia)) ? "passes(from_julia concrete)" : "HOLE passes(from_julia abstract)"
+            local _p0s = P0_STMT_FIRED[] == (objectid(ctx), (hasproperty(ctx, :current_stmt_idx) ? ctx.current_stmt_idx : 0)) ? " stmt-check-fired-here" : ""
+            p0!("W2 convert_type! over the representation: $(_p0k)$(_p0s)", "$(p0lbl(ctx)) %$((hasproperty(ctx, :current_stmt_idx) ? ctx.current_stmt_idx : 0)) :: $(_p0vt) from_julia=$(from_julia) to=$(to)")
+        end
+    end
     # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
     # representation's header names Tuple{Vararg{E}}, a class no Julia value has: widened to a
     # slot of any class, a class read would answer for that class, so it rejects here (the
@@ -1754,6 +1764,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 evt isa WasmValType || record_unsupported!(ctx, :value_stub,
                     "Memory constant of type $T has no physical element type";
                     detail=val, soundness_fatal=true)
+                p0!("W4 Memory constant element from_julia " * (typeof(mem[i]) === elem_type ? "== element's type" : "the Memory's eltype (the sink's)"),
+                    typeof(mem[i]) === elem_type ? "" : "$(p0lbl(ctx)) :: $(T) element $(typeof(mem[i])) wasm $(evt)")
                 emit_value!(b, NirLiteral(mem[i]), ctx, evt; from_julia=elem_type)
             end
             # `array.new_fixed 0` is the real non-null empty array representation.

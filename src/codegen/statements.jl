@@ -538,7 +538,9 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     # its header class is Tuple{Vararg{E}}, no value's type, so where any class may be a class
     # read would answer for it
     local erased = _erased_vararg_tuple_operand(ctx, rec)
-    if erased !== nothing
+    erased === nothing || p0!("W1 statement check fires node=$(nameof(typeof(node)))", "$(p0lbl(ctx)) %$(idx) :: $(erased[1]) -> $(erased[2])")
+    erased === nothing || (P0_STMT_FIRED[] = (objectid(ctx), idx))
+    if erased !== nothing && get(ENV, "WT_P0_NOSTMT", "") != "1"
         emit_unsupported_stub!(ctx, b, :unsupported_type,
             "a runtime-length tuple ($(erased[1])) stored where a $(erased[2]) is held: its class is " *
             "NTuple{n,$(vararg_tuple_eltype(erased[1]))} for the n it has at run time, which its representation does not carry";
@@ -1265,6 +1267,11 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             expected = struct_type_def.fields[wasm_field].valtype
             julia_field = struct_type isa DataType && i <= fieldcount(struct_type) ?
                 fieldtype(struct_type, i) : nothing
+            let _vt = value_type(ctx, val)
+                p0!("W3 %new field from_julia " * (julia_field === _vt ? "== value type" :
+                    (julia_field isa Type && isconcretetype(julia_field)) ? "concrete field != value type" : "ABSTRACT field type (the sink's)"),
+                    julia_field === _vt ? "" : "$(p0lbl(ctx)) %$(idx) :: field $(julia_field) value $(_vt) wasm $(expected)")
+            end
             emit_value!(b, val, ctx, expected;
                         from_julia=(julia_field isa Type ? julia_field : nothing))
         end

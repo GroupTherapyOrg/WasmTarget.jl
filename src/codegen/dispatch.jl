@@ -412,6 +412,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     ref_null!(b, AnyRef)  # ref.null any → (ref null any) = anyref
                 elseif entry_wasm_type in (I32, I64, F32, F64)
                     # Box numeric result into a WasmGC struct: (struct (field classId:i32) (field val:T))
+                    p0!("X hand box: dispatch")
                     box_idx = get_numeric_box_type!(mod, type_registry, entry_wasm_type)
                     # Stack has the numeric value; save it, push the return type's REAL classId (was a
                     # hardcoded 0 = non-discriminable — an isa/typeof on this result would wrongly fail),

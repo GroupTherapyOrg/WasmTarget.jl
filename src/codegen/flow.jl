@@ -205,6 +205,7 @@ function _emit_phi_edge_guarded_unbox!(b::InstrBuilder, ctx::AbstractCompilation
                                        src::InstrBuilder, phi_julia::DataType,
                                        phi_idx::Int)::Bool
     haskey(ctx.phi_locals, phi_idx) || return false
+    p0!("F flow.jl guarded phi-edge class test", "$(p0lbl(ctx)) phi %$(phi_idx) :: $(phi_julia)")
     append_builder!(b, src)
     src_type === ExternRef && any_convert_extern!(b)
     # the edge value, held for the class test and the unbox
