@@ -1207,6 +1207,14 @@ function _LocalQueryIndex(ctx::AbstractCompilationContext)::_LocalQueryIndex
         producers[k + 1] = producers[k] + produces_stack_value(rec)
     end
     local loops = loop_bounds(ctx.cfg)
+    let old = m_old_loop_bounds(nir)
+        p0!("L loop bounds " * (old == loops ? "same" : "DIFFER"), old == loops ? "" : p0lbl(ctx) * " old=$(old) new=$(loops)")
+        old == loops || p0set!("L bodies whose loop bounds differ", p0lbl(ctx))
+        p0!("L bodies")
+    end
+    let tr = findlast(rec -> !(rec.node isa NirLiteral && rec.node.value === nothing), nir)
+        p0!("N trailing nothing statements: " * (tr === nothing || tr == length(nir) ? "none" : "some"), (tr === nothing || tr == length(nir)) ? "" : p0lbl(ctx) * " n=$(length(nir)) last=$(tr)")
+    end
     branching_loops = Tuple{Int,Int}[]
     for (header, back_edge) in loops
         # a conditional in the loop other than its exit test at the header

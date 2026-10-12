@@ -342,6 +342,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
             s != block_idx + 1 && push!(non_trivial_targets, s)
         end
     end
+    let old = Set{Int}()
+        for (block_idx, block) in enumerate(blocks)
+            block_idx in dead_blocks && continue
+            term = block.terminator
+            if term isa NirGotoIfNot || term isa NirGoto
+                dest_block = get(stmt_to_block, term.target, nothing)
+                if dest_block !== nothing && dest_block != block_idx + 1 && !(dest_block in dead_blocks)
+                    push!(old, dest_block)
+                end
+            end
+        end
+        p0!("J jump targets " * (old == non_trivial_targets ? "same" : "DIFFER"), old == non_trivial_targets ? "" : p0lbl(ctx) * " old=$(sort!(collect(old))) new=$(sort!(collect(non_trivial_targets)))")
+    end
 
     # Julia inference commonly shares a terminal throw block between checks in
     # different loop regions. That gives the otherwise reducible loop body a

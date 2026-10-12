@@ -24,6 +24,7 @@ include("codegen/ir.jl")
 # Frontend - the normalized IR boundary (parity: code_generator.dart:77 typeContext).
 # Loads here (before codegen/types.jl and codegen/context.jl exist) by design — see
 # frontend/nir.jl's header comment.
+include("frontend/m_instr.jl")
 include("frontend/nir.jl")
 
 # The closed-world collector reads the boundary (its discovery dispatches on NirNode),
