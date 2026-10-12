@@ -2964,6 +2964,7 @@ const _OPERATOR_OPCODES = IdDict{Any,NamedTuple{(:f32, :f64, :i32, :i64),NTuple{
 # parity(pkg/dart2wasm/lib/intrinsics.dart:995 _binaryOperatorMap)
 function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     local ops = _OPERATOR_OPCODES[callee]
+    p0!("O _lower_operator! reached callee=$(callee)", "$(p0lbl(ctx)) %$(idx) :: $(Any[value_type(ctx, a) for a in args])")
     # Each value operand's Julia type, read from its node (Julia's answer or a proven join).
     local vals = NirNode[a for a in args if !_is_type_operand(a)]
     local ts = Any[value_type(ctx, a) for a in vals]

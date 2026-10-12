@@ -663,6 +663,19 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
     for rec in nir
         count_ssa_uses!(rec, ssa_uses)
     end
+    let w = Dict{Int,Int}()
+        for rec in nir
+            local n = rec.node
+            n isa NirSSA && (w[n.id] = get(w, n.id, 0) + 1)
+            _nir_any_operand(x -> (x isa NirSSA && (w[x.id] = get(w, x.id, 0) + 1); false), n)
+        end
+        local diff = sort!([k for k in union(keys(w), keys(ssa_uses)) if get(w, k, 0) != get(ssa_uses, k, 0)])
+        p0!("U count_ssa_uses! vs the walker: " * (isempty(diff) ? "same" : "DIFFER"),
+            isempty(diff) ? "" : "$(p0lbl(ctx)) :: " * join(("%$(k) $(get(ssa_uses, k, 0))->$(get(w, k, 0)) users=$(join((nameof(typeof(nir[j].node)) for j in ssa_users(ctx, k)), ","))" for k in diff[1:min(end, 4)]), "; "))
+        for k in diff
+            p0!("U differing value used only by Upsilon/PhiC: $(all(j -> nir[j].node isa Union{NirUpsilon, NirPhiC}, ssa_users(ctx, k)))")
+        end
+    end
 
     # Find loop bounds (header to backward goto)
     loop_bounds = Dict{Int, Int}()  # header => back_edge_idx
@@ -1203,6 +1216,20 @@ function _LocalQueryIndex(ctx::AbstractCompilationContext)::_LocalQueryIndex
     for (i, rec) in enumerate(nir)
         node = rec.node
         node isa NirGoto && !haskey(first_goto_to, node.target) && (first_goto_to[node.target] = i)
+    end
+    let last_be = Dict{Int,Int}()
+        for (i, rec) in enumerate(nir)
+            rec.node isa NirGoto && rec.node.target < i && (last_be[rec.node.target] = i)
+        end
+        for (h, be) in last_be
+            local f = get(first_goto_to, h, nothing)
+            p0!("B loop bounds: first goto " * (f == be ? "== last back edge" : f !== nothing && f < h ? "a FORWARD goto" : "!= last back edge"),
+                f == be ? "" : "$(p0lbl(ctx)) :: header $(h) first $(f) last $(be)")
+            if f != be
+                local br(be2) = be2 !== nothing && any(i -> nir[i].node isa NirGotoIfNot && i != h && i != h + 1, h:be2)
+                p0!("B branching decision " * (br(f) == br(be) ? "same" : "DIFFERS"))
+            end
+        end
     end
     branching_loops = Tuple{Int,Int}[]
     for header in 1:length(ctx.loop_headers)

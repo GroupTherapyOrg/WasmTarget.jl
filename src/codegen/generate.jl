@@ -45,6 +45,18 @@ parity(code_generator.dart:38 CodeGenerator.generate)
 function generate_body(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
     # Analyze control flow to find basic block structure
     blocks = analyze_blocks(ctx.nir)
+    let hit = (ctx isa CompilationContext && ctx.mi !== nothing) ? plan_ir_or_nothing(ctx.translator.plan, ctx.mi) : nothing
+        if hit !== nothing && hit[1] isa Core.CodeInfo && length(hit[1].code) == length(ctx.nir)
+            local cfg = Core.Compiler.compute_basic_blocks(hit[1].code)
+            local js = Set(first(bb.stmts) for bb in cfg.blocks)
+            local ws = Set(bk.start_idx for bk in blocks)
+            local rs = has_try_catch(ctx.nir) ? Set(bk.start_idx for bk in _split_blocks_for_regions(blocks, find_try_regions(ctx.nir))) : ws
+            p0!("G blocks: WT == Julia " * (ws == js ? "yes" : "NO") * (rs == ws ? "" : "; after the region split " * (rs == js ? "yes" : "NO")),
+                (ws == js) ? "" : "$(p0lbl(ctx)) :: only WT $(first(sort!(collect(setdiff(ws, js))), 6)) only Julia $(first(sort!(collect(setdiff(js, ws))), 6)) try=$(has_try_catch(ctx.nir)) n=$(length(ctx.nir))")
+        else
+            p0!("G blocks: no CodeInfo aligned with the NIR")
+        end
+    end
 
     # the function's entry, before any instruction, maps to its definition, as dart sets the
     # member's offset before it generates the body (code_generator.dart:3625)

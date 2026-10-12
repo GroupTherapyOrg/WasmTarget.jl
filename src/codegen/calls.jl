@@ -4547,6 +4547,7 @@ Returns nothing if the function is not a known binary reduce operation.
 parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time containers; dart has no splatted call.)
 """
 function _get_binary_reduce_opcode(func, elem_type::Type)::Union{UInt8, Nothing}
+    p0!("O _get_binary_reduce_opcode reached func=$(func) T=$(elem_type)")
     local is_add = func === (+) || func === Core.Intrinsics.add_int ||
                    func === Core.Intrinsics.add_float
     local is_mul = func === (*) || func === Core.Intrinsics.mul_int ||
