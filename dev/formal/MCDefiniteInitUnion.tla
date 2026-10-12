@@ -3,4 +3,5 @@
 EXTENDS DefiniteInit
 MCN == 5
 MCMeet == "Union"
+MCCatchEdge == TRUE
 =============================================================================

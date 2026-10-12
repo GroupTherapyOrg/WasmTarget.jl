@@ -43,9 +43,6 @@ builder (_ctx_function_builder), and end it. Uses a block-based translation for 
 parity(code_generator.dart:38 CodeGenerator.generate)
 """
 function generate_body(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder
-    # Analyze control flow to find basic block structure
-    blocks = analyze_blocks(ctx.nir)
-
     # the function's entry, before any instruction, maps to its definition, as dart sets the
     # member's offset before it generates the body (code_generator.dart:3625)
     map_to_definition!(b, ctx)
@@ -53,7 +50,7 @@ function generate_body(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrB
     # The finalized typed instruction stream is authoritative. In particular,
     # post-return code is already stack-polymorphic in the builder; no serialized
     # opcode may be inspected or rewritten after this point.
-    return generate_structured(b, ctx, blocks)
+    return generate_structured(b, ctx, ctx.cfg)   # the body's CFG, Julia's (nir_cfg)
 end
 
 
@@ -61,15 +58,6 @@ end
 
 
 
-"""
-Represents a basic block in the IR.
-parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
-"""
-struct BasicBlock
-    start_idx::Int
-    end_idx::Int
-    terminator::Union{NirGotoIfNot, NirGoto, NirReturn, Nothing}   # nothing: falls through
-end
 
 """
 Represents a try/catch region in the IR.
@@ -129,10 +117,9 @@ has_try_catch(nir::Vector{NirStmt})::Bool = any(rec -> rec.node isa NirEnter, ni
 """
     stmt_is_proven_unreachable(nir, idx) -> Bool
 
-Return `true` only when the ordinary Julia CFG proves that `idx` cannot be reached
-from entry.  This is the sole condition under which an unsupported lowering may be
-kept as a diagnosed validating trap instead of rejecting compilation.  Uncertainty
-(including exception-bearing CFGs) is reachable for soundness purposes.
+Return `true` only when Julia's CFG (nir_cfg, whose Enter blocks reach their catch destinations)
+proves that `idx` cannot be reached from entry.  This is the sole condition under which an
+unsupported lowering may be kept as a diagnosed validating trap instead of rejecting compilation.
 
 parity(quarantine: Julia's typed IR is a goto CFG that can keep blocks no edge reaches, and a
 trap is sound only in such a block; dart's TFA removes unreachable members before codegen
@@ -142,75 +129,18 @@ formal(dev/formal/ProvenDead.tla): a statement proven dead has no control-flow p
 """
 function stmt_is_proven_unreachable(nir::Vector{NirStmt}, idx::Int)::Bool
     1 <= idx <= length(nir) || return false
-    has_try_catch(nir) && return false
-    blocks = analyze_blocks(nir)
-    isempty(blocks) && return false
-    bidx = findfirst(b -> b.start_idx <= idx <= b.end_idx, blocks)
-    bidx === nothing && return false
-    start2id = Dict{Int,Int}(blocks[i].start_idx => i for i in eachindex(blocks))
-    reachable = falses(length(blocks))
+    local cfg = nir_cfg(nir)
+    reachable = falses(length(cfg.blocks))
     reachable[1] = true
     work = Int[1]
     while !isempty(work)
-        bi = pop!(work)
-        term = blocks[bi].terminator
-        successors = Int[]
-        if term isa NirGoto
-            haskey(start2id, term.target) && push!(successors, start2id[term.target])
-        elseif term isa NirGotoIfNot
-            haskey(start2id, term.target) && push!(successors, start2id[term.target])
-            bi < length(blocks) && push!(successors, bi + 1)
-        elseif !(term isa NirReturn)
-            bi < length(blocks) && push!(successors, bi + 1)
-        end
-        for si in successors
+        for si in cfg.succs[pop!(work)]
             reachable[si] || (reachable[si] = true; push!(work, si))
         end
     end
-    return !reachable[bidx]
+    return !reachable[cfg.block_of[idx]]
 end
 
-"""
-Analyze the IR to find basic block boundaries.
-A new block starts after each terminator AND at each jump target.
-parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its blocks and structure, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
-"""
-function analyze_blocks(nir::Vector{NirStmt})::Vector{BasicBlock}
-    # First, collect all jump targets
-    jump_targets = Set{Int}()
-    for rec in nir
-        if rec.node isa NirGoto || rec.node isa NirGotoIfNot
-            push!(jump_targets, rec.node.target)
-        end
-    end
-
-    blocks = BasicBlock[]
-    block_start = 1
-
-    for i in 1:length(nir)
-        node = nir[i].node
-
-        # Check if NEXT statement is a jump target (start new block after this one)
-        next_is_jump_target = (i + 1) in jump_targets
-
-        if node isa NirGotoIfNot || node isa NirGoto || node isa NirReturn
-            push!(blocks, BasicBlock(block_start, i, node))
-            block_start = i + 1
-        elseif next_is_jump_target && i >= block_start
-            # Current statement is NOT a terminator but next statement IS a jump target
-            # Close current block with no terminator (fallthrough)
-            push!(blocks, BasicBlock(block_start, i, nothing))
-            block_start = i + 1
-        end
-    end
-
-    # Handle trailing code without explicit terminator
-    if block_start <= length(nir)
-        push!(blocks, BasicBlock(block_start, length(nir), nothing))
-    end
-
-    return blocks
-end
 
 
 """

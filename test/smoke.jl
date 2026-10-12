@@ -1849,6 +1849,15 @@ _xf("dispatch_slot_float16", Any[
 _xf("reduce_intrinsic_kind", Any[
     ("add_int_over_floats", (n::Int64) -> (v = [1.0, Float64(n)]; Core.Intrinsics.add_int(v...)), Int64(3)),
 ])
+# A partially initialized object a handler may read before its fields are stored: it reaches the
+# handler through an upsilon, a use before the stores, and the definite-initialization proof
+# (which follows the body's CFG, an Enter's catch edge included) fails, so the %new rejects at its
+# statement (a field read on that path has no defined value natively)
+mutable struct _SmPN; a::Int64; b::Int64; _SmPN() = new(); end
+@noinline _sm_pn_throw(n::Int64) = n > 5 ? error("big") : n
+_xf("partial_new_handler_read", Any[
+    ("handler_reads_unstored_field", (n::Int64) -> (o = _SmPN(); try; o.a = _sm_pn_throw(n); o.b = 2; catch; return o.b; end; o.a + o.b), Int64(3)),
+])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId
 # (dev/AUDIT.md A5E4 = A5B3: two indices for one type, and `ref.test` answered 1 where native

@@ -14,33 +14,38 @@ function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationCont
     return b
 end
 
-"""Slice B: split blocks so every region's enter_idx ENDS a block and every
-catch_dest STARTS one — the region's try then opens and closes exactly at
-block boundaries and the stackifier's ordinary machinery does the rest.
-parity(quarantine: Julia's try regions are a flat `Core.EnterNode` / `catch_dest` pair of CFG
-edges; dart's TryCatch is one structured statement, code_generator.dart:925 visitTryCatch.)"""
-function _split_blocks_for_regions(blocks::Vector{BasicBlock}, regions)::Vector{BasicBlock}
-    cuts_after = Set{Int}()          # statement idx that must END a block
-    for r in regions
-        push!(cuts_after, r.enter_idx)
-        r.catch_dest > 1 && push!(cuts_after, r.catch_dest - 1)
-    end
-    out = BasicBlock[]
-    for b in blocks
-        lo = b.start_idx
-        for i in b.start_idx:(b.end_idx - 1)
-            if i in cuts_after
-                push!(out, BasicBlock(lo, i, nothing))
-                lo = i + 1
-            end
+"""
+    cfg_dominators(preds, nodes, entry) -> Dict{Int,Set{Int}}
+
+Each block's dominators among `nodes`, by the iterative intersection over its predecessors in
+`nodes` (`preds`, a CFG's): the entry dominates only itself; a block with no predecessor among
+`nodes`, which no path reaches, keeps every node. The one dominator computation the trampoline
+threading and the stackifier's loop labels read.
+parity(quarantine: Julia's IR is a CFG of gotos; the stackifier reconstructs wasm's structure from
+it (dev/formal/Stackifier.tla), where dart's kernel tree carries its structure.)
+"""
+function cfg_dominators(preds::Vector{Vector{Int}}, nodes, entry::Int)::Dict{Int,Set{Int}}
+    local ns = sort!(collect(nodes))
+    local all = Set(ns)
+    local dom = Dict{Int,Set{Int}}(b => (b == entry ? Set([b]) : copy(all)) for b in ns)
+    local changed = true
+    while changed
+        changed = false
+        for b in ns
+            b == entry && continue
+            local ps = Int[p for p in preds[b] if p in all]
+            isempty(ps) && continue
+            local d = copy(dom[ps[1]])
+            for p in Iterators.drop(ps, 1); intersect!(d, dom[p]); end
+            push!(d, b)
+            d == dom[b] || (dom[b] = d; changed = true)
         end
-        push!(out, BasicBlock(lo, b.end_idx, b.terminator))
     end
-    return out
+    return dom
 end
 
 """
-    _thread_backward_trampolines!(blocks, nir, try_regions) -> blocks
+    _thread_backward_trampolines!(cfg, nir, try_regions) -> cfg
 
 Julia's optimizer may place a phi's predecessor AFTER the phi block as a one-statement
 `goto` trampoline: `%39 goto %53 if not …` / `%44 = φ(%43 => …, %53 => …)` / `%53 goto %44`.
@@ -52,57 +57,27 @@ jumps to the trampoline jumps to its target instead, and the phi edges keyed by 
 trampoline's terminator are re-keyed to each predecessor's — after which the trampoline
 is unreachable and drops out by reachability like any dead block. Only explicit jumps
 are threaded (a fall-through into a trampoline is left for the stackifier's own error).
+Each round re-derives the one CFG (nir_cfg) of the rewritten statements.
 Kernel never produces this shape; it is a Julia-layout quarantine
 (parity(quarantine: Julia IR block order)).
 """
-function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{NirStmt},
-                                      try_regions)::Vector{BasicBlock}
+function _thread_backward_trampolines!(cfg::NirCFG, nir::Vector{NirStmt}, try_regions)::NirCFG
     region_bounds = Set{Int}()
     for r in try_regions
         push!(region_bounds, r.enter_idx); push!(region_bounds, r.catch_dest)
     end
     # fast path: no one-statement goto block that jumps backwards → nothing to thread
     any(b -> b.terminator isa NirGoto && b.start_idx == b.end_idx &&
-             b.terminator.target < b.start_idx, blocks) || return blocks
+             b.terminator.target < b.start_idx, cfg.blocks) || return cfg
     for _ in 1:16   # each round threads one trampoline and re-derives the CFG
-        n = length(blocks)
-        stmt_to_block = Dict{Int,Int}()
-        for (bi, b) in enumerate(blocks), i in b.start_idx:b.end_idx
-            stmt_to_block[i] = bi
-        end
-        succs = [Int[] for _ in 1:n]; preds = [Int[] for _ in 1:n]
-        for (bi, b) in enumerate(blocks)
-            t = b.terminator
-            if t isa NirGotoIfNot
-                bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
-                d = get(stmt_to_block, t.target, nothing)
-                d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
-            elseif t isa NirGoto
-                d = get(stmt_to_block, t.target, nothing)
-                d === nothing || (push!(succs[bi], d); push!(preds[d], bi))
-            elseif !(t isa NirReturn)
-                bi < n && (push!(succs[bi], bi + 1); push!(preds[bi + 1], bi))
-            end
-        end
-        # dominators over the raw CFG (regions' catch edges are irrelevant to this shape)
-        dom = [Set{Int}(1:n) for _ in 1:n]; dom[1] = Set([1])
-        changed = true
-        while changed
-            changed = false
-            for bi in 2:n
-                isempty(preds[bi]) && continue
-                d = copy(dom[preds[bi][1]])
-                for p in Iterators.drop(preds[bi], 1); intersect!(d, dom[p]); end
-                push!(d, bi)
-                d == dom[bi] || (dom[bi] = d; changed = true)
-            end
-        end
+        blocks, preds = cfg.blocks, cfg.preds
+        dom = cfg_dominators(preds, eachindex(blocks), 1)
         threaded = false
         for (s, b) in enumerate(blocks)
             t = b.terminator
             (t isa NirGoto && b.start_idx == b.end_idx) || continue   # a pure goto block
-            d = get(stmt_to_block, t.target, nothing)
-            (d !== nothing && d <= s && !(d in dom[s])) || continue           # backward, not a loop
+            d = cfg.block_of[t.target]
+            (d <= s && !(d in dom[s])) || continue           # backward, not a loop
             isempty(preds[s]) && continue
             (b.start_idx in region_bounds || t.target in region_bounds) && continue
             all(p -> (pt = blocks[p].terminator; pt isa Union{NirGoto,NirGotoIfNot} &&
@@ -127,14 +102,14 @@ function _thread_backward_trampolines!(blocks::Vector{BasicBlock}, nir::Vector{N
                 nt = pt isa NirGoto ? NirGoto(t.target) : NirGotoIfNot(pt.cond, t.target)
                 prec = nir[pb.end_idx]
                 nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.slot)
-                blocks[p] = BasicBlock(pb.start_idx, pb.end_idx, nt)
             end
             threaded = true
             break
         end
         threaded || break
+        cfg = nir_cfg(nir)
     end
-    return blocks
+    return cfg
 end
 
 """
@@ -151,20 +126,19 @@ parity(quarantine: Julia's typed IR is an unstructured goto CFG that must be sta
 wasm blocks and loops; Kernel's control flow is already structured, so dart2wasm lowers it
 statement by statement.)
 """
-function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vector{BasicBlock};
+function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                                   trailing_unreachable::Bool = true,
                                   try_regions::Vector = Any[])::InstrBuilder
     # The flow's own view of the IR: the trampoline threading below re-keys phi edges and
     # re-targets jumps in THIS copy; the context's NIR is left as Julia produced it.
     nir = copy(ctx.nir)
-    # Slice B: try regions are FIRST-CLASS — pre-split at their boundaries,
-    # then the two label events below (open at the enter block's end, close at the
-    # handler block's start) are the ENTIRE try lowering. Handler blocks compile as
-    # plain CFG blocks: the stackifier's phi machinery already owns handler-edge phis.
-    if !isempty(try_regions)
-        blocks = _split_blocks_for_regions(blocks, try_regions)
-    end
-    blocks = _thread_backward_trampolines!(blocks, nir, try_regions)
+    # Slice B: try regions are FIRST-CLASS — Julia's CFG ends a block at each Enter and
+    # starts one at each catch destination, and its Enter block's successors are its
+    # fall-through and its catch destination; the two label events below (open at the enter
+    # block's end, close at the handler block's start) are the ENTIRE try lowering. Handler
+    # blocks compile as plain CFG blocks: the stackifier's phi machinery owns their phis.
+    cfg = _thread_backward_trampolines!(cfg, nir, try_regions)
+    blocks = cfg.blocks
     # ========================================================================
     # STEP 0: FOLD THE ALWAYS-TAKEN BOUNDSCHECK BRANCHES
     # ========================================================================
@@ -200,15 +174,9 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # STEP 1: Build Control Flow Graph
     # ========================================================================
 
-    # Map statement index -> block index
-    stmt_to_block = Dict{Int, Int}()
-    for (block_idx, block) in enumerate(blocks)
-        for i in block.start_idx:block.end_idx
-            stmt_to_block[i] = block_idx
-        end
-    end
+    # statement index -> block index, the CFG's
+    stmt_to_block = Dict{Int, Int}(i => cfg.block_of[i] for i in eachindex(cfg.block_of))
 
-    # (successor edges for regions are added after the terminator walk below)
     # Slice B: region → block-event maps. A region OPENS at the end of the
     # block containing its EnterNode and CLOSES at the start of its handler block.
     try_open_at = Dict{Int, Vector{Any}}()   # block_idx (enter block) → regions, outermost first
@@ -221,72 +189,19 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
         pushfirst!(get!(Vector{Any}, try_close_at, hb), r)
     end
 
-    # Build successor/predecessor maps (block indices)
-    successors = Dict{Int, Vector{Int}}()  # block_idx -> successor block indices
-    predecessors = Dict{Int, Vector{Int}}()  # block_idx -> predecessor block indices
-
-    for i in 1:length(blocks)
-        successors[i] = Int[]
-        predecessors[i] = Int[]
-    end
-
-    # The folded CFG: every block's edges as Julia's IR has them, except that
-    # an always-taken boundscheck branch keeps only its target edge.
+    # The folded CFG: every block's edges as Julia's CFG has them (nir_cfg), except that an
+    # always-taken boundscheck branch keeps only its target edge.
+    successors = Dict{Int, Vector{Int}}(k => copy(cfg.succs[k]) for k in eachindex(blocks))
+    predecessors = Dict{Int, Vector{Int}}(k => copy(cfg.preds[k]) for k in eachindex(blocks))
     for (block_idx, block) in enumerate(blocks)
         term = block.terminator
-        if term isa NirGotoIfNot
-            term_idx = block.end_idx
-            if term_idx in boundscheck_jumps
-                dest_block = get(stmt_to_block, term.target, nothing)
-                if dest_block !== nothing
-                    push!(successors[block_idx], dest_block)
-                    push!(predecessors[dest_block], block_idx)
-                end
-            else
-                dest_block = get(stmt_to_block, term.target, nothing)
-                fall_through_block = block_idx < length(blocks) ? block_idx + 1 : nothing
-
-                if fall_through_block !== nothing && fall_through_block <= length(blocks)
-                    push!(successors[block_idx], fall_through_block)
-                    push!(predecessors[fall_through_block], block_idx)
-                end
-                if dest_block !== nothing
-                    push!(successors[block_idx], dest_block)
-                    push!(predecessors[dest_block], block_idx)
-                end
-            end
-        elseif term isa NirGoto
-            dest_block = get(stmt_to_block, term.target, nothing)
-            if dest_block !== nothing
-                push!(successors[block_idx], dest_block)
-                push!(predecessors[dest_block], block_idx)
-            end
-        elseif term isa NirReturn
-            # No successors for return
-        else
-            # Fall through to next block
-            if block_idx < length(blocks)
-                next_block = block_idx + 1
-                push!(successors[block_idx], next_block)
-                push!(predecessors[next_block], block_idx)
-            end
+        (term isa NirGotoIfNot && block.end_idx in boundscheck_jumps) || continue
+        local dest_block = cfg.block_of[term.target]
+        for s in successors[block_idx]
+            s == dest_block && continue
+            filter!(!=(block_idx), predecessors[s])
         end
-    end
-
-    # Slice B: handler edges — the enter block flows to BOTH its fall-through
-    # and the handler block (the catch edge), so predecessors/phi analysis see handlers.
-    for r in try_regions
-        eb = get(stmt_to_block, r.enter_idx, nothing)
-        hb = get(stmt_to_block, r.catch_dest, nothing)
-        (eb === nothing || hb === nothing) && continue
-        if !(hb in successors[eb])
-            push!(successors[eb], hb)
-            push!(predecessors[hb], eb)
-        end
-        if eb < length(blocks) && !((eb + 1) in successors[eb])
-            push!(successors[eb], eb + 1)
-            push!(predecessors[eb + 1], eb)
-        end
+        successors[block_idx] = Int[dest_block]
     end
 
     # Dead code = unreachable from the entry over the folded CFG. Its blocks
@@ -323,34 +238,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, blocks::Vecto
     # header and a late latch even though an outer branch reaches that merge
     # without passing through the header. Such a target must not receive a
     # label nested inside the loop.
+    # Compute block dominators from the real CFG. Numeric block intervals are
+    # not loop membership: Julia 1.13 may lay a loop-exit merge between the
+    # header and a late latch even though an outer branch reaches that merge
+    # without passing through the header. Such a target must not receive a
+    # label nested inside the loop.
     live_blocks = Set(i for i in eachindex(blocks) if !(i in dead_blocks))
-    dominators = Dict{Int,Set{Int}}()
-    entry_block = isempty(live_blocks) ? nothing : minimum(live_blocks)
-    for block_idx in live_blocks
-        dominators[block_idx] = block_idx == entry_block ? Set([block_idx]) : copy(live_blocks)
-    end
-    changed = true
-    while changed
-        changed = false
-        for block_idx in sort!(collect(live_blocks))
-            block_idx == entry_block && continue
-            preds = Int[p for p in predecessors[block_idx] if p in live_blocks]
-            new_dom = if isempty(preds)
-                Set([block_idx])
-            else
-                common = copy(dominators[first(preds)])
-                for pred in Iterators.drop(preds, 1)
-                    intersect!(common, dominators[pred])
-                end
-                push!(common, block_idx)
-                common
-            end
-            if new_dom != dominators[block_idx]
-                dominators[block_idx] = new_dom
-                changed = true
-            end
-        end
-    end
+    dominators = isempty(live_blocks) ? Dict{Int,Set{Int}}() :
+        cfg_dominators([predecessors[k] for k in eachindex(blocks)], live_blocks, minimum(live_blocks))
 
     # ========================================================================
     # STEP 2: Identify Back Edges (loops) vs Forward Edges

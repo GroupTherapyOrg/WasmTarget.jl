@@ -1386,7 +1386,7 @@ const LOCKS = [
         () -> begin
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             reach = findfirst("Dead code = unreachable from the entry over the folded CFG", stack_src)
-            cfg = findfirst("# Build successor/predecessor maps", stack_src)
+            cfg = findfirst("# The folded CFG: every block's edges as Julia's CFG has them (nir_cfg)", stack_src)
             dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
             ordering_fail = reach === nothing || cfg === nothing || dominators === nothing ||
                             first(cfg) > first(reach) || first(reach) > first(dominators)
@@ -3017,7 +3017,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                               (stm, "local info = idx == 0 ? ctx.stmt_sources[0] : get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)"),
                               (comp, "            ctx.stmt_sources[0] = definition\n            b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)"),
                               (stm, "    finally\n        # the code after the statement maps to the function's definition again, as dart's\n        # `finally` restores the enclosing member's offset (code_generator.dart:721)\n        map_to_definition!(b, ctx)\n    end"),
-                              (fbody(gen, "generate_body"), "    blocks = analyze_blocks(ctx.nir)\n\n    # the function's entry, before any instruction, maps to its definition, as dart sets the\n    # member's offset before it generates the body (code_generator.dart:3625)\n    map_to_definition!(b, ctx)\n"),
+                              (fbody(gen, "generate_body"), "::InstrBuilder\n    # the function's entry, before any instruction, maps to its definition, as dart sets the\n    # member's offset before it generates the body (code_generator.dart:3625)\n    map_to_definition!(b, ctx)\n"),
                               (stk, "map_to_definition!(bb, ctx)   # the code after the return is the function's again"),
                               (stk, "        map_to_definition!(b, ctx)\n"),
                               (read(joinpath(SRC, "builder", "instr_builder.jl"), String), "records_source_maps(b) && push!(mapped, body_end_mapping(code))")]
@@ -3647,6 +3647,31 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("the use count and the loop bounds read one table each", nui) &&
                  occursin("@test WasmTarget.loop_bounds(synth) == [(3, 6)]", nui) ? 0 : 1
+            v
+        end),
+    "L181_one_cfg" => ("a body's control-flow graph is one, Julia's own: nir_cfg (frontend/nir.jl), a port of Compiler's basic_blocks_starts and compute_basic_blocks (Compiler/src/ssair/ir.jl:46, :93; an Enter starts and ends a block, its catch destination a successor; a :leave ends one), built once per compiled body (the context's `cfg`) and read by generate_body, the stackifier (its blocks, successors and predecessors, the boundscheck fold the only edit; no region split, no handler edges of its own), the trampoline threading (nir_cfg of each round's rewritten statements), the proven-dead proof (its reachability, which now sees a handler through its catch edge, so a body with a try is no longer excluded), the definite-initialization proof (its statement successors) and the statement visitor's stub reset (a block start); one dominator computation, cfg_dominators, read by the trampolines and the loop labels. No analyze_blocks, no _split_blocks_for_regions, no successor rule outside nir_cfg, no second dominator loop. Behavior: test/nir_use_index.jl's 'nir_cfg is Julia's compute_basic_blocks' (its blocks and edges equal Compiler's over bodies with loops, phis and try/catch), dev/formal/ProvenDead.tla (MCProvenDeadNoCatchEdgeBroken: an Enter's catch edge dropped proves a handler dead) and DefiniteInit.tla (MCDefiniteInitNoCatchEdgeBroken), and the probes byte-identical across the move (the first audit's side notes; 13.4's one CFG; dev/CHARTER.md C1)",
+        () -> begin
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local stk = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local v = count_sites(r"analyze_blocks|_split_blocks_for_regions")
+            v += count("function nir_cfg(nir::Vector{NirStmt})::NirCFG", nirs) == 1 ? 0 : 1
+            v += occursin("edge!(k, block_of[t.catch_target])", nirs) && occursin("push!(starts, idx); push!(starts, idx + 1)", nirs) ? 0 : 1
+            v += count_sites(r"\bnir_cfg\("; roots=[CODEGEN]) == 4 ? 0 : 1   # the context, the trampolines, the two proofs
+            v += occursin("return generate_structured(b, ctx, ctx.cfg)", gen) ? 0 : 1
+            v += occursin("successors = Dict{Int, Vector{Int}}(k => copy(cfg.succs[k]) for k in eachindex(blocks))", stk) ? 0 : 1
+            v += occursin("ctx.cfg.blocks[ctx.cfg.block_of[idx]].start_idx == idx", stm) ? 0 : 1
+            v += occursin("Int[cfg.blocks[s].start_idx for s in cfg.succs[bk]]", stm) ? 0 : 1
+            v += count_sites(r"push!\((succs|successors|preds|predecessors)\["; roots=[CODEGEN])
+            v += count_sites(r"Set\{Int\}\(1:n\)|start2id|has_try_catch\(nir\) && return false"; roots=[CODEGEN])
+            v += count("function cfg_dominators(", stk) == 1 ? 0 : 1
+            v += count(r"while changed", stk) == 1 ? 0 : 1
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("nir_cfg is Julia's compute_basic_blocks", nui) ? 0 : 1
+            for f in ("MCProvenDeadNoCatchEdgeBroken.cfg", "MCDefiniteInitNoCatchEdgeBroken.cfg")
+                v += isfile(joinpath(ROOT, "dev", "formal", f)) ? 0 : 1
+            end
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",

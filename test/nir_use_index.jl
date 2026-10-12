@@ -79,3 +79,25 @@ end
              S(WasmTarget.NirReturn(nothing))]
     @test WasmTarget.loop_bounds(synth) == [(3, 6)]
 end
+
+# The one CFG is Julia's own (L181): nir_cfg's blocks and edges equal Compiler's
+# compute_basic_blocks over the same statements, for bodies with loops, phis, a try/catch (an
+# Enter's catch edge, a :leave ending its block), invokes and foreigncalls
+@testset "nir_cfg is Julia's compute_basic_blocks" begin
+    bodies = Any[(sum, (Vector{Float64},)), (sort!, (Vector{Int},)), (string, (Int,)),
+                 (_nui_catching, (Int,)), (_nui_union, (Vector{Any},)), (_nui_upsilon, (Int,)),
+                 (Base.Math.exp_impl, (Float64, Float64, Val{:ℯ}))]
+    local tries = 0
+    for (f, argtypes) in bodies
+        ci, _ = WasmTarget.get_typed_ir(f, argtypes)
+        nir = WasmTarget.nir_body(ci).stmts
+        any(rec -> rec.node isa WasmTarget.NirEnter, nir) && (tries += 1)
+        cfg = WasmTarget.nir_cfg(nir)
+        jc = Core.Compiler.compute_basic_blocks(ci.code)
+        @test [b.start_idx for b in cfg.blocks] == [first(b.stmts) for b in jc.blocks]
+        @test [b.end_idx for b in cfg.blocks] == [last(b.stmts) for b in jc.blocks]
+        @test [Set(s) for s in cfg.succs] == [Set(b.succs) for b in jc.blocks]
+        @test [Set(p) for p in cfg.preds] == [Set(filter(!=(0), b.preds)) for b in jc.blocks]
+    end
+    @test tries >= 2
+end

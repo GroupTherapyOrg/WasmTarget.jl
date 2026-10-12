@@ -154,6 +154,7 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - One class set, closed_world_classes, read by the enrollment, the no-method records, the ambiguity search and the numbering (L176); one rule for a match that is one signature (L177); one bound for a call's candidate products; the plan writes nothing into the world (L78); an invoke_in_world no one method covers is a dynamic call.
 - A value meets a sink through one conversion typed by its own type: one widening check, the funnel's (L178); no ladder beside it, one box producer; one TypeError builder, one `Type{X}` element rule, the type-object test over the static type, one class test (L179).
 - One table per construct: the operator table and the conversion table, one width rule, one operand table, one loop-bounds definition (L180).
+- One CFG, Julia's own (nir_cfg: compute_basic_blocks over the NIR), read by the stackifier, the trampolines, the proven-dead and definite-initialization proofs and the stub reset; one dominator computation (L181).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

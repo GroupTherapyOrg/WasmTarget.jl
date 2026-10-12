@@ -3,4 +3,5 @@
 EXTENDS DefiniteInit
 MCN == 5
 MCMeet == "Intersect"
+MCCatchEdge == TRUE
 =============================================================================
