@@ -440,7 +440,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
 
     # parity(dispatch_table.dart:800 output): fill the ONE selector table (positions were packed at metadata
     # time; wrapper indices only now exist). Contiguous runs → one segment each.
-    fill_selector_table_elements!(mod, dt_registry)
+    fill_selector_table_elements!(mod, type_registry, dt_registry)
 end
 
 

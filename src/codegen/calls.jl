@@ -2869,7 +2869,7 @@ function as_checker!(ctx::AbstractCompilationContext, target::Type,
         # the body's rejection is each caller's (located at its statement there), so the
         # checker's own copy leaves the ledger
         e isa WasmCompileError || rethrow()
-        local sink = DIAGNOSTICS_SINK[]
+        local sink = _ctx_diagnostics(ctx)
         sink === nothing || filter!(d -> d !== e.diag, sink)
         e.diag
     end

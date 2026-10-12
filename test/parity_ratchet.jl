@@ -303,6 +303,8 @@ const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
     (:DispatchTableRegistry, :selector_offset),
     (:DispatchTableRegistry, :selector_positions),
     (:DispatchTableRegistry, :selector_cascades),
+    (:WasmInterpreter, :layout_reads),  # the host-layout memo, keyed by a specialization's specTypes or its CodeInstance (ir_reads_host_layout's key) — open by construction
+    (:Translator, :constants_in_progress),  # the constant objects being emitted (cycle and depth guard) — any constant value
     (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
     (:ClosedWorld, :codeinfos),         # Core.Compiler.compile!'s output as it hands it: CodeInstance, CodeInfo alternating in a Vector{Any}
     (:ClosedWorldPlan, :functions),     # (callable, argument types, name, MethodInstance) — the callable is open, as FunctionInfo.func_ref
@@ -857,8 +859,6 @@ end
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Terminal state 0 (dev/CHARTER.md C2)",
-        () -> length(process_global_state_sites())),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
@@ -924,6 +924,8 @@ end
 
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
+    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Reached 0 on 2026-10-12 (batch 116e-1: the options, the diagnostics ledger and the constants in progress on the Translator, the perf_now import and the RNG globals on the module's registry, the layout-read memo on the interpreter, the selector table's base index read from the registry) and locked; test/diagnostics_sink.jl's 'two compiles in one process share no state (R40)' (dev/CHARTER.md C1 C2)",
+        () -> length(process_global_state_sites())),
     # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
     # each ratchet it cites "has reached 0 and been converted to a lock"), 2026-09-30
     "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Reached 0 on 2026-10-11, when infer_value_type, get_ssa_type and _value_julia_type became the one reader, value_type (L174); stays 0 (dev/CHARTER.md C9, rule 2)",
@@ -1465,7 +1467,7 @@ const LOCKS = [
             forbidden = ["code generation failed for", "sprint(showerror, err)"]
             required = ["b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)",
                         "err isa WasmTarget.WasmCompileError", "err.diag in err.all",
-                        "DIAGNOSTICS_SINK[] === nothing"]
+                        "@test isempty(sink_b)                                  # none of the first compile's diagnostics"]
             count(p -> occursin(p, compile_src), forbidden) +
             count(p -> !occursin(p, compile_src * test_src), required)
         end),
@@ -2659,7 +2661,7 @@ const LOCKS = [
                         (loc, "pushfirst!(ir.argtypes, Tuple{})"),
                         (loc, "(:ok, Base.invokelatest(_OCS[trace.entry], f, args...))"),
                         (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
-                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(plan, trace)"),
+                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(plan, trace; options, diagnostics)"),
                         (loc, "filter!(keep, nevents)"),
                         (loc, "filter!(keep, wevents)"),
                         (smoke, "replace(_smoke_locate(f, args), "),
@@ -2967,7 +2969,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 !occursin("        isempty(name) && throw(ArgumentError(\"WasmFunction(type \$type_idx; name=\\\"\\\"): ", def) +
                 occursin("isempty(f.name) || push!(func_names", def)
         end),
-    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone sets OPTIONS[] (exactly one `OPTIONS[] =` in src) and sets and restores DIAGNOSTICS_SINK[]; among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_statement_trace — is one call of it, so the source-map and trace entries take diagnostics_sink and the source-map entries the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: it sets no options and routes no ledger, which its docstring says. test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
+    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone reads the options (options_from_env) and hands them with the caller's ledger to the compile, whose Translator holds them (no OPTIONS, no DIAGNOSTICS_SINK in src: R40); among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_statement_trace — is one call of it, so the source-map and trace entries take diagnostics_sink and the source-map entries the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: called directly it reads the environment's options itself and routes no ledger, which its docstring says. test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
         () -> begin
             local api = read(joinpath(SRC, "WasmTarget.jl"), String)
             local body(name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), api); m === nothing ? "" : m.match)
@@ -2986,11 +2988,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 push!(parts, String(take!(cur)))
                 v += count(k -> !occursin(r"^\s*\w+::", k), parts)
             end
-            # exactly one OPTIONS[] write in src, inside the one entry
-            v += abs(count_sites(r"\bOPTIONS\[\]\s*=[^=]") - 1) + (occursin(r"\bOPTIONS\[\]\s*=[^=]", entry) ? 0 : 1)
-            # DIAGNOSTICS_SINK[] written only inside the one entry (twice: set, restore)
-            v += abs(count_sites(r"\bDIAGNOSTICS_SINK\[\]\s*=[^=]") - 2) +
-                 abs(length(collect(eachmatch(r"\bDIAGNOSTICS_SINK\[\]\s*=[^=]", entry))) - 2)
+            # the one entry reads the options once and hands them and the caller's ledger to the
+            # compile (its Translator holds them, R40): no process-wide options or ledger exists
+            v += occursin("options=options_from_env(), diagnostics=diagnostics_sink", entry) ? 0 : 1
+            v += count_sites(r"\bOPTIONS\b|\bDIAGNOSTICS_SINK\b"; roots=[SRC])
             # compile_module( and _emit_module( called in src/WasmTarget.jl only inside the one entry
             local outside = replace(api, entry => "")
             for l in split(outside, '\n')
@@ -3406,7 +3407,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = count_sites(r"\bglobal_named\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "ext")], exclude_files=["parity_ratchet.jl"])
             v += count_sites(r"\bexc_cell_type!"; roots=[CODEGEN])
             # a find of a function or a global by its name, outside the one boundary that refuses a
-            # module already holding the compile's own global names (recover_module_handles!)
+            # module already holding the compile's own global names (check_existing_module, at the entry)
             for (dir, _, fs) in walkdir(CODEGEN), f in fs
                 endswith(f, ".jl") || continue
                 local enclosing = ""
@@ -3415,7 +3416,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     d === nothing || (enclosing = d.captures[1])
                     _iscomment(line) && continue
                     occursin(r"\.name\s*==(?!=)[^\n]*\b(?:functions|globals)\b", line) &&
-                        enclosing != "recover_module_handles!" && (v += 1)
+                        enclosing != "check_existing_module" && (v += 1)
                 end
             end
             v += abs(count_sites(r"StructType\(\[FieldType\(AnyRef, true\), FieldType\(ExternRef, false\)\]\)"; roots=[CODEGEN]) - 1)

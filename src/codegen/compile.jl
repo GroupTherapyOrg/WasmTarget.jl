@@ -236,10 +236,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                         link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
-                        optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         source_map_url::Union{Nothing,String}=nothing,
                         trace::Union{Nothing,StatementTrace}=nothing,
+                        options::CompilerOptions=CompilerOptions(),
+                        diagnostics::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
                         entry_names::Set{String}=Set{String}(),
                         named_entries::Set{Any}=Set{Any}()
                         )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
@@ -254,41 +255,19 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         functions = filter(entry -> !(entry isa Tuple && entry[1] in import_stub_funcs), functions)
     end
 
-    # SOUNDNESS: reset every per-module task-local cache for every compilation.
-    # A framework-supplied `existing_module` is still a new component and must not
-    # inherit type/function indices or callable identities from the previous one.
-    clear_rng_globals!()
-    clear_perf_now!()
-
-    # Create shared module and registries (or use the framework's predeclared module).
-    if existing_module !== nothing
-        mod = existing_module
-        # a module's source map URL is its own, from its construction (dart ModuleBuilder)
-        mod.source_map_url == source_map_url || throw(ArgumentError(
-            "existing_module records source maps for $(repr(mod.source_map_url)), the compile for " *
-            "$(repr(source_map_url)): construct it with WasmModule(; source_map_url)"))
-        # its builders' trace is its own too (WT_BUILDER_TRACE asks for it)
-        mod.builder_trace == OPTIONS[].builder_trace || throw(ArgumentError(
-            "existing_module's builders trace=$(mod.builder_trace), the compile's trace=$(OPTIONS[].builder_trace) " *
-            "(WT_BUILDER_TRACE): construct it with WasmModule(; builder_trace)"))
-    else
-        mod = WasmModule(; source_map_url, builder_trace=OPTIONS[].builder_trace)
-    end
-    # one module shape: every module can report where its exceptions were thrown, and a
-    # source map only maps its code (dart: a throw always captures StackTrace.current). A
-    # framework's module declares these imports before its own definitions.
-    (existing_module !== nothing && _stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
-        throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
-                            "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
+    # the framework's predeclared module (checked at the compile's entry, before collection:
+    # check_existing_module), else a new one
+    mod = existing_module !== nothing ? existing_module :
+          WasmModule(; source_map_url, builder_trace=options.builder_trace)
     # a module with a host-declared import imports the count of its open calls, which the host's
     # glue writes (host_glue_js), before any global it defines
     ensure_host_imports_open!(mod)
     ensure_provenance_imports!(mod)
     trace === nothing || ensure_trace_imports!(mod)
-    local translator = Translator(plan, trace)
+    local translator = Translator(plan, trace; options, diagnostics)
     type_registry = TypeRegistry()
     recover_module_handles!(type_registry, mod)
-    func_registry = FunctionRegistry()
+    func_registry = FunctionRegistry(; log=options.log_registry)
 
     # Create base struct type FIRST — all other structs will be subtypes — then the $JlType
     # hierarchy, before any other type registers: every `Any` field, local and signature is
@@ -322,17 +301,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # Pre-register BoxedNothing type
     get_nothing_box_type!(mod, type_registry)
 
-    # Normalize input: ensure each entry is (func, arg_types, name)
-    normalized = []
-    for entry in functions
-        if length(entry) == 2
-            f, arg_types = entry
-            name = string(nameof(f))
-            push!(normalized, (f, arg_types, name))
-        else
-            push!(normalized, entry)
-        end
-    end
+    # the plan's entries carry their names (trim_compile_plan's), so none needs normalizing
+    normalized = functions
 
     requested_names = Set(String(entry[3]) for entry in normalized)
     unknown_bindings = setdiff(Set(keys(root_bindings)), requested_names)
@@ -399,8 +369,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         is_closure = is_closure_type(closure_type)
 
         # the function's typed IR is its MethodInstance's in the collected closed world
-        (entry_mi isa Core.MethodInstance && !optimize_ir) &&
-            error("unoptimized IR for $f$(arg_types) requested inside a collected closed world, whose IR is optimized")
         entry_mi isa Core.MethodInstance ||
             error("a planned function without its MethodInstance: $(f)$(arg_types)")
         typed, return_type = plan_ir(plan, entry_mi)
@@ -466,12 +434,12 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         fd[8] === nothing && continue
         for rec in fd[8].stmts
             (rec.slot == 0 && rec.node isa NirForeignCall) || continue
-            rec.node.c_symbol === :jl_get_current_task && ensure_rng_globals!(mod)
-            rec.node.c_symbol === :jl_hrtime && ensure_perf_now_import!(mod)
+            rec.node.c_symbol === :jl_get_current_task && ensure_rng_globals!(mod, type_registry)
+            rec.node.c_symbol === :jl_hrtime && ensure_perf_now_import!(mod, type_registry)
         end
     end
     # the first module initializer seeds the RNG's state words from the host
-    local _rng = get_rng_globals()
+    local _rng = type_registry.rng_globals
     _rng === nothing || push!(type_registry.module_init_functions, rng_seed_initializer!(mod, _rng))
 
     # Exception objects synthesized by lowering must join the closed component
@@ -857,10 +825,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # body is filled once codegen has numbered every class
     ensure_class_id_reader!(mod, type_registry, translator)
 
-    # Clear module-level state after compilation
-    clear_rng_globals!()
-    clear_perf_now!()
-
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
     end
@@ -906,11 +870,14 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
         entry_name[key] = name
     end
     kwargs = (; kwargs..., entry_names=Set{String}(keys(requested)), named_entries=Set{Any}(values(requested)))
+    # a host's module is checked before anything is collected: a mismatch fails at the entry,
+    # not after the closed world's collection
+    local existing = get(kwargs, :existing_module, nothing)
+    existing === nothing || check_existing_module(existing, get(kwargs, :source_map_url, nothing),
+                                                  get(kwargs, :options, CompilerOptions()))
     try
-        return with_layout_read_memo() do
-            plan = trim_compile_plan(normalized; external_entries)
-            return _compile_closed_world_plan(plan; kwargs...)
-        end
+        plan = trim_compile_plan(normalized; external_entries)
+        return _compile_closed_world_plan(plan; kwargs...)
     catch err
         # a failure outside any statement — collecting the closed world, registering its
         # types, building its dispatch tables, declaring its functions — located at the
@@ -935,8 +902,8 @@ _module_entries_label(entries::Vector)::String =
 
 Compile multiple Julia functions into a single WebAssembly module, unserialized: the closed-world
 compile the one compile entry (`_compile`, src/WasmTarget.jl) calls. It is internal to that
-entry: it reads the options without setting them and routes no diagnostics ledger, and tests
-call it to inspect the module. A compile a caller runs goes through an exported entry
+entry, which passes the options it read and the caller's diagnostics ledger; called directly (tests
+inspect the module it returns), it reads the environment's options itself and routes no ledger. A compile a caller runs goes through an exported entry
 (compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap,
 compile_with_statement_trace), each one call of `_compile`.
 
@@ -952,13 +919,14 @@ function compile_module(functions::Vector;
                         root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
                         link_roots::Union{Nothing,Function}=nothing,
                         return_registries::Bool=false,
-                        optimize_ir::Bool=true,
                         register_ir_types::Bool=false,
                         source_map_url::Union{Nothing,String}=nothing,
-                        trace::Union{Nothing,StatementTrace}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
+                        trace::Union{Nothing,StatementTrace}=nothing,
+                        options::CompilerOptions=options_from_env(),
+                        diagnostics::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,
-        root_bindings, link_roots, optimize_ir, register_ir_types, source_map_url, trace)
+        root_bindings, link_roots, register_ir_types, source_map_url, trace, options, diagnostics)
 end
 
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
