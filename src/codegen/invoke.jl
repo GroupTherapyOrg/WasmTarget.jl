@@ -2,21 +2,6 @@
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
     nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : value_type(ctx, arg)
 
-"""Return the unique singleton represented by `T`, or `nothing` when none exists.
-parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)"""
-_invoke_singleton_instance(@nospecialize(T))::Any =
-    T isa DataType && Base.issingletontype(T) ? getfield(T, :instance) : nothing
-
-"""The function object a MethodInstance specializes — its signature's first parameter's
-singleton instance — or `nothing` for a closure, a constructor or an unspecialized
-signature.
-parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the invocation's
-target member, read as an identity."""
-function _invoke_callee_object(mi::Core.MethodInstance)::Any
-    st = mi.specTypes
-    (st isa DataType && st <: Tuple && length(st.parameters) >= 1) || return nothing
-    return _invoke_singleton_instance(st.parameters[1])
-end
 
 """
 Compile an invoke expression (method invocation) — dart visitor shape:
@@ -115,8 +100,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # The closed-world metadata operations trim_compile_plan leaves out of the function
     # list (check_world_bounded, isvisible and their overlays) lower at an :invoke
     # through the same identity-keyed BUILTIN_LOWERINGS entry as at a :call — the
-    # invoked Method's function OBJECT selects it, never its name.
-    local _cw_f = mi isa Core.MethodInstance ? _invoke_callee_object(mi) : nothing
+    # callee OBJECT the boundary resolved selects it, never its name.
+    local _cw_f = _nir_callee_object(node.callee)
     if _cw_f === Base.check_world_bounded || _cw_f === _closed_world_type_bounds ||
        _cw_f === Base.isvisible || _cw_f === _closed_world_isvisible
         local _cw_r = BUILTIN_LOWERINGS[_cw_f](b, fb, ctx, node, idx, args, _cw_f)

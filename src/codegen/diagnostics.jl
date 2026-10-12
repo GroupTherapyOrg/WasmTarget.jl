@@ -525,7 +525,9 @@ const GENERATED_CONSTRUCTS = (
     # boxed-number compare inline, intrinsics.dart:2974)
     jl_egal = GeneratedConstruct("runtime egal", "jl_egal", "", false),
     # parity(pkg/dart2wasm/lib/types.dart:1039 AsCheckerCallTarget.name): "<obj> as $T", the
-    # function an as-check calls (AsCheckers.generateAsChecker, :763; as_checker!)
+    # function an as-check calls (AsCheckers.generateAsChecker, :763; as_checker!). dart names it
+    # by the tested class's name; a Julia type is no class, so T is the type as Julia prints it
+    # (string(target)), parameters included
     as_checker = GeneratedConstruct("as-checker", "<obj> as ", "", true),
     # parity(quarantine: jl_has_typevar is Julia's C runtime, jltypes.c, its walk ported over WT's
     # type objects; dart's type objects have no free type variables to search)

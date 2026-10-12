@@ -157,5 +157,6 @@ _nui_clo(x::Int64) = _NUI_CLO(x)
     clo = [n for n in callees(_nui_clo, (Int64,)) if n isa WasmTarget.NirInvoke && n.callee === _NUI_CLO]
     @test length(clo) == 1 && clo[1].self isa WasmTarget.NirLiteral && clo[1].self.value === _NUI_CLO
     @test all(n -> n.self === nothing, callees(expm1, (Float64,)))
+    @test all(n -> n.self === nothing, callees(Dict{Int64,Int64}, ()))   # a type object carries no self
     @test_throws ArgumentError WasmTarget.NirCall(WasmTarget.NirLiteral(Core.Intrinsics.add_int), WasmTarget.NirNode[])
 end

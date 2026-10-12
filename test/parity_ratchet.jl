@@ -185,8 +185,7 @@ const R30_ANY_SEAMS = Dict{Symbol,String}(
     :_nir_callee_object => "a callee operand's object: a function, a type or any callable value",
     :resolve_call_callee => "a :call's callee resolved to its object, or the operand of a dynamic callee",
     :nir_callee => "a callee operand resolved to its one representation: a constant's object, an unbound GlobalRef or a runtime value's node",
-    :_invoke_callee_object => "the function object a MethodInstance specializes",
-    :_invoke_singleton_instance => "the one instance of a singleton type, any value",
+    :nir_operand_callee => "a callee operand resolved by the one rule over its static type: a constant's object, an unbound GlobalRef, a singleton's instance or a runtime value's node",
     :nir_const => "a literal operand's value, any Julia value",
     :_nir_const_operand => "a constant operand's value, any Julia value",
     :_nir_field_name => "a getfield operand's literal, whatever the IR wrote there",
@@ -1179,7 +1178,10 @@ const LOCKS = [
                          "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
                          "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup",
                          "_compile_invoke_print", "_invoke_print_b", "_invoke_println_b"]
-            required = ["_invoke_singleton_instance", "Base.issingletontype(T)"]
+            # the singleton predicate is the boundary's one callee rule (nir_operand_callee), which
+            # an :invoke's callee is resolved by too
+            local nir_src = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            required = String[]
             # receiver-free print/println/show compile Julia's own bodies, whose console
             # write rejects loudly at its statement — pinned behaviorally
             diag_required = ["(DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,))",
@@ -1187,6 +1189,7 @@ const LOCKS = [
                              "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
             count(p -> occursin(p, codegen_src), forbidden) +
                 count(p -> !occursin(p, invoke_src), required) +
+                (occursin("(static_type isa DataType && Base.issingletontype(static_type) && static_type <: Function)", nir_src) ? 0 : 1) +
                 count(p -> !occursin(p, diag_src), diag_required)
         end),
     "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
@@ -3689,7 +3692,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v
         end),
-    "L182_one_callee_representation" => ("a call's constant callee has one representation, its object, resolved once at the NIR boundary by one rule for a :call, an :invoke and a call codegen builds (nir_callee over resolve_operand, and _resolve_nircall_callee's SSA, Core.Const and singleton-argument arms for both statement kinds), as Kernel's StaticInvocation carries its resolved target (expressions.dart:2820): an intrinsic the IR embeds as the object, a type object an :invoke embeds and a function a singleton-typed argument names are their objects; NirCall and NirInvoke refuse a NirLiteral callee at construction (_refuse_literal_callee); a constant holding captures (its Core.Typeof not a singleton type, not a Builtin) carries its self operand in the node's own field `self` (nir_callee_self, FunctionInvocation.receiver, expressions.dart:2262), which an :invoke of a closure's function pushes first (nir_callee_value) and the operand walkers read; no callee is unwrapped in codegen (no nir_const of a callee, no `callee isa NirLiteral`, no _resolve_builtin_callee) and no :invoke callee is resolved again there (no _invoke_named_callee). Behavior: test/nir_use_index.jl's 'a call's constant callee has one representation' (expm1's embedded have_fma, Dict's constructor, a singleton-typed argument's :invoke, a const closure's self; a NirLiteral callee refused) and smoke constant_callees (dev/AUDIT.md A4C5; dev/CHARTER.md C1)",
+    "L182_one_callee_representation" => ("a call's constant callee has one representation, its object, resolved once at the NIR boundary by one rule for a :call, an :invoke and a call codegen builds (nir_callee over resolve_operand, and _resolve_nircall_callee's SSA, Core.Const and singleton-argument arms for both statement kinds), as Kernel's StaticInvocation carries its resolved target (expressions.dart:2820): an intrinsic the IR embeds as the object, a type object an :invoke embeds and a function a singleton-typed argument names are their objects; NirCall and NirInvoke refuse a NirLiteral callee at construction (_refuse_literal_callee); a callee passed as an operand (a call codegen builds, nir_call; invoke_in_world's `f`; `_apply_iterate`'s function) is read by the same rule over the operand's static type (nir_operand_callee: a runtime value of a singleton function type is its instance); a constant whose type does not determine it (Compiler's singleton_type over its Core.Typeof answers nothing: not a function singleton, not a type object, not a Builtin) carries its self operand in the node's own field `self` (nir_callee_self, FunctionInvocation.receiver, expressions.dart:2262), which an :invoke of a closure's function pushes first (nir_callee_value) and the operand walkers read; no callee is unwrapped or resolved in codegen (no nir_const of a callee, no `callee isa NirLiteral`, no manual global resolution of a callee operand, no _resolve_builtin_callee, _invoke_in_world_callee) and no :invoke callee is resolved again from its MethodInstance (no _invoke_named_callee, _invoke_callee_object). Behavior: test/nir_use_index.jl's 'a call's constant callee has one representation' (expm1's embedded have_fma, Dict's constructor, a singleton-typed argument's :invoke, a const closure's self; a NirLiteral callee refused) and smoke constant_callees (dev/AUDIT.md A4C5; dev/CHARTER.md C1)",
         () -> begin
             local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
             local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
@@ -3699,8 +3702,12 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("NirCall(nir_callee(callee), NirNode[operands...])", nirs) ? 0 : 1
             v += count("nir_callee_self(@nospecialize(callee))::Union{Nothing,NirLiteral} =", nirs) == 1 ? 0 : 1
             v += occursin("closure_self_to_push = something(nir_callee_value(node), NirLiteral(node.callee))", inv) ? 0 : 1
-            v += count_sites(r"nir_const\((func|[\w.]*callee[\w.]*)\)|_resolve_builtin_callee|_invoke_named_callee|callee\.value\b|callee isa NirLiteral|isa NirLiteral \? [\w.]*callee";
+            v += count_sites(r"nir_const\((func|f|fref|target_func|[\w.]*callee[\w.]*)\)|\b(fref|target_func|target)\s+isa\s+NirGlobalRef|_resolve_builtin_callee|_invoke_named_callee|_invoke_callee_object|_invoke_in_world_callee|callee\.value\b|callee isa NirLiteral|isa NirLiteral \? [\w.]*callee";
                              exclude_files=["frontend/nir.jl"])
+            # every callee passed as an operand is read by the one rule (nir_operand_callee): the
+            # boundary's argument arm, nir_call, invoke_in_world's and _apply_iterate's
+            v += count_sites(r"\bnir_operand_callee\("; roots=[SRC]) == 8 ? 0 : 1
+            v += occursin("CC.singleton_type(Core.Typeof(callee)) !== nothing", nirs) ? 0 : 1
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("a call's constant callee has one representation", nui) ? 0 : 1
             v += occursin("_g(\"constant_callees\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1

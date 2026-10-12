@@ -48,12 +48,11 @@ function _register_builtin!(callee, lowering::Function)::Function
     return lowering
 end
 
-"""THE funnel: resolve `func`'s callee identity once and, if it names a
-registered Core/Base builtin, run its lowering. Returns the handled
-`InstrBuilder` or `nothing` (generic/dynamic-call path continues) — dart's
-nullable-return entry-funnel shape. Called ONCE from `compile_call!`, directly
-after its ONE SSAValue→GlobalRef callee-resolution step, mirroring dart's
-resolve-the-target-once dispatch (`StaticIntrinsic._lookup`, intrinsics.dart:401).
+"""THE funnel: if the call's callee, the object the NIR boundary resolved once (nir_callee),
+names a registered Core/Base builtin, run its lowering. Returns the handled `InstrBuilder` or
+`nothing` (generic/dynamic-call path continues) — dart's nullable-return entry-funnel shape.
+Called ONCE from `compile_call!`, mirroring dart's resolve-the-target-once dispatch
+(`StaticIntrinsic._lookup`, intrinsics.dart:401).
 formal(dev/formal/ConsultChain.tla).
 parity(intrinsics.dart:1194 generateStaticIntrinsic)"""
 function _try_builtin_lowering!(b::InstrBuilder, fb::InstrBuilder, ctx::AbstractCompilationContext,
@@ -83,8 +82,8 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Not
     # the statement's type (`Any`: inference does not see through the world-age builtin) is the
     # consumer's widening, converted to afterwards. A callee that is not a constant, or one the
     # plan registers no function for, is a dynamic call, typed `Any` as Julia's IR types it.
-    local f = _invoke_in_world_callee(args[2])
-    local target = (f === nothing || ctx.func_registry === nothing) ? nothing :
+    local f = nir_operand_callee(args[2], value_type(ctx, args[2]))
+    local target = (!(f isa Function || f isa Type) || ctx.func_registry === nothing) ? nothing :
         get_function(ctx.func_registry, f, Tuple(Any[value_type(ctx, a) for a in args[3:end]]))
     local R = target === nothing ? Any : target.return_type
     local had_result = haskey(ctx.ssa_types, idx)
@@ -94,7 +93,7 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Not
     # fragment's stack starts with its parent's)
     local height = length(b.v.stack)
     try
-        compile_call!(b, nir_call(args[2], args[3:end]), idx, ctx)
+        compile_call!(b, nir_call(args[2], args[3:end], value_type(ctx, args[2])), idx, ctx)
     finally
         had_result ? (ctx.ssa_types[idx] = old_result) : delete!(ctx.ssa_types, idx)
     end
@@ -1936,9 +1935,11 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
         _emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))
         return append_builder!(b, fb)
     end
-    # the run-time check: the one as-checker of (target, static type), called on the operand
-    # (types.dart:552 emitAsCheck → generateAsChecker), which returns it; a check WT cannot
-    # lower rejects here, at this statement
+    # the run-time check: the one as-checker of (target, static type), called on the operand as
+    # the top type (types.dart:552 emitAsCheck → generateAsChecker), which returns it in the
+    # register of S ∩ T; a check WT cannot lower rejects here, at this statement. The operand is
+    # boxed into the top type only where its register is a number's (no run-time check measured
+    # one: a numeric static type is concrete, decided by the static arms above)
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
     local _ta_chk = as_checker!(ctx, _ta_target, _ta_static)
@@ -1946,8 +1947,8 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
         emit_unsupported_stub!(ctx, fb, _ta_chk.kind, _ta_chk.construct; idx=idx, detail=_ta_chk.detail)
         return append_builder!(b, fb)
     end
-    coerce_stack_top!(fb, _ta_chk[2], ctx; from_julia=_ta_static)
-    emit_direct_call!(fb, ctx.mod, ctx.type_registry, _ta_chk[1])
+    coerce_stack_top!(fb, AnyRef, ctx; from_julia=_ta_static)
+    emit_direct_call!(fb, ctx.mod, ctx.type_registry, _ta_chk)
     return append_builder!(b, fb)
 end
 

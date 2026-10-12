@@ -245,7 +245,7 @@ target and stays a loud reject at the call site.
 function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type})::Union{Core.MethodInstance,Nothing}
     (node.callee === Core._apply_iterate && length(node.operands) == 3) || return nothing
     local fref = node.operands[2]
-    local f = fref isa NirGlobalRef ? (fref.bound ? fref.value : fref) : nir_const(fref)
+    local f = nir_operand_callee(fref, value_type(fref, slot_types, nothing))
     (f isa Function && !(f isa Core.Builtin) && !(f isa Core.IntrinsicFunction)) || return nothing
     local T = value_type(node.operands[3], slot_types, nothing)
     (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
@@ -253,15 +253,6 @@ function _apply_iterate_vararg_target_mi(node::NirCall, slot_types::Vector{Type}
     local matches = wt_method_matches(sig)
     (matches !== nothing && length(matches) == 1) || return nothing
     return CC.specialize_method(matches[1])
-end
-
-# The callee of `invoke_in_world(world, f, args...)` when `f` is a constant (a literal or a
-# bound global): a function or a type; otherwise nothing (a dynamic callee).
-# parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age, and a closed-world module has exactly one.)
-function _invoke_in_world_callee(target::NirNode)::Union{Function,Type,Nothing}
-    local f = target isa NirGlobalRef ? (target.bound ? target.value : nothing) :
-              target isa NirLiteral ? target.value : nothing
-    return (f isa Function || f isa Type) ? f : nothing
 end
 
 """
@@ -279,8 +270,8 @@ and a closed-world module has exactly one.)
 function _invoke_in_world_target_mi(node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
     (length(node.operands) >= 2 && _nir_callee_object(node.callee) === Core.invoke_in_world) ||
         return nothing
-    local f = _invoke_in_world_callee(node.operands[2])
-    f === nothing && return nothing
+    local f = nir_operand_callee(node.operands[2], arg_type(node.operands[2]))
+    (f isa Function || f isa Type) || return nothing
     local arg_types = Any[arg_type(a) for a in @view node.operands[3:end]]
     local matches = wt_method_matches(Tuple{Core.Typeof(f), arg_types...})
     (matches !== nothing && length(matches) == 1 && matches[1].fully_covers) || return nothing
@@ -305,8 +296,8 @@ function _called_function(node::NirCall, arg_type)::Tuple{Any,Vector{NirNode}}
     local callee = _nir_callee_object(node.callee)
     callee === Core.invoke_in_world || return (callee, node.operands)
     length(node.operands) >= 2 || return (nothing, NirNode[])
-    local f = _invoke_in_world_callee(node.operands[2])
-    (f === nothing || _invoke_in_world_target_mi(node, arg_type) !== nothing) && return (nothing, NirNode[])
+    local f = nir_operand_callee(node.operands[2], arg_type(node.operands[2]))
+    (!(f isa Function || f isa Type) || _invoke_in_world_target_mi(node, arg_type) !== nothing) && return (nothing, NirNode[])
     return (f, node.operands[3:end])
 end
 

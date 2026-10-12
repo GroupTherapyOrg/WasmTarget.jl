@@ -2784,25 +2784,29 @@ function _emit_typeerror_throw!(b::InstrBuilder, ctx::AbstractCompilationContext
 end
 
 """
-    as_checker!(ctx, target, static_type) -> (function index, parameter) | WasmDiagnostic
+    as_checker!(ctx, target, static_type) -> function index | WasmDiagnostic
 
-The one as-checker of `x::target` for an operand of static type `static_type`: a function of
-that type's register (the parameter it returns with the function) returning the operand, whose
-body tests it (the one isa lowering, which reads the static type as Julia's emit_isa does) and
-throws the one TypeError when it fails. Built on its first use, in a codegen context of its own
-whose one statement is `typeassert(x, target)`, and cached on the module's registry. A body WT
-cannot lower is no function: its rejection is returned (and cached), and each calling statement
-rejects with it, located there.
+The one as-checker of `x::target` for an operand of static type `static_type`: a function from the
+top type (anyref) to the register of the value it passes, `typeintersect(static_type, target)`
+(Julia's typeassert result), whose body narrows its argument to the static type's register, tests
+it (the one isa lowering, which reads the static type as Julia's emit_isa does: S ∩ T picks the
+test), throws the one TypeError when it fails, and converts its argument to the result's register.
+Built on its first use, in a codegen context of its own whose one statement is
+`typeassert(x, target)`, and cached on the module's registry. A body WT cannot lower is no
+function: its rejection is returned (and cached), and each calling statement rejects with it,
+located there.
 parity(pkg/dart2wasm/lib/types.dart:763 AsCheckers.generateAsChecker): one checker function per
-tested type, cached (`_asCheckers`, :758), its body the is-check and the throw (:1094
-AsCheckerCodeGenerator.generate); dart keys it by the operand's representation
-(operandIsNullable), WT by the operand's static type, which Julia's isa reads. dart's other
-as-check, an inline call of its run-time asSubtype for a type no class-id range decides
-(types.dart:562-592), has no WT counterpart: every WT isa is lowered at compile time over the
-closed world, so every target has a checker.
+tested type, cached (`_asCheckers`, :758), from the top type (:784) to the tested type's (:783),
+its body the is-check, the throw and the conversion of its argument (:1094
+AsCheckerCodeGenerator.generate, :1172-1173). dart's other as-check, an inline call of its
+run-time asSubtype for a type no class-id range decides (types.dart:562-592), has no WT
+counterpart: every WT isa is lowered at compile time over the closed world.
+parity(quarantine: dart keys its checker by the tested type and the operand's nullability; Julia's
+isa is decided over the operand's static type too (emit_isa tests S ∩ T, cgutils.cpp), so WT keys
+it by (target, static type).)
 """
 function as_checker!(ctx::AbstractCompilationContext, target::Type,
-                     static_type::Type)::Union{Tuple{UInt32,WasmValType}, WasmDiagnostic}
+                     static_type::Type)::Union{UInt32, WasmDiagnostic}
     local key = (target, static_type)
     local hit = get(ctx.type_registry.as_checkers, key, nothing)
     hit === nothing || return hit
@@ -2811,24 +2815,39 @@ function as_checker!(ctx::AbstractCompilationContext, target::Type,
     local R = typeintersect(static_type, target)
     local body = NirBody(NirStmt[NirStmt(check, R, 0), NirStmt(NirReturn(NirSSA(1, R)), Any, 0)],
                          Type[Any, static_type], nothing)
-    local cctx = CompilationContext(body, (static_type,), static_type, ctx.mod, ctx.type_registry;
+    # its parameter is the top type (`Any`'s register), its argument's static type the operand's
+    # (the slot table, which value_type reads)
+    local cctx = CompilationContext(body, (Any,), R, ctx.mod, ctx.type_registry;
                                     translator=ctx.translator, mi=nothing)
     cctx.current_stmt_idx = 1
-    local param = only(cctx.wasm_params)
+    only(cctx.wasm_params) === AnyRef || error("the top type crosses a call as $(only(cctx.wasm_params)), not anyref")
+    local operand = boundary_wasm_type(static_type, ctx.mod, ctx.type_registry)   # the static type's register
+    # S ∩ T's register, as a call's result translates (a `nothing` has no result register:
+    # it stays in the static type's); none when S ∩ T is empty (the check always throws)
+    local results = R === Union{} ? WasmValType[] : R === Nothing ? WasmValType[operand] :
+                    copy(cctx.wasm_results)
     local name = generated_function_name(:as_checker, string(target))
-    local cb = InstrBuilder(WasmValType[param], WasmValType[param]; func_name=name, mod=ctx.mod,
+    local cb = InstrBuilder(WasmValType[AnyRef], results; func_name=name, mod=ctx.mod,
                             locals=cctx.locals)
     local result = try
         local_get!(cb, 0)
+        coerce_stack_top!(cb, operand, cctx; from_julia=static_type)
+        local tmp = allocate_local!(cctx, operand)
+        local_tee!(cb, UInt32(tmp))
         _compile_call_isa(check.operands, cb, cctx)              # the one isa test: i32
         num!(cb, Opcode.I32_EQZ)
         if_!(cb)                                                 # not a target → THROW
         _emit_typeerror_throw!(cb, cctx, target,
-            (bb, w) -> (local_get!(bb, 0); coerce_stack_top!(bb, w, cctx; from_julia=static_type)))
+            (bb, w) -> (local_get!(bb, UInt32(tmp)); coerce_stack_top!(bb, w, cctx; from_julia=static_type)))
         end_block!(cb)
-        local_get!(cb, 0)                                        # the value survives the check
+        if isempty(results)
+            unreachable!(cb)   # structural trap: S ∩ T is empty, so the test above always throws
+        else
+            local_get!(cb, 0)                                    # the value survives the check
+            coerce_stack_top!(cb, only(results), cctx; from_julia=(R === Nothing ? static_type : R))
+        end
         finish_function!(cb)
-        (add_function!(ctx.mod, cb; name=name), param)
+        add_function!(ctx.mod, cb; name=name)
     catch e
         # the body's rejection is each caller's (located at its statement there), so the
         # checker's own copy leaves the ledger
@@ -3739,8 +3758,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         #   `Core.tuple(v...)`→ the builtin VALUE, no GlobalRef at all
         # — so the last two used to fall through to the loud reject for a splat the
         # first one lowers.
-        target_value = target_func isa NirGlobalRef ?
-            (target_func.bound ? target_func.value : nothing) : nir_const(target_func)
+        target_value = nir_operand_callee(target_func, value_type(ctx, target_func))
         target_is_tuple = target_value === Core.tuple
         target_is_vect = target_value === Base.vect
         target_is_typed_vect = target_value === Base.getindex
