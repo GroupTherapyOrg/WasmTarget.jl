@@ -1075,7 +1075,13 @@ constant expression), complete (finish_function!), of the function's own paramet
 The function's locals and source mappings are the builder's. A function is filled once.
 parity(pkg/wasm_builder/lib/src/builder/function.dart:35 FunctionBuilder.forceBuild)
 """
+const P0_EMBED = Ref(String[])
+const P0_TA = Ref(0)
 function fill_function!(mod::WasmModule, idx::Integer, b::InstrBuilder)::UInt32
+    let (c, _) = builder_code_mapped(b), fnn = mod.functions[Int(idx) - num_imported_funcs(mod) + 1].name
+        println(stderr, "FNHASH\t", fnn, "\t", string(hash(c), base=16), "\t", join(sort!(unique(P0_EMBED[])), ","), "\t", P0_TA[])
+        P0_EMBED[] = String[]; P0_TA[] = 0
+    end
     local slot = _defined_function_slot(mod, idx, :fill_function)
     local fn = mod.functions[slot]
     local ft = mod.types[Int(fn.type_idx) + 1]::FuncType
