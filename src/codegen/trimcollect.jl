@@ -1972,9 +1972,9 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             push!(get!(() -> Any[], names, sig), mi0)
             oldb += ncodeunits(nm0); newb += ncodeunits(sig)
         end
-        p0add("S name bytes, the planner's names", oldb); p0add("S name bytes, the signatures", newb)
+        p0add!("S name bytes, the planner's names", oldb); p0add!("S name bytes, the signatures", newb)
         p0!("S plans")
-        p0add("S functions named", length(functions))
+        p0add!("S functions named", length(functions))
         for (sig, ms) in names
             length(ms) > 1 && (p0!("S two MethodInstances print alike", sig * " :: " * join(string.(ms), " | ")); p0set!("S colliding signatures", sig))
         end

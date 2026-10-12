@@ -88,3 +88,4 @@ function p0_arm(@nospecialize(x), code_info, slot_types)::String
     x isa Function && Base.issingletontype(typeof(x)) && return "embedded singleton function"
     return "embedded " * p0_obj_kind(x)
 end
+p0add!(k::AbstractString, n::Integer) = (P0[String(k)] = get(P0, String(k), 0) + Int(n); nothing)
