@@ -231,11 +231,9 @@ const NUMERIC_INTRINSIC_ARG_OPS = Set{Symbol}((
     :not_int, :or_int, :xor_int, :and_int,
 ))
 
-"""True when `func` names one of `NUMERIC_INTRINSIC_ARG_OPS` — same name-extraction
-rule `_it_name` uses (GlobalRef / Core.IntrinsicFunction), so this is a drop-in for
-a chain of individual per-op `is_func` name checks, ORed together, that it replaces.
+"""True when `func`, a call's callee as the NIR boundary resolved it (an intrinsic is its
+object), is one of `NUMERIC_INTRINSIC_ARG_OPS`, by the name `_it_name` reads.
 parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)"""
 function is_numeric_intrinsic_arg(func)::Bool
-    f = nir_const(func)   # the callee object, a literal callee unwrapped
-    return f isa Core.IntrinsicFunction && nameof(f) in NUMERIC_INTRINSIC_ARG_OPS
+    return func isa Core.IntrinsicFunction && nameof(func) in NUMERIC_INTRINSIC_ARG_OPS
 end

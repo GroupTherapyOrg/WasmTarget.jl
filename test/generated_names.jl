@@ -19,6 +19,7 @@ const _GN_SUBJECTS = Dict{Symbol,String}(
     :field_initializer => "Main.COUNTER",
     :foreigncall_table => "utf8proc_toupper/utf8proc_tolower/utf8proc_totitle/utf8proc_isupper/utf8proc_islower",
     :export_entry => "gf2",
+    :as_checker => "Tuple{Any, Any}",
 )
 
 _gn_name(kind::Symbol) = _GN.generated_function_name(kind, get(_GN_SUBJECTS, kind, ""))
