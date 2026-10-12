@@ -1942,13 +1942,16 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
     # one: a numeric static type is concrete, decided by the static arms above)
     local _ta_ty = emit_call_operand!(fb, ctx, args[1])
     _ta_ty isa WasmValType || error("typeassert's operand has no value")
-    local _ta_chk = as_checker!(ctx, _ta_target, _ta_static)
-    if _ta_chk isa WasmDiagnostic
-        emit_unsupported_stub!(ctx, fb, _ta_chk.kind, _ta_chk.construct; idx=idx, detail=_ta_chk.detail)
-        return append_builder!(b, fb)
-    end
-    coerce_stack_top!(fb, AnyRef, ctx; from_julia=_ta_static)
-    emit_direct_call!(fb, ctx.mod, ctx.type_registry, _ta_chk)
+    P0_TA[] += 1
+    local _ta_tmp = allocate_local!(ctx, _ta_ty)
+    local_tee!(fb, UInt32(_ta_tmp))
+    _compile_call_isa(args, fb, ctx)                  # the one isa test: i32
+    num!(fb, Opcode.I32_EQZ)
+    if_!(fb)                                          # not a T → THROW
+    _emit_typeerror_throw!(fb, ctx, _ta_target,
+        (bb, w) -> (local_get!(bb, UInt32(_ta_tmp)); coerce_stack_top!(bb, w, ctx; from_julia=_ta_static)))
+    end_block!(fb)
+    local_get!(fb, UInt32(_ta_tmp))                   # the value survives the check
     return append_builder!(b, fb)
 end
 
