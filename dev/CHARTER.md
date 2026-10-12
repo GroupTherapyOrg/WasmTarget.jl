@@ -55,7 +55,9 @@ with the per-clause status. A clause is never closed by argument.
   widening check, no ladder, one box producer) `L179` (one TypeError builder, one `Type{X}`
   element rule, the type-object test over the static type, one class test) `L180` (one operator
   table, one conversion table, one width rule, one operand table, one loop-bounds definition)
-  `L181` (one CFG, Julia's own, nir_cfg; one dominator computation).
+  `L181` (one CFG, Julia's own, nir_cfg; one dominator computation) `L182` (a constant callee's
+  one representation, its object, resolved once at the boundary) `L183` (one as-checker per
+  target and static type).
   Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a

@@ -495,7 +495,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                 # the MI from the concrete call-site SSA types, exactly as the
                 # compiler would for an ordinary specialized call.
                 if mi isa Core.MethodInstance && node.callee !== nothing
-                    f = node.callee isa NirLiteral ? node.callee.value : node.callee
+                    f = node.callee
                     arg_types = Any[arg_type(a) for a in node.operands]
                     # Constructors are callable Type objects, not subtypes of
                     # Function. They participate in exactly the same overlay

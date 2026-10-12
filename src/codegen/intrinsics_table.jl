@@ -236,6 +236,5 @@ rule `_it_name` uses (GlobalRef / Core.IntrinsicFunction), so this is a drop-in 
 a chain of individual per-op `is_func` name checks, ORed together, that it replaces.
 parity(quarantine: a predicate over Julia's intrinsics and builtins; dart's intrinsics are keyed by member.)"""
 function is_numeric_intrinsic_arg(func)::Bool
-    f = nir_const(func)   # the callee object, a literal callee unwrapped
-    return f isa Core.IntrinsicFunction && nameof(f) in NUMERIC_INTRINSIC_ARG_OPS
+    return func isa Core.IntrinsicFunction && nameof(func) in NUMERIC_INTRINSIC_ARG_OPS
 end
