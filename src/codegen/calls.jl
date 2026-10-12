@@ -2815,6 +2815,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # operand node (a literal callee, or a runtime value).
     func = node.callee
     args = node.operands
+    func isa NirLiteral && func.value isa Core.IntrinsicFunction && push!(P0_EMBED[], string(nameof(func.value)))
     # the callee Julia reached through a binding (every name-keyed call below)
     named = !(func isa NirNode)
 
