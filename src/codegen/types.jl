@@ -538,6 +538,9 @@ mutable struct TypeRegistry
     egal_func_idx::Union{Nothing, UInt32}
     # whether fill_egal_function! has filled its body (a later first use raises)
     egal_filled::Bool
+    # the as-checkers (as_checker!, dart's AsCheckers._asCheckers, types.dart:758): per (target,
+    # static type), the function, or the rejection its body raised
+    as_checkers::Dict{Tuple{Type,Type}, Union{UInt32, WasmDiagnostic}}
     # utf8proc case-record table helper, shared by the case-mapping/predicate calls.
     unicode_case_func_idx::Union{Nothing, UInt32}
     # F3 (dev/HISTORY.md#closures-and-dynamic-dispatch): specialized Core.Box struct types, keyed by contents WASM type.
@@ -609,6 +612,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,  # unicode_property_func_idx
     nothing,  # egal_func_idx
     false,    # egal_filled
+    Dict{Tuple{Type,Type}, Union{UInt32, WasmDiagnostic}}(),  # as_checkers
     nothing,  # unicode_case_func_idx
     Dict{WasmValType, UInt32}(),  # box_types (F3)
     Dict{Tuple{Type,Symbol}, Type}(),  # box_contents_types (record_capture_contents)
