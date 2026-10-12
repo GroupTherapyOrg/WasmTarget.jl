@@ -44,10 +44,12 @@ with the per-clause status. A clause is never closed by argument.
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
   an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
-  `R29b` `R37` `L152` (codegen reads a function's IR from the plan, not from `get_typed_ir`) `L170`
-  (an :invoke calls its MethodInstance's function) `L171` (one consult for which methods Julia
-  selects, asked by collection, planning and the vtable pre-pass; a statement's codegen asks it
-  only in closed_world_call_result, 13.17's A3C1).
+  `R29b` `R37` `L152` (codegen reads a function's IR, its callees' return types and its joins
+  from the plan and asks no inference) `L170` (an :invoke calls its MethodInstance's function)
+  `L171` (one consult for which methods Julia selects, asked by collection, planning and the
+  vtable pre-pass; a statement's codegen asks it nowhere) `L174` (one reader of an operand's
+  Julia type, value_type, Julia's argextype) `L175` (a global's binding resolved once, at the
+  boundary).
   Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a

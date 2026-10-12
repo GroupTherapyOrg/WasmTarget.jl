@@ -10,7 +10,7 @@
 # `Expr.args`; anything it needs was resolved here, once, when the node was built.
 #
 # `build_nir(code_info)` takes NO context: it is a pure function of the CodeInfo, and it
-# runs FIRST — before analyze_ssa_types!/analyze_control_flow!/allocate_ssa_locals!, which
+# runs FIRST — before analyze_control_flow!/allocate_ssa_locals!, which
 # are themselves NIR consumers. Every type on a node is Julia INFERENCE's own answer
 # (`code_info.ssavaluetypes`, widened to a plain Julia type; `Any` where inference had
 # nothing), never a codegen re-derivation. The WASM-target type (WasmValType) is a
@@ -52,9 +52,9 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
 abstract type NirNode end
 
 """A use of an SSA-defined value. `julia_type` is Julia inference's own answer for that
-SSA id (`widenconst(code_info.ssavaluetypes[id])`, `Any` when inference had none) — not a
-new `infer_value_type` call site: R3 must not increase from this boundary. A context's
-refinements on top of it (analyze_ssa_types!'s overrides) stay in `ctx.ssa_types`.
+SSA id (`widenconst(code_info.ssavaluetypes[id])`, `Any` when inference had none), which
+`value_type` reads. A context's `ctx.ssa_types` adds only the plan's answers on top of it (its
+joins, an unused invoke's return type).
 parity(quarantine: Julia's typed IR names a statement's value by `Core.SSAValue`; a Kernel
 subexpression is nested in its consumer, so no value reference exists.)"""
 struct NirSSA <: NirNode
@@ -74,15 +74,22 @@ struct NirSlot <: NirNode
     id::Int
 end
 
-"""A `GlobalRef` operand, its binding resolved ONCE here. `bound` says the binding
-existed (an unbound GlobalRef is a soundness reject at the consumer, and `value === nothing`
-alone cannot distinguish that from a global whose value IS `nothing`).
+"""A `GlobalRef` operand, its binding resolved ONCE here, and no consumer resolves it again
+(L175). `bound` says the binding existed (an unbound GlobalRef is a soundness reject at the
+consumer, and `value === nothing` alone cannot distinguish that from a global whose value IS
+`nothing`); `constant` says the binding is a constant (`isconst`), whose `value` is the value
+every read of it has; `julia_type` is Julia's type for the read, what Compiler's
+`abstract_eval_globalref_type` answers (abstractinterpretation.jl:3599 on 1.12.7, :3660 on
+1.13.1): a constant's `Core.Typeof(value)`, a non-constant binding's declared type
+(`Core.get_binding_type`, `Any` for an untyped global), `Any` for an unbound one.
 parity(pkg/kernel/lib/src/ast/expressions.dart:1363 StaticGet): a read of a module-level binding."""
 struct NirGlobalRef <: NirNode
     mod::Module
     name::Symbol
     value::Any
     bound::Bool
+    constant::Bool
+    julia_type::Type
 end
 
 """A constant operand — literal numbers/strings/symbols/chars/types/QuoteNode payloads,
@@ -408,7 +415,9 @@ function resolve_operand(x, types)::NirNode
     elseif x isa GlobalRef
         bound = isdefined(x.mod, x.name)
         val = bound ? getfield(x.mod, x.name) : nothing
-        return NirGlobalRef(x.mod, x.name, val, bound)
+        constant = bound && isconst(x.mod, x.name)
+        T = constant ? Core.Typeof(val) : bound ? Core.get_binding_type(x.mod, x.name) : Any
+        return NirGlobalRef(x.mod, x.name, val, bound, constant, T)
     elseif x isa QuoteNode
         return NirLiteral(x.value)
     else
@@ -422,7 +431,8 @@ parity(quarantine: a Julia `:call` names its callee by a GlobalRef or QuoteNode 
 invocation carries its target member.)"""
 function resolve_call_callee(x, types)::Any
     if x isa GlobalRef
-        return isdefined(x.mod, x.name) ? getfield(x.mod, x.name) : x
+        local g = resolve_operand(x, types)::NirGlobalRef   # the one resolution of a global
+        return g.bound ? g.value : x
     elseif x isa QuoteNode
         return x.value
     elseif x isa Function && Base.issingletontype(typeof(x))
@@ -476,9 +486,8 @@ end
 function _resolve_type_operand(x)::Type
     x isa Type && return x
     if x isa GlobalRef
-        isdefined(x.mod, x.name) || return Any
-        v = getfield(x.mod, x.name)
-        return v isa Type ? v : Any
+        local g = resolve_operand(x, Type[])::NirGlobalRef   # the one resolution of a global
+        return (g.bound && g.value isa Type) ? g.value : Any
     end
     (x isa QuoteNode && x.value isa Type) && return x.value
     return Any
@@ -684,8 +693,8 @@ end
 `code_info.code` (`nir[i]` classifies `code_info.code[i]`). A pure function of the
 CodeInfo: it runs BEFORE the context's analysis passes, which are themselves NIR
 consumers, and can therefore also be run on a callee's CodeInfo where no context exists.
-Every type on a node is Julia inference's own answer, widened once here — R3/R5 unaffected
-(0 new `infer_value_type`/`get_concrete_wasm_type` call sites).
+Every type on a node is Julia inference's own answer, widened once here, and value_type reads it
+(L174), never a consumer's re-derivation.
 formal(dev/formal/NirBuild.tla): classification is total (every statement kind maps to Known or Unsupported, never a silent no-op) and positionally aligned (nir[i] always describes code[i]); resolved identities and static types are computed exactly once, never re-derived by a consumer.
 parity(quarantine: the one pass from Julia's CodeInfo to the boundary nodes; dart2wasm receives
 Kernel already built by the CFE.)

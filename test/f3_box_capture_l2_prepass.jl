@@ -4,10 +4,15 @@
 # a field whose writes are not one concrete type, or whose box no body creates, records Any
 # (dev/formal/CaptureType.tla).
 
-# The box-capture analysis takes its closure bodies as a lookup (closure_ir): a compilation
-# passes its collected world's; a test outside any compilation asks Julia's inference.
-_f3_ir_prepass(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter());
-              isempty(r) ? nothing : (r[1][1], r[1][2]))
+# The box-capture analysis takes every closure body of a callable type (closure_bodies) and asks
+# each call's return type of `rettype`: a compilation passes its collected world's bodies and the
+# collector's inference entry; a test outside any compilation takes every specialization Julia
+# holds of the type's call methods, inferred by the WasmInterpreter, and that same entry.
+_f3_bodies_prepass(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo}[
+    (mi, r[1][1]) for m in Base._methods_by_ftype(Tuple{T, Vararg{Any}}, -1, Base.get_world_counter())
+    for mi in Base.specializations(m.method)
+    if mi isa Core.MethodInstance && mi.specTypes isa DataType && mi.specTypes.parameters[1] === T
+    for r in (Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter()),) if !isempty(r)]
 
 _rc_mki(x::Int64) = (c = x; () -> (c = c + 1; c))
 _rc_mkf(x::Float64) = (c = x; () -> (c = c + 1; c))
@@ -22,7 +27,7 @@ _rc_body(f, argtypes) = begin
 end
 # a creator and the closure it returns, as the closed world holds them
 _rc_world(mk, args...) = Any[_rc_body(mk, map(typeof, args)), _rc_body(mk(args...), ())]
-_rc_values(world) = collect(values(WasmTarget.record_capture_contents(world; closure_ir=_f3_ir_prepass)))
+_rc_values(world) = collect(values(WasmTarget.record_capture_contents(world; closure_bodies=_f3_bodies_prepass, rettype=WasmTarget.infer_return_type)))
 
 @testset "record_capture_contents: captured variables' types from every write" begin
     # counter: `s` is a mutated capture → Core.Box; the foreach closure captures it.
@@ -42,4 +47,18 @@ _rc_values(world) = collect(values(WasmTarget.record_capture_contents(world; clo
     @test all(==(Any), _rc_values(Any[_rc_body(_rc_mkf(0.25), ())]))
     # a box its creator never writes starts undefined: its type is the closures' writes'
     @test _rc_values(_rc_world(_rc_undef)) == [Vector{Int64}]
+end
+
+# Two closures capture one box, each through its own field: the writer stores a Float64 and the
+# reader is returned with it. Every field holding the box shares one join, so the reader's field
+# is not the creator's Int64 alone (it unboxed the writer's 2.5 as an Int64 box: illegal cast,
+# Julia answers 2.5; dev/formal/CaptureType.tla, MCCaptureTypePerFieldRecordBroken.cfg).
+_rc_pair(n::Int64) = (x = n; w = @noinline(() -> (x = 2.5; nothing)); (w, @noinline(() -> x)))
+@testset "record_capture_contents: every field holding one box shares its join" begin
+    local p = _rc_pair(1)
+    local world = Any[_rc_body(_rc_pair, (Int64,)), _rc_body(p[1], ()), _rc_body(p[2], ())]
+    local rec = WasmTarget.record_capture_contents(world; closure_bodies=_f3_bodies_prepass,
+                                                   rettype=WasmTarget.infer_return_type)
+    @test length(rec) == 2
+    @test all(==(Any), values(rec))
 end

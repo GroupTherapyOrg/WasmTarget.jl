@@ -93,7 +93,7 @@ function is_nothing_value(val::NirNode, ctx)::Bool
     # Inference may retain a surrounding Union at a phi edge, so the statement
     # itself is authoritative evidence that this particular edge is null.
     if val isa NirSSA
-        ssa_type = get(ctx.ssa_types, val.id, Any)
+        ssa_type = value_type(ctx, val)
         ssa_type === Nothing && return true
         if 1 <= val.id <= length(ctx.nir)
             rec = ctx.nir[val.id]

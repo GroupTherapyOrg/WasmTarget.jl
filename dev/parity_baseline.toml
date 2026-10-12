@@ -6,7 +6,6 @@
 R14_fresh_constant_structs = 10
 R27_coercion_bypass = 18
 R33_unexercised_registry_entries = 5
-R3_infer_value_type = 56
 R40_process_global_state = 7
 R5_julia_type_reguess = 60
 R7_raw_coercion_ops = 21

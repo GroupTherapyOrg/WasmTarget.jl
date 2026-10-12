@@ -33,6 +33,9 @@ MCScopeOf == [w \in MCWriteSites |->
 
 MCConcreteTypes == {"Int64T", "Float64T"}
 
+MCInvokedIn == MCCaptures            \* every captor is invoked where it is created
+MCEveryCaptorBody == TRUE            \* the walk takes every body of each captor type
+
 MCTransitiveDiscovery == FALSE
 MCOrderDependentJoin  == FALSE
 =============================================================================

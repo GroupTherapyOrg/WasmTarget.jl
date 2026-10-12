@@ -528,7 +528,7 @@ parity(quarantine: WT's export boundary is the host's glue (L156: an export entr
 """
 function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, translator::Translator)::Nothing
     local ctx = CompilationContext(NirBody(NirStmt[], Type[Any], nothing), (Any,), Int32, mod, registry;
-                                   translator=translator)
+                                   translator=translator, mi=nothing)
     # its locals are ctx's, which emit_class_id! allocates
     local b = InstrBuilder(ctx.wasm_params, ctx.wasm_results; func_name="ensure_class_id_reader!", mod=mod,
                            locals=ctx.locals)

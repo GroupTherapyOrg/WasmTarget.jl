@@ -53,3 +53,95 @@ _wt_oip_pe(x::T) where {T<:Integer} = sizeof(T) + x
     @test WasmTarget.compile_multi(Any[(_wt_oip_pe, (Int64,), "pe")]) isa Vector{UInt8}
     @test _wt_oip_pe(3) == 11
 end
+
+# Codegen asks no inference (L152): every return type it needs (a callee's, an unused :invoke's,
+# a joined box read's) is the plan's, computed in collection. The one inference entry is stubbed
+# to count its calls: collection asks it (the box analyses' return types), the compile of the
+# plan never does, and an unused :invoke's type is its MethodInstance's rettype in the plan.
+_wt_oip_box(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
+@noinline _wt_oip_side(x::Int64) = (Base.donotdelete(x); x + 1)
+_wt_oip_unused(n::Int64) = (_wt_oip_side(n); n * 2)
+@testset "codegen asks no inference; an unused :invoke reads the plan's rettype" begin
+    local calls = Ref(0)
+    local original = which(WasmTarget.infer_return_type, Tuple{Any, Tuple})
+    try
+        @eval WasmTarget function infer_return_type(@nospecialize(f), argtypes::Tuple;
+                                                    interp::WasmInterpreter=get_wasm_interpreter())::Type
+            $(calls)[] += 1
+            return Base.infer_return_type(f, Tuple{argtypes...}; interp=interp)
+        end
+        local plan = Base.invokelatest(WasmTarget.trim_compile_plan,
+                                       Any[(_wt_oip_box, (Int64,), "box"), (_wt_oip_unused, (Int64,), "unused")])
+        @test calls[] > 0                                 # collection asks Julia's inference
+        calls[] = 0
+        @test Base.invokelatest(WasmTarget._compile_closed_world_plan, plan) isa WasmTarget.WasmModule
+        @test calls[] == 0                                # the compile of the plan asks none
+        # every planned body's joins are the plan's, keyed by MethodInstance
+        @test Set(keys(plan.joins)) == Set(fn[4] for fn in plan.functions)
+        # the unused `_wt_oip_side(n)` reads `::Any` in its caller's IR; the type codegen gives
+        # it is the return type of the function it calls, registered with the plan's rettype
+        local unused = [s.node.mi for fn in plan.functions
+                        for s in WasmTarget.build_nir(WasmTarget.plan_ir(plan, fn[4])[1])
+                        if s.node isa WasmTarget.NirInvoke && s.julia_type === Any]
+        @test any(mi -> mi.def.name === :_wt_oip_side, unused)
+        @test all(mi -> WasmTarget.plan_ir(plan, mi)[2] === Int64, unused)
+    finally
+        Base.delete_method(only(m for m in methods(WasmTarget.infer_return_type) if m !== original))
+    end
+    @test which(WasmTarget.infer_return_type, Tuple{Any, Tuple}) === original
+end
+
+# The caller's context types the unused `_wt_oip_side_s("ab")`, which reads `::Any` in its IR, by
+# the return type of the function its MethodInstance compiles to (get_function_by_mi): for a planned
+# body that is registered with its rettype in the plan. Its operand is a String, so no numeric
+# join types it: the context's seeding does.
+@noinline _wt_oip_side_s(s::String) = (Base.donotdelete(s); ncodeunits(s))
+_wt_oip_unused_s(n::Int64) = (_wt_oip_side_s("ab"); n * 2)
+@testset "an unused :invoke's type in its caller's context is its callee's registered return type" begin
+    local plan = WasmTarget.trim_compile_plan(Any[(_wt_oip_unused_s, (Int64,), "unused")])
+    local mod, treg, freg, _ = WasmTarget._compile_closed_world_plan(plan; return_registries=true)
+    local fn = only(fn for fn in plan.functions if fn[3] == "unused")
+    local src, rt = WasmTarget.plan_ir(plan, fn[4])
+    local body = WasmTarget.nir_body(src)
+    local idx = findfirst(s -> s.node isa WasmTarget.NirInvoke && s.julia_type === Any &&
+                               s.node.mi.def.name === :_wt_oip_side_s, body.stmts)
+    @test idx !== nothing
+    local callee = body.stmts[idx].node.mi
+    local ctx = WasmTarget.CompilationContext(body, fn[2], rt, mod, treg;
+                                              translator=WasmTarget.Translator(plan, nothing),
+                                              func_registry=freg, mi=fn[4])
+    @test ctx.ssa_types[idx] === WasmTarget.get_function_by_mi(freg, callee).return_type
+    @test ctx.ssa_types[idx] === WasmTarget.plan_ir(plan, callee)[2] === Int64
+end
+
+# One reader of what a node is (L174): value_type is Julia's argextype (Compiler optimize.jl:423 on 1.12.7, :502 on 1.13.1),
+# widened. For every call/invoke/new operand of every planned body of a program holding SSA values,
+# arguments, literals, a type literal, quoted symbols and constant globals, the reader's answer (the
+# boundary's SSA types, no join) is Compiler's argextype of the raw operand, widened.
+const _WT_OIP_TABLE = [10, 20, 30]
+_wt_oip_mix(n::Int64) = (s = string(n, :k, 'c'); v = n > 0 ? _WT_OIP_TABLE : Int64[];
+                         Float64(length(s) + sum(v)) + (n isa Integer ? 1.5 : 0.0))
+@testset "value_type is Julia's argextype" begin
+    local CC = Core.Compiler
+    local plan = WasmTarget.trim_compile_plan(Any[(_wt_oip_mix, (Int64,), "mix")])
+    local compared = 0
+    local kinds = Set{Symbol}()
+    for fn in plan.functions
+        local src = WasmTarget.plan_ir(plan, fn[4])[1]
+        local nir = WasmTarget.build_nir(src)
+        local slots = WasmTarget.nir_slot_types(src)
+        for stmt in src.code
+            (stmt isa Expr && stmt.head in (:call, :invoke, :new)) || continue
+            for x in stmt.args[(stmt.head === :invoke ? 3 : 2):end]
+                (x isa Expr || x isa Core.SlotNumber) && continue
+                local node = WasmTarget.resolve_operand(x, nir)
+                local julia = CC.widenconst(CC.argextype(x, src, CC.VarState[]))
+                @test WasmTarget.value_type(node, slots, nothing) == julia
+                push!(kinds, nameof(typeof(node)))
+                compared += 1
+            end
+        end
+    end
+    @test compared > 100
+    @test kinds ⊇ Set([:NirSSA, :NirArgument, :NirLiteral, :NirGlobalRef])
+end

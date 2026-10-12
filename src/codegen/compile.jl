@@ -566,15 +566,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         end
     end
 
-    # Captured variables' types, from the functions that declare them, recorded for every body
-    # before any compiles, so no body's box reads depend on which compiled first
-    # (record_capture_contents; CaptureType.tla). A captor body the closed world does not hold
-    # has no IR here by design: its writes never run, and it erases the box (box_capture.jl).
-    local _capture_bodies = Any[(fd[8].stmts, fd[8].slot_types,
-                                 isempty(fd[8].slot_types) ? nothing : fd[8].slot_types[1])
-                                for fd in function_data if fd[8] !== nothing]
-    merge!(type_registry.box_contents_types,
-           record_capture_contents(_capture_bodies; closure_ir=mi -> plan_ir_or_nothing(plan, mi)))
+    # Captured variables' types, recorded once by the collection over the whole closed world
+    # before any body compiles, so no body's box reads depend on which compiled first
+    # (record_capture_contents; CaptureType.tla): the plan's record.
+    merge!(type_registry.box_contents_types, plan.capture_record)
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
@@ -815,7 +810,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                                     dom_bindings=bindings === nothing ?
                                         Dict{UInt32,Vector{Tuple{UInt32,Vector{Int32}}}}() : bindings.dom_bindings,
                                     skip_stmts=bindings === nothing ? Set{Int}() : bindings.skip_stmts,
-                                    invoke_imports=_bound_invokes)
+                                    invoke_imports=_bound_invokes,
+                                    mi=function_data[i][9])
             ctx.entry_calls = bindings === nothing ? UInt32[] : copy(bindings.entry_calls)
             ctx.invoke_arguments = bindings === nothing ? Dict{Int,Vector{Int}}() :
                 deepcopy(bindings.invoke_arguments)

@@ -861,8 +861,6 @@ end
 const METRICS = [
     "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks (dev/MARCH.md 13.7). Terminal state 0 (dev/CHARTER.md C2)",
         () -> length(process_global_state_sites())),
-    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Terminal state 0 (dev/CHARTER.md C9, rule 2)",
-        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
     "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
     "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
@@ -930,6 +928,8 @@ end
 const LOCKS = [
     # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
     # each ratchet it cites "has reached 0 and been converted to a lock"), 2026-09-30
+    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Reached 0 on 2026-10-11, when infer_value_type, get_ssa_type and _value_julia_type became the one reader, value_type (L174); stays 0 (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
     "R41_raw_local_declarations" => ("codegen sites that declare a local by pushing onto a function's locals list themselves (a push!/append!/pushfirst!/insert! onto any list named `locals`, bare or as a field, in src or ext), each computing its own index, beside the one declaration path, declare_local! (allocate_local!, builder_add_local!), which checks the local's type against the module (dart declares a local only through addLocal, instructions.dart:382). Reached 0 on 2026-10-11, when the last 165 sites moved to allocate_local! and builder_add_local!; stays 0 (dev/AUDIT.md A15B2; dev/CHARTER.md C7)",
         () -> begin
             # any push!/append!/pushfirst!/insert! onto a list named `locals` (bare or as a field), in src
@@ -1129,10 +1129,10 @@ const LOCKS = [
             # a failure inside any capture/value-channel proof propagates
             required = ["_numeric_joins = numeric_local_joins(ctx)",
                         "propagate_numeric_value_types",
-                        "capture_read_types(ctx.nir", "function record_capture_contents(",
+                        "plan_joins(ctx.translator.plan, ctx.mi)", "function record_capture_contents(",
                         "no fixpoint within the bound: every captured variable stays erased",
                         "Tuple{Vararg{Int64}}"]
-            body = match(r"(?s)\nfunction numeric_local_joins\(.*?\nend\n", context_src)
+            body = match(r"(?s)\nnumeric_local_joins\(ctx::AbstractCompilationContext\).*?\n\n", context_src)
             all_src = context_src * capture_src * capture_test
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required) +
@@ -1226,8 +1226,8 @@ const LOCKS = [
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
                         "collect_new_pairs!",
                         "# the loop only adds: no collected body is ever dropped",
-                        "codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves)",
-                        "fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves)",
+                        "codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves; numeric_joins, capture)",
+                        "fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
@@ -1430,9 +1430,9 @@ const LOCKS = [
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
-            required = ["capture_record = record_capture_contents(",
-                        "capture_read_types(nir, nir, capture_record",
-                        "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
+            required = ["capture.record = record_capture_contents(",
+                        "capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record,",
+                        "_body_joins(numeric_joins, capture, host_mi, src, nir, st)", "if isempty(absp)", "_closed_world_exact_type",
                         "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
                         "root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
@@ -1513,10 +1513,14 @@ const LOCKS = [
             forbidden = ["If we can't evaluate, default to Int64",
                          "phi_julia_type = Int64", "phic_julia_type = Int64",
                          "phi_wasm_type = I64  # Default for Any/Union"]
-            required = ["An unresolved global has no numeric type evidence",
-                        "Preserve missing type evidence as Any", "end\n    return Any\nend"]
+            nir_src = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            # an unbound global's type is Any (the boundary's julia_type), and a node that is no
+            # operand has no type to guess: value_type raises
+            required = ["T = constant ? Core.Typeof(val) : bound ? Core.get_binding_type(x.mod, x.name) : Any",
+                        "Preserve missing type evidence as Any",
+                        "    error(\"value_type of \$(node), which is not an operand\")\nend"]
             count(p -> occursin(p, context_src), forbidden) +
-                count(p -> !occursin(p, context_src), required)
+                count(p -> !occursin(p, context_src * nir_src), required)
         end),
     "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
         () -> begin
@@ -1606,7 +1610,7 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
             required = ["function _emit_typeerror_throw!", "func::Symbol=:typeassert",
                         "NirNode[NirLiteral(func), NirLiteral(\"\"), NirLiteral(target), got]",
-                        "i == 4 ? get_ssa_type(ctx, got)",
+                        "i == 4 ? value_type(ctx, got)",
                         "_emit_typeerror_throw!(fb, args[1], _ta_target",
                         "err.expected === String", "err.got isa Int64"]
             forbidden = ["null-payload throw", "union_bottom_throw_stub shape"]
@@ -1678,18 +1682,14 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own answer — the statement's type, or, where Julia stopped at its max_methods cutoff and typed a call to a known function `Any`, Julia's answer with the cutoff lifted (every applicable method from the one method table, each inferred, joined by tmerge; used only when concrete, unambiguous and every target is in the closed world) — never its first argument's type, a field's type, or a join over the registry's specializations; the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads its own MethodInstance's return type as Julia infers it, never a registry entry's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own answer — the statement's type, or, where Julia stopped at its max_methods cutoff and typed a call to a known function `Any`, the call is the dynamic dispatch Julia's IR asks for, its result the dispatched method's, read at run time (codegen re-infers nothing: closed_world_call_result, which lifted the cutoff, was deleted 2026-10-11, L152) — never its first argument's type, a field's type, or a join over the registry's specializations; the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads the return type of the function its MethodInstance compiles to (get_function_by_mi: a planned body's rettype in the plan, a declared import's declared one), never another registry entry's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["result_julia = get(ctx.ssa_types, idx, Any)",
-                        "CC.typeinf_type(get_wasm_interpreter(), node.mi)",
-                        "lookup = wt_method_matches(Tuple{Core.Typeof(f), argtypes...})",
-                        "lookup.ambig",
-                        "rt = infer_return_type(f, argtypes; interp=interp)",
-                        "all(match -> match.method in reached, lookup.matches) || return Any",
+                        "local target = get_function_by_mi(ctx.func_registry, rec.node.mi)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
                         # the explicit-`%new` runtime class, now read off the boundary (Phase 12D)
@@ -1702,21 +1702,25 @@ const LOCKS = [
                         "Core.bitcast(T, bits)",
                         "% TargetBits",
                         "% SourceBits"]
-            forbidden = ["getfield(a, :parent)",
+            forbidden = ["getfield(a, :parent)", "closed_world_call_result",
                          "infer_call_type", "foldl(typejoin, returns)", "infos[1].return_type",
                          "candidate <: actual", "info.arg_types...} == spec"]
             all_src = context_src * interp_src * trim_src * calls_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types (each operand's call-site type, _edge_arg_type over the body's numeric joins) and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
+    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden. _closed_world_edge types each operand as the edge's consumer reads it: a finalizer's and a `:cfunction`'s by Julia's argextype (value_type over the slot types and the boundary's SSA types, no join), as Julia's queue does (typeinfer.jl:1353, :1361 on 1.12.7; :1502, :1510 on 1.13.1); the `:new_function` edge specializes `Tuple{node.T, Vararg}`, typing no operand (:1523 on 1.13.1); an :invoke re-specialization, a splat and an invoke_in_world by the call-site type codegen's call reads (_edge_arg_type: value_type over the body's joins, _body_joins: its numeric joins and its captured-box reads, plan.joins' union), so the MethodInstance collected is the one called (dev/AUDIT.md A13P8)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             required = ["arg_types = Any[arg_type(a) for a in node.operands]",
-                        "a -> _call_site_arg_type(a, slot_types, get!(() -> propagate_numeric_value_types(nir), joins, src))",
+                        "local body = _body_joins(joins, capture, mi, src, nir, slot_types)\n    return a -> value_type(a, slot_types, body)",
+                        "local _call_type = let st = nir_slot_types(src), j = _body_joins(numeric_joins, capture, host_mi, src, nir, st)",
+                        "local argextype(a) = value_type(a, slot_types, nothing)   # Julia's queue's operand type",
+                        "Tuple{argextype(node.operands[1]), argextype(node.operands[2])}",
+                        "mi = CC.compileable_specialization_for_call(interp, Tuple{argextype(ops[2]),",
                         "matches = wt_method_matches(ftype)",
                         "f isa Function || f isa Type",
                         "target.arg_types[(takes_closure ? 2 : 1):end]",
@@ -1776,7 +1780,7 @@ const LOCKS = [
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
             helpers_src = read(joinpath(CODEGEN, "helpers.jl"), String)
-            required = ["function source_slot_type", "source_type = source_slot_type(ctx, val.n)",
+            required = ["T = value_type(ctx, NirArgument(source_slot))", "    value_type(node, ctx.slot_types, ctx.ssa_types)",
                         "function packed_vararg_source_type",
                         "packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)",
                         "Reconstruct the one source-level vararg tuple",
@@ -2597,14 +2601,14 @@ const LOCKS = [
     "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, at each caller that enrolls by it — the collector and the plan — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! throws a failure through throw_located_collection_failure, which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
         () -> begin
             trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], codeinfos[i - 1], src, k, node)",
-                        "(enrolled_as[edge[2]] = _enrollment_text(_EDGE_ENROLLMENT[edge[1]], codeinfos[j], src, k, n))",
+            required = ["reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node)",
+                        "(enrolled_as[edge[2]] = _enrollment_text(_EDGE_ENROLLMENT[edge[1]], eci, src, k, n))",
                         "const _EDGE_ENROLLMENT = (invoke = \"the call\", splat = \"the call\", invoke_in_world = \"the call\",",
                         "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
                         "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
                         "reasons[cmi] = \"the body of the closure",
                         "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
-                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; reasons=enrolled_by)",
+                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by)",
                         "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp, entries; reasons=enrolled_by, held=held_types,"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is
@@ -2681,12 +2685,19 @@ const LOCKS = [
             end
             n
         end),
-    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); the box-capture analysis takes its closure bodies as a required lookup (dev/CHARTER.md C1); and a statement's codegen asks no method table either (L171)",
+    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); codegen asks no inference at all: no `infer_return_type(`, `typeinf_type(`, `Base.return_types`, `return_type(` or `CC.findall(` call in src/codegen outside trimcollect.jl's collector and planner and ir.jl's inspection definitions, and no `closed_world_call_result` or `analyze_ssa_types!` anywhere in src (a callee's return type, an unused :invoke's and every join are the plan's: plan_ir, plan_joins, FunctionInfo.return_type); the box-capture analysis takes its closure bodies and its return-type question as required arguments (closure_bodies, rettype), so box_capture.jl names no inference, and collection passes them; its behavior: test/ir_one_inference_path.jl compiles a plan with the one inference entry counting its calls, and the compile asks it 0 times (dev/AUDIT.md A3C1; dev/CHARTER.md C1); and a statement's codegen asks no method table either (L171)",
         () -> begin
             local n = count_sites(r"\bget_typed_ir\("; roots=[SRC], exclude_files=["codegen/ir.jl"])
             n += count_sites(r"TRIM_IR_CACHE"; roots=[SRC])
+            n += count_sites(r"(?<![\w.])infer_return_type\(|\btypeinf_type\(|Base\.return_types|(?<![\w])return_type\(|CC\.findall\(";
+                             roots=[CODEGEN], exclude_files=["trimcollect.jl", "ir.jl"])
+            n += count_sites(r"closed_world_call_result|analyze_ssa_types!"; roots=[SRC])
             local box = read(joinpath(CODEGEN, "box_capture.jl"), String)
-            n += occursin("local hit = closure_ir(mi)", box) ? 0 : 1
+            n += occursin("closure_bodies::Function", box) && occursin("rettype::Function", box) &&
+                 !occursin("closure_ir", box) ? 0 : 1
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            n += occursin("@testset \"codegen asks no inference; an unused :invoke reads the plan's rettype\"", oip) &&
+                 occursin("@test calls[] == 0", oip) ? 0 : 1
             n
         end),
     "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite and its three platforms stay CI's, and so, for `dev/lanes.sh` without `--all`, do the deep TLC instances, which gate.yml runs): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first, batch 111's 1.13 failure having surfaced at minute 29 of a serial run) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13, and AGENTS.md makes a push wait for its run on CI's runners, `bash dev/gate.sh` (the script reproduces it locally). No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml (dev/gate.sh) is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast (the first red job cancels the rest, as the script stops), every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered only by a gate/** push or workflow_dispatch, ci.yml and formal.yml never by a gate/** push (their push triggers are exactly `branches: [main, 'march/**']`, no branches-ignore) (Dale 2026-10-09: the gate off the local machine). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
@@ -3330,14 +3341,12 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 end
             end
             # who asks the consult, in src/codegen and src/frontend: the collector and planner
-            # (trimcollect.jl), the vtable pre-pass's ambiguity search (compile.jl's
-            # _compile_closed_world_plan, closures.jl's ambiguous_class_tuple), and one statement
-            # question left, closed_world_call_result (context.jl, MARCH 13.17 A3C1's remainder, which
-            # 116b deletes); every other site counts
+            # (trimcollect.jl) and the vtable pre-pass's ambiguity search (compile.jl's
+            # _compile_closed_world_plan, closures.jl's ambiguous_class_tuple); a statement's
+            # codegen asks none; every other site counts
             local consult_rx = r"\b(wt_method_matches|wt_method_which|wt_dispatch_mi|wt_methods_ambiguous|_wt_matches_with_ambiguous|entry_method_instance)\("
             local allowed_callers = Set([("codegen/compile.jl", "_compile_closed_world_plan"),
-                                         ("codegen/closures.jl", "ambiguous_class_tuple"),
-                                         ("codegen/context.jl", "closed_world_call_result")])
+                                         ("codegen/closures.jl", "ambiguous_class_tuple")])
             for root in (CODEGEN, joinpath(SRC, "frontend")), (dir, _, fs) in walkdir(root), f in fs
                 endswith(f, ".jl") || continue
                 local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
@@ -3442,6 +3451,37 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int =\n    declare_local!(ctx.mod, ctx.locals, ctx.n_params, wasm_type)", cx) ? 0 : 1
             v += occursin("allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int =\n    allocate_local!(ctx, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true))", cx) ? 0 : 1
             v + builder_rows_failing(["c"])
+        end),
+    "L174_one_value_type_reader" => ("an operand's Julia type has one reader, value_type (context.jl), Julia's argextype widened (Compiler optimize.jl:423 on 1.12.7, :502 on 1.13.1): an SSA value's statement type (ctx.ssa_types, the boundary's type plus the plan's joins), a slot's type, a literal's Core.Typeof, a global's type the boundary read; collection and codegen both read it, as dart's dartTypeOf answers every node (code_generator.dart:129). Exactly its two methods (the rule over (slot types, SSA types) and the context's form) are defined; no other reader exists in src (get_ssa_type, infer_value_type, _value_julia_type, _call_site_arg_type, _collector_static_type, source_slot_type, the box analyses' _f3_ssa_type and _f3_literal_type), and no site reads `ssa_types` keyed by an operand node's `.id` or indexes a slot table outside value_type and the NIR boundary (a statement's own type, keyed by its statement index, is no operand read; a physical `ctx.arg_types` entry is the wasm signature's parameter, not an operand's Julia type); the joins codegen applies are the plan's (numeric_local_joins reads plan_joins), and the box analyses (propagate_numeric_value_types, capture_read_types, record_capture_contents, f3_box_value_types, box_contents_type) run nowhere outside box_capture.jl and trimcollect.jl's collector. Its behavior: test/ir_one_inference_path.jl compares value_type with Compiler's argextype for every call operand of every planned body of a program (dev/AUDIT.md A3C1, A3C4; dev/CHARTER.md C1)",
+        () -> begin
+            local cx = read(joinpath(CODEGEN, "context.jl"), String)
+            local v = abs(count_sites(r"^function value_type\(|^value_type\(ctx::AbstractCompilationContext"; roots=[SRC]) - 2)
+            v += occursin("function value_type(node::NirNode, slot_types::Union{Nothing,AbstractVector}, ssa_types)::Type", cx) ? 0 : 1
+            v += occursin("value_type(ctx::AbstractCompilationContext, node::NirNode)::Type =\n    value_type(node, ctx.slot_types, ctx.ssa_types)", cx) ? 0 : 1
+            v += count_sites(r"\b(get_ssa_type|infer_value_type|_value_julia_type|_call_site_arg_type|_collector_static_type|source_slot_type|_f3_ssa_type|_f3_literal_type)\b"; roots=[SRC])
+            # an operand's type read past the reader: ssa_types keyed by an operand node's id (a
+            # statement's own type, keyed by its index, is no operand read) or a slot table indexed,
+            # outside value_type's own lines and the boundary (frontend/nir.jl)
+            v += count_sites(r"ssa_types(\[|,\s*)[A-Za-z_][\w.]*(\[\d+\])?\.id\b|(?<!dt\.)\bslot_types\[";
+                             roots=[SRC], exclude_files=["frontend/nir.jl"],
+                             exclude_line=r"return ssa_types === nothing \? node\.julia_type|^\s*return slot_types\[n\]$")
+            v += occursin("numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type} =\n    ctx.mi === nothing ? Dict{Int,Type}() : plan_joins(ctx.translator.plan, ctx.mi)", cx) ? 0 : 1
+            v += count_sites(r"(?<![\w.])(propagate_numeric_value_types|capture_read_types|record_capture_contents|f3_box_value_types|box_contents_type)\(";
+                             roots=[SRC], exclude_files=["codegen/box_capture.jl", "codegen/trimcollect.jl"],
+                             exclude_line=r"^\s*#|^\s{4}\w+\(.*\) ->")
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            v += occursin("@testset \"value_type is Julia's argextype\"", oip) ? 0 : 1
+            v
+        end),
+    "L175_globalref_resolved_once" => ("a global's binding is resolved once, at the NIR boundary (resolve_operand, frontend/nir.jl), as dart's StaticGet carries its resolved target (expressions.dart:1363, read by visitStaticGet, code_generator.dart:2183): NirGlobalRef carries `bound`, `value`, `constant` (isconst) and `julia_type` (abstract_eval_globalref_type's answer), resolve_call_callee and _resolve_type_operand read that one resolution, and no `isdefined(`, `isconst(`, `getglobal(` or `getfield(` over a `.mod, .name` pair appears outside frontend/nir.jl. (The getglobal builtin's constant fold, builtins.jl, asks of a constant module and a literal name, the intrinsic's own operands, not of a NirGlobalRef.) Its behavior: value_type's argextype comparison covers every global operand (L174's test) (dev/AUDIT.md 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local nir = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local v = count_sites(r"\b(isdefined|isconst|getglobal|getfield)\(\s*[\w.\[\]]+\.mod\s*,\s*[\w.\[\]]+\.name\b";
+                                  roots=[SRC], exclude_files=["frontend/nir.jl"])
+            v += occursin("    bound::Bool\n    constant::Bool\n    julia_type::Type\nend", nir) ? 0 : 1
+            v += count(r"resolve_operand\(x, (types|Type\[\])\)::NirGlobalRef", nir) == 2 ? 0 : 1
+            v += count(r"isdefined\(x\.mod, x\.name\)", nir) == 1 ? 0 : 1
+            v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin

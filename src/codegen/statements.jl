@@ -12,7 +12,7 @@ Emits typed struct.get/ref.cast directly onto the caller's builder `b`
 parity(quarantine: Julia's Vector is a struct over a Memory; the owner a storage pointer traces to is read as its wasm array.)
 """
 function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationContext, arr_t)::InstrBuilder
-    vt = infer_value_type(vec, ctx)
+    vt = value_type(ctx, vec)
     # parity(translator.dart:1597 convertType): a String/Symbol backing is the classed struct (constants.dart:872 visitStringConstant, :1556 visitSymbolConstant) — the funnel reads .data
     if vt === String || vt === Symbol
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
@@ -147,14 +147,14 @@ parity(quarantine: a Julia pointer is an address; WasmGC has none, so a pointer 
 function _storage_pointer_backing(ctx::AbstractCompilationContext, operand::NirNode)::Union{NirNode,Nothing}
     node = operand
     node isa NirSSA && 1 <= node.id <= length(ctx.nir) || return nothing
-    T = get_ssa_type(ctx, node)
+    T = value_type(ctx, node)
     def = ctx.nir[node.id].node
     T isa DataType && (T <: Ptr || (T <: Base.BitInteger && def isa NirCall &&
                                     def.callee === Core.Intrinsics.bitcast)) || return nothing
     # an object's own address (pointer_from_objref) is not the storage it may hold
     backing = _trace_memmove_ptr(node, ctx; eltypes = _EveryEltype(), through_value_ptr = false)
     backing === nothing && return nothing
-    backing_type = get_ssa_type(ctx, backing)
+    backing_type = value_type(ctx, backing)
     return backing_type === String || backing_type === Symbol ? nothing : backing
 end
 
@@ -192,7 +192,7 @@ const _STORAGE_PRIMITIVE_ELTYPES = (Int8, UInt8, Int16, UInt16, Int32, UInt32, I
 # parity(quarantine: Julia byte pointers into storage): the element type a traced backing
 # holds — a String/Symbol backing is its byte array.
 function _storage_element_type(backing, ctx::AbstractCompilationContext)::Type
-    T = infer_value_type(backing, ctx)
+    T = value_type(ctx, backing)
     return T === String || T === Symbol ? UInt8 : eltype(T)
 end
 
@@ -202,7 +202,7 @@ end
 function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
                                        ctx::AbstractCompilationContext, shift::Integer)::InstrBuilder
     emit_value!(b, ptr_or_count, ctx, I64)
-    backing_type = backing === nothing ? Nothing : infer_value_type(backing, ctx)   # a byte count has no backing
+    backing_type = backing === nothing ? Nothing : value_type(ctx, backing)   # a byte count has no backing
     if backing_type === String || backing_type === Symbol
         i64_const!(b, 1)
         num!(b, Opcode.I64_SUB)
@@ -280,7 +280,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
             # P4-stdlib: pointer into a Base.RefValue{T} box (radix sort
             # counters use pointer_from_objref(Ref(...))) — the terminal IS
             # the box; the caller emits struct.get/set on it.
-            local _nt = infer_value_type(cur, ctx)
+            local _nt = value_type(ctx, cur)
             (_nt isa DataType && _nt <: Base.RefValue) || return _fail("new-non-refvalue: $_nt", st)
             return cur
         elseif st isa NirCall && !isempty(st.operands)
@@ -294,7 +294,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                 # Memory compiles DIRECTLY as a wasm array; valid terminal
                 # (callers use _emit_backing_array! which skips the Vector
                 # struct deref for Memory values).
-                local _mn_t = infer_value_type(cur, ctx)
+                local _mn_t = value_type(ctx, cur)
                 local _mn_el = _mn_t isa DataType && length(_mn_t.parameters) >= 2 ? _mn_t.parameters[2] : nothing
                 _mn_el in eltypes || return _fail("memorynew-elty: $_mn_t", st)
                 return cur
@@ -303,7 +303,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                 # the terminal preserves resize/copy phis that legitimately select
                 # different allocations; following into one constructor arm would
                 # invent a single backing identity.
-                local _mr_t = get_ssa_type(ctx, cur)
+                local _mr_t = value_type(ctx, cur)
                 local _mr_el = _mr_t isa DataType && _mr_t.name.name === :GenericMemoryRef &&
                                length(_mr_t.parameters) >= 2 ? _mr_t.parameters[2] :
                                (_mr_t isa DataType && !isempty(_mr_t.parameters) ? _mr_t.parameters[1] : nothing)
@@ -313,7 +313,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                 fld = _nir_field_name(st.operands[2])
                 if fld === :ptr_or_offset || fld === :ptr
                     owner = st.operands[1]
-                    owner_type = get_ssa_type(ctx, owner)
+                    owner_type = value_type(ctx, owner)
                     if owner_type isa DataType &&
                        owner_type.name.name in (:MemoryRef, :GenericMemoryRef) &&
                        owner isa NirSSA
@@ -341,7 +341,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                         cur = owner
                     end
                 elseif fld === :mem
-                    memory_type = get_ssa_type(ctx, cur)
+                    memory_type = value_type(ctx, cur)
                     if memory_type isa DataType &&
                        memory_type.name.name in (:Memory, :GenericMemory)
                         owner = st.operands[1]
@@ -363,7 +363,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                     cur = st.operands[1]
                 elseif fld === :ref
                     vec = st.operands[1]
-                    vt = infer_value_type(vec, ctx)
+                    vt = value_type(ctx, vec)
                     (vt isa DataType && vt <: Vector &&
                      eltype(vt) in eltypes) || return _fail("elty-not-allowed: $vt", vec)
                     return vec
@@ -371,7 +371,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                     # P4-stdlib (SHA update!): getfield(obj, fld) whose RESULT
                     # type is an allowed Vector/Memory is itself the backing-store
                     # identity.
-                    local _gf_vt = infer_value_type(cur, ctx)
+                    local _gf_vt = value_type(ctx, cur)
                     if _gf_vt isa DataType && _gf_vt <: Vector && eltype(_gf_vt) in eltypes
                         return cur
                     elseif _gf_vt isa DataType &&
@@ -462,7 +462,7 @@ record's shape is static.)
 """
 function _erased_vararg_tuple_operand(ctx::AbstractCompilationContext, rec::NirStmt)::Union{Nothing, Tuple{Type, Type}}
     local node = rec.node
-    local vt(v) = v isa NirNode ? get_ssa_type(ctx, v) : nothing
+    local vt(v) = v isa NirNode ? value_type(ctx, v) : nothing
     local isvt(T) = T isa DataType && is_runtime_vararg_tuple_type(T)
     local check(v, slot) = (T = vt(v); (isvt(T) && !(slot isa DataType && is_runtime_vararg_tuple_type(slot))) ? (T, slot) : nothing)
     local first_hit(pairs) = (for (v, slot) in pairs; h = check(v, slot); h === nothing || return h; end; nothing)
@@ -639,7 +639,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             end
             actual = only(value_builder.v.stack)
             append_builder!(b, value_builder)
-            local src_T = get_ssa_type(ctx, node.value)
+            local src_T = value_type(ctx, node.value)
             if src_T isa DataType && is_runtime_vararg_tuple_type(src_T) && pi_type isa DataType &&
                pi_type <: Tuple && isconcretetype(pi_type)
                 # a runtime-length tuple narrowed to the NTuple it was tested to be is built as
@@ -1084,7 +1084,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                 emit_struct_prefix!(b, ctx.type_registry, size_tuple_type_inner, size_info_inner)
                 append_builder!(b, _f1_b)
                 coerce_stack_top!(b, I64, ctx;
-                    from_julia=_value_julia_type(field_values[2], ctx))
+                    from_julia=(local _f2t = value_type(ctx, field_values[2]); _f2t === Any ? nothing : _f2t))
                 struct_new!(b, size_info_inner.wasm_type_idx)
             else
                 append_builder!(b, _f1_b)   # typed merge
@@ -1158,16 +1158,8 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         # (M3: the tagged-union wrapper arm is DELETED — needs_tagged_union was ≡ false;
         # a union field is AnyRef holding the classId box / struct ref directly.)
         if field_type isa Union
-            # Get the value's actual type
-            val_type = if val isa NirSSA
-                get(ctx.ssa_types, val.id, Any)
-            elseif val isa NirGlobalRef
-                typeof(val.value)
-            elseif val isa NirLiteral
-                typeof(val.value)
-            else
-                Any
-            end
+            # the value's Julia type
+            val_type = value_type(ctx, val)
 
             # Check if this value is nothing - either literally or via an SSA with Nothing type
             # SSA values with Nothing type (e.g., from GlobalRef to nothing) produce no bytecode,
@@ -1207,9 +1199,9 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                  _cn_wasm_fi <= length(_cn_struct_def.fields)) ||
                     error("registered union field $i has no physical Wasm type")
                 local _cn_expected = _cn_struct_def.fields[_cn_wasm_fi].valtype
-                local _cn_julia = _value_julia_type(val, ctx)
+                local _cn_julia = value_type(ctx, val)
                 emit_value!(b, val, ctx, _cn_expected;
-                    from_julia=(_cn_julia isa Type ? _cn_julia : nothing))
+                    from_julia=(_cn_julia === Any ? nothing : _cn_julia))   # Any states no source type
             end
         elseif field_type === Any
             # Determine actual Wasm field type (AnyRef when JlType hierarchy active,
@@ -1241,16 +1233,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             if _cn_field_is_anyref
                 # Field is anyref — concrete/struct refs are subtypes of anyref.
                 # No extern.convert_any needed. Numerics need boxing.
-                val_julia_type = if val isa NirSSA
-                    get(ctx.ssa_types, val.id, Any)
-                elseif val isa NirArgument
-                    local _arg_i = ctx.is_compiled_closure ? val.n : val.n - 1
-                    (_arg_i >= 1 && _arg_i <= length(ctx.arg_types)) ? ctx.arg_types[_arg_i] : Any
-                elseif val isa NirLiteral || val isa NirGlobalRef
-                    typeof(val.value)
-                else
-                    Any
-                end
+                val_julia_type = value_type(ctx, val)
                 val_wasm_type = julia_to_wasm_type(val_julia_type)
                 if val_wasm_type === I32 || val_wasm_type === I64 || val_wasm_type === F32 || val_wasm_type === F64
                     emit_numeric_to_anyref!(b, val, val_wasm_type, ctx)
@@ -1466,7 +1449,7 @@ function _fc_jl_object_id!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx:
             # dart2wasm Object identity: read the mutable identityHash slot and lazily
             # assign a non-zero module-local identity on first observation.
             local object_arg = length(node.operands) >= 1 ? node.operands[1] : nothing
-            local object_type = object_arg === nothing ? nothing : get_ssa_type(ctx, object_arg)
+            local object_type = object_arg === nothing ? nothing : value_type(ctx, object_arg)
             # a String's or Symbol's objectid is its content's hash (the Base.objectid
             # overlays, interpreter.jl), never this per-object counter
             # Identity is a mutable object's: an immutable value's objectid is its content's hash
@@ -1702,7 +1685,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
                 # resize! legitimately switches an IOBuffer from its empty allocation
                 # to a grown allocation, so the owner phi is the exact dynamic storage.
                 owner_arg = length(node.operands) >= 4 ? node.operands[end] : nothing
-                owner_type = owner_arg === nothing ? nothing : get_ssa_type(ctx, owner_arg)
+                owner_type = owner_arg === nothing ? nothing : value_type(ctx, owner_arg)
                 owner_is_memory = owner_type isa DataType &&
                     owner_type.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
                 data_owner = owner_is_memory ? owner_arg :
@@ -1814,7 +1797,7 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
         # accepted: its base is 1, so a match at its first byte stays distinct from
         # C NULL (0), which a Memory backing's base 0 could not guarantee.
         str_ssa = _trace_memmove_ptr(ptr_arg, ctx)
-        if str_ssa !== nothing && get_ssa_type(ctx, str_ssa) in (String, Symbol)
+        if str_ssa !== nothing && value_type(ctx, str_ssa) in (String, Symbol)
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
             # Allocate locals for the loop (same pattern as scratch_local allocation)
@@ -1918,7 +1901,7 @@ function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
         _emit_backing_array!(b, backing, ctx, arr)
         local_set!(b, arr_local)
         emit_value!(b, ptr, ctx, I64)
-        backing_type = get_ssa_type(ctx, backing)
+        backing_type = value_type(ctx, backing)
         if backing_type === String || backing_type === Symbol
             i64_const!(b, 1)
             num!(b, Opcode.I64_SUB)
@@ -1968,7 +1951,7 @@ function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
     local arr_ref = ConcreteRef(UInt32(arr_idx), true)
     local traced = _trace_string_ptr(ptr_arg, ctx)
     local root = length(node.operands) >= 3 ? node.operands[3] : nothing
-    local root_type = root === nothing ? nothing : get_ssa_type(ctx, root)
+    local root_type = root === nothing ? nothing : value_type(ctx, root)
     local source!, offset!
     if traced !== nothing
         local source, offset = traced
@@ -2030,11 +2013,11 @@ end
 # parity(quarantine: the jl_genericmemory_copyto foreigncall Julia's own bodies reach, lowered here; dart2wasm calls no C runtime.)
 function _fc_jl_genericmemory_copyto!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{Nothing, InstrBuilder}
     length(node.operands) >= 5 || return nothing
-        local _gmc_mt = infer_value_type(node.operands[1], ctx)
+        local _gmc_mt = value_type(ctx, node.operands[1])
         local _gmc_te = _gmc_mt isa DataType && length(_gmc_mt.parameters) >= 2 ? _gmc_mt.parameters[2] : nothing
         # any element kind: the byte offsets divide by Julia's element stride (sizeof
         # for isbits, 8 for a boxed reference slot) — the rule :ptr_or_offset multiplies by
-        if _gmc_te isa Type && infer_value_type(node.operands[3], ctx) === _gmc_mt
+        if _gmc_te isa Type && value_type(ctx, node.operands[3]) === _gmc_mt
             local _gmc_arr = get_array_type!(ctx.mod, ctx.type_registry, _gmc_te)
             local _gmc_sz = memory_element_stride(_gmc_te)
             local _gmc_off = a -> begin
@@ -2275,7 +2258,7 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
             # memmove passes a byte count and array.copy takes an element count. Julia memmoves
             # only bits storage, `n * aligned_sizeof(T)` bytes (Base.unsafe_copyto! on two
             # MemoryRefs), so the element size is Julia's own for the storage's element type.
-            local _mem_type = dest_arr_ssa isa NirSSA ? get(ctx.ssa_types, dest_arr_ssa.id, Any) : Any
+            local _mem_type = dest_arr_ssa isa NirSSA ? value_type(ctx, dest_arr_ssa) : Any
             local _el_type = (_mem_type isa DataType &&
                               _mem_type <: Union{GenericMemory, GenericMemoryRef, Array}) ?
                              eltype(_mem_type) : nothing

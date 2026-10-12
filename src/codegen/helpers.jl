@@ -38,14 +38,14 @@ function is_boolean_value(val::NirNode, ctx::AbstractCompilationContext)::Bool
             return true
         end
         # Check if SSA has Bool inferred type (e.g., phi node results, getfield of Bool fields)
-        if infer_value_type(val, ctx) === Bool
+        if value_type(ctx, val) === Bool
             return true
         end
     elseif val isa NirLiteral && val.value isa Bool
         return true
     elseif val isa NirArgument
         # Function parameters typed as Bool
-        if infer_value_type(val, ctx) === Bool
+        if value_type(ctx, val) === Bool
             return true
         end
     end

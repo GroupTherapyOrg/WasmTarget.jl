@@ -104,8 +104,11 @@
 (*    (Int64/Float64/... are never subtypes of one another -- the only      *)
 (*    join two DIFFERENT concrete types ever produces in this algorithm is  *)
 (*    "not concrete", i.e. dynamic) plus one extra tag `"AnyT"` (a write    *)
-(*    site whose own operand type could not be pinned -- `_f3_operand_type` *)
-(*    / `_f3_write_result_type`'s `Any` fallbacks) and `"None"` (a write    *)
+(*    site whose operand type is `Any`: value_type's answer for an SSA      *)
+(*    inference left `Any` or an argument whose slot type is `Any`, or a    *)
+(*    call `rettype` answers `Any` for; a closure writing its own argument  *)
+(*    of a concrete slot type reports that type, not AnyT) and `"None"` (a  *)
+(*    write                                                                 *)
 (*    SITE that, in a given run, simply has no statement there at all --    *)
 (*    the free choice of which of a fixed set of syntactic write slots is   *)
 (*    actually present). This is exactly the granularity `box_contents_     *)
@@ -146,6 +149,17 @@
 (* MCBoxJoin.cfg's TransitiveDiscovery = TRUE, the shape all four claims    *)
 (* below require. MCBoxJoinIncompleteBroken.cfg (TransitiveDiscovery =      *)
 (* FALSE) is kept as the PRE-FIX baseline TLC must still reject.            *)
+(*                                                                          *)
+(* A CAPTOR CALLED ELSEWHERE. A scope can create a captor closure without   *)
+(* calling it: it returns it, stores it, or passes it on, and another       *)
+(* function calls it. A walk that reads captor bodies through the scanned   *)
+(* code's `:invoke`s never sees such a body, so a write there is invisible  *)
+(* and the join narrows (the creator's Int64 init against a Float64 write   *)
+(* in the returned closure). The walk instead takes every body of each      *)
+(* captor type the closed world holds (EveryCaptorBody = TRUE), and raises  *)
+(* when a captor body the scanned code invokes is not among them.           *)
+(* MCBoxJoinCaptorMissedBroken.cfg (EveryCaptorBody = FALSE, Root creates   *)
+(* Level1 and does not invoke it) is the shape TLC must reject.             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -154,7 +168,16 @@ CONSTANTS
                           \* nested closure that (directly or transitively) captures the box
     Root,                 \* CONSTANT: the scope holding the `%new(Core.Box)` / enclosing writes
     Captures,             \* [Scopes -> SUBSET Scopes]: Captures[s] = closures CREATED (a literal
-                          \* `:new`+`:invoke` pair) directly IN s's own code that also capture the box
+                          \* `:new`) directly IN s's own code that also capture the box
+    InvokedIn,            \* [Scopes -> SUBSET Scopes]: InvokedIn[s] \subseteq Captures[s], the captors
+                          \* whose body s's own code also `:invoke`s; a captor s creates but does not
+                          \* call (returned, stored, called by another function) is outside it
+    EveryCaptorBody,      \* BOOLEAN: TRUE = discovery takes EVERY body of each captor type the
+                          \* closed world holds (box_capture.jl's walk, `closure_bodies(T)`), and the
+                          \* bodies s invokes are among them (the walk raises otherwise);
+                          \* FALSE = only the captors s itself invokes (a walk that reads the
+                          \* bodies through the `:invoke`s of the scanned code), the shape
+                          \* MCBoxJoinCaptorMissedBroken.cfg rejects
     WriteSites,           \* finite set of abstract `setfield!(_, :contents, v)` statement ids
     ScopeOf,              \* [WriteSites -> Scopes]: which scope's OWN code textually holds this write
     ConcreteTypes,        \* finite set of concrete (pairwise-incomparable) Julia leaf types
@@ -168,6 +191,8 @@ CONSTANTS
 ASSUME Root \in Scopes
 ASSUME Captures \in [Scopes -> SUBSET Scopes]
 ASSUME ScopeOf \in [WriteSites -> Scopes]
+ASSUME InvokedIn \in [Scopes -> SUBSET Scopes] /\ \A s \in Scopes : InvokedIn[s] \subseteq Captures[s]
+ASSUME EveryCaptorBody \in BOOLEAN
 ASSUME TransitiveDiscovery \in BOOLEAN
 ASSUME OrderDependentJoin \in BOOLEAN
 ASSUME ConcreteTypes \cap {"AnyT", "None", "NoWrites", "Dynamic"} = {}
@@ -206,8 +231,15 @@ ReachClosure(S) == LET Grown == S \cup UNION {Captures[s] : s \in S}
                    IN IF Grown = S THEN S ELSE ReachClosure(Grown)
 
 TrueReachableScopes == ReachClosure({Root})           \* ground truth: any depth, always
-OneHopScopes         == {Root} \cup Captures[Root]     \* today's real algorithm: ONE hop only
-AlgoReachableScopes  == IF TransitiveDiscovery THEN TrueReachableScopes ELSE OneHopScopes
+
+\* the scopes the walk reaches one hop from s: every captor body (EveryCaptorBody), or only the
+\* captors s's own code invokes
+AlgoEdges(s) == IF EveryCaptorBody THEN Captures[s] ELSE InvokedIn[s]
+RECURSIVE AlgoReach(_)
+AlgoReach(S) == LET Grown == S \cup UNION {AlgoEdges(s) : s \in S}
+                IN IF Grown = S THEN S ELSE AlgoReach(Grown)
+OneHopScopes         == {Root} \cup AlgoEdges(Root)    \* the pre-transitive walk: ONE hop only
+AlgoReachableScopes  == IF TransitiveDiscovery THEN AlgoReach({Root}) ELSE OneHopScopes
 
 \* ExistingWrites: the write SITES actually present in this run (box_capture.jl has no notion
 \* of "None" -- a slot that simply is not a statement in the IR does not exist as a candidate

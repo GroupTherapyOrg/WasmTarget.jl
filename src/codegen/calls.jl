@@ -296,7 +296,7 @@ WasmArrayExt.copy/fill take an array and an element offset, intrinsics.dart:1255
 function _emit_storage_pointer_offset!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                        ptr::NirNode, index, source::NirNode, step::Int)::Nothing
     emit_value!(b, ptr, ctx, I64)
-    local src_type = get_ssa_type(ctx, source)
+    local src_type = value_type(ctx, source)
     (src_type === String || src_type === Symbol) && (i64_const!(b, 1); num!(b, Opcode.I64_SUB))
     if index !== nothing && !(nir_const(index) isa Integer && nir_const(index) == 1)
         emit_value!(b, index, ctx, I64)
@@ -2009,8 +2009,8 @@ parity(intrinsics.dart:1409 StaticIntrinsic.identical): the static arms, else th
 `identical` over the boxed operands.
 """
 function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode, y::NirNode)::InstrBuilder
-    local T1 = infer_value_type(x, ctx)
-    local T2 = infer_value_type(y, ctx)
+    local T1 = value_type(ctx, x)
+    local T2 = value_type(ctx, y)
     T1 isa Type || (T1 = Any)
     T2 isa Type || (T2 = Any)
     local mod, reg = ctx.mod, ctx.type_registry
@@ -2085,7 +2085,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     end
 
     # Get the type of the value being checked (for detecting tagged unions)
-    value_type = get_ssa_type(ctx, value_arg)
+    val_jt = value_type(ctx, value_arg)
 
     bld = _sub_builder(fb, ctx, "_compile_call_isa", 1)
 
@@ -2094,13 +2094,13 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # type C <: T, the test is C's exact one, which WT can make where T's own has none
     # (`isa(x::Union{Nothing,Tuple{Int64,Int64}}, Tuple{Any,Any})`, Base._accumulate1!).
     local isa_isect = check_type      # S ∩ T, Julia's intersected_type
-    if check_type isa Type && value_type isa Type
+    if check_type isa Type && val_jt isa Type
         # Julia folds S <: T only where its subtyping of kinds is sound (jl_is_not_broken_subtype,
         # subtype.c: not a `Type{…}` against a kind, JuliaLang/julia#27078); elsewhere it tests
         local _not_broken = !(check_type in (DataType, Union, UnionAll, Core.TypeofBottom)) ||
-                            !(value_type isa DataType && value_type.name === Type.body.name)
-        local _known = _not_broken && value_type <: check_type
-        local _isect = _known ? value_type : typeintersect(value_type, check_type)
+                            !(val_jt isa DataType && val_jt.name === Type.body.name)
+        local _known = _not_broken && val_jt <: check_type
+        local _isect = _known ? val_jt : typeintersect(val_jt, check_type)
         isa_isect = _isect
         if _known || _isect === Union{}
             drop!(bld)
@@ -2123,7 +2123,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         if is_pointer_egal_type_type(isa_isect)
             check_type = isa_isect
         elseif check_type isa Type && check_type !== Type && has_intersect_type_not_kind(check_type)
-            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): Julia tests a type object against " *
+            _isa_reject!(bld, ctx, "isa(x::$(val_jt), $(check_type)): Julia tests a type object against " *
                                    "$(isa_isect) by type equality at run time (jl_isa), which WT does not have")
             append_builder!(fb, bld)
             return nothing
@@ -2156,19 +2156,19 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         else
             ref_is_null!(bld)
         end
-    elseif check_type isa Type && is_runtime_vararg_tuple_type(value_type)
+    elseif check_type isa Type && is_runtime_vararg_tuple_type(val_jt)
         # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), E concrete,
         # so it is a T exactly for the lengths T admits (its header's class, Tuple{Vararg{E}},
         # is no value's type): a test of its size, or a rejection where T's lengths are not
         # a list of exact and least lengths
-        local lens = tuple_lengths_admitting(check_type, vararg_tuple_eltype(value_type))
+        local lens = tuple_lengths_admitting(check_type, vararg_tuple_eltype(val_jt))
         if lens === nothing
-            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): the lengths of a runtime-length tuple $(check_type) admits are not a list of exact and least lengths")
+            _isa_reject!(bld, ctx, "isa(x::$(val_jt), $(check_type)): the lengths of a runtime-length tuple $(check_type) admits are not a list of exact and least lengths")
         elseif isempty(lens)
             drop!(bld)
             i32_const!(bld, 0)
         else
-            local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, value_type)
+            local tuple_info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, val_jt)
             local size_info = ctx.type_registry.structs[Tuple{Int64}]
             ref_cast!(bld, Int64(tuple_info.wasm_type_idx), false)
             struct_get!(bld, tuple_info.wasm_type_idx, wasm_field_idx(tuple_info, 2))
@@ -2187,10 +2187,10 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             end
         end
     elseif check_type isa DataType && is_bare_array_class(check_type) &&
-           check_type in bare_array_partition(ctx.mod, ctx.type_registry, value_type).shared
+           check_type in bare_array_partition(ctx.mod, ctx.type_registry, val_jt).shared
         # a bare-array class is told only by an array type no other class the value may be
         # is; this one's is another's too (Memory{Int64} and Memory{UInt64})
-        _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)): its wasm array type is another class's " *
+        _isa_reject!(bld, ctx, "isa(x::$(val_jt), $(check_type)): its wasm array type is another class's " *
                                "the value may be, and no test tells them apart")
     elseif check_type !== nothing && isconcretetype(check_type)
         # isa(x, ConcreteType) -> type check
@@ -2201,7 +2201,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             # parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): the load (_narrow_generic_local!) delivers the SSA's REFINED
             # type — when the join proved a numeric, the value on stack IS that numeric
             # regardless of the (anyref) local. The refined type drives the fold.
-            local _isa2_refined = get(ctx.ssa_types, value_arg.id, Any)
+            local _isa2_refined = value_type(ctx, value_arg)
             isconcretetype(_isa2_refined) && (isa2_julia = _isa2_refined)
             if _isa2_refined in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
                 isa2_val_wasm = julia_to_wasm_type(_isa2_refined)
@@ -2284,12 +2284,12 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             else
                 _isa_reject!(bld, ctx, "isa(x, $(check_type)): $(check_type) has no runtime test for a $(isa2_val_wasm) value")
             end
-        elseif value_type isa Union && Nothing <: value_type && Base.typesplit(value_type, Nothing) <: check_type
+        elseif val_jt isa Union && Nothing <: val_jt && Base.typesplit(val_jt, Nothing) <: check_type
             # x::Union{Nothing, S} with S <: T: isa(x, T) is exactly "x is not the null nothing"
             ref_is_null!(bld)
             num!(bld, Opcode.I32_EQZ)  # negate: 1->0, 0->1
         else
-            _isa_reject!(bld, ctx, "isa(x::$(value_type), $(check_type)) has no runtime test for a $(something(isa2_val_wasm, "stack")) value")
+            _isa_reject!(bld, ctx, "isa(x::$(val_jt), $(check_type)) has no runtime test for a $(something(isa2_val_wasm, "stack")) value")
         end
     elseif check_type !== nothing && !isconcretetype(check_type)
         # Abstract type check (e.g. Integer, AbstractFloat, Number, Real)
@@ -2299,7 +2299,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
         if value_arg isa NirSSA
             # the load delivers the SSA's REFINED type (translator.dart:2100): a proven
             # numeric is on the stack unboxed whatever its local's type
-            local _refined3 = get(ctx.ssa_types, value_arg.id, Any)
+            local _refined3 = value_type(ctx, value_arg)
             isconcretetype(_refined3) && (isa3_julia = _refined3)
             if _refined3 in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool)
                 isa3_val_wasm = julia_to_wasm_type(_refined3)
@@ -2761,7 +2761,7 @@ function _emit_typeerror_throw!(b::InstrBuilder, got::NirNode, target::Type, idx
     local values = NirNode[NirLiteral(func), NirLiteral(""), NirLiteral(target), got]
     for i in 1:4
         local expected = def.fields[wasm_field_idx(info, i) + 1].valtype
-        local source_type = i == 4 ? get_ssa_type(ctx, got) : fieldtype(TypeError, i)
+        local source_type = i == 4 ? value_type(ctx, got) : fieldtype(TypeError, i)
         emit_value!(b, values[i], ctx, expected;
                     from_julia=(source_type isa Type ? source_type : fieldtype(TypeError, i)))
     end
@@ -2875,7 +2875,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     # Signature + call_ref). Devirtualizable callees (concrete/small-union types)
     # never reach here — the existing paths outrank.
     if is_runtime_ir_value(func)
-        local _dfc_t = infer_value_type(func, ctx)
+        local _dfc_t = value_type(ctx, func)
         if is_callable_julia_type(_dfc_t) &&
            emit_dynamic_closure_call!(fb, ctx, func, args, idx) === true
             return append_builder!(b, fb)
@@ -2929,7 +2929,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # (Ryu digit readback). Fake base pointers compile to 0, so the pointer
         # VALUE is the 0-based byte offset.
         local _pr_tp0 = begin
-            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            local _t = ptr_arg !== nothing ? value_type(ctx, ptr_arg) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
         local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
@@ -2996,13 +2996,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # cross-width pointerset).
         local _PRB_WIDE = (Int16, UInt16, Int32, UInt32, Int64, UInt64)
         local _prb_tp = begin
-            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            local _t = ptr_arg !== nothing ? value_type(ctx, ptr_arg) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
         local _prb_vec = (ptr_arg !== nothing && (_prb_tp === UInt8 || _prb_tp === Int8)) ?
             _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRB_WIDE) : nothing
         if _prb_vec !== nothing
-            local _prb_te = eltype(infer_value_type(_prb_vec, ctx))
+            local _prb_te = eltype(value_type(ctx, _prb_vec))
             local _prb_s = sizeof(_prb_te)
             local _prb_arr = get_array_type!(ctx.mod, ctx.type_registry, _prb_te)
             local _prb_w64 = _prb_s == 8
@@ -3048,17 +3048,17 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         local _PRG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
                             Int64, UInt64, Float32, Float64)
         local _prg_tp = begin
-            local _t = ptr_arg !== nothing ? infer_value_type(ptr_arg, ctx) : nothing
+            local _t = ptr_arg !== nothing ? value_type(ctx, ptr_arg) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
         local _prg_vec = (ptr_arg !== nothing && _prg_tp in _PRG_PRIMS) ?
             _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRG_PRIMS, allow_ref = true) : nothing
         if _prg_vec !== nothing && begin
-                local _t = infer_value_type(_prg_vec, ctx)
+                local _t = value_type(ctx, _prg_vec)
                 _t isa DataType && _t <: Base.RefValue
             end
             # Pointer into a RefValue{T} box: load is struct.get of field :x
-            local _prr_rt = infer_value_type(_prg_vec, ctx)
+            local _prr_rt = value_type(ctx, _prg_vec)
             local _prr_te = _prr_rt.parameters[1]
             if _prr_te in _PRG_PRIMS && sizeof(_prr_te) == sizeof(_prg_tp)
                 if !haskey(ctx.type_registry.structs, _prr_rt)
@@ -3083,7 +3083,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 return append_builder!(b, fb)
             end
         elseif _prg_vec !== nothing
-            local _prg_vt = infer_value_type(_prg_vec, ctx)
+            local _prg_vt = value_type(ctx, _prg_vec)
             local _prg_te = eltype(_prg_vt)
             if sizeof(_prg_te) == sizeof(_prg_tp) && sizeof(_prg_te) in (4, 8)
                 local _prg_arr = get_array_type!(ctx.mod, ctx.type_registry, _prg_te)
@@ -3125,7 +3125,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # returns the original pointer.
         local _ps_ptr = length(args) >= 1 ? args[1] : nothing
         local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx) : nothing
-        local _ps_vt = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        local _ps_vt = length(args) >= 2 ? value_type(ctx, args[2]) : nothing
         if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _psb = _ctx_builder(ctx, "compile_call")
@@ -3144,16 +3144,16 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         local _PSG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
                             Int64, UInt64, Float32, Float64)
         local _psg_tp = begin
-            local _t = _ps_ptr !== nothing ? infer_value_type(_ps_ptr, ctx) : nothing
+            local _t = _ps_ptr !== nothing ? value_type(ctx, _ps_ptr) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
         local _psg_vec = (_ps_ptr !== nothing && _psg_tp in _PSG_PRIMS) ?
             _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _PSG_PRIMS, allow_ref = true) : nothing
         if _psg_vec !== nothing && length(args) >= 2 && begin
-                local _t = infer_value_type(_psg_vec, ctx)
+                local _t = value_type(ctx, _psg_vec)
                 _t isa DataType && _t <: Base.RefValue
             end
-            local _psr_rt = infer_value_type(_psg_vec, ctx)
+            local _psr_rt = value_type(ctx, _psg_vec)
             local _psr_te = _psr_rt.parameters[1]
             if _psr_te in _PSG_PRIMS && sizeof(_psr_te) == sizeof(_psg_tp)
                 if !haskey(ctx.type_registry.structs, _psr_rt)
@@ -3180,7 +3180,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 return append_builder!(b, fb)
             end
         elseif _psg_vec !== nothing && length(args) >= 2
-            local _psg_vt = infer_value_type(_psg_vec, ctx)
+            local _psg_vt = value_type(ctx, _psg_vec)
             local _psg_te = eltype(_psg_vt)
             if sizeof(_psg_te) == sizeof(_psg_tp) && sizeof(_psg_te) in (4, 8)
                 local _psg_arr = get_array_type!(ctx.mod, ctx.type_registry, _psg_te)
@@ -3235,7 +3235,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                           isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8, 16)) ?
             _trace_memmove_ptr(_ps_ptr, ctx) : nothing
         if _psw_vec !== nothing && length(args) >= 2
-            local _psw_te = eltype(infer_value_type(_psw_vec, ctx))
+            local _psw_te = eltype(value_type(ctx, _psw_vec))
             if _psw_te === UInt8 || _psw_te === Int8
                 local _psw_arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
                 local _psw_s = sizeof(_psg_tp)
@@ -3339,7 +3339,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             !is_numeric_intrinsic && !owns_captured_arithmetic
         _called_func = func isa GlobalRef ? nothing : func   # an unbound global names nothing
         if _called_func !== nothing
-            _call_arg_types = tuple([infer_value_type(a, ctx) for a in args]...)
+            _call_arg_types = tuple([value_type(ctx, a) for a in args]...)
             _target = get_function(ctx.func_registry, _called_func, _call_arg_types)
             if _target === nothing && typeof(_called_func) <: Function && isconcretetype(typeof(_called_func))
                 _target = get_function(ctx.func_registry, _called_func, (typeof(_called_func), _call_arg_types...))
@@ -3383,7 +3383,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # A3E6: planted to reject every operand, the smoke corpus still passed)
         if (is_numeric_intrinsic || is_generic_arithmetic) && _is_boxed_numeric_operand(arg, ctx)
             emit_unsupported_stub!(ctx, fb, :unsupported_method,
-                "`$(func)` on an operand held as any value ($(arg isa NirSSA ? arg.julia_type : "unknown")): its class is known only at run time";
+                "`$(func)` on an operand held as any value ($(arg isa NirSSA ? value_type(ctx, arg) : "unknown")): its class is known only at run time";
                 idx=idx)
             return append_builder!(b, fb)
         end
@@ -3410,7 +3410,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         local _p1_ty = _p1_pos >= 1 ? fb.v.stack[_p1_pos] : nothing
         if _p1_ty !== nothing && (_p1_ty === ExternRef || _p1_ty === AnyRef)
             local arg1_ssa = args[1]
-            if arg1_ssa isa NirSSA && get(ctx.ssa_types, arg1_ssa.id, nothing) === Any
+            if arg1_ssa isa NirSSA && value_type(ctx, arg1_ssa) === Any
                 # numeric intrinsic on an Any-typed (boxed) operand — type instability. Loud reject.
                 fb = _ctx_builder(ctx, "compile_call.frag")
                 emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -3556,7 +3556,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 end
             end
         end
-        local _cv_julia_src = length(args) >= 2 ? infer_value_type(args[2], ctx) : nothing
+        local _cv_julia_src = length(args) >= 2 ? value_type(ctx, args[2]) : nothing
         local _cv_src_wide = length(args) >= 2 && get_phi_edge_wasm_type(args[2], ctx) === I64
         local _cv_result = emit_conversion!(fb, ctx, _it_name, _cv_julia_src, _cv_julia_dst, idx;
                                             src_already_wide=_cv_src_wide)
@@ -3638,7 +3638,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
             # Constants with undefined fields were rejected above because WasmGC has no
             # equivalent representation.
-            local _throw_st = get_ssa_type(ctx, _throw_val)
+            local _throw_st = value_type(ctx, _throw_val)
             emit_value!(_thrb, _throw_val, ctx, AnyRef;
                         from_julia=(_throw_st isa DataType && isconcretetype(_throw_st)) ? _throw_st : nothing)
         end
@@ -3696,7 +3696,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         container_arg = args[3]  # The container to iterate
 
         # Get container Julia type
-        container_type = infer_value_type(container_arg, ctx)
+        container_type = value_type(ctx, container_arg)
 
         # ONE callee resolution, then identity on the resolved OBJECT (L124's rule):
         # the splat target reaches this position under three spellings and a
@@ -3713,7 +3713,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         target_is_typed_vect = target_value === Base.getindex
         target_is_compose = target_value === (∘)
         prefix_values = length(args) == 4 ? _apply_iterate_svec_values(args[3], ctx) : nothing
-        tail_type = length(args) == 4 ? get_ssa_type(ctx, args[4]) : nothing
+        tail_type = length(args) == 4 ? value_type(ctx, args[4]) : nothing
 
         # Core.tuple is only directly representable when the iterable is proven
         # empty. A runtime-length Julia tuple needs a genuine variable-tuple
@@ -3756,11 +3756,11 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             _emit_apply_iterate_vect_prefix!(fb, actual_prefix, args[4],
                                               tail_type, ctx)
         elseif all(a -> begin
-                       local T = get_ssa_type(ctx, a)
+                       local T = value_type(ctx, a)
                        T isa DataType && T <: Vector
                    end, args[3:end])
             local container_args = args[3:end]
-            local container_types = DataType[get_ssa_type(ctx, a) for a in container_args]
+            local container_types = DataType[value_type(ctx, a) for a in container_args]
             elem_type = eltype(container_type)
 
             if any(T -> eltype(T) !== elem_type, container_types)
@@ -3815,8 +3815,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # rejects at its statement rather than casting them to an integer
         if func === Core.getfield && length(args) >= 2 &&
            args[1] isa NirArgument && !ctx.is_compiled_closure &&
-           !(_gft_index isa Integer) && get_ssa_type(ctx, args[2]) <: Integer
-            local _gft_slot_T = get_ssa_type(ctx, args[1])
+           !(_gft_index isa Integer) && value_type(ctx, args[2]) <: Integer
+            local _gft_slot_T = value_type(ctx, args[1])
             local _gft_fixed = args[1].n - 2
             local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
             if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
@@ -3862,8 +3862,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # one physical parameter per specialized vararg. A literal tuple
             # projection is therefore exactly the corresponding parameter read.
             if args[1] isa NirArgument && !ctx.is_compiled_closure &&
-               source_slot_type(ctx, args[1].n) !== nothing
-                local _gft_slot_T = get_ssa_type(ctx, args[1])
+               args[1].n <= length(ctx.slot_types)
+                local _gft_slot_T = value_type(ctx, args[1])
                 local _gft_fixed = args[1].n - 2
                 local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
                 if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
@@ -3875,7 +3875,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     _gfc_done = true
                 end
             end
-            local _gft_T = infer_value_type(args[1], ctx)
+            local _gft_T = value_type(ctx, args[1])
             if !_gfc_done && _gft_T isa DataType && _gft_T <: Tuple && 1 <= _gft_i <= fieldcount(_gft_T)
                 local _gft_info = haskey(ctx.type_registry.structs, _gft_T) ?
                                   ctx.type_registry.structs[_gft_T] :
@@ -3919,7 +3919,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # defined-check = a null test on the anyref contents.
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) === :contents &&
-           get(ctx.ssa_types, args[1].id, Any) === Core.Box
+           value_type(ctx, args[1]) === Core.Box
             local _bxd_ib = _ctx_builder(ctx, "compile_call")
             local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx, static_wasm_type(args[1], ctx))  # box intrinsic branches on the operand's type
             local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
@@ -3943,7 +3943,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # initialized in Wasm and therefore defined.
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) isa Symbol
-            local _isd_T = get(ctx.ssa_types, args[1].id, Any)
+            local _isd_T = value_type(ctx, args[1])
             local _isd_f = nir_const(args[2])
             if _isd_T isa DataType && isstructtype(_isd_T) &&
                _isd_f in fieldnames(_isd_T)
@@ -3980,7 +3980,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # callee; read the registered struct field here (the ONE shared cell).
         if !_gfc_done && func === Core.getfield && length(args) == 2 &&
            nir_const(args[2]) isa Symbol
-            local _gfb_T = get_ssa_type(ctx, args[1])
+            local _gfb_T = value_type(ctx, args[1])
             local _gfb_fld = nir_const(args[2])
             if _gfb_T isa DataType && _gfb_fld isa Symbol &&
                !(isstructtype(_gfb_T) && _gfb_fld in fieldnames(_gfb_T))
@@ -4015,8 +4015,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # getfield(x::T, f) with a field name known only at run time: a dispatch candidate of
         # getproperty(x, f::Symbol) over a concrete class (_emit_getfield_runtime_name!)
         if !_gfc_done && func === Core.getfield && length(args) == 2 &&
-           !(nir_const(args[2]) isa Symbol) && get_ssa_type(ctx, args[2]) === Symbol
-            local _rn_T = get_ssa_type(ctx, args[1])
+           !(nir_const(args[2]) isa Symbol) && value_type(ctx, args[2]) === Symbol
+            local _rn_T = value_type(ctx, args[1])
             _rn_T isa DataType && isconcretetype(_rn_T) &&
                 (_gfc_done = _emit_getfield_runtime_name!(fb, ctx, idx, args[1], args[2], _rn_T))
         end
@@ -4037,7 +4037,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
         if called_func !== nothing
             # Infer argument types BEFORE pushing (need for type checking)
-            call_arg_types = tuple([infer_value_type(arg, ctx) for arg in args]...)
+            call_arg_types = tuple([value_type(ctx, arg) for arg in args]...)
 
             # dynamic-dispatch sites must not pick a same-name
             # overload with an incompatible return (i32 getindex for a ref site)
@@ -4261,7 +4261,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         if names isa Tuple && length(args) == 1
             # Get the tuple argument type to determine value types
             tuple_arg = args[1]
-            tuple_type = infer_value_type(tuple_arg, ctx)
+            tuple_type = value_type(ctx, tuple_arg)
 
             if tuple_type <: Tuple
                 # Construct the concrete NamedTuple type
@@ -4348,7 +4348,7 @@ parity(quarantine: Julia's Core._apply_iterate, a call splatting run-time contai
 function _iterable_proven_empty(arg::NirNode, ctx)::Bool
     arg isa NirLiteral && return arg.value isa Tuple && isempty(arg.value)
     arg isa NirSSA || return false
-    get_ssa_type(ctx, arg) === Tuple{} && return true
+    value_type(ctx, arg) === Tuple{} && return true
     local def = _ssa_def(arg, ctx)
     if def isa NirNew && !isempty(def.operands)
         # a `%new` whose type operand is written down literally, and whose last field
@@ -4602,7 +4602,7 @@ parity(pkg/dart2wasm/lib/code_generator.dart:2955 CodeGenerator.visitThrow)
 function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
                                   ctx::AbstractCompilationContext)::InstrBuilder
     isempty(args) && error("Core.throw_methoderror takes its function")
-    local static(a) = _collector_static_type(a, ctx.slot_types)
+    local static(a) = value_type(a, ctx.slot_types, nothing)
     local tuple_type = tuple_runtime_type(args[2:end], ctx.slot_types)
     if tuple_type === nothing
         local ea = methoderror_args_types(args[2:end], ctx.slot_types)
@@ -4676,7 +4676,7 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
     local_set!(bld, v)
     local cid = allocate_local!(ctx, I32)
     local_get!(bld, v); emit_class_id!(bld, ctx, S); local_set!(bld, cid)
-    local f_type = _collector_static_type(args[1], ctx.slot_types)
+    local f_type = value_type(args[1], ctx.slot_types, nothing)
     for (C, id) in ordered_pairs(reg.type_ids, type_order_key,
                                  C -> C isa DataType && isconcretetype(C) && C <: S && !(C <: Type) &&
                                       (isstructtype(C) || isprimitivetype(C)))

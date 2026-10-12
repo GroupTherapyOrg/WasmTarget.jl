@@ -82,14 +82,16 @@ end
 # and a closed-world module has exactly one.)
 function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) >= 2 || return nothing
-    # The call is typed by its own static type — Julia's inference of f(args...) at the
-    # operands' types, as a dart call's static type is its target's return type — and the
-    # statement's type (`Any`: inference does not see through the world-age builtin) is the
-    # consumer's widening, converted to afterwards. A callee that is not a constant is a
-    # dynamic call typed `Any`.
+    # The call is typed by its own static type — its target's return type, the plan's for the
+    # MethodInstance the collector enrolled as this statement's edge (registered with the
+    # function, `FunctionInfo.return_type`), as a dart call's static type is its target's — and
+    # the statement's type (`Any`: inference does not see through the world-age builtin) is the
+    # consumer's widening, converted to afterwards. A callee that is not a constant, or one the
+    # plan registers no function for, is a dynamic call, typed `Any` as Julia's IR types it.
     local f = _invoke_in_world_callee(args[2])
-    local R = f === nothing ? Any :
-        infer_return_type(f, Tuple(Any[get_ssa_type(ctx, a) for a in args[3:end]]))
+    local target = (f === nothing || ctx.func_registry === nothing) ? nothing :
+        get_function(ctx.func_registry, f, Tuple(Any[value_type(ctx, a) for a in args[3:end]]))
+    local R = target === nothing ? Any : target.return_type
     local had_result = haskey(ctx.ssa_types, idx)
     local old_result = get(ctx.ssa_types, idx, Any)
     ctx.ssa_types[idx] = R
@@ -148,7 +150,7 @@ end
 # route; no Binding object or partial partition chain exists in Wasm.
 # parity(quarantine: Julia's BindingPartition world bounds; dart has no world age.)
 function _lower_check_world_bounded!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
-    (length(args) == 1 && get_ssa_type(ctx, args[1]) === Core.TypeName) || return nothing
+    (length(args) == 1 && value_type(ctx, args[1]) === Core.TypeName) || return nothing
     wb = _ctx_builder(ctx, "compile_call.check_world_bounded")
     emit_closed_world_type_bounds!(wb, args[1], ctx)
     append_builder!(b, wb)
@@ -205,7 +207,7 @@ end
 function _lower_sizeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
     arg = args[1]
-    arg_type = infer_value_type(arg, ctx)
+    arg_type = value_type(ctx, arg)
     local _szb = _ctx_builder(ctx, "compile_call")
     if arg_type === String || arg_type === Symbol
         emit_value!(_szb, arg, ctx, ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
@@ -234,7 +236,7 @@ end
 function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
     arg = args[1]
-    arg_type = infer_value_type(arg, ctx)
+    arg_type = value_type(ctx, arg)
     if arg_type === String || arg_type === Symbol
         local _ncb = _ctx_builder(ctx, "compile_call")
         # ONE 4-arg wrap replaces the sniff+cast ladder
@@ -259,7 +261,7 @@ end
 function _lower_length!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
     arg = args[1]
-    arg_type = infer_value_type(arg, ctx)
+    arg_type = value_type(ctx, arg)
 
     if arg_type isa DataType && arg_type <: Vector
         # Vector is a struct with (typeId, ref, size) where size is Tuple{Int64}
@@ -293,7 +295,7 @@ end
 # in a size tuple; a dart record's arity is static.)
 function _lower_nfields!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) == 1 || return nothing
-    local tuple_type = get_ssa_type(ctx, args[1])
+    local tuple_type = value_type(ctx, args[1])
     if is_runtime_vararg_tuple_type(tuple_type)
         local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, tuple_type)
         local size_info = ctx.type_registry.structs[Tuple{Int64}]
@@ -350,7 +352,7 @@ function _memoryref_source(ctx::AbstractCompilationContext, ref::NirNode)::Tuple
         literal = _nir_const_operand(node)
         literal isa Core.GenericMemoryRef && return (:constant, literal)
         if node isa NirArgument
-            T = get_ssa_type(ctx, node)
+            T = value_type(ctx, node)
             return (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) ?
                 (:boxed, node) : (:zero, ref)
         end
@@ -469,7 +471,7 @@ fields are read off the view.
 """
 function _emit_memoryref_box_field!(b::InstrBuilder, ctx::AbstractCompilationContext, arg::NirNode,
                                     field::UInt32)::InstrBuilder
-    T = get_ssa_type(ctx, arg)
+    T = value_type(ctx, arg)
     box_idx = register_memoryref_box!(ctx.mod, ctx.type_registry, T)
     local_get!(b, _memoryref_argument_local(ctx, arg))
     struct_get!(b, box_idx, field)
@@ -633,7 +635,7 @@ function _is_array_ref_read(ctx::AbstractCompilationContext, rec::NirStmt)::Bool
     callee === Core.getfield || callee === Base.getproperty || return false
     field = _nir_field_name(node.operands[2])
     field === :ref || field === 1 || return false
-    T = get_ssa_type(ctx, node.operands[1])
+    T = value_type(ctx, node.operands[1])
     return T isa DataType && T <: Array
 end
 
@@ -693,16 +695,16 @@ function _is_memoryref_store_result(ctx::AbstractCompilationContext, rec::NirStm
     rec.slot == 0 && rec.node isa NirCall && length(rec.node.operands) >= 2 || return false
     callee = _nir_callee_object(rec.node.callee)
     if callee === Core.memoryrefset!
-        T = get_ssa_type(ctx, rec.node.operands[2])
+        T = value_type(ctx, rec.node.operands[2])
         return T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)
     end
     # `setfield!(a::Array, :ref, v)` returns v; a read result is a pair like v
     (callee === Core.setfield! || callee === Base.setproperty!) && length(rec.node.operands) >= 3 ||
         return false
     _nir_field_name(rec.node.operands[2]) === :ref || return false
-    O = get_ssa_type(ctx, rec.node.operands[1])
+    O = value_type(ctx, rec.node.operands[1])
     (O isa Type && O !== Union{} && O <: Array) || return false
-    T = get_ssa_type(ctx, rec.node.operands[3])
+    T = value_type(ctx, rec.node.operands[3])
     (T isa DataType && T <: Core.GenericMemoryRef && isconcretetype(T)) || return false
     idx = findfirst(r -> r === rec, ctx.nir)
     return idx !== nothing && any(!=(idx), ssa_users(ctx, idx))
@@ -728,7 +730,7 @@ function _is_memoryref_unbox(ctx::AbstractCompilationContext, rec::NirStmt)::Boo
     else
         return false
     end
-    S = get_ssa_type(ctx, src)
+    S = value_type(ctx, src)
     return !(S isa Type && S !== Union{} && S <: Core.GenericMemoryRef)
 end
 
@@ -771,7 +773,7 @@ function _is_memoryref_field_read(ctx::AbstractCompilationContext, rec::NirStmt)
     callee === Core.getfield || callee === Base.getproperty || return false
     T = rec.julia_type
     T isa Type && T !== Union{} && T <: Core.GenericMemoryRef || return false
-    O = get_ssa_type(ctx, node.operands[1])
+    O = value_type(ctx, node.operands[1])
     return !(O isa Type && (O <: Array || O <: Core.GenericMemoryRef || O <: GenericMemory))
 end
 
@@ -898,7 +900,7 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     # BoundsError's `a` holds any value: the base as Julia passes it — a Memory base (Julia
     # 1.13 indexes a Memory directly) as itself, a MemoryRef base in its single-value struct,
     # with its offset.
-    base_type = get_ssa_type(ctx, base)
+    base_type = value_type(ctx, base)
     if base_type isa DataType && base_type <: GenericMemory
         emit_value!(b, base, ctx, AnyRef; from_julia=base_type)
     else
@@ -922,7 +924,7 @@ end
 function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     isempty(args) && return nothing
     ref_arg = args[1]
-    ref_type = get_ssa_type(ctx, ref_arg)
+    ref_type = value_type(ctx, ref_arg)
     elem_type = if ref_type isa DataType && ref_type.name.name === :GenericMemoryRef
         ref_type.parameters[2]
     elseif ref_type isa DataType && ref_type.name.name === :MemoryRef
@@ -954,7 +956,7 @@ end
 function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) >= 1 || return nothing
     ref_arg = args[1]
-    ref_type = infer_value_type(ref_arg, ctx)
+    ref_type = value_type(ctx, ref_arg)
 
     # Nothing-typed memory — always returns nothing (i32.const 0).
     # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
@@ -1011,8 +1013,8 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
 
     array_get!(_mrgb, array_type_idx; signed=packed_array_signedness(elem_type))
 
-    # Note: if elem_type is Any, array.get returns externref and the SSA local
-    # is also typed as externref (fixed in analyze_ssa_types!). No cast needed here.
+    # An Any element reads as a reference; the statement's store converts it to the local's
+    # type (coerce_stack_top!, dart's convertType at the read), the SSA's IR type.
     append_builder!(fb, _mrgb)
     return append_builder!(b, fb)
 end
@@ -1037,7 +1039,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     length(args) >= 2 || return nothing
     ref_arg = args[1]
     value_arg = args[2]
-    ref_type = infer_value_type(ref_arg, ctx)
+    ref_type = value_type(ctx, ref_arg)
 
     # Nothing-typed memory — storing nothing is a no-op.
     # Don't push a result — Nothing has no Wasm representation to keep on the stack.
@@ -1089,7 +1091,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
 
     # Compile the value to store - we need it twice (for array.set and return)
     # First compile gets the value on stack for array.set
-    local mset_val_T = get_ssa_type(ctx, value_arg)
+    local mset_val_T = value_type(ctx, value_arg)
     local mset_val_is_mr = mset_val_T isa DataType && mset_val_T <: Core.GenericMemoryRef &&
                            isconcretetype(mset_val_T)
     # a MemoryRef is emitted by the sink's own funnel below, never as a bare value here
@@ -1117,7 +1119,7 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
             append_builder!(_msb, _mv_b)
             # A KNOWN closure erasing into a Memory{Any} slot wraps into
             # the closure OBJECT (dart convertType at the erasure seam)
-            maybe_wrap_closure!(_msb, ctx, infer_value_type(value_arg, ctx))
+            maybe_wrap_closure!(_msb, ctx, value_type(ctx, value_arg))
             if !is_already_anyref && mset_src_wasm_any === ExternRef
                 any_convert_extern!(_msb)
             end
@@ -1431,7 +1433,7 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
     # type is known only at run time makes a tuple WT does not build (MARCH 13.10)
     tuple_type = tuple_runtime_type(args, ctx.slot_types)
     if tuple_type === nothing
-        local static_types = Type[_collector_static_type(a, ctx.slot_types) for a in args]
+        local static_types = Type[value_type(a, ctx.slot_types, nothing) for a in args]
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
             "a tuple of $(Tuple{static_types...}): its type is its elements' runtime types, known only at run time";
             idx=idx, detail=call)
@@ -1456,7 +1458,7 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
         for (fi, arg) in enumerate(args)
             # A MemoryRef element: its field holds the ref's single-value struct
             # (memoryref_field_type!), built by the sink's funnel.
-            local _mr_jt = _value_julia_type(arg, ctx)
+            local _mr_jt = value_type(ctx, arg)
             if _mr_jt isa DataType && _mr_jt <: Core.GenericMemoryRef
                 local _mr_fi = fi + Int(info.field_offset)
                 (struct_type_def isa StructType && _mr_fi <= length(struct_type_def.fields)) ||
@@ -1491,7 +1493,7 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
             expected_wasm isa WasmValType || error("tuple field $fi has no physical Wasm type")
             append_builder!(_tupb, _ab)
             if arg_ty !== nothing && arg_ty !== expected_wasm
-                local _tuple_jt = _value_julia_type(arg, ctx)
+                local _tuple_jt = value_type(ctx, arg)
                 coerce_stack_top!(_tupb, expected_wasm, ctx;
                                   from_julia=(_tuple_jt isa Type && isconcretetype(_tuple_jt)) ? _tuple_jt : nothing)
             end
@@ -1521,7 +1523,7 @@ function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)::InstrBuil
     # type is a supertype of the value's, so the value is emitted in the statement's
     # representation, a boxed value carrying its own class (Base.inferencebarrier)
     length(args) == 2 || error("compilerbarrier takes a kind and a value, got $(length(args)) operands")
-    local vt = get_ssa_type(ctx, args[2])
+    local vt = value_type(ctx, args[2])
     local li = get(ctx.ssa_locals, idx, nothing)
     local target = (li !== nothing && 1 <= li - ctx.n_params + 1 <= length(ctx.locals)) ?
         ctx.locals[li - ctx.n_params + 1] :                      # the local, before any narrowing
@@ -1558,7 +1560,7 @@ end
 function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     length(args) >= 1 || return nothing
     arg = args[1]
-    arg_type = infer_value_type(arg, ctx)
+    arg_type = value_type(ctx, arg)
     ctx.type_registry.type_lookup_global === nothing &&
         error("typeof lowering requires the canonical type lookup table")
     base_idx = ctx.type_registry.base_struct_idx
@@ -1960,7 +1962,7 @@ function _lower_ifelse!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder
     append_builder!(_ieb, _cv_b)
 
     # Determine the type of the values for select
-    val_type = infer_value_type(args[2], ctx)
+    val_type = value_type(ctx, args[2])
 
     # The select's type is the value's (dart select(type)): a numeric type encodes the untyped
     # select, a reference the typed one. Until 2026-09-30 a struct whose wasm type is an abstract
@@ -1989,7 +1991,7 @@ function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBui
         ctx.last_stmt_was_stub = true
         return append_builder!(b, fb)
     end
-    local _ta_static = get_ssa_type(ctx, args[1])
+    local _ta_static = value_type(ctx, args[1])
     if _ta_static isa Type && _ta_static <: _ta_target
         emit_value!(fb, args[1], ctx, isconcretetype(_ta_static) && isconcretetype(_ta_target) ?
                     get_concrete_wasm_type(_ta_target, ctx.mod, ctx.type_registry) :
@@ -2177,7 +2179,7 @@ function _lower_getfield_signal_skip!(b, fb, ctx, call, idx, args)::Union{InstrB
         field_name = nir_const(field_ref)
         if field_name === :signal
             # Only skip for CompilableSignal/Setter types (WasmGlobal pattern)
-            target_type = infer_value_type(args[1], ctx)
+            target_type = value_type(ctx, args[1])
             if target_type isa DataType && target_type.name.name in (:CompilableSignal, :CompilableSetter)
                 # Skip - this is getting Signal from CompilableSignal/Setter
                 return append_builder!(b, fb)
@@ -2196,7 +2198,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
     if length(args) >= 2
         obj_arg = args[1]
         field_ref = args[2]
-        obj_type = infer_value_type(obj_arg, ctx)   # pre-existing query (the mega-arm relies on it)
+        obj_type = value_type(ctx, obj_arg)   # pre-existing query (the mega-arm relies on it)
         if is_runtime_vararg_tuple_type(obj_type) && !nir_quoted(field_ref)
             local info = register_vararg_tuple_type!(ctx.mod, ctx.type_registry, obj_type)
             local E = vararg_tuple_eltype(obj_type)
@@ -2495,7 +2497,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         end
 
         # Handle Type{T} constants for DataType field access.
-        # When a DataType constant (e.g., Vector{Int64}) appears in IR, infer_value_type
+        # When a DataType constant (e.g., Vector{Int64}) appears in IR, value_type
         # returns Type{Vector{Int64}}. Unwrap to DataType for struct field access, since
         # DataType is registered in the JlType hierarchy with fields like :name, :parameters.
         effective_obj_type = obj_type
@@ -2551,7 +2553,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 field_idx = if nir_const(field_ref) isa Integer
                     nir_const(field_ref)
                 elseif (field_ref isa NirSSA || field_ref isa NirArgument) &&
-                       get_ssa_type(ctx, field_ref) <: Integer
+                       value_type(ctx, field_ref) <: Integer
                     # Dynamic index - will be handled below for homogeneous tuples. Only an
                     # operand whose type is an integer is an index: a Symbol name declines
                     # here and compile_call! reads it by name (_emit_getfield_runtime_name!: a
@@ -2783,7 +2785,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         obj_arg = args[1]
         field_ref = args[2]
         value_arg = args[3]
-        obj_type = infer_value_type(obj_arg, ctx)
+        obj_type = value_type(ctx, obj_arg)
 
         field_sym = nir_const(field_ref)
 
@@ -2832,13 +2834,13 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 end
                 if value_has_local || first(_memoryref_source(ctx, value_arg)) === :indexed
                     info = ctx.type_registry.structs[obj_type]
-                    value_type = infer_value_type(value_arg, ctx)
+                    val_jt = value_type(ctx, value_arg)
                     local _vr_def = ctx.mod.types[info.wasm_type_idx + 1]
                     local _vr_expected = _vr_def.fields[wasm_field_idx(info, 1) + 1].valtype
                     temp_local = allocate_local!(ctx, _vr_expected)
                     local _vrb = _ctx_builder(ctx, "compile_call")
                     emit_memoryref_mem!(_vrb, ctx, value_arg, _vr_expected;
-                                from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
+                                from_julia=(val_jt isa Type && isconcretetype(val_jt)) ? val_jt : nothing)
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     # If obj_arg's local is structref, insert ref.cast null before struct_set
@@ -2868,7 +2870,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 # is on top of the stack. If we compile obj_arg first, we'd push it
                 # AFTER the value, giving wrong order [value, ref] instead of [ref, value].
                 # Solution: compile value first, store in temp local, then compile ref.
-                value_type = infer_value_type(value_arg, ctx)
+                val_jt = value_type(ctx, value_arg)
                 local _vs_def = ctx.mod.types[info.wasm_type_idx + 1]
                 local _vs_expected = _vs_def.fields[wasm_field_idx(info, 2) + 1].valtype
                 temp_local = allocate_local!(ctx, _vs_expected)
@@ -2876,7 +2878,7 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 
                 # Compile value and store in local (value may already be on stack from prev stmt)
                 emit_value!(_vsb, value_arg, ctx, _vs_expected;
-                            from_julia=(value_type isa Type && isconcretetype(value_type)) ? value_type : nothing)
+                            from_julia=(val_jt isa Type && isconcretetype(val_jt)) ? val_jt : nothing)
                 local_set!(_vsb, temp_local)
 
                 # Now compile obj (struct ref)
@@ -3012,7 +3014,7 @@ operator entries here, so the two can never disagree about a call's width.
 parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic)
 """
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
-    arg_type = length(args) > 0 ? infer_value_type(args[1], ctx) : Int64
+    arg_type = length(args) > 0 ? value_type(ctx, args[1]) : Int64
     is_32bit = arg_type === Int32 || arg_type === UInt32 || arg_type === Bool || arg_type === Char ||
                arg_type === Int16 || arg_type === UInt16 || arg_type === Int8 || arg_type === UInt8 ||
                (isprimitivetype(arg_type) && sizeof(arg_type) <= 4)
@@ -3057,7 +3059,7 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
     local ops = _OPERATOR_OPCODES[callee]
     # Each value operand's Julia type, read from its node (Julia's answer or a proven join).
     local vals = NirNode[a for a in args if !_is_type_operand(a)]
-    local ts = Any[_value_julia_type(a, ctx) for a in vals]
+    local ts = Any[value_type(ctx, a) for a in vals]
 
     # String/Symbol `*` is CONCATENATION, not arithmetic: a `call *` of two proven
     # String/Symbol operands would otherwise fall into the numeric branch and emit

@@ -59,7 +59,7 @@ THE Int128/UInt128 dispatch point, consulted from `compile_call!` right where th
 and `emit_intrinsic_unop!`'s nullable-return contract). Operands are already on `b`'s
 stack (the same operand emission the residue arms relied on); `arg_type` is the
 caller's already-inferred Int128/UInt128 source type (the same value the residue arms
-were passed — recomputing it here would be a second `infer_value_type` call site, R3).
+were passed — recomputing it here would be a second reader of its type, L174).
 Returns `nothing` when `op` is not one of this tier's ops.
 
 On a hit, finishes exactly like the intrinsics table routes: the SSA result gets the

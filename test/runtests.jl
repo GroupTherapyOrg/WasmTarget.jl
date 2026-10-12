@@ -68,6 +68,10 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
                 for ln in lines
                     occursin("WasmTarget.jl |", ln) && println("  shard $i: ", strip(ln))
                     startswith(ln, "WT_PHASE_TIME\t") && push!(phase_times, String(ln[sizeof("WT_PHASE_TIME\t")+1:end]))
+                    if startswith(ln, "WT_QA_TIME\t")
+                        local qa = split(ln, '\t')
+                        push!(phase_times, string(qa[2], "\tQA: ", qa[3]))
+                    end
                     startswith(ln, "WT_SETUP_TIME\t") && println("  shard $i setup: ", split(ln, '\t')[2], "s")
                 end
             end
@@ -90,7 +94,7 @@ if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, 
                     println(io, ln)
                 end
             end
-            @info "Recorded $(length(phase_times)) phase durations → test/phase_times.tsv"
+            @info "Recorded $(length(phase_times)) phase and QA durations → test/phase_times.tsv"
         end
         # ── Join the overlapped fuzz pass (usually already done by now). ──
         # (Assignment-free exit accounting below: an earlier `failed = true` inside a
@@ -112,14 +116,35 @@ const (_WT_SHARD, _WT_NSHARDS) = let s = get(ENV, "WT_SHARD", "")
     isempty(s) ? (0, 1) : (parse(Int, split(s, ",")[1]), parse(Int, split(s, ",")[2]))
 end
 _wt_fuzz() = get(ENV, "WT_FUZZ", "") == "1"          # the dedicated serial fuzz pass
-# The QA families (the files included below, before the phases) are dealt round-robin across
-# the shards in file order, the k-th to shard (k-1) % N, so the N shards together run each exactly
-# once (on ubuntu CI they took 616 s, run 37879296900, which alone made shard 0 the slowest job).
+# The durations the shards are dealt by: test/phase_times.tsv, "<secs>\t<name>" per Phase and
+# "<secs>\tQA: <file>" per QA family, measured on CI's runners (WT_RECORD_TIMES=1 rewrites it from
+# a run's WT_PHASE_TIME and WT_QA_TIME lines). A missing entry takes the median of its kind.
+const _PHASE_TIMES_TSV = joinpath(@__DIR__, "phase_times.tsv")
+function _wt_recorded_times()::Dict{String,Float64}
+    d = Dict{String,Float64}()
+    isfile(_PHASE_TIMES_TSV) || return d
+    for ln in eachline(_PHASE_TIMES_TSV)
+        parts = split(ln, '\t'; limit = 2)
+        length(parts) == 2 || continue
+        t = tryparse(Float64, parts[1])
+        t === nothing || (d[String(parts[2])] = t)
+    end
+    return d
+end
+const _WT_TIMES = _wt_recorded_times()
+_wt_median(v) = (local c = sort!(collect(Float64, v)); isempty(c) ? 1.0 : c[(length(c) + 1) ÷ 2])
+# The QA families (the files included below, before the phases) are dealt in file order, each to
+# the shard whose recorded load is least so far (its duration from the times file), so the N
+# shards together run each exactly once, and every process deals them alike; the phases are then
+# packed onto the loads the QA families left (_phase_owner). Round-robin dealing put 57 s of QA on
+# one shard and 263 s on another (gate run 38192764399, suite 3/6 at 1142 s of the 1200 s budget).
 # Not in a WT_PHASE run or the fuzz pass. Each one run prints a WT_QA_TIME line.
-const _WT_QA_DEALT = Ref(0)
+const _WT_QA_MEDIAN = _wt_median(t for (k, t) in _WT_TIMES if startswith(k, "QA: "))
+const _WT_QA_LOAD = zeros(_WT_NSHARDS)
 function _wt_qa(name::AbstractString)::Bool
-    _WT_QA_DEALT[] += 1
-    ((_WT_QA_DEALT[] - 1) % _WT_NSHARDS == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
+    local s = argmin(_WT_QA_LOAD)
+    _WT_QA_LOAD[s] += get(_WT_TIMES, "QA: " * name, _WT_QA_MEDIAN)
+    (s - 1 == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
     println("WT_QA\t", name)
     return true
 end
@@ -490,30 +515,18 @@ end
 # across worker processes, so it is a pure function of (committed timings file,
 # registration order, nshards): phases are bin-packed onto shards by LPT (longest
 # processing time first → least-loaded shard) using the durations recorded in
-# test/phase_times.tsv. Round-robin left the shard walls >2× apart (1:03 vs 2:09);
-# LPT pulls the wall down toward the mean. Phases with no recorded duration get
-# the median, and a missing file degrades to "all equal" (≈ round-robin packing).
+# test/phase_times.tsv, onto the loads the QA families left (_WT_QA_LOAD). Round-robin left the
+# shard walls >2× apart (1:03 vs 2:09); LPT pulls the wall down toward the mean. Phases with no
+# recorded duration get the median, and a missing file degrades to "all equal".
 # A skipped phase's function is never CALLED → never JIT-compiled (the lazy-compile
 # win). Each phase's wall time is emitted as a `WT_PHASE_TIME` line; the
 # orchestrator regenerates the tsv from those lines when WT_RECORD_TIMES=1.
-const _PHASE_TIMES_TSV = joinpath(@__DIR__, "phase_times.tsv")
-function _phase_durations()
-    d = Dict{String,Float64}()
-    isfile(_PHASE_TIMES_TSV) || return d
-    for ln in eachline(_PHASE_TIMES_TSV)
-        parts = split(ln, '\t'; limit = 2)
-        length(parts) == 2 || continue
-        t = tryparse(Float64, parts[1])
-        t === nothing || (d[String(parts[2])] = t)
-    end
-    return d
-end
 function _phase_owner(n::Int)
-    rec = _phase_durations()
-    med = isempty(rec) ? 1.0 : sort!(collect(values(rec)))[(length(rec) + 1) ÷ 2]
+    rec = Dict(k => t for (k, t) in _WT_TIMES if !startswith(k, "QA: "))
+    med = _wt_median(values(rec))
     dur = [get(rec, name, med) for (name, _) in _PHASES]
     owner = Vector{Int}(undef, length(_PHASES))
-    load = zeros(n)
+    load = n == length(_WT_QA_LOAD) ? copy(_WT_QA_LOAD) : zeros(n)
     for i in sort(collect(eachindex(_PHASES)); by = j -> -dur[j])
         s = argmin(load)
         owner[i] = s - 1

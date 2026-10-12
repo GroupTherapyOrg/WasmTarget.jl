@@ -46,7 +46,7 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
             end
         end
         # Fall back to Julia type inference
-        ssa_type = get(ctx.ssa_types, val.id, Any)
+        ssa_type = value_type(ctx, val)
         return get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
     elseif val isa NirSlot
         # SlotNumber in unoptimized IR — check slot_locals first, then params
@@ -66,10 +66,8 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         else
-            source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
+            return get_concrete_wasm_type(value_type(ctx, val), ctx.mod, ctx.type_registry; for_local=true)
         end
-        return AnyRef
     elseif val isa NirArgument
         # Match compile_value's offset — for regular functions, _1 is the
         # function object, so actual args start at _2 → arg_types[1].
@@ -784,7 +782,7 @@ function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationCont
         unreachable!(b)  # structural trap (dart-legit dead path)
     else
         if ty !== func_ret_wasm
-            source_julia = _value_julia_type(val, ctx)
+            source_julia = value_type(ctx, val)
             convert_type!(b, ty, func_ret_wasm, ctx;
                           from_julia=(source_julia isa Type && isconcretetype(source_julia)) ? source_julia : nothing)
         end
@@ -933,7 +931,7 @@ parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
 function _is_boxed_numeric_operand(arg::NirNode, ctx::AbstractCompilationContext)::Bool
     arg isa NirSSA || return false
     _is_externref_value(arg, ctx) && return false
-    get(ctx.ssa_types, arg.id, Any) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
+    value_type(ctx, arg) in (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool) &&
         return false
     li = get(ctx.ssa_locals, arg.id, nothing)
     li === nothing && (li = get(ctx.phi_locals, arg.id, nothing))
@@ -1003,7 +1001,7 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
     # classed MemoryRef{T} and carrying its element offset — never its bare Memory.
     if (expected isa ConcreteRef && expected.type_idx in values(ctx.type_registry.memoryref_box_idxs)) ||
        expected === AnyRef || expected === EqRef || expected === StructRef || expected === ExternRef
-        local mr_T = get_ssa_type(ctx, val)
+        local mr_T = value_type(ctx, val)
         if mr_T isa DataType && mr_T <: Core.GenericMemoryRef && isconcretetype(mr_T)
             emit_memoryref_box!(b, ctx, val, mr_T)
             expected === ExternRef && extern_convert_any!(b)
@@ -1016,7 +1014,7 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
         # Like dart's wrap(node, expectedType), the single wrap funnel owns both
         # the emitted Wasm type and the node's static source type. Callers must
         # not independently rediscover source types just to request a coercion.
-        from_julia === nothing && (from_julia = infer_value_type(val, ctx))
+        from_julia === nothing && (from_julia = value_type(ctx, val))
         convert_type!(b, ty, expected, ctx; from_julia=from_julia)
     end
     return expected
@@ -1118,14 +1116,14 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # only a plain definition is re-emitted from its node.
             def = _rec.slot > 0 ? nothing : _rec.node
             if def isa NirPi
-                pi_type = get(ctx.ssa_types, node.id, Any)
+                pi_type = value_type(ctx, node)
                 if pi_type === Nothing
                     # PiNode narrowed to Nothing - emit appropriate null/zero value
                     # Nothing maps to I32 in Wasm, so emit i32.const 0 as default.
                     # For Union{Nothing, T} where T is a ref type, emit ref.null instead.
                     emitted_nothing = false
                     if def.value isa NirSSA
-                        underlying_type = get(ctx.ssa_types, def.value.id, Any)
+                        underlying_type = value_type(ctx, def.value)
                         # For Union{Nothing, T}, emit ref.null $T
                         if underlying_type !== Nothing && underlying_type !== Any
                             wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
@@ -1165,7 +1163,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                                 end
                             end
                             if _pi_src_wasm === nothing
-                                local _pi_src_type = get(ctx.ssa_types, def.value.id, Any)
+                                local _pi_src_type = value_type(ctx, def.value)
                                 _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
                             end
                         elseif def.value isa NirArgument
@@ -1187,7 +1185,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                             # Check if the source is a generic ref type that needs casting
                             local _pi_src_wasm2 = nothing
                             if def.value isa NirSSA
-                                local _pi_src_type2 = get(ctx.ssa_types, def.value.id, Any)
+                                local _pi_src_type2 = value_type(ctx, def.value)
                                 _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
                             elseif def.value isa NirArgument
                                 local _pi_arg_idx2 = ctx.is_compiled_closure ? def.value.n : def.value.n - 1

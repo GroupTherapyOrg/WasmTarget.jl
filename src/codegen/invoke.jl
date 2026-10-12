@@ -1,6 +1,6 @@
 # parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)
 _invoke_arg_static_type(arg, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg} =
-    nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : infer_value_type(arg, ctx)
+    nir_const(arg) isa Type ? Core.Typeof(nir_const(arg)) : value_type(ctx, arg)
 
 """Return the unique singleton represented by `T`, or `nothing` when none exists.
 parity(pkg/dart2wasm/lib/code_generator.dart:1668 CodeGenerator.visitStaticInvocation)"""
@@ -279,7 +279,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             # discovery skipped such functions entirely, so this never fired before).
             # Push ref.null of the param's wasm type to keep the call aligned.
             if isempty(_ab.instrs) && param_types !== nothing && arg_idx <= length(param_types)
-                local _sp_jt = infer_value_type(arg, ctx)
+                local _sp_jt = value_type(ctx, arg)
                 if _sp_jt isa DataType && Base.issingletontype(_sp_jt)
                     local _sp_pt = param_types[arg_idx]
                     local _sp_w = get_concrete_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
@@ -301,7 +301,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 # Skip non-Type values (e.g., Vararg markers)
                 if expected_julia_type isa Type
                     expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
-                    actual_julia_type = infer_value_type(arg, ctx)
+                    actual_julia_type = value_type(ctx, arg)
                     # F8 (census: dart wrap = 100% of expressions through convertType,
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
                     # re-implementing convertType — is ONE funnel call. The emission's own

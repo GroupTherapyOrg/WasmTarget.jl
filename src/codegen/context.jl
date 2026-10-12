@@ -96,6 +96,9 @@ mutable struct CompilationContext <: AbstractCompilationContext
     # fragment carry: its parameters type locals 0 .. n_params-1, its results type every return
     wasm_params::Vector{WasmValType}
     wasm_results::Vector{WasmValType}
+    # the planned body this context compiles (its joins are the plan's, plan_joins), or nothing
+    # for a body the plan does not hold (the class-id reader's), which has no joins
+    mi::Union{Nothing, Core.MethodInstance}
 end
 
 # parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
@@ -110,7 +113,8 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
                            dom_bindings::Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}=Dict{UInt32, Vector{Tuple{UInt32, Vector{Int32}}}}(),
                            dispatch_registry::Union{Nothing, DispatchTableRegistry}=nothing,
                            skip_stmts::Set{Int}=Set{Int}(),
-                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}())::CompilationContext
+                           invoke_imports::Dict{Int, UInt32}=Dict{Int, UInt32}(),
+                           mi::Union{Nothing, Core.MethodInstance})::CompilationContext
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     n_stmts = length(body.stmts)
@@ -155,13 +159,32 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         Dict{Int,Union{Nothing,SourceInfo}}(),
         body.slot_types,
         body.debuginfo,
-        function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)...
+        function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)...,
+        mi
     )
-    # Analyze SSA types and allocate locals for multi-use SSAs. These passes run before
+    # Each SSA's type is the NIR boundary's (Julia inference's own answer, widened), with the
+    # plan's joins applied in analyze_control_flow!; nothing else retypes it before emission
+    # (parity(code_generator.dart:129 CodeGenerator.dartTypeOf): one static type per expression).
+    # An `Any` SSA has no entry: value_type reads the node's own type for it. An `:invoke` whose
+    # value the optimizer left unused reads `::Any` in the caller's IR, which is no answer for
+    # it: its type is the return type of the function it calls, the one compile_invoke! calls
+    # (get_function_by_mi): a planned body's is its rettype in the plan, a declared import's its
+    # declared one; a MethodInstance with no function rejects at its statement
+    # (parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
+    # invocation's type is its target's return type).
+    for (i, rec) in enumerate(ctx.nir)
+        if rec.julia_type !== Any
+            ctx.ssa_types[i] = rec.julia_type
+        elseif ctx.func_registry !== nothing && rec.slot == 0 && rec.node isa NirInvoke &&
+               rec.node.mi isa Core.MethodInstance
+            local target = get_function_by_mi(ctx.func_registry, rec.node.mi)
+            (target === nothing || target.return_type === Any) || (ctx.ssa_types[i] = target.return_type)
+        end
+    end
+    # Allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
     # (the statement entry, L119, cannot see it) — never a bare error naming no site.
     try
-        analyze_ssa_types!(ctx)
         numeric_joins = analyze_control_flow!(ctx)  # loops, phi locals, the numeric joins
         analyze_signal_captures!(ctx)  # Identify SSAs that are signal getters/setters
         allocate_slot_locals!(ctx)  # Slot locals BEFORE SSA locals (no overlap)
@@ -408,7 +431,7 @@ function refine_checked_cast_types!(ctx::AbstractCompilationContext)::Nothing
         _cx isa NirSSA || continue
         local _corig = get(ctx.ssa_types, _ck, Any)
         (_corig === Any || _corig isa Union) || continue
-        get(ctx.ssa_types, _cx.id, Any) === _cT || continue
+        value_type(ctx, _cx) === _cT || continue
         ctx.ssa_types[_ck] = _cT
     end
     return nothing
@@ -444,29 +467,16 @@ _is_getfield_callee(@nospecialize(f))::Bool =
 """
     numeric_local_joins(ctx) -> Dict{Int,Type}
 
-The Any-but-really-numeric joins of the function being compiled: Julia leaves a scalar-replaced
-`Core.Box` accumulator and its phis typed `Any`, and these recover the one numeric type such an
-SSA carries so its local is that type: propagate_numeric_value_types (NumericJoin.tla), and the
-reads of a captured box, typed by the contents type recorded for the closure type before any
-body compiled (capture_read_types; CaptureType.tla) and propagated by f3_box_value_types
-(BoxValueTypes.tla).
-Computed once per compilation context (analyze_control_flow!); every join it returns is
-applied to an erased SSA type.
+The joins of the function being compiled: Julia leaves a scalar-replaced `Core.Box`
+accumulator and its phis typed `Any`, and the reads of a captured box `Any`; each join is the
+one type such an SSA carries, so its local is that type (NumericJoin.tla, CaptureType.tla,
+BoxValueTypes.tla). Collection computed them once (plan_joins); codegen reads them and runs no
+analysis and no inference of its own. A body the plan does not hold has none.
 parity(translator.dart:2100 Translator.translateTypeOfLocalVariable): a variable's local is
 typed by its real inferred type, not the erased one.
 """
-function numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type}
-    joins = propagate_numeric_value_types(ctx.nir, ctx.ssa_types;
-        argtypes=ctx.arg_types, self_shift=(ctx.is_compiled_closure ? 0 : 1))
-    local record = ctx.type_registry.box_contents_types
-    if record !== nothing
-        local selfT = ctx.func_ref isa DataType ? ctx.func_ref : typeof(ctx.func_ref)
-        merge!(joins, capture_read_types(ctx.nir, ctx.ssa_types, record, selfT;
-                                         spectypes=ctx.slot_types,
-                                         closure_ir=mi -> plan_ir_or_nothing(ctx.translator.plan, mi)))
-    end
-    return joins
-end
+numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type} =
+    ctx.mi === nothing ? Dict{Int,Type}() : plan_joins(ctx.translator.plan, ctx.mi)
 
 """
 Analyze control flow to find loops and handle phi nodes.
@@ -498,8 +508,8 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     for (i, rec) in enumerate(nir)
         if rec.node isa NirPhi
             # Preserve missing type evidence as Any; never guess a numeric phi.
-            # analyze_ssa_types! skips Any-typed SSAs, but phi nodes with type Any
-            # must map to ExternRef, not I64. Fall back to inference's own type first.
+            # An Any-typed SSA has no ssa_types entry, and a phi typed Any
+            # maps to a reference, not I64: inference's own type is the fallback.
             phi_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
             phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
@@ -816,7 +826,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 seen_non_ssa = true
             elseif seen_non_ssa
                 # This SSA comes after a non-SSA arg - needs a local
-                ssa_type = get(ctx.ssa_types, arg.id, Any)
+                ssa_type = value_type(ctx, arg)
                 is_numeric = ssa_type in (Int32, UInt32, Int64, UInt64, Int, Float32, Float64, Bool)
                 if is_numeric
                     push!(needs_local_set, arg.id)
@@ -880,19 +890,8 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
             # Also update ctx.ssa_types so compile_statement safety check uses the real type.
             if call !== nothing && call.callee === Core.compilerbarrier && length(call.operands) >= 2
                 inner_val = call.operands[2]  # operands = [kind, value]
-                inner_type = nothing
-                if inner_val isa NirSSA
-                    inner_type = get(ctx.ssa_types, inner_val.id, nothing)
-                elseif inner_val isa NirArgument
-                    arg_idx = inner_val.n
-                    if arg_idx <= length(ctx.arg_types)
-                        inner_type = ctx.arg_types[arg_idx]
-                    end
-                elseif inner_val isa NirLiteral
-                    # Literal value — infer type from the value itself
-                    inner_type = typeof(inner_val.value)
-                end
-                if inner_type !== nothing && inner_type !== Any && inner_type !== Union{}
+                inner_type = value_type(ctx, inner_val)
+                if inner_type !== Any && inner_type !== Union{}
                     ssa_type = inner_type
                     ctx.ssa_types[ssa_id] = inner_type  # Update for safety check
                 end
@@ -973,33 +972,19 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                     # For PiNode from anyref Union params, keep narrowed type
                     # (don't widen to source's Union type). For non-Union sources, use source type.
                     local _pi_src_is_anyref = false
-                    if node.value isa NirArgument
-                        arg_idx = node.value.n
-                        if arg_idx <= length(ctx.slot_types)
-                            local _slot_type = ctx.slot_types[arg_idx]
-                            if _slot_type isa Union && needs_anyref_boxing(_slot_type)
-                                _pi_src_is_anyref = true
-                                # Keep effective_type = ssa_type (the narrowed target)
-                            end
-                        end
-                    elseif node.value isa NirSSA
-                        val_type = get(ctx.ssa_types, node.value.id, nothing)
-                        if val_type !== nothing && val_type isa Union && needs_anyref_boxing(val_type)
-                            _pi_src_is_anyref = true
-                        end
+                    if node.value isa NirArgument || node.value isa NirSSA
+                        # a Union source held as anyref: keep effective_type = ssa_type (the narrowed target)
+                        local _pi_src_type = value_type(ctx, node.value)
+                        _pi_src_is_anyref = _pi_src_type isa Union && needs_anyref_boxing(_pi_src_type)
                     end
                     if !_pi_src_is_anyref
-                        # Non-Union source: use source type for compatible locals
+                        # Non-Union source: use source type for compatible locals (an SSA
+                        # Julia left `Any` keeps the narrowed target)
                         if node.value isa NirSSA
-                            val_type = get(ctx.ssa_types, node.value.id, nothing)
-                            if val_type !== nothing
-                                effective_type = val_type
-                            end
+                            local _src_t = value_type(ctx, node.value)
+                            _src_t === Any || (effective_type = _src_t)
                         elseif node.value isa NirArgument
-                            arg_idx = node.value.n
-                            if arg_idx <= length(ctx.slot_types)
-                                effective_type = ctx.slot_types[arg_idx]
-                            end
+                            effective_type = value_type(ctx, node.value)
                         end
                     end
                 end
@@ -1063,7 +1048,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 if _is_getfield_callee(sfunc)
                     obj_arg = call.operands[1]
                     field_ref = call.operands[2]
-                    obj_type = infer_value_type(obj_arg, ctx)
+                    obj_type = value_type(ctx, obj_arg)
                     if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type)
                         field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
                         if field_sym isa Symbol && hasfield(obj_type, field_sym)
@@ -1077,7 +1062,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 # Also check memoryrefget on Any-element arrays
                 if sfunc === Core.memoryrefget
                     ref_arg = call.operands[1]
-                    ref_type = infer_value_type(ref_arg, ctx)
+                    ref_type = value_type(ctx, ref_arg)
                     if ref_type isa DataType
                         elt = nothing
                         if ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1
@@ -1370,16 +1355,6 @@ function count_ssa_uses!(rec::NirStmt, uses::Dict{Int, Int})::Nothing
     return nothing
 end
 
-"""
-The inferred source type of IR slot `slot` (slot 1 = `#self#`, then the parameters, then the
-locals), as the NIR boundary widened it — `nothing` when the IR carries no slot table.
-parity(quarantine: Julia's slots and flattened vararg packs, read from the IR's slot table; dart's parameters and variables are declared.)
-"""
-function source_slot_type(ctx::AbstractCompilationContext, slot::Integer)::Union{Type, Nothing}
-    1 <= slot <= length(ctx.slot_types) || return nothing
-    return ctx.slot_types[slot]
-end
-
 """Return the source tuple type when one IR argument is a flattened vararg pack.
 
 `CodeInfo` exposes a vararg method's final source argument as `Tuple{...}`, while
@@ -1391,7 +1366,8 @@ parity(quarantine: Julia's slots and flattened vararg packs, read from the IR's 
 function packed_vararg_source_type(ctx::AbstractCompilationContext,
                                    source_slot::Integer,
                                    physical_start::Integer)::Union{Type, Nothing}
-    T = source_slot_type(ctx, source_slot)
+    1 <= source_slot <= length(ctx.slot_types) || return nothing
+    T = value_type(ctx, NirArgument(source_slot))
     T isa DataType && T <: Tuple || return nothing
     physical_start >= 1 || return nothing
     tail = physical_start <= length(ctx.arg_types) ?
@@ -1406,275 +1382,44 @@ function packed_vararg_source_type(ctx::AbstractCompilationContext,
     return T
 end
 
-# parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
-function get_ssa_type(ctx::AbstractCompilationContext, val::NirNode)::Type
-    if val isa NirSSA
-        return get(ctx.ssa_types, val.id, Any)
-    elseif val isa NirArgument
-        # Core.Argument indexes Julia IR slots, whose inferred source contract
-        # is CodeInfo.slottypes. `ctx.arg_types` is the flattened physical Wasm
-        # signature and intentionally differs for packed Vararg slots, closures,
-        # and other ABI transformations; it is only a legacy fallback when the
-        # source slot table is unavailable.
-        source_type = source_slot_type(ctx, val.n)
-        source_type !== nothing && return source_type
-        if ctx.is_compiled_closure
-            idx = val.n
-        else
-            idx = val.n - 1
-        end
-        if idx >= 1 && idx <= length(ctx.arg_types)
-            return ctx.arg_types[idx]
-        end
-        return Any
-    elseif val isa NirLiteral
-        # Literal Symbols and other quoted constants carry the type of their
-        # payload; a Type literal is a type constant.
-        return val.value isa Type ? Type{val.value} : typeof(val.value)
-    elseif val isa NirGlobalRef && val.bound
-        # a global operand is its bound value
-        return val.value isa Type ? Type{val.value} : typeof(val.value)
-    else
-        return Any
-    end
-end
-
 """
-Analyze the IR to determine types of SSA values.
-Uses Julia inference's own SSA types (the NIR boundary's widened answer).
-parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
+    value_type(node, slot_types, ssa_types) -> Type
+    value_type(ctx, node) -> Type
+
+The Julia type of an operand node, Julia's own answer for it: Compiler's `argextype`
+(optimize.jl:423 on 1.12.7, :502 on 1.13.1), widened as the NIR boundary widens every type.
+- An SSA value: its statement's type, `ssa_types[id]` (in codegen `ctx.ssa_types`, the
+  boundary's type plus the plan's joins; in collection the body's joins), else, and when
+  `ssa_types` is `nothing`, the type the boundary recorded on the node.
+- An argument or a slot: its slot type (`CodeInfo.slottypes`, widened at the boundary); `Any`
+  with no slot table (`slot_types` is `nothing`), and one outside the table is invalid IR
+  (argextype's InvalidIRError).
+- A literal (a QuoteNode payload or an embedded constant): `widenconst(Const(v))`,
+  `Core.Typeof(v)`.
+- A global: the type the boundary read for its binding (NirGlobalRef.julia_type).
+Any other node is not an operand. This is the one reader of an operand's Julia type (L174):
+collection and codegen both read it.
+parity(code_generator.dart:129 CodeGenerator.dartTypeOf): one function answers every node's type.
 """
-function analyze_ssa_types!(ctx::AbstractCompilationContext)::Nothing
-    # Use Julia's type inference results when available. Store all concrete types
-    # including Nothing (needed for function dispatch); only skip Any as it provides no
-    # useful information. The boundary already widened inference lattice elements
-    # (unoptimized IR's Core.Const/PartialStruct) to plain Julia types.
-    for (i, rec) in enumerate(ctx.nir)
-        rec.julia_type !== Any && (ctx.ssa_types[i] = rec.julia_type)
+function value_type(node::NirNode, slot_types::Union{Nothing,AbstractVector}, ssa_types)::Type
+    if node isa NirSSA
+        return ssa_types === nothing ? node.julia_type : get(ssa_types, node.id, node.julia_type)
+    elseif node isa NirArgument || node isa NirSlot
+        slot_types === nothing && return Any
+        local n = node isa NirArgument ? node.n : node.id
+        1 <= n <= length(slot_types) ||
+            error("$(node) is outside the slot table ($(length(slot_types)) slots): invalid IR")
+        return slot_types[n]
+    elseif node isa NirLiteral
+        return Core.Typeof(node.value)
+    elseif node isa NirGlobalRef
+        return node.julia_type
     end
-
-    # Override: if an SSA is a getfield/getproperty on a struct field typed as Any,
-    # or a memoryrefget on an array with Any elements, force the SSA type to Any.
-    # This ensures the local is allocated as externref (matching what struct.get/array.get
-    # actually produces), preventing type mismatches with local.set.
-    for (i, rec) in enumerate(ctx.nir)
-        rec.slot == 0 || continue
-        node = rec.node
-        if node isa NirCall && length(node.operands) >= 2
-            func = node.callee
-            # Check getfield/getproperty on Any-typed struct field
-            # (Base's getproperty and the Compiler's own both lower to getfield)
-            if _is_getfield_callee(func)
-                obj_arg = node.operands[1]
-                field_ref = node.operands[2]
-                obj_type = infer_value_type(obj_arg, ctx)
-                # Check the Julia field type directly (no registry lookup needed)
-                # Also allow non-concrete Tuple types (e.g., Tuple{Any, Int64})
-                # isconcretetype(Tuple{Any, Int64}) = false because Any is abstract, but
-                # fieldtype/fieldcount still work correctly on Tuple DataTypes.
-                is_concrete_enough = isconcretetype(obj_type) || (obj_type <: Tuple && obj_type isa DataType)
-                if obj_type isa DataType && isstructtype(obj_type) && !isprimitivetype(obj_type) && is_concrete_enough
-                    field_sym = field_ref isa NirLiteral ? field_ref.value : field_ref
-                    julia_field_type = nothing
-                    if field_sym isa Symbol && hasfield(obj_type, field_sym)
-                        julia_field_type = fieldtype(obj_type, field_sym)
-                    elseif field_sym isa Integer
-                        fc = Base.datatype_fieldcount(obj_type)   # nothing: no definite count (a Vararg tuple)
-                        if fc !== nothing && 1 <= field_sym <= fc
-                            julia_field_type = fieldtype(obj_type, Int(field_sym))
-                        end
-                    end
-                    if julia_field_type === Any
-                        ctx.ssa_types[i] = Any  # Force ExternRef local to match struct.get output
-                    end
-                end
-            end
-            # Check memoryrefget on Any-element array
-            if func === Core.memoryrefget
-                ref_arg = node.operands[1]
-                ref_type = infer_value_type(ref_arg, ctx)
-                elem_type = nothing  # unknown
-                if ref_type isa DataType
-                    if ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1
-                        elem_type = ref_type.parameters[1]
-                    elseif ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2
-                        elem_type = ref_type.parameters[2]
-                    end
-                end
-                if elem_type === Any
-                    ctx.ssa_types[i] = Any  # Force ExternRef local to match array.get output
-                end
-            end
-        end
-    end
-
-    # A statement Julia left `::Any` is re-asked of Julia only where its `Any` is a cutoff,
-    # not an answer. A dynamic call to a known function: `closed_world_call_result`. An
-    # `:invoke` whose value the optimizer left unused (the caller's IR then reads `::Any`):
-    # its result is the invoked MethodInstance's own return type, as Julia infers it through
-    # the one inference path. (The IR's CodeInstance is not always there to read: the
-    # closed-world collector re-targets an abstract invoke at a bare MethodInstance.)
-    # parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
-    # invocation's type is its target's return type.
-    ctx.func_registry === nothing && return
-    for (i, rec) in enumerate(ctx.nir)
-        haskey(ctx.ssa_types, i) && continue
-        rec.slot == 0 || continue
-        node = rec.node
-        if node isa NirCall
-            local _cw = closed_world_call_result(ctx, node)
-            _cw === Any || (ctx.ssa_types[i] = _cw)
-            continue
-        end
-        (node isa NirInvoke && node.mi isa Core.MethodInstance) || continue
-        local _irt = CC.typeinf_type(get_wasm_interpreter(), node.mi)
-        (_irt isa Type && _irt !== Any) && (ctx.ssa_types[i] = _irt)
-    end
+    error("value_type of $(node), which is not an operand")
 end
-
-"""
-    closed_world_call_result(ctx, call) -> Type
-
-The result type of a call to a known function that Julia's inference left `::Any`. Julia
-stops enumerating a call's methods at `max_methods`; this is Julia's own answer with that
-cutoff lifted: every method applicable to the operands' Julia types, each inferred through
-the one inference path and joined with Julia's `tmerge` (`Base.infer_return_type`). The
-answer is used only when it is concrete; otherwise the call stays `Any`. An ambiguous or
-unenumerable call stays `Any`. A concrete answer is used only when the call's dispatch can
-reach every applicable method — each has a specialization in the closed world. Otherwise
-the call stays `Any`: a method no allocated class reaches (`ncodeunits(::LazyString)` in a
-program that makes no LazyString) is not evidence against the answer, but it is not in the
-closed world to prove it either.
-parity(pkg/vm/lib/transformations/type_flow/analysis.dart:535 process): a dynamic
-invocation's type is the union of the results of all its possible targets.
-"""
-function closed_world_call_result(ctx::AbstractCompilationContext, call::NirCall)::Type
-    ctx.func_registry === nothing && return Any
-    f = _nir_callee_object(call.callee)
-    (f isa Function || f isa Type) || return Any
-    f isa Core.Builtin && return Any
-    argtypes = Tuple(Any[get_ssa_type(ctx, a) for a in call.operands])
-    interp = get_wasm_interpreter()
-    lookup = wt_method_matches(Tuple{Core.Typeof(f), argtypes...})
-    (lookup === nothing || lookup.ambig || isempty(lookup.matches)) && return Any
-    rt = infer_return_type(f, argtypes; interp=interp)
-    isconcretetype(rt) || return Any
-    reached = Set{Method}()
-    for info in something(get_func_ref_infos(ctx.func_registry, f), FunctionInfo[])
-        local sig = (!isempty(info.arg_types) && info.arg_types[1] === Core.Typeof(f) &&
-                     length(info.arg_types) == length(argtypes) + 1) ?
-                    Tuple{info.arg_types...} : Tuple{Core.Typeof(f), info.arg_types...}
-        local own = wt_method_matches(sig; limit=1)
-        (own === nothing || isempty(own.matches)) || push!(reached, own.matches[1].method)
-    end
-    all(match -> match.method in reached, lookup.matches) || return Any
-    return rt
-end
-
-# parity(quarantine: WT's reading of a value's Julia type from the IR beside Julia's own inference; dev/MARCH.md 13.4 deletes the re-derivation, R3.)
-function infer_value_type(val::NirNode, ctx::AbstractCompilationContext)::Union{Type, Core.TypeofVararg}
-    if val isa NirArgument
-        # Source IR semantics are authoritative. The physical signature can be
-        # flattened (notably a vararg tuple), so indexing ctx.arg_types first
-        # can turn one Tuple source argument into its first physical element.
-        source_type = source_slot_type(ctx, val.n)
-        source_type !== nothing && return source_type
-        # For closures being compiled, _1 is the closure object (arg_types[1])
-        # For regular functions, arguments start at _2 (arg_types[1])
-        # Use is_compiled_closure flag to distinguish (not the type of first arg)
-        if ctx.is_compiled_closure
-            # Closure: direct mapping (_1 = closure, _2 = first arg)
-            idx = val.n
-        else
-            # Regular function: skip _1 (function type in IR)
-            idx = val.n - 1
-        end
-        if idx >= 1 && idx <= length(ctx.arg_types)
-            return ctx.arg_types[idx]
-        elseif idx < 1 && ctx.func_ref !== nothing
-            # Core.Argument(1) in a non-closure is the function reference itself.
-            # This occurs in kwarg wrapper methods that pass `self` to the inner #method#N.
-            # Return typeof(func_ref) so cross-function lookup can match the registered signature.
-            return typeof(ctx.func_ref)
-        end
-    elseif val isa NirSlot
-        # SlotNumber is the unoptimized IR equivalent of Core.Argument.
-        # Slot 1 = function self, slot 2+ = arguments (same indexing as Argument).
-        # For local variable slots (not params), use slottypes from CodeInfo.
-        source_type = source_slot_type(ctx, val.id)
-        source_type !== nothing && return source_type
-        if ctx.is_compiled_closure
-            idx = val.id
-        else
-            idx = val.id - 1
-        end
-        if idx >= 1 && idx <= length(ctx.arg_types)
-            return ctx.arg_types[idx]
-        end
-    elseif val isa NirSSA
-        return get(ctx.ssa_types, val.id, Any)
-    elseif val isa NirGlobalRef
-        # GlobalRef to a constant - infer type from the actual value
-        if val.bound
-            actual_val = val.value
-            if actual_val isa Int32
-                return Int32
-            elseif actual_val isa Int64 || actual_val isa Int
-                return Int64
-            elseif actual_val isa Float32
-                return Float32
-            elseif actual_val isa Float64
-                return Float64
-            elseif actual_val isa Bool
-                return Bool
-            elseif actual_val isa Char
-                return Char
-            elseif actual_val isa Type
-                # Return Type{actual_val} (e.g., Type{Int64}) instead of bare Type.
-                # This allows get_concrete_wasm_type to return ConcreteRef for the DataType struct,
-                # which triggers extern_convert_any bridging when passed to externref-typed params.
-                return Type{actual_val}
-            else
-                return typeof(actual_val)
-            end
-        end
-        # An unresolved global has no numeric type evidence; fall through to Any.
-    elseif val isa NirLiteral
-        lit = val.value
-        if lit isa Symbol || lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
-            # a quoted literal carries the type of its payload
-            return typeof(lit)
-        elseif lit isa Int64 || lit isa Int
-            return Int64
-        elseif lit isa Int32
-            return Int32
-        elseif lit isa Float64
-            return Float64
-        elseif lit isa Float32
-            return Float32
-        elseif lit isa Bool
-            return Bool
-        elseif lit isa Char
-            return Char
-        elseif lit isa WasmGlobal
-            return typeof(lit)
-        elseif lit isa Type
-            # Type{T} references - return Type{T}
-            return Type{lit}
-        elseif lit isa Function
-            # Function values passed as arguments (e.g., kwarg wrappers pass `self` to inner method)
-            # Return typeof(f) so cross-function lookup can match the registered signature
-            return typeof(lit)
-        elseif isprimitivetype(typeof(lit))
-            # Custom primitive type (e.g., JuliaSyntax.Kind) - return actual type
-            return typeof(lit)
-        elseif isstructtype(typeof(lit)) && !isa(lit, Type) && !isa(lit, Function) && !isa(lit, Module)
-            # Struct constant - return actual type
-            return typeof(lit)
-        end
-    end
-    return Any
-end
+# parity(code_generator.dart:129 CodeGenerator.dartTypeOf): the same reader over the function being compiled.
+value_type(ctx::AbstractCompilationContext, node::NirNode)::Type =
+    value_type(node, ctx.slot_types, ctx.ssa_types)
 
 """
     _ref_cast_source_type(val, ctx)
@@ -1813,7 +1558,7 @@ The index is stored as a type parameter, so we extract it from the type.
 parity(quarantine: WT's JS-interop signals (WasmGlobal, Therapy): a captured signal is a wasm global the host reads; dart's JS interop has no such capture.)
 """
 function get_wasm_global_idx(val, ctx::AbstractCompilationContext)::Union{Int, Nothing}
-    val_type = infer_value_type(val, ctx)
+    val_type = value_type(ctx, val)
     if val_type <: WasmGlobal
         # Extract IDX from WasmGlobal{T, IDX}
         return global_index(val_type)

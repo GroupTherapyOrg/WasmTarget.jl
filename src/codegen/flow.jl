@@ -50,8 +50,9 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
                 return ctx.locals[local_array_idx]
             end
         end
-        edge_julia_type = get(ctx.ssa_types, val.id, nothing)
-        if edge_julia_type !== nothing
+        # an SSA Julia left `Any` and no local holds has no wasm type to report here
+        edge_julia_type = value_type(ctx, val)
+        if edge_julia_type !== Any
             return get_concrete_wasm_type(edge_julia_type, ctx.mod, ctx.type_registry; for_local=true)
         end
     elseif val isa NirSlot
@@ -68,8 +69,7 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
             return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
         else
-            source_type = source_slot_type(ctx, val.id)
-            source_type !== nothing && return get_concrete_wasm_type(source_type, ctx.mod, ctx.type_registry; for_local=true)
+            return get_concrete_wasm_type(value_type(ctx, val), ctx.mod, ctx.type_registry; for_local=true)
         end
     elseif val isa NirArgument
         # Use the ACTUAL Wasm parameter type from arg_types, not the Julia slottype.

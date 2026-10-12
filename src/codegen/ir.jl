@@ -46,8 +46,10 @@ end
     infer_return_type(f, argtypes) -> Type
 
 The return type of `f(::argtypes...)` under the one inference path (overlays applied): the
-question a box-capture join asks about a write's value. Julia's own answer: `Any` for a call
-inference cannot analyze, `Union{}` for one no method matches.
+question a box-capture join asks about a write's value, which collection passes to the box
+analyses (their `rettype`). Codegen never calls it (L152): it reads the joins and every callee's
+return type from the plan. Julia's own answer: `Any` for a call inference cannot analyze,
+`Union{}` for one no method matches.
 parity(quarantine: a return-type query to Julia's own inference; dart reads a member's return
 type off its Kernel FunctionNode.)
 """

@@ -153,8 +153,8 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - C10 closed: a trap names each frame (L159, L157), one compile entry (L158), rethrow(e) keeps
   its stack (L145), an escaped exception names its type (L160), the statement lane is strict on
   throws (L161), the locator follows every closure (L147), the gate has a 20-minute budget (L162).
-- An :invoke calls its MethodInstance's function (L170); one consult for which methods Julia selects (L171).
-- No instruction is recorded in dead code, as dart's `_add` (L172); a local is declared through one path, its type checked (L173, R41).
+- An :invoke calls its MethodInstance's function (L170); one consult for which methods Julia selects (L171); no instruction is recorded in dead code, as dart's `_add` (L172); a local is declared through one path, its type checked (L173, R41).
+- One reader of an operand's type, Julia's argextype (L174, R3 locked); codegen asks no inference, its joins and capture record the plan's (L152); a global resolved once (L175).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

@@ -7,10 +7,15 @@
 # dart2wasm's `translateTypeOfLocalVariable` — reconstructing what Julia erased, not a heuristic.
 # Pure analysis, not wired into codegen yet (byte-identical).
 
-# The box-capture analysis takes its closure bodies as a lookup (closure_ir): a compilation
-# passes its collected world's; a test outside any compilation asks Julia's inference.
-_f3_ir_l0(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter());
-              isempty(r) ? nothing : (r[1][1], r[1][2]))
+# The box-capture analysis takes every closure body of a callable type (closure_bodies) and asks
+# each call's return type of `rettype`: a compilation passes its collected world's bodies and the
+# collector's inference entry; a test outside any compilation takes every specialization Julia
+# holds of the type's call methods, inferred by the WasmInterpreter, and that same entry.
+_f3_bodies_l0(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo}[
+    (mi, r[1][1]) for m in Base._methods_by_ftype(Tuple{T, Vararg{Any}}, -1, Base.get_world_counter())
+    for mi in Base.specializations(m.method)
+    if mi isa Core.MethodInstance && mi.specTypes isa DataType && mi.specTypes.parameters[1] === T
+    for r in (Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter()),) if !isempty(r)]
 
 @testset "F3 L0: pure box_contents_type inference (dart2wasm-aligned)" begin
     _btype(fn) = begin
@@ -18,7 +23,7 @@ _f3_ir_l0(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get
         nir = WasmTarget.build_nir(ci)
         bs = WasmTarget.find_box_news(nir)
         @assert length(bs) == 1
-        WasmTarget.box_contents_type(nir, nir, bs[1]; closure_ir=_f3_ir_l0)
+        WasmTarget.box_contents_type(nir, nir, bs[1]; closure_bodies=_f3_bodies_l0, rettype=WasmTarget.infer_return_type)
     end
 
     # MONOMORPHIC captures → typed cell (the variable's real concrete type).
@@ -35,7 +40,7 @@ _f3_ir_l0(mi) = (r = Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get
     @test _btype(hetero) === nothing
 
     # A box with no resolvable write in this IR → nothing (no false concrete type).
-    @test WasmTarget.box_contents_type(WasmTarget.NirStmt[], Any[], 1; closure_ir=_f3_ir_l0) === nothing
+    @test WasmTarget.box_contents_type(WasmTarget.NirStmt[], Any[], 1; closure_bodies=_f3_bodies_l0, rettype=WasmTarget.infer_return_type) === nothing
 end
 
 # formal(dev/formal/BoxJoin.tla) — TRANSITIVE closure-write discovery. `_f3_capturing_closure_bodies`
@@ -69,16 +74,46 @@ end
 
     # The root's own one-hop scan finds `level1` only; `level1` never writes the box directly (it
     # only creates+invokes `level2`, which does). Transitive discovery must surface BOTH bodies.
-    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_ir=_f3_ir_l0)
+    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_bodies=_f3_bodies_l0)
     @test length(bodies) == 2
 
     # The join over ALL writes (Int64 init, Int64 `+=` in level2, Float64 literal in level2) must
     # widen to dynamic (`nothing`) — Int64 alone (the one-hop answer) is the documented soundness gap.
-    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_ir=_f3_ir_l0) === nothing
+    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_bodies=_f3_bodies_l0, rettype=WasmTarget.infer_return_type) === nothing
 
-    # A captor whose body the lookup does not hold writes what no one can see: the view is
-    # incomplete and the box stays erased, never narrowed to the creator's Int64 init (it was
-    # skipped, so the join saw only the init; dev/AUDIT.md A3C2, BoxJoin.tla)
-    @test WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_ir=mi -> nothing) === nothing
-    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_ir=mi -> nothing) === nothing
+    # A captor body the scanned code invokes that the closed world does not hold is one whose
+    # writes no one can see: the walk is loud, never a narrowing to the creator's Int64 init
+    # (BoxJoin.tla EveryCaptorBody)
+    local none = T -> Tuple{Core.MethodInstance,Core.CodeInfo}[]
+    @test_throws WasmTarget.WasmInternalError WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_bodies=none)
+    local err = try
+        WasmTarget.box_contents_type(nir, nir, box_id; closure_bodies=none, rettype=WasmTarget.infer_return_type,
+                                     spectypes=WasmTarget.nir_slot_types(ci))
+        nothing
+    catch e
+        e
+    end
+    @test err isa WasmTarget.WasmInternalError
+    # it names the creator body, the invoking statement and the captor body
+    @test occursin("_f3_l0_outer_boxjoin", sprint(showerror, err))
+    @test occursin("invokes the captor body", sprint(showerror, err)) && err.stmt_idx > 0
+end
+
+# formal(dev/formal/BoxJoin.tla) — a captor called elsewhere. The creator makes a closure that
+# writes the box and does not call it: it returns it, and its caller calls it. A walk that read
+# captor bodies through the creator's `:invoke`s never saw the Float64 write and narrowed the cell
+# to the Int64 the creator writes (MCBoxJoinCaptorMissedBroken.cfg); the walk takes every body of
+# each captor type, so the join is dynamic.
+_f3_l0_mk_writer(n::Int64) = (x = n; w = () -> (x = x + 0.5; nothing); x += 1; (w, () -> x))
+@testset "F3 L0: every body of a captor type, called here or not (BoxJoin.tla EveryCaptorBody)" begin
+    local pair = _f3_l0_mk_writer(1)
+    pair[1](); pair[2]()   # Julia specializes both bodies, as the closed world would hold them
+    ci = code_typed(_f3_l0_mk_writer, (Int64,); optimize = true)[1].first
+    nir = WasmTarget.build_nir(ci)
+    box_id = only(WasmTarget.find_box_news(nir))
+    @test !any(s -> s.node isa WasmTarget.NirInvoke, nir)   # the creator calls neither closure
+    bodies = WasmTarget._f3_capturing_closure_bodies(nir, box_id; closure_bodies=_f3_bodies_l0)
+    @test length(bodies) == 2
+    @test WasmTarget.box_contents_type(nir, nir, box_id; closure_bodies=_f3_bodies_l0,
+                                       rettype=WasmTarget.infer_return_type) === nothing
 end

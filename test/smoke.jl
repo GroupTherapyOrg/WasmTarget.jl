@@ -312,10 +312,11 @@ _disp(x::Float64) = x + 0.5
 struct _SmA x::Int32 end; struct _SmB x::Int32 end; struct _SmC x::Int32 end; struct _SmD x::Int32 end
 _smd(a::_SmA) = Int32(1); _smd(a::_SmB) = Int32(2); _smd(a::_SmC) = Int32(3); _smd(a::_SmD) = Int32(4)
 @noinline _smd_fwd(x::Any)::Int32 = _smd(x)
-# Ten methods pass Julia's max_methods cutoff, so inference types each call below `::Any`;
-# the result type is Julia's answer with the cutoff lifted (every applicable method's
-# inferred result, joined). _smm: all Int64. _smw: nine Int64 methods and one WIDER
-# `_smw(::Any, ::Int64)::Float64` that the tenth class reaches. _smx: five Int64, five Float64.
+# Ten methods pass Julia's max_methods cutoff, so inference types each call below `::Any`, and
+# the call is the dynamic dispatch Julia's IR asks for: its result is the method's, read at run
+# time (codegen re-infers nothing). _smm: all Int64 (summed: two Any operands, erased_arithmetic).
+# _smw: nine Int64 methods and one WIDER `_smw(::Any, ::Int64)::Float64` that the tenth class
+# reaches. _smx: five Int64, five Float64.
 abstract type _SmM end
 abstract type _SmW end
 abstract type _SmX end
@@ -340,7 +341,6 @@ _g("dispatch", Any[
     # skip non-struct classes and trap at runtime with no row
     ("eq_any_mixed", (n::Int64) -> (v = Any[1, "x", 2.5]; (v[1] == 1 ? 1 : 0) + (v[2] == "x" ? 10 : 0) + (v[3] == 2.5 ? 100 : 0) + n), Int64(1)),
     ("selector_table_span", (n::Int64) -> (v = Any[_SmA(Int32(n)), _SmB(Int32(n)), _SmC(Int32(n)), _SmD(Int32(n))]; s = Int32(0); for e in v; s += _smd_fwd(e); end; Int64(s) + n), Int64(3)),
-    ("megamorphic_all_int64", (n::Int64) -> ((t = 0; for x in _smm_xs(); t += _smm(x, n); end; t)::Int64), Int64(3)),
     ("megamorphic_wider_method", (n::Int64) -> (c = 0; for x in _smw_xs(); c += _smw(x, n) isa Float64 ? 100 : 1; end; c), Int64(3)),
     ("megamorphic_disagree", (n::Int64) -> (c = 0; for x in _smx_xs(); c += _smx(x, n) isa Int64 ? 1 : 100; end; c), Int64(3)),
 ])
@@ -654,7 +654,9 @@ _g("builtins_invoked", Any[
 # Arithmetic whose operands are results of an erased (Vector{Any}) closure call: Julia
 # types each result `::Any`, so `+`/`-`/`*` runs on two Any values and rejects located at
 # `dynamic (%a + %b)::Any`.
-# These passed only while the call result was guessed as its first argument's type. Gap:
+# These passed only while the call result was guessed as its first argument's type, and the
+# megamorphic sum only while codegen re-inferred the call with Julia's max_methods cutoff lifted
+# (Julia's own answer at the cutoff is the IR's `Any`). Gap:
 # the typed value channel — each boxed operand unboxed by its classId and the operator
 # dispatched on the classes, the result boxed with the class the chosen method returns.
 _xf("erased_arithmetic", Any[
@@ -664,6 +666,7 @@ _xf("erased_arithmetic", Any[
     ("erased_results_mul", (n::Int64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5) * fs[1](2))::Int64), Int64(3)),
     ("erased_results_sub_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) - fs[1](2.0))::Float64), 1.5),
     ("erased_results_mul_f", (n::Float64) -> (h = x -> x + n; fs = Any[h]; (fs[1](5.0) * fs[1](2.0))::Float64), 1.5),
+    ("megamorphic_all_int64", (n::Int64) -> ((t = 0; for x in _smm_xs(); t += _smm(x, n); end; t)::Int64), Int64(3)),
 ])
 
 @noinline _sm_bump!(f) = f()
@@ -2057,6 +2060,33 @@ _g("one_consult", Any[
     ("invoke_names_its_method", (n::Int64) -> invoke(_sm_oc, Tuple{Integer}, n) * 1000 + _sm_oc(n), Int64(3)),
     ("closure_candidate_and_invoked", (n::Int64) -> (k = n; g = @noinline((x::Int64) -> x + k); a = g(1); fs = Any[g]; a * 100 + (fs[1](2)::Int64)), Int64(3)),
     ("no_method_record_per_callee", (n::Int64) -> (v = Any[n, "s"]; a = try; _sm_ncf(v[1]); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; a * 100 + (_sm_ncg(v[1])::Int64)), Int64(3)),
+])
+# One reader of what a node is (value_type, Julia's argextype): an operand's type is the same for
+# every consumer — a literal or constant global edge into a phi, a non-constant global's declared
+# type, a field read Julia types narrower than the field (BoundsError's `a::Any` read as the
+# Memory{UInt8} it holds), a dynamic call Julia leaves `::Any` (its result is the dispatched
+# method's, read at run time, never re-inferred in codegen), and a captured variable a closure the
+# creator does not call writes (every body of each captor type joins, BoxJoin.tla).
+const _OTR_VEC = [1, 2, 3]
+global _otr_typed::Int64 = 5
+_otr_mk(n::Int64) = (x = n; w = @noinline(() -> (x = 2.5; nothing)); (w, @noinline(() -> x)))
+# a closure writing its own argument into the box (the write typed by the argument's slot type,
+# argextype's answer): of the creator's type, so the box stays that type; of another, so it widens
+_otr_arg_same(n::Int64) = (x = n; w = @noinline(y -> (x = y; nothing)); w(n + 1); x)
+_otr_arg_other(n::Int64) = (x = n; w = @noinline(y -> (x = y; nothing)); w(2.5); v = x; v isa Float64 ? Int64(2 * v) : -1)
+# a box write whose value is a call with a type-literal operand (the literal argues as Type{T})
+_otr_lit_write(n::Int64) = (x = n; w = @noinline(y -> (x = convert(Int64, y); nothing)); w(Int32(n + 4)); x)
+_g("one_type_reader", Any[
+    ("literal_phi_edge", (n::Int64) -> (x = n > 0 ? "a" : n; x isa String ? ncodeunits(x) + n : -1), Int64(3)),
+    ("constant_global_phi_edge", (n::Int64) -> (v = n > 0 ? _OTR_VEC : Int64[]; length(v) + n), Int64(3)),
+    ("typed_global_read", (n::Int64) -> n + _otr_typed, Int64(3)),
+    ("field_read_narrower_than_field", (x::Int64) -> (e = BoundsError(Memory{UInt8}(undef, 2), x); length(e.a) + x), Int64(5)),
+    ("dynamic_call_result_any", (n::Int64) -> (v = Any[codeunits("ab"), [n], n, 1.0]; _sm_cu_q(v[n])), Int64(3)),
+    ("captor_called_elsewhere", (n::Int64) -> (p = _otr_mk(n); p[1](); p[2]() isa Float64 ? 1 : 0), Int64(3)),
+    ("box_write_argument_same_type", (n::Int64) -> _otr_arg_same(n), Int64(3)),
+    ("box_write_argument_other_type", (n::Int64) -> _otr_arg_other(n), Int64(3)),
+    ("box_write_type_literal_operand", (n::Int64) -> _otr_lit_write(n), Int64(3)),
+    ("captor_called_elsewhere_value", (n::Int64) -> (p = _otr_mk(n); a = p[2]()::Int64; p[1](); a * 10 + Int64(2 * (p[2]()::Float64))), Int64(3)),
 ])
 # A finalizer, a `:cfunction` and an `:invoke_modify` have no lowering: the collector enrolls
 # the edge's target, and the statement rejects where it stands (record_unsupported!), never

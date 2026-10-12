@@ -6,12 +6,14 @@
 # (boxed). Julia erases this by reifying every mutated capture as `Core.Box{contents::Any}`, so the
 # pure equivalent is to RECOMPUTE the variable's inferred type = the JOIN of all its assignments
 # (enclosing init + every closure write, each write's result type computed via
-# `Core.Compiler.return_type` past the box's `Any`-erasure). CONCRETE join → typed `Box{i64}`;
+# Julia's inference past the box's `Any`-erasure). CONCRETE join → typed `Box{i64}`;
 # `Union`/abstract/`Any` → anyref `Box` (dart2wasm's top-type field). This reconstructs what
 # dart2wasm gets for free from Dart's static types — NOT a heuristic, NOT "type by init and hope".
 #
-# This file owns the pure inference over typed IR. `compute_numeric_joins!` invokes it once per
-# context phase; specialized `Box{contents}` layouts flow through %new, setfield!/getfield, and
+# This file owns the pure inference over typed IR. Collection runs it once (trimcollect.jl): the
+# capture record and every planned body's joins go on the plan, which codegen reads; codegen runs
+# none of it. Each return-type question goes to the `rettype` the collector passes, its one
+# inference entry. Specialized `Box{contents}` layouts flow through %new, setfield!/getfield, and
 # closure capture fields. Unit-tested in test/f3_box_capture_l0.jl.
 #
 # Every analysis here reads the NIR boundary (`Vector{NirStmt}`), never a raw statement: the box
@@ -19,29 +21,21 @@
 # whose `T` is `Core.Box`, a `NirPi`/`NirPhi` carrying it forward. The callee identity comes from
 # the boundary's one resolution, so a same-named function in another module can never be mistaken
 # for `Core.setfield!` (the L124 rule). `build_nir` is a pure function of a CodeInfo, so the closure
-# bodies this file walks (retrieved through `get_typed_ir`) go through the same boundary.
+# bodies this file walks (the closed world's, `closure_bodies`) go through the same boundary.
 
 # parity(quarantine: the Core.Compiler alias of the capture-typing pass (dev/formal/CaptureType.tla).)
 const _F3_CC = Core.Compiler
 
-"""The caller's type answer for one SSA id, widened once. `sst` is whatever the caller holds:
-the NIR itself (each node's own type — Julia inference's widened answer for that SSA), a raw
-per-SSA lattice vector, or a context's REFINED map (`Dict`/`IntKeyMap`). All three read through
-one get-safe accessor, so a refinement the context proved still wins over inference's answer.
-parity(code_generator.dart:135 getStaticType): an operand's type is its defining node's, read once.
+"""The SSA types an analysis here reads operands against, as value_type takes them: the NIR
+itself is each node's own type (`nothing`: the boundary's answer, recorded on the node), a map
+(`Dict`) holds a refinement that wins over it.
+parity(code_generator.dart:129 CodeGenerator.dartTypeOf): an operand's type is read once, by one reader.
 """
-_f3_ssa_type(sst::Vector{NirStmt}, id::Int)::Type = _nir_ssa_type(sst, id)
-# parity(code_generator.dart:135 getStaticType): the same read from a lattice vector or a refined map.
-function _f3_ssa_type(sst, id::Int)::Type
-    t = get(sst, id, Any)   # Vector, IntKeyMap and Dict all answer an absent id with Any
-    t isa Type && return t
-    return _F3_CC.widenconst(t)
-end
-
-"""The Julia type a literal operand contributes as a call argument. A type literal argues as
-`Type` (the call site passes the type OBJECT), everything else as its own concrete type.
-parity(code_generator.dart:130 ConstantExpression): a constant's static type is its constant's type."""
-_f3_literal_type(@nospecialize(v))::Type = v isa Type ? Type : typeof(v)
+_f3_ssa_map(sst::Vector{NirStmt})::Nothing = nothing
+# parity(code_generator.dart:129 CodeGenerator.dartTypeOf): a map of refined SSA types, read as is.
+_f3_ssa_map(sst::AbstractDict)::AbstractDict = sst
+# parity(code_generator.dart:129 CodeGenerator.dartTypeOf): a vector of SSA types, read as is.
+_f3_ssa_map(sst::AbstractVector)::AbstractVector = sst
 
 # parity(quarantine: `:contents` is the one field of Julia's `Core.Box`, the untyped cell Julia
 # lowering creates for a reassigned captured variable; dart's captured variable is a typed field
@@ -89,31 +83,20 @@ function _f3_refers_to_box(arg, box_id::Int, nir::Vector{NirStmt})::Bool
     return false
 end
 
-# Concrete Julia type of an IR operand, with box-contents reads typed as `T` and `NirArgument`s
-# resolved through `spectypes` (the method's signature tuple). Non-pinnable → `Any`.
+# The Julia type of an IR operand, with box-contents reads typed as `T`: every other operand is
+# value_type's (its slot types `spectypes`, the body's slot table, or `nothing`: none).
 # parity(quarantine: types the operands of a value written into a Julia `Core.Box`, whose
-# `contents::Any` erases the variable's type — box reads as the join candidate, arguments through
-# the MethodInstance's specTypes)
-function _f3_operand_type(a, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})::Union{Type, Core.TypeofVararg}
-    _f3_is_box_read(a, nir) && return T
-    if a isa NirSSA
-        return _f3_ssa_type(sst, a.id)
-    elseif a isa NirArgument
-        return (spectypes !== nothing && 1 <= a.n <= length(spectypes)) ?
-               _F3_CC.widenconst(spectypes[a.n]) : Any
-    elseif a isa NirLiteral
-        return _f3_literal_type(a.value)
-    else
-        return Any
-    end
-end
+# `contents::Any` erases the variable's type — box reads as the join candidate)
+_f3_operand_type(a::NirNode, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})::Type =
+    _f3_is_box_read(a, nir) ? T : value_type(a, spectypes, _f3_ssa_map(sst))
 
 # Result type of a contents-write value `rhs` in `nir`, given box-contents type estimate `T`
-# and the enclosing method's `spectypes`. Calls compute via `return_type` with box-reads typed `T`.
+# and the enclosing method's `spectypes`. A call's is `rettype`'s answer with box-reads typed `T`.
 # parity(quarantine: the inferred type of one value written into a Julia `Core.Box`, recomputed
 # through the one inference path because `contents::Any` erased it; dart reads the variable's
 # inferred type, translator.dart:2100 translateTypeOfLocalVariable)
-function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospecialize(T))::Union{Type, Core.TypeofVararg}
+function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospecialize(T),
+                               rettype::Function)::Union{Type, Core.TypeofVararg}
     if rhs isa NirSSA && 1 <= rhs.id <= length(nir)
         local node = nir[rhs.id].node
         if node isa NirCall
@@ -121,11 +104,11 @@ function _f3_write_result_type(nir::Vector{NirStmt}, sst, spectypes, rhs, @nospe
             f === nothing && return Any
             local operands = node.operands
             argtypes = Any[_f3_operand_type(a, sst, T, spectypes, nir) for a in operands]
-            return infer_return_type(f, Tuple(argtypes))
+            return rettype(f, Tuple(argtypes))
         end
-        return _f3_ssa_type(sst, rhs.id)
+        return value_type(rhs, spectypes, _f3_ssa_map(sst))
     end
-    return _f3_operand_type(rhs, sst, T, nothing, nir)
+    return _f3_operand_type(rhs, sst, T, spectypes, nir)
 end
 
 # Every `getfield(#self#, fld)` read in `nir` for `fld` ∈ `fields` — the pattern by which a
@@ -185,23 +168,24 @@ end
 _f3_box_captors(nir::Vector{NirStmt}, box_id::Int)::Set{Type} =
     Set{Type}(ty for (ty, _) in _f3_box_captor_fields(nir, box_id))
 
-# Retrieve the NIR + specTypes of EVERY closure body that captures `box_id` — directly, via a
-# literal `%new(clo, …, box, …)` in `nir`, OR TRANSITIVELY through any chain of further-nested
-# closure creation. The box writes this join must fold in live in these bodies. Recursion: a
-# discovered closure's own body reaches the SAME box one hop deeper as `getfield(#self#, boxfield)`
-# (boxfield = the field `_f3_box_captor_fields` matched for it); `_f3_box_captor_fields` and
-# `_f3_refers_to_box` already treat "the box" as any SSA value regardless of how it arrived, so the
-# same one-hop matching recurses unchanged on that SSA id, any depth. `visited` (keyed by specTypes)
-# guards a recursive closure that captures itself. Returns Vector{(nir, spectypes)}, or nothing
-# when a captor's body is not in the lookup: its writes are then unknown, and the box stays erased.
-# parity(quarantine: every closure body that can write a Julia `Core.Box`, reached through the
-# MethodInstances its captors are invoked with; the join of their writes restores the type
-# `contents::Any` erased, where dart reads the variable's inferred type,
-# translator.dart:2100 translateTypeOfLocalVariable)
+# Retrieve the NIR + specTypes of EVERY closure body that captures `box_id` — directly, a closure
+# type `%new(clo, …, box, …)` in `nir` builds, OR TRANSITIVELY through any chain of further-nested
+# closure creation. The box writes this join must fold in live in these bodies: every body of each
+# captor type the closed world holds (`closure_bodies(T)`), whether `nir` invokes it or not (a
+# captor `nir` returns is called by another function). Recursion: a discovered closure's own body
+# reaches the SAME box one hop deeper as `getfield(#self#, boxfield)` (boxfield = the field
+# `_f3_box_captor_fields` matched for it); `_f3_box_captor_fields` and `_f3_refers_to_box` already
+# treat "the box" as any SSA value regardless of how it arrived, so the same one-hop matching
+# recurses unchanged on that SSA id, any depth. `visited` (keyed by specTypes) guards a recursive
+# closure that captures itself. Returns Vector{(nir, spectypes)}.
+# parity(quarantine: every closure body that can write a Julia `Core.Box`, the closed world's bodies
+# of each captor type; the join of their writes restores the type `contents::Any` erased, where
+# dart reads the variable's inferred type, translator.dart:2100 translateTypeOfLocalVariable)
 function _f3_capturing_closure_bodies(nir::Vector{NirStmt}, box_id::Int;
-                                      closure_ir::Function)::Union{Nothing, Vector{Tuple{Vector{NirStmt}, Any}}}
+                                      closure_bodies::Function,
+                                      spectypes=nothing)::Vector{Tuple{Vector{NirStmt}, Any}}
     out = Tuple{Vector{NirStmt}, Any}[]
-    _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id; closure_ir) || return nothing
+    _f3_collect_capturing_bodies!(out, Set{Any}(), nir, box_id; closure_bodies, spectypes)
     return out
 end
 
@@ -209,45 +193,53 @@ end
 # closure re-captures the same `Core.Box` as `getfield(#self#, field)`, found one hop per body)
 function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}}, visited::Set{Any},
                                        nir::Vector{NirStmt}, box_id::Int;
-                                       closure_ir::Function)::Bool
+                                       closure_bodies::Function, spectypes=nothing)::Nothing
     field_captors = _f3_box_captor_fields(nir, box_id)
-    isempty(field_captors) && return true
-    captor_types = Set{Type}(ty for (ty, _) in field_captors)
-    # find the invokes of those closures → the collected IR of their MethodInstances (closure_ir:
-    # the plan's in codegen, the collected pairs in collection). A captor whose body the lookup
-    # does not hold has writes no one can see: the view is incomplete (false), and the box
-    # stays erased rather than narrowed (BoxJoin.tla: an invisible write never narrows the cell)
-    for s in nir
+    isempty(field_captors) && return nothing
+    # the captor types in one order (the join is order-independent; the walk's order is fixed)
+    captor_types = sort!(unique!(Type[ty for (ty, _) in field_captors]); by=string)
+    # The walk is complete only when the bodies it reads are every body of each captor type
+    # (BoxJoin.tla EveryCaptorBody): a captor body the scanned code invokes that the closed
+    # world does not hold is one whose writes no one can see, which is loud, never a narrowing
+    for (k, s) in enumerate(nir)
         local node = s.node
-        node isa NirInvoke || continue
-        mi = node.mi
-        mi isa Core.MethodInstance || continue
-        st = mi.specTypes
-        st isa DataType && st <: Tuple && length(st.parameters) >= 1 || continue
-        clo_T = st.parameters[1]
-        (clo_T in captor_types) || continue
-        st in visited && continue
-        push!(visited, st)
-        local hit = closure_ir(mi)
-        hit === nothing && return false
-        boxfields = Set{Symbol}(f for (ty, f) in field_captors if ty === clo_T)
-        body_nir = build_nir(hit[1])
-        push!(out, (body_nir, collect(st.parameters)))
-        # A further-nested closure reaches the SAME box as `getfield(#self#, boxfield)` — find
-        # that read's SSA id in this body and recurse discovery one hop deeper from it.
-        for i in keys(_f3_self_field_reads(body_nir, boxfields))
-            _f3_collect_capturing_bodies!(out, visited, body_nir, i; closure_ir) || return false
+        (node isa NirInvoke && node.mi isa Core.MethodInstance) || continue
+        local st = node.mi.specTypes
+        (st isa DataType && st <: Tuple && length(st.parameters) >= 1 &&
+         st.parameters[1] in captor_types) || continue
+        any(b -> b[1] === node.mi, closure_bodies(st.parameters[1])) ||
+            throw(WasmInternalError(
+                (spectypes === nothing || isempty(spectypes)) ? "a body capturing a box" : string(spectypes[1]),
+                k, "", String["joining the writes into the captured box %$(box_id)"],
+                ErrorException("statement %$(k) invokes the captor body $(node.mi), which the closed " *
+                               "world does not hold: its writes into the box cannot be joined"),
+                Base.StackTraces.StackFrame[]))
+    end
+    for clo_T in captor_types
+        for (mi, src) in closure_bodies(clo_T)
+            st = mi.specTypes
+            st in visited && continue
+            push!(visited, st)
+            boxfields = Set{Symbol}(f for (ty, f) in field_captors if ty === clo_T)
+            body_nir = build_nir(src)
+            push!(out, (body_nir, nir_slot_types(src)))
+            # A further-nested closure reaches the SAME box as `getfield(#self#, boxfield)` — find
+            # that read's SSA id in this body and recurse discovery one hop deeper from it.
+            for i in sort!(collect(keys(_f3_self_field_reads(body_nir, boxfields))))
+                _f3_collect_capturing_bodies!(out, visited, body_nir, i; closure_bodies,
+                                              spectypes=nir_slot_types(src))
+            end
         end
     end
-    return true
+    return nothing
 end
 
 """
-    box_contents_type(nir, ssa_types, box_id; closure_ir) -> Type | Nothing
+    box_contents_type(nir, ssa_types, box_id; closure_bodies, rettype) -> Type | Nothing
 
 PURE contents type for the `Core.Box` created at SSA index `box_id`: the JOIN of the enclosing init
-write and EVERY closure write's computed result type (closure bodies retrieved via the `invoke`
-CodeInstance; write types via `return_type` past the `Any`-erasure). Returns the concrete type if
+write and EVERY closure write's computed result type (every body of each captor type the closed
+world holds, `closure_bodies`; write types by `rettype` past the `Any`-erasure). Returns the concrete type if
 the join unifies to one concrete `DataType`, else `nothing` (`Union`/abstract/`Any` ⇒ the box is
 genuinely dynamic ⇒ anyref-boxed, dart2wasm's top-type field). Mirrors dart2wasm typing a context
 field by the variable's own type — reconstructing what Julia erased. F3 L0; not yet wired
@@ -256,14 +248,16 @@ formal(dev/formal/BoxJoin.tla): the join below is SOUND (a concrete type is chos
 when every write the box can ever receive, any nesting depth, agrees on it), order-
 independent, and never lets an invisible write narrow the cell. Closure-write discovery
 (_f3_capturing_closure_bodies) is TRANSITIVE — it recurses into a discovered closure's own
-body to find a further-nested captor, any depth — matching MCBoxJoin.cfg's TransitiveDiscovery
-= TRUE, the shape this model requires for the four claims to hold.
+body to find a further-nested captor, any depth — and takes every body of each captor type,
+called here or not, matching MCBoxJoin.cfg's TransitiveDiscovery = TRUE and EveryCaptorBody =
+TRUE, the shape this model requires for the four claims to hold.
 parity(quarantine: Julia lowers a reassigned captured variable to `Core.Box`, whose
 `contents::Any` erases the variable's type; the join of every write restores it. dart types the
 context field by the variable's inferred type, closures.dart:1579 translateTypeOfLocalVariable)
 """
 function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int;
-                           spectypes=nothing, closure_ir::Function)::Union{Type,Nothing}
+                           spectypes=nothing, closure_bodies::Function,
+                           rettype::Function)::Union{Type,Nothing}
     # 1) enclosing init write(s); an argument written in is typed by the creator's signature
     init = nothing
     for s in nir
@@ -274,8 +268,7 @@ function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int;
         vt === Any && return nothing
         init = init === nothing ? vt : Union{init, vt}
     end
-    bodies = _f3_capturing_closure_bodies(nir, box_id; closure_ir)
-    bodies === nothing && return nothing     # a captor's writes are unknown: the box is dynamic
+    bodies = _f3_capturing_closure_bodies(nir, box_id; closure_bodies, spectypes)
     # A box its creator declares but never writes starts undefined, and a read before any write
     # throws: its values are the closures' writes. Those that do not read the box (typed with the
     # contents unknown, Union{}) give the start; the others are then typed from it below.
@@ -283,7 +276,7 @@ function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int;
         for (body_nir, cspec) in bodies, s in body_nir
             w = _f3_contents_write(s.node)
             w === nothing && continue
-            local vt = _f3_write_result_type(body_nir, body_nir, cspec, w[2], Union{})
+            local vt = _f3_write_result_type(body_nir, body_nir, cspec, w[2], Union{}, rettype)
             vt === Union{} && continue
             init = init === nothing ? vt : Union{init, vt}
         end
@@ -295,7 +288,7 @@ function box_contents_type(nir::Vector{NirStmt}, ssa_types, box_id::Int;
         for s in body_nir
             w = _f3_contents_write(s.node)
             w === nothing && continue
-            push!(types, _f3_write_result_type(body_nir, body_nir, cspec, w[2], init))
+            push!(types, _f3_write_result_type(body_nir, body_nir, cspec, w[2], init, rettype))
         end
     end
     joined = reduce((a, b) -> Union{a, b}, types)
@@ -317,12 +310,13 @@ end
 
 # Result type of one call node with box-derived operands typed by `out` (propagated) — the engine
 # of f3_box_value_types. A `getfield(box,:contents)` read → the box's contents type; any other call
-# → `return_type` with each SSA operand typed by `out[id]` if propagated, else its inferred type.
+# → `rettype`'s answer with each SSA operand typed by `out[id]` if propagated, else its inferred type.
 # parity(quarantine: one step of f3_box_value_types — a call over values read from a Julia
 # `Core.Box` is inferred `Any`; recompute it through the one inference path with the restored
 # operand types)
 function _f3_call_result_type(node::NirCall, nir::Vector{NirStmt}, out::Dict{Int,Type},
-                              boxT::Dict{Int,Type}, ssa_types, spectypes)::Union{Nothing, Type}
+                              boxT::Dict{Int,Type}, ssa_types, spectypes,
+                              rettype::Function)::Union{Nothing, Type}
     local operands = node.operands
     if node.callee === getfield && length(operands) >= 2 && _f3_is_contents(operands[2])
         boxref = operands[1]
@@ -338,31 +332,23 @@ function _f3_call_result_type(node::NirCall, nir::Vector{NirStmt}, out::Dict{Int
     for a in operands
         if a isa NirSSA && haskey(out, a.id)
             push!(argtypes, out[a.id]); uses_box = true
-        elseif a isa NirSSA
-            push!(argtypes, _f3_ssa_type(ssa_types, a.id))
-        elseif a isa NirArgument
-            # resolve closure/fn arguments (e.g. the closure's `i`) via slottypes/specTypes
-            push!(argtypes, (spectypes !== nothing && 1 <= a.n <= length(spectypes)) ?
-                  _F3_CC.widenconst(spectypes[a.n]) : Any)
-        elseif a isa NirLiteral
-            push!(argtypes, _f3_literal_type(a.value))
         else
-            push!(argtypes, Any)
+            push!(argtypes, value_type(a, spectypes, _f3_ssa_map(ssa_types)))
         end
     end
     uses_box || return nothing
     # an operand with no value (Union{}) means the call never runs
     any(t -> t === Union{}, argtypes) && return Union{}
-    return infer_return_type(f, Tuple(argtypes))
+    return rettype(f, Tuple(argtypes))
 end
 
 """
-    f3_box_value_types(nir, ssa_types = nir; closure_ir) -> Dict{Int,Type}
+    f3_box_value_types(nir, ssa_types = nir; closure_bodies, rettype) -> Dict{Int,Type}
 
 F3 L2b — the VALUE-TYPE PROPAGATION past Julia's `Box{Any}` erasure (the F3 L2 unblocker the L2
 attempt surfaced; dart2wasm `node.accept1 → ValueType`). Forward fixed-point: each `%new(Core.Box)`
 with CONCRETE contents T seeds box-reads of it → T; any op over already-propagated SSAs → its
-computed result type (`return_type` with propagated operand types). Returns ssa_id → concrete Julia
+computed result type (`rettype`'s answer with propagated operand types). Returns ssa_id → concrete Julia
 type for box-DERIVED values (the getfield result, the `s+i` arithmetic) — these are inferred `Any`
 by Julia (the dynamic `+`) but compute at a concrete width, so without this they get anyref locals
 the i64 value can't fill ("expected anyref, found i64"). PURE analysis (the typed-box wiring consumes
@@ -375,7 +361,8 @@ formal(dev/formal/BoxValueTypes.tla): every SSA it types holds exactly that type
 function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                             extra_box_seeds::Dict{Int,Type}=Dict{Int,Type}(),
                             spectypes=nothing, record=nothing,
-                            keep_nonconcrete::Bool=false, closure_ir::Function)::Dict{Int,Type}
+                            keep_nonconcrete::Bool=false, closure_bodies::Function,
+                            rettype::Function)::Dict{Int,Type}
     out = Dict{Int,Type}()
     boxT = Dict{Int,Type}(extra_box_seeds)
     for bid in find_box_news(nir)
@@ -386,7 +373,7 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
             local ts = Type[get(record, tf, Any) for tf in fields]
             all(==(ts[1]), ts) && ts[1] isa DataType && isconcretetype(ts[1]) ? ts[1] : nothing
         else
-            box_contents_type(nir, ssa_types, bid; spectypes, closure_ir)
+            box_contents_type(nir, ssa_types, bid; spectypes, closure_bodies, rettype)
         end
         t !== nothing && (boxT[bid] = t)
     end
@@ -411,7 +398,7 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                 vts = Type[]
                 for v in node.values
                     t = v isa NirSSA ? get(out, v.id, nothing) :
-                        v isa NirLiteral ? _f3_literal_type(v.value) : nothing
+                        v isa NirLiteral ? value_type(v, nothing, nothing) : nothing
                     t isa Type || (vts = nothing; break)
                     push!(vts, t)
                 end
@@ -423,7 +410,7 @@ function f3_box_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                 end
             end
             node isa NirCall || continue
-            ft = _f3_call_result_type(node, nir, out, boxT, ssa_types, spectypes)
+            ft = _f3_call_result_type(node, nir, out, boxT, ssa_types, spectypes, rettype)
             # codegen keeps only a concrete type (a local's); record_capture_contents's fixpoint
             # keeps every computed one, Union{} (no value yet) and unions included
             if ft isa Type && ft !== Core.Box &&
@@ -443,7 +430,7 @@ _f3_is_numeric_jl(T)::Bool = T isa DataType && isconcretetype(T) &&
     (T <: Integer || T <: AbstractFloat) && T !== Bool && sizeof(T) <= 8 && !(T <: BigInt)
 
 """
-    propagate_numeric_value_types(nir, ssa_types = nir) -> Dict{Int,Type}
+    propagate_numeric_value_types(nir, ssa_types = nir; slot_types, rettype) -> Dict{Int,Type}
 
 Loop C value channel (dart2wasm `node.accept1 → ValueType` — the type is a byproduct of emission).
 Julia erases a mutated capture to `Any` even after the WT interpreter inlines + scalar-replaces the
@@ -462,16 +449,16 @@ translateTypeOfLocalVariable.)
 formal(dev/formal/NumericJoin.tla): every SSA it types holds exactly that type on every execution (VERIFY rechecks each phi's join, bans a failing phi and restarts)
 """
 function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
-                                        argtypes=nothing, self_shift::Int=1)::Dict{Int,Type}
+                                        slot_types=nothing,
+                                        rettype::Function)::Dict{Int,Type}
     out = Dict{Int,Type}()
-    _opT(a) = a isa NirSSA ? (haskey(out, a.id) ? out[a.id] : _f3_ssa_type(ssa_types, a.id)) :
-              a isa NirLiteral ? _f3_literal_type(a.value) :
-              a isa NirArgument ? ((argtypes !== nothing && 1 <= a.n - self_shift <= length(argtypes) &&
-                                    argtypes[a.n - self_shift] isa Type) ?
-                                   argtypes[a.n - self_shift] : Any) :
-              Any
-    # only consider SSAs Julia left as Any (don't override a known concrete type)
-    pend = Int[i for i in eachindex(nir) if _f3_ssa_type(ssa_types, i) === Any]
+    local map = _f3_ssa_map(ssa_types)
+    # an operand's type: a joined SSA's join, else value_type's (no slot table: Any)
+    _opT(a) = (a isa NirSSA && haskey(out, a.id)) ? out[a.id] : value_type(a, slot_types, map)
+    # only consider SSAs Julia left as Any (don't override a known concrete type): each
+    # statement's own type
+    pend = Int[i for i in eachindex(nir)
+               if (map === nothing ? nir[i].julia_type : get(map, i, nir[i].julia_type)) === Any]
     banned = Set{Int}()   # phis VERIFY rejected: never typed again
     while true
         changed = true
@@ -500,7 +487,7 @@ function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                     f === nothing && continue
                     ats = Any[_opT(a) for a in node.operands]
                     all(_f3_is_numeric_jl, ats) || continue   # every operand must be (resolved) numeric
-                    rt = infer_return_type(f, Tuple(ats))
+                    rt = rettype(f, Tuple(ats))
                     if _f3_is_numeric_jl(rt)
                         out[i] = rt; changed = true
                     end
@@ -523,7 +510,7 @@ end
 
 
 """
-    record_capture_contents(bodies; closure_ir) -> Dict{Tuple{Type,Symbol},Type}
+    record_capture_contents(bodies; closure_bodies, rettype) -> Dict{Tuple{Type,Symbol},Type}
 
 The type of every captured variable of the closed world, keyed by (closure type, captured
 field): the join of every write into the variable's `Core.Box` anywhere in `bodies` (each a
@@ -531,15 +518,18 @@ field): the join of every write into the variable's `Core.Box` anywhere in `bodi
 the creator's signature), and every write through the field: in a body of the closure itself
 (`#self#`) or through a closure value (a closure a callee returned, its body inlined). A write
 that reads the variable (`c = c + 1`) is typed with the current record, so the join iterates
-to a fixpoint. A field whose writes are not one concrete type records `Any`: its reads stay
-erased. The record is complete for the closed world because every body that can run is in it,
+to a fixpoint. Several closures can capture one box (a writer and a reader returned
+together), each through its own field: every field that holds one box shares one join, so a
+write through any of them is a write into each. A field whose writes are not one concrete type
+records `Any`: its reads stay erased. The record is complete for the closed world because every body that can run is in it,
 which the creator alone is not (a returned closure's writes are invisible to its creator).
 formal(dev/formal/CaptureType.tla): a captured box's read is typed by the join of every write
 into the box, its creator's included.
 parity(closures.dart:1436 Capture.type): a captured variable's type comes from its
 declaration, the one type every read and write of it shares.
 """
-function record_capture_contents(bodies::Vector; closure_ir::Function)::Dict{Tuple{Type,Symbol},Type}
+function record_capture_contents(bodies::Vector; closure_bodies::Function,
+                                 rettype::Function)::Dict{Tuple{Type,Symbol},Type}
     # The least fixpoint of the types each captured variable can hold: round k types every
     # write through a field with the field's contents as round k-1's set (a set still empty
     # holds no value yet: Union{}, and a write computed from it stores nothing), over the
@@ -548,8 +538,18 @@ function record_capture_contents(bodies::Vector; closure_ir::Function)::Dict{Tup
     local held = Dict{Tuple{Type,Symbol},Set{Any}}()
     # the fields whose box some body creates: only those have their base in the closed world
     local created = Set{Tuple{Type,Symbol}}()
+    # the fields that hold one box, as classes: a field two boxes' captors share joins both
+    local same_box = Dict{Tuple{Type,Symbol},Set{Tuple{Type,Symbol}}}()
     for (nir, _, _) in bodies, box_id in find_box_news(nir)
-        union!(created, _f3_box_captor_fields(nir, box_id))
+        local fields = _f3_box_captor_fields(nir, box_id)
+        union!(created, fields)
+        local class = Set{Tuple{Type,Symbol}}(fields)
+        for tf in fields
+            union!(class, get(same_box, tf, ()))
+        end
+        for tf in class
+            same_box[tf] = class
+        end
     end
     for _round in 1:32
         local next = Dict{Tuple{Type,Symbol},Set{Any}}()
@@ -567,16 +567,22 @@ function record_capture_contents(bodies::Vector; closure_ir::Function)::Dict{Tup
                     foreach(tf -> add!(tf, t), fields)
                 end
             end
-            local joins = _capture_propagate(nir, seeds, selfT, spec; closure_ir)
+            local joins = _capture_propagate(nir, seeds, selfT, spec; closure_bodies, rettype)
             for s in nir
                 local w = _f3_contents_write(s.node)
                 w === nothing && continue
                 local key = _captured_box_field(w[1], nir, selfT)
                 key === nothing && continue
                 local v = w[2]
-                add!(key, v isa NirSSA ? get(joins, v.id, _f3_ssa_type(nir, v.id)) :
+                add!(key, v isa NirSSA ? get(joins, v.id, value_type(v, spec, nothing)) :
                           _f3_operand_type(v, nir, Any, spec, nir))
             end
+        end
+        # a write through one field of a box is a write into the box every field of it reads
+        for class in unique(values(same_box))
+            local ts = Set{Any}()
+            foreach(tf -> union!(ts, get(next, tf, ())), class)
+            foreach(tf -> (next[tf] = copy(ts)), class)
         end
         if next == held
             local out = _capture_finalize(held)
@@ -596,14 +602,16 @@ end
 # parity(quarantine: one round of record_capture_contents's fixpoint over the reads of a Julia
 # `Core.Box`, whose `contents::Any` erases the type the round's seed restores)
 function _capture_propagate(nir::Vector{NirStmt}, seeds::Dict{Tuple{Type,Symbol},Type},
-                            @nospecialize(selfT), spec; closure_ir::Function)::Dict{Int,Type}
+                            @nospecialize(selfT), spec; closure_bodies::Function,
+                            rettype::Function)::Dict{Int,Type}
     local reads = Dict{Int,Type}()
     for i in eachindex(nir)
         local key = _captured_box_field(NirSSA(i, Any), nir, selfT)
         key === nothing && continue
         reads[i] = get(seeds, key, Union{})   # a field with no value yet holds none
     end
-    return f3_box_value_types(nir, nir; extra_box_seeds=reads, spectypes=spec, keep_nonconcrete=true, closure_ir)
+    return f3_box_value_types(nir, nir; extra_box_seeds=reads, spectypes=spec, keep_nonconcrete=true,
+                              closure_bodies, rettype)
 end
 
 # The record's answer per captured field: its one concrete type, else Any (erased).
@@ -626,14 +634,14 @@ function _captured_box_field(x, nir::Vector{NirStmt}, @nospecialize(selfT))::Uni
         return nothing
     local base, fld = node.operands[1], node.operands[2]
     (fld isa NirLiteral && fld.value isa Symbol) || return nothing
-    local T = (base isa NirArgument && base.n == 1) ? selfT : base isa NirSSA ? base.julia_type : nothing
+    local T = (base isa NirArgument && base.n == 1) ? selfT : base isa NirSSA ? value_type(base, nothing, nothing) : nothing
     (T isa DataType && isstructtype(T) && hasfield(T, fld.value) &&
      fieldtype(T, fld.value) === Core.Box) || return nothing
     return (T, fld.value)
 end
 
 """
-    capture_read_types(nir, ssa_types, record, selfT; spectypes, closure_ir) -> Dict{Int,Type}
+    capture_read_types(nir, ssa_types, record, selfT; spectypes, closure_bodies, rettype) -> Dict{Int,Type}
 
 The types of the captured-box reads in `nir`, and of the values computed from them: a box read
 `getfield(carrier, f)` whose carrier is the closure being compiled (`#self#`, of type
@@ -646,7 +654,8 @@ captured variable's type on its own: it cannot see its creator's writes.
 parity(closures.dart:1436 Capture.type)
 """
 function capture_read_types(nir::Vector{NirStmt}, ssa_types, record::Dict{Tuple{Type,Symbol},Type},
-                            @nospecialize(selfT); spectypes=nothing, closure_ir::Function)::Dict{Int,Type}
+                            @nospecialize(selfT); spectypes=nothing, closure_bodies::Function,
+                            rettype::Function)::Dict{Int,Type}
     local seeds = Dict{Int,Type}()
     for i in eachindex(nir)
         local key = _captured_box_field(NirSSA(i, Any), nir, selfT)
@@ -655,7 +664,8 @@ function capture_read_types(nir::Vector{NirStmt}, ssa_types, record::Dict{Tuple{
         (ct isa DataType && isconcretetype(ct)) || continue
         seeds[i] = ct
     end
-    local joins = f3_box_value_types(nir, ssa_types; extra_box_seeds=seeds, spectypes, record, closure_ir)
+    local joins = f3_box_value_types(nir, ssa_types; extra_box_seeds=seeds, spectypes, record,
+                                     closure_bodies, rettype)
     for b in keys(seeds)
         delete!(joins, b)
     end
