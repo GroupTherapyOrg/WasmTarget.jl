@@ -3699,7 +3699,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = count("        _refuse_literal_callee(callee)\n", nirs) == 2 ? 0 : 1
             v += count("function nir_callee(x::NirNode)::Any", nirs) == 1 ? 0 : 1
             v += occursin("callee = length(args) >= 2 ? _resolve_nircall_callee(args[2], code_info, types, slot_types) : nothing", nirs) ? 0 : 1
-            v += occursin("NirCall(nir_callee(callee), NirNode[operands...])", nirs) ? 0 : 1
+            v += occursin("NirCall(nir_operand_callee(callee, static_type), NirNode[operands...])", nirs) ? 0 : 1
             v += count("nir_callee_self(@nospecialize(callee))::Union{Nothing,NirLiteral} =", nirs) == 1 ? 0 : 1
             v += occursin("closure_self_to_push = something(nir_callee_value(node), NirLiteral(node.callee))", inv) ? 0 : 1
             v += count_sites(r"nir_const\((func|f|fref|target_func|[\w.]*callee[\w.]*)\)|\b(fref|target_func|target)\s+isa\s+NirGlobalRef|_resolve_builtin_callee|_invoke_named_callee|_invoke_callee_object|_invoke_in_world_callee|callee\.value\b|callee isa NirLiteral|isa NirLiteral \? [\w.]*callee";
