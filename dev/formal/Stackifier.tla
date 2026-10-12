@@ -327,12 +327,12 @@ DomIter(dom, k) == IF k = 0 THEN dom ELSE DomIter(DomUpdate(dom), k - 1)
 Dominators == doms
 ComputeDominators == DomIter([i \in Blocks |-> Blocks], N)
 
-\* STEP 3/duplication: non_trivial_targets (line 405-437) -- every non-
-\* fallthrough jump-arm destination (GOTO's target, or COND's dest/false
-\* arm, boundscheck-folded or not; COND's true/fallthrough arm is NEVER a
-\* target here) from a LIVE source, landing on a LIVE destination -- a dead
-\* source is skipped outright (line 407-410) and a dead destination is
-\* excluded (the `!(dest_block in dead_blocks)` guard at every arm).
+\* STEP 3/duplication: non_trivial_targets -- the folded CFG's successors
+\* of every LIVE block other than its fall-through (GOTO's target, or
+\* COND's dest/false arm, boundscheck-folded or not; COND's fall-through
+\* arm is NEVER a target here): a dead block has no successors and is no
+\* successor (the code reads the folded successors, from which dead
+\* blocks are removed; an Enter's catch edge, not modeled, is the try's).
 NonTrivialTargets ==
     {target[i] : i \in {ii \in Blocks : ii \notin AlgoDeadBlocks
                           /\ kind[ii] \in {"GOTO", "COND"} /\ target[ii] # ii + 1

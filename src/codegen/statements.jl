@@ -455,25 +455,9 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
     # Reset dead code guard at basic block boundaries.
     # The last_stmt_was_stub flag from a previous stub should NOT cascade across basic
     # block boundaries — the next block is reachable via a different control flow path.
-    # Check: (a) previous stmt is a terminator, OR (b) this idx is a jump target.
-    if ctx.last_stmt_was_stub && idx > 1
-        _should_reset = false
-        _prev_node = ctx.nir[idx - 1].node
-        if _prev_node isa NirGoto || _prev_node isa NirGotoIfNot || _prev_node isa NirReturn
-            _should_reset = true
-        else
-            # Check if this idx is a jump target of any goto
-            for _s in ctx.nir
-                _n = _s.node
-                if (_n isa NirGotoIfNot && _n.target == idx) || (_n isa NirGoto && _n.target == idx)
-                    _should_reset = true
-                    break
-                end
-            end
-        end
-        if _should_reset
-            ctx.last_stmt_was_stub = false
-        end
+    # A block starts where the body's CFG (nir_cfg) starts one.
+    if ctx.last_stmt_was_stub && idx > 1 && ctx.cfg.blocks[ctx.cfg.block_of[idx]].start_idx == idx
+        ctx.last_stmt_was_stub = false
     end
 
     # If a previous statement in this function was a stub (emitted unreachable),
@@ -840,6 +824,7 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
                                         subject::NirNode, T::DataType,
                                         missing::Set{Int})::Bool
     1 <= start_pc <= length(nir) || return false
+    local cfg = nir_cfg(nir)   # the body's CFG: an Enter reaches its catch destination
     incoming = Dict{Int,Set{Int}}(start_pc => Set{Int}())
     queue = Int[start_pc]
     while !isempty(queue)
@@ -853,17 +838,9 @@ function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
             return false
         end
 
-        successors = if node isa NirReturn
-            Int[]
-        elseif node isa NirGoto
-            Int[node.target]
-        elseif node isa NirGotoIfNot
-            pc < length(nir) ? Int[pc + 1, node.target] : Int[node.target]
-        elseif pc < length(nir)
-            Int[pc + 1]
-        else
-            Int[]
-        end
+        local bk = cfg.block_of[pc]   # 0: a trailing `nothing`, in no block and followed by none
+        successors = bk == 0 ? Int[] : pc < cfg.blocks[bk].end_idx ? Int[pc + 1] :
+            Int[cfg.blocks[s].start_idx for s in cfg.succs[bk]]
         for dest in successors
             start_pc <= dest <= length(nir) || return false
             next_state = haskey(incoming, dest) ? intersect(incoming[dest], assigned) : copy(assigned)

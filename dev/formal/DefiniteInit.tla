@@ -14,8 +14,10 @@
 (* start_pc with `incoming[start_pc] = {}`: at each statement, a            *)
 (* `setfield!(subject, f, _)` of a missing field adds f; any other use of   *)
 (* the subject while a missing field is unassigned answers false. The      *)
-(* successors are a goto's target, a goto-if-not's fall-through and target, *)
-(* nothing after a return, else the next statement. A successor before      *)
+(* successors are the one CFG's (nir_cfg, Julia's compute_basic_blocks): a  *)
+(* goto's target, a goto-if-not's fall-through and target, an Enter's next  *)
+(* statement and its catch destination (the catch edge), nothing after a   *)
+(* return, else the next statement. A successor before                      *)
 (* start_pc (a back edge out of the region) answers false. Each successor's *)
 (* state is the INTERSECTION of the states arriving on its edges; a         *)
 (* successor is re-queued whenever that state changes.                      *)
@@ -31,31 +33,40 @@
 (*                                                                          *)
 (* VARIANT Meet: "Intersect" = the real code; "Union" = a state merged by   *)
 (* union, the may-analysis in place of the must-analysis.                   *)
+(* VARIANT CatchEdge: TRUE = the real code; FALSE = an Enter's catch edge   *)
+(* not followed, so a handler that reads the object before a field is      *)
+(* stored goes unseen and the proof answers true where a path reads it.    *)
 (*                                                                          *)
 (* formal(dev/formal/DefiniteInit.tla): an answer of true means every path  *)
 (* stores each missing field before the object is read.                    *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS N, Meet
+CONSTANTS N, Meet, CatchEdge
 
 ASSUME N \in Nat /\ N >= 1
 ASSUME Meet \in {"Intersect", "Union"}
+ASSUME CatchEdge \in BOOLEAN
 
 Idx == 1..N
 Missing == {1, 2}
 Stmts == {[k |-> "write", f |-> 1], [k |-> "write", f |-> 2], [k |-> "use"],
           [k |-> "plain"], [k |-> "return"]} \cup
-         {[k |-> "goto", t |-> t] : t \in Idx} \cup {[k |-> "gotoifnot", t |-> t] : t \in Idx}
+         {[k |-> "goto", t |-> t] : t \in Idx} \cup {[k |-> "gotoifnot", t |-> t] : t \in Idx} \cup
+         {[k |-> "enter", t |-> t] : t \in Idx}
 Programs == [Idx -> Stmts]
 
 VARIABLE prog
 vars == <<prog>>
 
+\* ground truth: an Enter's catch destination is reached when anything in its region throws
 Succ(p, i) == CASE p[i].k = "goto"      -> {p[i].t}
                 [] p[i].k = "gotoifnot" -> {p[i].t} \cup (IF i < N THEN {i + 1} ELSE {})
+                [] p[i].k = "enter"     -> {p[i].t} \cup (IF i < N THEN {i + 1} ELSE {})
                 [] p[i].k = "return"    -> {}
                 [] OTHER                -> IF i < N THEN {i + 1} ELSE {}
+\* the proof's successors: the one CFG's, or without the catch edge (the Broken variant)
+AlgoSucc(p, i) == IF p[i].k = "enter" /\ ~CatchEdge THEN (IF i < N THEN {i + 1} ELSE {}) ELSE Succ(p, i)
 
 After(p, i, A) == IF p[i].k = "write" THEN A \cup {p[i].f} ELSE A
 
@@ -78,7 +89,7 @@ Solve(p, inc, q) ==
              A  == inc[pc]
              useFail == p[pc].k = "use" /\ ~(Missing \subseteq A)
              out == After(p, pc, A)
-             succ == Succ(p, pc)
+             succ == AlgoSucc(p, pc)
              new(d) == IF d \in DOMAIN inc THEN Merge(inc[d], out) ELSE out
              changed == {d \in succ : d \notin DOMAIN inc \/ new(d) # inc[d]}
              inc2 == [d \in DOMAIN inc \cup succ |-> IF d \in succ THEN new(d) ELSE inc[d]]

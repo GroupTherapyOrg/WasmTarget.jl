@@ -1039,6 +1039,13 @@ _g("union_fields", Any[
     ("findfirst_vec_hit", (x::Int64) -> (r = findfirst(==(x), Int64[1, 2, 3]); r === nothing ? Int64(-1) : r), Int64(2)),
     ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
 ])
+# ---- a loop whose back edge is a goto-if-not (1.13 lays the String search loop of
+# findfirst that way): the one CFG's loop bounds see it (L181; on 1.12 its back edge is a goto)
+_g("loop_backward_branch", Any[
+    ("findfirst_char_miss", (x::Int64) -> Int64(findfirst(==(Char(x)), "abc") === nothing), Int64(122)),
+    ("findfirst_char_hit", (x::Int64) -> (r = findfirst(==(Char(x)), "abcabc"); r === nothing ? Int64(-1) : Int64(r)), Int64(99)),
+    ("findnext_char_hit", (x::Int64) -> (r = findnext(==(Char(x)), "abcabc", 4); r === nothing ? Int64(-1) : Int64(r)), Int64(98)),
+])
 # ---- Union{Nothing,<numeric>} values: returns, phis, typeof, union-split calls ----
 # Each shape runs at a `nothing` input, a 0 input and a nonzero input, so a nothing-vs-0
 # confusion shows. A phi typed Int64 by inference can receive `nothing` on a path that
@@ -1897,6 +1904,15 @@ _xf("dispatch_slot_float16", Any[
 # bits, never their values, which no float opcode does: it rejects at its statement (native NaN)
 _xf("reduce_intrinsic_kind", Any[
     ("add_int_over_floats", (n::Int64) -> (v = [1.0, Float64(n)]; Core.Intrinsics.add_int(v...)), Int64(3)),
+])
+# A partially initialized object a handler may read before its fields are stored: it reaches the
+# handler through an upsilon, a use before the stores, and the definite-initialization proof
+# (which follows the body's CFG, an Enter's catch edge included) fails, so the %new rejects at its
+# statement (a field read on that path has no defined value natively)
+mutable struct _SmPN; a::Int64; b::Int64; _SmPN() = new(); end
+@noinline _sm_pn_throw(n::Int64) = n > 5 ? error("big") : n
+_xf("partial_new_handler_read", Any[
+    ("handler_reads_unstored_field", (n::Int64) -> (o = _SmPN(); try; o.a = _sm_pn_throw(n); o.b = 2; catch; return o.b; end; o.a + o.b), Int64(3)),
 ])
 # Two structurally equal self-referential structs are one wasm type (iso-recursive
 # canonicalization): the builder gives them one index, so an isa tells them by classId
