@@ -168,7 +168,6 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
     if !val_is_ref && ret_is_ref
         return true
     end
-    tracing(:retcompat) && println(stderr, "RETCOMPAT false: val=$value_type ret=$return_type")
     return false
 end
 
@@ -809,7 +808,7 @@ would push a reference where i32.eqz needs an i32, so it is unboxed (ref.cast + 
 parity(pkg/dart2wasm/lib/code_generator.dart:1277 CodeGenerator.visitIfStatement)
 """
 function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
-    if tracing(:condstub) && ctx.last_stmt_was_stub
+    if tracing(ctx, :condstub) && ctx.last_stmt_was_stub
         println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
         for fr in stacktrace()[2:9]
             println(stderr, "   ", fr)
@@ -840,14 +839,6 @@ function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::Abstract
     return b
 end
 
-"""
-Compile a value reference (SSA, Argument, or Literal).
-object-identity stack for struct-constant compilation (cycle/depth guard)
-parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep — a
-mutable struct reachable from itself; dart's CFE constants are acyclic canonical trees,
-so constants.dart needs no in-progress stack.)
-"""
-const _VALUE_COMPILE_STACK = Vector{Any}()
 
 # B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
 # code_generator.dart:879): the body builds into the typed InstrBuilder `b`, so the type it
@@ -1090,7 +1081,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
     # more values. Emitting data after unreachable creates invalid WASM byte sequences
     # (e.g., array element i32_const values decode as block/loop instructions).
     if ctx.last_stmt_was_stub
-        tracing(:deadval) && println(stderr, "DEADVAL val=", first(repr(node), 60))
+        tracing(ctx, :deadval) && println(stderr, "DEADVAL val=", first(repr(node), 60))
         unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
         return b
     end
@@ -1787,14 +1778,14 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # object graphs (Luxor/Karnak/Graphs values captured in Makie figures)
         # recursed compile_value to a StackOverflow. Guard by object identity
         # AND depth; refuse with a NAMED error so pipelines degrade honestly.
-        if any(x -> x === val, _VALUE_COMPILE_STACK)
+        if any(x -> x === val, ctx.translator.constants_in_progress)
             record_unsupported!(ctx, :unsupported_type, "cyclic struct constant of type $(T) (object graph references itself)"; detail=string(nameof(T)), soundness_fatal=true)
         end
-        if length(_VALUE_COMPILE_STACK) > 200
-            _tail = join((string(nameof(typeof(x))) for x in _VALUE_COMPILE_STACK[end-7:end]), " → ")
+        if length(ctx.translator.constants_in_progress) > 200
+            _tail = join((string(nameof(typeof(x))) for x in ctx.translator.constants_in_progress[end-7:end]), " → ")
             record_unsupported!(ctx, :unsupported_type, "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))"; detail=string(nameof(T)), soundness_fatal=true)
         end
-        push!(_VALUE_COMPILE_STACK, val)
+        push!(ctx.translator.constants_in_progress, val)
         try
 
         # Ensure struct type is registered and get its type index
@@ -1836,7 +1827,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # Create the struct
         struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
         finally
-            pop!(_VALUE_COMPILE_STACK)
+            pop!(ctx.translator.constants_in_progress)
         end
         end   # the NirLiteral constant chain
     end

@@ -27,11 +27,6 @@
 # M8.2 — route single-axis dispatch through the ONE dart table
 # ============================================================================
 
-# parity(pkg/dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable)
-const _ST_BASE_IDX = Base.RefValue{UInt32}(0)
-# parity(pkg/dart2wasm/lib/dispatch_table.dart:489 DispatchTable._initializeWasmTable)
-_st_base_idx(_)::UInt32 = _ST_BASE_IDX[]
-
 """
     pack_dispatch_selectors!(mod, dt_registry, type_registry)
 
@@ -46,7 +41,6 @@ parity(dispatch_table.dart:965 buildRowDisplacementTable)
 """
 function pack_dispatch_selectors!(mod::WasmModule, dt_registry, type_registry)::Nothing
     isempty(dt_registry.tables) && return
-    type_registry.base_struct_idx !== nothing && (_ST_BASE_IDX[] = type_registry.base_struct_idx)
     # collect single-axis selectors: (func_ref, rows::Vector{(classId, entry_i)}, weight)
     packable = Tuple{Any,Vector{Tuple{Int,Int}},Int,Dict{Int,Vector{Int}},Int}[]
     for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
@@ -210,14 +204,14 @@ function emit_classid_span_guard!(b::InstrBuilder, sc::Integer, lo::Integer, hi:
 end
 
 """
-    fill_selector_table_elements!(mod, dt_registry)
+    fill_selector_table_elements!(mod, type_registry, dt_registry)
 
 After wrapper emission (dispatch.jl): write the packed positions' wrapper indices
 into the ONE table as element segments (contiguous runs, dart output(),
 dispatch_table.dart:800).
 parity(dispatch_table.dart:800 DispatchTable.output)
 """
-function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
+function fill_selector_table_elements!(mod::WasmModule, type_registry::TypeRegistry, dt_registry)::Nothing
     dt_registry.selector_table_idx === nothing && return
     entries = Tuple{Int,UInt32}[]   # (position, wrapper_idx)
     for (func_ref, positions) in ordered_pairs(dt_registry.selector_positions, r -> selector_order_key(dt_registry, r))
@@ -236,8 +230,9 @@ function fill_selector_table_elements!(mod::WasmModule, dt_registry)::Nothing
                 local_get!(tb, UInt32(j - 1))
             end   # (trampoline params ARE the slot types — no refinement needed)
             local_get!(tb, UInt32(c.axis2 - 1))
-            ref_cast!(tb, Int64(_st_base_idx(dt_registry)), false)
-            struct_get!(tb, UInt32(_st_base_idx(dt_registry)), UInt32(0))
+            local base_idx = something(type_registry.base_struct_idx)   # the class hierarchy's top
+            ref_cast!(tb, Int64(base_idx), false)
+            struct_get!(tb, UInt32(base_idx), UInt32(0))
             # the level-2 span guard (a classId outside it has no row in this group)
             local lo2, hi2 = _cascade_span(c)
             emit_classid_span_guard!(tb, builder_add_local!(tb, I32), lo2, hi2)

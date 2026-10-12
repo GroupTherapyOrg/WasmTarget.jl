@@ -316,7 +316,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         # reconstructing only the local-function half here left
         # imported calls with an unseeded operand stack.
         local _cc_params = _function_type(ctx.mod, target.wasm_idx).params
-        tracing(:cc) && println(stderr, "CC target=", target.name, " idx=", target.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
+        tracing(ctx, :cc) && println(stderr, "CC target=", target.name, " idx=", target.wasm_idx, " params=", _cc_params, " fbh=", length(fb.v.stack))
         bcc = _sub_builder(fb, ctx, "compile_invoke", length(_cc_params);
                            seed_types=_cc_params)   # the placeholder truth IS the contract
         emit_direct_call!(bcc, ctx.mod, ctx.type_registry, target.wasm_idx)
