@@ -44,4 +44,6 @@ MCLateCut         == TRUE
 
 (* the superseded original is dead: no site of the program names it *)
 ASSUME "O" \in AllOriginals /\ "O" \notin Reachable
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================

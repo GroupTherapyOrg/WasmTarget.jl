@@ -112,6 +112,29 @@
 (*   LateCut = FALSE   -- only the first collection is cut: a later        *)
 (*                        round's compile! output merges an import's       *)
 (*                        native body (LateLeafUncut).                     *)
+(*   WorldSitesDropped -- an `invoke_in_world` whose target is not one     *)
+(*                        method (`_invoke_in_world_target_mi` answers     *)
+(*                        nothing) becomes neither an edge nor a dynamic   *)
+(*                        site, so the methods its call reaches at run     *)
+(*                        time are never collected (P3).                   *)
+(*   PlannerWrites     -- the collector records a reason only for the      *)
+(*                        bodies it enrolls itself, and the planner walks  *)
+(*                        the edges again to write the rest into the       *)
+(*                        world (A2C4).                                    *)
+(*                                                                         *)
+(* WORLD SITES. A `Core.invoke_in_world(w, f, args...)` call runs          *)
+(* `f(args...)` by Julia's dispatch at run time. When one method covers    *)
+(* the call's signature it is an edge (the "invoke_in_world" kind); when   *)
+(* none does, the call is a dynamic site of `f` over its operands          *)
+(* (`_called_function`, read by the collector's candidate scan), which    *)
+(* enrolls the method each class that may reach it selects, or a located   *)
+(* rejection where the dynamic call has no lowering. `WorldSites` are      *)
+(* those calls, by the abstract slot type a value reaches them at.         *)
+(*                                                                         *)
+(* REASONS. Every collected body has the reason it entered the world,      *)
+(* recorded by the collector as it follows the edge, candidate or root     *)
+(* that brought it in (`reasoned`); the plan reads the world and writes    *)
+(* none of it (ReasonsComplete).                                           *)
 (*                                                                         *)
 (* WHAT IS GUARANTEED. With Trim = FALSE, LateCut = TRUE and every kind    *)
 (* followed, no reachable body is ever missing (NoneMissing), no import is *)
@@ -196,7 +219,10 @@ CONSTANTS
     FmaEdges,         \* [Methods -> SUBSET Methods]: the Base.fma_emulated bodies a body's muladd_float/fma_float lower to
     ExternalLeaves,   \* SUBSET Methods: declared imports (`import_stubs`); Julia infers their native bodies, the plan never holds them
     LateCut,          \* BOOLEAN: TRUE = the code (every compile! output cut); FALSE = only the first collection cut
-    RootsOnlyIfNew    \* BOOLEAN: FALSE = the code (every candidate is a root); TRUE = a collected candidate gets no row (c7f0c250, batch 111's first gate)
+    RootsOnlyIfNew,   \* BOOLEAN: FALSE = the code (every candidate is a root); TRUE = a collected candidate gets no row (c7f0c250, batch 111's first gate)
+    WorldSites,       \* [Methods -> SUBSET Types]: invoke_in_world calls no one method covers, by the slot type a value reaches them at
+    WorldSitesDropped,\* BOOLEAN: FALSE = the code (each is a dynamic site); TRUE = neither an edge nor a dynamic site (P3)
+    PlannerWrites     \* BOOLEAN: FALSE = the code (the collector records every body's reason); TRUE = the planner writes the rest (A2C4)
 
 ASSUME /\ Roots \subseteq Methods
        /\ InvokeEdges \in [Methods -> SUBSET Methods]
@@ -212,6 +238,9 @@ ASSUME /\ Roots \subseteq Methods
        /\ ExternalLeaves \subseteq Methods \ Roots
        /\ LateCut \in BOOLEAN
        /\ RootsOnlyIfNew \in BOOLEAN
+       /\ WorldSites \in [Methods -> SUBSET Types]
+       /\ WorldSitesDropped \in BOOLEAN
+       /\ PlannerWrites \in BOOLEAN
 
 VARIABLES
     collected,        \* SUBSET Methods: methods with a (CodeInstance, CodeInfo) pair in `codeinfos`
@@ -226,10 +255,11 @@ VARIABLES
     dynSeen,          \* SUBSET Methods: `seen_disp`
     dynRoots,         \* SUBSET Methods: `dynamic_roots` -- the dispatch rows' candidates (and the trim's roots, Trim only)
     fmaScanned,       \* SUBSET collected: bodies in `fma_scanned`
-    fmaRoots          \* SUBSET Methods: c7f0c250's `intrinsic_body_roots` -- the trim's roots (Trim only)
+    fmaRoots,         \* SUBSET Methods: c7f0c250's `intrinsic_body_roots` -- the trim's roots (Trim only)
+    reasoned          \* SUBSET Methods: the bodies the collector recorded a reason for (`enrolled_as`)
 
 vars == <<collected, discarded, status, steps, pruned, invokeScanned, invokeSeen,
-          superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
+          superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
 
 ----------------------------------------------------------------------------
 HiddenTargets(m)  == {p[1] : p \in HiddenEdges[m]}
@@ -271,6 +301,13 @@ LeafCut(S, Out) == (CutWalk(S, Out) \cap Out) \ ExternalLeaves
 (* the pairs one round's compile! of S yields to the merge: cut when `cut` *)
 Compiled(S, Mat, cut) == IF cut THEN LeafCut(S, JuliaClosure(S, Mat)) ELSE JuliaClosure(S, Mat)
 
+(* the dynamic sites a body holds: its dynamic calls, and the             *)
+(* invoke_in_world calls no one method covers (WorldSitesDropped, broken:  *)
+(* those dropped)                                                          *)
+ScannedSites(m) == IF WorldSitesDropped THEN DynSites[m] ELSE DynSites[m] \cup WorldSites[m]
+(* every dynamic site the program has, the ground truth's *)
+AllSites(m) == DynSites[m] \cup WorldSites[m]
+
 (* `runtime_types`: rebuilt from the current plan on every call *)
 Observed == UNION {TypeSites[m] : m \in collected}
 
@@ -291,6 +328,7 @@ TypeOK ==
     /\ dynRoots \subseteq Methods
     /\ fmaScanned \subseteq collected
     /\ fmaRoots \subseteq Methods
+    /\ reasoned \subseteq Methods
 
 (* the first collection: compile! of the entries, always cut *)
 Init ==
@@ -308,6 +346,7 @@ Init ==
     /\ dynRoots = {}
     /\ fmaScanned = {}
     /\ fmaRoots = {}
+    /\ reasoned = Roots   \* each entry: "a compilation entry"
 
 ----------------------------------------------------------------------------
 CeilingOpen == RoundCeiling = 0 \/ steps < RoundCeiling
@@ -350,6 +389,10 @@ ScanInvokes(m) ==
        IN  /\ invokeScanned' = invokeScanned \cup {m}
            /\ superseded' = IF Trim THEN superseded \cup (Originals(m) \ Roots) ELSE superseded
            /\ invokeSeen' = invokeSeen \cup proposals
+           \* the reason of every edge's target, collected already or not (PlannerWrites,
+           \* broken: only the targets this scan enrolls)
+           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN proposals
+                                         ELSE FinalInvoke(m) \cup CollectorHidden(m))
            /\ Enroll(proposals)
     /\ UNCHANGED <<pruned, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
 
@@ -375,14 +418,14 @@ Prune ==
            /\ fmaScanned' = fmaScanned \cap keep
            /\ trimmedFor' = superseded
            /\ UNCHANGED <<discarded, status, steps, invokeSeen, superseded, dynSeen,
-                          dynRoots, fmaRoots>>
+                          dynRoots, fmaRoots, reasoned>>
 
 (* Is there a dynamic call site, in a collected body, whose candidate for  *)
 (* a currently observed class `seen_disp` has not yet seen? Shared by      *)
 (* DiscoverDynamic, Finish and Idempotence. *)
 DynamicWorkAvailable ==
     \E m \in collected :
-        \E T \in (DynSites[m] \cap Observed) :
+        \E T \in (ScannedSites(m) \cap Observed) :
             \E n \in DynTargets[T] : n \notin dynSeen
 
 (* Step 2 for one candidate: it enters `seen_disp` and `dynamic_roots`;   *)
@@ -392,10 +435,11 @@ DiscoverDynamic ==
     /\ CeilingOpen
     /\ ~PrunePending
     /\ \E m \in collected :
-         \E T \in (DynSites[m] \cap Observed) :
+         \E T \in (ScannedSites(m) \cap Observed) :
            \E n \in DynTargets[T] :
              /\ n \notin dynSeen
              /\ dynSeen' = dynSeen \cup {n}
+             /\ reasoned' = reasoned \cup {n}
              /\ IF n \in collected
                 THEN /\ dynRoots' = IF RootsOnlyIfNew THEN dynRoots ELSE dynRoots \cup {n}
                      /\ UNCHANGED <<collected, discarded, status, steps>>
@@ -414,6 +458,7 @@ ScanFma(m) ==
     /\ LET new == FmaEdges[m] \ collected
        IN  /\ fmaScanned' = fmaScanned \cup {m}
            /\ fmaRoots' = fmaRoots \cup new
+           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN new ELSE FmaEdges[m])
            /\ Enroll(new)
     /\ UNCHANGED <<pruned, invokeScanned, invokeSeen, superseded, trimmedFor, dynSeen, dynRoots>>
 
@@ -427,7 +472,7 @@ Finish ==
     /\ ~DynamicWorkAvailable
     /\ status' = "Done"
     /\ UNCHANGED <<collected, discarded, steps, pruned, invokeScanned, invokeSeen,
-                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
+                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
 
 (* THE ROUND-CEILING VARIANT: a cap forces the plan "done" while work      *)
 (* remains -- the retired `for _round in 1:8` / `length(ms) <= 64` bug     *)
@@ -438,7 +483,7 @@ ForceStopAtCeiling ==
     /\ steps >= RoundCeiling
     /\ status' = "Done"
     /\ UNCHANGED <<collected, discarded, steps, pruned, invokeScanned, invokeSeen,
-                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
+                   superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned>>
 
 Stutter ==
     /\ status # "Running"
@@ -469,7 +514,7 @@ ReachClosure(S) ==
     LET Live              == S \ ExternalLeaves
         Obs               == UNION {TypeSites[m] : m \in Live}
         DirectTargets     == UNION {FinalInvoke(m) \cup HiddenTargets(m) \cup FmaEdges[m] : m \in Live}
-        DynTargetsFrom(m) == UNION {DynTargets[T] : T \in (DynSites[m] \cap Obs)}
+        DynTargetsFrom(m) == UNION {DynTargets[T] : T \in (AllSites(m) \cap Obs)}
         DynAll            == UNION {DynTargetsFrom(m) : m \in Live}
         Grown             == S \cup DirectTargets \cup DynAll
     IN  IF Grown = S THEN S ELSE ReachClosure(Grown)
@@ -520,12 +565,20 @@ NoGarbage == collected \subseteq Reachable
 (* answers. MCClosedWorldKindsRootsOnlyIfNewBroken violates it.            *)
 RootsComplete ==
     status = "Done" =>
-        \A m \in collected : \A T \in (DynSites[m] \cap Observed) : DynTargets[T] \subseteq dynRoots
+        \A m \in collected : \A T \in (AllSites(m) \cap Observed) : DynTargets[T] \subseteq dynRoots
 
 (* (8) LeavesNeverCollected, in EVERY state and so at every round: no      *)
 (* import's native body is ever in the plan (MCClosedWorldLeaves; its      *)
 (* LateLeafUncut variant breaks it).                                       *)
 LeavesNeverCollected == collected \cap ExternalLeaves = {}
+
+(* (9) ReasonsComplete: at the fixpoint every collected body has the       *)
+(* reason the collector recorded when it followed the edge, candidate or   *)
+(* root that brought it in; the plan reads them and writes none            *)
+(* (MCClosedWorldPlannerWritesBroken violates it). Not checked where a     *)
+(* materialized original is dead code (MCClosedWorldGarbage, H9): no live  *)
+(* edge names it, so no reason does.                                       *)
+ReasonsComplete == status = "Done" => collected \subseteq reasoned
 
 (* Support invariant: the worklist is genuinely finite -- each enrolling   *)
 (* scan adds a body `invoke_seen`, `seen_disp` or an fma root admits once, *)

@@ -45,4 +45,6 @@ MCWidened         == {}
 MCUnmaterialized  == {}
 MCCollectorKinds  == HiddenKinds
 MCTrim            == FALSE
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================

@@ -1493,6 +1493,11 @@ _g("invoke_in_world", Any[
     # a callee returning `nothing` pushes no value: what is below it on the stack is not its
     # result (dev/AUDIT.md E7)
     ("nothing_result", (x::Int64) -> (r = Ref(x); y = x * 3 + (Base.invoke_in_world(Base.tls_world_age(), _sm_iiw_set!, r, x + 1); r[]); y), Int64(4)),
+    # a call no one method covers is the dynamic call it makes, f(args...), as Julia's run-time
+    # invoke_in_world dispatches it: two methods over an erased argument, and one method that does
+    # not cover it (dev/AUDIT.md P3: no edge and no dynamic site, rejected; native 21 and 34)
+    ("two_methods_erased", (x::Int64) -> (v = Any[x, "ab"]; w = Base.tls_world_age(); Base.invoke_in_world(w, _sm_iiw2, v[1])::Int64 + 10 * Base.invoke_in_world(w, _sm_iiw2, v[2])::Int64), Int64(3)),
+    ("one_method_not_covering", (x::Int64) -> (v = Any[x, Int32(2)]; w = Base.tls_world_age(); Base.invoke_in_world(w, _sm_iiw3, v[1])::Int64 + 10 * Base.invoke_in_world(w, _sm_iiw3, v[2])::Int64), Int64(3)),
 ])
 # Julia's exception stack (dev/formal/ExceptionStack.tla): a throw pushes its exception, an
 # enter records the depth and its pop_exception restores it, `catch e` reads the top, rethrow()
@@ -1623,6 +1628,8 @@ _sm_wf(x) = 2
 abstract type _SmQAB end
 struct _SmQB1 <: _SmQAB; x::Int64; end
 struct _SmQB2 <: _SmQAB; x::Int64; end
+struct _SmQH; q::Union{Nothing,_SmQB2}; end
+const _SM_KT = Any[(3, true), "abc"]
 _sm_kd(::DataType) = 1
 _sm_kd(::Int64) = 2
 # Arithmetic on a value narrowed out of a Union (its class stated by Julia's IR) answers, and
@@ -1680,6 +1687,26 @@ _g("dynamic_enrollment", Any[
     # the same with a tuple of a type built in the program, whose DataType element the
     # collector observes (A5C3: measured 1)
     ("kind_row_beside_type_tuple", (n::Int64) -> (v = Any[Int64, n]; _sm_kd(v[1]) + _sm_tt(n)[2] - n), Int64(3)),
+    # one class set (closed_world_classes): the ambiguity search asks about the classes a value may
+    # have, not every numbered one; QB2 is numbered (a field's type names it) and no value has it
+    # (dev/AUDIT.md A7C4: rejected over the numbered classes, native 3)
+    ("closure_ambiguity_numbered_unreached_class", (n::Int64) -> (k = n; h(x::_SmQAB, y) = 1 + 0k; h(x, y::_SmQAB) = 2 + 0k; h(x::_SmQB1, y::_SmQB1) = 3 + 0k; f = _sm_dh(h)[]; q = _sm_dh(_SmQH(nothing))[]::_SmQH; f(_sm_dh(_SmQB1(n))[], _sm_dh(_SmQB1(n))[])::Int64 + (q.q === nothing ? 0 : 5)), Int64(3)),
+    # the constant `nothing` a statement passes is a value of class Nothing, as a literal is (it was
+    # no candidate: no row for it, a trap where native answers 1), and Julia's match at Nothing
+    # leaves T a TypeVar, the MethodInstance Julia runs
+    ("closure_union_nothing_erased", (n::Int64) -> (k = n; h(x::Union{T,Nothing}) where {T} = (x === nothing ? 1 : 3) + 0k; g = _sm_dh(h)[]; g(_sm_dh(nothing)[])::Int64), Int64(3)),
+    # a kind is no value's dispatch type at a Type{S} parameter: the match at DataType leaves S a
+    # TypeVar and is no signature; the type object's own Type{Int64} is (dev/AUDIT.md A9C6: the
+    # body built at DataType rejected its static parameter, native 8)
+    ("closure_type_parameter_at_kind", (n::Int64) -> (k = n; h(::Type{S}) where {S} = (S === Int64 ? 1 : 3) + 0k; h(x) = 7 + 0k; g = _sm_dh(h)[]; v = Any[Int64, DataType, n]; g(v[1])::Int64 + g(v[3])::Int64), Int64(3)),
+    # the classes a constant holds are candidates: the tuple inside `_SM_KT` has a row for the
+    # dynamic `length` (it was numbered and no candidate: a trap where native answers 32)
+    ("constant_contents_dynamic_call", (n::Int64) -> length(_SM_KT[n])::Int64 + 10 * length(_SM_KT[n + 1])::Int64, Int64(1)),
+    # a tuple held as Any, read by a dynamic getindex (dev/AUDIT.md A3S3)
+    ("tuple_getindex_held_any", (n::Int64) -> (t = _sm_dh((n, 2n))[]; t[1]::Int64), Int64(3)),
+    # a callee is no evidence of a class: the Dict a constructor builds is a candidate by the %new
+    # in the constructor's body (dev/AUDIT.md A4C4)
+    ("constructor_callee_class", (n::Int64) -> (d = Dict{Int64,Int64}(n => 1); v = Any[d, "ab"]; length(v[1])::Int64), Int64(3)),
 ])
 # isa against a kind (DataType, UnionAll, …): Julia folds S <: T only where its subtyping of
 # kinds is sound (jl_is_not_broken_subtype), and tests the type object's kind elsewhere
@@ -1891,6 +1918,12 @@ _g("method_error", Any[
     # read trapped on the null; a tuple holding `nothing` raised a WasmInternalError)
     ("nothing_union_split", (n::Int64) -> (x = n > 0 ? n : nothing; try; _sm_me_q(x)::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(-1)),
     ("nothing_in_any_vector", (n::Int64) -> (v = Any[n, nothing]; try; _sm_me_q(v[n])::Int64; catch e; e isa MethodError ? -1 : -2; end), Int64(2)),
+    # a Bool a comparison makes, reaching a union-split call with no method for it: its class is
+    # in the one class set where it is made (an intrinsic's result), as the numbered set's fixed
+    # primitives held it before
+    # an exception a Base body raises, caught and passed to a call with no method for it
+    ("caught_exception_no_method", (n::Int64) -> (e = try; div(n, n - 3); catch err; err; end; try; _sm_me_q(e)::Int64; catch e2; e2 isa MethodError ? -1 : -2; end), Int64(3)),
+    ("bool_union_split", (n::Int64) -> (x = n > 0 ? n : (n < -5); try; _sm_me_q(x)::Int64; catch e; (e isa MethodError && e.args === (false,)) ? -1 : -2; end), Int64(-1)),
     ("class_switch_caught", (n::Int64) -> (v = Any[n, "s", Int32(2), 0x01, 'c', 1.5]; s = _sm_me_5(v[1])::Int64 + _sm_me_5(v[2])::Int64 + _sm_me_5(v[3])::Int64 + _sm_me_5(v[4])::Int64 + _sm_me_5(v[5])::Int64; try; _sm_me_5(v[n])::Int64; catch e; (e isa MethodError && e.args === (1.5,)) ? s + 100 : s; end), Int64(6)),
 ])
 # a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct
@@ -1932,6 +1965,9 @@ _g("getfield_runtime_name", Any[
 ])
 @noinline _sm_va_getfield(s::Symbol, xs...) = getfield(xs, s)
 @noinline _sm_iiw_set!(r::Base.RefValue{Int64}, v::Int64) = (r[] = v; nothing)
+@noinline _sm_iiw2(x::Int64) = 1
+@noinline _sm_iiw2(x::String) = 2
+@noinline _sm_iiw3(x::Integer) = Int64(x) + 1
 @noinline _sm_dt_getfield(@nospecialize(T::DataType), s::Symbol) = getfield(T, s)
 _g("sizeof_values", Any[
     ("sizeof_memory_int64", (n::Int64) -> Core.sizeof(Memory{Int64}(undef, n)), Int64(3)),

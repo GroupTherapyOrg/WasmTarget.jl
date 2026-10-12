@@ -15,6 +15,8 @@
 (*   B --dyn T2--> D                                                       *)
 (*   A --hidden invoke_in_world--> E --hidden splat--> S                   *)
 (*   E --muladd_float--> F   (Base.fma_emulated)                           *)
+(*   A --:new T3-->[observed]; A --invoke_in_world, no one method covers   *)
+(*        its signature, a value of T3 at it--> W  (a world site, P3)      *)
 (*                                                                         *)
 (* D is discoverable only once B was found by a dynamic scan, scanned by   *)
 (* the invoke scan (which retargets O to N), and N collected -- each       *)
@@ -22,9 +24,9 @@
 (* the imports MCClosedWorldLeaves'.                                       *)
 EXTENDS ClosedWorld
 
-MCMethods == {"R", "A", "B", "O", "N", "D", "E", "S", "F"}
+MCMethods == {"R", "A", "B", "O", "N", "D", "E", "S", "F", "W"}
 MCRoots   == {"R"}
-MCTypes   == {"T1", "T2"}
+MCTypes   == {"T1", "T2", "T3"}
 
 MCInvokeEdges == [m \in MCMethods |->
     IF   m = "R" THEN {"A"}
@@ -34,7 +36,7 @@ MCInvokeEdges == [m \in MCMethods |->
 MCRetargets == [m \in MCMethods |-> IF m = "B" THEN {<<"O", "N">>} ELSE {}]
 
 MCTypeSites == [m \in MCMethods |->
-    IF   m = "A" THEN {"T1"}
+    IF   m = "A" THEN {"T1", "T3"}
     ELSE IF m = "N" THEN {"T2"}
     ELSE {}]
 
@@ -44,7 +46,10 @@ MCDynSites == [m \in MCMethods |->
     ELSE {}]
 
 MCDynTargets == [t \in MCTypes |->
-    IF t = "T1" THEN {"B"} ELSE {"D"}]
+    IF t = "T1" THEN {"B"} ELSE IF t = "T2" THEN {"D"} ELSE {"W"}]
+
+(* A's invoke_in_world call no one method covers: a dynamic site of its callee *)
+MCWorldSites == [m \in MCMethods |-> IF m = "A" THEN {"T3"} ELSE {}]
 
 MCSpecializeFails == {}
 MCRoundCeiling    == 0

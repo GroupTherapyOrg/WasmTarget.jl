@@ -223,9 +223,9 @@ end
         @test e isa WasmTarget.WasmCompileError && !occursin("ambiguous", sprint(showerror, e)) &&
               occursin("admits a type object or a bare array", sprint(showerror, e))
     end
-    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.ghn, (Int64,), "ghn")]).held_type_objects
-    @test Type{M.HM} in WasmTarget.trim_compile_plan(Any[(M.ghm, (Int64,), "ghm")]).held_type_objects
-    @test Type{M.HC} in WasmTarget.trim_compile_plan(Any[(M.ghc, (Int64,), "ghc")]).held_type_objects
+    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.ghn, (Int64,), "ghn")]).classes.held
+    @test Type{M.HM} in WasmTarget.trim_compile_plan(Any[(M.ghm, (Int64,), "ghm")]).classes.held
+    @test Type{M.HC} in WasmTarget.trim_compile_plan(Any[(M.ghc, (Int64,), "ghc")]).classes.held
     # past 10^6 objects the walk of the constants rejects, located at the statement holding the
     # constant as a codegen rejection is: its host, its statement and the inline chain (dev/AUDIT.md
     # A13C7, A13P19: it was a WasmInternalError at the module, "no statement was being compiled")
@@ -236,7 +236,7 @@ end
               e.diag.stmt_idx > 0 && occursin("CHN", e.diag.stmt) && occursin("statement %$(e.diag.stmt_idx)", msg)
     end
     @test M.gcab(1) == 2
-    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.gcab, (Int64,), "gcab")]).held_type_objects
+    @test Type{M.SA} in WasmTarget.trim_compile_plan(Any[(M.gcab, (Int64,), "gcab")]).classes.held
     # a type object held as a value is a candidate whether or not its values are one pointer: a
     # Type{Vector} row rejects (A10C1: no row, and the Any row answered 2 where native answers 1)
     @test M.gtu(3) == 1
@@ -269,4 +269,30 @@ end
     printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
     body = only(filter(b -> startswith(b, "\$pf "), split(printed, r"\n\s*\(func ")))
     @test count(l -> strip(l) == "struct.new $me", split(body, '\n')) == length(rf) + length(rg)
+end
+
+# The one class set holds the classes of a constant's contents: a QB2 inside `const QC = Any[…]`
+# is a value of class QB2 as surely as an allocated one, so the vtable pre-pass asks Julia about
+# (QB2, QB2), where h's two less specific methods are ambiguous (Julia throws MethodError: native
+# -1), and rejects. A set without the constant's contents ran the first row there, a silent wrong
+# answer (dev/AUDIT.md A7C4; L176). The rejection names its callable, not a statement (MARCH 13.17
+# A4P2), so the case is here, not in smoke.
+module ConstantContentsClass
+abstract type QAB end
+struct QB1 <: QAB; x::Int64; end
+struct QB2 <: QAB; x::Int64; end
+const QC = Any[QB2(1)]
+@noinline dh(@nospecialize(x)) = Ref{Any}(x)
+pq(n::Int64) = (k = n; h(x::QAB, y) = 1 + 0k; h(x, y::QAB) = 2 + 0k; h(x::QB1, y::QB1) = 3 + 0k;
+                f = dh(h)[]; a = f(dh(QB1(n))[], dh(QB1(n))[])::Int64;
+                try; a + 10 * f(QC[1], QC[1])::Int64; catch e; e isa MethodError ? -1 : -2; end)
+end
+@testset "a constant's contents are classes of the one set" begin
+    M = ConstantContentsClass
+    @test M.pq(3) == -1
+    plan = WasmTarget.trim_compile_plan(Any[(M.pq, (Int64,), "pq")])
+    @test M.QB2 in plan.classes.runtime
+    let e = try; WasmTarget.compile(M.pq, (Int64,)); nothing; catch err; err; end
+        @test e isa WasmTarget.WasmCompileError && occursin("which are ambiguous for", sprint(showerror, e))
+    end
 end

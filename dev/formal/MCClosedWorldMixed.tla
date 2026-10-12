@@ -31,4 +31,6 @@ MCLateCut         == TRUE
 
 (* the superseded original is live: an unretargeted site still names it *)
 ASSUME "A" \in AllOriginals /\ "A" \in Reachable
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================

@@ -49,4 +49,6 @@ MCLateCut         == TRUE
 (* the late import is reached only from the dynamic candidate *)
 ASSUME /\ "I2" \notin JuliaClosure(MCRoots, {})
        /\ "I2" \in JuliaClosure({"B"}, {})
+(* no invoke_in_world call without one covering method *)
+MCWorldSites == [m \in MCMethods |-> {}]
 =============================================================================
