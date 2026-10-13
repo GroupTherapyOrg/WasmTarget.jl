@@ -484,7 +484,8 @@ Base.showerror(io::IO, e::ModuleValidationError) =
 function _function_type_idx(mod::WasmModule, idx::Integer)::UInt32
     0 <= idx < _function_count(mod) ||
         _module_invalid(:function_index, "function index $idx is out of bounds")
-    idx < num_imported_funcs(mod) && return filter(x -> x.kind == 0x00, mod.imports)[idx + 1].type_idx
+    local imp = imported_function(mod, idx)
+    imp === nothing || return imp.type_idx
     return mod.functions[idx - num_imported_funcs(mod) + 1].type_idx
 end
 
@@ -866,6 +867,23 @@ parity(pkg/wasm_builder/lib/src/builder/functions.dart:13 FunctionsBuilder._impo
 """
 function num_imported_funcs(mod::WasmModule)::Int
     count(imp -> imp.kind == 0x00, mod.imports)
+end
+
+"""
+    imported_function(mod, idx) -> Union{Nothing, WasmImport}
+
+The imported function at function index `idx`, or `nothing` where `idx` is no imported function's
+(a defined function's): the one query that reads an import by its function index.
+parity(pkg/wasm_builder/lib/src/builder/functions.dart:13 FunctionsBuilder._importedFunctions)
+"""
+function imported_function(mod::WasmModule, idx::Integer)::Union{Nothing,WasmImport}
+    local n = 0
+    for imp in mod.imports
+        imp.kind == 0x00 || continue
+        n == idx && return imp
+        n += 1
+    end
+    return nothing
 end
 
 """

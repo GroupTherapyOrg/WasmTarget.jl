@@ -289,9 +289,18 @@ elision is fail-closed: every closure field must have exactly one explicit
 substitution.
 
 Framework runtime adapters that must reference compiled roots may use
-`link_roots(mod, root_indices, type_registry)`. It runs once after every root
-has a typed placeholder and before root bodies are emitted; adding late imports
-is rejected because it would invalidate all function indices.
+`link_roots(mod, root_indices, type_registry)`, `root_indices` mapping each entry's
+name to its function index. It runs once after every root has a typed placeholder
+and before root bodies are emitted, and returns the function exports it requests,
+a vector of `name => function index` (or `nothing`), which the compile makes with
+its own, each once, its name taken by the one export namer; an export or a late
+import the hook adds itself is rejected (an import would invalidate all function
+indices).
+
+Each entry is exported under its requested name, or its function's name (its
+signature where another entry requests or takes that name); every other function the
+compile defines under its signature as Julia prints it in a stack trace
+(`Base.StackTraces.show_spec_sig`). A name already exported is refused, never renamed.
 
 parity(compile.dart:216 compile)
 """

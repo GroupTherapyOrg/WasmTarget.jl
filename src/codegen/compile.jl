@@ -192,11 +192,11 @@ holds that index.
 function _check_import_stub_external_types!(mod::WasmModule, registry::TypeRegistry,
                                              name::AbstractString, arg_types::Tuple,
                                              wasm_idx::Integer, return_type::Type)::Nothing
-    local func_imports = filter(imp -> imp.kind == 0x00, mod.imports)
-    (0 <= Int(wasm_idx) < length(func_imports) && _is_host_declared_import(func_imports[Int(wasm_idx) + 1])) ||
+    local imp = imported_function(mod, wasm_idx)
+    (imp !== nothing && _is_host_declared_import(imp)) ||
         throw(ArgumentError("import stub \"$(name)\"$(arg_types) is bound to function index $(wasm_idx), " *
                             "which is not a host-declared function import (the module imports " *
-                            "$(length(func_imports)) function(s)): an import_stubs index must name the host import " *
+                            "$(num_imported_funcs(mod)) function(s)): an import_stubs index must name the host import " *
                             "the stub stands for"))
     ft = _function_type(mod, Int(wasm_idx))
     required_params = WasmValType[translate_external_type(T, mod, registry) for T in arg_types]
@@ -240,9 +240,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         source_map_url::Union{Nothing,String}=nothing,
                         trace::Union{Nothing,StatementTrace}=nothing,
                         options::CompilerOptions,
-                        diagnostics::Union{Nothing,Vector{WasmDiagnostic}},
-                        entry_names::Set{String}=Set{String}(),
-                        named_entries::Set{Any}=Set{Any}()
+                        diagnostics::Union{Nothing,Vector{WasmDiagnostic}}
                         )::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     # This private entry receives only a complete plan produced by
     # `trim_compile_plan`. It never discovers or silently adds functions.
@@ -532,7 +530,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Calculate function indices (accounting for imports + pre-created helper functions)
     # Functions are added in order, so index = n_imports + n_existing + position - 1
-    n_imports = length(mod.imports)
+    n_imports = num_imported_funcs(mod)
     # every function is defined with its signature (function_wasm_signature, the one derivation
     # its body's builder carries too) before any body compiles, so a call! reads every function's
     # type from the moment its index exists: define, then fill (functions.dart:31 define).
@@ -541,30 +539,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # not) registers as is_candidate=true → visible to the call-site typeId switch (by_ref)
     # and hidden from get_function's signature lookup; an :invoke that names it still
     # reaches it by its MethodInstance (get_function_by_mi).
-    # each function's name, given where it is defined: its Julia name, with a `_<k>` suffix for
-    # the k-th earlier function of that name, the name the compile asks to export it under
-    # (codegen_export_name may rename the export in a host's module; a generated function may
-    # share the text). A requested name is the entry's own; any other name already given (an
-    # entry given without a name, as another specialization of its function is) takes the first
-    # free `name_<k>`
-    # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
-    local given_names = Set{String}()
-    local plan_names = union(Set{String}(String(fd[3]) for fd in function_data), entry_names)
-    local export_name_counts = Dict{String,Int}()
-    local defined_names = String[]
-    for (f, arg_types, name, _, _, _, _) in function_data
-        local export_name = name
-        if !((f, Tuple(arg_types)) in named_entries) && (name in given_names || name in entry_names)
-            local k = get(export_name_counts, name, 1)
-            while string(name, "_", k) in given_names || string(name, "_", k) in plan_names
-                k += 1
-            end
-            export_name = string(name, "_", k)
-            export_name_counts[name] = k + 1
-        end
-        push!(given_names, export_name)
-        push!(defined_names, export_name)
-    end
     for (i, (f, arg_types, name, _, return_type, global_args, _)) in enumerate(function_data)
         func_idx = UInt32(n_imports + n_existing + i - 1)
         local fd_mi = function_data[i][9]
@@ -598,7 +572,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         end
         # defined here, its body filled by the compile loop below (every index exists before
         # any body compiles)
-        define_function!(mod, _pp, _rr; name=defined_names[i])
+        # named where it is defined, by the name the plan gave it once (plan_function_names!)
+        # parity(pkg/dart2wasm/lib/functions.dart:171 FunctionCollector.getFunction): `functions.define(ftype, getFunctionName(target))` names the function where it is defined
+        define_function!(mod, _pp, _rr; name=String(name))
     end
 
     # THE CLOSURE VTABLE PRE-PASS (the index-freeze rule: nothing
@@ -684,18 +660,26 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         end
     end
 
-    # the exports a link_roots hook adds belong to this compile too (a framework's host-facing
-    # functions): each is exported through its entry below, as the compiler's own are
-    local hook_exports_from = length(mod.exports) + 1
-    if link_roots !== nothing
-        # the linker runs after function indices exist, so add_import! refuses an import from it
-        root_indices = Dict{String,UInt32}(
-            name => UInt32(n_imports + n_existing + i - 1)
-            for (i, (_, _, name, _, _, _, _)) in enumerate(function_data))
-        link_roots(mod, root_indices, type_registry)
+    # the exports a link_roots hook requests (a framework's host-facing functions), made by the
+    # compile with its own, each once, under its final name and through its entry
+    local hook_exports = link_roots === nothing ? Pair{String,UInt32}[] :
+        run_link_roots(link_roots, mod, type_registry, Dict{String,UInt32}(
+            String(name) => UInt32(n_imports + n_existing + i - 1)
+            for (i, (_, _, name, _, _, _, _, _, fd_mi)) in enumerate(function_data) if haskey(plan.roots, fd_mi)))
+    # every export's name decided here, once, before any body compiles, by the one export namer:
+    # each function this compile defines under its name (its requested name or its signature,
+    # plan_function_names!), then each export the hook requests; a name already held is refused
+    # now, not after codegen
+    # parity(pkg/dart2wasm/lib/translator.dart:163 Translator.exportNamer)
+    local namer = ExportNamer(mod)
+    local compile_exports = Tuple{String,UInt32}[]
+    for (i, (_, _, name, _, _, _, _, _, _)) in enumerate(function_data)
+        push!(compile_exports, (export_name!(namer, String(name), "the compiled function \"$(name)\""),
+                                UInt32(n_imports + n_existing + i - 1)))
     end
-
-
+    for (name, idx) in hook_exports
+        push!(compile_exports, (export_name!(namer, name, "the link_roots hook's request for function $(idx)"), idx))
+    end
 
     # Build dispatch tables for megamorphic functions (>8 specializations)
     # Phase 1: metadata (signatures, globals, tables) — needed by emit_dispatch_call! during body compilation
@@ -706,10 +690,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         # parity(dispatch_table.dart:501 DispatchTable.build): pack single-axis selectors into the ONE dart table
         pack_dispatch_selectors!(mod, dispatch_registry, type_registry)
     end
-
-    # the exports this compile makes, (name, function index), one per function it defines:
-    # added once, after codegen, where whether the module has Julia's exception stack is known
-    local compile_exports = Tuple{String,UInt32}[]
 
     # Second pass: fill each defined function with its body
     for (i, (f, arg_types, name, _, return_type, global_args, is_closure, fn_nir)) in enumerate(function_data)
@@ -784,7 +764,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)
         end
         fill_function!(mod, func_idx, b)
-        push!(compile_exports, (defined_names[i], func_idx))
     end
 
     # Phase 2: Add wrapper functions AFTER all actual functions are compiled.
@@ -802,28 +781,21 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     finalize_module_initializers!(mod, type_registry)
     # an exception that escapes an export leaves Julia's stack as the call found it, so in a
     # module that has the stack an export is its entry ("<export name> (export)"), and the
-    # function itself otherwise. A function export this compile's link_roots hook made is
-    # retargeted to its entry here, after codegen (dev/MARCH.md 13.17 A13C2, C1); an
+    # function itself otherwise: the compile's own exports and its hook's requests, each made
+    # once, here, after codegen, under the name the export namer took for it before codegen; an
     # existing_module's exports, made before this compile, are left as they were made. WT exports
     # every function this compile defines, where dart exports only a member with a wasm:export
     # pragma (functions.dart:154-156): dev/MARCH.md 13.17 A13C3.
     local exc_top = type_registry.handles.exc_top
-    if exc_top !== nothing
-        for k in hook_exports_from:length(mod.exports)
-            local e = mod.exports[k]
-            (e.kind == 0x00 && e.idx >= num_imported_funcs(mod)) || continue
-            mod.exports[k] = WasmExport(e.name, e.kind, emit_export_entry!(mod, type_registry, e.idx, e.name))
-        end
-    end
-    # an exported function is exported once, under its export name, its entry named by it
     # parity(pkg/dart2wasm/lib/functions.dart:178 exports.export): `module.exports.export(exportName, function)`, once per exported function
-    local finals = codegen_export_names(mod, String[first(e) for e in compile_exports], entry_names)
-    for ((_, inner_idx), final) in zip(compile_exports, finals)
-        add_export!(mod, final, 0, exc_top === nothing ? inner_idx : emit_export_entry!(mod, type_registry, inner_idx, final))
+    for (name, idx) in compile_exports
+        local target = (exc_top === nothing || idx < num_imported_funcs(mod)) ? idx :
+                       emit_export_entry!(mod, type_registry, idx, name)
+        add_export!(mod, name, 0, target)
     end
     # the class reader of an escaped exception, over the final numbering, as the egal function's
     # body is filled once codegen has numbered every class
-    ensure_class_id_reader!(mod, type_registry, translator)
+    ensure_class_id_reader!(mod, type_registry, translator, namer)
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
@@ -836,15 +808,9 @@ end
 # entry points may normalize inputs, but none may bypass this collector.
 # parity(pkg/dart2wasm/lib/compile.dart:572 _runCodegenPhase)
 function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
-    normalized = Any[]
-    for entry in functions
-        if length(entry) == 2
-            f, arg_types = entry
-            push!(normalized, (f, arg_types, string(nameof(f))))
-        else
-            push!(normalized, entry)
-        end
-    end
+    # an entry given without a name is named by trim_compile_plan (its function's name, or its
+    # signature where another entry requests or takes that name)
+    normalized = Any[length(entry) == 2 ? (entry[1], entry[2], nothing) : entry for entry in functions]
     import_stubs = get(kwargs, :import_stubs, Any[])
     external_entries = Any[(entry[1], Tuple(entry[3])) for entry in import_stubs]
     root_bindings = get(kwargs, :root_bindings, Dict{String,RootBindings}())
@@ -853,7 +819,7 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     end
     # every requested name (an entry given with its name) decided before anything is compiled: a
     # name two entries request, or one entry requested under two names, is refused, never renamed
-    # onto another entry; an entry given without a name takes its function's, disambiguated
+    # onto another entry
     local requested = Dict{String,Any}()
     local entry_name = Dict{Any,String}()
     for entry in functions
@@ -869,7 +835,6 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
         requested[name] = key
         entry_name[key] = name
     end
-    kwargs = (; kwargs..., entry_names=Set{String}(keys(requested)), named_entries=Set{Any}(values(requested)))
     # a host's module is checked before anything is collected: a mismatch fails at the entry,
     # not after the closed world's collection
     local existing = get(kwargs, :existing_module, nothing)
@@ -895,7 +860,7 @@ end
 # the entries a module compiles, for a failure outside any statement to name
 # parity(pkg/dart2wasm/lib/compile.dart:113 CFECrashError)
 _module_entries_label(entries::Vector)::String =
-    "module of " * join((string(e[3], "(", join(("::" * string(T) for T in e[2]), ", "), ")") for e in entries), ", ")
+    "module of " * join((string(something(e[3], nameof(e[1])), "(", join(("::" * string(T) for T in e[2]), ", "), ")") for e in entries), ", ")
 
 """
     compile_module(functions::Vector) -> WasmModule
@@ -932,30 +897,96 @@ end
 # _collect_reachable_ir_types (Phase 12B, the closed-world type collector) lives in
 # trimcollect.jl beside the planner; it reads the NIR bodies in `function_data`.
 
-# The names a compile exports its functions under, decided together before any export is made:
-# each function's own name (unique in the plan: trim_compile_plan dedups an unrequested name, and
-# _compile_module_trim refuses a name two entries request), or, for a name nobody requested that
-# the module already exports (a host's existing_module or its link_roots hook), `name_d<k>`, never
-# a name already taken or decided. A requested name the module already exports is refused: a
-# rename would hand the host another entry's name. The low-level module builder, like dart's
-# ExportsBuilder (exports.dart:14), rejects a duplicate name.
-# parity(quarantine: a WT invention, open on 13.4's one export namer and 13.17 A13C2/A13C3 — a compile into a host's existing module may be asked for a name that module already exports; dart2wasm builds its module whole, each export name from its member's wasm:export pragma)
-function codegen_export_names(mod::WasmModule, names::Vector{String}, requested::Set{String})::Vector{String}
-    local taken = Set{String}(e.name for e in mod.exports)
-    allunique(names) || error("the plan gave two functions one name: $(names[findfirst(n -> count(==(n), names) > 1, names)])")
-    for n in names
-        (n in requested && n in taken) && throw(ArgumentError(
-            "the module already exports \"$n\", the name this compile is asked to export a function under: " *
-            "request another name, or leave the module's export out"))
+"""
+    ExportNamer(mod)
+
+The one namespace a module's export names are taken from, as dart's translator holds one
+exportNamer (translator.dart:163): it holds the names the module already exports (a host's
+existing_module, the exception tag its setup exported), each with what holds it, and reserves the
+names of the exports WasmTarget generates, `wasmtarget.exception` and `wasmtarget.class_id`, which
+only generated_export_name! takes. Every export codegen makes takes its name through it, once.
+parity(pkg/dart2wasm/lib/namer.dart:23 Namer): the used names of one namespace, the names of
+pre-specified exports reserved among them (namer.dart:32 reserveName)
+"""
+struct ExportNamer
+    taken::Dict{String,String}   # each name taken, and what holds it
+    reserved::Set{String}        # the generated exports' names, taken by their export alone
+end
+
+# the names a module's exports hold, and the generated exports' reserved names
+# parity(pkg/dart2wasm/lib/namer.dart:23 Namer)
+ExportNamer(mod::WasmModule)::ExportNamer =
+    ExportNamer(Dict{String,String}(e.name => "the module's export $(k - 1)" for (k, e) in enumerate(mod.exports)),
+                Set{String}(["wasmtarget.exception", "wasmtarget.class_id"]))
+
+"""
+    export_name!(namer, name, holder) -> String
+
+Take `name` for one export, `holder` saying what it exports (for the message of a later
+request). A name already taken, or reserved for a generated export, is refused, naming what holds
+it, never renamed with a counter (dart's getName appends `_<n>`, namer.dart:45): a function is
+exported under its requested name or its signature (plan_function_names!), each Julia's identity,
+so a second holder is a request to change, not a name to invent.
+parity(pkg/dart2wasm/lib/namer.dart:45 Namer.getName)
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): a name held twice is refused, where dart's counter suffix (namer.dart:45) would hand a host another function under a near name.)
+"""
+function export_name!(namer::ExportNamer, name::String, holder::String)::String
+    local prior = get(namer.taken, name, name in namer.reserved ?
+                      "reserved for the export WasmTarget generates under it" : nothing)
+    prior === nothing || throw(ArgumentError(
+        "the export name \"$name\" is taken ($(prior)), the name $(holder) is exported under: " *
+        "request another name, or leave the module's export out"))
+    namer.taken[name] = holder
+    return name
+end
+
+"""
+    generated_export_name!(namer, name) -> String
+
+Take the reserved `name` for the export WasmTarget generates under it (the exception tag, the
+class reader), once.
+parity(pkg/dart2wasm/lib/namer.dart:32 Namer.reserveName)
+"""
+function generated_export_name!(namer::ExportNamer, name::String)::String
+    name in namer.reserved || throw(WasmInternalError(name, 0, "", String["exporting $(name)"],
+        ErrorException("a generated export whose name the export namer does not reserve"),
+        Base.StackTraces.StackFrame[]))
+    local prior = get(namer.taken, name, nothing)
+    prior === nothing || throw(ArgumentError(
+        "the export name \"$name\" is taken ($(prior)), the name of the export WasmTarget generates"))
+    namer.taken[name] = "the export WasmTarget generates"
+    return name
+end
+
+"""
+    run_link_roots(link_roots, mod, registry, root_indices) -> Vector{Pair{String,UInt32}}
+
+Run a framework's `link_roots(mod, root_indices, registry)` hook once, after every function has
+its index and before any body is compiled, `root_indices` mapping each entry's name to its
+function index. The hook returns the function exports it requests, `name => function index` (or
+`nothing` for none), which the compile makes with its own (each once, its name through the one
+export namer, through its entry); the hook changes no export itself (the module's exports after it
+equal those before it, so an export it adds, removes or retargets is refused), and it adds no
+import (add_import! refuses one after a definition).
+parity(quarantine: a host framework links its runtime adapters to the compiled roots (existing_module, dev/MARCH.md 13.16); dart's translator builds its module whole, each export from a wasm:export pragma, functions.dart:178.)
+"""
+function run_link_roots(link_roots::Function, mod::WasmModule, registry::TypeRegistry,
+                        root_indices::Dict{String,UInt32})::Vector{Pair{String,UInt32}}
+    local before = copy(mod.exports)
+    local requested = link_roots(mod, root_indices, registry)
+    mod.exports == before || throw(ArgumentError(
+        "the link_roots hook changed the module's exports (before: " *
+        join(("\"$(e.name)\" → $(e.kind):$(e.idx)" for e in before), ", ") * "; after: " *
+        join(("\"$(e.name)\" → $(e.kind):$(e.idx)" for e in mod.exports), ", ") *
+        "): a hook adds, removes or retargets no export; it returns the exports it requests, " *
+        "`name => function index`, and the compile makes them"))
+    requested === nothing && return Pair{String,UInt32}[]
+    requested isa AbstractVector || throw(ArgumentError(
+        "the link_roots hook returned $(repr(requested)): a hook returns `nothing` or the exports it requests, " *
+        "a vector of `name => function index`"))
+    for r in requested
+        r isa Pair{String,<:Integer} || throw(ArgumentError(
+            "the link_roots hook requested $(repr(r)): each requested export is `name => function index`"))
     end
-    local decided = union(taken, Set{String}(names))
-    return map(names) do n
-        n in taken || return n
-        local k = 2
-        while string(n, "_d", k) in decided
-            k += 1
-        end
-        push!(decided, string(n, "_d", k))
-        return string(n, "_d", k)
-    end
+    return Pair{String,UInt32}[first(r) => UInt32(last(r)) for r in requested]
 end
