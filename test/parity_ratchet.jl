@@ -1012,9 +1012,9 @@ const LOCKS = [
                           exclude_files=["parity_ratchet.jl"])),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
         () -> count_silent_catches()),
-    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
+    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted. One site is allowed, exactly: `function host_runtime_js(bytes::Vector{UInt8})::String`, no emission but the host runtime generated from the module a host instantiates, its imports read by the builder's module_function_imports (dart generates its runtime from the module it translated, runtime_generator.dart:128)",
         () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
-                          roots=[CODEGEN])),
+                          roots=[CODEGEN], exclude_line=r"^function host_runtime_js\(bytes::Vector\{UInt8\}\)::String$")),
     "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
         () -> begin
             codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
@@ -2597,7 +2597,7 @@ const LOCKS = [
                               (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    trace === nothing || ensure_trace_imports!(mod)"),
                               (gen, "const st = e.getArg(tag, 1);"),
                               (runner, "catch (e) { return [(\$(WasmTarget.host_escape_js()))(instance.exports, e)]; }"),
-                              (runner, "    \$HOST_RUNTIME_MERGE_JS"),
+                              (runner, "    \$(host_runtime_merge_js(bytes))"),
                               (gen, "    global_get!(b, top)\n    struct_get!(b, cell, 1)\n    global_get!(b, top)\n    throw_!(b, exc_tag(registry))"),
                               (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx)\n    finish_function!(b)"),
                               (gen, "        struct_set!(b, cell, 0)\n    end\n    return _emit_throw_top!(b, mod, registry)\nend")]
@@ -2674,24 +2674,42 @@ const LOCKS = [
                           roots=[joinpath(SRC, "builder")]) +
               (occursin("        m[1] == \"builder/types.jl\" && (started = true)\n        started && push!(files, m[1])",
                         read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)) ? 0 : 1)),
-    "L150_every_host_import_has_its_runtime" => ("every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src), is answered by HOST_RUNTIME (generate.jl) or by the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and HOST_RUNTIME answers none that no code creates: a module's imports and its runtime are one list, as dart2wasm generates its runtime's JS methods from what it translated (runtime_generator.dart:128); the glue reads its exclusion list, the imports it does not wrap, from HOST_RUNTIME, the list _is_host_declared_import reads; a traced compile's `wasmtarget.trace_*` imports are its harness's (dev/CHARTER.md C1)",
+    "L150_every_host_import_has_its_runtime" => ("WT's own imports are one list, WT_IMPORTS (generate.jl), which every reader reads: every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src, and the traced compile's per-type probes, ensure_trace_imports!), is on it or is the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and it lists none that no code creates; host_runtime_js answers each of them a module declares, _is_host_declared_import calls every other function import the host's (by that list alone, no module-name rule), and the glue leaves exactly them unwrapped. The runtime is generated per module, as dart2wasm generates its runtime's JS methods from the module it translated (runtime_generator.dart:60 generateJsMethods, :128 RuntimeFinalizer.generate): host_runtime_js has one method, over the bytes a host instantiates (their imports read by the builder's module_function_imports), so no harness answers a module with a fixed list or another module's runtime (no `host_runtime_js()` call in src, test or docs). Behavior: test/host_imports.jl's 'the host runtime is the module's own imports' instantiates a module that reads the clock and one that draws random words, each with its own runtime, whose fields equal the module's declared function imports exactly, and with any one field taken out raises a LinkError (until 116e-2 every harness instantiated every module with all three fixed answers; dev/AUDIT.md A2C9, A2E4, A13E4; dev/CHARTER.md C1)",
         () -> begin
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
             local created = Set{Tuple{String,String}}()
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
                 for m in eachmatch(r"add_(?:global_)?import!\(mod, \"(\w+)\", \"(\w+)\"", read(joinpath(dir, f), String))
-                    startswith(m.captures[2], "trace_") || push!(created, (m.captures[1], m.captures[2]))
+                    push!(created, (m.captures[1], m.captures[2]))
                 end
             end
-            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
-            local answered = Set{Tuple{String,String}}((m.captures[1], m.captures[2])
-                                 for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", \"", gen))
-            # the glue answers its count, and reads the imports it leaves alone from HOST_RUNTIME
-            local glue = match(r"(?s)\nfunction host_glue_js\(\)::String\n.*?\nend\n", gen)
-            local glue_ok = glue !== nothing && occursin("for (mm, f, _) in HOST_RUNTIME if mm == m", glue.match) &&
-                            occursin("once(glued.wasmtarget, 'wasmtarget', 'host_imports_open', open)", glue.match)
-            glue_ok && push!(answered, ("wasmtarget", "host_imports_open"))
-            length(symdiff(created, answered)) + (glue_ok ? 0 : 1)
+            for m in eachmatch(r"\(\"(trace_\w+)\", [IF](?:32|64)\)", fbody(gen, "ensure_trace_imports!"))
+                push!(created, ("wasmtarget", m.captures[1]))
+            end
+            local list = match(r"(?s)\nconst WT_IMPORTS = Tuple\{String,String,Union\{Nothing,String\}\}\[\n.*?\n\]\n", gen)
+            local listed = list === nothing ? Set{Tuple{String,String}}() :
+                Set{Tuple{String,String}}((m.captures[1], m.captures[2]) for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", (?:\"|nothing)", list.match))
+            # the glue answers its count, and reads the imports it leaves alone from WT_IMPORTS
+            local glue = fbody(gen, "host_glue_js")
+            local glue_ok = occursin("for (mm, f, _) in WT_IMPORTS if mm == m", glue) &&
+                            occursin("once(glued.wasmtarget, 'wasmtarget', 'host_imports_open', open)", glue) &&
+                            !occursin("m === 'wasmtarget'", glue)
+            glue_ok && push!(listed, ("wasmtarget", "host_imports_open"))
+            local required = [
+                (gen, "_is_host_declared_import(imp::WasmImport)::Bool =\n    imp.kind == 0x00 && !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, WT_IMPORTS)\n"),
+                (fbody(gen, "host_runtime_js"), "local imported = Set{Tuple{String,String}}(module_function_imports(bytes))\n    local answered = [(m, f, js) for (m, f, js) in WT_IMPORTS if js !== nothing && (m, f) in imported]"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"given\"] == r[\"declared\"] == sort([\"wasmtarget.stack_trace\", has])"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"missing\"] == [x * \" LinkError\" for x in r[\"given\"]]")]
+            local v = length(symdiff(created, listed)) + (glue_ok ? 0 : 1) +
+                      count(((text, needle),) -> !occursin(needle, text), required)
+            # one method, over the module's bytes; no fixed runtime anywhere
+            v += abs(count_sites(r"^function host_runtime_js\(|^host_runtime_js\(.*\)(?:::\w+)?\s*=") - 1)
+            v += count_sites(r"^function host_runtime_js\((?!bytes::Vector\{UInt8\}\)::String$)")
+            v += count_sites(r"host_runtime_js\(\)|HOST_RUNTIME\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "docs")],
+                             exclude_files=["parity_ratchet.jl"])
+            v
         end),
     "L151_every_builder_has_its_module" => ("every builder has its module, as every dart InstructionsBuilder has one (instructions.dart:233): InstrBuilder and WasmStackValidator have no method without a WasmModule (`mod` is a required keyword, never `Union{Nothing}`), so a module-less builder cannot be made and its fallbacks (a caller's global type, an unchecked global.set, a guessed struct for an unresolvable index, a call's claimed signature) are unreachable; no `=== nothing` test of a module in src/builder and no `mod=nothing` in src; every InstrBuilder codegen constructs names its module (`mod=`). Its behavior, over src/builder alone: `InstrBuilder(; func_name)` and `WasmStackValidator(; func_name)` throw (dev/AUDIT.md A2B7, A3B5, B5; dev/CHARTER.md C7)",
         () -> begin
@@ -3051,10 +3069,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
             local reader = fbody(gen, "ensure_class_id_reader!")
             local helper = fbody(gen, "host_escape_js")
-            local required = [(reader, "add_export!(mod, \"wasmtarget.class_id\", 0,"),
+            local required = [(reader, "add_export!(mod, generated_export_name!(namer, \"wasmtarget.class_id\"), 0,"),
                               (reader, "emit_type_object_kind!(b, registry, 0, allocate_local!(ctx, I32), done, id!)"),
                               (reader, "local_get!(b, 0)\n    emit_class_id!(b, ctx, Any)\n    end_block!(b)\n    finish_function!(b)"),
-                              (comp, "    ensure_class_id_reader!(mod, type_registry, translator)\n"),
+                              (comp, "    ensure_class_id_reader!(mod, type_registry, translator, namer)\n"),
                               (helper, "exports['wasmtarget.class_id'](e.getArg(tag, 0))"),
                               (helper, "return { throw: 'minified:Class' + id, stack }"),
                               (fbody(api, "_compile"), "_emit_module(result[1]; optimize, validate, class_names=_class_names(result[2]))"),
@@ -3805,6 +3823,60 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("an as-checker's rejection is its caller's", da) && occursin("one as-checker per (target, static type)", da) ? 0 : 1
             local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
             v += occursin("_g(\"as_checkers\"", smk) && occursin("(\"empty_intersection_throws\"", smk) ? 0 : 1
+            v
+        end),
+    "L184_one_export_namer" => ("a module's export names come from one export namer, as dart's translator holds one exportNamer (translator.dart:163; namer.dart:23 Namer): ExportNamer, made from the module's exports with the names of the exports WasmTarget generates reserved (namer.dart:32 reserveName); every add_export! in codegen takes its name from it, export_name! or generated_export_name! (the compile's functions and its link_roots hook's requests, decided before any body compiles, the exception tag, the class reader), and a name already held is refused naming its holder, never renamed with a counter (no `_d<k>`, `name_<k>` or `base_<n>`: a compiled function's name is its Julia identity, plan_function_names!, Base.StackTraces.show_spec_sig of its method and specTypes, where of two methods over one specialization the one Julia's `morespecific` orders first keeps it and the other adds its method's own signature, the choice never the plan's order; a name still held twice after that is a WasmInternalError naming both methods); a link_roots hook returns the exports it requests (`name => function index`) and adds none itself (run_link_roots refuses one), and no export is retargeted after codegen (no assignment into a module's `.exports`). Behavior: test/real_bottom_exceptions.jl's 'each export is made once' (a hook's request exported once through its entry; a hook's own add_export!, a hook's request for a name a compiled function holds, a requested reserved name and a host export of a function's signature each refused, naming the holder) and test/generated_names.jl's 'a compiled function is named by its signature' (names independent of the order, smoke's invoke_names_its_method and closure_invoke_only_body named by rule (a), two generic functions printing alike refused) (dev/AUDIT.md A13C2, A12C5, P6; dev/MARCH.md 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local v = count_sites(r"^struct ExportNamer$") == 1 ? 0 : 1
+            # every export codegen makes is named by the namer: each add_export! line names it
+            # there, or is the compile's one loop over the names the namer took before codegen
+            for root in (CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")), (dir, _, files) in walkdir(root), f in files
+                endswith(f, ".jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    (_iscomment(line) || !occursin(r"\badd_(?:global_|table_|memory_)?export!\(", line)) && continue
+                    (occursin(r"\badd_export!\(mod, (?:generated_)?export_name!\(", line) ||
+                     strip(line) == "add_export!(mod, name, 0, target)") || (v += 1)
+                end
+            end
+            local required = [(comp, "push!(compile_exports, (export_name!(namer, String(name), \"the compiled function \\\"\$(name)\\\"\"),"),
+                              (comp, "push!(compile_exports, (export_name!(namer, name, \"the link_roots hook's request for function \$(idx)\"), idx))"),
+                              (comp, "    for (name, idx) in compile_exports\n        local target = (exc_top === nothing || idx < num_imported_funcs(mod)) ? idx :\n                       emit_export_entry!(mod, type_registry, idx, name)\n        add_export!(mod, name, 0, target)\n    end"),
+                              (comp, "    length(mod.exports) == before || throw(ArgumentError("),
+                              (trim, "all(o -> o === mi || Base.morespecific(mi.def::Method, o.def::Method), alike)) ? s :"),
+                              (trim, "    sprint(io -> Base.StackTraces.show_spec_sig(IOContext(io, :color => false), mi.def::Method, mi.specTypes))"),
+                              (read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String), "occursin(\"the link_roots hook's request\", err.msg)"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test \"_sm_oc(x::Int64) [_sm_oc(x::Integer)]\" in names(mi)"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test occursin(\"print alike\", msg)")]
+            v += count(((text, needle),) -> !occursin(needle, text), required)
+            # one place each export is made: the compile's loop runs once, after codegen, over names
+            # decided before it; nothing retargets an export, and no counter renames one
+            v += count_sites(r"\.exports\[[^\]]*\]\s*=(?!=)|codegen_export_names|used_names|export_name_counts|given_names|\"_d\"")
+            v += count("local namer = ExportNamer(mod)", comp) == 1 ? 0 : 1
+            v
+        end),
+    "L185_one_import_query" => ("the import at a function index is read by one builder query, imported_function(mod, idx), as wasm_builder's FunctionsBuilder holds its imported functions (functions.dart:13 _importedFunctions) and FunctionsBuilder.import (:43) hands its caller the imported function: codegen, the frontend and ext read no module's `.imports` (no filter over a module's imports at a call site, no index into them), every import query there being imported_function, with num_imported_funcs for the count; inside the builder the list is read only by the functions that keep it (add_import!, num_imported_funcs, imported_function) and the serializer (to_bytes_mapped). Behavior: test/host_imports.jl's 'one query for the import at a function index' (the k-th function import, nothing at a defined function's index, a host-declared import told apart by that answer alone, and the import section the bytes declare read back the same) (dev/AUDIT.md A13E4; dev/CHARTER.md C1)",
+        () -> begin
+            local v = count_sites(r"\.imports\b"; roots=[CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")])
+            v += count_sites(r"filter\([^\n]*\bimports\b")
+            v += count_sites(r"^function imported_function\(") == 1 ? 0 : 1
+            # the builder: the functions that read the list, exactly
+            local readers = Set{String}()
+            for (dir, _, fs) in walkdir(joinpath(SRC, "builder")), f in fs
+                endswith(f, ".jl") || continue
+                local enclosing = ""
+                for line in eachline(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    _iscomment(line) && continue
+                    occursin(r"\bmod\.imports\b", line) && push!(readers, enclosing)
+                end
+            end
+            v += length(symdiff(readers, Set(["add_import!", "num_imported_funcs", "imported_function", "to_bytes_mapped"])))
+            local hi = read(joinpath(ROOT, "test", "host_imports.jl"), String)
+            v += occursin("@testset \"one query for the import at a function index\" begin", hi) &&
+                 occursin("@test WasmTarget.imported_function(mod, n) === nothing", hi) ? 0 : 1
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",

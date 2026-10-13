@@ -69,8 +69,8 @@ anchor in `src/` has a row.)
 | Value-type subtyping | `wasm_subtype` (builder/types.jl) | — a per-type rule, type.dart isSubtypeOf; test_wasm_subtype_lattice.jl |
 | Closed-world binding lookups | `_closed_world_type_bounds`, `_closed_world_isvisible` (interpreter.jl) | — a walk down one binding's partitions or import chain to its end; no fixpoint |
 | Array element offset and MemoryRef snapshots | `array_offset_field_idx` (structs.jl), `_memoryref_operand_is_fixed`, `allocate_memoryref_offset_locals!` (builtins.jl) | StorageRef |
-| LEB128 and source-map VLQ encoders | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl) | — encodings; wasm-tools parses every module |
-| Export names | `codegen_export_names` (compile.jl) | — one pass over the names, each its own or the first free `name_d<k>`; its claims (no taken name reused, a requested taken name refused) are per name, test/real_bottom_exceptions.jl "each export is made once" |
+| LEB128 and source-map VLQ encoders, the import-section reader | `encode_leb128_unsigned` (writer.jl), `_encode_vlq!` (builder/source_map.jl), `module_function_imports`, `read_unsigned!`, `read_signed!` (writer.jl) | — encodings and their decoding; wasm-tools parses every module, and test/host_imports.jl reads each module's imports back |
+| Export names | `plan_function_names!`, `julia_function_name` (trimcollect.jl), `ExportNamer`, `export_name!`, `generated_export_name!` (compile.jl) | — no fixpoint: a function's name is its signature, one rule per function (the less specific of two methods over one specialization suffixed by `morespecific`), and each export name is taken once or refused; test/generated_names.jl "a compiled function is named by its signature", test/real_bottom_exceptions.jl "each export is made once" |
 | Source-map JSON reader | `_json_read`, `_json_value`, `_json_skip` and the readers below them (builder/source_map.jl) | — a recursive-descent recognizer of JSON's grammar (RFC 8259) with no state beyond its position; test/source_maps.jl "the map's JSON reader refuses what JSON does not allow" |
 
 ## Rules
