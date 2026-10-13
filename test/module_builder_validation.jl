@@ -361,7 +361,7 @@ _mbv_empty_function!(m, params; name) =
         mktempdir() do dir
             wasm = joinpath(dir, "void-root.wasm")
             write(wasm, MBV.to_bytes(void_module))
-            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js())).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
+            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js(MBV.to_bytes(void_module)))).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
             proc = run(ignorestatus(`node -e $probe $wasm`))
             @test proc.exitcode == 0
         end
@@ -435,6 +435,7 @@ _mbv_empty_function!(m, params; name) =
                 linked_indices[] = copy(roots)
                 @test registry isa MBV.TypeRegistry
                 @test linked_mod isa MBV.WasmModule
+                nothing
             end)
         @test Set(keys(linked_indices[])) == Set(["linked_leaf", "linked_caller"])
         @test linker_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -447,8 +448,8 @@ _mbv_empty_function!(m, params; name) =
                     linked_mod, string_type)
                 MBV.add_root_global_initializer!(linked_mod, registry,
                     initialized_global[], roots["string_init"])
-                eager = MBV.add_string_global!(linked_mod, registry, "eager")
-                MBV.add_global_export!(linked_mod, "eager_string", eager)
+                MBV.add_string_global!(linked_mod, registry, "eager")
+                nothing   # a hook adds no export itself (run_link_roots)
             end)
         @test init_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
         # the initializer is named by the root that computes the value; an imported root is refused
@@ -459,6 +460,7 @@ _mbv_empty_function!(m, params; name) =
                 local e = try; MBV.add_root_global_initializer!(linked_mod, registry, g, 0); nothing; catch err; err; end
                 @test e isa ArgumentError && occursin("is an imported function, not a compiled root", e.msg)
                 MBV.add_root_global_initializer!(linked_mod, registry, g, roots["string_init"])
+                nothing
             end)
         @test count(f -> f.name == "string_init field initializer", init_mod.functions) == 1
         # an import from the linker would renumber the defined functions: the builder refuses it

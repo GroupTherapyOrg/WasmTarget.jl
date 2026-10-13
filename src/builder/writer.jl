@@ -125,3 +125,116 @@ function write_name!(w::WasmWriter, name::String)::WasmWriter
     append!(w.buffer, name_bytes)
     return w
 end
+
+# ============================================================================
+# Deserialization: the import section a module's bytes declare
+# ============================================================================
+
+"""
+    WasmDeserializer(bytes)
+
+A module's bytes and the offset of the next byte to read, as dart's wasm_builder reads a module
+back (its Deserializer).
+parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:8 Deserializer)
+"""
+mutable struct WasmDeserializer
+    data::Vector{UInt8}
+    offset::Int   # 1-based, the next byte
+end
+
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:12 Deserializer)
+WasmDeserializer(data::Vector{UInt8})::WasmDeserializer = WasmDeserializer(data, 1)
+
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:16 Deserializer.isAtEnd)
+is_at_end(d::WasmDeserializer)::Bool = d.offset > length(d.data)
+
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:18 Deserializer.readByte)
+function read_byte!(d::WasmDeserializer)::UInt8
+    is_at_end(d) && throw(ArgumentError("the module's bytes end at byte $(d.offset - 1), inside a section"))
+    local b = d.data[d.offset]
+    d.offset += 1
+    return b
+end
+
+# an unsigned LEB128 integer
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:49 Deserializer.readUnsigned)
+function read_unsigned!(d::WasmDeserializer)::UInt64
+    local result = UInt64(0)
+    local shift = 0
+    local byte = read_byte!(d)
+    result |= UInt64(byte & 0x7f) << shift
+    shift += 7
+    while byte & 0x80 != 0
+        byte = read_byte!(d)
+        result |= UInt64(byte & 0x7f) << shift
+        shift += 7
+    end
+    return result
+end
+
+# a signed LEB128 integer (a heap type's s33)
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:32 Deserializer.readSigned)
+function read_signed!(d::WasmDeserializer)::Int64
+    local result = Int64(0)
+    local shift = 0
+    local byte = read_byte!(d)
+    result |= Int64(byte & 0x7f) << shift
+    shift += 7
+    while byte & 0x80 != 0
+        byte = read_byte!(d)
+        result |= Int64(byte & 0x7f) << shift
+        shift += 7
+    end
+    (shift < 64 && byte & 0x40 != 0) && (result |= ~Int64(0) << shift)
+    return result
+end
+
+# parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:73 Deserializer.readName)
+function read_name!(d::WasmDeserializer)::String
+    local n = Int(read_unsigned!(d))
+    d.offset + n - 1 <= length(d.data) || throw(ArgumentError("the module's bytes end inside a name"))
+    local name = String(d.data[d.offset:d.offset + n - 1])
+    d.offset += n
+    return name
+end
+
+"""
+    module_function_imports(bytes) -> Vector{Tuple{String,String}}
+
+The function imports a module's bytes declare, `(module, field)` each in import order, read from
+its import section; an imported global's value type and mutability are read past. A module
+WasmTarget writes imports functions and globals only (to_bytes), so an import of another kind is
+refused, never skipped.
+parity(pkg/wasm_builder/lib/src/serialize/sections.dart:161 ImportSection.deserialize)
+"""
+function module_function_imports(bytes::Vector{UInt8})::Vector{Tuple{String,String}}
+    (length(bytes) >= 8 && bytes[1:4] == b"\0asm") ||
+        throw(ArgumentError("the bytes are not a WebAssembly module (no \\0asm header)"))
+    local d = WasmDeserializer(bytes, 9)
+    local out = Tuple{String,String}[]
+    while !is_at_end(d)
+        local id = read_byte!(d)
+        local size = Int(read_unsigned!(d))
+        if id != SECTION_IMPORT
+            d.offset += size
+            continue
+        end
+        for _ in 1:read_unsigned!(d)
+            local m = read_name!(d)
+            local f = read_name!(d)
+            local kind = read_byte!(d)
+            if kind == 0x00                       # a function: its type index
+                read_unsigned!(d)
+                push!(out, (m, f))
+            elseif kind == 0x03                   # a global: its value type, its mutability
+                local vt = read_byte!(d)
+                (vt == 0x63 || vt == 0x64) && read_signed!(d)   # a reference's heap type
+                read_byte!(d)
+            else
+                throw(ArgumentError("the module imports $(m).$(f) of kind $(kind): a module WasmTarget writes imports functions and globals only"))
+            end
+        end
+        return out
+    end
+    return out
+end

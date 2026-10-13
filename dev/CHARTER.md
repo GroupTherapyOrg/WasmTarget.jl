@@ -43,10 +43,10 @@ with the per-clause status. A clause is never closed by argument.
   `L45` `L47` `L61` `L67` `L68` `L69` `L80` `L91` `L97` `L98` `L100` `L102` `L103` `L104`
   `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
   decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
-  an index) `L150` (a module's host imports and its runtime are one list) `R20` `R21` `R29a`
-  `R29b` `R37` `L152` (codegen reads a function's IR, its callees' return types and its joins
-  from the plan and asks no inference) `L170` (an :invoke calls its MethodInstance's function)
-  `L171` (one consult for which methods Julia selects, asked by collection, planning and the
+  an index) `L150` (WT's imports are one list; a module's runtime is generated from its
+  imports) `R20` `R21` `R29a` `R29b` `R37` `L152` (codegen reads a function's IR, its callees'
+  return types and its joins from the plan and asks no inference) `L170` (an :invoke calls its
+  MethodInstance's function) `L171` (one consult for which methods Julia selects, asked by collection, planning and the
   vtable pre-pass; a statement's codegen asks it nowhere) `L174` (one reader of an operand's
   Julia type, value_type, Julia's argextype) `L175` (a global's binding resolved once, at the
   boundary) `L176` (one class set, closed_world_classes, read by the enrollment, the no-method
@@ -57,7 +57,8 @@ with the per-clause status. A clause is never closed by argument.
   table, one conversion table, one width rule, one operand table, one loop-bounds definition)
   `L181` (one CFG, Julia's own, nir_cfg; one dominator computation) `L182` (a constant callee's
   one representation, its object, resolved once at the boundary) `L183` (one as-checker per
-  target and static type).
+  target and static type) `L184` (one export namer; a compiled function named by its Julia
+  identity, never a counter) `L185` (one query for the import at a function index).
   Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a

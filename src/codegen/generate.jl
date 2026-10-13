@@ -148,8 +148,8 @@ end
 
 The module's one exception tag, exported as `wasmtarget.exception` (defined by
 ensure_provenance_imports!, before any definition, and held by handle afterwards,
-recover_module_handles!): the tag that export names, else a new tag, add_tag!'s index, exported;
-a module holding tags of its own and no such export is refused (its tags are the host's, never
+recover_module_handles!): the tag that export names, else a new tag, add_tag!'s index, exported
+under the name the export namer reserves for it (ExportNamer); a module holding tags of its own and no such export is refused (its tags are the host's, never
 WT's). Its payload is the exception and the
 stack trace of its throw, as dart's exception tag carries (exception, stackTrace), and a third
 value, the entry of Julia's exception stack its throw pushed (one entry: its exception, which
@@ -175,7 +175,7 @@ function ensure_exception_tag!(mod::WasmModule)::UInt32
     local cell = add_type!(mod, StructType([FieldType(AnyRef, true), FieldType(ExternRef, false)]))
     tag_ft = FuncType(WasmValType[AnyRef, ExternRef, ConcreteRef(cell, true)], WasmValType[])
     local tag = add_tag!(mod, add_type!(mod, tag_ft))
-    add_export!(mod, "wasmtarget.exception", 4, tag)
+    add_export!(mod, generated_export_name!(ExportNamer(mod), "wasmtarget.exception"), 4, tag)
     return tag
 end
 
@@ -239,11 +239,11 @@ end
 # parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; the count the host's glue keeps is imported before any defined global, dev/MARCH.md 13.16.)
 function _refuse_late_host_imports_open(mod::WasmModule)::Nothing
     _imported_global(mod, "wasmtarget", "host_imports_open") === nothing || return nothing
-    local host = findfirst(_is_host_declared_import, mod.imports)
+    local host = _host_declared_import(mod)
     host === nothing && return nothing
     local defined = findfirst(g -> g isa WasmGlobalDef, mod.globals)
     defined === nothing || throw(ArgumentError(
-        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) needs the " *
+        "the host-declared import $(host.module_name).$(host.field_name) needs the " *
         "imported count wasmtarget.host_imports_open, which must precede the module's defined global " *
         "$(defined - 1)$(mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))"): " *
         "call WasmTarget.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
@@ -404,33 +404,43 @@ function emit_current_exception!(b::InstrBuilder, mod::WasmModule, registry::Typ
 end
 
 """
-The JavaScript each host import WT's code generator creates is answered with, by
-(module, field): the module's runtime, as dart2wasm generates the JS methods its module imports
-(RuntimeFinalizer.generate). A traced compile's `wasmtarget.trace_*` imports are answered by
-its harness (test/trace_localize.jl), not here. L150 keeps this table and the imports equal.
+The imports WT's code generator creates, each by (module, field) with the JavaScript the module's
+runtime answers it with (host_runtime_js), or `nothing` for a traced compile's probes,
+`wasmtarget.trace_*`, which its harness answers (test/trace_localize.jl). One list, which every
+reader reads: host_runtime_js answers each of them a module imports, _is_host_declared_import
+calls every other function import the host's, and the glue (host_glue_js) wraps every function
+of the import object except these. L150 keeps it equal to the imports codegen creates.
 parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
 """
-const HOST_RUNTIME = [
+const WT_IMPORTS = Tuple{String,String,Union{Nothing,String}}[
     ("wasmtarget", "stack_trace", "() => new Error()"),
     ("env", "perf_now", "() => performance.now()"),
     ("env", "random_i64", "() => { const a = new BigInt64Array(1); crypto.getRandomValues(a); return a[0]; }"),
+    ("wasmtarget", "trace_enter", nothing),
+    ("wasmtarget", "trace_i32", nothing),
+    ("wasmtarget", "trace_i64", nothing),
+    ("wasmtarget", "trace_f32", nothing),
+    ("wasmtarget", "trace_f64", nothing),
 ]
 
 """
-    host_runtime_js() -> String
+    host_runtime_js(bytes) -> String
 
-The import object a host instantiates a WasmTarget module with, as a JavaScript expression:
-every import WT's code generator creates, answered as HOST_RUNTIME says. A host adds its own
-imports beside it (a framework's, or a test's deterministic clock) and may answer one of these
-differently. A host discards an instance that trapped, as policy, and its catch of an escape is
-Julia's JL_CATCH after its restore: an export it calls from inside that catch starts as after the
-restore (host_glue_js).
+The import object a host instantiates the module `bytes` with, as a JavaScript expression: the WT
+imports that module declares (WT_IMPORTS, read from its import section by
+module_function_imports), each answered as the list says, generated per module as dart2wasm
+generates the JS methods its module imports; a module that reads no clock gets no `env.perf_now`.
+A host adds its own imports beside it (a framework's, or a test's deterministic clock) and may
+answer one of these differently. A host discards an instance that trapped, as policy, and its
+catch of an escape is Julia's JL_CATCH after its restore: an export it calls from inside that
+catch starts as after the restore (host_glue_js).
 parity(pkg/dart2wasm/lib/js/runtime_generator.dart:128 RuntimeFinalizer.generate)
 """
-function host_runtime_js()::String
-    local mods = unique(first.(HOST_RUNTIME))
-    return "{ " * join(("$(m): { " * join(("$(f): $(js)" for (mm, f, js) in HOST_RUNTIME if mm == m), ", ") * " }"
-                        for m in mods), ", ") * " }"
+function host_runtime_js(bytes::Vector{UInt8})::String
+    local imported = Set{Tuple{String,String}}(module_function_imports(bytes))
+    local answered = [(m, f, js) for (m, f, js) in WT_IMPORTS if js !== nothing && (m, f) in imported]
+    return "{ " * join(("$(m): { " * join(("$(f): $(js)" for (mm, f, js) in answered if mm == m), ", ") * " }"
+                        for m in unique(first.(answered))), ", ") * " }"
 end
 
 """
@@ -440,8 +450,8 @@ The glue a host instantiates a WasmTarget module through, as a JavaScript expres
 `(importObject) => importObject'`. It creates the count of open calls of host-declared imports,
 `open`, a mutable i32 `WebAssembly.Global`, and hands it to the module as
 `wasmtarget.host_imports_open` (ensure_host_imports_open!); it wraps every function the import
-object holds that is a host-declared import (_is_host_declared_import: not of module
-`wasmtarget`, not answered by HOST_RUNTIME, whose list it reads) in
+object holds that is a host-declared import (_is_host_declared_import: not on WT_IMPORTS, the list
+it reads) in
 `(...a) => { open.value++; try { return f(...a); } finally { open.value--; } }`. The finally runs
 on every exit of the import's frame, also when stack exhaustion or a trap below it, which no wasm
 catch observes, unwinds it, so the count is exact at every point, and no wasm code writes it. An
@@ -466,8 +476,8 @@ formal(dev/formal/ExceptionStack.tla): GlueFinally, the count lowered on every e
 parity(quarantine: Julia's host is the catching frame of every call, julia.h:2548/:2555, and the only frame that observes stack exhaustion and traps, which V8 lets no wasm catch observe, legacy or exnref (measured on Node 22.23.3 and 26.11.0); dart generates the JS for each import, js/runtime_generator.dart:60 generateJsMethods, and wraps none in a finally)
 """
 function host_glue_js()::String
-    local runtime = join(("$(repr(m)): [" * join((repr(f) for (mm, f, _) in HOST_RUNTIME if mm == m), ", ") * "]"
-                          for m in unique(first.(HOST_RUNTIME))), ", ")
+    local runtime = join(("$(repr(m)): [" * join((repr(f) for (mm, f, _) in WT_IMPORTS if mm == m), ", ") * "]"
+                          for m in unique(first.(WT_IMPORTS))), ", ")
     return "((importObject) => { " *
            "const open = new WebAssembly.Global({ value: 'i32', mutable: true }, 0); " *
            "const runtime = { $(runtime) }; const glued = {}; " *
@@ -476,7 +486,6 @@ function host_glue_js()::String
            "one instance, and the host calls its own function, never the glued one (WasmTarget.host_glue_js)'); " *
            "read = true; return v; } }); }; " *
            "for (const [m, fs] of Object.entries(importObject)) { glued[m] = Object.assign({}, fs); " *
-           "if (m === 'wasmtarget') continue; " *
            "for (const [f, fn] of Object.entries(fs)) { " *
            "if (typeof fn !== 'function' || (runtime[m] || []).includes(f)) continue; " *
            "once(glued[m], m, f, (...a) => { open.value++; try { return fn(...a); } finally { open.value--; } }); } } " *
@@ -504,7 +513,7 @@ function ensure_provenance_imports!(mod::WasmModule)::Nothing
 end
 
 """
-    ensure_class_id_reader!(mod, registry, translator)
+    ensure_class_id_reader!(mod, registry, translator, namer)
 
 The provenance export beside the exception tag: `wasmtarget.class_id: (anyref) -> i32`, the
 classId of an escaped exception, which a host that catches an escape reads from the tag's payload
@@ -517,10 +526,12 @@ Nothing, a bare array whose wasm type one class has answers that class, and a va
 header (a bare array whose wasm type classes share) traps at the cast, never a guessed class.
 Defined at the end of compile_module, over the final numbering, the last of the module's
 functions; a module that already exports one was compiled by WasmTarget already, which a compile
-into it refuses at its entry (check_existing_module).
+into it refuses at its entry (check_existing_module). Its export takes the name the compile's export
+namer reserves for it (ExportNamer).
 parity(quarantine: WT's export boundary is the host's glue (L156: an export entry holds no try and no local), so the catch dart's `\$invokeMain` makes inside wasm, invoke_main_patch.dart:43-52, is made by the host, which reads the escaped value's class through this one exported reader, code_generator.dart:6076 loadClassId)
 """
-function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, translator::Translator)::Nothing
+function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, translator::Translator,
+                                 namer::ExportNamer)::Nothing
     local ctx = CompilationContext(NirBody(NirStmt[], Type[Any], nothing), (Any,), Int32, mod, registry;
                                    translator=translator, mi=nothing)
     # its locals are ctx's, which emit_class_id! allocates
@@ -538,7 +549,8 @@ function ensure_class_id_reader!(mod::WasmModule, registry::TypeRegistry, transl
     emit_class_id!(b, ctx, Any)
     end_block!(b)
     finish_function!(b)
-    add_export!(mod, "wasmtarget.class_id", 0, add_function!(mod, b; name=generated_function_name(:class_id_reader)))
+    add_export!(mod, generated_export_name!(namer, "wasmtarget.class_id"), 0,
+                add_function!(mod, b; name=generated_function_name(:class_id_reader)))
     return nothing
 end
 
@@ -638,11 +650,9 @@ end
 # the function index of an imported function, or nothing
 # parity(pkg/wasm_builder/lib/src/builder/functions.dart:43 FunctionsBuilder.import)
 function _import_func_idx(mod::WasmModule, module_name::String, field_name::String)::Union{Nothing,UInt32}
-    local n = 0
-    for imp in mod.imports
-        imp.kind == 0x00 || continue
-        (imp.module_name == module_name && imp.field_name == field_name) && return UInt32(n)
-        n += 1
+    for i in 0:num_imported_funcs(mod) - 1
+        local imp = imported_function(mod, i)
+        (imp.module_name == module_name && imp.field_name == field_name) && return UInt32(i)
     end
     return nothing
 end
@@ -727,7 +737,7 @@ parity(quarantine: Julia's host call starts with an empty exception stack and a 
 """
 function ensure_host_imports_open!(mod::WasmModule)::Nothing
     _imported_global(mod, "wasmtarget", "host_imports_open") === nothing || return nothing
-    findfirst(_is_host_declared_import, mod.imports) === nothing && return nothing
+    _host_declared_import(mod) === nothing && return nothing
     _refuse_late_host_imports_open(mod)
     add_global_import!(mod, "wasmtarget", "host_imports_open", I32, true; name="\$host_imports_open")
     return nothing
@@ -739,25 +749,34 @@ end
 `\$host_imports_open`, the imported count of open calls of host-declared imports, held by handle
 (ensure_host_imports_open! imports it at compile setup, recover_module_handles!); `nothing` in a
 module with no host-declared import, where every export call is top-level. WT's own runtime imports
-(HOST_RUNTIME, a traced compile's `wasmtarget.trace_*`) never call an export back and are not
+(WT_IMPORTS, a traced compile's `wasmtarget.trace_*` among them) never call an export back and are not
 counted. A host-declared import added after the setup has no count, and is refused.
 parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; a call is re-entrant iff a host import that may call back is open, which only the host observes on every exit, its glue's finally (host_glue_js); dart has no exception stack.)
 """
 function host_imports_open_global(mod::WasmModule, registry::TypeRegistry)::Union{Nothing,UInt32}
     local g = registry.handles.host_imports_open
     g === nothing || return g
-    local host = findfirst(_is_host_declared_import, mod.imports)
+    local host = _host_declared_import(mod)
     host === nothing || throw(ArgumentError(
-        "the host-declared import $(mod.imports[host].module_name).$(mod.imports[host].field_name) was added " *
+        "the host-declared import $(host.module_name).$(host.field_name) was added " *
         "after compile setup, which imports their count wasmtarget.host_imports_open (ensure_host_imports_open!)"))
     return nothing
 end
 
-# an imported function the host declared, not one of WT's own runtime imports
+# an imported function the host declared: a function import not on WT_IMPORTS, WT's own
 # parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; only a host-declared import can call an export back.)
-_is_host_declared_import(imp)::Bool =
-    imp.kind == 0x00 && imp.module_name != "wasmtarget" &&
-    !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, HOST_RUNTIME)
+_is_host_declared_import(imp::WasmImport)::Bool =
+    imp.kind == 0x00 && !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, WT_IMPORTS)
+
+# the module's first host-declared import, or nothing
+# parity(quarantine: Julia's host call starts with an empty exception stack and a re-entrant one with its caller's; only a host-declared import can call an export back.)
+function _host_declared_import(mod::WasmModule)::Union{Nothing,WasmImport}
+    for i in 0:num_imported_funcs(mod) - 1
+        local imp = imported_function(mod, i)
+        _is_host_declared_import(imp) && return imp
+    end
+    return nothing
+end
 
 # `\$import_tops`'s array: a mutable array of exception-stack tops, nullable; defined at its
 # first use and held by handle
@@ -848,8 +867,8 @@ formal(dev/formal/ExceptionStack.tla): ImportCall and ImportReturn (ReturnRestor
 parity(quarantine: Julia's J2: a re-entrant call starts with its caller's stack, the stack at the open import's call; dart's call counts nothing, instructions.dart:947)
 """
 function emit_direct_call!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, func_idx::Integer)::InstrBuilder
-    local imports = filter(imp -> imp.kind == 0x00, mod.imports)
-    local host = Int(func_idx) < length(imports) && _is_host_declared_import(imports[Int(func_idx) + 1])
+    local imp = imported_function(mod, func_idx)
+    local host = imp !== nothing && _is_host_declared_import(imp)
     host && call!(b, import_tops_save!(mod, registry))
     call!(b, func_idx)
     if host
