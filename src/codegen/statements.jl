@@ -1208,9 +1208,14 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                 ref_null!(b, Int64(missing_type.type_idx))
             elseif missing_type === StructRef || missing_type === ArrayRef ||
                    missing_type === ExternRef || missing_type === AnyRef || missing_type === EqRef
-                # Null is the explicit Wasm representation of Julia's undefined
-                # reference slot; isdefined/getfield already interpret that sentinel.
-                ref_null!(b, missing_type)
+                # Julia's undefined reference field: the undefined value where the field holds
+                # `nothing` too (undef_slot), else its null; isdefined and getfield read it so
+                local _mjfi = fi - Int(info.field_offset)
+                if 1 <= _mjfi <= fieldcount(struct_type) && undef_slot(fieldtype(struct_type, _mjfi), missing_type)
+                    emit_undef_value!(b, ctx.mod, ctx.type_registry)
+                else
+                    ref_null!(b, missing_type)
+                end
             elseif primitive_init_proven && missing_type === I32
                 i32_const!(b, 0)
             elseif primitive_init_proven && missing_type === I64
@@ -1305,8 +1310,8 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx:
             # Julia's length check, then exactly that many elements
             emit_memory_length!(b, ctx, len_arg, mem_type)
 
-            # array.new_default creates array filled with default value (0 for primitives, null for refs)
-            array_new_default!(b, arr_type_idx)
+            # the slots as Julia's allocator leaves them (an `Any` slot `#undef`, emit_new_slots!)
+            emit_new_slots!(b, ctx, arr_type_idx, elem_type)
 
             return b
 end

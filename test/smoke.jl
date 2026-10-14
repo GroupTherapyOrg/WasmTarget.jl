@@ -1983,6 +1983,24 @@ _g("selector_nothing", Any[
     ("erased_nothing_dispatch_caller", (n::Int64) -> (v = Any[n, 2.5, "a", nothing, 'c', Int32(1), 0x01, true, :s, Int16(2)]; _sm_callgq(v[n])::Int64), Int64(4)),
     ("erased_nothing_three_methods", (n::Int64) -> (v = Any[n, 2.5, nothing]; _sm_gs(v[n])::Int64), Int64(3)),
 ])
+# Julia's `#undef` is NULL and `nothing` an object; WT's `nothing` is the null, so a slot that
+# holds both marks `#undef` with its undefined value: a stored `nothing` is assigned, an unset slot
+# is not, and its read throws UndefRefError (dev/AUDIT.md A17E1: isassigned and isdefined of a
+# stored `nothing` answered 2, native 1, and the read of an unset slot answered 0, native
+# UndefRefError; dev/formal/Undef.tla)
+mutable struct _SmUA; x; _SmUA() = new(); end
+@noinline _sm_ua_h(x) = x === nothing ? 1 : 2
+_g("undef_slots", Any[
+    ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
+    ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
+    ("read_unset_throws", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = n; try; _sm_ua_h(v[n - 1]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("isdefined_field_nothing", (n::Int64) -> (m = _SmUA(); m.x = (n > 0 ? nothing : n); isdefined(m, :x) ? 1 : 2), Int64(3)),
+    ("isdefined_field_unset", (n::Int64) -> (m = _SmUA(); isdefined(m, :x) ? 1 : 2 + 0n), Int64(3)),
+    ("read_unset_field_throws", (n::Int64) -> (m = _SmUA(); try; _sm_ua_h(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("captured_local_nothing", (n::Int64) -> (local x; g = () -> x; x = n > 0 ? nothing : 1; g() === nothing ? 1 : 2), Int64(3)),
+    ("grown_slot_unset", (n::Int64) -> (v = Any[nothing, n]; resize!(v, 1); resize!(v, 2); (isassigned(v, 1) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("copied_unset", (n::Int64) -> (v = Vector{Any}(undef, 3); v[1] = nothing; v[3] = n; w = copy(v); (isassigned(w, 1) ? 10 : 20) + (isassigned(w, 2) ? 1 : 2)), Int64(3)),
+])
 # A primitive type wider than any register (a 128-bit one that is no Int128) has no
 # representation: it rejects at its statement (dev/AUDIT.md A16B5: an unlocated error)
 primitive type _SmP128 128 end

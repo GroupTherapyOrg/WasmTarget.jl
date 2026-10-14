@@ -97,6 +97,7 @@
 20.0	15.0	type_object_kinds
 10.2	8.6	type_object_rows
 5.0	6.1	typeassert_checks
+5.4	5.4	undef_slots
 11.1	13.1	union_fields
 16.0	19.2	union_nothing
 1.4	1.2	union_register

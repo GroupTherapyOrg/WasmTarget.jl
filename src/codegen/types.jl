@@ -625,6 +625,10 @@ mutable struct TypeRegistry
     # (ensure_rng_globals!), made once per module on first use, as the egal function is
     perf_now_idx::Union{Nothing, UInt32}
     rng_globals::Union{Nothing, RNGGlobals}
+    # the module's one undefined value, Julia's `#undef` in a slot that holds `nothing` too
+    # (undef_value_global!, undef.jl), and its struct type, made once per module on first use
+    undef_global::Union{Nothing, UInt32}
+    undef_struct_idx::Union{Nothing, UInt32}
     # the types being registered right now (PendingTypes)
     pending::PendingTypes
     # the module objects codegen holds by handle (ModuleHandles)
@@ -660,6 +664,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,                                            # u128_divrem_func_idx
     nothing,                                            # perf_now_idx
     nothing,                                            # rng_globals
+    nothing, nothing,                                   # undef_global, undef_struct_idx
     PendingTypes(),                                     # types being registered
     ModuleHandles()                                     # the module's handles
 )
