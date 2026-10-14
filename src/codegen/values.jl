@@ -571,12 +571,18 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
 end
 # Core (mod, registry) method, the scratch local the caller's own: the dispatch wrappers, the
 # selector callers and the closure entries build their functions without a codegen context.
+# The scratch is a local the caller declared for this box, of the boxed value's own wasm type:
+# a parameter, or a local of another type, is refused (a same-typed index is told only by its
+# declaration, L173).
 # parity(translator.dart:1597 convertType): the boxing arm — save the value, the classId, the
 # value, struct.new (:1640-1644).
 function emit_classid_box!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                            scratch::Integer, wasm_type::WasmValType, julia_type::Type)::UInt32
     isconcretetype(julia_type) || error(
         "numeric boxing requires a concrete Julia source type, got $julia_type")
+    (scratch >= length(b.params) && _local_type(b, scratch, "the box's scratch") === wasm_type) ||
+        throw(ArgumentError("$(b.func_name): the scratch of a $(wasm_type) box is local $(scratch), " *
+                            "which is no local declared with the type $(wasm_type)"))
     box_idx = get_numeric_box_type!(mod, registry, wasm_type)
     local_set!(b, scratch)                  # save the value
     emit_type_id!(b, registry, julia_type)
@@ -922,8 +928,8 @@ end
 """
     _is_boxed_numeric_operand(arg, ctx) -> Bool
 
-True when `arg` arrives in a physically `AnyRef` local and its refined type is not one of the
-machine numerics (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool): a numeric operation on
+True when `arg` arrives in a physically `AnyRef` local and its refined type is not a number its
+register holds exactly (exact_register: a Bool, or a 32- or 64-bit number): a numeric operation on
 it rejects in compile_call! (its class is known only at run time, dev/AUDIT.md A3E6), and
 `_lower_operator!` unboxes it at the width its node states. An SSA whose refined type is a machine
 numeric is not included: its load is the one unbox (translator.dart:2099

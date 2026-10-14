@@ -465,7 +465,9 @@ end
 """A callee written as an operand, resolved once to the callee's one representation: a constant
 (a bound global, a quoted value, an object the IR embeds of any kind: a function, an intrinsic, a
 type object, a closure) is its object; an unbound global stays a `GlobalRef`; a runtime value
-stays its node. Read by the boundary (resolve_call_callee) and by a call codegen builds from an
+stays its node. A bound global that is no constant is taken as its value at the boundary too:
+sound only because no compiled code can rebind it, WT lowering no `setglobal!` (a write rejects at
+its statement), so the binding a call reads at run time is the one read here. Read by the boundary (resolve_call_callee) and by a call codegen builds from an
 operand (nir_call).
 parity(pkg/kernel/lib/src/ast/expressions.dart:2820 StaticInvocation): the call node carries its
 resolved target, one representation of it."""
@@ -476,8 +478,9 @@ function nir_callee(x::NirNode)::Any
 end
 
 """The callee an operand names, by the boundary's one rule: nir_callee (a constant is its object,
-an unbound global its GlobalRef), and a runtime value whose static type is a singleton function
-type is that type's instance (a value of a singleton type IS its instance, Julia's own answer);
+an unbound global its GlobalRef), and a runtime value whose static type determines it is that
+value, Compiler's own answer (CC.singleton_type, Compiler/src/utilities.jl:213 on 1.12.7 and
+1.13.1: a singleton type's instance, and the X of a `Type{X}`), the rule nir_callee_self reads;
 any other runtime value stays its node. Read by the boundary (an argument's slot type), by a call
 codegen builds from an operand (nir_call) and by the collector's and codegen's readings of a
 callee passed as an operand (invoke_in_world's `f`, `_apply_iterate`'s), each with the operand's
@@ -487,9 +490,8 @@ resolved target, one representation of it, by one rule."""
 function nir_operand_callee(x::NirNode, @nospecialize(static_type))::Any
     local c = nir_callee(x)
     c isa NirNode || return c
-    (static_type isa DataType && Base.issingletontype(static_type) && static_type <: Function) &&
-        return static_type.instance
-    return c
+    local v = CC.singleton_type(static_type)
+    return v === nothing ? c : v
 end
 
 """A `:call`'s or `:invoke`'s callee operand resolved by nir_callee over its one resolution as an
@@ -502,8 +504,9 @@ resolve_call_callee(x, types)::Any = nir_callee(resolve_operand(x, types))
 operand node. Beyond `resolve_call_callee`, a callee that is a VALUE with a static identity is
 that identity: an SSA use whose defining statement is a global reference (unoptimized IR's
 `%1 = Base.add_int; (%1)(x, y)`) or whose inferred type is a `Core.Const`, and any operand
-whose static type (an SSA use's widened type, an argument's slot type) is a singleton function
-type (`mapreduce_first(f::typeof(length), …)`'s `f(x)`): nir_operand_callee, the rule the
+whose static type (an SSA use's widened type, an argument's slot type) determines it, a
+singleton type (`mapreduce_first(f::typeof(length), …)`'s `f(x)`) or a `Type{X}`
+(CC.singleton_type): nir_operand_callee, the rule the
 collector's and codegen's operand callees read too — a value of a singleton type IS its instance,
 Julia's own answer. One rule for both statement kinds, so an :invoke's callee is never resolved
 again in codegen.
@@ -593,6 +596,16 @@ is a runtime value (an SSA use, an argument, a slot) or a global binding.
 parity(pkg/kernel/lib/src/ast/expressions.dart:5070 ConstantExpression): a constant operand
 carries its constant."""
 nir_const(@nospecialize(x))::Any = x isa NirLiteral ? x.value : x
+
+"""The value a type operand names at compile time, by one rule for every construct reading one
+(isa, typeassert, the ten conversions): a literal's value, or a constant global's, the
+boundary's one resolution of its binding (NirGlobalRef). A global that is no constant is read at
+run time (Julia's jl_isa, jl_typeassert and the conversions read the binding then), and a runtime
+value is its node: both answer `nothing`, which each reader rejects at its statement.
+parity(pkg/kernel/lib/src/ast/expressions.dart:5070 ConstantExpression): a constant operand
+carries its constant."""
+nir_type_operand(@nospecialize(x))::Any =
+    x isa NirLiteral ? x.value : (x isa NirGlobalRef && x.bound && x.constant) ? x.value : nothing
 
 """True for a literal Julia's IR had to quote — a value that is not self-quoting (a Symbol, a
 Module, a TypeName, an IR reference, …): Julia embeds constants with `Base.quoted`, which
@@ -900,7 +913,7 @@ end
 """
 A basic block of a body's CFG (nir_cfg): its first and last statement and its terminator.
 parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
-(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+(Compiler/src/ssair/ir.jl:94 on 1.12.7 and 1.13.1) cuts into blocks; dart's kernel tree carries its structure, so
 dart2wasm lowers it statement by statement and has no CFG.)
 """
 struct BasicBlock
@@ -917,7 +930,7 @@ predecessor blocks (`succs`, `preds`; an Enter's catch destination among its suc
 virtual entry predecessors left out) and the block of each statement (`block_of`). A block's
 successors list its fall-through first, then its jump or catch edge.
 parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
-(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+(Compiler/src/ssair/ir.jl:94 on 1.12.7 and 1.13.1) cuts into blocks; dart's kernel tree carries its structure, so
 dart2wasm lowers it statement by statement and has no CFG.)
 """
 struct NirCFG
@@ -940,7 +953,7 @@ Enter's are the next block and its catch destination's; a return has none; any o
 through. The stackifier, the proven-dead proof, the definite-initialization proof and the
 statement visitor's block test read it.
 parity(quarantine: Julia's typed IR is a CFG of gotos, which Compiler's compute_basic_blocks
-(Compiler/src/ssair/ir.jl:93) cuts into blocks; dart's kernel tree carries its structure, so
+(Compiler/src/ssair/ir.jl:94 on 1.12.7 and 1.13.1) cuts into blocks; dart's kernel tree carries its structure, so
 dart2wasm lowers it statement by statement and has no CFG.)
 """
 function nir_cfg(nir::Vector{NirStmt})::NirCFG

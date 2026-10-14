@@ -4,4 +4,5 @@ EXTENDS ProvenDead
 MCN == 5
 MCCondFallthrough == TRUE
 MCCatchEdge == FALSE
+MCTrailingOnly == TRUE
 =============================================================================

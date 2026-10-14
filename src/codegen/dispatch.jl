@@ -374,7 +374,14 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                     # body actually takes (the classed-string vs byte-array split broke
                     # the search family at threshold=2: cast (ref 7), param (ref null 5)).
                     local _tp = _tparam
-                    if _tp in (I32, I64, F32, F64)
+                    if concrete_type === Nothing && _tp === I32
+                        # `nothing` (its null at the anyref slot) taken as the target's Nothing
+                        # parameter holds it: its i32 placeholder, never unboxed, as the closure
+                        # entry takes it (_closure_narrow_arg!; dev/formal/Coercion.tla
+                        # NothingNeverCast)
+                        drop!(b)
+                        i32_const!(b, 0)
+                    elseif _tp in (I32, I64, F32, F64)
                         # Unbox the numeric arg via THE single unbox consumer (non-null: dispatch-guarded).
                         emit_classid_unbox!(b, mod, type_registry, _tp)
                     elseif _tp isa ConcreteRef

@@ -27,8 +27,9 @@ _want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER
 # groups are dealt by their recorded durations (test/smoke_times.tsv, measured on CI's runners per
 # Julia version, as runtests.jl deals the suite's phases by test/phase_times.tsv): the longest
 # first, each to the part whose load is least so far, then the xfail groups onto the loads the
-# groups left; a group with no recorded duration takes the median of its list. The dealing is a
-# pure function of the file, the lists and N, so the N parts together run every group exactly
+# groups left. A missing file, a duration that is no number and a group with no recorded
+# duration are errors, never a guess (L163 checks the file lists exactly the groups). The dealing
+# is a pure function of the file, the lists and N, so the N parts together run every group exactly
 # once. Unset: every group.
 const SMOKE_PART = let s = get(ENV, "WT_SMOKE_PART", "")
     m = match(r"^([0-9]+)/([1-9][0-9]*)$", s)
@@ -44,27 +45,26 @@ end
 # for an xfail group), this Julia version's column
 const SMOKE_TIMES_TSV = joinpath(@__DIR__, "smoke_times.tsv")
 const SMOKE_RECORDED = let d = Dict{String,Float64}(), col = VERSION >= v"1.13-" ? 2 : 1
-    if isfile(SMOKE_TIMES_TSV)
-        for ln in eachline(SMOKE_TIMES_TSV)
-            (isempty(ln) || startswith(ln, '#')) && continue
-            local f = split(ln, '\t'; limit = 3)
-            length(f) == 3 || error("test/smoke_times.tsv: a line is not \"<1.12 s>\\t<1.13 s>\\t<group>\": $ln")
-            local t = tryparse(Float64, f[col])
-            t === nothing || (d[String(f[3])] = t)
-        end
+    isfile(SMOKE_TIMES_TSV) || error("test/smoke_times.tsv is missing: the parts are dealt by its durations")
+    for ln in eachline(SMOKE_TIMES_TSV)
+        (isempty(ln) || startswith(ln, '#')) && continue
+        local f = split(ln, '\t'; limit = 3)
+        length(f) == 3 || error("test/smoke_times.tsv: a line is not \"<1.12 s>\\t<1.13 s>\\t<group>\": $ln")
+        local t = tryparse(Float64, f[col])
+        t === nothing && error("test/smoke_times.tsv: $(repr(f[col])) is no duration: $ln")
+        d[String(f[3])] = t
     end
     d
 end
-_smoke_median(v) = (local c = sort!(collect(Float64, v)); isempty(c) ? 1.0 : c[(length(c) + 1) ÷ 2])
 # the part (0-based) each group of GROUPS and each of XFAIL is dealt to, for n parts
 function _smoke_owners(n::Int)
     local key(prefix, g) = prefix * first(g)
     local load = zeros(n)
     local owners = Dict{String,Int}()
     for (prefix, list) in (("", GROUPS), ("xfail ", XFAIL))
-        local recorded = [get(SMOKE_RECORDED, key(prefix, g), nothing) for g in list]
-        local med = _smoke_median(t for t in recorded if t !== nothing)
-        local dur = [something(t, med) for t in recorded]
+        local dur = [haskey(SMOKE_RECORDED, key(prefix, g)) ? SMOKE_RECORDED[key(prefix, g)] :
+                     error("test/smoke_times.tsv records no duration for smoke group $(key(prefix, g))")
+                     for g in list]
         for k in sort(collect(eachindex(list)); by = j -> (-dur[j], j))
             local p = argmin(load)
             owners[key(prefix, list[k])] = p - 1
@@ -1949,6 +1949,36 @@ _g("capture_typed_invoke", Any[
 # answers 1)
 _g("nested_captor", Any[
     ("nested_write_read_by_creator", (n::Int64) -> (c = n; o = @noinline () -> (i = @noinline () -> (c = 2.5; nothing); i(); nothing); o(); c isa Float64 ? 1 : 2), Int64(1)),
+])
+# A captor's body inlined into a function taking the closure as an argument writes through that
+# argument: the write joins the box, so the creator's read is not its own Int64 alone (dev/AUDIT.md
+# A17C1: the read unboxed a Float64 box as an Int64 one, an illegal cast on 1.12, native 1)
+@noinline _sm_callit(g) = (g(); nothing)
+_g("inlined_captor", Any[
+    ("write_through_argument", (n::Int64) -> (c = n; w = () -> (c = 2.5; nothing); _sm_callit(w); c isa Float64 ? 1 : 2), Int64(1)),
+])
+# A user primitive narrower than its i32 register keeps junk above its width until it is read:
+# its width is its own bits, 8*sizeof, for every primitive (dev/AUDIT.md A17E2: zext of an 8-bit
+# primitive answered 300, native 44)
+primitive type _SmP8 8 end
+_sm_p8(n::Int64) = Core.Intrinsics.bitcast(_SmP8, (n % UInt8) + 0xc8)
+_g("narrow_primitive", Any[
+    ("zext_dirty_p8", (n::Int64) -> Core.Intrinsics.zext_int(Int64, _sm_p8(n)), Int64(100)),
+    ("sext_dirty_p8", (n::Int64) -> Core.Intrinsics.sext_int(Int64, _sm_p8(n)), Int64(200)),
+    ("ult_dirty_p8", (n::Int64) -> Core.Intrinsics.ult_int(_sm_p8(n), Core.Intrinsics.bitcast(_SmP8, 0x50)) ? 1 : 2, Int64(100)),
+    ("egal_dirty_p8", (n::Int64) -> _sm_p8(n) === Core.Intrinsics.bitcast(_SmP8, 0x2c) ? 1 : 2, Int64(100)),
+])
+# An erased nothing reaching a selector-dispatched `::Nothing` method, through the selector
+# caller's class read and the dispatch wrapper's argument (dev/AUDIT.md A17E3: the base trapped
+# reading a null's header, native 4)
+_sm_gq(x::Int64) = 1; _sm_gq(x::Float64) = 2; _sm_gq(x::String) = 3; _sm_gq(x::Nothing) = 4; _sm_gq(x::Char) = 5
+_sm_gq(x::Int32) = 6; _sm_gq(x::UInt8) = 7; _sm_gq(x::Bool) = 8; _sm_gq(x::Symbol) = 9; _sm_gq(x::Int16) = 10
+@noinline _sm_callgq(@nospecialize(x)) = _sm_gq(x)
+@noinline _sm_gs(x::Nothing) = 4; @noinline _sm_gs(x::Int64) = 1; @noinline _sm_gs(x::Float64) = 2
+_g("selector_nothing", Any[
+    ("erased_nothing_many_methods", (n::Int64) -> (v = Any[n, 2.5, "a", nothing, 'c', Int32(1), 0x01, true, :s, Int16(2)]; _sm_gq(v[n])::Int64), Int64(4)),
+    ("erased_nothing_dispatch_caller", (n::Int64) -> (v = Any[n, 2.5, "a", nothing, 'c', Int32(1), 0x01, true, :s, Int16(2)]; _sm_callgq(v[n])::Int64), Int64(4)),
+    ("erased_nothing_three_methods", (n::Int64) -> (v = Any[n, 2.5, nothing]; _sm_gs(v[n])::Int64), Int64(3)),
 ])
 # A primitive type wider than any register (a 128-bit one that is no Int128) has no
 # representation: it rejects at its statement (dev/AUDIT.md A16B5: an unlocated error)

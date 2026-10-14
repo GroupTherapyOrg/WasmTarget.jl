@@ -240,7 +240,7 @@ of `julia_type`'s own signedness (e.g. `ult_int` normalises an Int8 operand unsi
 """
 function normalise_narrow!(b::InstrBuilder, ctx,
                            julia_type::Type, signed::Bool)::InstrBuilder
-    julia_width = _julia_int_width(julia_type, true)
+    julia_width = _operand_width(julia_type)
     if julia_width < 32
         if signed
             num!(b, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
@@ -443,8 +443,8 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
     (julia_src isa Type && julia_dst isa Type) ||
         return reject!("its source or target is not a type")
     local src_reg, dst_reg = numeric_register(julia_src), numeric_register(julia_dst)
-    local src_128 = _julia_int_width(julia_src, false) == 128
-    local dst_128 = _julia_int_width(julia_dst, false) == 128
+    local src_128 = _julia_int_width(julia_src) == 128
+    local dst_128 = _julia_int_width(julia_dst) == 128
     # a primitive wider than every register that is no 128-bit integer has no representation
     (isprimitivetype(julia_src) && src_reg === nothing && !src_128) &&
         return reject!("a $(sizeof(julia_src))-byte primitive other than Int128 and UInt128 has no representation")
