@@ -47,12 +47,12 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     # the I32 register with Int32 but have a narrower `typemin` for the overflow check.
     (I64, I64, :sdiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; check_overflow=true, julia_width=jw); num!(b, Opcode.I64_DIV_S)), I64),
     (I64, I64, :checked_sdiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; check_overflow=true, julia_width=jw); num!(b, Opcode.I64_DIV_S)), I64),
-    (I64, I64, :udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_DIV_U)), I64),
-    (I64, I64, :checked_udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_DIV_U)), I64),
-    (I64, I64, :srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_REM_S)), I64),
-    (I64, I64, :checked_srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_REM_S)), I64),
-    (I64, I64, :urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_REM_U)), I64),
-    (I64, I64, :checked_urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false); num!(b, Opcode.I64_REM_U)), I64),
+    (I64, I64, :udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_DIV_U)), I64),
+    (I64, I64, :checked_udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_DIV_U)), I64),
+    (I64, I64, :srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_REM_S)), I64),
+    (I64, I64, :checked_srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_REM_S)), I64),
+    (I64, I64, :urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_REM_U)), I64),
+    (I64, I64, :checked_urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, false; julia_width=jw); num!(b, Opcode.I64_REM_U)), I64),
     (I64, I64, :eq_int)   => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_EQ), I32),
     (I64, I64, :ne_int)   => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_NE), I32),
     (I64, I64, :slt_int)  => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I64_LT_S), I32),
@@ -71,12 +71,12 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
     # legacy arms coerce the amount. dart's ints are uniformly i64: no such case.)
     (I32, I32, :sdiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; check_overflow=true, julia_width=jw); num!(b, Opcode.I32_DIV_S)), I32),
     (I32, I32, :checked_sdiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; check_overflow=true, julia_width=jw); num!(b, Opcode.I32_DIV_S)), I32),
-    (I32, I32, :udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_DIV_U)), I32),
-    (I32, I32, :checked_udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_DIV_U)), I32),
-    (I32, I32, :srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_REM_S)), I32),
-    (I32, I32, :checked_srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_REM_S)), I32),
-    (I32, I32, :urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_REM_U)), I32),
-    (I32, I32, :checked_urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true); num!(b, Opcode.I32_REM_U)), I32),
+    (I32, I32, :udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_DIV_U)), I32),
+    (I32, I32, :checked_udiv_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_DIV_U)), I32),
+    (I32, I32, :srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_REM_S)), I32),
+    (I32, I32, :checked_srem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_REM_S)), I32),
+    (I32, I32, :urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_REM_U)), I32),
+    (I32, I32, :checked_urem_int) => BinOpEmit((b, ctx, jw) -> (_emit_div_guard!(b, ctx, true; julia_width=jw); num!(b, Opcode.I32_REM_U)), I32),
     (I32, I32, :eq_int)   => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I32_EQ), I32),
     (I32, I32, :ne_int)   => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I32_NE), I32),
     (I32, I32, :slt_int)  => BinOpEmit((b, ctx, jw) -> num!(b, Opcode.I32_LT_S), I32),
@@ -116,19 +116,17 @@ const INTRINSIC_BINOPS = Dict{Tuple{WasmValType,WasmValType,Symbol},BinOpEmit}(
 )
 
 """
-    emit_intrinsic_binop!(b, lhs_ty, rhs_ty, op, ctx=nothing, julia_width=default) -> Union{WasmValType,Nothing}
+    emit_intrinsic_binop!(b, lhs_ty, rhs_ty, op, ctx, julia_width) -> Union{WasmValType,Nothing}
 
 THE dispatch point (dart code_generator: one lookup, one emission). Operands are on
 the stack at (lhs_ty, rhs_ty). Returns the result type, or `nothing` when the table
-has no entry (the caller keeps its legacy arm until its family migrates). `ctx` and
-`julia_width` are trailing/optional: only the div/rem entries read them (`ctx` to
-build the DivideError guard, `julia_width` for its overflow check — see the table's
-header comment); every other entry ignores both, so a caller that never reaches a
-div/rem key (e.g. the M11.1 table smoke test) may omit them.
+has no entry. Only the div/rem entries read `ctx` (to build the DivideError guard) and
+`julia_width` (the operands' width by the one width rule, `_julia_int_width`, for its overflow
+check — see the table's header comment); every caller states both.
 parity(intrinsics.dart:995 _binaryOperatorMap) — the one lookup in generateInstanceIntrinsic.
 """
 function emit_intrinsic_binop!(b::InstrBuilder, lhs_ty::WasmValType, rhs_ty::WasmValType,
-                               op::Symbol, ctx=nothing, julia_width::Int=(lhs_ty === I32 ? 32 : 64))::Union{WasmValType, Nothing}
+                               op::Symbol, ctx, julia_width::Int)::Union{WasmValType, Nothing}
     e = get(INTRINSIC_BINOPS, (lhs_ty, rhs_ty, op), nothing)
     e === nothing && return nothing
     e.emit!(b, ctx, julia_width)

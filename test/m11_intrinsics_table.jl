@@ -4,15 +4,15 @@
 @testset "M11.1 intrinsics table (dart intrinsics.dart shape)" begin
     b = WasmTarget.InstrBuilder(; func_name="t", mod=WasmTarget.WasmModule())
     WasmTarget.seed_input!(b, WasmTarget.WasmValType[WasmTarget.I64, WasmTarget.I64])
-    rt = WasmTarget.emit_intrinsic_binop!(b, WasmTarget.I64, WasmTarget.I64, :add_int)
+    rt = WasmTarget.emit_intrinsic_binop!(b, WasmTarget.I64, WasmTarget.I64, :add_int, nothing, 64)
     @test rt === WasmTarget.I64
     b2 = WasmTarget.InstrBuilder(; func_name="t2", mod=WasmTarget.WasmModule())
     WasmTarget.seed_input!(b2, WasmTarget.WasmValType[WasmTarget.F64, WasmTarget.F64])
-    rt2 = WasmTarget.emit_intrinsic_binop!(b2, WasmTarget.F64, WasmTarget.F64, :lt_float)
+    rt2 = WasmTarget.emit_intrinsic_binop!(b2, WasmTarget.F64, WasmTarget.F64, :lt_float, nothing, 64)
     @test rt2 === WasmTarget.I32                       # comparisons yield i32
-    # no entry → nothing (legacy arm keeps working)
+    # no entry → nothing
     b3 = WasmTarget.InstrBuilder(; func_name="t3", mod=WasmTarget.WasmModule())
-    @test WasmTarget.emit_intrinsic_binop!(b3, WasmTarget.I64, WasmTarget.F64, :add_int) === nothing
+    @test WasmTarget.emit_intrinsic_binop!(b3, WasmTarget.I64, WasmTarget.F64, :add_int, nothing, 64) === nothing
     # coverage: the table carries the full i64/i32 integer core + f64/f32 float core
     @test length(WasmTarget.INTRINSIC_BINOPS) >= 51   # shifts excluded (mixed-width amounts)
 end

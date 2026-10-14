@@ -694,16 +694,17 @@ ref_eq!(b::InstrBuilder)::InstrBuilder =
 # ref.func: the non-null reference to function `f`'s type. The spec's C.refs, the functions a
 # function body's ref.func may name, are those the module names outside function bodies: in a
 # global's initializer (a constant expression, so a ref.func there needs no other declaration),
-# an element segment (declare_funcs!) or an export. A body's ref.func of a function named by
-# none of an element segment and an export is refused (one named only in a global's initializer
-# is refused too, the module keeping no record of it; dart checks no declaration).
+# an element segment (declare_funcs!) or an export. WT's rule is narrower than the spec's: a
+# body's ref.func must name a function an element segment or an export names, and one named
+# only in a global's initializer is refused, the module keeping no record of the functions its
+# initializers name (loud, never an invalid module; dart checks no declaration).
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1594 InstructionsBuilder.ref_func)
 function ref_func!(b::InstrBuilder, f::Integer)::InstrBuilder
     local m = b.v.mod
     (b.constant_expression || any(seg -> UInt32(f) in seg.func_indices, m.elem_segments) ||
      any(x -> x.kind == 0x00 && x.idx == UInt32(f), m.exports)) ||
-        _module_invalid(:ref_func, "function $f is not declared for reference (declare_funcs!, an export, " *
-                        "or a global's initializer)")
+        _module_invalid(:ref_func, "function $f is named by no element segment (declare_funcs!) and no export, " *
+                        "which a function body's ref.func needs")
     validate_push!(b.v, ConcreteRef(UInt32(_function_type_idx(m, f)), false))
     _emit!(b, InstrIR.RefFunc(UInt32(f)))
 end
@@ -999,7 +1000,8 @@ function append_builder!(dst::InstrBuilder, src::InstrBuilder)::InstrBuilder
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): a constant expression " *
                             "takes only a constant fragment"))
     # and a function body takes no constant fragment: its ref.func was checked as a global
-    # initializer's, which declares the function, and a body's needs another declaration
+    # initializer's, which needs no declaration, where a body's must name a function an element
+    # segment or an export names (ref_func!)
     (src.constant_expression && !dst.constant_expression) &&
         throw(ArgumentError("append_builder!($(dst.func_name) ← $(src.func_name)): a function body " *
                             "takes no constant fragment"))

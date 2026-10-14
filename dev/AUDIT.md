@@ -1634,3 +1634,123 @@ first:
 - Everything else is on MARCH 13.17 under its row: A7S1's remainder (the callable created in one
   function and called in another), A12C1 (restated) and A16B5's remainder (a wide primitive in a
   parameter or a field).
+
+## 2026-10-14 — audited through 52c0a9bd (baae2757..52c0a9bd: batches 116dx, 116d-3, 116d-4, 116e-1)
+
+The seventeenth audit covers:
+- fece20cb, batch 116dx, the sixteenth audit's fixes;
+- ae8f71ee, batch 116d-3, one CFG, Julia's own;
+- 5fab8286, batch 116d-4, a constant callee is its object; one as-checker per target and static type;
+- 52c0a9bd, batch 116e-1, one owner of a compile's state.
+
+It made 29 findings, three seen from two or three areas (A17P5 = A17C6 = A17E9, A17P3 = A17E4,
+A17E5 within A17P8). Each program was run native, on baae2757 (before the range) and on 52c0a9bd
+(Julia 1.12.7, Node 22.23.3; the closure ones on 1.13.1 too). Silent wrong answers at 52c0a9bd,
+older than the range:
+- A17E1. One wasm null stood for both `#undef` and `nothing` in a slot of the any hierarchy:
+  `isassigned` of a `Vector{Any}` slot holding `nothing` answered 2 (native 1), `isdefined` of a
+  field set to `nothing` answered 2 (native 1), and reading an `#undef` `Vector{Any}` slot answered
+  0 where native throws UndefRefError, on both trees. The report's third program (a captured
+  `local x` set to `nothing`) answered as native on both trees and both versions.
+- A17E2. The width rule gave a user primitive narrower than its i32 register the register's
+  width: `zext_int(Int64, bitcast(P8, (n % UInt8) + 0xc8))` answered 300 (native 44), its
+  `sext_int` 400 (native -112) and its `ult_int` against `bitcast(P8, 0x50)` 2 (native 1), on both
+  trees; the egal of two such values answered as native.
+Traps where Julia answers:
+- A17C1. A captor's body inlined into a function taking the closure as an argument wrote through
+  that argument, which the capture record did not key: `c1` (the report's program) trapped, illegal
+  cast, on both trees under 1.12 (native 1); 1.13 collects the closure's own body and answered 1.
+- A17E3 did not reproduce at 52c0a9bd: a nothing reaching a selector-dispatched `::Nothing`
+  method, through ten methods, three methods and a body that is the selector call alone, answered
+  4 as native; baae2757 trapped on all three (illegal cast).
+Loud, not wrong: A17C2's program rejects on both trees, its constant a cyclic Core.Box (A12C7 on
+13.17); a non-cyclic capturing closure constant called only as an :invoke callee answered as
+native on both. A17E6's program rejects on both trees (the typeassert's target is an SSA value).
+
+Area: builder — (A17B1) The closure entry's object scratch was a `-1` sentinel and a keyword
+default, beside the `Union{Nothing,UInt32}` its siblings use, and the argument tests' scratch a
+`(-1, -1)` pair; L173's four needles saw only the old spellings, and nothing tested that a scratch
+is the declared local. (A17B2) _closure_narrow_arg!'s Nothing arm raised two bare errors in the
+vtable pre-pass, not _closure_layout_error. (A17B3) ref_func!'s message named a global's
+initializer as a declaration its check does not read, and append_builder!'s comment repeated the
+half-rule. (A17B4) as_checker!'s quarantine did not state why it builds the body before defining
+the function, where dart defines first.
+
+Area: collection and planning — (A17C1) above; A16C3's nested-captor link had the same blind spot.
+(A17C2) The class set and the callable observation walked a call's operands without its `self`,
+the constant callable 5fab8286 introduced, so statement_operands' comment was false. (A17C3)
+CaptureType.tla's positive typing held by definition, never modeling how a field joins its box;
+Enrollment.tla's InSet equalled Reaches likewise; ClosedWorld.tla's TypedRetargets only widened,
+where the code's typing also narrows. (A17C4) nir_operand_callee read a singleton function type
+where nir_callee_self reads Compiler's singleton_type. (A17C5) A vararg body's short slot table
+dropped the packed tuple's class silently. (A17C6) = A17P5. (A17C7) nir_callee's docstring did
+not say why a bound non-constant global is taken as its value, and _closed_world_edge's named
+the numeric joins only.
+
+Area: emission and diagnostics — (A17E1), (A17E2), (A17E3) above. (A17E4) = A17P3. (A17E5)
+compute_basic_blocks is at Compiler ir.jl:94 on 1.12.7 and 1.13.1, cited :93. (A17E6) typeassert
+took a bound global's value whether constant or not, where isa and the conversions reject one that
+is not. (A17E7) The definite-initialization proof rebuilt the caller's CFG on every partial `%new`.
+(A17E8) ProvenDead.tla and DefiniteInit.tla did not model the trailing-`nothing` rule (a statement
+in no block), and DefiniteInit.tla's catch edge sat at the Enter only, so no start_pc inside a try
+body was checked and the upsilon rule went unstated. (A17E9) = A17P5.
+
+Area: enforcement and prose — (A17P1) E5 was called resolved, but four sites still subtracted a
+String's pointer base themselves (_emit_storage_pointer_offset!, memcmp, memchr, beside the rule),
+and L143 counted one spelling. (A17P2) L180's detector missed a numeric list as a named or keyword
+tuple, a ternary's tuples, an `!isa` chain and a `Union{…}` const. (A17P3) = A17E4: entry 16's
+resolution of A16E5 was itself wrong: base/int.jl holds `- + *` at :86-88 on 1.13.1 too (entry 16's
+":85-87 on 1.13.1" is false; this entry corrects it). (A17P4) xfail partial_new_handler_read was on
+no plan row, and functor_invoke lacked its native answer. (A17P5) compile_module's keyword default
+read the options beside the entry, codegen read WASMTARGET_DEBUG_LOCALS with a process-wide `@warn
+maxlog`, and options.jl's "ENV read from nowhere else" was false. (A17P6) R40's ledger half passed
+on the process-wide design too. (A17P7) gate-fast.yml named a round-robin dealing, R40's text and
+section comment cited a 13.7 that no longer lists the side channels, L76 kept a dead `required`
+list, and ae8f71ee's message said L148 read 1 where the landed commit reads 0. (A17P8) L180 cited
+translator.dart:1113 for translateExternalType (:1239) and four texts cited ir.jl:93 (:94); its
+third claim, types.dart:1039 for AsCheckerCallTarget.name, is true at 898a1e4b (`String get name`
+is line 1039). (A17P9) smoke's dealing skipped a missing timing file, dropped an unparsed value
+and took the median for an unrecorded group silently.
+
+Resolution: in batch 116ex (the commit carrying this entry), each case added and run on both
+trees first, but A17E1, fixed in 116ex-2, the commit after it:
+- A17C1 + A17C3: model first, CaptureType.tla's record joins a write by the operand carrying its
+  captor (`#self#`, an SSA value, an argument), and MCCaptureTypeArgumentCarrierBroken (the key
+  reading `#self#` and an SSA value only) violates Covered; _captured_box_field keys a box read by
+  value_type over any carrier operand and the body's slot types, the nested-captor link included
+  (smoke inlined_captor; test/f3_box_capture_l2_prepass.jl's 'a write through an argument joins
+  the box'). ClosedWorld.tla's typed sites retarget in both directions, RetargetsSound states
+  exactness, and MCClosedWorldTypingNarrow holds while its ReTypeOnlyRestores variant violates it.
+- A17E2: `_julia_int_width(T)` is 8*sizeof for every primitive WT represents and `nothing` for any
+  other type, `_operand_width` its reader for an intrinsic's operand, and no width keyword defaults
+  to a register (smoke narrow_primitive; L180).
+- A17E3: the selector caller reads its receiver's class through emit_class_id! (a null is
+  Nothing's), and the dispatch wrapper takes a nothing for a `::Nothing` parameter as its
+  placeholder, as the closure entry does (smoke selector_nothing, regression cases).
+- A17C5: the packed tuple's slot type is read by value_type, which raises on a short table.
+  A17E6: isa, typeassert and the ten conversions read a type operand by one rule,
+  nir_type_operand (test/ir_one_inference_path.jl). A17E7: the proof reads the context's CFG for
+  the caller's body (L181). A17E8: model first, ProvenDead.tla and DefiniteInit.tla carry the
+  trailing-`nothing` rule (their AnyNothing variants violate Sound), and DefiniteInit.tla's ground
+  truth throws from every statement of a try body, with the upsilon rule stated and start_pc any
+  statement (MCDefiniteInitRegion; its UpsilonNotUse variant violates Sound).
+- A17C2: the class set and the callable observation walk nir_expr_operands, `self` included.
+  A17C4: nir_operand_callee reads CC.singleton_type (L76). A17C7: both docstrings are true.
+- A17B1: every scratch is `Union{Nothing,UInt32}`, required, and the box producer refuses one that
+  is a parameter or a local of another type (L173; test/dispatch_method_error.jl). A17B2: both
+  errors are _closure_layout_error. A17B3: the rule and the comment state WT's narrower rule
+  truly. A17B4: the quarantine states the order and its reason.
+- A17P1: one storage-pointer rule, _emit_storage_byte_offset!, read by the element offset, the
+  pointer load and store offset, memcmp and memchr; L143 counts any String-or-Symbol subtraction
+  outside it. A17P2: L180 counts the new spellings; the two duplicated pointer-element tuples read
+  _STORAGE_PRIMITIVE_ELTYPES, `eltypes` is required, the ternary reads Base.uinttype, and the
+  others are on the allowlist with their reasons. A17P3 = A17E4, A17E5, A17P8: the citations are
+  true. A17P4: 13.10 holds both with their native answers. A17P5: the `locals` trace point
+  replaces the ENV reads; L158 counts any ENV read in src outside options.jl but
+  `_wt_default_validate` (compile_module's default stays the one other reader, the orchestrator's
+  ruling). A17P6: R40's text and its test name the ledger check a regression check. A17P7: the
+  texts are true and the dead count gone. A17P9: the dealing errors on each, and L163 checks the
+  timing file lists exactly the groups.
+  The cases failed at the start and pass; each tightened lock (L76, L143, L158, L163, L173, L180,
+  L181) was negative-tested on the exact commit.
+- Everything else is on MARCH 13.17 under its row: A17C3's Enrollment remainder.
