@@ -19,11 +19,10 @@ _rc_mkf(x::Float64) = (c = x; () -> (c = c + 1; c))
 _rc_mkmix(x::Int64) = (c = x; () -> (c = c + 0.5; c))
 _rc_undef() = (local r; () -> (r = Int64[]; push!(r, 1); r))
 
-# the (nir, slot types, #self# type) of `f(argtypes...)`
+# the (nir, slot types) of `f(argtypes...)`
 _rc_body(f, argtypes) = begin
     ci = code_typed(f, argtypes; optimize = true)[1].first
-    st = WasmTarget.nir_slot_types(ci)
-    (WasmTarget.build_nir(ci), st, st[1])
+    (WasmTarget.build_nir(ci), WasmTarget.nir_slot_types(ci))
 end
 # a creator and the closure it returns, as the closed world holds them
 _rc_world(mk, args...) = Any[_rc_body(mk, map(typeof, args)), _rc_body(mk(args...), ())]
@@ -61,4 +60,25 @@ _rc_pair(n::Int64) = (x = n; w = @noinline(() -> (x = 2.5; nothing)); (w, @noinl
                                                    rettype=WasmTarget.infer_return_type)
     @test length(rec) == 2
     @test all(==(Any), values(rec))
+end
+
+# A function taking a closure as an argument, the closure's body inlined into it, writes through
+# the argument (`setfield!(getfield(_2, :c), :contents, 2.5)`): that write joins the box like any
+# other, so the creator's read is not the creator's Int64 alone (dev/formal/CaptureType.tla's
+# argument carrier; it was keyed only through `#self#` or an SSA value, and the creator's read
+# unboxed a Float64 box as an Int64 one: illegal cast, Julia answers 1)
+@noinline _rc_callit(g) = (g(); nothing)
+_rc_inlined(n::Int64) = (c = n; w = () -> (c = 2.5; nothing); _rc_callit(w); c isa Float64 ? 1 : 2)
+@testset "record_capture_contents: a write through an argument joins the box" begin
+    local creator = _rc_body(_rc_inlined, (Int64,))
+    # the closure type the creator builds, and the callee taking it
+    local W = only(unique(n.node.T for n in creator[1] if n.node isa WasmTarget.NirNew &&
+                          n.node.type_kind === :literal && n.node.T !== Core.Box))
+    local callee = _rc_body(_rc_callit, (W,))
+    # the callee writes through its argument: its body inlined the closure's
+    @test any(s -> (w = WasmTarget._f3_contents_write(s.node); w !== nothing &&
+                    WasmTarget._captured_box_field(w[1], callee[1], callee[2]) !== nothing), callee[1])
+    local rec = WasmTarget.record_capture_contents(Any[creator, callee]; closure_bodies=_f3_bodies_prepass,
+                                                   rettype=WasmTarget.infer_return_type)
+    @test rec[(W, :c)] === Any
 end

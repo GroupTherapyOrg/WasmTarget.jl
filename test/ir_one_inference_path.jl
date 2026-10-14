@@ -153,3 +153,19 @@ _wt_oip_mix(n::Int64) = (s = string(n, :k, 'c'); v = n > 0 ? _WT_OIP_TABLE : Int
     @test compared > 100
     @test kinds ⊇ Set([:NirSSA, :NirArgument, :NirLiteral, :NirGlobalRef])
 end
+
+# isa, typeassert and the ten conversions read a type operand by one rule (nir_type_operand): a
+# literal's value or a constant global's; a global that is no constant is read at run time
+# (Julia's jl_isa and jl_typeassert read the binding then), which none of them lowers, so it
+# answers nothing and each rejects at its statement (dev/AUDIT.md A17E6: typeassert took a bound
+# global's value whether constant or not)
+global _ioip_nonconst_T = Int64
+const _IOIP_CONST_T = Int64
+@testset "a type operand's value: one rule for isa, typeassert and the conversions" begin
+    local G(name) = WasmTarget.resolve_operand(GlobalRef(@__MODULE__, name), Any[])
+    @test WasmTarget.nir_type_operand(WasmTarget.NirLiteral(Int64)) === Int64
+    @test WasmTarget.nir_type_operand(G(:_IOIP_CONST_T)) === Int64
+    @test G(:_ioip_nonconst_T) isa WasmTarget.NirGlobalRef && G(:_ioip_nonconst_T).bound
+    @test WasmTarget.nir_type_operand(G(:_ioip_nonconst_T)) === nothing
+    @test WasmTarget.nir_type_operand(WasmTarget.NirSSA(1, Type)) === nothing
+end

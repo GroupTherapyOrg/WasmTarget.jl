@@ -38,7 +38,9 @@ end
 # diagnostics. A compile does not inherit the options an earlier compile read: compile_module,
 # called directly, reads its own environment (a process-wide options Ref left the registration
 # log of an earlier, logging compile on). On the base (process state) the inner compile reset the
-# RNG globals and perf_now import the outer compile had made, and compile_module logged.
+# RNG globals and perf_now import the outer compile had made, and compile_module logged; the
+# ledger check passed there too (the process-wide sink was set and restored around each compile),
+# so it is a regression check, not R40's evidence.
 @noinline _ds3_outer(x::Int64) = Int64(rand(Int64) % 7) + Int64(time_ns() % UInt64(2)) + x
 @noinline _ds3_inner(x::Int64) = Int64(rand(Int64) % 3) + Int64(time_ns() % UInt64(2)) + x
 _ds3_plain(x::Int64) = x * 5

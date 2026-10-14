@@ -1687,18 +1687,22 @@ for a null `nothing` where the static type admits Nothing, Nothing's id.
 A closure of any class is its object (maybe_wrap_closure!), whose header names its class.
 parity(code_generator.dart:6076 loadClassId)
 """
-function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T);
-                        arrays::Bool=true)::InstrBuilder
-    local reg = ctx.type_registry
+emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T); arrays::Bool=true)::InstrBuilder =
+    emit_class_id!(b, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w), T; arrays)
+# parity(code_generator.dart:6076 loadClassId): the same read in a function a module builds
+# with no compilation context (a selector caller), its scratch declared through `alloc`
+function emit_class_id!(b::InstrBuilder, mod::WasmModule, reg::TypeRegistry, alloc::Function,
+                        @nospecialize(T); arrays::Bool)::InstrBuilder
     local base_idx = reg.base_struct_idx
-    local bare = arrays ? bare_array_partition(ctx.mod, reg, T).told : Tuple{Type,UInt32}[]
+    base_idx === nothing && throw(ArgumentError("a class read needs the class base struct"))
+    local bare = arrays ? bare_array_partition(mod, reg, T).told : Tuple{Type,UInt32}[]
     # `nothing` may be the null reference, which has no header: its class is Nothing's, read
     # before the header as dart branches on null before loadClassId (A11E2: the read trapped
     # where Julia throws a MethodError)
     local nid = get_type_id(reg, Nothing)
     local nullable = nid > 0 && (T === nothing || Nothing <: T)
     isempty(bare) && !nullable && return emit_typeof!(b, base_idx)
-    local v = allocate_local!(ctx, AnyRef)
+    local v = alloc(AnyRef)
     local_set!(b, v)
     local done = block!(b; results=WasmValType[I32])
     if nullable
@@ -1915,8 +1919,7 @@ end
 # parity(types.dart:527 emitAsCheck)
 function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) == 2 || return nothing
-    local _ta_target = nir_const(args[2]) isa Type ? nir_const(args[2]) :
-        (args[2] isa NirGlobalRef && args[2].bound && args[2].value isa Type) ? args[2].value : nothing
+    local _ta_target = nir_type_operand(args[2])
     if !(_ta_target isa Type)
         record_unsupported!(ctx, :unsupported_method,
             "typeassert(x, T) with a T known only at run time"; idx=idx)
@@ -2919,7 +2922,7 @@ parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrins
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     arg_type = length(args) > 0 ? value_type(ctx, args[1]) : Int64
     is_32bit = operand_register(arg_type) in (I32, F32)
-    is_128bit = _julia_int_width(arg_type, false) == 128
+    is_128bit = _julia_int_width(arg_type) == 128
     return arg_type, is_32bit, is_128bit
 end
 
@@ -2959,7 +2962,7 @@ end
 
 The intrinsic Julia's own method of `f(::T, ::T)` runs, for `f` one of `+`, `-`, `*` (or that
 intrinsic itself) and `T` a type whose wasm arithmetic is Julia's: a 32- or 64-bit BitInteger
-(`add_int`, base/int.jl:86-88 on 1.12.7, :85-87 on 1.13.1) or an IEEE Float32/Float64 (`add_float`,
+(`add_int`, base/int.jl:86-88 on 1.12.7 and 1.13.1) or an IEEE Float32/Float64 (`add_float`,
 base/float.jl:495-497 on 1.12.7, :492-494 on 1.13.1);
 `nothing` otherwise (a narrow integer wraps at its own width, which no single opcode does). Its
 opcode is the one operator table's, INTRINSIC_BINOPS.
@@ -2967,7 +2970,7 @@ parity(quarantine: Julia's surface operators are methods whose bodies call intri
 `_binaryOperatorMap` (intrinsics.dart:437) is keyed by the operator's name directly.)
 """
 function operator_intrinsic(@nospecialize(f), @nospecialize(T))::Union{Nothing, Symbol}
-    local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T, false) in (32, 64)
+    local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T) in (32, 64)
     local flt = numeric_register(T) in (F32, F64)
     (int || flt) || return nothing
     # an intrinsic runs as itself, over its own kind only: `add_int` over floats adds their bits,
@@ -3032,7 +3035,7 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
             boxed_operand_unboxed = true
         end
     end
-    emit_intrinsic_binop!(fb, wt, wt, op, ctx, _julia_int_width(T, wt === I32)) === nothing &&
+    emit_intrinsic_binop!(fb, wt, wt, op, ctx, _operand_width(T)) === nothing &&
         error("the operator table has no $(op) over $(wt)")
 
     # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT

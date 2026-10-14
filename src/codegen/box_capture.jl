@@ -514,19 +514,21 @@ end
 
 The type of every captured variable of the closed world, keyed by (closure type, captured
 field): the join of every write into the variable's `Core.Box` anywhere in `bodies` (each a
-`(nir, spectypes, selfT)`) — its creator's writes into the box it makes (an argument typed by
-the creator's signature), and every write through the field: in a body of the closure itself
-(`#self#`) or through a closure value (a closure a callee returned, its body inlined). A write
+`(nir, spectypes)`, its body and its slot types) — its creator's writes into the box it makes (an
+argument typed by the creator's signature), and every write through the field, whatever operand
+carries the closure (_captured_box_field): in a body of the closure itself (`#self#`), through a
+closure value (a closure a callee returned, its body inlined) or through an argument (a function
+taking the closure, the closure's body inlined into it). A write
 that reads the variable (`c = c + 1`) is typed with the current record, so the join iterates
 to a fixpoint. Several closures can capture one box (a writer and a reader returned
 together), each through its own field: every field that holds one box shares one join, so a
-write through any of them is a write into each. A closure a captor's body builds from its own box
-field (`%new(T2, getfield(#self#, f))`, a nested captor, at any depth) holds that box: its field
-joins the field it was built from. A field whose writes are not one concrete type
+write through any of them is a write into each. A closure a body builds from a box field it reads
+(`%new(T2, getfield(carrier, f))`, a nested captor, at any depth) holds that box: its field joins
+the field it was built from. A field whose writes are not one concrete type
 records `Any`: its reads stay erased. The record is complete for the closed world because every body that can run is in it,
 which the creator alone is not (a returned closure's writes are invisible to its creator).
 formal(dev/formal/CaptureType.tla): a captured box's read is typed by the join of every write
-into the box, its creator's included.
+into the box, its creator's included, whatever operand carries the captor.
 parity(closures.dart:1436 Capture.type): a captured variable's type comes from its
 declaration, the one type every read and write of it shares.
 """
@@ -551,19 +553,19 @@ function record_capture_contents(bodies::Vector; closure_bodies::Function,
             same_box[tf] = class
         end
     end
-    for (nir, _, _) in bodies, box_id in find_box_news(nir)
+    for (nir, _) in bodies, box_id in find_box_news(nir)
         local fields = _f3_box_captor_fields(nir, box_id)
         union!(created, fields)
         join_box!(fields)
     end
-    # a nested captor: a closure a body builds from a box field it reads (`getfield(#self#, f)`
-    # of its own closure, or of a closure value) holds that box through its own field
-    for (nir, _, selfT) in bodies, s in nir
+    # a nested captor: a closure a body builds from a box field it reads (`getfield(carrier, f)`,
+    # whatever operand the carrier is) holds that box through its own field
+    for (nir, spec) in bodies, s in nir
         local node = s.node
         (node isa NirNew && node.type_kind === :literal && node.T !== Core.Box && isstructtype(node.T)) || continue
         for (j, op) in enumerate(node.operands)
             j <= fieldcount(node.T) && fieldtype(node.T, j) === Core.Box || continue
-            local from = _captured_box_field(op, nir, selfT)
+            local from = _captured_box_field(op, nir, spec)
             from === nothing || join_box!(Tuple{Type,Symbol}[from, (node.T, fieldname(node.T, j))])
         end
     end
@@ -571,7 +573,7 @@ function record_capture_contents(bodies::Vector; closure_bodies::Function,
         local next = Dict{Tuple{Type,Symbol},Set{Any}}()
         add!(key, @nospecialize(t)) = (t === Union{} || push!(get!(() -> Set{Any}(), next, key), t))
         local seeds = Dict{Tuple{Type,Symbol},Type}(key => Union{ts...} for (key, ts) in held)
-        for (nir, spec, selfT) in bodies
+        for (nir, spec) in bodies
             for box_id in find_box_news(nir)
                 local fields = _f3_box_captor_fields(nir, box_id)
                 isempty(fields) && continue
@@ -583,11 +585,11 @@ function record_capture_contents(bodies::Vector; closure_bodies::Function,
                     foreach(tf -> add!(tf, t), fields)
                 end
             end
-            local joins = _capture_propagate(nir, seeds, selfT, spec; closure_bodies, rettype)
+            local joins = _capture_propagate(nir, seeds, spec; closure_bodies, rettype)
             for s in nir
                 local w = _f3_contents_write(s.node)
                 w === nothing && continue
-                local key = _captured_box_field(w[1], nir, selfT)
+                local key = _captured_box_field(w[1], nir, spec)
                 key === nothing && continue
                 local v = w[2]
                 add!(key, v isa NirSSA ? get(joins, v.id, value_type(v, spec, nothing)) :
@@ -619,11 +621,10 @@ end
 # parity(quarantine: one round of record_capture_contents's fixpoint over the reads of a Julia
 # `Core.Box`, whose `contents::Any` erases the type the round's seed restores)
 function _capture_propagate(nir::Vector{NirStmt}, seeds::Dict{Tuple{Type,Symbol},Type},
-                            @nospecialize(selfT), spec; closure_bodies::Function,
-                            rettype::Function)::Dict{Int,Type}
+                            spec; closure_bodies::Function, rettype::Function)::Dict{Int,Type}
     local reads = Dict{Int,Type}()
     for i in eachindex(nir)
-        local key = _captured_box_field(NirSSA(i, Any), nir, selfT)
+        local key = _captured_box_field(NirSSA(i, Any), nir, spec)
         key === nothing && continue
         reads[i] = get(seeds, key, Union{})   # a field with no value yet holds none
     end
@@ -639,11 +640,14 @@ _capture_finalize(seen::Dict{Tuple{Type,Symbol},Set{Any}})::Dict{Tuple{Type,Symb
                                           isconcretetype(first(ts))) ? first(ts) : Any)
                                   for (tf, ts) in seen)
 
-# The (closure type, field) a box operand reads — `getfield(carrier, f)` where the carrier is
-# `#self#` (of type `selfT`) or a closure value and `f` is its captured `Core.Box` — or nothing.
+# The (closure type, field) a box operand reads — `getfield(carrier, f)` where `f` is the
+# carrier's captured `Core.Box` field — or nothing. The carrier is any operand, typed by the one
+# reader of an operand's type (value_type over the body's slot types `spec`): `#self#` in a
+# closure's own body, an argument where a function taking the closure inlined its body, an SSA
+# value (a closure a callee returned).
 # parity(quarantine: a Julia closure reaches its captured `Core.Box` through a field of its own
 # struct; dart's captured variable is a field of the closure's context, closures.dart:1411 Capture)
-function _captured_box_field(x, nir::Vector{NirStmt}, @nospecialize(selfT))::Union{Nothing,Tuple{Type,Symbol}}
+function _captured_box_field(x, nir::Vector{NirStmt}, spec)::Union{Nothing,Tuple{Type,Symbol}}
     (x isa NirSSA && 1 <= x.id <= length(nir)) || return nothing
     local s = nir[x.id]
     local node = s.node
@@ -651,18 +655,19 @@ function _captured_box_field(x, nir::Vector{NirStmt}, @nospecialize(selfT))::Uni
         return nothing
     local base, fld = node.operands[1], node.operands[2]
     (fld isa NirLiteral && fld.value isa Symbol) || return nothing
-    local T = (base isa NirArgument && base.n == 1) ? selfT : base isa NirSSA ? value_type(base, nothing, nothing) : nothing
+    (base isa NirSSA || base isa NirArgument || base isa NirSlot) || return nothing
+    local T = value_type(base, spec, nothing)
     (T isa DataType && isstructtype(T) && hasfield(T, fld.value) &&
      fieldtype(T, fld.value) === Core.Box) || return nothing
     return (T, fld.value)
 end
 
 """
-    capture_read_types(nir, ssa_types, record, selfT; spectypes, closure_bodies, rettype) -> Dict{Int,Type}
+    capture_read_types(nir, ssa_types, record; spectypes, closure_bodies, rettype) -> Dict{Int,Type}
 
 The types of the captured-box reads in `nir`, and of the values computed from them: a box read
-`getfield(carrier, f)` whose carrier is the closure being compiled (`#self#`, of type
-`selfT`) or a closure value (the M10b shape: a closure a callee returned) is seeded with the
+`getfield(carrier, f)`, whatever operand carries the closure (_captured_box_field: `#self#`, an
+argument, a closure value a callee returned), is seeded with the
 type recorded for that captured field (record_capture_contents), a box this body creates and a
 closure captures is typed by the record too, and
 f3_box_value_types propagates it to the `:contents` reads and what they feed. The box reads
@@ -670,12 +675,11 @@ themselves are Core.Box values and are never retyped. A closure body never infer
 captured variable's type on its own: it cannot see its creator's writes.
 parity(closures.dart:1436 Capture.type)
 """
-function capture_read_types(nir::Vector{NirStmt}, ssa_types, record::Dict{Tuple{Type,Symbol},Type},
-                            @nospecialize(selfT); spectypes=nothing, closure_bodies::Function,
-                            rettype::Function)::Dict{Int,Type}
+function capture_read_types(nir::Vector{NirStmt}, ssa_types, record::Dict{Tuple{Type,Symbol},Type};
+                            spectypes, closure_bodies::Function, rettype::Function)::Dict{Int,Type}
     local seeds = Dict{Int,Type}()
     for i in eachindex(nir)
-        local key = _captured_box_field(NirSSA(i, Any), nir, selfT)
+        local key = _captured_box_field(NirSSA(i, Any), nir, spectypes)
         key === nothing && continue
         local ct = get(record, key, nothing)
         (ct isa DataType && isconcretetype(ct)) || continue

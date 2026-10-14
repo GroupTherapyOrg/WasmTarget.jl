@@ -326,3 +326,24 @@ end
         @test WasmTarget._canonical_tuple_type(Tuple{Type{X}, Int64}) === built
     end
 end
+
+# A box's scratch is a local the function declared for it, of the boxed value's own type (L173): a
+# closure entry, a dispatch wrapper and a selector caller box through the scratch their declarations
+# return, and the box refuses a parameter or a local of another type, where an index computed
+# beside the declaration (a `-1` absent, `1 + arity`) could name another local (dev/AUDIT.md A17B1)
+_dme_box(n::Int64) = n + 1
+@testset "a box's scratch is the local declared for it (L173)" begin
+    local mod, reg, _, _ = WasmTarget.compile_module(Any[(_dme_box, (Int64,), "b")]; return_registries=true)
+    local mk() = WasmTarget.InstrBuilder(WasmTarget.WasmValType[WasmTarget.AnyRef, WasmTarget.AnyRef],
+                                         WasmTarget.WasmValType[WasmTarget.AnyRef]; func_name="box_scratch", mod=mod)
+    local b = mk()
+    local l64 = WasmTarget.builder_add_local!(b, WasmTarget.I64)
+    WasmTarget.i64_const!(b, 7)
+    @test WasmTarget.emit_classid_box!(b, mod, reg, l64, WasmTarget.I64, Int64) isa UInt32
+    # a parameter, and a declared local of another type, are no scratch of an i64 box
+    local b2 = mk()
+    local l32 = WasmTarget.builder_add_local!(b2, WasmTarget.I32)
+    WasmTarget.i64_const!(b2, 7)
+    @test_throws ArgumentError WasmTarget.emit_classid_box!(b2, mod, reg, 1, WasmTarget.I64, Int64)
+    @test_throws ArgumentError WasmTarget.emit_classid_box!(b2, mod, reg, l32, WasmTarget.I64, Int64)
+end
