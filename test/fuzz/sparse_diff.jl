@@ -1,12 +1,11 @@
 # ============================================================================
 # Differential fuzz of the SparseArrays stdlib — FOUNDATION (step 1).
 # ============================================================================
-# SparseArrays construction (`sparse(::Matrix)`) is unlocked by two overlays in
-# ext/WasmTargetSparseArraysExt.jl (sparse_check_Ti + a hand-rolled dense→CSC).
-# Once a CSC exists, the READ/REDUCE/MATVEC paths compile from the real
-# SparseArrays implementations. This file differentially verifies that
-# foundation (wasm vs native, same oracle as core): construction round-trips,
-# nnz, reductions, sparse·vector, sparse·dense.
+# SparseArrays compiles from its own source (no overlays): construction, the
+# builders (hcat/vcat/blockdiag/permute/spdiagm/±), reads, reductions and
+# products. This file differentially verifies it (wasm vs native, the same
+# bit-exact oracle as core): construction round-trips, nnz, reductions,
+# sparse·vector, sparse·dense.
 #
 # Tested dense-in / dense-out (sparse used INTERNALLY) so the matrix bridge can
 # marshal inputs/outputs — mirrors how linalg_diff verifies factorization objects.
@@ -65,8 +64,7 @@ _sp_sum(A)     = sum(sparse(A))               # full reduction
 _sp_max(A)     = maximum(abs, sparse(A))      # mapped reduction
 _sp_mv(A, x)   = sparse(A) * x                # sparse · vector
 _sp_spdense(A) = Matrix(sparse(A) * Matrix(sparse(A)))  # sparse · dense
-# result-building ops (unlocked by the is_struct_type carve-out + the outer-ctor
-# overlay) — each builds a NEW sparse result, compared densified
+# result-building ops — each builds a NEW sparse result, compared densified
 _sp_matmul(A, B) = Matrix(sparse(A) * sparse(B))   # sparse · sparse → sparse
 _sp_add(A, B)    = Matrix(sparse(A) + sparse(B))   # sparse + sparse (Base op)
 _sp_sub(A, B)    = Matrix(sparse(A) - sparse(B))   # sparse - sparse (Base op)
@@ -102,7 +100,6 @@ _sp_cmb6(A)        = Matrix(permutedims(permutedims(sparse(A))))               #
 _sp_cmb7(A, Bm)    = Matrix(permutedims(blockdiag(sparse(A), sparse(A) * sparse(Bm))))  # matmul→blockdiag→transpose
 
 function run_sparse_tests(; reps::Int = 40)
-    FuzzHarness.NODE_OK || (@test_skip true; return)
     rng = MersenneTwister(0x5A11)
     sq()  = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n),)) for _ in 1:reps ]
     sqv() = [ (n = rand(rng, 2:5); (_sp_rmat(rng, n, n), _sp_rvec(rng, n))) for _ in 1:reps ]
@@ -119,7 +116,7 @@ function run_sparse_tests(; reps::Int = 40)
         @test _sp_diff(_sp_mv,      (Matrix{Float64}, Vector{Float64}), sqv(), Vector{Float64})  # S·x
         @test _sp_diff(_sp_spdense, (Matrix{Float64},), sq(), Matrix{Float64})  # S·dense
     end
-    @testset "result-building ops (carve-out + outer-ctor overlay)" begin
+    @testset "result-building ops" begin
         ssq() = [ (n = rand(rng, 2:4); (_sp_rmat(rng, n, n), _sp_rmat(rng, n, n))) for _ in 1:reps ]
         @test _sp_diff(_sp_matmul, (Matrix{Float64}, Matrix{Float64}), ssq(), Matrix{Float64})  # S·S
         @test _sp_diff(_sp_add,    (Matrix{Float64}, Matrix{Float64}), ssq(), Matrix{Float64})  # S+S

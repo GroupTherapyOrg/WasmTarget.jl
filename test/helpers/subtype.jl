@@ -36,6 +36,18 @@ function VarBinding(var::TypeVar, right::Bool)
 end
 
 """
+    _RawJoin(a, b)
+
+The join of two lower bounds neither of which is a subtype of the other: subtype.c's
+simple_join ends in `jl_new_struct(jl_uniontype_type, a, b)`, a raw union node without
+`Union{a, b}`'s normalization, and the algorithm reads it only as a union.
+"""
+struct _RawJoin
+    a::Any
+    b::Any
+end
+
+"""
     SubtypeEnv
 
 Environment for the subtype algorithm. Mirrors jl_stenv_t from subtype.c.
@@ -108,6 +120,10 @@ function _subtype(@nospecialize(x), @nospecialize(y), env::SubtypeEnv, param::In
         # Right union (exists): at least one element must be a supertype
         return _subtype(x, y.a, env, param) || _subtype(x, y.b, env, param)
     end
+
+    # a raw join (simple_join) is a union too
+    x isa _RawJoin && return _subtype(x.a, y, env, param) && _subtype(x.b, y, env, param)
+    y isa _RawJoin && return _subtype(x, y.a, env, param) || _subtype(x, y.b, env, param)
 
     # === TYPEVAR HANDLING ===
     if x isa TypeVar
@@ -226,7 +242,7 @@ function _var_gt(vb::VarBinding, @nospecialize(a), env::SubtypeEnv, param::Int):
                 vb.lb = a
             elseif vb.lb === a
                 # Same value/type, no change needed
-            elseif !(vb.lb isa Type) || !(a isa Type)
+            elseif !(vb.lb isa Type || vb.lb isa _RawJoin) || !(a isa Type)
                 # Non-type values (e.g., integer parameters in Tuple{1,2})
                 # Can't form Union of non-types. Use Any as join (will fail diagonal check).
                 vb.lb = Any
@@ -237,7 +253,7 @@ function _var_gt(vb::VarBinding, @nospecialize(a), env::SubtypeEnv, param::Int):
                 # a is narrower than current lb, keep current lb
             else
                 # Neither is subtype of other — join them
-                vb.lb = Union{vb.lb, a}
+                vb.lb = _RawJoin(vb.lb, a)   # subtype.c simple_join's raw union node
             end
         end
         return true
@@ -354,6 +370,7 @@ end
 Handles both Type values (DataType) and non-type values (e.g., integer 1 in Tuple{1,1})."""
 function _is_leaf_bound(@nospecialize(v))::Bool
     v isa DataType && return isconcretetype(v)
+    v isa _RawJoin && return false
     # Non-type values (e.g., integers in value-parameterized types) are always concrete
     !(v isa Type) && !(v isa TypeVar) && return true
     return false
@@ -364,6 +381,7 @@ function _type_contains_var(@nospecialize(t), v::TypeVar)::Bool
     t === v && return true
     t isa TypeVar && return false
     t isa Union && return _type_contains_var(t.a, v) || _type_contains_var(t.b, v)
+    t isa _RawJoin && return _type_contains_var(t.a, v) || _type_contains_var(t.b, v)
     t isa UnionAll && return _type_contains_var(t.body, v) || t.var === v
     t isa DataType && begin
         for p in t.parameters

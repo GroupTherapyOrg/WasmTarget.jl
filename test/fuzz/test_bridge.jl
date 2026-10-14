@@ -92,7 +92,6 @@ function check_case(fn, argtypes, inputs)
     bridge_supported(rt) || return (:unsupported_desc, rt)
     desc = descriptor(rt)[1]
     res = bridge_run(fn, argtypes, inputs; rettype = rt)
-    res === :no_node && return (:no_node, nothing)
     res isa Pair && return (res.first, res.second)
     for (i, tup) in enumerate(inputs)
         native = fn(tup...)
@@ -101,11 +100,6 @@ function check_case(fn, argtypes, inputs)
         tree_matches(desc, native, payload) || return (:mismatch, (tup, native, payload))
     end
     return (:ok, nothing)
-end
-
-if !FuzzHarness.NODE_OK
-    @info "Node.js unavailable — bridge round-trip cannot run"
-    exit(0)
 end
 
 println("== CORE (must round-trip) ==")
