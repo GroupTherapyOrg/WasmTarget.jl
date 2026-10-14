@@ -340,7 +340,8 @@ two static calls a builtin hides that WT lowers as direct calls: `:splat`, a run
 `Core._apply_iterate` (`_apply_iterate_vararg_target_mi`), and `:invoke_in_world`
 (`_invoke_in_world_target_mi`). Those two and the `:invoke` re-specialization type their
 operands by `arg_type`, the call-site type codegen's call reads (`_edge_arg_type`: value_type
-over the body's numeric joins), so the MethodInstance collected is the one codegen calls. A
+over the body's joins, its numeric joins and its captured-box reads, `_body_joins`), so the
+MethodInstance collected is the one codegen calls. A
 statement names at most one edge.
 
 `nothing` when the statement has no edge or its target is not one MethodInstance. That skips
@@ -705,16 +706,13 @@ function _capture_typing!(capture::_CaptureTyping, codeinfos::Vector{Any})::Noth
     end
     local closure_bodies = T -> get(bodies_by_type, T, Tuple{Core.MethodInstance,Core.CodeInfo}[])
     local nirs = IdDict{Core.CodeInfo,Vector{NirStmt}}(src => build_nir(src) for (_, _, src) in pairs)
-    capture.record = record_capture_contents(Any[
-        (nirs[csrc], nir_slot_types(csrc),
-         isempty(nir_slot_types(csrc)) ? nothing : nir_slot_types(csrc)[1])
-        for (_, _, csrc) in pairs]; closure_bodies, rettype=infer_return_type)
+    capture.record = record_capture_contents(Any[(nirs[csrc], nir_slot_types(csrc)) for (_, _, csrc) in pairs];
+                                             closure_bodies, rettype=infer_return_type)
     empty!(capture.joins)
     for (_, mi, src) in pairs
-        local st = nir_slot_types(src)
-        capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record,
-                                               isempty(st) ? nothing : st[1];
-                                               spectypes=st, closure_bodies, rettype=infer_return_type)
+        capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record;
+                                               spectypes=nir_slot_types(src), closure_bodies,
+                                               rettype=infer_return_type)
     end
     return nothing
 end
@@ -946,15 +944,17 @@ function closed_world_classes(codeinfos::Vector{Any}, entry_mis::Vector{Any},
         end
         return
     end
-    # The operands one statement carries: every node's `args` hold exactly the runtime operands
-    # (a foreigncall's ABI preamble and an invoke's MethodInstance are resolved fields). A callee
-    # is never evidence of an instantiated class, a NirCall's and a NirInvoke's alike: it is the
-    # call's static target (a function, a constructor, a builtin, an intrinsic), not a value the
-    # call passes on, as a dart static target is not (a function used as a value is an operand);
-    # the class a constructor builds is observed at its %new, in the constructor's body.
+    # The values one statement passes on, read through the one operand table
+    # (nir_expr_operands): a call's operands and the value it is called on, its `self` (a
+    # constant callable whose type does not determine it, a capturing closure, which the callee
+    # receives as its first argument, as a dart FunctionInvocation's receiver is a value);
+    # a foreigncall's runtime operands (its ABI preamble is a resolved field). A static target
+    # whose type determines it (a function, a constructor, a builtin, an intrinsic) carries no
+    # value, as a dart static target does not; a `%new`'s type operand is the class it builds,
+    # observed by the statement rule, not a value it passes on.
     function statement_operands(node::NirNode)::Vector{NirNode}
-        (node isa NirCall || node isa NirInvoke || node isa NirNew || node isa NirForeignCall) &&
-            return node.operands
+        (node isa NirCall || node isa NirInvoke) && return nir_expr_operands(node)
+        (node isa NirNew || node isa NirForeignCall) && return node.operands
         return NirNode[]
     end
     # the classes WT's lowering instantiates are roots, reason "instantiated by lowering", in a
@@ -974,10 +974,12 @@ function closed_world_classes(codeinfos::Vector{Any}, entry_mis::Vector{Any},
     end
     for (ci_j, mi_j, src_j) in _collected_pairs(codeinfos)
         # a vararg method's packed tuple is a value no statement makes (WT rebuilds it from the
-        # flattened parameters): its class is observed from the body's slot
+        # flattened parameters): its class is observed from the body's slot, read by the one
+        # reader of an operand's type. Julia keeps every argument's slot type
+        # (replace_code_newstyle!, Compiler/src/ssair/legacy.jl:77), so a shorter table is
+        # invalid IR, which value_type raises on, never a class dropped
         if mi_j.def isa Method && mi_j.def.isva
-            local st_j = nir_slot_types(src_j)
-            length(st_j) >= mi_j.def.nargs && observe_type!(st_j[mi_j.def.nargs])
+            observe_type!(value_type(NirArgument(mi_j.def.nargs), nir_slot_types(src_j), nothing))
         end
         for (sidx, s0) in enumerate(nir_for(src_j))
             local node0 = s0.node
@@ -1122,7 +1124,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             # enrolled `iterate` as a callable, batch 101's CI regression)
             if (node isa NirCall && !(_nir_callee_object(node.callee) isa Core.Builtin)) ||
                node isa NirInvoke || node isa NirNew
-                for a in node.operands
+                # the call's `self` included: a constant callable it is called on (nir_expr_operands)
+                for a in (node isa NirNew ? node.operands : nir_expr_operands(node))
                     local v = a isa NirLiteral ? a.value :
                               (a isa NirGlobalRef && a.constant) ? a.value : nothing
                     (v isa Function && !(v isa Core.Builtin) && !(v isa Core.IntrinsicFunction)) &&
