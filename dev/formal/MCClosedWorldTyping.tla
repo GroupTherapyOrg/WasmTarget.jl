@@ -22,7 +22,7 @@ TYTypeSites   == [m \in TYMethods |-> IF m = "R" THEN {"T1"} ELSE {}]
 TYDynSites    == [m \in TYMethods |-> IF m = "R" THEN {"T1"} ELSE {}]
 TYDynTargets  == [t \in TYTypes |-> {"C"}]
 TYEmptySets   == [m \in TYMethods |-> {}]
-TYTypedRetargets == [m \in TYMethods |-> IF m = "R" THEN {<<"O", "N", "C">>} ELSE {}]
+TYTypedRetargets == [m \in TYMethods |-> IF m = "R" THEN {<<"O", "N", "C", "widen">>} ELSE {}]
 TYInPlace     == TRUE
 
 (* a typed site's original is an :invoke edge Julia wrote *)

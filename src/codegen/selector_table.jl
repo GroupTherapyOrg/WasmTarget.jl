@@ -265,7 +265,7 @@ function fill_selector_table_elements!(mod::WasmModule, type_registry::TypeRegis
 end
 
 """
-    generate_selector_caller_body!(b, dt, dt_registry, base_struct_idx; caller_return_type, mod, type_registry) -> b
+    generate_selector_caller_body!(b, dt, dt_registry; caller_return_type, mod, type_registry) -> b
 
 dart's virtual call site (code_generator.dart:2103-2110), as the dispatcher body, emitted into
 `b`, the caller's function builder, and ended:
@@ -276,9 +276,8 @@ A classId with no row hits a null funcref → trap: the honest MethodError analo
 (loud, dart-legit) — same posture the FNV probe's miss already had.
 parity(pkg/dart2wasm/lib/dispatch_table.dart:396 DispatchTable)
 """
-function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_registry,
-                                        base_struct_idx::UInt32;
-                                        caller_return_type::Type=Any, mod::WasmModule,
+function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_registry;
+                                        caller_return_type::Type, mod::WasmModule,
                                         type_registry::TypeRegistry)::InstrBuilder
     axis = dt_registry.selector_axis[dt.func_ref]
     offset = dt_registry.selector_offset[dt.func_ref]
@@ -292,10 +291,10 @@ function generate_selector_caller_body!(b::InstrBuilder, dt::DispatchTable, dt_r
             ref_cast!(b, Int64(_st.type_idx), _st.nullable)
         end
     end
-    # receiver.classId (dart: struct.get topInfo.classId)
+    # receiver.classId (dart: struct.get topInfo.classId), by the one class read: a null
+    # receiver is `nothing`, whose class is Nothing's (emit_class_id!; it trapped on the null)
     local_get!(b, UInt32(axis - 1))
-    ref_cast!(b, Int64(base_struct_idx), false)
-    struct_get!(b, UInt32(base_struct_idx), UInt32(0))
+    emit_class_id!(b, mod, type_registry, w -> builder_add_local!(b, w), Any; arrays=false)
     # the span guard: a classId outside [lo, hi] has no row (MethodError → trap)
     local lo, hi = _selector_span(dt_registry, dt.func_ref)
     emit_classid_span_guard!(b, builder_add_local!(b, I32), lo, hi)   # the guarded classId

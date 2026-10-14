@@ -19,7 +19,7 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
 
 @testset "F3 L2b: f3_box_value_types value-type propagation" begin
     @test isempty(WasmTarget.capture_read_types(WasmTarget.NirStmt[], Any[],
-                                                Dict{Tuple{Type,Symbol},Type}(), Tuple{Vararg{Int64}}; closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
+                                                Dict{Tuple{Type,Symbol},Type}(); spectypes=Type[Tuple{Vararg{Int64}}], closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
     # counter: `s` mutated capture → Core.Box{Int64}; getfield(box,:contents)::Any must propagate Int64.
     fcounter(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     ci = code_typed(fcounter, (Int64,); optimize = true)[1].first
@@ -64,10 +64,10 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
     # undefined and holds Vector{Int64}); the closure's reads are typed from that record
     cci = only(code_typed(vector_capture, ())).first
     vst, cst = WasmTarget.nir_slot_types(vci), WasmTarget.nir_slot_types(cci)
-    vrec = WasmTarget.record_capture_contents(Any[(WasmTarget.build_nir(cci), cst, cst[1]),
-                                                  (vnir, vst, vst[1])]; closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+    vrec = WasmTarget.record_capture_contents(Any[(WasmTarget.build_nir(cci), cst),
+                                                  (vnir, vst)]; closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
     @test vrec[(typeof(vf), :result)] === Vector{Int64}
-    vjoins = WasmTarget.capture_read_types(vnir, vnir, vrec, typeof(vf);
+    vjoins = WasmTarget.capture_read_types(vnir, vnir, vrec;
                                            spectypes=WasmTarget.nir_slot_types(vci), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
     @test Vector{Int64} in values(vjoins)
 
@@ -102,8 +102,8 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
         local boxf = only(fieldname(bspec[1], k) for k in 1:fieldcount(bspec[1])
                           if fieldtype(bspec[1], k) === Core.Box)
         vt = WasmTarget.capture_read_types(bnir, bnir,
-                                           Dict{Tuple{Type,Symbol},Type}((bspec[1], boxf) => Int64),
-                                           bspec[1]; spectypes = bspec, closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+                                           Dict{Tuple{Type,Symbol},Type}((bspec[1], boxf) => Int64);
+                                           spectypes = bspec, closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
         # both the contents read AND the s+i add (resolved Int64 via spectypes) propagate;
         # the box reads themselves are never retyped
         @test count(==(Int64), values(vt)) >= 2
