@@ -1536,7 +1536,7 @@ const LOCKS = [
             count(p -> occursin(p, context_src), forbidden) +
                 count(p -> !occursin(p, context_src * nir_src), required)
         end),
-    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
+    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values; and `#undef` is never `nothing`: a slot that holds `nothing` too (undef_slot, undef.jl: a pointer slot whose type admits Nothing, held in an abstract reference of the any hierarchy, where `nothing` is the null) marks `#undef` with the module's one undefined value, which memorynew, jl_alloc_genericmemory and a partial %new fill it with, Julia's slot unset (atomic_pointerset of C_NULL) stores, memoryref_isassigned and isdefined (a field's, a Box's contents) compare against, and memoryrefget, a field read and a Box's contents read test, throwing UndefRefError (Julia's null_pointer_check, cgutils.cpp); a constant Box's unset contents are it too. Its behavior: smoke undef_slots (isassigned and isdefined of a stored `nothing` answered 2, native 1, and the read of an unset slot 0 where native throws UndefRefError: dev/AUDIT.md A17E1) and dev/formal/Undef.tla (MCUndefAsNullBroken, MCUndefReadUncheckedBroken) (dev/CHARTER.md C6)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
@@ -1548,9 +1548,30 @@ const LOCKS = [
                         "Bool condition has a non-boolean reference representation",
                         "struct construction leaves a non-reference Julia field undefined",
                         "_wt_make_undefined_field"]
+            # `#undef` beside `nothing`: each reader and writer of a slot that holds both (A17E1)
+            local blt_src = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local undef_src = read(joinpath(CODEGEN, "undef.jl"), String)
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local undef_needles = (
+                (blt_src, "emit_new_slots!(_mnb, ctx, arr_type_idx, elem_type)"),
+                (stmts_src, "emit_new_slots!(b, ctx, arr_type_idx, elem_type)"),
+                (blt_src, "_mrg_def isa ArrayType && undef_slot(elem_type, _mrg_def.elem.valtype) &&\n        emit_undef_read_check!(_mrgb, ctx, _mrg_def.elem.valtype)"),
+                (blt_src, "undef_slot(elem_type, elem_wasm) ?\n            emit_is_undef!(mib, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :"),
+                (blt_src, "    if undef_slot(T, elem)\n        emit_undef_value!(_apb, ctx.mod, ctx.type_registry)"),
+                (blt_src, "undef_slot(Any, _mb_ft) && emit_undef_read_check!(_mb_ib, ctx, _mb_ft)"),
+                (blt_src, "_emit_field_undef_check!(_sfb, ctx, obj_type, field_sym, field_idx, info)"),
+                (blt_src, "_emit_field_undef_check!(_sfgb, ctx, effective_obj_type, field_sym, field_idx, info)"),
+                (calls_src, "_emit_field_undef_check!(_gfb_ib, ctx, _gfb_T, _gfb_fld, _gfb_fi, _gfb_info)"),
+                (calls_src, "undef_slot(Any, _bxd_ft) ?\n                    emit_is_undef!(_bxd_ib, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :"),
+                (calls_src, "undef_slot(fieldtype(_isd_T, _isd_f), _isd_ft) ?\n                            emit_is_undef!(_isd_b, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :"),
+                (stmts_src, "if 1 <= _mjfi <= fieldcount(struct_type) && undef_slot(fieldtype(struct_type, _mjfi), missing_type)\n                    emit_undef_value!(b, ctx.mod, ctx.type_registry)"),
+                (values_src, "            emit_undef_value!(b, ctx.mod, ctx.type_registry)\n            struct_new!(b, type_idx)"),
+                (undef_src, "    return Nothing <: julia_type\nend"),
+                (smk, "_g(\"undef_slots\""))
             count(p -> occursin(p, calls_src) || occursin(p, values_src) || occursin(p, stmts_src), forbidden) +
                 count(p -> !(occursin(p, calls_src) || occursin(p, values_src) ||
-                             occursin(p, stmts_src) || occursin(p, test_src)), required)
+                             occursin(p, stmts_src) || occursin(p, test_src)), required) +
+                count(((src, n),) -> !occursin(n, src), undef_needles)
         end),
     "L62_exact_primitive_reinterpret_layout" => ("primitive ReinterpretArray construction folds exact bits/padding predicates, preserves runtime dimension errors, and bottom helpers never acquire a result representation",
         () -> begin

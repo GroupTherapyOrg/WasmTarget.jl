@@ -1801,15 +1801,15 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         local undefined_fields = Symbol[fn for fn in fieldnames(T) if !isdefined(val, fn)]
         if T === Core.Box && undefined_fields == Symbol[:contents]
             # Julia's unassigned captured variable is represented by an actual
-            # Core.Box whose contents field is undefined. The nullable Any field's
-            # null is the runtime undefined-reference sentinel consumed by the
-            # existing isdefined/throw_undef_if_not lowering—not a fabricated value.
+            # Core.Box whose contents field is undefined: the undefined value (undef_slot,
+            # undef.jl), which the isdefined and getfield lowerings read as `#undef` — not a
+            # fabricated value, and not the null `nothing` is.
             # parity(quarantine: mutable-identity floor — Core.Box is WT's captured-variable
             # cell, dart's closures.dart:1533 _buildContexts captured-variable field; a closure cell is never
             # a kernel `Constant` AST node, so it never enters constants.dart's canonicalization
             # map on the dart side either. R14 floor, never migratable.)
             emit_struct_prefix!(b, ctx.type_registry, T, info)
-            ref_null!(b, AnyRef)
+            emit_undef_value!(b, ctx.mod, ctx.type_registry)
             struct_new!(b, type_idx)
             return b
         end

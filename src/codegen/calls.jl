@@ -3988,7 +3988,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
         end
         # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
-        # defined-check = a null test on the anyref contents.
+        # defined-check: a test of its contents for `#undef` (the undefined value, or a typed
+        # reference box's null).
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) === :contents &&
            value_type(ctx, args[1]) === Core.Box
@@ -4000,7 +4001,11 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _bxd_ft = ctx.mod.types[_bxd_idx + 1].fields[2].valtype
             if _wt_is_ref(_bxd_ft)
                 struct_get!(_bxd_ib, _bxd_idx, UInt32(1))
-                ref_is_null!(_bxd_ib)
+                # an untyped box holds `nothing` too: its contents are unset when they are the
+                # undefined value (undef_slot), a typed reference box's when null
+                undef_slot(Any, _bxd_ft) ?
+                    emit_is_undef!(_bxd_ib, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :
+                    ref_is_null!(_bxd_ib)
                 num!(_bxd_ib, Opcode.I32_EQZ)
             else
                 # a TYPED box (i64 contents etc.) is always defined
@@ -4010,9 +4015,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             append_builder!(fb, _bxd_ib)
             _gfc_done = true
         end
-        # General concrete-struct field definedness. Reference fields use null
-        # as Julia's undefined-field state; physical numeric fields are always
-        # initialized in Wasm and therefore defined.
+        # General concrete-struct field definedness. A reference field's undefined state is the
+        # undefined value where it holds `nothing` too (undef_slot), else its null; physical
+        # numeric fields are always initialized in Wasm and therefore defined.
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) isa Symbol
             local _isd_T = value_type(ctx, args[1])
@@ -4039,7 +4044,12 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                                 ConcreteRef(UInt32(_isd_info.wasm_type_idx), true))
                     if _wt_is_ref(_isd_ft)
                         struct_get!(_isd_b, _isd_info.wasm_type_idx, _isd_wfi)
-                        ref_is_null!(_isd_b); num!(_isd_b, Opcode.I32_EQZ)
+                        # a field that holds `nothing` too is unset when it holds the undefined
+                        # value (undef_slot); any other reference field's null is its `#undef`
+                        undef_slot(fieldtype(_isd_T, _isd_f), _isd_ft) ?
+                            emit_is_undef!(_isd_b, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :
+                            ref_is_null!(_isd_b)
+                        num!(_isd_b, Opcode.I32_EQZ)
                     else
                         drop!(_isd_b); i32_const!(_isd_b, 1)
                     end
@@ -4077,6 +4087,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         emit_value!(_gfb_ib, args[1], ctx,
                                     ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
                         struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_wfi))
+                        _emit_field_undef_check!(_gfb_ib, ctx, _gfb_T, _gfb_fld, _gfb_fi, _gfb_info)
                         append_builder!(fb, _gfb_ib)
                         _gfc_done = true
                     end

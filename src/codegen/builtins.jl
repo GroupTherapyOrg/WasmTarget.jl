@@ -911,10 +911,11 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
 end
 
 # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
-# arrays have no undefined representation and are always assigned. Reference
-# arrays encode Julia's undefined slot as null and require an actual load.
+# arrays have no undefined representation and are always assigned. A reference
+# slot's undefined state is the undefined value where the slot holds `nothing` too
+# (undef_slot, undef.jl), else its null, and requires an actual load.
 # parity(quarantine: Julia's `Core.memoryref_isassigned` on a GenericMemoryRef — an undefined
-# reference slot is null; dart's WasmArray has no undefined-slot query.)
+# reference slot is NULL in Julia; dart's WasmArray has no undefined-slot query.)
 function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     isempty(args) && return nothing
     ref_arg = args[1]
@@ -933,7 +934,12 @@ function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)::Unio
     emit_memoryref!(mib, ctx, ref_arg)
     if _wt_is_ref(elem_wasm)
         array_get!(mib, array_type_idx; signed=packed_array_signedness(elem_type))
-        ref_is_null!(mib); num!(mib, Opcode.I32_EQZ)
+        # a slot that holds `nothing` too is unset when it holds the undefined value
+        # (undef_slot); any other reference slot's null is its `#undef`
+        undef_slot(elem_type, elem_wasm) ?
+            emit_is_undef!(mib, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w)) :
+            ref_is_null!(mib)
+        num!(mib, Opcode.I32_EQZ)
     else
         drop!(mib) # index
         drop!(mib) # array
@@ -1006,6 +1012,10 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     emit_memoryref!(_mrgb, ctx, ref_arg)
 
     array_get!(_mrgb, array_type_idx; signed=packed_array_signedness(elem_type))
+    # a read of an `#undef` slot throws UndefRefError (undef_slot: one that holds `nothing` too)
+    local _mrg_def = ctx.mod.types[array_type_idx + 1]
+    _mrg_def isa ArrayType && undef_slot(elem_type, _mrg_def.elem.valtype) &&
+        emit_undef_read_check!(_mrgb, ctx, _mrg_def.elem.valtype)
 
     # An Any element reads as a reference; the statement's store converts it to the local's
     # type (coerce_stack_top!, dart's convertType at the read), the SSA's IR type.
@@ -1151,7 +1161,7 @@ function _lower_memorynew!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, 
     # `length(ref.mem)` as the capacity, so any padding here is observable.
     local _mnb = _ctx_builder(ctx, "compile_call")
     emit_memory_length!(_mnb, ctx, size_arg, mem_type)
-    array_new_default!(_mnb, arr_type_idx)
+    emit_new_slots!(_mnb, ctx, arr_type_idx, elem_type)   # an `Any` slot starts `#undef`
     append_builder!(fb, _mnb)
     return append_builder!(b, fb)
 end
@@ -1253,9 +1263,9 @@ end
 # `atomic_pointerset(p, C_NULL, order)` with `p` inside a Memory whose slots hold
 # references: Julia's `_unsetindex!` / `_deleteend!` clearing a freed slot for its GC.
 # The slot is the storage-relative byte pointer divided by Julia's element stride
-# (memory_element_stride); in a WasmGC array that slot becomes null — unset, as
-# `isassigned` then reads it. Returns `p`, as the intrinsic does. Any other stored value
-# or pointer is not lowered here.
+# (memory_element_stride); in a WasmGC array that slot becomes `#undef` again — its null, or
+# the undefined value in a slot that holds `nothing` too (undef_slot) — as `isassigned` reads
+# it. Returns `p`, as the intrinsic does. Any other stored value or pointer is not lowered here.
 # parity(sdk/lib/_internal/wasm/common/list.dart:611 GrowableList.length=): freed slots are
 # nulled with `_data.fill(newLength, length, null)`.
 function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
@@ -1279,7 +1289,12 @@ function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{I
         num!(_apb, Opcode.I64_DIV_U)
     end
     narrow_length_to_i32!(_apb)
-    elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx)) : ref_null!(_apb, elem)
+    # the slot is `#undef` again: the undefined value where it holds `nothing` too (undef_slot)
+    if undef_slot(T, elem)
+        emit_undef_value!(_apb, ctx.mod, ctx.type_registry)
+    else
+        elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx)) : ref_null!(_apb, elem)
+    end
     array_set!(_apb, arr_t)
     emit_value!(_apb, p, ctx, I64)
     append_builder!(fb, _apb)
@@ -2149,6 +2164,8 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
             local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
             struct_get!(_mb_ib, _mb_idx, UInt32(1))
+            # an untyped box's unset contents are the undefined value: the read throws (undef_slot)
+            undef_slot(Any, _mb_ft) && emit_undef_read_check!(_mb_ib, ctx, _mb_ft)
             # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
             # unbox through the ONE funnel so declared and actual agree at the store.
             local _mb_jt = get(ctx.ssa_types, idx, Any)
@@ -2317,6 +2334,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
+                        _emit_field_undef_check!(_sfb, ctx, obj_type, field_sym, field_idx, info)
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
                     end
@@ -2457,6 +2475,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 _sfg_layout isa StructType || error("registered getfield owner has no struct layout")
                 local _sfg_fields = _sfg_layout.fields
                 struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi)
+                _emit_field_undef_check!(_sfgb, ctx, effective_obj_type, field_sym, field_idx, info)
                 _unpack_memoryref_field_read!(_sfgb, ctx, idx)
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)
