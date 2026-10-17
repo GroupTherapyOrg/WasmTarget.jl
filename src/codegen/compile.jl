@@ -360,17 +360,17 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     for entry in normalized
         f, arg_types, name = entry[1], entry[2], entry[3]
         local entry_mi = length(entry) >= 4 ? entry[4] : nothing
-        # Check if this is a closure (function with captured variables)
-        # A TYPE-KEYED entry (f IS the closure DataType — capturing
-        # closures have no instance) resolves IR by ftype, and the closure type
-        # is f itself, not typeof(f).
-        local _type_keyed_closure = f isa DataType && is_closure_type(f)
-        closure_type = _type_keyed_closure ? f : typeof(f)
-        is_closure = is_closure_type(closure_type)
-
         # the function's typed IR is its MethodInstance's in the collected closed world
         entry_mi isa Core.MethodInstance ||
             error("a planned function without its MethodInstance: $(f)$(arg_types)")
+        # Check if this is a closure (function with captured variables)
+        # A TYPE-KEYED entry (f IS the receiver's DataType — a capturing closure or a
+        # functor has no instance) resolves IR by ftype, and the receiver type is f
+        # itself, not typeof(f); a constructor's entry is also a DataType, but its
+        # receiver is Type{f}.
+        local _type_keyed_closure = f isa DataType && callable_receiver_type(entry_mi) === f
+        closure_type = _type_keyed_closure ? f : typeof(f)
+        is_closure = _type_keyed_closure || is_closure_type(closure_type)
         typed, return_type = plan_ir(plan, entry_mi)
 
         bindings = get(root_bindings, name, nothing)
