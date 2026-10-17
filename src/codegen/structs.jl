@@ -76,6 +76,32 @@ end
 is_closure_type(::Any)::Bool = false
 
 """
+Whether a call's receiver of type `T` carries state its function reads: a concrete struct
+with fields, a capturing closure or a callable struct that is not a `Function` (a functor,
+such as SciMLBase's `ODEFunction`). Its call method's function takes the object first.
+
+parity(quarantine: Julia makes any struct callable by defining a method on it; Kernel calls
+an instance through its class's `call` member, a function taking `this`.)
+"""
+is_stateful_receiver_type(@nospecialize(T))::Bool =
+    T isa DataType && T !== Union{} && !(T <: Type) && isconcretetype(T) && isstructtype(T) &&
+    fieldcount(T) > 0
+
+"""
+The receiver type a MethodInstance's signature names first (the callable's own type), or
+`nothing` for a signature that is not one tuple of types.
+
+parity(quarantine: a Julia signature carries its callable as the first element; a Kernel
+member's receiver is its enclosing class.)
+"""
+function callable_receiver_type(mi::Core.MethodInstance)::Union{Nothing, Type}
+    local st = mi.specTypes
+    (st isa DataType && st <: Tuple && !isempty(st.parameters)) || return nothing
+    local R = st.parameters[1]
+    return R isa Type ? R : nothing
+end
+
+"""
 Register a closure type as a WasmGC struct.
 formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
 parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.

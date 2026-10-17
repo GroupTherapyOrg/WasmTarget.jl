@@ -111,7 +111,6 @@
 0.8	1.1	xfail dynamic_single_class
 11.1	8.1	xfail erased_arithmetic
 3.9	2.8	xfail erased_operand_arithmetic
-0.4	0.3	xfail functor_invoke
 0.7	0.8	xfail isa_runtime_type
 0.4	0.8	xfail memoryref_unbox
 3.0	2.5	xfail overlaid_callable_value

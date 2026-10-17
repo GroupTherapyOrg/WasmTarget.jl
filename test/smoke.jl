@@ -285,6 +285,20 @@ _g("closures", Any[
     ("erased_result_float64", (n::Int64) -> (fs = Any[x -> x * 0.5]; r = fs[1](n); r isa Float64 ? 1 : 2), Int64(3)),
 ])
 
+# ---- functors (callable structs that are not Functions) -------------------
+# An :invoke Julia leaves uninlined names the functor's call method; its function takes the
+# object first, as a capturing closure's does (a constant receiver: constant_callees). A call
+# that always throws is never inlined, so the throwing case reaches that :invoke on a branch
+# the run never takes.
+struct _SmScale; k::Float64; end
+struct _SmNoF64; v::Float64; end
+@noinline (s::_SmScale)(x::Float64) = s.k * x
+@noinline (s::_SmScale)(x::_SmNoF64) = s.k * Float64[x][1]
+_g("functors", Any[
+    ("functor_invoke_runtime", (x::Float64) -> _SmScale(x)(2.5), 3.0),
+    ("functor_invoke_throwing_dead", (x::Float64) -> x > 1.0e300 ? _SmScale(2.0)(_SmNoF64(x)) : _SmScale(3.0)(x), 2.0),
+])
+
 # ---- KNOWN-PENDING (xfail) — gaps with an open loop; reported, do NOT fail the gate.
 # When one flips to passing, the smoke says so loudly (the loop that closes it is done).
 const XFAIL = Vector{Pair{String,Vector{Any}}}()
@@ -1638,8 +1652,8 @@ _g("as_checkers", Any[
 # A call's constant callee, one representation (A4C5): an intrinsic the IR embeds as the object
 # (have_fma in expm1, ctlz_int in _growend!), a type object an :invoke embeds (Dict's
 # constructor), a function a specialized argument names (a singleton-typed parameter), and a
-# constant callee holding captures, whose self the :invoke passes (a closure's; a callable
-# struct's is xfail functor_invoke)
+# constant callee holding captures, whose self the :invoke passes (a closure's and a callable
+# struct's)
 struct _SmCC; a::Int64; end
 @noinline (c::_SmCC)(x::Int64) = x + c.a
 const _SM_CCI = _SmCC(5)
@@ -1651,10 +1665,6 @@ _g("constant_callees", Any[
     ("embedded_type_object", (x::Int64) -> (d = Dict{Int64,Int64}(); d[x] = 2; d[x] + length(d)), Int64(3)),
     ("singleton_argument", (x::Int64) -> _sm_apply(abs, x), Int64(-4)),
     ("closure_constant", (x::Int64) -> _SM_CLO(x) + 1, Int64(4)),
-])
-# a callable struct's :invoke: the closed world holds no function for the functor's
-# MethodInstance, a located rejection (dev/MARCH.md 13.10)
-_xf("functor_invoke", Any[
     ("functor_constant", (x::Int64) -> _SM_CCI(x), Int64(4)),
 ])
 # A SimpleVector is dart's immutable array of its elements, a wasm type of its own; a

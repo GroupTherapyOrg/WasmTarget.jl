@@ -455,8 +455,8 @@ end
 
 """Return the targets of the collected bodies' edges (`_closed_world_edge`) missing from a
 collected world, each recorded in `seen`. Every edge's target has its reason recorded in
-`reasons` (the first statement naming it), collected already or not, and the closure type of each
-`:invoke`'s target in `invoked_closures`: the walk is the collection's one walk of the edges, and
+`reasons` (the first statement naming it), collected already or not, and the closure or functor
+type of each `:invoke`'s target in `invoked_closures`: the walk is the collection's one walk of the edges, and
 the plan reads what it records. An explicit `:invoke` whose concrete call-site types select
 another MethodInstance is retargeted in place to it, recomputed every round from Julia's own
 MethodInstance (the one its IR held before any round retargeted it, kept in `invoke_originals`):
@@ -583,8 +583,8 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
             haskey(reasons, mi) || (reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node))
             if kind === :invoke
                 local st = mi.specTypes
-                (st isa DataType && length(st.parameters) >= 1 && st.parameters[1] isa DataType &&
-                 is_closure_type(st.parameters[1])) && push!(invoked_closures, st.parameters[1])
+                (st isa DataType && length(st.parameters) >= 1 &&
+                 is_stateful_receiver_type(st.parameters[1])) && push!(invoked_closures, st.parameters[1])
             end
             mi in seen && continue
             push!(seen, mi)
@@ -1365,7 +1365,7 @@ struct ClosedWorld
     callable_types::Set{DataType}                    # callable types whose bodies the candidate fixpoint enrolled
     enrolled_as::IdDict{Core.MethodInstance,String}  # why each entered the closed world
     classes::ClosedWorldClasses                      # the one class set (closed_world_classes)
-    invoked_closures::Set{DataType}                  # the closure types an :invoke calls
+    invoked_closures::Set{DataType}                  # the closure and functor types an :invoke calls
     no_method::IdDict{DataType,Set{DataType}}        # per callable type, the args tuples it has no method for
     lowering_callees::Dict{Type,Core.MethodInstance} # each fma lowering's Base.fma_emulated, by signature
     numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}}  # each body's numeric joins (_numeric_joins!)
@@ -1871,6 +1871,11 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             # internals regressed in the suite context (the march-16 gate catch).
             (ftyp in world.callable_types || ftyp in invoked_closures ||
              ftyp <: _RuntimeComposition) && (f = ftyp)
+        elseif ftyp isa DataType && ftyp in invoked_closures
+            # A functor an :invoke calls (Julia leaves the call uninlined when it always
+            # throws): keyed by its type like a capturing closure, its function takes the
+            # object first. Dispatch never selects it, so it has no vtable.
+            f = ftyp
         end
         if f === nothing
             @debug "trim_compile_plan: skipping non-singleton callable" sig

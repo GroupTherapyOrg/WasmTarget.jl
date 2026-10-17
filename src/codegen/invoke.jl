@@ -142,11 +142,13 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
     # methods share a specialization's argument types (`invoke(f, Tuple{Super}, x)`).
     # parity(functions.dart:90 FunctionCollector.getFunction): one function per Reference.
     local target = get_function_by_mi(ctx.func_registry, mi)
-    # a capturing closure's function takes its closure object first (its signature's first
-    # parameter is the closure type, compile.jl prepends it): the call pushes the callee's
-    # value there
+    # a capturing closure's or a functor's function takes its object first (its signature's
+    # first parameter is the receiver type, compile.jl prepends it): the call pushes the
+    # callee's value there
     local takes_closure = target !== nothing && length(target.arg_types) == length(args) + 1 &&
-                          first(target.arg_types) isa DataType && is_closure_type(first(target.arg_types))
+                          first(target.arg_types) isa DataType &&
+                          (is_closure_type(first(target.arg_types)) ||
+                           first(target.arg_types) === callable_receiver_type(mi))
     # the parameter types the arguments are pushed as: the callee's own signature, else the
     # MethodInstance's (a call rejected below, its arguments emitted before its trap)
     local param_types = if target !== nothing
