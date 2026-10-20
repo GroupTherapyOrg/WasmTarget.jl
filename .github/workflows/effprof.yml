@@ -1,0 +1,41 @@
+name: effprof
+# THROWAWAY measurement (eff-pipeline): where a lane's time goes, compile vs Node vs wasm-tools
+on:
+  push:
+    branches: ['exp/effprof**']
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  prof:
+    name: prof ${{ matrix.what }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        what: ['smoke 3/10', 'smoke 7/10', 'phase60', 'qa', 'fuzz']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Julia
+        run: |
+          curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+      - uses: taiki-e/install-action@v2
+        with: { tool: wasm-tools }
+      - name: precompile (workload on)
+        run: |
+          nproc; free -g
+          time julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.precompile(); using WasmTarget'
+      - name: profile
+        run: |
+          case "${{ matrix.what }}" in
+            smoke*) julia --project=. dev/effprof/prof_smoke.jl "${{ matrix.what }}" | sed 's/^/  /' | tail -40 ;;
+            phase60) WT_VALIDATE=1 WT_PHASE='Phase 60: Base.Math Coverage (WBUILD-1024)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
+            qa) WT_VALIDATE=1 WT_PHASE='Phase 63: Real Base Collections (WBUILD-2020)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
+            fuzz) WT_VALIDATE=1 WT_FUZZ=1 WT_FUZZ_PART=0/6 julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
+          esac
