@@ -1,7 +1,8 @@
 name: Formal models
 on:
   push:
-    branches: [main, 'march/**']
+    # a march/** push runs none: the gate runs every instance on the commit that lands (gate.yml)
+    branches: [main]
   pull_request:
   schedule:
     - cron: '17 3 * * *'   # nightly: the same harness plus dev/formal/nightly (instances too large for a 20-minute gate)

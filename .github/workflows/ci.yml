@@ -2,15 +2,22 @@ name: CI
 
 on:
   push:
-    # march/** = agent branches of the finishing march: each gets the full
-    # matrix on push, so the authoritative gate runs on GitHub, not on a
-    # memory-bound local box (dev/MARCH.md §5).
-    branches: [main, 'march/**']
+    branches: [main]
   pull_request:
+  # gate.yml calls this matrix (gated: true) beside its own lanes, so the gate a landing needs
+  # runs CI's 1.13 suite, macOS and Windows on the exact commit that lands (dev/land.sh merge;
+  # dev/CHARTER.md C10, L153); a march/** push no longer runs it a second time
+  workflow_call:
+    inputs:
+      gated:
+        description: "called by gate.yml: the ubuntu Julia 1.12 jobs are its own lanes', and a red job cancels the gate's run"
+        type: boolean
+        default: false
 
-# Only the newest push per branch runs; a superseded run is cancelled.
+# Only the newest push per branch runs; a superseded run is cancelled. A gated call is part of
+# the gate's run, which has its own group.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ${{ inputs.gated && format('ci-gated-{0}', github.run_id) || format('ci-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -43,17 +50,28 @@ jobs:
             if [ -n "$miss" ]; then echo "commits without a 'Charter: C<n>' trailer:"; printf '%s' "$miss"; exit 1; fi
           fi
           echo "clean: $(git rev-list --count origin/main..HEAD) commits"
+      - name: Cancel the gate's run
+        if: failure() && inputs.gated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}
 
   test:
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Every slice is an independently bounded job. The single serial `all` slice (lanes +
-    # every shard + fuzz on one runner) ran 94 min on macOS at 3d67b2aa and passed the
-    # 110-min bound on march/batch-9 as the smoke corpus grew, so ubuntu and macOS are
-    # sliced like Windows: the inner-loop lanes, the codegen shards (four on ubuntu; two
-    # on macOS, whose runners GitHub caps at five concurrent jobs), and the fuzz pass.
+    # Every slice is an independently bounded job: the inner-loop lanes, the codegen shards
+    # (four on ubuntu and Windows, two on macOS, whose runners GitHub caps at five concurrent
+    # jobs) and the fuzz pass (two parts on macOS: one pass ran 3871 s there, run 38323112169).
+    # Each slice runs as P concurrent processes, one per core its runner can hold in memory
+    # (four on ubuntu and Windows, two on macOS's 7 GB): the shards as WT_SHARD sub-shards, the
+    # fuzz pass as WT_FUZZ_PART parts, smoke as WT_SMOKE_PART parts, registry coverage as
+    # WT_COVERAGE_PART parts and their merge, so the slices together still run every family once.
     timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 70 || 110 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
+    env:
+      # Julia's own multi-target list on x86-64 (one depot serves every runner CPU model,
+      # dev/ci_depot.sh); macOS's runners are all Apple silicon
+      JULIA_CPU_TARGET: ${{ matrix.target.os == 'macos-latest' && 'apple-m1' || 'generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)' }}
     strategy:
       fail-fast: false
       matrix:
@@ -67,11 +85,12 @@ jobs:
           - { os: ubuntu-latest, slice: shard-1, shard: '1,4', fuzz: '' }
           - { os: ubuntu-latest, slice: shard-2, shard: '2,4', fuzz: '' }
           - { os: ubuntu-latest, slice: shard-3, shard: '3,4', fuzz: '' }
-          - { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '0/1' }
           - { os: macos-latest, slice: lanes, shard: '', fuzz: '' }
           - { os: macos-latest, slice: shard-0, shard: '0,2', fuzz: '' }
           - { os: macos-latest, slice: shard-1, shard: '1,2', fuzz: '' }
-          - { os: macos-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: macos-latest, slice: fuzz-0, shard: '', fuzz: '0/2' }
+          - { os: macos-latest, slice: fuzz-1, shard: '', fuzz: '1/2' }
           # Each shard and the fuzz pass is its own job: the local orchestrator buffers
           # child logs and blocks on the first process, which hid the responsible shard
           # until job timeout.
@@ -79,7 +98,18 @@ jobs:
           - { os: windows-latest, slice: shard-1, shard: '1,4', fuzz: '' }
           - { os: windows-latest, slice: shard-2, shard: '2,4', fuzz: '' }
           - { os: windows-latest, slice: shard-3, shard: '3,4', fuzz: '' }
-          - { os: windows-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: windows-latest, slice: fuzz, shard: '', fuzz: '0/1' }
+        # gated (gate.yml's call): the ubuntu Julia 1.12 jobs are the gate's own lanes (L153)
+        exclude:
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: lanes, shard: '', fuzz: '' } }
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: shard-0, shard: '0,4', fuzz: '' } }
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: shard-1, shard: '1,4', fuzz: '' } }
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: shard-2, shard: '2,4', fuzz: '' } }
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: shard-3, shard: '3,4', fuzz: '' } }
+          - { version: "${{ inputs.gated && '1.12' || 'none' }}", target: { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '0/1' } }
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
         with:
@@ -88,8 +118,6 @@ jobs:
       - uses: julia-actions/setup-julia@v2
         with:
           version: ${{ matrix.version }}
-
-      - uses: julia-actions/cache@v2
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -104,40 +132,103 @@ jobs:
         with:
           tool: wasm-tools
 
+      # The package under test precompiles without its PrecompileTools workload, except in one
+      # job per platform and version (the lanes slice; on Windows shard-0), which compiles the
+      # image a user loads; the workload's signatures compile in their own suite family,
+      # test/precompile_workload.jl (dev/ci_depot.sh, L193)
+      - name: Workload off
+        if: matrix.target.slice != 'lanes' && !(matrix.target.os == 'windows-latest' && matrix.target.slice == 'shard-0')
+        run: printf '[WasmTarget]\nprecompile_workload = false\n' > LocalPreferences.toml
+
+      # the dependencies' packages and images a previous run published (dev/ci_depot.sh): the
+      # lanes slice the package's environment, the others Pkg.test's
+      - name: Depot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/ci_depot.sh restore ${{ matrix.target.slice == 'lanes' && 'lanes' || 'suite' }}
+
       - name: Install dependencies
-        run: |
-          julia --project=. -e '
-            using Pkg
-            Pkg.instantiate()
-          '
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: julia --project=. -e 'using Pkg; Pkg.instantiate()'
 
       # The dart-lang/sdk files src/ cites, at the pinned commit, for L132 (every parity
       # anchor resolves). The ratchet runs in the lanes and in the Pkg.test shard its QA
       # family is dealt to (runtests.jl's _wt_qa).
       - name: Pinned dart2wasm sources
-        if: matrix.target.slice != 'fuzz'
-        shell: bash
+        if: ${{ !startsWith(matrix.target.slice, 'fuzz') }}
         run: bash dev/fetch_dart_sdk.sh
 
       # The inner-loop lanes, on both Julia versions: the differential smoke
       # corpus (the 1.13 reduce miscompile lived only here — Pkg.test never
       # saw it), the structural ratchet, and — on 1.12, whose typed IR the
-      # baseline records — byte identity of the probe corpus.
+      # baseline records — byte identity of the probe corpus and registry coverage.
       - name: Inner-loop lanes
         if: matrix.target.slice == 'lanes'
+        env:
+          P: ${{ matrix.target.os == 'macos-latest' && '2' || '4' }}
         run: |
-          julia --project=. test/smoke.jl
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)' 2>/dev/null || true
+          d=$(mktemp -d); r=0; pids=()
+          for k in $(seq 0 $((P - 1))); do WT_SMOKE_PART="$k/$P" julia --project=. test/smoke.jl > "$d/smoke$k.log" 2>&1 & pids+=($!); done
+          for p in "${pids[@]}"; do wait "$p" || r=1; done
+          for k in $(seq 0 $((P - 1))); do echo "── smoke part $k/$P"; cat "$d/smoke$k.log"; done
+          [ $r -eq 0 ] || exit 1
           julia --project=. test/parity_ratchet.jl
-          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; julia --project=. test/registry_coverage.jl; fi
+          if [ "${{ matrix.version }}" = "1.12" ]; then
+            julia --project=. test/probe_bytes.jl
+            rm -rf coverage-parts; pids=()
+            for k in $(seq 0 $((P - 1))); do WT_COVERAGE_PART="$k/$P" WT_COVERAGE_DIR="$PWD/coverage-parts" julia --project=. test/registry_coverage.jl > "$d/cov$k.log" 2>&1 & pids+=($!); done
+            for p in "${pids[@]}"; do wait "$p" || r=1; done
+            for k in $(seq 0 $((P - 1))); do echo "── registry coverage part $k/$P"; cat "$d/cov$k.log"; done
+            [ $r -eq 0 ] || exit 1
+            WT_COVERAGE_MERGE=1 WT_COVERAGE_DIR="$PWD/coverage-parts" julia --project=. test/registry_coverage.jl
+          fi
 
       - name: Run tests
         if: matrix.target.slice != 'lanes'
         env:
           WT_SHARD: ${{ matrix.target.shard }}
-          WT_FUZZ: ${{ matrix.target.fuzz }}
+          WT_FUZZ_SLICE: ${{ matrix.target.fuzz }}
           # wasm-tools validation of every compiled module (module bytes are
           # platform-independent, so Unix coverage validates the corpus;
           # Windows stays off to protect its 45-minute shard budget).
           WT_VALIDATE: ${{ matrix.target.os == 'windows-latest' && '' || '1' }}
+          P: ${{ matrix.target.os == 'macos-latest' && '2' || '4' }}
         run: |
-          julia --project=. -e 'using Pkg; Pkg.test()'
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)' 2>/dev/null || true
+          d=$(mktemp -d); r=0; pids=()
+          for k in $(seq 0 $((P - 1))); do
+            if [ -n "$WT_SHARD" ]; then
+              i=${WT_SHARD%,*}; n=${WT_SHARD#*,}
+              WT_SHARD="$((i * P + k)),$((n * P))" julia --project=. -e 'using Pkg; Pkg.test()' > "$d/p$k.log" 2>&1 & pids+=($!)
+            else
+              i=${WT_FUZZ_SLICE%/*}; n=${WT_FUZZ_SLICE#*/}
+              WT_SHARD= WT_FUZZ=1 WT_FUZZ_PART="$((i * P + k))/$((n * P))" julia --project=. -e 'using Pkg; Pkg.test()' > "$d/p$k.log" 2>&1 & pids+=($!)
+            fi
+          done
+          for k in "${!pids[@]}"; do wait "${pids[$k]}" || { r=1; echo "process $k FAILED"; }; done
+          for k in $(seq 0 $((P - 1))); do echo "── process $k of $P"; cat "$d/p$k.log"; done
+          exit $r
+
+      # one job per platform and version publishes Pkg.test's depot when it compiled a dependency
+      # image the restored depot lacked: shard-0, and the lanes slice the package's (gated, on
+      # ubuntu the gate's smoke-1.13 part 0 publishes that one)
+      - name: Depot to publish
+        id: depot
+        if: matrix.target.slice == 'shard-0' || (matrix.target.slice == 'lanes' && !(inputs.gated && matrix.target.os == 'ubuntu-latest'))
+        run: bash dev/ci_depot.sh save ${{ matrix.target.slice == 'lanes' && 'lanes' || 'suite' }} depot-out
+      - uses: actions/upload-artifact@v4
+        if: steps.depot.outputs.save == 'true'
+        with:
+          name: ${{ steps.depot.outputs.name }}
+          path: depot-out/depot.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Cancel the gate's run
+        if: failure() && inputs.gated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}

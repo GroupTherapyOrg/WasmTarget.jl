@@ -27,6 +27,10 @@
 #       coverage (WT_COVERAGE_PART, its hits to coverage-parts/), and `--lane coverage --merge`
 #       gives coverage's verdict on the union of those parts (WT_COVERAGE_MERGE). Each job of
 #       .github/workflows/gate.yml (dev/gate.sh) runs one; every other lane is a no-op.
+#   bash dev/lanes.sh --lane <name> --part i/N --procs P   # part i of N as P concurrent processes,
+#       parts i*P+k of N*P (k = 0..P-1), all of which must pass: a CI job uses every core of its
+#       runner (one lane process kept one of four busy), and the N*P parts together are still every
+#       part exactly once (smoke, smoke-1.13, suite, fuzz, coverage; TLC runs its own workers)
 #
 # No lane of the default run is skipped green (A12P6): a default `julia` that is not 1.12
 # (byte identity and registry coverage record 1.12's typed IR, and the suite stands in for
@@ -35,7 +39,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 JULIA="${JULIA:-julia}"
-fast=0; export TLC_FAST=1; only=""; part=""; merge=0
+fast=0; export TLC_FAST=1; only=""; part=""; merge=0; procs=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --fast) fast=1 ;;
@@ -43,6 +47,7 @@ while [ $# -gt 0 ]; do
     --lane) only="${2:-}"; shift ;;
     --part) part="${2:-}"; shift ;;
     --merge) merge=1 ;;
+    --procs) procs="${2:-}"; shift ;;
     *) echo "lanes.sh: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -52,6 +57,11 @@ if [ -n "$only" ]; then
     *" $only "*) ;; *) echo "lanes.sh: no lane $only" >&2; exit 2 ;;
   esac
   [ $fast -eq 0 ] || { echo "lanes.sh: --lane runs one lane of the default run, not of --fast" >&2; exit 2; }
+fi
+[[ $procs =~ ^[1-9][0-9]*$ ]] || { echo "lanes.sh: --procs $procs: expected a positive integer" >&2; exit 2; }
+if [ "$procs" -gt 1 ]; then
+  [ -n "$part" ] || { echo "lanes.sh: --procs needs --part i/N" >&2; exit 2; }
+  case "$only" in smoke|smoke-1.13|suite|fuzz|coverage) ;; *) echo "lanes.sh: --procs needs --lane smoke, smoke-1.13, suite, fuzz or coverage" >&2; exit 2 ;; esac
 fi
 if [ -n "$part" ]; then
   pi=${part%/*}; pn=${part#*/}
@@ -89,7 +99,7 @@ if [ -z "$NODE_MAJOR" ] || [ "$node_major" != "$NODE_MAJOR" ]; then
 fi
 # the whole Pkg.test suite as concurrent shards, two (WT_SHARD=0,2 and 1,2) or the one
 # --part i/N names (WT_SHARD=i,N); all must pass
-shards="0,2 1,2"; [ "$only" = suite ] && [ -n "$part" ] && shards="$pi,$pn"
+shards="0,2 1,2"; [ "$only" = suite ] && [ -n "$part" ] && shards=$(for k in $(seq 0 $((procs - 1))); do printf '%s ' "$((pi * procs + k)),$((pn * procs))"; done)
 suite() {
   local d s r=0 p pids=(); d=$(mktemp -d)
   for s in $shards; do
@@ -101,10 +111,25 @@ suite() {
   if [ $r -eq 0 ]; then echo "suite: shards $shards passed"; return 0; fi
   return 1
 }
+# a command once, or under --procs P as P concurrent processes, process k with <var> set to part
+# i*P+k of N*P; all must pass, and each process's log prints whole under its part
+parts() {
+  local var=$1; shift
+  [ "$procs" -gt 1 ] || { "$@"; return; }
+  local d k r=0 pids=(); d=$(mktemp -d)
+  for k in $(seq 0 $((procs - 1))); do
+    env "$var=$((pi * procs + k))/$((pn * procs))" "$@" > "$d/part$k.log" 2>&1 &
+    pids+=($!)
+  done
+  for k in "${!pids[@]}"; do wait "${pids[$k]}" || { r=1; echo "part $((pi * procs + k))/$((pn * procs)) FAILED"; }; done
+  for k in $(seq 0 $((procs - 1))); do echo "── part $((pi * procs + k))/$((pn * procs))"; cat "$d/part$k.log"; done
+  [ $r -eq 0 ] && echo "parts $((pi * procs))..$((pi * procs + procs - 1)) of $((pn * procs)) passed"
+  return $r
+}
 fuzz() {  # CI's fuzz pass, or the part of it --part names (WT_FUZZ_PART)
   local d; d=$(mktemp -d)
   local r=0
-  WT_VALIDATE=1 WT_FUZZ=1 $JULIA --project=. -e 'using Pkg; Pkg.test()' > "$d/fuzz.log" 2>&1 || r=1
+  parts WT_FUZZ_PART env WT_VALIDATE=1 WT_FUZZ=1 $JULIA --project=. -e 'using Pkg; Pkg.test()' > "$d/fuzz.log" 2>&1 || r=1
   report "$d/fuzz.log"
   if [ $r -eq 0 ]; then echo "fuzz: the fuzz pass${WT_FUZZ_PART:+ part $WT_FUZZ_PART} passed"; return 0; fi
   return 1
@@ -152,18 +177,18 @@ if [ $fast -eq 0 ]; then
   elif [ "$JULIA" != "julia" ]; then
     printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
   elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
-    bg "$d/s113" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl
+    bg "$d/s113" lane smoke-1.13 parts WT_SMOKE_PART julia +1.13 --project=. test/smoke.jl
   else
     printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
   fi
 fi
-lane smoke    $JULIA --project=. test/smoke.jl
+lane smoke    parts WT_SMOKE_PART $JULIA --project=. test/smoke.jl
 join_bg "$d/s113" "$d/formal"; rm -rf dev/formal/states
 stop
 if [ $fast -eq 0 ]; then
   if ! want probes && ! want coverage && ! want suite && ! want fuzz; then :
   elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then
-    bg "$d/coverage" lane coverage $JULIA --project=. test/registry_coverage.jl
+    bg "$d/coverage" lane coverage parts WT_COVERAGE_PART $JULIA --project=. test/registry_coverage.jl
     lane probes $JULIA --project=. test/probe_bytes.jl
     join_bg "$d/coverage"
   else

@@ -5,12 +5,14 @@
 #       worktree (durable, $WT_WORKTREES/<branch-leaf>) → rebase onto the march tip
 #       (`--onto` from <old-base> when the branch was cut from rewritten or dropped
 #       history) → strip transcript links from the rebased messages → fast lanes →
-#       push the branch, which runs the FULL CI matrix on it (ci.yml `march/**`).
+#       push the branch (a march/** push runs no CI: the gate is the landing's one run).
 #   dev/land.sh merge <branch>
-#       refuses unless every CI check on the branch head concluded success, then
-#       fast-forwards the march branch to it from the main tree and pushes.
+#       refuses unless gate.yml's run of the branch head on a gate/** branch (`bash dev/gate.sh`:
+#       every lane, and CI's matrix through its gated call) concluded success with every job
+#       successful, then fast-forwards the march branch to it from the main tree and pushes.
 #
-# The full gate is CI on the exact head that lands; a local full Pkg.test is optional.
+# The full gate is gate.yml on the exact head that lands, one run (dev/CHARTER.md C10, L153);
+# a local full Pkg.test is optional.
 set -euo pipefail
 MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
 MAIN=$(git rev-parse --show-toplevel)
@@ -62,10 +64,20 @@ prepare)
     echo "pushed $br @ $(git rev-parse --short HEAD) — CI: gh run list --branch $br"
     ;;
 merge)
+    git -C "$MAIN" fetch -q origin "$br"
     head=$(git -C "$MAIN" rev-parse "origin/$br")
-    states=$(gh api "repos/{owner}/{repo}/commits/$head/check-runs?per_page=100" \
-        --jq '[.check_runs[] | select(.name | test("downstream") | not) | .conclusion // "pending"] | unique | join(",")')
-    [ "$states" = "success" ] || { echo "CI on $br @ ${head:0:8} is '$states', not success — refusing"; exit 1; }
+    # the newest gate.yml run of exactly this commit on a gate/** branch (a full gate, never a
+    # gate-fast/** run): it concluded success and every job it ran did
+    run=$(gh api "repos/{owner}/{repo}/actions/workflows/gate.yml/runs?head_sha=$head&event=push&per_page=100" \
+        --jq "[.workflow_runs[] | select(.head_sha == \"$head\" and (.head_branch | startswith(\"gate/\")) and .status == \"completed\")]
+              | sort_by(.created_at) | last | if . == null then \"\" else \"\(.id) \(.conclusion)\" end")
+    [ -n "$run" ] || { echo "no gate/** run of gate.yml for $br @ ${head:0:8}: run \`bash dev/gate.sh $br\` — refusing"; exit 1; }
+    id=${run% *}
+    [ "${run#* }" = success ] || { echo "the gate run $id of $br @ ${head:0:8} is '${run#* }', not success — refusing"; exit 1; }
+    bad=$(gh api "repos/{owner}/{repo}/actions/runs/$id/jobs?per_page=100&filter=latest" --paginate \
+        --jq '.jobs[] | select(.conclusion != "success") | "\(.name): \(.conclusion // "pending")"')
+    [ -z "$bad" ] || { echo "the gate run $id of $br @ ${head:0:8} has jobs that did not succeed — refusing:"; echo "$bad"; exit 1; }
+    echo "the gate run $id of $br @ ${head:0:8}: every job succeeded"
     cd "$MAIN"
     [ "$(git rev-parse --abbrev-ref HEAD)" = "$MARCH" ] || { echo "main tree is not on $MARCH"; exit 1; }
     git merge --ff-only "$head"
