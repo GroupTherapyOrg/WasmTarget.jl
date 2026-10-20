@@ -22,7 +22,7 @@ key() {
   # every tracked file under dev/formal, the lane and the workflow that calls it, by path and
   # content (the working tree's)
   local h; h=$( { for f in $(git ls-files dev/formal dev/lanes.sh .github/workflows/gate.yml); do printf '%s %s\n' "$f" "$(git hash-object "$f")"; done
-                 printf 'part %s\n' "$part"; } | git hash-object --stdin | cut -c1-20)
+                 printf 'part %s\njava %s\n' "$part" "$java"; } | git hash-object --stdin | cut -c1-20)
   echo "tlc-${part%/*}of${part#*/}-$h"
 }
 out=${GITHUB_OUTPUT:-/dev/stdout}
