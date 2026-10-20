@@ -247,4 +247,10 @@ end
     @test refused(vcat(pre, imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('b'), 0x01, 0x70, 0x00, 0x00)), "of kind 1")
     @test refused(vcat(pre, UInt8[0x00, 0x02, 0x01, 0xff]), "not valid UTF-8")             # a custom section's name
     @test refused(vcat(pre, UInt8[0x02, 0x0b], fill(0xff, 10), [0x01]), "longer than 64 bits")
+    # a tenth byte with bits past bit 63: the count 1 with bit 64 set, never read as 1
+    @test refused(vcat(pre, imp(0x81, fill(0x80, 8)..., 0x02, one[2:end]...)), "longer than 64 bits")
+    # a global's reference heap type, a signed LEB128 whose tenth byte is neither sign extension
+    gref(last) = imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('g'), 0x03, 0x64, fill(0x80, 9)..., last, 0x00)
+    @test refused(vcat(pre, gref(0x01)), "longer than 64 bits")
+    @test WasmTarget.module_function_imports(vcat(pre, gref(0x7f))) == Tuple{String,String}[]
 end

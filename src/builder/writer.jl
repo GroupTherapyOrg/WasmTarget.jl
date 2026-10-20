@@ -167,7 +167,7 @@ function read_bytes!(d::WasmDeserializer, n::Integer)::Vector{UInt8}
     return bytes
 end
 
-# an unsigned LEB128 integer (refused past 64 bits)
+# an unsigned LEB128 integer (refused past 64 bits: a tenth byte holds bit 63 alone)
 # parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:49 Deserializer.readUnsigned)
 function read_unsigned!(d::WasmDeserializer)::UInt64
     local result = UInt64(0)
@@ -178,13 +178,16 @@ function read_unsigned!(d::WasmDeserializer)::UInt64
     while byte & 0x80 != 0
         shift < 64 || throw(ArgumentError("an unsigned LEB128 integer longer than 64 bits at byte $(d.offset - 1)"))
         byte = read_byte!(d)
+        (shift == 63 && byte & 0x7e != 0) &&
+            throw(ArgumentError("an unsigned LEB128 integer longer than 64 bits at byte $(d.offset - 1)"))
         result |= UInt64(byte & 0x7f) << shift
         shift += 7
     end
     return result
 end
 
-# a signed LEB128 integer (a heap type's s33; refused past 64 bits)
+# a signed LEB128 integer (a heap type's s33; refused past 64 bits: a tenth byte holds the sign
+# bit 63 and its extension alone)
 # parity(pkg/wasm_builder/lib/src/serialize/deserializer.dart:32 Deserializer.readSigned)
 function read_signed!(d::WasmDeserializer)::Int64
     local result = Int64(0)
@@ -195,6 +198,8 @@ function read_signed!(d::WasmDeserializer)::Int64
     while byte & 0x80 != 0
         shift < 64 || throw(ArgumentError("a signed LEB128 integer longer than 64 bits at byte $(d.offset - 1)"))
         byte = read_byte!(d)
+        (shift == 63 && byte & 0x7f != 0x00 && byte & 0x7f != 0x7f) &&
+            throw(ArgumentError("a signed LEB128 integer longer than 64 bits at byte $(d.offset - 1)"))
         result |= Int64(byte & 0x7f) << shift
         shift += 7
     end
