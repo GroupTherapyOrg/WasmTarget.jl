@@ -150,7 +150,9 @@ with the per-clause status. A clause is never closed by argument.
   source map's class names) `L161` (the statement lane counts a throw as matched only by a
   Julia exception of native's type) `L162` (the gate, every lane of `dev/lanes.sh` on CI's
   runners through `bash dev/gate.sh`, gives its verdict within its 20-minute budget per lane)
-  `L163` (the inner loop on CI's runners: `bash dev/gate.sh --fast`, the ratchet and both smokes).
+  `L163` (the inner loop on CI's runners: `bash dev/gate.sh --fast`, the ratchet and both smokes)
+  `L193` (what the gate reuses from an earlier run, the dependency depot and a TLC part's verdict,
+  stands only for what it was computed from).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this

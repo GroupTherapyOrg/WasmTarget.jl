@@ -4509,6 +4509,81 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local found = type_default_parameters()
             count(k -> count(==(k), found) != 1, keys(L192_ALLOWED)) + _l192_spellings_missed()
         end),
+    "L193_the_gates_caches_are_content_keyed" => ("what the gate reuses from an earlier run stands only for what it was computed from (dev/CHARTER.md C10): (1) the dependency depot (dev/ci_depot.sh) is published and restored as a repository-wide artifact named by the job's depot kind, its Julia version and the image target, holds no WasmTarget image (`--exclude='compiled/*/WasmTarget*'`: each job compiles the package under test), requires JULIA_CPU_TARGET (a native image loads on one runner CPU model), and is republished only by a job that compiled a dependency image the restored depot lacked; every image it holds passes Julia's own staleness check or is recompiled, so a stale depot costs time, never a verdict; gate.yml and gate-fast.yml set the workflow's JULIA_CPU_TARGET to Julia's multi-target list, use no julia-actions/cache (scoped to its branch: every new gate branch precompiled 136 dependencies, 323-466 s per job, run 37943322602), and in every job that loads the package (the lane job, emission-plan) turn the PrecompileTools workload off (LocalPreferences.toml; WasmTarget precompiled in ~9 s instead of ~212 s, run 39491700858) and restore the depot before Julia instantiates; the workload's signatures are one list, src/WasmTarget.jl's _PC_WORKLOAD, compiled by the workload and by test/precompile_workload.jl, a suite family, so a rejection among them still fails the gate; the emission-diff check's base tree takes the head's LocalPreferences.toml; (2) a TLC part's verdict (dev/tlc_verdict.sh) is reused only under the hash of every tracked file under dev/formal, dev/lanes.sh and gate.yml, the part and `java -version`: the key is computed here over a copy of those files, the same twice, and different when a model, an instance, the lane, the workflow, the part or the Java changes; gate.yml runs the lane unless that key's verdict exists and records a part's verdict only after its lane step passed (C10)",
+        () -> begin
+            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
+            local wf = joinpath(ROOT, ".github", "workflows")
+            local target = "\nenv:\n  JULIA_CPU_TARGET: 'generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)'\n"
+            local off = "run: printf '[WasmTarget]\\nprecompile_workload = false\\n' > LocalPreferences.toml\n"
+            local v = 0
+            local jobof(c, name) = (m = match(Regex("(?s)\\n  " * name * ":\\n(.*?)(?=\\n  [a-z][a-z-]*:\\n|\\z)"), c); m === nothing ? "" : m.captures[1])
+            # in order: the workload off, the depot restored, then Julia instantiates or plans
+            local ordered(j, after) = (a = findfirst(off, j); b = findfirst(r"run: bash dev/ci_depot\.sh restore ", j); c = findfirst(after, j);
+                                       a !== nothing && b !== nothing && c !== nothing && first(a) < first(b) < first(c))
+            for (f, jobs) in (("gate.yml", ("lane", "emission-plan")), ("gate-fast.yml", ("lane", "emission-plan")))
+                local c = _code(joinpath(wf, f))
+                v += occursin(target, c) && count("JULIA_CPU_TARGET", c) == 1 ? 0 : 1
+                v += occursin("julia-actions/cache", c) ? 1 : 0
+                for j in jobs
+                    v += ordered(jobof(c, j), j == "lane" ? "Pkg.instantiate()" : "bash dev/emission_diff.sh plan") ? 0 : 1
+                end
+                v += count(off, c) == length(jobs) && count("bash dev/ci_depot.sh restore ", c) == length(jobs) ? 0 : 1
+            end
+            local dep = _code(joinpath(ROOT, "dev", "ci_depot.sh"))
+            for needle in ("tar -cf - --exclude='compiled/*/WasmTarget*'",
+                           "[ -n \"\${JULIA_CPU_TARGET:-}\" ] || { echo \"ci_depot: JULIA_CPU_TARGET is unset",
+                           "grep -v '/WasmTarget[^/]*/' | wc -l",
+                           "if [ \"\$new\" -eq 0 ]; then echo \"save=false\" >> \"\$out\"; exit 0; fi",
+                           "select(.expired | not)")
+                v += occursin(needle, dep) ? 0 : 1
+            end
+            local gate = _code(joinpath(wf, "gate.yml"))
+            v += occursin("        if: steps.depot.outputs.save == 'true'\n        with:\n          name: \${{ steps.depot.outputs.name }}\n", gate) ? 0 : 1
+            # the workload's one list, compiled by the workload and by a suite family
+            local wt = read(joinpath(SRC, "WasmTarget.jl"), String)
+            v += occursin("const _PC_WORKLOAD = (", wt) && occursin("    @compile_workload begin\n        for (f, ts) in _PC_WORKLOAD\n            compile(f, ts; validate=false)\n", wt) &&
+                 count("compile(", split(wt, "@setup_workload")[end]) == 1 ? 0 : 1
+            v += occursin("    for (f, ts) in WasmTarget._PC_WORKLOAD\n        @test WasmTarget.compile(f, ts; validate=true) isa Vector{UInt8}\n",
+                          read(joinpath(ROOT, "test", "precompile_workload.jl"), String)) &&
+                 occursin("\n_wt_qa_include(\"precompile_workload.jl\")\n", read(joinpath(ROOT, "test", "runtests.jl"), String)) ? 0 : 1
+            v += occursin("  [ -f LocalPreferences.toml ] && cp LocalPreferences.toml \"\$tree/\"\n", _code(joinpath(ROOT, "dev", "emission_diff.sh"))) ? 0 : 1
+            # the TLC verdict's key, computed over a copy of what it hashes
+            local tmp = mktempdir()
+            try
+                local files = split(readchomp(Cmd(`git ls-files dev/formal dev/lanes.sh .github/workflows/gate.yml`; dir=ROOT)), '\n')
+                for f in vcat(files, "dev/tlc_verdict.sh")
+                    mkpath(dirname(joinpath(tmp, f))); cp(joinpath(ROOT, f), joinpath(tmp, f))
+                end
+                mkpath(joinpath(tmp, "bin"))
+                local java = joinpath(tmp, "bin", "java")
+                write(java, "#!/bin/sh\necho 'openjdk version \"17.0.1\"' >&2\n"); chmod(java, 0o755)
+                Base.run(Cmd(`git init -q`; dir=tmp)); Base.run(Cmd(`git add -A`; dir=tmp))
+                local path = joinpath(tmp, "bin") * ":" * ENV["PATH"]
+                local key(part) = readchomp(Cmd(Cmd(`bash dev/tlc_verdict.sh key $part`; dir=tmp); env=("PATH" => path, "HOME" => get(ENV, "HOME", tmp))))
+                local edit(f, s) = (local p = joinpath(tmp, f); local o = read(p, String); write(p, o * s); local edited = key("0/5"); write(p, o); edited)
+                local k = key("0/5")
+                local tla = first(filter(f -> endswith(f, ".tla") && startswith(f, "dev/formal/"), files))
+                local cfg = first(filter(f -> endswith(f, ".cfg") && startswith(f, "dev/formal/"), files))
+                v += startswith(k, "tlc-0of5-") && key("0/5") == k && key("1/5") != k ? 0 : 1
+                v += edit(tla, "\n") != k && edit(cfg, "\n") != k && edit("dev/formal/run_tlc.sh", "\n") != k &&
+                     edit("dev/lanes.sh", "\n") != k && edit(".github/workflows/gate.yml", "\n") != k && key("0/5") == k ? 0 : 1
+                write(java, "#!/bin/sh\necho 'openjdk version \"17.0.2\"' >&2\n")
+                v += key("0/5") != k ? 0 : 1
+            catch e
+                @warn "L193: the TLC verdict key over a copy" exception = e
+                v += 1
+            finally
+                rm(tmp; recursive=true, force=true)
+            end
+            # the lane runs unless the key's verdict exists; the verdict is recorded only after it passed
+            local i_lookup = findfirst("        run: bash dev/tlc_verdict.sh lookup \${{ matrix.part }}\n", gate)
+            local i_lane = findfirst("        if: matrix.lane != 'formal' || steps.tlc.outputs.hit != 'true'\n        run: |\n", gate)
+            local i_rec = findfirst("        if: matrix.lane == 'formal' && steps.tlc.outputs.hit != 'true'\n        id: tlcrec\n        run: bash dev/tlc_verdict.sh record \${{ matrix.part }} tlc-verdict\n", gate)
+            v += i_lookup !== nothing && i_lane !== nothing && i_rec !== nothing && first(i_lookup) < first(i_lane) < first(i_rec) &&
+                 occursin("          name: \${{ steps.tlcrec.outputs.name }}\n          path: tlc-verdict/verdict.txt\n", gate) &&
+                 count("tlc_verdict.sh", gate) == 2 ? 0 : 1
+            v
+        end),
 ]
 
 

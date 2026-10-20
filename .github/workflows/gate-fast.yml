@@ -32,11 +32,15 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write   # julia-actions/cache deletes this branch's superseded caches
+  actions: write   # a red job cancels the run; the depot is read as an artifact
 
 defaults:
   run:
     shell: bash
+
+# gate.yml's image target: one published depot serves every runner CPU model (dev/ci_depot.sh)
+env:
+  JULIA_CPU_TARGET: 'generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)'
 
 jobs:
   lane:
@@ -94,16 +98,14 @@ jobs:
           if [ "${{ matrix.lane }}" = smoke-1.13 ]; then channel 1.13; fi
           echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
 
-      # gate.yml's cache keys (per runner CPU model; a package image compiled for one model is
-      # recompiled on another): the package alone, smoke-1.13 on its own Julia
-      - name: Runner CPU model
-        id: cpu
-        run: |
-          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
-      - uses: julia-actions/cache@v2
-        with:
-          cache-name: gate-${{ matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes' }}-${{ steps.cpu.outputs.model }}
-          include-matrix: false
+      # gate.yml's: the package under test without its workload, the dependencies from the
+      # depot a gate run published (dev/ci_depot.sh), smoke-1.13's on its own Julia
+      - name: Workload off
+        run: printf '[WasmTarget]\nprecompile_workload = false\n' > LocalPreferences.toml
+      - name: Depot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/ci_depot.sh restore ${{ matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes' }}
 
       - name: Install wasm-tools
         uses: taiki-e/install-action@v2
@@ -169,14 +171,12 @@ jobs:
           [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
           channel 1.12 && "$J" default 1.12
           echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
-      - name: Runner CPU model
-        id: cpu
-        run: |
-          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
-      - uses: julia-actions/cache@v2
-        with:
-          cache-name: gate-lanes-${{ steps.cpu.outputs.model }}
-          include-matrix: false
+      - name: Workload off
+        run: printf '[WasmTarget]\nprecompile_workload = false\n' > LocalPreferences.toml
+      - name: Depot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/ci_depot.sh restore lanes
       - name: dev/emission_diff.sh plan
         env:
           GH_TOKEN: ${{ github.token }}

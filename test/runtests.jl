@@ -264,6 +264,7 @@ _wt_qa_include("no_fabricated_values.jl")
 # never leak an internal StackImbalanceError.
 _wt_qa_include("capability_negative_controls.jl")
 _wt_qa_include("unknown_ir_heads.jl")
+_wt_qa_include("precompile_workload.jl")
 # PARITY RATCHET (dev/PARITY_MASTER.md): structural-disease counts may only DECREASE;
 # completed dimensions are LOCKED exactly. Baseline: dev/parity_baseline.toml.
 if _wt_qa("parity_ratchet.jl")

@@ -35,11 +35,16 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write   # julia-actions/cache deletes this branch's superseded caches
+  actions: write   # a red job cancels the run; the depot and TLC verdicts are read as artifacts
 
 defaults:
   run:
     shell: bash
+
+# Julia's own multi-target list (its release sysimage's): a package image compiled on one runner
+# CPU model loads on every other, so one published depot serves every job (dev/ci_depot.sh)
+env:
+  JULIA_CPU_TARGET: 'generic;sandybridge,-xsaveopt,clone_all;haswell,-rdrnd,base(1);x86-64-v4,-rdrnd,base(1)'
 
 jobs:
   lane:
@@ -108,21 +113,21 @@ jobs:
           if [ "${{ matrix.lane }}" = smoke-1.13 ]; then channel 1.13; fi
           echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
 
-      # one cache per kind of job and runner CPU model: the suite and fuzz jobs precompile
-      # Pkg.test's environment, the others the package alone, smoke-1.13 on its own Julia; a
-      # package image compiled for one CPU model is recompiled on another (GitHub's runners are
-      # of several), so 7 of 9 suite and fuzz jobs rebuilt the restored environment, 136
-      # packages in 326-449 s (37891241960, and with JULIA_CPU_TARGET=haswell 37895633455)
-      - name: Runner CPU model
+      # the package under test precompiles without its PrecompileTools workload (~10 s, not
+      # ~212 s: run 39491700858), and the workload's signatures compile in their own suite
+      # family, test/precompile_workload.jl
+      - name: Workload off
         if: matrix.lane != 'formal'
-        id: cpu
-        run: |
-          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
-      - uses: julia-actions/cache@v2
+        run: printf '[WasmTarget]\nprecompile_workload = false\n' > LocalPreferences.toml
+
+      # the dependencies' packages and images a previous gate run published, repository-wide
+      # (dev/ci_depot.sh): the suite and fuzz jobs Pkg.test's environment, the others the
+      # package alone, smoke-1.13 on its own Julia
+      - name: Depot
         if: matrix.lane != 'formal'
-        with:
-          cache-name: gate-${{ (matrix.lane == 'suite' || matrix.lane == 'fuzz') && 'suite' || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes') }}-${{ steps.cpu.outputs.model }}
-          include-matrix: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/ci_depot.sh restore ${{ (matrix.lane == 'suite' || matrix.lane == 'fuzz') && 'suite' || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes') }}
 
       - name: Install wasm-tools
         if: matrix.lane != 'formal'
@@ -143,12 +148,35 @@ jobs:
         if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
         run: bash dev/fetch_dart_sdk.sh
 
+      # a formal part whose models, instances, lane and Java hash as a green part's did keeps
+      # that part's verdict (dev/tlc_verdict.sh); any change runs it
+      - name: TLC verdict by content
+        if: matrix.lane == 'formal'
+        id: tlc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/tlc_verdict.sh lookup ${{ matrix.part }}
+
       - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
+        if: matrix.lane != 'formal' || steps.tlc.outputs.hit != 'true'
         run: |
           # the job's stdout can be a non-blocking pipe, where one large write fails part-way
           # ("echo: write error: Resource temporarily unavailable": 37893727231 lost a shard's log)
           python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
           bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}
+
+      # a part model checked green publishes its verdict under its content's name
+      - name: TLC verdict record
+        if: matrix.lane == 'formal' && steps.tlc.outputs.hit != 'true'
+        id: tlcrec
+        run: bash dev/tlc_verdict.sh record ${{ matrix.part }} tlc-verdict
+      - uses: actions/upload-artifact@v4
+        if: matrix.lane == 'formal' && steps.tlc.outputs.hit != 'true'
+        with:
+          name: ${{ steps.tlcrec.outputs.name }}
+          path: tlc-verdict/verdict.txt
+          if-no-files-found: error
+          retention-days: 90
 
       # a coverage part's units and hits, for the merge job's verdict
       - uses: actions/upload-artifact@v4
@@ -167,6 +195,22 @@ jobs:
           path: emission-parts/
           if-no-files-found: error
           retention-days: 1
+
+      # one job per depot publishes it when it compiled a dependency image the restored depot
+      # lacked (a new dependency version, a first run): the probes for the package alone, part 0
+      # of the suite for Pkg.test's environment, part 0 of smoke-1.13 for Julia 1.13
+      - name: Depot to publish
+        id: depot
+        if: (matrix.lane == 'probes' || (matrix.lane == 'suite' && startsWith(matrix.part, '0/')) || (matrix.lane == 'smoke-1.13' && startsWith(matrix.part, '0/')))
+        run: bash dev/ci_depot.sh save ${{ matrix.lane == 'suite' && 'suite' || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes') }} depot-out
+      - uses: actions/upload-artifact@v4
+        if: steps.depot.outputs.save == 'true'
+        with:
+          name: ${{ steps.depot.outputs.name }}
+          path: depot-out/depot.tar.zst
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 90
 
       # a red lane cancels the run: fail-fast cancels the other lanes, this the jobs beside them
       - name: Cancel the run
@@ -235,14 +279,12 @@ jobs:
           [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
           channel 1.12 && "$J" default 1.12
           echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
-      - name: Runner CPU model
-        id: cpu
-        run: |
-          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
-      - uses: julia-actions/cache@v2
-        with:
-          cache-name: gate-lanes-${{ steps.cpu.outputs.model }}
-          include-matrix: false
+      - name: Workload off
+        run: printf '[WasmTarget]\nprecompile_workload = false\n' > LocalPreferences.toml
+      - name: Depot
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash dev/ci_depot.sh restore lanes
       - name: dev/emission_diff.sh plan
         env:
           GH_TOKEN: ${{ github.token }}

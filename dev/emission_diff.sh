@@ -36,6 +36,8 @@ base_tree() {
   git archive "$1" | tar -x -C "$tree"
   rm -rf "$tree/test"; cp -R test "$tree/test"
   [ -f Manifest.toml ] && cp Manifest.toml "$tree/"
+  # the gate's preferences (the workload off, ci_depot.sh): the base precompiles as the head does
+  [ -f LocalPreferences.toml ] && cp LocalPreferences.toml "$tree/"
   ( cd "$tree" && JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=. -e 'using Pkg; Pkg.instantiate()' >&2 )
   echo "$tree"
 }

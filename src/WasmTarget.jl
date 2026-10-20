@@ -623,21 +623,25 @@ _pc_strlen(x::Int64)         = length(string(x))
 _pc_strup(s::String)         = length(uppercase(s))
 _pc_struct(x::Int32)         = (s = _PCStruct(x, 1.5); s.a + Int32(s.b))
 _pc_tuple(x::Int64)          = (t = (x, x + Int64(1), x + Int64(2)); t[1] + t[3])
+# The workload's signatures: compiled at precompilation, and by test/precompile_workload.jl
+# wherever the workload is off (the gate's jobs, LocalPreferences.toml: precompile_workload =
+# false), so a rejection among them fails the gate as it fails a local precompile.
+const _PC_WORKLOAD = (
+    (_pc_iadd, (Int64,)), (_pc_imix, (Int64,)), (_pc_i32, (Int32,)),
+    (_pc_fmath, (Float64,)), (_pc_fmix, (Float64,)), (_pc_conv, (Int64,)),
+    (_pc_cond, (Int64,)), (_pc_loop, (Int64,)), (_pc_rec, (Int64,)),
+    (_pc_dict, (Int64,)), (_pc_set, (Int64,)),
+    (_pc_strlen, (Int64,)), (_pc_strup, (String,)),
+    (_pc_struct, (Int32,)), (_pc_tuple, (Int64,)),
+    (_pc_vsort, (Vector{Int64},)), (_pc_vsum, (Vector{Float64},)),
+    (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
+    (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
+)
 # end parity-region
 
 @setup_workload begin
     @compile_workload begin
-        for (f, ts) in (
-            (_pc_iadd, (Int64,)), (_pc_imix, (Int64,)), (_pc_i32, (Int32,)),
-            (_pc_fmath, (Float64,)), (_pc_fmix, (Float64,)), (_pc_conv, (Int64,)),
-            (_pc_cond, (Int64,)), (_pc_loop, (Int64,)), (_pc_rec, (Int64,)),
-            (_pc_dict, (Int64,)), (_pc_set, (Int64,)),
-            (_pc_strlen, (Int64,)), (_pc_strup, (String,)),
-            (_pc_struct, (Int32,)), (_pc_tuple, (Int64,)),
-            (_pc_vsort, (Vector{Int64},)), (_pc_vsum, (Vector{Float64},)),
-            (_pc_vmap, (Vector{Int64},)), (_pc_vfilter, (Vector{Int64},)),
-            (_pc_vreduce, (Vector{Int64},)), (_pc_vstat, (Vector{Int64},)),
-        )
+        for (f, ts) in _PC_WORKLOAD
             compile(f, ts; validate=false)
         end
     end
