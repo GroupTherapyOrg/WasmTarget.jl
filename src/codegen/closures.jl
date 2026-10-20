@@ -436,7 +436,7 @@ end
 # parity(translator.dart:2787 _ClosureTrampolineGenerator.generate)
 function _closure_call_body!(tb::InstrBuilder, mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                              body::ClosureBody, arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
-                             scratch::Union{Nothing,UInt32}; obj_scratch::Integer=-1,
+                             scratch::Union{Nothing,UInt32}; obj_scratch::Integer,
                              arg_scratch::Union{Nothing,UInt32})::InstrBuilder
     if takes_context
         local_get!(tb, UInt32(0))

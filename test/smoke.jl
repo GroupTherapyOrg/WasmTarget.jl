@@ -20,6 +20,7 @@ using Random, SHA   # seeded streams, as the full suite loads them
 using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
 include(joinpath(@__DIR__, "utils.jl"))
 include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first divergent statement
+include(joinpath(@__DIR__, "emission_fingerprint.jl"))   # the emission-diff check's head side
 
 const FILTER = lowercase.(ARGS)
 _want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER)
@@ -2385,6 +2386,13 @@ _xf("closed_world_edge_rejects", Any[
     ("atomic_modify_operator", (n::Int64) -> (a = _SmAtom(n); @atomic a.v _sm_atom_op n; @atomic a.v), Int64(3)),
 ])
 
+# Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
+# (keys spread) and its radix sort (two passes over keys 4000 ulps apart), and the errors a zero-textwidth pad and
+# an embedded NUL raise (their messages' escape_string), each caught (native -1)
+
+# the numeric lowering tables' generated groups, last in GROUPS
+include(joinpath(@__DIR__, "registry_cases.jl"))
+
 # ============================================================================
 
 # A WRONG answer located at its first divergent statement (TraceLocalize.first_divergence);
@@ -2417,6 +2425,11 @@ function main()
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
     ngroups = 0
+    # the emission-diff check's head side: each case's bodies, and which a passing run entered
+    local edir = get(ENV, "WT_EMISSION_DIR", "")
+    local rec = isempty(edir) ? nothing :
+        EmissionFingerprint.recorder(edir, SMOKE_PART[1], SMOKE_PART[2];
+                                     run_driver=WasmRunner.run_driver_batch, merge_js=WasmRunner.HOST_RUNTIME_MERGE_JS)
     for (group, cases) in _smoke_part(GROUPS)
         _want(group) || continue
         ngroups += 1
@@ -2424,17 +2437,31 @@ function main()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"
+            rec === nothing || (EMITTED_MODULES[] = Any[])
+            local passed = false
             try
-                r = isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
+                r = haskey(CASE_INPUTS, tag) ? compare_julia_wasm_inputs(f, CASE_INPUTS[tag]; admit=_rc_admit) :
+                    isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
                 if r.pass
-                    npass += 1
+                    npass += 1; passed = true
                 else
                     nfail += 1
-                    push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)\n    " *
+                    haskey(CASE_INPUTS, tag) && (args = r.input)   # a generated case: its first wrong input
+                    push!(failures, "WRONG $tag  exp=$(r.expected) act=$(r.actual)" *
+                                    (haskey(CASE_INPUTS, tag) ? "  input=$(r.input)" : "") * "\n    " *
                                     replace(_smoke_locate(f, args), "\n" => "\n    "))
                 end
             catch e
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
+            end
+            if rec !== nothing
+                try
+                    EmissionFingerprint.record!(rec, tag, passed, EmissionFingerprint.case_hash(f, Tuple(map(typeof, case[3:end]))),
+                                                EMITTED_MODULES[])
+                catch e
+                    nerr += 1; push!(failures, "ERROR $tag  (its emission fingerprint) $(_smoke_error_text(e))")
+                end
+                EMITTED_MODULES[] = nothing
             end
         end
         _smoke_time("group $group", tg)

@@ -84,7 +84,8 @@ function _f3_refers_to_box(arg, box_id::Int, nir::Vector{NirStmt})::Bool
 end
 
 # The Julia type of an IR operand, with box-contents reads typed as `T`: every other operand is
-# value_type's (its slot types `spectypes`, the body's slot table, or `nothing`: none).
+# value_type's (its slot types `spectypes`, the body's slot table; `nothing`, no table, raises for an
+# argument or a slot).
 # parity(quarantine: types the operands of a value written into a Julia `Core.Box`, whose
 # `contents::Any` erases the variable's type — box reads as the join candidate)
 _f3_operand_type(a::NirNode, sst, @nospecialize(T), spectypes, nir::Vector{NirStmt})::Type =
@@ -453,7 +454,7 @@ function propagate_numeric_value_types(nir::Vector{NirStmt}, ssa_types = nir;
                                         rettype::Function)::Dict{Int,Type}
     out = Dict{Int,Type}()
     local map = _f3_ssa_map(ssa_types)
-    # an operand's type: a joined SSA's join, else value_type's (no slot table: Any)
+    # an operand's type: a joined SSA's join, else value_type's (no slot table raises for an argument or a slot)
     _opT(a) = (a isa NirSSA && haskey(out, a.id)) ? out[a.id] : value_type(a, slot_types, map)
     # only consider SSAs Julia left as Any (don't override a known concrete type): each
     # statement's own type

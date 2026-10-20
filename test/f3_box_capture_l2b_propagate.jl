@@ -24,7 +24,7 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
     fcounter(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     ci = code_typed(fcounter, (Int64,); optimize = true)[1].first
     nir = WasmTarget.build_nir(ci)
-    vt = WasmTarget.f3_box_value_types(nir; closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+    vt = WasmTarget.f3_box_value_types(nir; spectypes=WasmTarget.nir_slot_types(ci), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
 
     @test !isempty(vt)
     @test all(==(Int64), values(vt))                       # box contents is Int64
@@ -39,13 +39,13 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
     # float accumulator → Float64 contents
     faccum(n::Int64) = (s = 0.0; foreach(i -> (s += i), 1:n); s)
     cif = code_typed(faccum, (Int64,); optimize = true)[1].first
-    vtf = WasmTarget.f3_box_value_types(WasmTarget.build_nir(cif); closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+    vtf = WasmTarget.f3_box_value_types(WasmTarget.build_nir(cif); spectypes=WasmTarget.nir_slot_types(cif), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
     @test !isempty(vtf) && all(==(Float64), values(vtf))
 
     # no Core.Box → empty (no false positives on an ordinary numeric fn)
     fplain(x::Int64) = (a = x + 1; b = a * 2; b - 3)
     cip = code_typed(fplain, (Int64,); optimize = true)[1].first
-    @test isempty(WasmTarget.f3_box_value_types(WasmTarget.build_nir(cip); closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
+    @test isempty(WasmTarget.f3_box_value_types(WasmTarget.build_nir(cip); spectypes=WasmTarget.nir_slot_types(cip), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
 
     # A concrete dominating write also proves non-numeric captured contents.
     # Julia boxes this local because its surrounding scope owns the name.
@@ -96,7 +96,7 @@ _f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo
     cic = code_typed(fcl, (Int64,); optimize = true)[1].first
     cnir = WasmTarget.build_nir(cic)
     bid = WasmTarget.find_box_news(cnir)[1]
-    bodies = WasmTarget._f3_capturing_closure_bodies(cnir, bid; closure_bodies=_f3_bodies_propagate)
+    bodies = WasmTarget._f3_capturing_closure_bodies(cnir, bid; spectypes=WasmTarget.nir_slot_types(cic), closure_bodies=_f3_bodies_propagate)
     @test !isempty(bodies)
     for (bnir, bspec) in bodies
         local boxf = only(fieldname(bspec[1], k) for k in 1:fieldcount(bspec[1])
