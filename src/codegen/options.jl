@@ -7,7 +7,7 @@
 # `verifyTypeChecks`, `watchPoints: List<int>`). WasmTarget instead had 17
 # scattered `ENV["WT_..."]` reads across src/. This file is the single typed
 # replacement: one struct, one env-parsing function, read once by the compile's entry
-# into its Translator — read from there, ENV read from nowhere else.
+# into its Translator — read from there, ENV read from nowhere else in src (L158).
 # ============================================================================
 
 """
@@ -24,6 +24,10 @@ Base.@kwdef struct CompilerOptions
     audit_value_stack::Bool = false
     log_registry::Bool = false
     trace::Set{Symbol} = Set{Symbol}()
+    # the wasm-tools cross-check of a finished module (WT_VALIDATE=1): WT's builder validates
+    # every instruction as it is emitted (instructions.dart:494 _verifyTypes, dart's gate), so
+    # the external validator is an independent double-check, off unless asked for
+    validate::Bool = false
 end
 
 """
@@ -31,8 +35,10 @@ end
 
 The only place ENV is read for compiler debug switches. `WT_TRACE` is a
 comma-separated list of trace points (`mm`, `strarg`, `closure`, `cc`,
-`stubargs`, `condstub`, `deadval`) replacing the eight ad-hoc
-`WT_TRACE_*`/`WT_DBG_*` variables it consolidates.
+`stubargs`, `condstub`, `deadval`, `locals`) replacing the ad-hoc
+`WT_TRACE_*`/`WT_DBG_*`/`WASMTARGET_DEBUG_LOCALS` variables it consolidates. `WT_VALIDATE=1`
+turns on the wasm-tools cross-check of every finished module (an entry's `validate` keyword, when
+given, decides instead).
 
 parity(dart2wasm.dart:251 parseArguments): the options object is built once from the
 invocation (dart's command line, WasmTarget's environment).
@@ -45,6 +51,7 @@ function options_from_env()::CompilerOptions
         audit_value_stack=get(ENV, "WT_AUDIT_VALUE_STACK", "") == "1",
         log_registry=get(ENV, "WT_LOG_REGISTRY", "") == "1",
         trace=trace,
+        validate=get(ENV, "WT_VALIDATE", "") == "1",
     )
 end
 

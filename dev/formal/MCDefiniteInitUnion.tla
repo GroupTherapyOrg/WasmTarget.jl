@@ -4,4 +4,7 @@ EXTENDS DefiniteInit
 MCN == 5
 MCMeet == "Union"
 MCCatchEdge == TRUE
+MCUpsilonIsUse == TRUE
+MCTrailingOnly == TRUE
+MCExt == FALSE
 =============================================================================

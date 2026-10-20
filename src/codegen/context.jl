@@ -572,7 +572,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
             is_phi_any_ref = phi_wasm_type isa ConcreteRef || phi_wasm_type === StructRef ||
                              phi_wasm_type === ArrayRef || phi_wasm_type === AnyRef ||
                              phi_wasm_type === ExternRef || phi_wasm_type === EqRef
-            is_wasm_struct_numeric = _julia_int_width(phi_julia_type, false) == 128
+            is_wasm_struct_numeric = _julia_int_width(phi_julia_type) == 128
             if is_phi_any_ref && !is_wasm_struct_numeric
                 for j in ssa_users(ctx, i)   # the statements that use the phi
                     use_rec = nir[j]
@@ -616,11 +616,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
             end
 
             local_idx = allocate_local!(ctx, phi_wasm_type)
-            # Trace externref phi allocations
-            if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
-                n_stmts = length(nir)
-                @warn "ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
-            end
+            # the `locals` trace point (WT_TRACE=locals): each phi local's allocation
+            tracing(ctx, :locals) && println(stderr, "  ALLOC PHI local $local_idx type=$(phi_wasm_type) for SSA $i ",
+                                             "(stmts=$(length(nir)), n_params=$(ctx.n_params))")
             ctx.phi_locals[i] = local_idx
         end
     end
@@ -920,7 +918,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
             # a primitive wider than every register that is no 128-bit integer has no
             # representation (numeric_register answers none): it rejects at its statement
             if ssa_type isa DataType && isprimitivetype(ssa_type) && numeric_register(ssa_type) === nothing &&
-               _julia_int_width(ssa_type, false) != 128
+               _julia_int_width(ssa_type) != 128
                 record_unsupported!(ctx, :unsupported_type,
                     "a $(sizeof(ssa_type))-byte primitive $(ssa_type) has no representation: no register holds it, and it is no Int128 or UInt128";
                     idx=ssa_id)
@@ -1128,11 +1126,9 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
             end
 
             local_idx = allocate_local!(ctx, wasm_type)
-            # Trace externref allocations for diagnostics
-            if get(ENV, "WASMTARGET_DEBUG_LOCALS", "") == "1"
-                n_stmts = length(nir)
-                @warn "ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$n_stmts, n_params=$(ctx.n_params))" maxlog=200
-            end
+            # the `locals` trace point (WT_TRACE=locals): each SSA local's allocation
+            tracing(ctx, :locals) && println(stderr, "  ALLOC SSA local $local_idx type=$(wasm_type) effective=$(effective_type) ",
+                                             "ssa_type=$(ssa_type) for SSA $ssa_id (stmts=$(length(nir)), n_params=$(ctx.n_params))")
             ctx.ssa_locals[ssa_id] = local_idx
         end
     end

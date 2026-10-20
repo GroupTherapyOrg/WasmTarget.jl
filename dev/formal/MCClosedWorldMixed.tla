@@ -1,5 +1,5 @@
 ------------------------ MODULE MCClosedWorldMixed ------------------------
-(* A LIVE original (Amendment 1; Part M's Finding 2). `@nospecialize g`:   *)
+(* A LIVE original. `@nospecialize g`:                                     *)
 (*   H1(x::Int) = g(x)  -- concrete operands: the scan retargets           *)
 (*                         g(::Any) (A) to g(::Int) (A2), superseding A;   *)
 (*   H2(x::Any) = g(x)  -- not concrete: keeps A, which stays live.        *)

@@ -231,23 +231,46 @@ end
 """
     normalise_narrow!(b, ctx, julia_type::Type, signed::Bool)
 
-THE wrap channel: emits the sign-extension (`i32.extend8_s`/`extend16_s`) or mask
-(`and 0xff`/`0xffff`) for a narrow value already on `b`'s stack; a no-op for canonical
-widths (Int32/Int64/UInt32/UInt64/anything else `julia_type` isn't one of the four
-narrow BitIntegers). `signed` is the CALLER's interpretation of the bits — independent
-of `julia_type`'s own signedness (e.g. `ult_int` normalises an Int8 operand unsigned;
-`zext_int` always normalises unsigned regardless of source signedness).
+THE wrap channel: for a value of `julia_type` already on `b`'s stack, held in its register
+(numeric_register) with junk above its width, emits its sign replicated upward or its bits
+above its width cleared, by its type's own bits (`_julia_int_width`, 8*sizeof: Julia's
+intrinsics read jl_datatype_size), through emit_extend_from_width!; a no-op for a register
+that holds exactly its value (exact_register: 32 or 64 bits, a Bool) and for a primitive as
+wide as its register. `signed` is the CALLER's interpretation of the bits — independent of
+`julia_type`'s own signedness (e.g. `ult_int` normalises an Int8 operand unsigned; `zext_int`
+always normalises unsigned regardless of source signedness).
 """
 function normalise_narrow!(b::InstrBuilder, ctx,
                            julia_type::Type, signed::Bool)::InstrBuilder
-    julia_width = _julia_int_width(julia_type, true)
-    if julia_width < 32
-        if signed
-            num!(b, julia_width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-        else
-            i32_const!(b, Int64((1 << julia_width) - 1))
-            num!(b, Opcode.I32_AND)
-        end
+    # a register that holds exactly its value (a Bool's 0 or 1, exact_register) carries no junk
+    exact_register(julia_type) === nothing || return b
+    return emit_extend_from_width!(b, numeric_register(julia_type), _operand_width(julia_type), signed)
+end
+
+"""
+    emit_extend_from_width!(b, reg, width, signed) -> b
+
+`[reg] -> [reg]`: the `width`-bit integer held in an i32 or i64 register `reg` with junk above
+its width, made the register's value: its bit `width-1` replicated upward (`signed`) or its
+bits above `width` cleared; a no-op at the register's own width. The 8- and 16-bit arms in an
+i32 are dart's narrowing shapes (`extend8_s`, `extend16_s`, `and 0xFF`, `and 0xFFFF`); any
+other width (a 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64) shifts its sign
+bit to the register's top and back (`shl`, `shr_s`) or masks.
+parity(intrinsics.dart:2037 wasmI32Int8FromInt): the narrowing arms, at every width.
+"""
+function emit_extend_from_width!(b::InstrBuilder, reg::Union{Nothing,NumType}, width::Integer, signed::Bool)::InstrBuilder
+    local bits = reg === I32 ? 32 : reg === I64 ? 64 :
+                 error("a $(width)-bit integer held in $(reg), which is no integer register")
+    1 <= width <= bits || error("a $(width)-bit integer cannot be held in an i$(bits) register")
+    width < bits || return b
+    local c = v -> reg === I32 ? i32_const!(b, Int64(v)) : i64_const!(b, Int64(v))
+    if signed && reg === I32 && (width == 8 || width == 16)
+        num!(b, width == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
+    elseif signed
+        c(bits - width); num!(b, reg === I32 ? Opcode.I32_SHL : Opcode.I64_SHL)
+        c(bits - width); num!(b, reg === I32 ? Opcode.I32_SHR_S : Opcode.I64_SHR_S)
+    else
+        c((Int64(1) << width) - 1); num!(b, reg === I32 ? Opcode.I32_AND : Opcode.I64_AND)
     end
     return b
 end
@@ -414,12 +437,12 @@ target is held in no integer register rejects, never a default register.
 resolved once from the operand (a literal type, or a constant global naming one) for all ten
 ops, rejecting any other at the statement (calls.jl): each is a type, never a default. A
 register is the one width rule's (julia_to_wasm_type through numeric_register), and the one
-widening rule normalises a source narrower than 32 bits before any op reads it widened:
+widening rule normalises a source narrower than its register before any op reads it widened:
 sext_int and sitofp read its sign at its own width, zext_int and uitofp its bits, whatever its
 type and whatever register the target has (a narrow register carries junk above its width,
 calls.jl's narrow-register invariant). `src_already_wide` is
-`get_phi_edge_wasm_type(args[2], ctx) === I64` — a widened phi local already occupies the full
-register, so sext_int/zext_int must not re-extend it, and trunc_int must treat it as a 64-bit
+`get_phi_edge_wasm_type(args[2], ctx) === I64` — a widened phi local of a type held in an i32
+already occupies the full register, so sext_int/zext_int must not re-extend it, and trunc_int must treat it as a 64-bit
 source even when the Julia type looks narrower.
 parity(quarantine: Julia's typed IR carries sext_int/zext_int/trunc_int/sitofp/uitofp/
 fptosi/fptoui/fpext/fptrunc/bitcast as intrinsic calls with an explicit target type and
@@ -443,8 +466,8 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
     (julia_src isa Type && julia_dst isa Type) ||
         return reject!("its source or target is not a type")
     local src_reg, dst_reg = numeric_register(julia_src), numeric_register(julia_dst)
-    local src_128 = _julia_int_width(julia_src, false) == 128
-    local dst_128 = _julia_int_width(julia_dst, false) == 128
+    local src_128 = _julia_int_width(julia_src) == 128
+    local dst_128 = _julia_int_width(julia_dst) == 128
     # a primitive wider than every register that is no 128-bit integer has no representation
     (isprimitivetype(julia_src) && src_reg === nothing && !src_128) &&
         return reject!("a $(sizeof(julia_src))-byte primitive other than Int128 and UInt128 has no representation")
@@ -461,18 +484,20 @@ function emit_conversion!(b::InstrBuilder, ctx, op::Symbol,
     # an integer conversion's target is a 128-bit integer or held in an i32 or an i64
     (op in (:sext_int, :zext_int, :trunc_int) && !dst_128 && !(dst_reg === I32 || dst_reg === I64)) &&
         return reject!("its target is held in no integer register")
+    # a source held wider than its own register (a widened phi local) is already its value
+    local widened = src_already_wide && src_reg === I32
     if op === :sext_int
         dst_128 && return _int128_sext!(b, ctx, julia_src, julia_dst)
-        src_already_wide && return dst_reg
+        widened && return dst_reg
         normalise_narrow!(b, ctx, julia_src, true)   # the one widening rule: its sign at its width
-        dst_reg === I64 && return table!(I32, I64, :sext_int)
+        (src_reg === I32 && dst_reg === I64) && return table!(I32, I64, :sext_int)
         return dst_reg
 
     elseif op === :zext_int
         dst_128 && return _int128_zext!(b, ctx, julia_src, julia_dst)
-        src_already_wide && return dst_reg
+        widened && return dst_reg
         normalise_narrow!(b, ctx, julia_src, false)   # the one widening rule: its bits
-        dst_reg === I64 && return table!(I32, I64, :zext_int)
+        (src_reg === I32 && dst_reg === I64) && return table!(I32, I64, :zext_int)
         return dst_reg
 
     elseif op === :trunc_int

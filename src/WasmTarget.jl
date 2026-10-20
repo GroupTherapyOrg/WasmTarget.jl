@@ -75,19 +75,6 @@ export WasmDiagnostic, WasmCompileError, WasmValidationError
 public add_type!, register_vector_type!, FuncRef, Bridge
 
 """
-    _wt_default_validate() -> Bool
-
-parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494 InstructionsBuilder._verifyTypes) — the wasm-tools DEMOTION (dart
-parity: dart2wasm ships no external validator; its builder IS the gate, verifying every emitted
-instruction's stack effect against its declared inputs/outputs). Since 2026-07-01 every InstrBuilder hard-gates each emission
-against the full subtype lattice (strict by default, mod threaded), so the module is valid
-BY CONSTRUCTION and the external `wasm-tools validate` pass is a redundant double-check —
-now OFF by default. Re-enable per-call (`validate=true`) or globally (`WT_VALIDATE=1`,
-recommended in CI as the independent cross-check).
-"""
-_wt_default_validate() = get(ENV, "WT_VALIDATE", "") == "1"
-
-"""
     compile(f, arg_types; optimize=false) -> Vector{UInt8}
 
 Compile a Julia function `f` with the given argument types to WebAssembly bytes.
@@ -95,11 +82,14 @@ Returns a valid WebAssembly binary that can be instantiated and executed.
 
 Set `optimize=true` for size-optimized output (default `-Os` like dart2wasm),
 `optimize=:speed` for `-O3`, or `optimize=:debug` for `-O1` without `--traps-never-happen`.
+`validate=true` runs `wasm-tools validate` over the finished module, an independent cross-check of
+the builder, which validates every instruction as it is emitted; unset, the options' switch
+(`WT_VALIDATE=1`, options_from_env) decides.
 
 parity(compile.dart:216 compile)
 """
 function compile(f, arg_types::Tuple; optimize=false,
-                 validate::Bool=_wt_default_validate(),
+                 validate::Union{Nothing,Bool}=nothing,
                  diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Vector{UInt8}
     return _compile(Any[(f, arg_types, string(nameof(f)))];
                     optimize, validate, diagnostics_sink).bytes
@@ -118,7 +108,7 @@ parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with sou
 """
 function compile_with_sourcemap(f, arg_types::Tuple; sourcemap_url::String="module.wasm.map",
                                 optimize=false,
-                                validate::Bool=_wt_default_validate(),
+                                validate::Union{Nothing,Bool}=nothing,
                                 diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
                                 existing_module::Union{WasmModule,Nothing}=nothing,
                                 import_stubs::Vector=Any[],
@@ -144,7 +134,7 @@ and the first event where the two runs differ is where a wrong value first appea
 parity(quarantine: a traced compile reports each statement's value to the host so a wrong value is located at its first divergent statement; dart has no statement-value trace.)
 """
 function compile_with_statement_trace(f, arg_types::Tuple;
-                                      validate::Bool=_wt_default_validate(),
+                                      validate::Union{Nothing,Bool}=nothing,
                                       diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Tuple{Vector{UInt8},StatementTrace}
     local name = string(nameof(f))
     local r = _compile(Any[(f, arg_types, name)]; optimize=false, validate, diagnostics_sink,
@@ -182,7 +172,7 @@ is the statement trace (`trace`). It takes every public entry's keywords, typed,
 else: an unknown keyword raises.
 parity(pkg/dart2wasm/lib/compile.dart:216 compile)
 """
-function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validate::Bool=_wt_default_validate(),
+function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validate::Union{Nothing,Bool}=nothing,
                   register_ir_types::Bool=false,
                   existing_module::Union{WasmModule,Nothing}=nothing, import_stubs::Vector=Any[],
                   root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
@@ -194,12 +184,15 @@ function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validat
     # the options, read once, and the caller's ledger, which mirrors every recorded
     # WasmDiagnostic (fatal and the non-fatal downgraded dependency stubs; on WasmCompileError
     # the same ledger rides the exception), are the compile's own: its Translator holds them
+    local options = options_from_env()
     local result = compile_module(functions; existing_module, import_stubs, root_bindings, link_roots,
                                   return_registries=true, register_ir_types, source_map_url, trace,
-                                  options=options_from_env(), diagnostics=diagnostics_sink)
+                                  options, diagnostics=diagnostics_sink)
     trace === nothing || trace.entry > 0 ||
         throw(ArgumentError("$(trace.entry_name)$(functions[1][2]) compiled to no traceable body"))
-    local bytes, source_map = _emit_module(result[1]; optimize, validate, class_names=_class_names(result[2]))
+    # the wasm-tools cross-check: the caller's `validate`, else the options' (WT_VALIDATE)
+    local bytes, source_map = _emit_module(result[1]; optimize, validate=something(validate, options.validate),
+                                           class_names=_class_names(result[2]))
     return CompileResult(bytes, source_map, return_registries ? (result[2], result[3], result[4]) : nothing, trace)
 end
 
@@ -253,7 +246,7 @@ end
 
 # Convenience method for single argument type
 # parity(compile.dart:216 compile): the same entry, one argument type spelled without the tuple.
-compile(f, arg_type::Type; optimize=false, validate::Bool=_wt_default_validate(),
+compile(f, arg_type::Type; optimize=false, validate::Union{Nothing,Bool}=nothing,
         diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing) =
     compile(f, (arg_type,); optimize, validate, diagnostics_sink)
 
@@ -297,7 +290,7 @@ parity(compile.dart:216 compile)
 """
 function compile_multi(functions::Vector; optimize=false,
                        return_registries::Bool=false,
-                       register_ir_types::Bool=false, validate::Bool=_wt_default_validate(),
+                       register_ir_types::Bool=false, validate::Union{Nothing,Bool}=nothing,
                        existing_module::Union{WasmModule,Nothing}=nothing,
                        import_stubs::Vector=Any[],
                        root_bindings::Dict{String,RootBindings}=Dict{String,RootBindings}(),
@@ -318,7 +311,7 @@ parity(pkg/dart2wasm/lib/compile.dart:216 compile): dart2wasm's compile with sou
 """
 function compile_multi_with_sourcemap(functions::Vector; sourcemap_url::String="module.wasm.map",
                                       optimize=false,
-                                      validate::Bool=_wt_default_validate(),
+                                      validate::Union{Nothing,Bool}=nothing,
                                       diagnostics_sink::Union{Nothing,Vector{WasmDiagnostic}}=nothing,
                                       existing_module::Union{WasmModule,Nothing}=nothing,
                                       import_stubs::Vector=Any[],
@@ -430,14 +423,15 @@ const WASM_OPT_PRODUCTION_FLAGS = [
 _binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
 
 """
-    optimize(bytes::Vector{UInt8}; level=:size, validate=true) -> Vector{UInt8}
+    optimize(bytes::Vector{UInt8}; level=:size, validate) -> Vector{UInt8}
 
 Run Binaryen `wasm-opt` on compiled WebAssembly bytes for size and performance optimization.
 Uses dart2wasm's production WasmGC flags by default.
 
 # Keywords
 - `level`: Optimization level — `:size` (default, `-Os` like dart2wasm), `:speed` (`-O3`), or `:debug` (`-O1`, no `--traps-never-happen`)
-- `validate`: Run `wasm-tools validate` after optimization (default `true`)
+- `validate`: Run `wasm-tools validate` after optimization (default: the options' `validate`,
+  `WT_VALIDATE=1`, options_from_env)
 
 # Returns
 Optimized `Vector{UInt8}`.
@@ -447,8 +441,9 @@ Optimized `Vector{UInt8}`.
 
 parity(compile.dart:711 _runOptPhase)
 """
-function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool=_wt_default_validate())::Vector{UInt8}
-    return first(_run_wasm_opt(bytes, nothing, nothing; level=level, validate=validate))
+function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Union{Nothing,Bool}=nothing)::Vector{UInt8}
+    return first(_run_wasm_opt(bytes, nothing, nothing; level=level,
+                               validate=something(validate, options_from_env().validate)))
 end
 
 """

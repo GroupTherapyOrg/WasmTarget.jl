@@ -13,43 +13,54 @@
 (*                                                                          *)
 (* WHAT THE REAL FUNCTION DOES (read from source). `nir_cfg` cuts the       *)
 (* statements into basic blocks by Julia's own rule (Compiler ir.jl:46      *)
-(* basic_blocks_starts, :93 compute_basic_blocks): a block starts at 1,     *)
+(* basic_blocks_starts, :94 compute_basic_blocks): a block starts at 1,     *)
 (* after a goto, a goto-if-not, a return or a :leave, at an Enter and after *)
 (* it, at every jump target and at every catch destination. A goto's        *)
 (* successor is its target's block; a goto-if-not's are its target's block  *)
 (* and the next; an Enter's are its catch destination's block (the catch    *)
 (* edge) and the next; any other block but a return's falls through. Then a *)
 (* worklist from block 1; a statement is proven unreachable when its block  *)
-(* was never marked. (A phi whose edge is the statement before it also      *)
-(* starts a block in Julia's rule; no statement here is a phi, and the      *)
-(* split only refines a block reached by fall-through.)                     *)
+(* was never marked, or when it is in no block: a trailing `nothing` after  *)
+(* the body's last terminator (Julia's ir.jl:84-89 adds a block start after *)
+(* the last statement that is not `nothing`; block_of 0, generate.jl). It   *)
+(* is dead by Julia's invariants: a body ends in a terminator, and no jump  *)
+(* targets a trailing `nothing`. (A phi whose edge is the statement before  *)
+(* it also starts a block in Julia's rule; no statement here is a phi, and  *)
+(* the split only refines a block reached by fall-through.)                 *)
 (*                                                                          *)
 (* THE CLAIM (Sound): a statement proven unreachable is not reachable from  *)
 (* statement 1 in the statement-level control-flow graph.                   *)
 (*                                                                          *)
 (* WHAT IS ABSTRACTED. Statements are `goto t`, `goto t if not c`, `return` *)
-(* or a plain statement; every target is a statement index. Init chooses    *)
-(* every program of N statements -- the class is exhaustive at that size.   *)
+(* an Enter, a :leave, a `nothing` or a plain statement; every target is a  *)
+(* statement index. Init chooses every program of N statements that keeps   *)
+(* Julia's invariant for trailing `nothing`s (the body before them ends in  *)
+(* a return or a goto, and no jump targets them) -- the class is            *)
+(* exhaustive at that size.                                                 *)
 (*                                                                          *)
 (* VARIANT CondFallthrough: TRUE = the real worklist; FALSE = a goto-if-not *)
 (* treated like a goto (its fall-through successor dropped).                *)
 (* VARIANT CatchEdge: TRUE = the real worklist; FALSE = an Enter's catch    *)
 (* edge dropped, so a handler reached only by an exception reads as dead:  *)
 (* a trap kept there would run where Julia runs the handler.               *)
+(* VARIANT TrailingOnly: TRUE = the real rule (only a trailing `nothing` is *)
+(* in no block); FALSE = every `nothing` in no block, so a reachable        *)
+(* mid-body `nothing` reads as dead.                                        *)
 (*                                                                          *)
 (* formal(dev/formal/ProvenDead.tla): a statement stmt_is_proven_unreachable *)
 (* proves dead has no control-flow path from entry.                         *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
-CONSTANTS N, CondFallthrough, CatchEdge
+CONSTANTS N, CondFallthrough, CatchEdge, TrailingOnly
 
 ASSUME N \in Nat /\ N >= 1
 ASSUME CondFallthrough \in BOOLEAN
 ASSUME CatchEdge \in BOOLEAN
+ASSUME TrailingOnly \in BOOLEAN
 
 Idx == 1..N
-Stmts == {[k |-> "plain"], [k |-> "return"], [k |-> "leave"]} \cup
+Stmts == {[k |-> "plain"], [k |-> "return"], [k |-> "leave"], [k |-> "nothing"]} \cup
          {[k |-> "goto", t |-> t] : t \in Idx} \cup {[k |-> "gotoifnot", t |-> t] : t \in Idx} \cup
          {[k |-> "enter", t |-> t] : t \in Idx}
 Programs == [Idx -> Stmts]
@@ -80,6 +91,15 @@ BlockMap(p) == LET st == Starts(p) IN [i \in Idx |-> MaxOf({s \in st : s <= i})]
 \* the block's last statement is the one before the next start (or N)
 EndMap(p, blk) == [s \in Starts(p) |-> MaxOf({e \in Idx : blk[e] = s})]
 
+\* a statement in no block: a trailing `nothing` (TrailingOnly), or any `nothing` (the Broken rule)
+NoBlock(p, i) == IF TrailingOnly THEN \A j \in i..N : p[j].k = "nothing" ELSE p[i].k = "nothing"
+\* Julia's invariant for trailing `nothing`s: the body before them ends in a return or a goto, and
+\* no jump targets one
+Real(p) == {i \in Idx : p[i].k # "nothing"}
+WellFormed(p) == p[N].k = "nothing" =>
+    Real(p) # {} /\ p[MaxOf(Real(p))].k \in {"return", "goto"} /\
+    \A i \in Idx : IsJump(p[i]) => p[i].t <= MaxOf(Real(p))
+
 \* the worklist's successor blocks
 BSucc(p, blk, end, s) ==
     LET term == p[end[s]]
@@ -94,7 +114,7 @@ BReach(p, blk, end, S) ==
     LET nxt == S \cup UNION {BSucc(p, blk, end, s) : s \in S}
     IN IF nxt = S THEN S ELSE BReach(p, blk, end, nxt)
 
-Init == prog \in Programs
+Init == prog \in Programs /\ WellFormed(prog)
 Next == UNCHANGED vars
 Spec == Init /\ [][Next]_vars
 
@@ -105,5 +125,5 @@ Sound ==
         end  == EndMap(prog, blk)
         live == BReach(prog, blk, end, {1})
         reach == Reachable(prog)
-    IN \A i \in Idx : blk[i] \notin live => i \notin reach
+    IN \A i \in Idx : (NoBlock(prog, i) \/ blk[i] \notin live) => i \notin reach
 =============================================================================

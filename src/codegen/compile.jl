@@ -747,7 +747,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             else
                 # Generate dispatch-only body (probe + call_indirect + return)
                 # parity(code_generator.dart:2028 CodeGenerator._virtualCall): the dart virtual call — classId + offset + call_indirect
-                generate_selector_caller_body!(b, dispatch_dt, dispatch_registry, type_registry.base_struct_idx;
+                generate_selector_caller_body!(b, dispatch_dt, dispatch_registry;
                     caller_return_type=return_type, mod=mod, type_registry=type_registry)
             end
         else
