@@ -56,7 +56,7 @@ done
 echo "gate: run $id  $(api gh run view "$id" --json url --jq .url)"
 # the fast job's names (the ratchet and the smokes, gate.yml's `fast` matrix): its verdict prints
 # as soon as every one of them is done
-fastjob='^(ratchet|smoke [0-9]+/[0-9]+|smoke-1\.13 [0-9]+/[0-9]+)$'
+fastjob='^(ratchet|smoke [0-9]+/[0-9]+|smoke-1\\.13 [0-9]+/[0-9]+)$'
 fast_said=0
 # the run is done when the API says completed: a dropped connection is retried, and a run whose
 # status the API will not give after the retries has no verdict

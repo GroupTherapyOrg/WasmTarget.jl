@@ -197,6 +197,10 @@ jobs:
           P: ${{ matrix.target.os == 'macos-latest' && '2' || '4' }}
         run: |
           python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)' 2>/dev/null || true
+          # Pkg.test's environment installed and precompiled once, by its shortest phase, before
+          # the P processes share it (on Windows, concurrent installs of one package collided:
+          # "readdir(...\packages\FastPower\...): no such file or directory")
+          WT_SHARD= WT_FUZZ= WT_PHASE='Phase 10: JavaScript Imports' julia --project=. -e 'using Pkg; Pkg.test()' > /dev/null
           d=$(mktemp -d); r=0; pids=()
           for k in $(seq 0 $((P - 1))); do
             if [ -n "$WT_SHARD" ]; then
@@ -207,8 +211,10 @@ jobs:
               WT_SHARD= WT_FUZZ=1 WT_FUZZ_PART="$((i * P + k))/$((n * P))" julia --project=. -e 'using Pkg; Pkg.test()' > "$d/p$k.log" 2>&1 & pids+=($!)
             fi
           done
+          # every process's lines as they come, so a hung one names itself before the timeout
+          tail -n +1 -F "$d"/p*.log 2>/dev/null & tailer=$!
           for k in "${!pids[@]}"; do wait "${pids[$k]}" || { r=1; echo "process $k FAILED"; }; done
-          for k in $(seq 0 $((P - 1))); do echo "── process $k of $P"; cat "$d/p$k.log"; done
+          kill "$tailer" 2>/dev/null || true
           exit $r
 
       # one job per platform and version publishes Pkg.test's depot when it compiled a dependency

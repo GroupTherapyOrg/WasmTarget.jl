@@ -25,7 +25,8 @@ name: Gate
 # Each split lane runs its part as P concurrent processes (`--procs`), one per core of the
 # runner (one lane process kept one of four busy).
 #
-# The parts are sized from measured job times. The budget B = 20 minutes per lane job (L162;
+# The parts are sized from measured job times: the fast job's smoke in N = 6 and M = 5 parts
+# (smoke and smoke-1.13), each as P = 4 processes. The budget B = 20 minutes per lane job (L162;
 # Dale 2026-10-09, the gate "~15-20 min"), B_fast = 9 minutes per fast job (L163): each job's
 # timeout, so a slow lane and a hung one are cut and red and fail-fast cancels the rest;
 # dev/gate.sh reads both here and names a job past its budget. B is lowered, never raised: a lane
@@ -223,9 +224,12 @@ jobs:
       matrix:
         include:
           - { lane: probes, part: '', procs: '' }
-          - { lane: fuzz, part: '0/3', procs: '4' }
-          - { lane: fuzz, part: '1/3', procs: '4' }
-          - { lane: fuzz, part: '2/3', procs: '4' }
+          - { lane: fuzz, part: '0/6', procs: '2' }
+          - { lane: fuzz, part: '1/6', procs: '2' }
+          - { lane: fuzz, part: '2/6', procs: '2' }
+          - { lane: fuzz, part: '3/6', procs: '2' }
+          - { lane: fuzz, part: '4/6', procs: '2' }
+          - { lane: fuzz, part: '5/6', procs: '2' }
           - { lane: suite, part: '0/4', procs: '4' }
           - { lane: suite, part: '1/4', procs: '4' }
           - { lane: suite, part: '2/4', procs: '4' }

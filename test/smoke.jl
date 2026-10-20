@@ -12,7 +12,7 @@
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
 # Part:   WT_SMOKE_PART=i/N julia --project=. test/smoke.jl  # one of N parts (i in 0..N-1)
 # Times:  WT_SMOKE_TIMES=1 also prints each group's wall seconds and the package load's, the
-#         numbers dev/gate.sh --fast's part counts are sized from (.github/workflows/gate-fast.yml)
+#         numbers dev/gate.sh --fast's part counts are sized from (.github/workflows/gate.yml's fast job)
 # ============================================================================
 const SMOKE_T_START = time()
 using WasmTarget

@@ -52,7 +52,7 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 | lowering-registry coverage | `julia --project=. test/registry_coverage.jl` |
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
-| full gate | CI on every `march/**` push; `bash dev/land.sh merge <branch>` lands only on green |
+| landing | `bash dev/land.sh merge <branch>`: only on the green gate run of its exact head |
 
 A batch is pushed only after the full gate is green: `bash dev/gate.sh` (gate.yml, L153, L162).
 A pure restructuring is byte-identical on the probes; a semantic change

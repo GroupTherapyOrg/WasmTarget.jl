@@ -2,7 +2,7 @@ name: Emission base
 # The emission-diff check's base file (dev/emission_diff.sh, L190) for a merge base no full gate
 # published: `bash dev/emission_diff.sh bootstrap` pushes a commit to emission-base/<name>, and
 # this compiles every smoke case with the merge base's src and the pushed commit's tests, in K = 10
-# parts, and publishes the file under its key (90 days). gate-fast.yml and gate.yml then read it.
+# parts, and publishes the file under its key (90 days). gate.yml's runs then read it.
 on:
   push:
     branches: ['emission-base/**']

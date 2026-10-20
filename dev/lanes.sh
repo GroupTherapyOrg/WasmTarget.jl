@@ -38,6 +38,7 @@
 # JULIA= override each print FAIL and turn the gate red.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+exec 3>&1   # the script's own stdout, which a lane's captured output bypasses (parts)
 JULIA="${JULIA:-julia}"
 fast=0; export TLC_FAST=1; only=""; part=""; merge=0; procs=1
 while [ $# -gt 0 ]; do
@@ -100,14 +101,22 @@ fi
 # the whole Pkg.test suite as concurrent shards, two (WT_SHARD=0,2 and 1,2) or the one
 # --part i/N names (WT_SHARD=i,N); all must pass
 shards="0,2 1,2"; [ "$only" = suite ] && [ -n "$part" ] && shards=$(for k in $(seq 0 $((procs - 1))); do printf '%s ' "$((pi * procs + k)),$((pn * procs))"; done)
+# Pkg.test's environment installed and precompiled once, by its shortest phase, before concurrent
+# Pkg.test processes share it (two processes installing one package collided: "Error when
+# installing package RecursiveArrayTools", gate run 39506747606)
+test_env() { WT_PHASE='Phase 10: JavaScript Imports' $JULIA --project=. -e 'using Pkg; Pkg.test()' > "$1" 2>&1 || { cat "$1"; return 1; }; }
 suite() {
   local d s r=0 p pids=(); d=$(mktemp -d)
+  test_env "$d/env.log" || return 1
   for s in $shards; do
     WT_VALIDATE=1 WT_SHARD="$s" $JULIA --project=. -e 'using Pkg; Pkg.test()' > "$d/shard$s.log" 2>&1 &
     pids+=($!)
   done
+  local tailer=""   # under --lane, every shard's lines as they come (parts)
+  if [ -n "$only" ]; then tail -n +1 -F "$d"/shard*.log >&3 2>/dev/null & tailer=$!; fi
   for p in "${pids[@]}"; do wait "$p" || r=1; done
-  report "$d"/shard*.log
+  [ -z "$tailer" ] || kill "$tailer" 2>/dev/null
+  [ -n "$only" ] || report "$d"/shard*.log
   if [ $r -eq 0 ]; then echo "suite: shards $shards passed"; return 0; fi
   return 1
 }
@@ -116,19 +125,24 @@ suite() {
 parts() {
   local var=$1; shift
   [ "$procs" -gt 1 ] || { "$@"; return; }
-  local d k r=0 pids=(); d=$(mktemp -d)
+  local d k r=0 pids=() tailer; d=$(mktemp -d)
   for k in $(seq 0 $((procs - 1))); do
     env "$var=$((pi * procs + k))/$((pn * procs))" "$@" > "$d/part$k.log" 2>&1 &
     pids+=($!)
   done
+  # under --lane (a CI job's log) every process's lines as they come, so a hung part names
+  # itself before the job's timeout cuts it (the lane's own output is held until it ends)
+  if [ -n "$only" ]; then tail -n +1 -F "$d"/part*.log >&3 2>/dev/null & tailer=$!; fi
   for k in "${!pids[@]}"; do wait "${pids[$k]}" || { r=1; echo "part $((pi * procs + k))/$((pn * procs)) FAILED"; }; done
-  for k in $(seq 0 $((procs - 1))); do echo "── part $((pi * procs + k))/$((pn * procs))"; cat "$d/part$k.log"; done
+  [ -z "${tailer:-}" ] || kill "$tailer" 2>/dev/null
+  [ -n "$only" ] || for k in $(seq 0 $((procs - 1))); do echo "── part $((pi * procs + k))/$((pn * procs))"; cat "$d/part$k.log"; done
   [ $r -eq 0 ] && echo "parts $((pi * procs))..$((pi * procs + procs - 1)) of $((pn * procs)) passed"
   return $r
 }
 fuzz() {  # CI's fuzz pass, or the part of it --part names (WT_FUZZ_PART)
   local d; d=$(mktemp -d)
   local r=0
+  [ "$procs" -eq 1 ] || test_env "$d/env.log" || return 1
   parts WT_FUZZ_PART env WT_VALIDATE=1 WT_FUZZ=1 $JULIA --project=. -e 'using Pkg; Pkg.test()' > "$d/fuzz.log" 2>&1 || r=1
   report "$d/fuzz.log"
   if [ $r -eq 0 ]; then echo "fuzz: the fuzz pass${WT_FUZZ_PART:+ part $WT_FUZZ_PART} passed"; return 0; fi
