@@ -754,7 +754,7 @@ parity(pkg/vm/lib/transformations/type_flow/native_code.dart:116 PragmaEntryPoin
 const LOWERING_INSTANTIATED_CLASSES = (ErrorException, ArgumentError, OverflowError, DivideError,
                                        StackOverflowError, OutOfMemoryError, BoundsError, TypeError,
                                        DomainError, InexactError, KeyError, MethodError,
-                                       AssertionError, UndefVarError, FieldError, String)
+                                       AssertionError, UndefVarError, UndefRefError, FieldError, String)
 
 """
 The classes a value of the closed world may have, one set (closed_world_classes): every concrete

@@ -381,6 +381,26 @@ end
     end
 end
 
+# memoryrefget, memoryrefset! and isassigned read their element type from the reference's own
+# type (memoryref_eltype): an operand whose type is no MemoryRef DataType has none to decide its
+# slot's storage and `#undef` by, so each rejects at its statement (memoryrefget and memoryrefset!
+# guessed an Int32 element, then the statement's type, compiling where they could not know it)
+module DiagErasedRef
+er_get(r) = Core.memoryrefget(r, :not_atomic, true) === 1 ? 1 : 2
+er_set(r) = (Core.memoryrefset!(r, 1, :not_atomic, true); 1)
+er_isa(r) = Core.memoryref_isassigned(r, :not_atomic, true) ? 1 : 2
+end
+@testset "diagnostics: a memory reference whose type is no MemoryRef rejects at its statement" begin
+    for (f, what) in ((DiagErasedRef.er_get, "memoryrefget of a Any"),
+                      (DiagErasedRef.er_set, "memoryrefset! of a Any"),
+                      (DiagErasedRef.er_isa, "isassigned of a Any"))
+        err = try WasmTarget.compile(f, (Any,)); nothing catch e; e end
+        @test err isa WasmTarget.WasmCompileError
+        msg = sprint(showerror, err)
+        @test occursin(what, msg) && occursin("known only at run time", msg) && occursin("statement %1", msg)
+    end
+end
+
 # Each edge kind of the closed world (_closed_world_edge) enrolls its target by its own
 # statement, with its kind's reason: with the kind gone from the enumerator, Julia's queue may
 # still collect the target, but nothing names the statement that needs it. A finalizer's

@@ -57,6 +57,7 @@
 17.7	24.1	memory
 0.4	0.4	memory_length
 14.9	11.6	memoryref_array_offset
+1.0	1.0	memoryref_barrier
 10.9	6.2	memoryref_erased
 4.4	3.4	memoryref_field
 4.9	4.6	memoryref_offset
@@ -97,6 +98,7 @@
 20.0	15.0	type_object_kinds
 10.2	8.6	type_object_rows
 5.0	6.1	typeassert_checks
+6.9	6.7	undef_slots
 11.1	13.1	union_fields
 16.0	19.2	union_nothing
 1.4	1.2	union_register

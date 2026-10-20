@@ -1998,6 +1998,65 @@ _g("selector_nothing", Any[
     ("erased_nothing_dispatch_caller", (n::Int64) -> (v = Any[n, 2.5, "a", nothing, 'c', Int32(1), 0x01, true, :s, Int16(2)]; _sm_callgq(v[n])::Int64), Int64(4)),
     ("erased_nothing_three_methods", (n::Int64) -> (v = Any[n, 2.5, nothing]; _sm_gs(v[n])::Int64), Int64(3)),
 ])
+# Julia's `#undef` is NULL and `nothing` an object; WT's `nothing` is the null, so a slot that
+# holds both marks `#undef` with its undefined value: a stored `nothing` is assigned, an unset slot
+# is not, and its read throws UndefRefError (dev/AUDIT.md A17E1: isassigned and isdefined of a
+# stored `nothing` answered 2, native 1, and the read of an unset slot answered 0, native
+# UndefRefError; dev/formal/Undef.tla)
+mutable struct _SmUA; x; _SmUA() = new(); end
+mutable struct _SmUS; a::Int64; x::String; _SmUS() = new(1); end
+# the String's length out of line: an inlined `length` in a try body is 13.17's 1.13 stackifier gap
+@noinline _sm_ulen(s::String) = ncodeunits(s)
+mutable struct _SmUU; a::Int64; x::Union{Nothing,String}; _SmUU() = new(1); end
+mutable struct _SmUR; a::Int64; b; _SmUR() = new(1); end
+mutable struct _SmUD; x::Union{Nothing,String}; _SmUD(x) = new(x); end
+@noinline _sm_ua_h(x) = x === nothing ? 1 : 2
+_g("undef_slots", Any[
+    ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
+    ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
+    ("read_unset_throws", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = n; try; _sm_ua_h(v[n - 1]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("isdefined_field_nothing", (n::Int64) -> (m = _SmUA(); m.x = (n > 0 ? nothing : n); isdefined(m, :x) ? 1 : 2), Int64(3)),
+    ("isdefined_field_unset", (n::Int64) -> (m = _SmUA(); isdefined(m, :x) ? 1 : 2 + 0n), Int64(3)),
+    ("read_unset_field_throws", (n::Int64) -> (m = _SmUA(); try; _sm_ua_h(m.x); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("captured_local_nothing", (n::Int64) -> (local x; g = () -> x; x = n > 0 ? nothing : 1; g() === nothing ? 1 : 2), Int64(3)),
+    ("grown_slot_unset", (n::Int64) -> (v = Any[nothing, n]; resize!(v, 1); resize!(v, 2); (isassigned(v, 1) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("copied_unset", (n::Int64) -> (v = Vector{Any}(undef, 3); v[1] = nothing; v[3] = n; w = copy(v); (isassigned(w, 1) ? 10 : 20) + (isassigned(w, 2) ? 1 : 2)), Int64(3)),
+    # a slot whose type admits no `nothing` keeps its null as `#undef`, read checked; a
+    # Union{Nothing,S} slot is held in the any hierarchy, so `#undef` and `nothing` are two values
+    # (dev/AUDIT.md A17E1, measured on 52c0a9bd: a Vector{String} slot's unset read answered 1 or
+    # trapped, native 2 or UndefRefError; isassigned of a stored nothing in a
+    # Vector{Union{Nothing,String}} 2, native 1, and its unset read `nothing`, native
+    # UndefRefError; the same for a field `new` leaves unset; a read by a run-time name of an unset
+    # field 1, native UndefRefError; a splat `[v...]` of an unset slot read as assigned, 2, and its
+    # length 2, native UndefRefError)
+    ("ref_unset_read_throws", (n::Int64) -> (v = Vector{String}(undef, n); try; v[1]; 1; catch; 2; end), Int64(2)),
+    ("ref_unset_length_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; _sm_ulen(v[n - 2]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("ref_field_unset_throws", (n::Int64) -> (m = _SmUS(); try; _sm_ulen(m.x) + n; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("union_isassigned_nothing", (n::Int64) -> (v = Vector{Union{Nothing,String}}(undef, 2); v[1] = nothing; isassigned(v, 1) ? 1 : 2), Int64(3)),
+    ("union_unset_read_throws", (n::Int64) -> (v = Vector{Union{Nothing,String}}(undef, 2); try; v[n - 2] === nothing ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("union_values", (n::Int64) -> (v = Vector{Union{Nothing,String}}(undef, 2); v[1] = "ab"; v[2] = nothing; (v[1] === nothing ? 10 : length(v[1]::String)) + (v[2] === nothing ? 100 : 0)), Int64(3)),
+    ("union_field_isdefined_nothing", (n::Int64) -> (m = _SmUU(); m.x = (n > 0 ? nothing : "s"); isdefined(m, :x) ? 1 : 2), Int64(3)),
+    ("union_field_unset_throws", (n::Int64) -> (m = _SmUU(); try; m.x === nothing ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("union_field_value", (n::Int64) -> (m = _SmUU(); m.x = (n > 0 ? "abc" : nothing); m.x === nothing ? 0 : length(m.x::String)), Int64(3)),
+    # an isbits union is inline in Julia, never `#undef`: its box's null is `nothing`, read as it is
+    ("inline_union_isassigned", (n::Int64) -> (v = Union{Nothing,Int64}[nothing, n]; (isassigned(v, 1) ? 10 : 20) + (v[1] === nothing ? 1 : 2)), Int64(3)),
+    ("splat_any_unset_throws", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; try; isassigned([v...], 1) ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("splat_union_unset_throws", (n::Int64) -> (v = Vector{Union{Nothing,String}}(undef, 2); v[2] = "a"; try; isassigned([v...], 1) ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("splat_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; length([v...]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("splat_assigned", (n::Int64) -> (v = Any[nothing, n]; w = [v...]; (isassigned(w, 1) ? 10 : 20) + (w[2] === n ? 1 : 2)), Int64(3)),
+    # a field `new` always sets is defined, its null `nothing` (isdefined_tfunc, jl_f_isdefined)
+    ("union_field_set_isdefined", (n::Int64) -> (m = _SmUD(n > 0 ? nothing : "a"); isdefined(m, :x) ? 1 : 2), Int64(3)),
+    ("runtime_name_unset_throws", (n::Int64) -> (m = _SmUR(); s = n > 0 ? :b : :a; try; getfield(m, s); 1; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+])
+# A MemoryRef passed through `inferencebarrier`: memoryrefget and memoryrefset! read the element
+# type from the reference's own type (memoryref_eltype, never a guessed Int32 element, A17E1), and
+# an Int64 element read into a statement typed Any is boxed under its own class (measured on
+# 52c0a9bd: a WasmInternalError, the box with no source type; native 1)
+_g("memoryref_barrier", Any[
+    ("memoryrefget_erased_any", (n::Int64) -> (v = Any[n, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefget(r, :not_atomic, true) === n ? 1 : 2), Int64(3)),
+    ("memoryrefget_erased_int", (n::Int64) -> (v = [n, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefget(r, :not_atomic, true) === n ? 1 : 2), Int64(3)),
+    ("memoryrefset_erased_any", (n::Int64) -> (v = Any[1, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefset!(r, n, :not_atomic, true); v[1] === n ? 1 : 2), Int64(3)),
+])
 # A primitive type wider than any register (a 128-bit one that is no Int128) has no
 # representation: it rejects at its statement (dev/AUDIT.md A16B5: an unlocated error)
 primitive type _SmP128 128 end

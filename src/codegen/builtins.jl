@@ -427,6 +427,17 @@ function memoryref_memory_type(@nospecialize(T))::Type
 end
 
 """
+    memoryref_eltype(T) -> Union{Type,Nothing}
+
+The element type of a MemoryRef of type `T` (`GenericMemoryRef{a,E,s}`'s `E`), or `nothing` for a
+type that is no MemoryRef DataType (an erased or abstract operand), whose element type, and with
+it its slot's storage and `#undef`, is known only at run time.
+parity(quarantine: Julia's GenericMemoryRef is an (array, index) pair; dart has no interior array reference.)
+"""
+memoryref_eltype(@nospecialize(T))::Union{Type,Nothing} =
+    (T isa DataType && T <: Core.GenericMemoryRef) ? T.parameters[2] : nothing
+
+"""
     emit_memoryref_offset!(b, ctx, ref) -> b
 
 Push the i32 element offset off0 = memoryrefoffset - 1 of MemoryRef operand `ref`. An
@@ -920,29 +931,33 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
 end
 
 # `memoryref_isassigned(ref, ordering, boundscheck)`: inline/packed element
-# arrays have no undefined representation and are always assigned. Reference
-# arrays encode Julia's undefined slot as null and require an actual load.
+# arrays have no undefined representation and are always assigned. A reference
+# slot's undefined state is the undefined value where the slot holds `nothing` too
+# (undef_slot, undef.jl), else its null, and requires an actual load.
 # parity(quarantine: Julia's `Core.memoryref_isassigned` on a GenericMemoryRef — an undefined
-# reference slot is null; dart's WasmArray has no undefined-slot query.)
+# reference slot is NULL in Julia; dart's WasmArray has no undefined-slot query.)
 function _lower_memoryref_isassigned!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, InstrBuilder}
     isempty(args) && return nothing
     ref_arg = args[1]
     ref_type = value_type(ctx, ref_arg)
-    elem_type = if ref_type isa DataType && ref_type.name.name === :GenericMemoryRef
-        ref_type.parameters[2]
-    elseif ref_type isa DataType && ref_type.name.name === :MemoryRef
-        ref_type.parameters[1]
-    else
-        Any
+    elem_type = memoryref_eltype(ref_type)
+    if elem_type === nothing
+        # a reference whose element type is no static fact: no slot type to test `#undef` by
+        emit_unsupported_stub!(ctx, fb, :unsupported_type,
+            "isassigned of a $(ref_type): its element type, which decides how its `#undef` is held, is known only at run time";
+            idx=idx, detail=call)
+        return append_builder!(b, fb)
     end
     array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
     arr_def = ctx.mod.types[array_type_idx + 1]
-    elem_wasm = arr_def isa ArrayType ? arr_def.elem.valtype : AnyRef
+    arr_def isa ArrayType || error("the array type of a Memory{$(elem_type)} is no array")
+    elem_wasm = arr_def.elem.valtype
     mib = _ctx_builder(ctx, "compile_call.memoryref_isassigned")
     emit_memoryref!(mib, ctx, ref_arg)
     if _wt_is_ref(elem_wasm)
         array_get!(mib, array_type_idx; signed=packed_array_signedness(elem_type))
-        ref_is_null!(mib); num!(mib, Opcode.I32_EQZ)
+        emit_is_unset!(mib, ctx, elem_type, elem_wasm)   # its `#undef`: the undefined value or the null
+        num!(mib, Opcode.I32_EQZ)
     else
         drop!(mib) # index
         drop!(mib) # array
@@ -961,51 +976,24 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     ref_arg = args[1]
     ref_type = value_type(ctx, ref_arg)
 
+    # the element type is the reference's own (memoryref_eltype); an operand whose type is no
+    # MemoryRef has none to read its slot's storage and `#undef` by
+    local elem_type = memoryref_eltype(ref_type)
+    if elem_type === nothing
+        emit_unsupported_stub!(ctx, fb, :unsupported_type,
+            "memoryrefget of a $(ref_type): its element type, which decides its slot's storage and `#undef`, is known only at run time";
+            idx=idx, detail=call)
+        return append_builder!(b, fb)
+    end
+
     # Nothing-typed memory — always returns nothing (i32.const 0).
     # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
-    if ref_type isa DataType && (
-        (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
-        (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
+    if elem_type === Nothing
         emit_memoryref!(fb, ctx, ref_arg)
         drop!(fb)  # drop i32_index
         drop!(fb)  # drop array_ref
         i32_const!(fb, 0)
         return append_builder!(b, fb)
-    end
-
-    # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
-    # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-    # Also handle Memory types for direct array access patterns
-    elem_type = Int32  # default
-    if ref_type isa DataType
-        if ref_type.name.name === :MemoryRef
-            elem_type = ref_type.parameters[1]
-        elseif ref_type.name.name === :GenericMemoryRef
-            # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
-            elem_type = ref_type.parameters[2]
-        elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
-            # Memory{T} - element type is first parameter
-            elem_type = ref_type.parameters[1]
-        elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
-            # GenericMemory{atomicity, T, addrspace} - element type is second parameter
-            elem_type = ref_type.parameters[2]
-        end
-    end
-
-    # Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
-    # When cross-function calls use abstract arg types (e.g., Vector instead of
-    # Vector{Any}), code_typed returns bare MemoryRef (UnionAll) instead of
-    # MemoryRef{Any} (DataType). The elem_type stays as default Int32.
-    # Fix: use the memoryrefget result's own SSA type as the element type.
-    if elem_type === Int32 && !(ref_type isa DataType)
-        ssa_result_type = get(ctx.ssa_types, idx, Any)
-        # If the SSA result type is itself a MemoryRef/array type (UnionAll),
-        # the element type is unknown — default to Any
-        if ssa_result_type isa UnionAll || ssa_result_type === Any
-            elem_type = Any
-        elseif ssa_result_type !== Int32
-            elem_type = ssa_result_type
-        end
     end
 
     # Get or create array type for this element type
@@ -1015,9 +1003,26 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     emit_memoryref!(_mrgb, ctx, ref_arg)
 
     array_get!(_mrgb, array_type_idx; signed=packed_array_signedness(elem_type))
+    # a read of an `#undef` reference slot throws UndefRefError (Julia's null_pointer_check)
+    local _mrg_def = ctx.mod.types[array_type_idx + 1]
+    _mrg_def isa ArrayType || error("the array type of a Memory{$(elem_type)} is no array")
+    _wt_is_ref(_mrg_def.elem.valtype) && emit_undef_read_check!(_mrgb, ctx, elem_type, _mrg_def.elem.valtype)
 
-    # An Any element reads as a reference; the statement's store converts it to the local's
-    # type (coerce_stack_top!, dart's convertType at the read), the SSA's IR type.
+    # The read's value is of the element type, memoryrefget's result type for the reference's
+    # own type (memoryrefget_tfunc; dart reads an array element at its element's static type,
+    # the source its convertType takes). An Any element reads as a reference, which the
+    # statement's store converts to the local's type (coerce_stack_top!). An element held in a
+    # numeric register is a primitive, the class of every value its slot holds: read into a
+    # local of any class (the statement typed wider than the element, its reference's type
+    # narrowed past Julia's, as through `inferencebarrier`), it converts here from that class,
+    # which the statement's wider type does not name.
+    local _mrg_li = get(ctx.ssa_locals, idx, nothing)
+    if !_wt_is_ref(_mrg_def.elem.valtype) && _mrg_li !== nothing &&
+       _mrg_li - ctx.n_params + 1 in eachindex(ctx.locals) && _wt_is_ref(ctx.locals[_mrg_li - ctx.n_params + 1])
+        (elem_type isa DataType && isprimitivetype(elem_type)) ||
+            error("a numeric element of $(elem_type), which is no primitive class")
+        coerce_stack_top!(_mrgb, ctx.locals[_mrg_li - ctx.n_params + 1], ctx; from_julia=elem_type)
+    end
     append_builder!(fb, _mrgb)
     return append_builder!(b, fb)
 end
@@ -1044,46 +1049,23 @@ function _lower_memoryrefset!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     value_arg = args[2]
     ref_type = value_type(ctx, ref_arg)
 
+    # the element type is the reference's own (memoryref_eltype); an operand whose type is no
+    # MemoryRef has none to store by
+    local elem_type = memoryref_eltype(ref_type)
+    if elem_type === nothing
+        emit_unsupported_stub!(ctx, fb, :unsupported_type,
+            "memoryrefset! of a $(ref_type): its element type, which decides its slot's storage, is known only at run time";
+            idx=idx, detail=call)
+        return append_builder!(b, fb)
+    end
+
     # Nothing-typed memory — storing nothing is a no-op.
     # Don't push a result — Nothing has no Wasm representation to keep on the stack.
-    if ref_type isa DataType && (
-        (ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1 && ref_type.parameters[1] === Nothing) ||
-        (ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2 && ref_type.parameters[2] === Nothing))
+    if elem_type === Nothing
         emit_memoryref!(fb, ctx, ref_arg)
         drop!(fb)  # drop i32_index
         drop!(fb)  # drop array_ref
         return append_builder!(b, fb)
-    end
-
-    # Extract element type from MemoryRef{T}, GenericMemoryRef{atomicity, T, addrspace},
-    # Memory{T}, or GenericMemory{atomicity, T, addrspace}
-    # Also handle Memory types for direct array access patterns
-    elem_type = Int32  # default
-    if ref_type isa DataType
-        if ref_type.name.name === :MemoryRef
-            elem_type = ref_type.parameters[1]
-        elseif ref_type.name.name === :GenericMemoryRef
-            # GenericMemoryRef has parameters (atomicity, element_type, addrspace)
-            elem_type = ref_type.parameters[2]
-        elseif ref_type.name.name === :Memory && length(ref_type.parameters) >= 1
-            # Memory{T} - element type is first parameter
-            elem_type = ref_type.parameters[1]
-        elseif ref_type.name.name === :GenericMemory && length(ref_type.parameters) >= 2
-            # GenericMemory{atomicity, T, addrspace} - element type is second parameter
-            elem_type = ref_type.parameters[2]
-        end
-    end
-
-    # Handle UnionAll MemoryRef types (bare MemoryRef without parameters)
-    # Same logic as memoryrefget: when ref_type is a bare UnionAll MemoryRef,
-    # infer element type from SSA result type or default to Any.
-    if elem_type === Int32 && !(ref_type isa DataType)
-        ssa_result_type = get(ctx.ssa_types, idx, Any)
-        if ssa_result_type isa UnionAll || ssa_result_type === Any
-            elem_type = Any
-        elseif ssa_result_type !== Int32
-            elem_type = ssa_result_type
-        end
     end
 
     # Get or create array type for this element type
@@ -1160,7 +1142,7 @@ function _lower_memorynew!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, 
     # `length(ref.mem)` as the capacity, so any padding here is observable.
     local _mnb = _ctx_builder(ctx, "compile_call")
     emit_memory_length!(_mnb, ctx, size_arg, mem_type)
-    array_new_default!(_mnb, arr_type_idx)
+    emit_new_slots!(_mnb, ctx, arr_type_idx, elem_type)   # an `Any` slot starts `#undef`
     append_builder!(fb, _mnb)
     return append_builder!(b, fb)
 end
@@ -1262,9 +1244,9 @@ end
 # `atomic_pointerset(p, C_NULL, order)` with `p` inside a Memory whose slots hold
 # references: Julia's `_unsetindex!` / `_deleteend!` clearing a freed slot for its GC.
 # The slot is the storage-relative byte pointer divided by Julia's element stride
-# (memory_element_stride); in a WasmGC array that slot becomes null — unset, as
-# `isassigned` then reads it. Returns `p`, as the intrinsic does. Any other stored value
-# or pointer is not lowered here.
+# (memory_element_stride); in a WasmGC array that slot becomes `#undef` again — its null, or
+# the undefined value in a slot that holds `nothing` too (undef_slot) — as `isassigned` reads
+# it. Returns `p`, as the intrinsic does. Any other stored value or pointer is not lowered here.
 # parity(sdk/lib/_internal/wasm/common/list.dart:611 GrowableList.length=): freed slots are
 # nulled with `_data.fill(newLength, length, null)`.
 function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
@@ -1288,7 +1270,8 @@ function _lower_atomic_pointerset!(b, fb, ctx, call, idx, args, callee)::Union{I
         num!(_apb, Opcode.I64_DIV_U)
     end
     narrow_length_to_i32!(_apb)
-    elem isa ConcreteRef ? ref_null!(_apb, Int64(elem.type_idx)) : ref_null!(_apb, elem)
+    # the slot is `#undef` again: the undefined value where it holds `nothing` too (undef_slot)
+    emit_undef!(_apb, ctx, T, elem)
     array_set!(_apb, arr_t)
     emit_value!(_apb, p, ctx, I64)
     append_builder!(fb, _apb)
@@ -2156,6 +2139,8 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
             local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
             struct_get!(_mb_ib, _mb_idx, UInt32(1))
+            # a read of unset contents throws UndefRefError (Julia's null_pointer_check)
+            _wt_is_ref(_mb_ft) && emit_undef_read_check!(_mb_ib, ctx, Any, _mb_ft)
             # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
             # unbox through the ONE funnel so declared and actual agree at the store.
             local _mb_jt = get(ctx.ssa_types, idx, Any)
@@ -2324,6 +2309,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         # The object arrives AS the registered struct
                         emit_value!(_sfb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                         struct_get!(_sfb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
+                        _emit_field_undef_check!(_sfb, ctx, obj_type, field_sym, field_idx, info)
                         append_builder!(fb, _sfb)
                         return append_builder!(b, fb)
                     end
@@ -2464,6 +2450,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 _sfg_layout isa StructType || error("registered getfield owner has no struct layout")
                 local _sfg_fields = _sfg_layout.fields
                 struct_get!(_sfgb, info.wasm_type_idx, _sfg_wfi)
+                _emit_field_undef_check!(_sfgb, ctx, effective_obj_type, field_sym, field_idx, info)
                 _unpack_memoryref_field_read!(_sfgb, ctx, idx)
                 append_builder!(fb, _sfgb)
                 return append_builder!(b, fb)

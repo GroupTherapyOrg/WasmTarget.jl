@@ -625,6 +625,10 @@ mutable struct TypeRegistry
     # (ensure_rng_globals!), made once per module on first use, as the egal function is
     perf_now_idx::Union{Nothing, UInt32}
     rng_globals::Union{Nothing, RNGGlobals}
+    # the module's one undefined value, Julia's `#undef` in a slot that holds `nothing` too
+    # (undef_value_global!, undef.jl), and its struct type, made once per module on first use
+    undef_global::Union{Nothing, UInt32}
+    undef_struct_idx::Union{Nothing, UInt32}
     # the types being registered right now (PendingTypes)
     pending::PendingTypes
     # the module objects codegen holds by handle (ModuleHandles)
@@ -662,6 +666,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,                                            # u128_divrem_func_idx
     nothing,                                            # perf_now_idx
     nothing,                                            # rng_globals
+    nothing, nothing,                                   # undef_global, undef_struct_idx
     PendingTypes(),                                     # types being registered
     ModuleHandles(),                                    # the module's handles
     IdDict{Type, Tuple{String,String}}()                # order keys
@@ -1977,7 +1982,8 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
     # this array again finds it pending (finish_pending!).
     local id = begin_pending!(registry, :arrays, elem_type)
     registry.arrays[elem_type] = id
-    local wasm_elem_type = get_concrete_wasm_type(elem_type, mod, registry)
+    # a pointer element that admits `nothing` is held in the any hierarchy, beside `#undef`
+    local wasm_elem_type = undef_slot_storage(elem_type, get_concrete_wasm_type(elem_type, mod, registry))
     return finish_pending!(mod, registry, id, ArrayType(FieldType(wasm_elem_type, true)))  # mutable arrays
 end
 
