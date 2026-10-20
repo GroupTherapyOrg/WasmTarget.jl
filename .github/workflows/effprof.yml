@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        what: ['smoke 3/10', 'smoke 7/10', 'phase60', 'qa', 'fuzz']
+        what: ['phase60', 'qa', 'fuzz']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,7 +35,7 @@ jobs:
         run: |
           case "${{ matrix.what }}" in
             smoke*) julia --project=. dev/effprof/prof_smoke.jl "${{ matrix.what }}" | sed 's/^/  /' | tail -40 ;;
-            phase60) WT_VALIDATE=1 WT_PHASE='Phase 60: Base.Math Coverage (WBUILD-1024)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
-            qa) WT_VALIDATE=1 WT_PHASE='Phase 63: Real Base Collections (WBUILD-2020)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
-            fuzz) WT_VALIDATE=1 WT_FUZZ=1 WT_FUZZ_PART=0/6 julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", "dev/effprof/prof_suite_hook.jl"])' 2>&1 | tail -40 ;;
+            phase60) WT_VALIDATE=1 WT_PHASE='Phase 60: Base.Math Coverage (WBUILD-1024)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", joinpath(pwd(), "dev/effprof/prof_suite_hook.jl")])' 2>&1 | grep -E "profile split|^   |suite [0-9]|Test Summary|ERROR|Error" | tail -60 ;;
+            qa) WT_VALIDATE=1 WT_PHASE='Phase 63: Real Base Collections (WBUILD-2020)' julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", joinpath(pwd(), "dev/effprof/prof_suite_hook.jl")])' 2>&1 | grep -E "profile split|^   |suite [0-9]|Test Summary|ERROR|Error" | tail -60 ;;
+            fuzz) WT_VALIDATE=1 WT_FUZZ=1 WT_FUZZ_PART=0/6 julia --project=. -e 'using Pkg; Pkg.test(; julia_args=["-L", joinpath(pwd(), "dev/effprof/prof_suite_hook.jl")])' 2>&1 | grep -E "profile split|^   |suite [0-9]|Test Summary|ERROR|Error" | tail -60 ;;
           esac
