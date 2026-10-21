@@ -1,7 +1,8 @@
 name: Formal models
 on:
   push:
-    branches: [main, 'march/**']
+    # not march/**: a landed head runs gate.yml's every TLC instance (dev/CHARTER.md C10)
+    branches: [main]
   pull_request:
   schedule:
     - cron: '17 3 * * *'   # nightly: the same harness plus dev/formal/nightly (instances too large for a 20-minute gate)

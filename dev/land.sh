@@ -4,13 +4,18 @@
 #   dev/land.sh prepare <branch> [<old-base>]
 #       worktree (durable, $WT_WORKTREES/<branch-leaf>) → rebase onto the march tip
 #       (`--onto` from <old-base> when the branch was cut from rewritten or dropped
-#       history) → strip transcript links from the rebased messages → fast lanes →
-#       push the branch, which runs the FULL CI matrix on it (ci.yml `march/**`).
+#       history) → strip transcript links from the rebased messages → the blocking gate,
+#       `bash dev/gate.sh --block`, which records its verdict for the rebased head. No push.
 #   dev/land.sh merge <branch>
-#       refuses unless every CI check on the branch head concluded success, then
-#       fast-forwards the march branch to it from the main tree and pushes.
+#       refuses unless the blocking gate's record of exactly the branch head (dev/.block/<tree>.toml
+#       in one of the repository's worktrees) is green, of that commit, and made on a clean tree,
+#       and the main tree is clean; then fast-forwards the march branch to it from the main tree,
+#       pushes it, and pushes the head to march/<branch-leaf>, where gate.yml runs the full matrix
+#       on it, non-blocking (its red is the next batch's first item).
 #
-# The full gate is CI on the exact head that lands; a local full Pkg.test is optional.
+# The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
+# holds a landing. The one final full gate before PR #122 merges is `bash dev/gate.sh` on the
+# exact merge head.
 set -euo pipefail
 MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
 MAIN=$(git rev-parse --show-toplevel)
@@ -57,20 +62,30 @@ prepare)
             { echo "$(git log -1 --format='%h %s' "$h") has no Charter: trailer — rerun with CHARTER=\"C<n> …\""; exit 1; }
     done
     git log --oneline "$tip..$br" | cat
-    bash dev/lanes.sh --fast
-    git push -q --force-with-lease origin "$br"
-    echo "pushed $br @ $(git rev-parse --short HEAD) — CI: gh run list --branch $br"
+    bash dev/gate.sh --block
+    echo "prepared $br @ $(git rev-parse --short HEAD): dev/land.sh merge $br lands it"
     ;;
 merge)
-    head=$(git -C "$MAIN" rev-parse "origin/$br")
-    states=$(gh api "repos/{owner}/{repo}/commits/$head/check-runs?per_page=100" \
-        --jq '[.check_runs[] | select(.name | test("downstream") | not) | .conclusion // "pending"] | unique | join(",")')
-    [ "$states" = "success" ] || { echo "CI on $br @ ${head:0:8} is '$states', not success — refusing"; exit 1; }
+    head=$(git -C "$MAIN" rev-parse --verify -q "$br^{commit}") || { echo "no branch $br — refusing"; exit 1; }
+    tree=$(git -C "$MAIN" rev-parse "$head^{tree}")
+    # the blocking gate's record of exactly this commit (dev/block.jl writes it in the worktree it
+    # ran in): green, of this head, made on a clean tree
+    rec=""
+    for w in $(git -C "$MAIN" worktree list --porcelain | sed -n 's/^worktree //p'); do
+        if [ -f "$w/dev/.block/$tree.toml" ] && grep -qx "head = \"$head\"" "$w/dev/.block/$tree.toml"; then rec="$w/dev/.block/$tree.toml"; break; fi
+    done
+    [ -n "$rec" ] || { echo "no blocking-gate record of $br @ ${head:0:8}: run \`bash dev/gate.sh --block\` on it — refusing"; exit 1; }
+    grep -qx 'clean = true' "$rec" || { echo "$rec was made on a tree with uncommitted changes — refusing"; exit 1; }
+    grep -qx 'verdict = "green"' "$rec" || { echo "$rec is not green — refusing"; grep -A8 '^failures' "$rec"; exit 1; }
+    echo "the blocking gate's record of $br @ ${head:0:8}: green ($rec)"
     cd "$MAIN"
     [ "$(git rev-parse --abbrev-ref HEAD)" = "$MARCH" ] || { echo "main tree is not on $MARCH"; exit 1; }
+    [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "main tree has uncommitted changes — refusing"; exit 1; }
     git merge --ff-only "$head"
     git push -q origin "$MARCH"
-    echo "landed $br @ ${head:0:8} on $MARCH"
+    # the full matrix on the landed head, non-blocking (gate.yml runs on march/**)
+    git push -q --force origin "$head:refs/heads/march/$leaf"
+    echo "landed $br @ ${head:0:8} on $MARCH; the full matrix: gh run list --branch march/$leaf"
     ;;
 *) echo "unknown command $cmd"; exit 1 ;;
 esac

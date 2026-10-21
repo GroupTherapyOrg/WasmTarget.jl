@@ -34,6 +34,11 @@ const BASELINE_PATH = joinpath(ROOT, "dev", "parity_baseline.toml")
 
 _iscomment(line::AbstractString) = startswith(lstrip(line), "#")
 
+# Each file is read once per run: the locks read the tree as it is when the run starts, and ~200
+# of them walking src/ line by line read every file ~40 times (the gate's budget, L194).
+const _LINES = Dict{String,Vector{String}}()
+_file_lines(path::AbstractString)::Vector{String} = get!(() -> readlines(path), _LINES, String(path))
+
 # Minimal reader for the baseline's `[section]` / `key = int` shape (TOML-compatible subset).
 function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
     out = Dict{String,Dict{String,Int}}()
@@ -89,7 +94,7 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
             # Windows: normalize separators so "codegen/values.jl" excludes match D:\...\codegen\values.jl
             _npath = replace(path, '\\' => '/')
             any(x -> endswith(_npath, x), exclude_files) && continue
-            for line in eachline(path)
+            for line in _file_lines(path)
                 _iscomment(line) && continue
                 occursin(rx, line) || continue
                 exclude_line !== nothing && occursin(exclude_line, line) && continue
@@ -109,7 +114,7 @@ function count_lines_all(rx::Regex; roots=[SRC])
     for root in roots
         for (dir, _, files) in walkdir(root), f in files
             endswith(f, ".jl") || continue
-            for line in eachline(joinpath(dir, f))
+            for line in _file_lines(joinpath(dir, f))
                 occursin(rx, line) && (n += 1)
             end
         end
@@ -2236,7 +2241,7 @@ const LOCKS = [
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
                 recent = String[]
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     if occursin(r"unreachable!\(", line) && !occursin("function unreachable!", line) &&
                        !startswith(lstrip(line), "#") &&
                        !occursin("structural trap", line) &&
@@ -2313,7 +2318,7 @@ const LOCKS = [
             n = 0
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     _iscomment(line) && continue
                     any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
                     occursin("table residue", line) || (n += 1)
@@ -2413,7 +2418,7 @@ const LOCKS = [
             n = 0
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     _iscomment(line) && continue
                     occursin(walk, line) || continue
                     any(b -> occursin(b, line), benign) && continue
@@ -2654,7 +2659,7 @@ const LOCKS = [
             for (dir, _, fs) in walkdir(SRC), f in fs
                 endswith(f, ".jl") || continue
                 local enclosing = ""
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local d = match(r"^function\s+([^\s(]+)\(", line)
                     d === nothing || (enclosing = d.captures[1])
                     (_iscomment(line) || d !== nothing) && continue
@@ -2772,7 +2777,7 @@ const LOCKS = [
                  occursin("@test calls[] == 0", oip) && occursin("@test queries[] == 0", oip) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the gate before a push runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, so CI confirms rather than discovers (CI's 1.13 suite and its three platforms stay CI's, and so, for `dev/lanes.sh` without `--all`, do the deep TLC instances, which gate.yml runs): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first, batch 111's 1.13 failure having surfaced at minute 29 of a serial run) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13, and AGENTS.md makes a push wait for its run on CI's runners, `bash dev/gate.sh` (the script reproduces it locally). No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the gate red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed the gate on Node 25 and trapped on CI's Node 22) (until A12P6 the first two and the missing java passed green). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml (dev/gate.sh) is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast (the first red job cancels the rest, as the script stops), every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered only by a gate/** push or workflow_dispatch, ci.yml and formal.yml never by a gate/** push (their push triggers are exactly `branches: [main, 'march/**']`, no branches-ignore) (Dale 2026-10-09: the gate off the local machine). Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (runtime-length flat function composition), and the batch stacked on it was lost with it (2026-10-07; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, on every landed head, never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** or march/** push or workflow_dispatch: `dev/land.sh merge` pushes the head it lands to march/<branch> (so every landed head gets the run), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #122 merges); ci.yml and formal.yml never run on a march/** or gate/** push (their push triggers are exactly `branches: [main]`, no branches-ignore; the pull request runs them), so a march/** push runs the full matrix alone; AGENTS.md says so. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
@@ -2796,7 +2801,7 @@ const LOCKS = [
             local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
             local pinned_push = map(("ci.yml", "formal.yml")) do f
                 local c = _code(joinpath(wf, f))
-                occursin("\non:\n  push:\n    branches: [main, 'march/**']\n", c) &&
+                occursin("\non:\n  push:\n    branches: [main]\n", c) && !occursin("march/", c) && !occursin("gate/", c) &&
                     count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) &&
                     !occursin(r"^on:[ \t]*\S"m, c)
             end
@@ -2805,7 +2810,9 @@ const LOCKS = [
                       occursin(raw"  for s in $shards; do" * "\n" * raw"    WT_VALIDATE=1 WT_SHARD=\"$s\" $JULIA --project=. -e 'using Pkg; Pkg.test()' > \"$d/shard$s.log\" 2>&1 &", lanes),
                       occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
                       occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
-                      occursin("A batch is pushed only after the full gate is green: `bash dev/gate.sh` (gate.yml, L153, L162).", replace(agents, r"\s+" => " ")),
+                      occursin("the full matrix then runs on it (gate.yml on `march/**`), and on PR #122's merge head as the final gate", replace(agents, r"\s+" => " ")),
+                      # every landed head gets the run: the landing pushes it to march/<branch>
+                      occursin(raw"    git push -q --force origin \"$head:refs/heads/march/$leaf\"", read(joinpath(ROOT, "dev", "land.sh"), String)),
                       # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
                       occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
                       occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
@@ -2875,11 +2882,11 @@ const LOCKS = [
                            occursin("          bash dev/lanes.sh --lane coverage --merge\n", gate) &&
                            occursin(raw"  export WT_COVERAGE_MERGE=1 WT_COVERAGE_DIR=\"$PWD/coverage-parts\"", lanes) &&
                            occursin(raw"    coverage) export WT_COVERAGE_PART=\"$part\" WT_COVERAGE_DIR=\"$PWD/coverage-parts\" ;;", lanes)),
-                      # ... and only on gate/**, where ci.yml and formal.yml never run
-                      occursin("\non:\n  push:\n    branches: ['gate/**']\n  workflow_dispatch:\n\n", gate) &&
+                      # ... and on gate/** and march/**, where ci.yml and formal.yml never run
+                      occursin("\non:\n  push:\n    branches: ['gate/**', 'march/**']\n  workflow_dispatch:\n\n", gate) &&
                           !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
-                      # ci.yml's and formal.yml's push triggers are exactly main and march/** (no
-                      # branches-ignore, no unfiltered or inline push), so no gate/** push runs them
+                      # ci.yml's and formal.yml's push triggers are exactly main (no march/** or
+                      # gate/**, no branches-ignore, no unfiltered or inline push)
                       pinned_push...])
         end),
     "L155_exception_handling_is_dart_legacy" => ("Exception handling is dart's legacy form: no try_table, throw_ref, catch_all, catch_ref or delegate, as a constructor or opcode in src. Every region opens with try_legacy!, whose outputs are the tag's payload, and closes with catch_legacy! on the exception tag, held by handle. Every printed probe module holds no `try_table`, `throw_ref`, `delegate` or `catch_all`. dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy; try_table exists only in wasm_builder), and its try runs with a concrete-reference result on CI's engine, V8 12.4 in Node 22, where a try_table with one traps (batch 108). The source half counts each such name outside a comment in src, a try_legacy! or catch_legacy! call in codegen beyond the region's one each, and the region's opener, its catch and the tag's payload as written (stackified.jl, generate.jl ensure_exception_tag!); the behavior half is test/probe_bytes.jl, which prints every probe's module with wasm-tools and fails on any of the four, required here as written (dev/MARCH.md 13.17 A13E7; dev/CHARTER.md C5)",
@@ -3148,7 +3155,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             count(((text, needle),) -> !occursin(needle, text), required) +
                 length(collect(eachmatch(r"both error|nstat === :throw && wstat === :ok|wstat === :trap", prop)))
         end),
-    "L162_the_gate_has_a_budget" => ("the gate gives its verdict in minutes: every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each, L153) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest; coverage-merge's timeout is at most 10 minutes and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's gate sentence names `bash dev/gate.sh`. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; the commit that set B names them; run 37930172953 (fuzz 1/4 1148 s) forced the fuzz parts' re-dealing and run 37943322602 (cold caches, cut at the budget) the 6 suite shards and 5 fuzz parts; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"; until batch 114 a lane job could run 45 minutes and the serial local run took 56; dev/CHARTER.md C10)",
+    "L162_the_gate_has_a_budget" => ("the full matrix gives its verdict in minutes, though it never holds a landing (L153): every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest; coverage-merge's timeout is at most 10 minutes and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's enforcement table names `bash dev/gate.sh` as the full matrix, non-blocking. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"; dev/CHARTER.md C10)",
         () -> begin
             local gate = read(joinpath(ROOT, ".github", "workflows", "gate.yml"), String)
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
@@ -3159,12 +3166,12 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             count(!, [lane_t == [20],
                       length(merge_t) == 1 && merge_t[1] <= 10,
                       length(collect(eachmatch(r"timeout-minutes:", gate))) == 2,
-                      occursin("A batch is pushed only after the full gate is green: `bash dev/gate.sh`", agents),
+                      occursin("| the full matrix, CI, non-blocking | `bash dev/gate.sh` (L153, L162)", agents),
                       occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
         end),
-    "L163_the_fast_lane" => ("the inner loop on CI's runners: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and the full gate (gate.yml, L153, L162) stays the push gate. gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; AGENTS.md's enforcement table has its row, `bash dev/gate.sh --fast` as ratchet + both smokes on CI's runners, the inner loop, not the push gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups, each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
+    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/land.sh calls neither it nor `dev/lanes.sh --fast` (a landing's gate is `bash dev/gate.sh --block`, L194). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups, each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             local wf = joinpath(ROOT, ".github", "workflows")
@@ -3205,7 +3212,9 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             # gate.sh --fast pushes to gate-fast/ and never to gate/
             v += occursin("[ \$fast -eq 0 ] || { prefix=gate-fast; workflow=\"Gate fast\"; verdict=FAST; }", sh) &&
                  occursin("name=\$prefix/\${name//\\//-}", sh) ? 0 : 1
-            v += occursin("| the inner loop, not the push gate: ratchet + both smokes on CI | `bash dev/gate.sh --fast` L163 |", agents) ? 0 : 1
+            v += occursin("#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to", sh) ? 0 : 1
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            v += occursin("--fast", land) ? 1 : 0
             # the smoke dealing's durations: exactly the groups, each measured on both versions
             local smk_src = read(joinpath(ROOT, "test", "smoke.jl"), String)
             local want = Set{String}(m[1] == "g" ? m[2] : "xfail " * m[2]
@@ -3220,6 +3229,112 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
             v
         end),
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl, those also on `julia +1.13`; the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12 and the probes through `WT_BLOCK_RUNNER` when it names a warm session's runner (one after another), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`). dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, each a hard limit (L195 scales them by the machine's measured speed); a changed file under src/ or ext/ with no row in test/block_groups.tsv fails the gate, and every src file has one; every group the file names is a smoke group or xfail group and every probe a corpus probe; a selection naming no group or probe fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, run_tlc.sh's `no instance`), never a green run of nothing. The evidence record dev/.block/<tree>.toml (git-ignored) is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of exactly that commit, green, made on a clean tree, from a clean main tree, and reads no CI check (dev/CHARTER.md C10)",
+        () -> begin
+            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
+            local corpus = read(joinpath(ROOT, "test", "probe_corpus.jl"), String)
+            local tlc = read(joinpath(ROOT, "dev", "formal", "run_tlc.sh"), String)
+            local v = 0
+            v += occursin("if [ \"\${1:-}\" = --block ]; then shift; exec julia --startup-file=no dev/block.jl \"\$@\"; fi", sh) ? 0 : 1
+            # every stage, started side by side
+            for line in [raw"    ld = launch!(Stage(\"load\", `$jl --project=. -e 'using WasmTarget; print(VERSION)'`, logf(\"load\")))",
+                         raw"    rat = launch!(Stage(\"ratchet\", `$jl -O0 --project=. test/parity_ratchet.jl`, logf(\"ratchet\")))",
+                         raw"        launch!(Stage(\"smoke-core\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $core`, smokeenv), logf(\"smoke-core\")))",
+                         raw"            launch!(Stage(\"smoke-batch\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $batch`, smokeenv), logf(\"smoke-batch\")))",
+                         raw"        launch!(Stage(\"smoke-1.13\", setenv(`julia +1.13 --startup-file=no --project=. -L dev/block_jit.jl test/smoke.jl $newgroups`, smokeenv), logf(\"smoke-1.13\")))",
+                         raw"    probe_env(c) = merge(ENV, Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
+                         raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, merge(ENV, Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
+                         raw"    smokeenv = merge(ENV, Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
+                         raw"    batch = setdiff(unique(vcat(mapped, newgroups)), core)",
+                         raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
+                         raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups that exercise it\")",
+                         raw"    foreach(wait, tasks)"]
+                v += occursin(line, blk) ? 0 : 1
+            end
+            # the budgets: the whole run at most 60 s, every stage within it
+            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
+            local sec = match(r"(?s)\n\[budget\]\n(.*?)(?:\n\[|\z)", bt)
+            local budgets = sec === nothing ? Dict{String,Float64}() :
+                Dict(String(m[1]) => parse(Float64, m[2]) for m in eachmatch(r"^\"([a-z0-9.-]+)\" = ([0-9.]+)$"m, sec[1]))
+            local stages = ["total", "load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tlc", "case-median"]
+            v += sort(collect(keys(budgets))) == sort(stages) ? 0 : 1
+            v += get(budgets, "total", Inf) <= 60 && all(k -> get(budgets, k, Inf) <= get(budgets, "total", 0), stages) ? 0 : 1
+            v += occursin(raw"        push!(fails, \"total: $(fmt(total)) s, over the budget of $tb s ($(fmt(total / factor)) s at the machine's best speed)\")", blk) ? 0 : 1
+            v += occursin(raw"                push!(fails, \"$name: $(fmt(wall)) s, over its budget of $b s ($(fmt(scaled)) s at the machine's best speed)\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
+            # the map: every src file has a row, every group and probe exists
+            local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf)\(\"([^\"]+)\""m, smoke))
+            local cases = Set(m[1] for m in eachmatch(r"^_c\(\"([^\"]+)\""m, corpus))
+            local rows = Dict{String,Vector{String}}()
+            for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
+                (isempty(strip(l)) || startswith(l, '#')) && continue
+                local f = split(l, '\t')
+                length(f) == 2 ? (rows[String(f[1])] = filter(!=("-"), String.(split(f[2])))) : (v += 1)
+            end
+            v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
+            for (k, gs) in rows
+                v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
+            end
+            for (d, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(d, f), ROOT), '\\' => '/')
+                v += any(k -> k == rel || (endswith(k, "/") && startswith(rel, k)), keys(rows)) ? 0 : 1
+            end
+            # a selection naming nothing fails its own run
+            v += occursin("        println(\"smoke: no group named \", join(unknown, \", \"))\n        exit(1)", smoke) ? 0 : 1
+            v += occursin("isempty(unknown) || (println(\"probe_bytes: WT_PROBE_ONLY names no probe \", join(unknown, \", \")); return 1)", probe) ? 0 : 1
+            v += occursin(raw"[[ \" ${cfgs[*]} \" == *\" $o \"* ]] || { echo \"TLC_ONLY names $o, which is no instance\" >&2; exit 1; }", tlc) ? 0 : 1
+            # the record, on a clean tree only, and the landing on it alone
+            v += occursin("    if clean\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
+            v += occursin("\ndev/.block/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
+            for line in [raw"        if [ -f \"$w/dev/.block/$tree.toml\" ] && grep -qx \"head = \\\"$head\\\"\" \"$w/dev/.block/$tree.toml\"; then rec=\"$w/dev/.block/$tree.toml\"; break; fi",
+                         raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
+                         raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec is not green — refusing\"; grep -A8 '^failures' \"$rec\"; exit 1; }",
+                         raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
+                         raw"    bash dev/gate.sh --block"]
+                v += occursin(line, land) ? 0 : 1
+            end
+            # no CI result read: no check run, no workflow run, no gh api call
+            v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api"i, land) ? 1 : 0
+            v
+        end),
+    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under WT_BLOCK_RUNNER, a warm session's runner, the smokes and probes it runs are budgeted and not ratcheted, their time the session's state, and load and ratchet hold bests of their own, `<stage>@warm`; a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row dev/MARCH.md has (a row the commit adds: the time is won back there); a budget exceeded only on a slower machine (within it once scaled) is recorded, not blocking. `WT_TIMING_UPDATE=1` lowers a best only from a green run on a clean tree on a quiet machine (load average at most Julia's CPU threads) and never raises one. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
+        () -> begin
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
+            local v = 0
+            v += occursin("const SLOWER_FRACTION = 0.15\nconst SLOWER_SECONDS = 0.3\n", blk) ? 0 : 1
+            v += occursin("const RATCHETED = (\"load\", \"ratchet\", \"smoke-core\", \"probes\")", blk) ? 0 : 1
+            v += occursin("        if name in RATCHETED && ok && fixed && slower(scaled, bw)", blk) ? 0 : 1
+            v += occursin("        scaled = wall / factor\n", blk) ? 0 : 1
+            v += occursin("    warm_stage(name) = !isempty(runner) && name in (\"smoke-core\", \"probes\")", blk) &&
+                 occursin("        fixed &= !warm_stage(name)", blk) ? 0 : 1
+            v += occursin("                (!haskey(best, bk) || w < best[bk]) && (best[bk] = w; push!(lowered, \"\$bk \$w\"))", blk) ? 0 : 1
+            v += occursin("        if !green\n            push!(notes, \"WT_TIMING_UPDATE: refused, the run is not green\")\n        elseif !clean", blk) ? 0 : 1
+            v += occursin("    quiet = loadavg[1] <= Sys.CPU_THREADS\n    updating && !quiet && (updating = false;", blk) ? 0 : 1
+            # a best not recorded fails the gate outside the update, which records it
+            v += occursin(raw"                push!(fails, \"$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\")", blk) ? 0 : 1
+            v += occursin(raw"                    push!(fails, \"calibration: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\"))", blk) ? 0 : 1
+            v += occursin("\n[best]\n", bt) && occursin("\n[budget]\n", bt) ? 0 : 1
+            # the decisions, run
+            local B = Module(:BlockDecisions)
+            try
+                Base.include(B, joinpath(ROOT, "dev", "block.jl"))
+                local f = (n, a...) -> Base.invokelatest(getglobal(B, n), a...)
+                v += count(!, [f(:slower, 11.6, 10.0), !f(:slower, 11.4, 10.0), !f(:slower, 1.25, 1.0), f(:slower, 1.4, 1.0),
+                               !f(:slower, 100.0, NaN), f(:machine_factor, 0.04, 0.02) == 2.0, f(:machine_factor, 0.01, 0.02) == 1.0,
+                               f(:timing_exemption, "Charter: C10\n", "| 13.4 | C1 |") == "",
+                               f(:timing_exemption, "x\nTiming: correctness fix (MARCH 13.4)\n", "| 13.4 | C1 | w |") == "correctness fix, MARCH 13.4",
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.99)", "| 13.4 | C1 |"); false; catch; true; end)])
+            catch e
+                println("    ✗ dev/block.jl does not load for its decisions: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
     "L164_one_subtype_relation" => ("one subtype relation, in the builder, as dart's isSubtypeOf lives beside its types (type.dart:236 RefType.isSubtypeOf, :733 DefType.isSubtypeOf): wasm_subtype, the heap-kind resolver, the same-top predicate and the non-null map are each defined once, in src/builder/types.jl; src/codegen defines none of the lattice names and no `_non_null` exists. Its behavior, run over src/builder alone: a defined function type is a subtype of itself, of func and of its nullable form, never of another function type, of an abstract type outside func or of a struct; a struct reaches its declared supertype; a non-null exn reference is a subtype of exnref; and test/builder_cases.jl's rows a-c (funcref is no (ref null \$sig), two function types are unrelated, an undefined type index is invalid, never a guessed struct) reject at their call (dev/AUDIT.md A3B3; dev/CHARTER.md C7)",
         () -> begin
             local names = ["wasm_subtype", "_wt_is_ref", "_wt_ref_nullable", "_wt_drop_nullable", "_wt_heap_kind",
@@ -3231,7 +3346,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
                 local rel = relpath(joinpath(dir, f), SRC)
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local m = match(def_rx, line)
                     m === nothing && continue
                     # a definition: `function name(` or a short form `name(…)::T =`
@@ -3276,7 +3391,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for (dir, _, files) in walkdir(SRC), f in files
                 endswith(f, ".jl") || continue
                 local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     _iscomment(line) && continue
                     seen[rel] = get(seen, rel, 0) + length(collect(eachmatch(r"::StorageType\b", line)))
                 end
@@ -3309,10 +3424,11 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = 0
             for (name, sigs) in expected
                 local defs = String[]
+                local rx = Regex("^(?:function\\s+)?(" * replace(name, "!" => "\\!") * "\\([^)]*\\))(?:::InstrBuilder)?\\s*(?:=|\$)")
                 for (dir, _, files) in walkdir(SRC), f in files
                     endswith(f, ".jl") || continue
-                    for line in eachline(joinpath(dir, f))
-                        local m = match(Regex("^(?:function\\s+)?(" * replace(name, "!" => "\\!") * "\\([^)]*\\))(?:::InstrBuilder)?\\s*(?:=|\$)"), line)
+                    for line in _file_lines(joinpath(dir, f))
+                        local m = match(rx, line)
                         m === nothing || push!(defs, m[1])
                     end
                 end
@@ -3415,7 +3531,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 endswith(f, ".jl") || continue
                 local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
                 local enclosing = ""
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local d = match(r"^(?:function\s+|)([A-Za-z_][A-Za-z0-9_!]*)\(.*\)(?:::[^=]+)?\s*=|^function\s+([^\s(]+)\(", line)
                     d === nothing || (enclosing = something(d.captures[1], d.captures[2]))
                     _iscomment(line) && continue
@@ -3440,7 +3556,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
                 rel == "codegen/trimcollect.jl" && continue
                 local enclosing = ""
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local d = match(r"^function\s+([^\s(]+)\(", line)
                     d === nothing || (enclosing = d.captures[1])
                     (_iscomment(line) || d !== nothing) && continue
@@ -3473,7 +3589,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for (dir, _, fs) in walkdir(CODEGEN), f in fs
                 endswith(f, ".jl") || continue
                 local enclosing = ""
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local d = match(r"^function\s+([^\s(]+)\(", line)
                     d === nothing || (enclosing = d.captures[1])
                     _iscomment(line) && continue
@@ -3490,7 +3606,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for (dir, _, fs) in walkdir(SRC), f in fs
                 endswith(f, ".jl") || continue
                 local enclosing = ""
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     local d = match(r"^function\s+([^\s(]+)\(", line)
                     d === nothing || (enclosing = d.captures[1])
                     (_iscomment(line) || d !== nothing) && continue
@@ -3815,7 +3931,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
                 endswith(f, ".jl") || continue
                 local rel = "codegen/" * relpath(joinpath(dir, f), CODEGEN)
-                for l in eachline(joinpath(dir, f))
+                for l in _file_lines(joinpath(dir, f))
                     (!_iscomment(l) && occursin(wrx, l)) || continue
                     local k = findfirst(e -> e[1] == rel && e[2] == strip(l), unused)
                     k === nothing ? (v += 1) : deleteat!(unused, k)
@@ -4066,7 +4182,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             n += occursin("include(\"overlay_reasons.jl\")", read(joinpath(ROOT, "test", "runtests.jl"), String)) ? 0 : 1
             for (d, _, fs) in walkdir(joinpath(ROOT, "ext")), f in fs
                 endswith(f, ".jl") || continue
-                for l in eachline(joinpath(d, f))
+                for l in _file_lines(joinpath(d, f))
                     occursin(r"quarantine:\s*(BLAS|LAPACK)\b", l) || continue
                     occursin(r"^# parity\(quarantine: (BLAS|LAPACK) [a-z0-9]+: ", l) || (n += 1)
                 end

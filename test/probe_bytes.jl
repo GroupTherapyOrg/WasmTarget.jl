@@ -20,6 +20,9 @@
 # Usage:
 #   julia --project=. test/probe_bytes.jl            # compare against the baseline
 #   WT_PROBE_RECORD=1 julia --project=. test/probe_bytes.jl   # rewrite the baseline
+#   WT_PROBE_ONLY="<name> ..." julia --project=. test/probe_bytes.jl   # exactly those probes (a
+#       name the corpus lacks fails the run): dev/block.jl's probe core and the batch's own probes,
+#       a baseline probe the corpus lacks still reported. A selection never records.
 #
 # On mismatch: prints every changed probe name (baseline hash vs new hash) and
 # exits 1. On a clean run: prints a one-line summary and exits 0.
@@ -46,7 +49,18 @@ function main()
     hashes = Dict{String,String}()
     non_dart_eh = String[]
     unnamed = String[]
+    local names = first.(CASES)
+    local mine = Set(names)
+    local only = split(get(ENV, "WT_PROBE_ONLY", ""))
+    if !isempty(only)
+        get(ENV, "WT_PROBE_RECORD", "") == "1" &&
+            (println("probe_bytes: WT_PROBE_ONLY records nothing: a baseline is recorded by a whole run"); return 1)
+        local unknown = filter(n -> !(n in names), only)
+        isempty(unknown) || (println("probe_bytes: WT_PROBE_ONLY names no probe ", join(unknown, ", ")); return 1)
+        intersect!(mine, only)
+    end
     for (name, (f, argtypes)) in CASES
+        name in mine || continue
         m = WasmTarget.compile_module([(f, argtypes, name)]; options=WasmTarget.options_from_env())
         bytes = WasmTarget.to_bytes(m)
         hashes[name] = bytes2hex(SHA.sha256(bytes))
@@ -101,13 +115,15 @@ function main()
         end
     end
     for name in sort(collect(keys(baseline)))
+        # a selection checks its own probes, and every baseline name the corpus lacks
+        (name in mine || !(name in names)) || continue
         if !haskey(hashes, name)
             println("  MISSING probe (in baseline, not in corpus): ", name)
             push!(changed, name)
         end
     end
 
-    println("probe_bytes: $(length(hashes)) probes, $(length(changed)) changed")
+    println("probe_bytes: $(length(hashes)) probes$(isempty(only) ? "" : " (of $(length(names)))"), $(length(changed)) changed")
     return isempty(changed) ? 0 : 1
 end
 

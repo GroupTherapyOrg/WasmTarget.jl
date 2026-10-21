@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Every lane as ONE command (AGENTS.md, "The enforcement stack"; dev/CHARTER.md C10):
 # structure → behavior (1.12 and 1.13, TLC beside) → byte identity and coverage → the suite;
-# the first red lane ends the run. The gate before a push is these lanes on CI's runners,
-# `bash dev/gate.sh` (gate.yml, one job per lane, 20 min each, L162); this script is their local
-# reproduction, whole or one lane. Measured serially here at batch 110 (AC power): ratchet 10 s,
+# the first red lane ends the run. The full matrix is these lanes on CI's runners, `bash dev/gate.sh`
+# (gate.yml, one job per lane, 20 min each, L162), on every landed head and never a landing's gate
+# (that is `bash dev/gate.sh --block`, L194); this script is their local reproduction, whole or one lane. Measured serially here at batch 110 (AC power): ratchet 10 s,
 # smoke 372 s, probes 45 s, coverage 470 s, TLC 455 s, smoke 1.13 374 s, the suite (two shards,
 # then fuzz) 1618 s: 56 min, the local reproduction's time, not the gate's.
 #
@@ -11,8 +11,8 @@
 #   JULIA="julia +1.13" bash dev/lanes.sh   # not a gate: a JULIA= run fails the gate
 #   bash dev/lanes.sh --fast     # ratchet + smoke only: the inner loop, never a push
 #
-# The default run is the gate's set of lanes (AGENTS.md, L153), which dev/gate.sh runs on CI's
-# runners: it adds the byte probes, the
+# The default run is the full matrix's set of lanes (AGENTS.md, L153), which dev/gate.sh runs on
+# CI's runners: it adds the byte probes, the
 # registry, the models, smoke on Julia 1.13 and the whole Pkg.test suite as two concurrent
 # shards (WT_SHARD=0,2 and 1,2: every family CI's shards run; two processes for this lane,
 # Dale 2026-10-07, after one process took 50 min on battery) beside CI's fuzz pass (WT_FUZZ=1, its own slice

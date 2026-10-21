@@ -64,6 +64,16 @@ if [ -n "${TLC_SHARD:-}" ]; then
   cfgs=("${shard[@]}")
   echo "  shard $si of $sn: ${#cfgs[@]} instances"
 fi
+# TLC_ONLY="<cfg> ..." checks exactly those instances (dev/block.jl: the instances of the models a
+# change touches); a name here that is no instance fails the run
+if [ -n "${TLC_ONLY:-}" ]; then
+  for o in $TLC_ONLY; do
+    [[ " ${cfgs[*]} " == *" $o "* ]] || { echo "TLC_ONLY names $o, which is no instance" >&2; exit 1; }
+  done
+  only=()
+  for c in "${cfgs[@]}"; do [[ " $TLC_ONLY " == *" $c "* ]] && only+=("$c"); done
+  cfgs=("${only[@]}")
+fi
 # TLC_LIST=1 prints the instances this run would check, one per line, and checks none (the
 # shards' partition is read from it)
 if [ "${TLC_LIST:-0}" = "1" ]; then printf '%s\n' "${cfgs[@]}"; exit 0; fi

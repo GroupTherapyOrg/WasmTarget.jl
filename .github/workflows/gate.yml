@@ -1,11 +1,15 @@
 name: Gate
-# The gate before a push, on CI's runners (AGENTS.md; dev/CHARTER.md C10): every lane of
-# `bash dev/lanes.sh`'s default run, one job each, each through `dev/lanes.sh --lane <name>
+# The full matrix on CI's runners, NON-BLOCKING (AGENTS.md; dev/CHARTER.md C10, L153): every lane
+# of `bash dev/lanes.sh`'s default run, one job each, each through `dev/lanes.sh --lane <name>
 # [--part i/N]`, so the commands are the script's: `julia` 1.12 and `julia +1.13` (juliaup, as
 # the script calls them), Node from ci.yml's node-version, wasm-tools, Java 17 for TLC. The
 # first red job cancels the rest (fail-fast), as the script stops at the first red lane.
-# `bash dev/gate.sh` pushes a commit to gate/<name> and prints the verdict; ci.yml and
-# formal.yml do not run on gate/**. The parts are sized from measured job times (each lane's
+# It runs on every landed head: `dev/land.sh merge` pushes the head it lands to march/<name>
+# (the only workflow a march/** push runs; ci.yml and formal.yml run on main and the pull
+# request), and its red is the next batch's first item, never a landing's gate (that is `bash
+# dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
+# verdict: the one final full gate before PR #122 merges is that run on the exact merge head.
+# The parts are sized from measured job times (each lane's
 # work under ~12 min on ubuntu-latest): smoke in 2 parts per version, registry coverage in 2 (and
 # a merge job for its verdict), TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
 # deals the instances round-robin, and at 5 the two largest, ExceptionStackDeep and
@@ -25,10 +29,10 @@ name: Gate
 # 5 fuzz parts. B is lowered, never raised: a lane past it is split or rebalanced first.
 on:
   push:
-    branches: ['gate/**']
+    branches: ['gate/**', 'march/**']
   workflow_dispatch:
 
-# Only the newest push per gate branch runs; a superseded run is cancelled.
+# Only the newest push per branch runs; a superseded run is cancelled.
 concurrency:
   group: gate-${{ github.ref }}
   cancel-in-progress: true

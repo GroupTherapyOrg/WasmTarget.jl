@@ -10,6 +10,9 @@
 # Run:   julia --project=. test/smoke.jl
 # Exit:  0 = all pass, 1 = any fail/error (so it is gate-able + CI-able).
 # Filter: julia --project=. test/smoke.jl boxing phi   # only matching groups
+# Exact:  WT_SMOKE_EXACT=1 julia --project=. test/smoke.jl memory phi_union   # exactly the groups (or
+#         xfail groups) named, in the order named; a name no group has fails the run (dev/block.jl
+#         selects its groups this way)
 # Part:   WT_SMOKE_PART=i/N julia --project=. test/smoke.jl  # one of N parts (i in 0..N-1)
 # Times:  WT_SMOKE_TIMES=1 also prints each group's wall seconds and the package load's, the
 #         numbers dev/gate.sh --fast's part counts are sized from (.github/workflows/gate-fast.yml)
@@ -22,7 +25,12 @@ include(joinpath(@__DIR__, "utils.jl"))
 include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first divergent statement
 
 const FILTER = lowercase.(ARGS)
-_want(group) = isempty(FILTER) || any(f -> occursin(f, lowercase(group)), FILTER)
+const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
+_want(group) = isempty(FILTER) || (EXACT ? lowercase(group) in FILTER : any(f -> occursin(f, lowercase(group)), FILTER))
+# the groups of `list` a run takes: in the file's order, or under WT_SMOKE_EXACT in the order named
+# (dev/block.jl names its fixed core first, so the core's times do not depend on what follows it)
+_selected(list) = EXACT ? sort(filter(g -> _want(first(g)), list); by = g -> findfirst(==(lowercase(first(g))), FILTER)) :
+    filter(g -> _want(first(g)), list)
 # WT_SMOKE_PART=i/N (dev/lanes.sh --lane smoke --part i/N, one job of dev/gate.sh's matrix): the
 # groups are dealt by their recorded durations (test/smoke_times.tsv, measured on CI's runners per
 # Julia version, as runtests.jl deals the suite's phases by test/phase_times.tsv): the longest
@@ -2612,16 +2620,24 @@ _smoke_time(what, t) = SMOKE_TIMES && println("smoke time: ", what, " ", round(t
 function main()
     t0 = time()
     _smoke_time("load", SMOKE_T_START)
+    # under WT_SMOKE_EXACT a name that names no group or xfail group selects nothing: refused,
+    # never a green run of 0 cases
+    local unknown = EXACT ? [f for f in FILTER if !any(g -> lowercase(first(g)) == f, vcat(GROUPS, XFAIL))] : String[]
+    if !isempty(unknown)
+        println("smoke: no group named ", join(unknown, ", "))
+        exit(1)
+    end
+    local case_secs = Float64[]
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
     ngroups = 0
-    for (group, cases) in _smoke_part(GROUPS)
-        _want(group) || continue
+    for (group, cases) in _selected(_smoke_part(GROUPS))
         ngroups += 1
         local tg = time()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
             tag = "$group/$name"
+            local tc = time()
             try
                 r = isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
                 if r.pass
@@ -2634,6 +2650,7 @@ function main()
             catch e
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
             end
+            push!(case_secs, time() - tc)
         end
         _smoke_time("group $group", tg)
     end
@@ -2641,8 +2658,7 @@ function main()
     # never fails the gate; a still-failing one must fail the way XFAIL_RUNTIME says it does.
     xf_now_pass = String[]; xf_still = 0; xf_mismatch = String[]; xf_seen = Set{String}()
     xf_part = _smoke_part(XFAIL)
-    for (group, cases) in xf_part
-        _want(group) || continue
+    for (group, cases) in _selected(xf_part)
         local tg = time()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
@@ -2666,6 +2682,9 @@ function main()
         _want(g) && owner == SMOKE_PART[1] && !(tag in xf_seen) &&
             push!(xf_mismatch, "$tag: listed in XFAIL_RUNTIME, but no xfail case has that name")
     end
+    # the median case's wall (compile, both runs, the comparison): dev/block.jl's per-case budget
+    SMOKE_TIMES && !isempty(case_secs) &&
+        println("smoke time: case median ", round(sort(case_secs)[(length(case_secs) + 1) ÷ 2]; digits = 3), " s")
     dt = round(time() - t0; digits = 1)
     println("\n" * "="^60)
     for fl in failures; println("  ", fl); end

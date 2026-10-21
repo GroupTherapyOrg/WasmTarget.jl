@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    # march/** = agent branches of the finishing march: each gets the full
-    # matrix on push, so the authoritative gate runs on GitHub, not on a
-    # memory-bound local box (dev/MARCH.md §5).
-    branches: [main, 'march/**']
+    # not march/**: a landed head's push runs gate.yml's full matrix alone, non-blocking
+    # (dev/CHARTER.md C10; the landing's gate is `bash dev/gate.sh --block`, L163); the pull
+    # request runs this matrix on every landing pushed to its branch
+    branches: [main]
   pull_request:
 
 # Only the newest push per branch runs; a superseded run is cancelled.

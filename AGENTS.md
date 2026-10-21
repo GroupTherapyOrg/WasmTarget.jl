@@ -44,20 +44,20 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 
 | Layer | Command |
 |---|---|
-| the gate: every lane below | `bash dev/gate.sh` (L162); locally `bash dev/lanes.sh` (`--fast`) |
-| the inner loop, not the push gate: ratchet + both smokes on CI | `bash dev/gate.sh --fast` L163 |
+| the landing gate, at most 60 s, local | `bash dev/gate.sh --block` (L194, L195) |
+| the full matrix, CI, non-blocking | `bash dev/gate.sh` (L153, L162); local `bash dev/lanes.sh` |
 | locks, ratchets, charter status | `julia --project=. test/parity_ratchet.jl` |
 | differential smoke | `julia --project=. test/smoke.jl [group]` |
 | byte-identity probes | `julia --project=. test/probe_bytes.jl` |
 | lowering-registry coverage | `julia --project=. test/registry_coverage.jl` |
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
-| full gate | CI on every `march/**` push; `bash dev/land.sh merge <branch>` lands only on green |
 
-A batch is pushed only after the full gate is green: `bash dev/gate.sh` (gate.yml, L153, L162).
-A pure restructuring is byte-identical on the probes; a semantic change
-is differential, its cases added to smoke first; every new lock is negative-tested (break it, watch
-it fire, restore) before it counts; `WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.
+`bash dev/land.sh merge <branch>` lands only a green `--block` record's commit; the full matrix then
+runs on it (gate.yml on `march/**`), and on PR #122's merge head as the final gate. A pure
+restructuring is byte-identical on the probes; a semantic change is differential, its cases added to
+smoke first; every new lock is negative-tested (break it, watch it fire, restore) before it counts;
+`WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.
 
 ## The anti-drift audit — `dev/AUDIT.md`
 

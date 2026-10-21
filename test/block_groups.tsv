@@ -1,0 +1,56 @@
+# The blocking gate's selections (dev/block.jl, `bash dev/gate.sh --block`; L194), measured by
+# test/block_impact.jl from the lines of src/ each probe and each smoke group runs, cut into 40-line
+# pieces of each top-level definition (225 probes run 947 pieces of src/, 21 cover them; 104 smoke
+# groups run 1183, the core's 12 groups (58 cases, 29.2 s recorded) run 1040). `probes`: the probe
+# core, a cover of every piece any probe runs; the gate adds the probes a change touches in
+# test/probe_corpus.jl or test/probe_baseline.txt. `core`: the smoke core every landing runs, the
+# cover by pieces per recorded second (test/smoke_times.tsv) up to 30 s; the first group pays for
+# compiling the compiler. `<file><TAB><groups>`: a changed file's groups beyond the core, the cover
+# (up to 25 s) of its pieces some group runs and the core does not; `-` when the core runs every
+# piece any group runs (a directory row, ending in /, covers its files; the longest match wins). A
+# changed file under src/ or ext/ with no row fails the gate: a batch that adds a file adds its row,
+# re-recorded or, when unsure, naming more groups. Every probe and group still runs on every landed
+# head (non-blocking: gate.yml on march/**). Re-record when src/ or the corpora move on.
+probes	string_lpad fc_task_rand muladd_f64 throw_inexacterror string_occursin string_uppercase fc_object_id fc_string_to_symbol fc_hrtime_elapsed checked_add int128_mul checked_add_i8 string_findfirst string_startswith fc_memset_dict_ctor const_dict fc_types_equal_pow fc_symbol_to_string fc_pchar_to_string_ptrlen fc_memchr_findfirst_char union_field
+core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs builtins_invoked memoryref_offset kind_isa isomorphic_recursive_classes exceptions
+src/WasmTarget.jl	-
+src/bridge.jl	-
+src/builder/instr_builder.jl	constant_memory_elements float32_fastmath simplevector_values captured_variables closed_world_edges
+src/builder/instr_ir.jl	-
+src/builder/instructions.jl	nested_captor recursive_types captured_variables
+src/builder/source_map.jl	-
+src/builder/types.jl	-
+src/builder/validator.jl	-
+src/builder/writer.jl	-
+src/codegen/box_capture.jl	-
+src/codegen/builtins.jl	long_constants varargs memoryref_field simplevector_values closed_world_reflection recursive_types
+src/codegen/calls.jl	varargs reduce_intrinsic_arity inlined_captor immutable_objectid method_error_value simplevector_values getfield_runtime_name
+src/codegen/closures.jl	closed_world_edges
+src/codegen/compile.jl	exception_stack
+src/codegen/context.jl	-
+src/codegen/diagnostics.jl	-
+src/codegen/dispatch.jl	-
+src/codegen/flow.jl	as_checkers closed_world_reflection filtered_fold
+src/codegen/generate.jl	-
+src/codegen/helpers.jl	-
+src/codegen/int128.jl	show_type numerics seeded_random
+src/codegen/int_key_map.jl	invoke_in_world
+src/codegen/interpreter.jl	immutable_objectid show_type seeded_random
+src/codegen/intrinsics_table.jl	-
+src/codegen/invoke.jl	-
+src/codegen/ir.jl	-
+src/codegen/julia_numeric_tier.jl	constant_callees seeded_random
+src/codegen/options.jl	-
+src/codegen/selector_table.jl	-
+src/codegen/stackified.jl	-
+src/codegen/statements.jl	foreign_calls loop_backward_branch closed_world_reflection immutable_objectid
+src/codegen/strings.jl	-
+src/codegen/structs.jl	-
+src/codegen/trimcollect.jl	constant_callees type_object_rows one_consult
+src/codegen/types.jl	foreign_calls invoke_in_world
+src/codegen/undef.jl	-
+src/codegen/unions.jl	-
+src/codegen/values.jl	dicts closed_world_edges
+src/frontend/nir.jl	invoke_in_world
+ext/	struct_by_structure
+

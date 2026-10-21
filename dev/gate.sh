@@ -1,5 +1,15 @@
 #!/usr/bin/env bash
-# The gate on CI's runners (AGENTS.md; dev/CHARTER.md C10): pushes a commit to gate/<name>, where
+# The gates (AGENTS.md; dev/CHARTER.md C10).
+#
+#   bash dev/gate.sh --block [--base <rev>]   # THE landing gate (L163, L194, L195): dev/block.jl on
+#       this machine, at most 60 s of wall: the ratchet, a fixed smoke core plus the groups the
+#       change maps to and its own cases (on 1.13 too), every probe, TLC for the models it touches,
+#       side by side, each stage on a budget and a timing ratchet (dev/timing_best.toml); writes
+#       the evidence record dev/.block/<tree>.toml that `dev/land.sh merge` lands on. No CI.
+#
+# Without --block: the full matrix on CI's runners, never a landing's gate: every landed head gets
+# it on its march/** push (non-blocking, gate.yml), and the one final full gate before PR #122
+# merges is this command on the exact merge head. It pushes a commit to gate/<name>, where
 # .github/workflows/gate.yml runs every lane of `bash dev/lanes.sh`'s default run as its own job
 # (the first red job cancels the rest), waits for the run, and prints one verdict line per lane,
 # the slowest lane job against the budget gate.yml's lane timeout sets (a job the budget cut off is
@@ -9,9 +19,9 @@
 #
 #   bash dev/gate.sh                 # HEAD, on gate/<current branch, / as ->
 #   bash dev/gate.sh <rev> [<name>]  # a branch or commit, on gate/<name>
-#   bash dev/gate.sh --fast [<rev>] [<name>]   # the inner loop, not the push gate: pushes to
+#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to
 #       gate-fast/<name>, where .github/workflows/gate-fast.yml runs only the ratchet and smoke
-#       on 1.12 and 1.13 (L163), and prints `FAST green` or `FAST red`; its budget is
+#       on 1.12 and 1.13, and prints `FAST green` or `FAST red`; its budget is
 #       gate-fast.yml's lane timeout
 #
 # The commit is pushed as it is: uncommitted changes are not in it. A gate branch keeps its
@@ -19,6 +29,7 @@
 # re-gating the commit a branch already holds pushes it to gate/<name>-N, which starts cold.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+if [ "${1:-}" = --block ]; then shift; exec julia --startup-file=no dev/block.jl "$@"; fi
 command -v gh >/dev/null || { echo "gate: needs the GitHub CLI (gh)" >&2; exit 2; }
 # an API read, retried: three tries, 10 s then 30 s apart; its output, or nothing and status 1
 api() { local out k; for k in 1 2 3; do out=$("$@" 2>/dev/null) && { printf '%s' "$out"; return 0; }
