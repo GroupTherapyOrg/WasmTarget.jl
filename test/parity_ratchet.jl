@@ -5766,7 +5766,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             label_clauses == get(cites, "13.17", Set{String}()) || (v += 1)
             v
         end),
-    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted; and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
+    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted, as dev/audit_window.sh counts it, the one program `dev/land.sh land` runs before its hold too (the march tip's last entry, the commits past it and the landing's own), so a landing into a full window refuses in its preflight, naming the audit to wait for, never after a gate run (run here on a scratch repository: five commits past the entry fit, a sixth or the landing's own beyond five fills it); and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")
             isfile(audit) || return 1
@@ -5799,10 +5799,34 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             sha === nothing && return v + 1
             success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v   # counted above
-            # the commits since the last audited one, merges not counted: a pull request's
-            # merge checkout and a landed march branch count the same
-            local behind = parse(Int, readchomp(`git -C $ROOT rev-list --count --no-merges $sha..HEAD`))
-            return v + (behind > 5 ? 1 : 0)
+            # the window, by the one program `dev/land.sh land`'s preflight runs too (dev/audit_window.sh):
+            # the commits since the last audited one, merges not counted (a pull request's merge checkout
+            # and a landed march branch count the same), at most its cap of 5, its last entry this lock's
+            local wsh = joinpath(ROOT, "dev", "audit_window.sh")
+            local w = split(readchomp(ignorestatus(`bash $wsh $ROOT`)))
+            v += length(w) == 4 && w[1] == sha && w[3] == "5" && parse(Int, w[2]) <= 5 ? 0 : 1
+            # land refuses a full window in its preflight, before the hold, by the same program
+            local landsh = read(joinpath(ROOT, "dev", "land.sh"), String)
+            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\" \"origin/$MARCH\" \"$(git rev-list --count --no-merges \"origin/$MARCH..HEAD\")\"); then", landsh) &&
+                 occursin(raw"wait for audit #$((wentries + 1)) — refusing\"; exit 1", landsh) ? 0 : 1
+            # behavior on a scratch repository: an entry audited through its first commit, then commits;
+            # five past it fit, a sixth fills the window, and the landing's own commit counts
+            v += mktempdir() do t
+                local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
+                g("init", "-q"); mkpath(joinpath(t, "dev"))
+                write(joinpath(t, "f"), "0"); g("add", "f"); g("commit", "-qm", "c0")
+                local c0 = readchomp(`git -C $t rev-parse HEAD`)
+                write(joinpath(t, "dev", "AUDIT.md"), "# Audit\n\n## entry — audited through $(c0[1:8])\n")
+                g("add", "dev/AUDIT.md"); g("commit", "-qm", "c1")
+                for k in 2:5
+                    write(joinpath(t, "f"), string(k)); g("commit", "-qam", "c$k")
+                end
+                local st = (args...) -> Base.run(pipeline(ignorestatus(`bash $wsh $t $args`); stdout = devnull)).exitcode
+                local five = st(); local five_own = st("HEAD", "1")
+                write(joinpath(t, "f"), "6"); g("commit", "-qam", "c6")
+                count(!, [five == 0, five_own == 1, st() == 1, st("HEAD", "0") == 1])
+            end
+            return v
         end),
     "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_byte_offset! (statements.jl): its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those; _emit_storage_element_offset! narrows it and divides by the element size, _emit_storage_pointer_offset! (a pointer load's or store's offset) adds the index term, and memcmp and memchr read it too. No lowering converts a pointer to an index itself: no `from_julia=Ptr{UInt8}` coercion, and no String-or-Symbol test (spelled `=== String || … === Symbol` or `in (String, Symbol)`) followed within three lines by a constant 1 and a subtraction (`_SUB`) outside the rule (E5 of the first audit's side notes, dev/AUDIT.md A17P1: four sites kept their own `- 1`). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
         () -> begin

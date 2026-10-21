@@ -21,7 +21,9 @@
 #       the landing log (below).
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
-#       a dirty tree; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
+#       a dirty tree; refuses, before the hold, when L148's audit window is full (the march tip's last
+#       audit entry, the commits past it and this landing's, at most 5: dev/audit_window.sh, the
+#       ratchet's own program), naming the audit to wait for; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
 #       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
 #       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
@@ -296,6 +298,17 @@ land)
     have=$([ -f Manifest.toml ] && awk '/^ *\[deps\.WasmTarget\.extensions\]/ { f = 1; next } /^ *\[/ { f = 0 } f && NF { print $1 }' Manifest.toml | sort | tr '\n' ' ' || true)
     [ "$want" = "$have" ] ||
         { echo "land: Manifest.toml's WasmTarget extensions ($have) are not Project.toml's ($want): julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
+    # L148's audit window, read by the ratchet's own program (dev/audit_window.sh) before the hold: the
+    # march tip's last audit entry, the commits past its audited-through commit and this landing's,
+    # at most 5; a full window refuses here, in a second, never after a gate run its ratchet refuses
+    git fetch -q origin
+    if ! win=$(bash dev/audit_window.sh "$W" "origin/$MARCH" "$(git rev-list --count --no-merges "origin/$MARCH..HEAD")"); then
+        read -r wsha wcount wcap wentries <<<"$win"
+        if [ "$wsha" = - ] || [ "$wcount" -le "$wcap" ]; then
+            echo "land: origin/$MARCH's dev/AUDIT.md names no audited-through commit its head holds ($win) — refusing"; exit 1
+        fi
+        echo "land: the audit window is full ($wcount commits past ${wsha:0:8}, this one included, at most $wcap: L148): wait for audit #$((wentries + 1)) — refusing"; exit 1
+    fi
     step preflight
     # the hold, the machine's one (the agents' scheduler reads this file alone, and the orchestrator's
     # hold is this file with owner 0): one landing at a time, and while it exists no other agent's
