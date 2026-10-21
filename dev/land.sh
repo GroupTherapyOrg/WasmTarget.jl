@@ -19,6 +19,10 @@
 #       from the main tree and pushes it, the landing's one push (gate.yml runs the full matrix on
 #       that push when its head carries `Closes: C<n>`, non-blocking); appends the landing's line to
 #       the landing log (below).
+#   dev/land.sh warm
+#       right after a commit, in the lane's worktree: outside any hold (it waits while one exists), starts
+#       the tree's runner when absent and runs the blocking gate once at JLRUN_PRIO=5, so the landing's
+#       gate runs warm; its record stands like any gate run's
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
 #       a dirty tree; refuses a worktree with no live Kaimon session (dev/kaimon_session.sh: every lane
@@ -55,7 +59,7 @@
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
-#   landed_at  commit  author_at  land_start  gate_runs  gate_wall_s  land_wall_s  edit_to_landed_s  files  insertions  timing  own_s  queue_wait_s
+#   landed_at  commit  author_at  land_start  gate_runs  gate_wall_s  land_wall_s  edit_to_landed_s  files  insertions  timing  own_s  queue_wait_s  gate_state
 # author_at the earliest author time of the commits the landing brings (the edit), commit the landed
 # head, files the paths those commits change and insertions the lines they add (git log --numstat
 # over the range), gate_runs and gate_wall_s the gate runs `land` made (0 for a bare `merge`), timing
@@ -64,7 +68,9 @@
 # A30E1, plus each red of its own checks from its start to the next attempt's, A33E4: a red on timing
 # alone or on the ratchet's L148 or L197 alone is not its own) and queue_wait_s the rest of
 # edit_to_landed_s (the holds of others, an audit window, other landings' reds, a stack's author time). A line before
-# A30E1 has the first eleven fields.
+# A30E1 has the first eleven fields. gate_state says whether the landing's gate ran warm (warm; cold;
+# cold-after-warm, cold though a gate run of the change warmed the runner first; fresh, no runner); a
+# line before it has thirteen fields.
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
 # holds a landing: the last closure matrix's verdict is read, never waited for. The one
@@ -136,8 +142,8 @@ owed_lifted() { case "${2#* }" in FAILED*) return 1 ;; esac
                 git cat-file -e "$1:dev/.loop/excuse/${2:0:8}" 2>/dev/null; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
-cmd=${1:?usage: dev/land.sh land (in the worktree of the branch) | prepare <branch> [old-base]}
-if [ "$cmd" = land ]; then
+cmd=${1:?usage: dev/land.sh land | warm (in the worktree of the branch) | prepare <branch> [old-base]}
+if [ "$cmd" = land ] || [ "$cmd" = warm ]; then
     br=$(git symbolic-ref --short -q HEAD) || { echo "land: HEAD is detached: run it on the batch's branch — refusing"; exit 1; }
 else
     br=${2:?branch}
@@ -288,18 +294,40 @@ merge)
                     END { print min, n + 0, ins + 0 }')
     start=${LAND_START:-$m_start}
     mkdir -p "$(dirname "$LOG")"
-    [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\town_s\tqueue_wait_s\n' > "$LOG"
+    [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\town_s\tqueue_wait_s\tgate_state\n' > "$LOG"
     # own_s, the landing's own mechanics (A30E1, A33E4): its land's start to its push, less its wait for
     # another landing's hold, plus its own reds (LAND_OWN_RED); queue_wait_s the rest of its edit to
     # landed (the holds of others, an audit window, other landings' reds, a stack's author time)
     e2l=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")
     own=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1] - $ARGV[2] + $ARGV[3]' "$landed" "$start" "${LAND_HOLD_WAIT:-0}" "${LAND_OWN_RED:-0}")
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
         "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
-        "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$e2l" "$own")" >> "$LOG"
+        "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$e2l" "$own")" "${LAND_GATE_STATE:-fresh}" >> "$LOG"
     # the landing's one push is the march branch's, above: gate.yml runs the full matrix on it when its
     # head carries `Closes: C<n>` (no other ref is pushed, L153)
     echo "landed $br @ ${head:0:8} on $MARCH"
+    ;;
+warm)
+    # pre-warms this tree's runner right after a commit, outside any hold, so the landing's gate runs
+    # warm (a gate's first run on a server is cold, 80-265 s against 30-40 s warm): waits while a landing
+    # holds the machine, starts the runner when absent (it stays up IDLE_MIN, 120 min), and runs the
+    # blocking gate once on the committed tree at JLRUN_PRIO=5; its record is a gate run's like any, a
+    # red one standing (the change is red: fix it before the landing)
+    W=$(git rev-parse --show-toplevel)
+    [ "$W" != "$MAIN" ] || { echo "warm: run it in the lane's worktree, not the main tree — refusing"; exit 1; }
+    cd "$W"
+    [ -z "$(git status --porcelain)" ] || { echo "warm: $W has uncommitted or untracked files: commit first — refusing"; exit 1; }
+    waited=0
+    while [ -e "$HOLD" ] && kill -0 "$(cut -d' ' -f1 "$HOLD" 2>/dev/null || echo x)" 2>/dev/null; do
+        [ $waited -eq 1 ] || echo "warm: waiting while a landing holds the machine ($(cat "$HOLD" 2>/dev/null))"
+        waited=1; sleep 5
+    done
+    export JLRUN_PRIO=5
+    out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "warm: this tree's runner did not start — refusing"; exit 1; }
+    echo "$out" | tail -1
+    set +e; bash dev/gate.sh --block --warm 2>&1 | grep -E '^(BLOCK|  FAIL|  runner)'; st=${PIPESTATUS[0]}; set -e
+    echo "warm: the gate ran once on $(git rev-parse --short HEAD) (exit $st); \`bash dev/land.sh land\` lands it on a warm runner unless the tip's src moves under it"
+    exit "$st"
     ;;
 land)
     # bash reads this whole case statement before it runs any of it, and every way out of this arm
@@ -483,6 +511,28 @@ land)
         done
         echo "land: Closes: $(echo $closes): the ratchet reads each CLOSED; the full matrix runs on this landing's push"
     fi
+    # whether the landing's gate ran warm (its record's runner_state): cold after a warm-up of this change
+    # on this tree's runner (an earlier gate record of a commit with the same author time, author and
+    # subject, finished before this land began) is reported, the warm-up having not held (the tip's src
+    # moved under it, or the runner restarted); the tracker counts the cold landings (L197)
+    grec=$(sed -n 's/^BLOCK .*→ \(dev\/\.block\/.*\.toml\)$/\1/p' "$glog" | tail -1)
+    gstate=$(sed -n 's/^runner_state = "\(.*\)"$/\1/p' "$grec" 2>/dev/null || true)
+    case $gstate in
+    warm) gate_state=warm ;;
+    cold*) gate_state=cold; warmed=""
+           want_g=$(git log -1 --format='%at %ae %s' HEAD)
+           for f in dev/.block/*-*.toml; do
+               [ -f "$f" ] && [ "$f" != "$grec" ] || continue
+               fin=$(sed -n 's/^finished = //p' "$f")
+               [ -n "$fin" ] && perl -e 'exit !($ARGV[0] < $ARGV[1])' "$fin" "$l_start" || continue
+               [ "$(git log -1 --format='%at %ae %s' "$(sed -n 's/^head = "\(.*\)"$/\1/p' "$f")" 2>/dev/null)" = "$want_g" ] && warmed=$(basename "$f" .toml)
+           done
+           if [ -n "$warmed" ]; then
+               gate_state=cold-after-warm
+               echo "land: the gate ran cold after a warm-up of this change (record ${warmed:0:8}-${warmed##*-}): $gstate"
+           fi ;;
+    *) gate_state=fresh ;;
+    esac
     # the change's own reds (A33E4): from the red history (the main tree's dev/.loop/reds.tsv, which
     # dev/block.jl writes and a worktree's removal leaves, A33E5), each red run of a commit of the same
     # change (its author time, author and subject, as a rebase or an amend keeps them) after its author
@@ -490,7 +540,7 @@ land)
     # `queue` red (timing alone; the ratchet on L148 or L197 alone) counts as queue time
     want=$(git log -1 --format='%at %ae %s' HEAD)
     own_red=$( { sort -t "$(printf '\t')" -k1,1n "$REDS" 2>/dev/null || true; } | awk -F'\t' -v w="$want" -v au="${want%% *}" -v ls="$l_start" "$OWN_RED_AWK")
-    LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_STATE=$gate_state LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")

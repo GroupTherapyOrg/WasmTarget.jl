@@ -30,31 +30,31 @@
 [best]
 "calibration" = 0.004047
 "load" = 0.24
-"load@warm" = 0.28
+"load@warm" = 0.17
 "probes" = 28.26
-"probes@warm" = 9.92
+"probes@warm" = 0.67
 "ratchet" = 9.6
-"ratchet@warm" = 20.45
+"ratchet@warm" = 6.73
 "smoke-core" = 51.79
-"smoke-core@warm" = 24.2
+"smoke-core@warm" = 1.58
 
 [best_cpu]
 "load" = 0.51
-"load@warm" = 0.59
+"load@warm" = 0.22
 "probes" = 37.55
-"probes@warm" = 1.34
+"probes@warm" = 1.43
 "ratchet" = 12.89
-"ratchet@warm" = 22.73
+"ratchet@warm" = 8.36
 "smoke-core" = 66.83
-"smoke-core@warm" = 1.28
+"smoke-core@warm" = 1.41
 
 [best_from]
 "calibration" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
 "load" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
-"load@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"load@warm" = "the median of records 9da94868-2 9da94868-3 9da94868-4 on 4c618a3d at machine factor 1.41 1.12 1.13"
 "probes" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
-"probes@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"probes@warm" = "the median of records 9da94868-2 9da94868-3 9da94868-4 on 4c618a3d at machine factor 1.41 1.12 1.13"
 "ratchet" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
-"ratchet@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"ratchet@warm" = "the median of records bcea0bd7-2 bcea0bd7-3 bcea0bd7-4 on 50823190 at machine factor 1.31 1.22 1.23"
 "smoke-core" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
-"smoke-core@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"smoke-core@warm" = "the median of records 9da94868-2 9da94868-3 9da94868-4 on 4c618a3d at machine factor 1.41 1.12 1.13"

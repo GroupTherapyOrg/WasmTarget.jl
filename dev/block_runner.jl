@@ -17,11 +17,13 @@
 # (never stale code). The
 # test entry points' packages (PRELOAD) load at start, so the package set does not depend on which
 # request came first. A request that sets WT_PROBE_RECORD, WT_RATCHET_UPDATE or WT_RECORD_TIMES is
-# refused: a baseline is recorded by a fresh process. The server stops after IDLE_MIN idle minutes.
+# refused: a baseline is recorded by a fresh process. The server stops after IDLE_MIN idle minutes,
+# 120, so a lane's runner stays warm across its landings (`bash dev/land.sh warm` warms it after a commit).
 #
 # Each request reports its state first, `block_runner: warm <blob>` or `block_runner: cold
 # (<why>) <blob>`: cold until its check (the file it runs, with these arguments and WT_* variables)
-# has run once on the code as it now is,
+# has finished a run on the code as it now is (a run interrupted mid-way, a killed warm-up, warms
+# nothing),
 # i.e. its first run on this server or since a revise (its time is then compiling the change and the
 # check's paths, not running them; dev/block.jl's verdict on time takes no cold run), <blob> the git
 # blob of the dev/block_runner.jl the server runs (dev/block.jl refuses a
@@ -56,7 +58,7 @@ const DIR = joinpath(ROOT, "dev", ".block", "runner")   # git-ignored with the g
 const SOCK = joinpath(DIR, "sock")
 const ENVDIR = joinpath(ROOT, "dev", "runner_env")
 const RESTART = 75
-const IDLE_MIN = 20
+const IDLE_MIN = 120   # a lane's runner stays up across its landings: a gate's first run on a server is cold
 const PRELOAD = ("Test", "Random", "SHA", "LinearAlgebra", "Statistics", "Dates")
 const REFUSED = ("WT_PROBE_RECORD", "WT_RATCHET_UPDATE", "WT_RECORD_TIMES")
 
@@ -344,7 +346,6 @@ function serve_loop(Revise, reset_main!, usings_changed, logmsg, real_exit, T0, 
         key = join(vcat(normpath(abspath(cwd, target)), args, sort([k * "=" * v for (k, v) in env if startswith(k, "WT_")])), '\0')
         state = get(ran_on, key, -1) == version[] ? "warm" :
                 haskey(ran_on, key) || version[] > 0 ? "cold (this check's first run since a revise)" : "cold (this check's first run on this server)"
-        ran_on[key] = version[]
         logmsg("request $(nreq[]): $target $(join(args, ' ')) — $state (sync $(round(time() - t; digits = 2)) s)")
         frame(sock, 'e', "block_runner: $state $BLOB\n")
         out = Pipe(); Base.link_pipe!(out; reader_supports_async = true, writer_supports_async = true)
@@ -369,6 +370,10 @@ function serve_loop(Revise, reset_main!, usings_changed, logmsg, real_exit, T0, 
         catch
         end
         code = try; fetch(task); catch; 130; end
+        # a check is warm only once a run of it has finished on the code as it now is: a run interrupted
+        # mid-way (a warm-up killed, the client gone) compiled part of its paths, and the next run of it
+        # is cold, its timing unjudged, never a warm one still compiling
+        istaskfailed(task) || (ran_on[key] = version[])
         close(out.in); close(err.in); wait(p1); wait(p2)
         logmsg("request $(nreq[]) exit $code in $(round(time() - t; digits = 1)) s")
         frame(sock, 'x', string(code))
