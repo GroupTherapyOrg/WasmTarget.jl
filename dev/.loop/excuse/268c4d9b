@@ -1,0 +1,1 @@
+machine: its fresh worktree's runner was cold: gate-1 112.5 s compiled the checks and gate-2 31.6 s judged (steps.tsv), 144.1 s of its 153 s, after three refused attempts outside the clock (stale Manifest, factor cap, a runner crash)

@@ -274,7 +274,7 @@ end
 # CI bounded-fuzz path (ci_fuzz_passes) stays fully deterministic. A discovery
 # sweep calls rotate_inputs!(seed) to APPEND a few seeded-random inputs per type,
 # so a wrong-value stub that only fires OFF the fixed edge set surfaces over runs
-# (kills sample overfitting — test/fuzz/LOOP.md §7 G2). Found gaps record their
+# (kills sample overfitting). Found gaps record their
 # concrete input, so reproducers stay deterministic regardless of rotation.
 const ROTATE_SEED = Ref{UInt64}(0)
 rotate_inputs!(seed::Integer) = (ROTATE_SEED[] = UInt64(seed); nothing)

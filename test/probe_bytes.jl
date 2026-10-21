@@ -1,0 +1,130 @@
+# Byte-identity probe lane (dev/MARCH.md §4 Phase 1 item 4, §5 "byte identity").
+#
+# Purpose: a fast, deterministic fingerprint of a fixed probe corpus so any PURE
+# restructuring (Phase 2 bloat nuke, Phase 4 duplication collapse, etc.) can be
+# checked for byte-for-byte identical codegen output in seconds, without running
+# the full differential suite. This is NOT a soundness or parity gate — it only
+# proves "nothing observable changed"; dart2wasm structural parity and the native
+# differential remain the real oracles (see AGENTS.md).
+#
+# Each probe compiles with `WasmTarget.compile_module([(f, argtypes, name)])` and serializes
+# with `to_bytes` (the bytes `compile_multi(…; validate=false)` returns, the module object kept
+# for the named-globals check below) — the explicit export NAME matters: `compile(f, …)` exports `string(nameof(f))`, and for an
+# anonymous closure that is Julia's session-global gensym (`#17`), which advances whenever any
+# closure is defined in the process, so the bytes would depend on corpus order, not codegen.
+# (unoptimized IR, no wasm-tools double-check — module bytes only) and is
+# fingerprinted with `bytes2hex(SHA.sha256(bytes))`. SHA is a Julia stdlib
+# (always on LOAD_PATH regardless of the active Project.toml), so `using SHA`
+# resolves under plain `--project=.` with no extra dependency wiring.
+#
+# Usage:
+#   julia --project=. test/probe_bytes.jl            # compare against the baseline
+#   WT_PROBE_RECORD=1 julia --project=. test/probe_bytes.jl   # rewrite the baseline
+#   WT_PROBE_ONLY="<name> ..." julia --project=. test/probe_bytes.jl   # exactly those probes (a
+#       name the corpus lacks fails the run): dev/block.jl's probe core and the batch's own probes,
+#       a baseline probe the corpus lacks still reported. A selection never records.
+#
+# On mismatch: prints every changed probe name (baseline hash vs new hash) and
+# exits 1. On a clean run: prints a one-line summary and exits 0.
+
+using WasmTarget
+using SHA
+
+const _PROBE_DIR = @__DIR__
+const _BASELINE_PATH = joinpath(_PROBE_DIR, "probe_baseline.txt")
+include("probe_corpus.jl")
+
+# Exception handling is dart's legacy form (L155): a printed probe module holds none of the
+# instructions dart2wasm does not emit. Its text, as wasm-tools prints it, is read.
+const _NON_DART_EH = r"\b(try_table|throw_ref|delegate|catch_all)\b"
+_non_dart_eh(printed::String)::Bool = occursin(_NON_DART_EH, printed)
+
+# every global the module object names (each defined or imported global's `name`) is named in
+# the printed text (`(global $<name>`), as dart's NameSection writes each global's name
+# (sections.dart:844): the names are the module's, not read back from the section being checked
+_unnamed_globals(m::WasmTarget.WasmModule, printed::String)::Int =
+    count(g -> g.name !== nothing && !occursin("(global \$" * g.name * " ", printed), m.globals)
+
+function main()
+    hashes = Dict{String,String}()
+    non_dart_eh = String[]
+    unnamed = String[]
+    local names = first.(CASES)
+    local mine = Set(names)
+    local only = split(get(ENV, "WT_PROBE_ONLY", ""))
+    if !isempty(only)
+        get(ENV, "WT_PROBE_RECORD", "") == "1" &&
+            (println("probe_bytes: WT_PROBE_ONLY records nothing: a baseline is recorded by a whole run"); return 1)
+        local unknown = filter(n -> !(n in names), only)
+        isempty(unknown) || (println("probe_bytes: WT_PROBE_ONLY names no probe ", join(unknown, ", ")); return 1)
+        intersect!(mine, only)
+    end
+    for (name, (f, argtypes)) in CASES
+        name in mine || continue
+        m = WasmTarget.compile_module([(f, argtypes, name)]; options=WasmTarget.options_from_env())
+        bytes = WasmTarget.to_bytes(m)
+        hashes[name] = bytes2hex(SHA.sha256(bytes))
+        printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)
+        _non_dart_eh(printed) && push!(non_dart_eh, name)
+        _unnamed_globals(m, printed) == 0 || push!(unnamed, name)
+        # WT_PROBE_DUMP=<name>:<path> writes one probe's binary for cross-process diffing
+        dump = get(ENV, "WT_PROBE_DUMP", "")
+        if dump != "" && startswith(dump, name * ":")
+            write(dump[length(name)+2:end], bytes)
+        end
+    end
+
+    if !isempty(unnamed)
+        for name in unnamed
+            println("  A NAMED GLOBAL NOT PRINTED BY ITS NAME: ", name)
+        end
+        println("probe_bytes: $(length(unnamed)) of $(length(hashes)) probes name a global the printed module does not")
+        return 1
+    end
+
+    if !isempty(non_dart_eh)
+        for name in non_dart_eh
+            println("  NOT DART'S EXCEPTION HANDLING (try_table, throw_ref, delegate or catch_all): ", name)
+        end
+        println("probe_bytes: $(length(non_dart_eh)) of $(length(hashes)) probes hold exception handling dart2wasm does not emit")
+        return 1
+    end
+
+    if get(ENV, "WT_PROBE_RECORD", "") == "1"
+        _write_baseline(_BASELINE_PATH, hashes)
+        println("probe_bytes: recorded $(length(hashes)) probes to $(_BASELINE_PATH)")
+        return 0
+    end
+
+    baseline = _load_baseline(_BASELINE_PATH)
+    if isempty(baseline)
+        println("probe_bytes: no baseline at $(_BASELINE_PATH) — run with WT_PROBE_RECORD=1 first")
+        return 1
+    end
+
+    changed = String[]
+    for name in sort(collect(keys(hashes)))
+        old = get(baseline, name, nothing)
+        new = hashes[name]
+        if old === nothing
+            println("  NEW probe (not in baseline): ", name, " => ", new)
+            push!(changed, name)
+        elseif old != new
+            println("  CHANGED: ", name, "  ", old, " -> ", new)
+            push!(changed, name)
+        end
+    end
+    for name in sort(collect(keys(baseline)))
+        # a selection checks its own probes, and every baseline name the corpus lacks
+        (name in mine || !(name in names)) || continue
+        if !haskey(hashes, name)
+            println("  MISSING probe (in baseline, not in corpus): ", name)
+            push!(changed, name)
+        end
+    end
+
+    println("probe_bytes: $(length(hashes)) probes$(isempty(only) ? "" : " (of $(length(names)))"), $(length(changed)) changed")
+    return isempty(changed) ? 0 : 1
+end
+
+exit(main())

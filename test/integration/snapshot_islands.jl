@@ -131,7 +131,6 @@ function pi_classify(group, cell)
         catch e
             return ("compile_fail", first(sprint(showerror, e), 200))
         end
-        r.skipped && return ("skipped_no_node", "")
         if !r.pass
             a = string(r.actual)
             return (startswith(a, "trap") ? "runtime_trap" : "mismatch", first(a, 160))

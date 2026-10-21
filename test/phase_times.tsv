@@ -1,80 +1,134 @@
-0.33	Phase 10: JavaScript Imports
-3.405	Phase 11: Loops
-2.587	Phase 12: Recursion
-3.107	Phase 13: Compiled Struct Access
-2.947	Phase 14: Float Operations
-57.968	Phase 15: Strings
-4.992	Phase 16: Multi-Function Modules
-1.253	Phase 17: JS Interop
-3.547	Phase 18: Tables
-1.873	Phase 1: Test Harness Infrastructure
-6.491	Phase 21: Multi-dimensional Arrays (Matrix)
-7.952	Phase 22: Math Functions (WASM-native)
-7.071	Phase 23: Cross-function Type Sharing (TF-005)
-7.662	Phase 23: Union Types
-15.324	Phase 23: Void Control Flow
-5.785	Phase 24: Advanced Recursion and Control Flow
-9.888	Phase 24: Core IR Type Registration (IR-001)
-8.602	Phase 24: Overlay Dispatch Tables
-6.664	Phase 28: Binaryen Optimization
-2.135	Phase 29: Stack Validator Integration
-1.804	Phase 2: Wasm Builder
-7.189	Phase 30: Comparison Harness
-15.252	Phase 31: Manual Comparison Harness
-48.964	Phase 32: M_EXPAND Expression Patterns
-27.28	Phase 33: M_ADVANCED Language Features
-5.525	Phase 34: Tier 2 Hash Dispatch (PURE-9060)
-2.013	Phase 36: JlType Hierarchy (PURE-9063)
-28.815	Phase 37: Subtype Checking (PURE-9064)
-8.369	Phase 38: Dict/Set from Base (PURE-9065)
-16.822	Phase 39: Broadcasting (PURE-9066)
-3.179	Phase 3: Julia Compiler
-3.796	Phase 46: compile_value dispatch (D-002)
-4.751	Phase 47: compile_statement dispatch (D-003)
-1.461	Phase 48: intrinsic dispatch (D-004)
-1.367	Phase 49: SSA local allocation (D-005)
-11.933	Phase 4: Control Flow
-1.897	Phase 50: control flow (D-006)
-3.674	Phase 51: WASM module assembly (D-007)
-9.1	Phase 52: E2E-001 f(5)=26 via REAL codegen (no hand-emitted opcodes)
-12.532	Phase 53: E2E-002 20-function regression (no hand-emitted opcodes)
-10.158	Phase 54: P-001 Parser-to-codegen pipeline
-14.374	Phase 55: P-003 22-function regression suite
-33.469	Phase 59 cont'd: NaN/Inf/Subnormal (WBUILD-1023)
-16.917	Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)
-6.747	Phase 59 cont'd: Utility Math (WBUILD-1022)
-11.683	Phase 5: Integer Operations
-42.455	Phase 60: Base.Math Coverage (WBUILD-1024)
-3.922	Phase 62: Bridge Tests (WBUILD-2013)
-19.74	Phase 63: Real Base Collections (WBUILD-2020)
-5.269	Phase 65: Vector Splatting (WBUILD-5301)
-11.856	Phase 68: Closure Autodiscovery (BF1-FIX)
-8.363	Phase 6: Type Conversions
-17.785	Phase 71: String Dispatch (BF2)
-30.67	Phase 72: Numeric Functions (CF-1003)
-77.449	Phase 73: String Functions (CF-2002)
-4.093	Phase 74: Array Mutation Functions
-90.446	Phase 75: Comprehensive FULLTEST
-2.232	Phase 7: WasmGC Structs
-1.936	Phase 8: Tuples
-0.93	Phase 9: WasmGC Arrays
-44.053	STRESS-1000: Numeric Type Matrix
-67.282	STRESS-1001: Math Type Matrix
-12.458	STRESS-1002: Collection Type Matrix
-14.076	STRESS-1003: Array Mutation Type Matrix
-53.144	STRESS-1004: String Functions Binaryen
-1.973	STRESS-2004: Closure Argument Passing
-2.261	STRESS-3000: 8-Deep Collection Chain
-13.072	STRESS-3001: String Operation Chain
-4.451	STRESS-3002: Math × Collection Chain
-2.014	STRESS-3003: Cross-Type Promotion Chain
-2.824	STRESS-3004: Closure + Composition Chain
-4.273	STRESS-5001: 20-Function Module
-2.646	STRESS-6000: sort kwargs
-3.942	STRESS-6001: clamp/fld/cld
-6.549	STRESS-6002: String kwargs
-3.709	STRESS-7000: Empty/Single Inputs
-7.083	STRESS-7001: NaN/Inf/-0.0
-5.213	STRESS-7002: Overflow/Large
-11.1	STRESS-8000: Binaryen Survey
-5.653	STRESS-8001: Binaryen Deep Validation
+30.377	Dates stdlib
+9.842	Float-range colon (a8c00917b1b0)
+0.287	Phase 10: JavaScript Imports
+1.718	Phase 11: Loops
+2.048	Phase 12: Recursion
+1.919	Phase 13: Compiled Struct Access
+1.852	Phase 14: Float Operations
+16.285	Phase 15: Strings
+4.903	Phase 16: Multi-Function Modules
+1.01	Phase 17: JS Interop
+2.312	Phase 18: Tables
+1.077	Phase 1: Test Harness Infrastructure
+4.459	Phase 21: Multi-dimensional Arrays (Matrix)
+3.794	Phase 22: Math Functions (WASM-native)
+5.099	Phase 23: Cross-function Type Sharing (TF-005)
+4.183	Phase 23: Union Types
+8.903	Phase 23: Void Control Flow
+3.274	Phase 24: Advanced Recursion and Control Flow
+8.588	Phase 24: Core IR Type Registration (IR-001)
+12.977	Phase 24: Overlay Dispatch Tables
+3.177	Phase 28: Binaryen Optimization
+1.966	Phase 29: Stack Validator Integration
+0.453	Phase 2: Wasm Builder
+4.587	Phase 30: Comparison Harness
+16.86	Phase 31: Manual Comparison Harness
+15.693	Phase 32: M_EXPAND Expression Patterns
+20.333	Phase 33: M_ADVANCED Language Features
+9.294	Phase 34: Tier 2 Hash Dispatch (PURE-9060)
+2.06	Phase 36: JlType Hierarchy (PURE-9063)
+56.8	Phase 37: Subtype Checking (PURE-9064)
+7.02	Phase 38: Dict/Set from Base (PURE-9065)
+18.145	Phase 39: Broadcasting (PURE-9066)
+0.857	Phase 3: Julia Compiler
+5.355	Phase 46: compile_value dispatch (D-002)
+4.508	Phase 47: compile_statement dispatch (D-003)
+1.517	Phase 48: intrinsic dispatch (D-004)
+1.143	Phase 49: SSA local allocation (D-005)
+6.434	Phase 4: Control Flow
+1.88	Phase 50: control flow (D-006)
+2.075	Phase 51: WASM module assembly (D-007)
+15.231	Phase 59 cont'd: NaN/Inf/Subnormal (WBUILD-1023)
+16.336	Phase 59 cont'd: Power/Hypot/Cbrt (WBUILD-1021)
+4.39	Phase 59 cont'd: Utility Math (WBUILD-1022)
+6.265	Phase 5: Integer Operations
+346.086	Phase 60: Base.Math Coverage (WBUILD-1024)
+5.322	Phase 62: Bridge Tests (WBUILD-2013)
+206.448	Phase 63: Real Base Collections (WBUILD-2020)
+7.297	Phase 65: Vector Splatting (WBUILD-5301)
+4.922	Phase 6: Type Conversions
+30.308	Phase 71: String Dispatch (BF2)
+13.323	Phase 72: Numeric Functions (CF-1003)
+74.995	Phase 73: String Functions (CF-2002)
+18.428	Phase 74: Array Mutation Functions
+101.897	Phase 75: Comprehensive FULLTEST
+1.154	Phase 77: ordinary Object identity
+0.775	Phase 7: WasmGC Structs
+0.327	Phase 8: Tuples
+0.337	Phase 9: WasmGC Arrays
+18.626	QA: apply_iterate_soundness.jl
+64.651	QA: capability_negative_controls.jl
+11.048	QA: cleanup_loop1_backfills.jl
+20.686	QA: crossing_terminal_taildup.jl
+24.231	QA: diagnostic_attribution.jl
+2.986	QA: diagnostics_sink.jl
+57.098	QA: dispatch_method_error.jl
+16.254	QA: f11_int128_bitcount_backfills.jl
+2.997	QA: f31_union_value_backfills.jl
+1.239	QA: f3_box_capture_l0.jl
+0.049	QA: f3_box_capture_l1.jl
+1.609	QA: f3_box_capture_l2_prepass.jl
+11.634	QA: f3_box_capture_l2b_propagate.jl
+0.904	QA: fold_rule.jl
+1.935	QA: fuzz/repro_multivar_phi_merge.jl
+14.217	QA: generated_names.jl
+16.401	QA: grapheme_break.jl
+5.362	QA: host_boundary_types.jl
+13.853	QA: host_imports.jl
+21.791	QA: immutable_objectid.jl
+1.501	QA: ir_one_inference_path.jl
+0.504	QA: layout_read_memo.jl
+15.554	QA: lazy_classid_isa.jl
+11.363	QA: m10_contexts.jl
+0.218	QA: m11_intrinsics_table.jl
+1.948	QA: m1_void_backfills.jl
+11.37	QA: m8_selector_table.jl
+41.187	QA: march3_try_backfills.jl
+0.606	QA: memmove_single_path.jl
+29.333	QA: module_builder_validation.jl
+4.648	QA: module_metadata.jl
+2.467	QA: mutable_global_initialization.jl
+2.97	QA: nir_use_index.jl
+23.811	QA: no_fabricated_values.jl
+0.246	QA: no_undefined_globals.jl
+2.943	QA: overlay_reasons.jl
+56.46	QA: parity_ratchet.jl
+33.49	QA: real_bottom_exceptions.jl
+10.089	QA: recursive_groups.jl
+4.697	QA: reinterpret_array_semantics.jl
+4.727	QA: sidecar/sidecar_test.jl
+82.453	QA: sort_comparator_backfills.jl
+39.348	QA: source_maps.jl
+0.498	QA: storage_relative_pointer_soundness.jl
+17.085	QA: string_hash_ground_truth.jl
+5.198	QA: symbol_syntax_metadata.jl
+11.518	QA: test_aqua.jl
+10.649	QA: test_explicit_imports.jl
+0.389	QA: test_wasm_subtype_lattice.jl
+1.869	QA: type_world_bounds.jl
+0.868	QA: unknown_ir_heads.jl
+0.243	QA: value_channel_propagate.jl
+1.828	QA: vararg_fixed_prefix.jl
+9.824	QA: wrong_value_locator.jl
+35.65	Random stdlib
+17.395	STRESS-1000: Numeric Type Matrix
+68.021	STRESS-1001: Math Type Matrix
+65.699	STRESS-1002: Collection Type Matrix
+70.351	STRESS-1003: Array Mutation Type Matrix
+105.034	STRESS-1004: String Functions Binaryen
+14.967	STRESS-2004: Closure Argument Passing
+52.658	STRESS-3000: 8-Deep Collection Chain
+51.004	STRESS-3001: String Operation Chain
+5.445	STRESS-3002: Math × Collection Chain
+3.347	STRESS-3003: Cross-Type Promotion Chain
+9.587	STRESS-3004: Closure + Composition Chain
+4.604	STRESS-5001: 20-Function Module
+30.62	STRESS-6000: sort kwargs
+2.835	STRESS-6001: clamp/fld/cld
+20.276	STRESS-6002: String kwargs
+29.81	STRESS-7000: Empty/Single Inputs
+3.661	STRESS-7001: NaN/Inf/-0.0
+9.173	STRESS-7002: Overflow/Large
+16.928	STRESS-8000: Binaryen Survey
+12.785	STRESS-8001: Binaryen Deep Validation
+49.973	Statistics stdlib

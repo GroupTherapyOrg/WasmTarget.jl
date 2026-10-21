@@ -1,9 +1,16 @@
 # Build outputs
 *.wasm
 *.wat
+# hand-written sidecar modules are source, not build output
+!test/sidecar/*.wat
 docs/dist/
 docs/build/
 Manifest.toml
+
+# Reports the fuzz tools regenerate on every run (test/fuzz/run.jl, stdlib_coverage.jl)
+test/fuzz/failures/INDEX.md
+test/fuzz/COVERAGE.md
+test/fuzz/STDLIB_COVERAGE.md
 
 # Node
 node_modules/
@@ -17,5 +24,13 @@ node_modules/
 
 # Claude Code
 .claude/worktrees/
-ralph_loops/
 Manifest-v*.toml
+# TLC's default metadir (run_tlc.sh passes its own under $TMPDIR)
+dev/formal/states/
+# the blocking gate's evidence records and logs (dev/block.jl), one per tree, never committed
+dev/.block/
+# the landing log (dev/land.sh, L197), the main tree's, never committed; its copy through the previous
+# landing, which each landing carries in its own tree (A21E4), and the landings' excuse files are
+dev/.loop/*
+!dev/.loop/landings.log
+!dev/.loop/excuse/

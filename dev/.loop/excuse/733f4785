@@ -1,0 +1,1 @@
+lock: committed 19:58:24Z, it waited the orchestrator's slot order behind audit entry 27, the map tsv and 3ab2fb81 (the --pieces commit); it landed in 55.4 s on a cold gate of 46.9 s

@@ -1,39 +1,51 @@
 # F3 sub-loop L2b (dev/HISTORY.md#closures-and-dynamic-dispatch) — value-type propagation past Julia's Box{Any} erasure.
 #
-# f3_box_value_types(code, ssa_types) forward-propagates concrete types from each %new(Core.Box)
+# f3_box_value_types(nir) forward-propagates concrete types from each %new(Core.Box)
 # with concrete contents: box-reads (getfield(box,:contents), inferred Any) → the contents type;
 # ops that CONSUME a box-derived value → their computed result type. The typed-box wiring consumes
 # this so the getfield→… chain lands i64 values in i64 locals (not anyref-from-erasure). DORMANT:
 # nothing reads it yet (byte-identical). Only box-DERIVED SSAs are typed — no false positives on
 # unrelated concrete-result calls.
 
+# The box-capture analysis takes every closure body of a callable type (closure_bodies) and asks
+# each call's return type of `rettype`: a compilation passes its collected world's bodies and the
+# collector's inference entry; a test outside any compilation takes every specialization Julia
+# holds of the type's call methods, inferred by the WasmInterpreter, and that same entry.
+_f3_bodies_propagate(@nospecialize(T)) = Tuple{Core.MethodInstance,Core.CodeInfo}[
+    (mi, r[1][1]) for m in Base._methods_by_ftype(Tuple{T, Vararg{Any}}, -1, Base.get_world_counter())
+    for mi in Base.specializations(m.method)
+    if mi isa Core.MethodInstance && mi.specTypes isa DataType && mi.specTypes.parameters[1] === T
+    for r in (Base.code_typed_by_type(mi.specTypes; interp=WasmTarget.get_wasm_interpreter()),) if !isempty(r)]
+
 @testset "F3 L2b: f3_box_value_types value-type propagation" begin
-    @test isempty(WasmTarget.f3_self_box_joins(Any[], Any[], Tuple{Vararg{Int64}}))
+    @test isempty(WasmTarget.capture_read_types(WasmTarget.NirStmt[], Any[],
+                                                Dict{Tuple{Type,Symbol},Type}(); spectypes=Type[Tuple{Vararg{Int64}}], closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
     # counter: `s` mutated capture → Core.Box{Int64}; getfield(box,:contents)::Any must propagate Int64.
     fcounter(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     ci = code_typed(fcounter, (Int64,); optimize = true)[1].first
-    vt = WasmTarget.f3_box_value_types(ci.code, ci.ssavaluetypes)
+    nir = WasmTarget.build_nir(ci)
+    vt = WasmTarget.f3_box_value_types(nir; spectypes=WasmTarget.nir_slot_types(ci), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
 
     @test !isempty(vt)
     @test all(==(Int64), values(vt))                       # box contents is Int64
     # every typed SSA is a box-read (getfield(_, :contents)) — no unrelated calls captured
     for (i, _) in vt
-        s = ci.code[i]
-        @test s isa Expr && s.head === :call && s.args[1] isa GlobalRef &&
-              s.args[1].name === :getfield &&
-              length(s.args) >= 3 && s.args[3] isa QuoteNode && s.args[3].value === :contents
+        node = nir[i].node
+        @test node isa WasmTarget.NirCall && node.callee === getfield &&
+              length(node.operands) >= 2 &&
+              node.operands[2] isa WasmTarget.NirLiteral && node.operands[2].value === :contents
     end
 
     # float accumulator → Float64 contents
     faccum(n::Int64) = (s = 0.0; foreach(i -> (s += i), 1:n); s)
     cif = code_typed(faccum, (Int64,); optimize = true)[1].first
-    vtf = WasmTarget.f3_box_value_types(cif.code, cif.ssavaluetypes)
+    vtf = WasmTarget.f3_box_value_types(WasmTarget.build_nir(cif); spectypes=WasmTarget.nir_slot_types(cif), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
     @test !isempty(vtf) && all(==(Float64), values(vtf))
 
     # no Core.Box → empty (no false positives on an ordinary numeric fn)
     fplain(x::Int64) = (a = x + 1; b = a * 2; b - 3)
     cip = code_typed(fplain, (Int64,); optimize = true)[1].first
-    @test isempty(WasmTarget.f3_box_value_types(cip.code, cip.ssavaluetypes))
+    @test isempty(WasmTarget.f3_box_value_types(WasmTarget.build_nir(cip); spectypes=WasmTarget.nir_slot_types(cip), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type))
 
     # A concrete dominating write also proves non-numeric captured contents.
     # Julia boxes this local because its surrounding scope owns the name.
@@ -47,8 +59,16 @@
     end
     vf = vector_capture()
     vci = only(code_typed(vf, ())).first
-    vjoins = WasmTarget.f3_self_box_joins(
-        vci.code, vci.ssavaluetypes, typeof(vf); argtypes=())
+    vnir = WasmTarget.build_nir(vci)
+    # the creator records the box's type (its only write is the closure's, so the box starts
+    # undefined and holds Vector{Int64}); the closure's reads are typed from that record
+    cci = only(code_typed(vector_capture, ())).first
+    vst, cst = WasmTarget.nir_slot_types(vci), WasmTarget.nir_slot_types(cci)
+    vrec = WasmTarget.record_capture_contents(Any[(WasmTarget.build_nir(cci), cst),
+                                                  (vnir, vst)]; closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+    @test vrec[(typeof(vf), :result)] === Vector{Int64}
+    vjoins = WasmTarget.capture_read_types(vnir, vnir, vrec;
+                                           spectypes=WasmTarget.nir_slot_types(vci), closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
     @test Vector{Int64} in values(vjoins)
 
     # The recovered contents type must reach codegen, not merely the analysis
@@ -74,14 +94,18 @@
     # must both propagate the contents type. Without the closure seed the body sees no box at all.
     fcl(n::Int64) = (s = 0; foreach(i -> (s += i), 1:n); s)
     cic = code_typed(fcl, (Int64,); optimize = true)[1].first
-    bid = WasmTarget.find_box_news(cic.code)[1]
-    bodies = WasmTarget._f3_capturing_closure_bodies(cic.code, bid)
+    cnir = WasmTarget.build_nir(cic)
+    bid = WasmTarget.find_box_news(cnir)[1]
+    bodies = WasmTarget._f3_capturing_closure_bodies(cnir, bid; spectypes=WasmTarget.nir_slot_types(cic), closure_bodies=_f3_bodies_propagate)
     @test !isempty(bodies)
-    for (bcode, bsst, bspec) in bodies
-        seeds = WasmTarget.f3_closure_box_seeds(bcode, bspec[1], Int64)
-        @test !isempty(seeds) && all(==(Int64), values(seeds))          # captured-box field reads
-        vt = WasmTarget.f3_box_value_types(bcode, bsst; extra_box_seeds = seeds, spectypes = bspec)
-        # both the getfield read AND the s+i add (resolved Int64 via spectypes) propagate
+    for (bnir, bspec) in bodies
+        local boxf = only(fieldname(bspec[1], k) for k in 1:fieldcount(bspec[1])
+                          if fieldtype(bspec[1], k) === Core.Box)
+        vt = WasmTarget.capture_read_types(bnir, bnir,
+                                           Dict{Tuple{Type,Symbol},Type}((bspec[1], boxf) => Int64);
+                                           spectypes = bspec, closure_bodies=_f3_bodies_propagate, rettype=WasmTarget.infer_return_type)
+        # both the contents read AND the s+i add (resolved Int64 via spectypes) propagate;
+        # the box reads themselves are never retyped
         @test count(==(Int64), values(vt)) >= 2
     end
 end

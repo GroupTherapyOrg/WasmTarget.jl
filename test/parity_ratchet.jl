@@ -1,20 +1,25 @@
 # ============================================================================
-# parity_ratchet.jl — structural enforcement for dev/PARITY_MASTER.md.
+# parity_ratchet.jl — the machine checks of dev/CHARTER.md, the definition of done: every
+# lock and ratchet, and the per-clause status the run prints last.
 #
 # Makes "clean up as you go" MECHANICAL: every structural-disease metric from the
 # 2026-07-01 census is counted here with a precise pattern and compared against the
 # committed baseline (dev/parity_baseline.toml).
 #
 #   RATCHET metrics may only go DOWN.  count > baseline  ⇒  FAIL.
-#   LOCK    metrics must match EXACTLY. count != locked  ⇒  FAIL.
+#   LOCKS pass only at 0.               count != 0       ⇒  FAIL (A3P9).
+#   The baseline holds exactly the ratchets: a ratchet with no baseline line, or a
+#   baseline key that names no ratchet                   ⇒  FAIL (A12P5).
 #
 # When a commit legitimately lowers a count, tighten the baseline IN THE SAME COMMIT:
 #     WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
-# (update mode still FAILS on any increase — a ratchet never loosens; flipping a
-# metric from ratchet to lock is done by hand in the baseline = "phase done").
+# (update mode still FAILS on any increase — a ratchet never loosens; a ratchet at 0 becomes a
+# lock by moving its definition from METRICS to LOCKS, and the baseline records ratchets only:
+# update mode rewrites it with every ratchet's count, recording a new one and dropping a key
+# that names none, a reviewable diff).
 #
 # Run standalone (seconds, exit 0/1):   julia --project=. test/parity_ratchet.jl
-# Also included by runtests.jl on shard 0 as a @testset.
+# Also included by runtests.jl as a @testset, on the shard its _wt_qa dealing gives it.
 # ============================================================================
 module ParityRatchet
 
@@ -29,6 +34,11 @@ const BASELINE_PATH = joinpath(ROOT, "dev", "parity_baseline.toml")
 
 _iscomment(line::AbstractString) = startswith(lstrip(line), "#")
 
+# Each file is read once per run: the locks read the tree as it is when the run starts, and ~200
+# of them walking src/ line by line read every file ~40 times (the gate's budget, L194).
+const _LINES = Dict{String,Vector{String}}()
+_file_lines(path::AbstractString)::Vector{String} = get!(() -> readlines(path), _LINES, String(path))
+
 # Minimal reader for the baseline's `[section]` / `key = int` shape (TOML-compatible subset).
 function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
     out = Dict{String,Dict{String,Int}}()
@@ -41,20 +51,26 @@ function _read_baseline(path::String)::Dict{String,Dict{String,Int}}
             section = m.captures[1]
             out[section] = get(out, section, Dict{String,Int}())
         # Accept TOML inline comments.  Without this, an annotated baseline entry is
-        # silently omitted and reported as NEW(baseline), which disables its ratchet.
-        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing && !isempty(section)
-            out[section][m.captures[1]] = parse(Int, m.captures[2])
+        # omitted and its ratchet reported MISSING. A key before any `[section]` is kept
+        # under "" so that run() reports it as naming no ratchet (A12P5).
+        elseif (m = match(r"^(\w+)\s*=\s*(\d+)(?:\s+#.*)?$", s)) !== nothing
+            local d = get!(out, section, Dict{String,Int}())
+            # a key twice would keep its last line, so a second, larger line would loosen its
+            # ratchet silently (TOML forbids it): refused, as the run refuses a STRAY key (A13P18)
+            haskey(d, m.captures[1]) && error("$(path): [$(section)] $(m.captures[1]) appears twice; delete one line")
+            d[m.captures[1]] = parse(Int, m.captures[2])
         end
     end
     return out
 end
 
-function _write_baseline(path::String, metrics::Dict{String,Int}, locks::Dict{String,Int})
+# the ratchets' values only: a lock's value is 0 by definition (A3P9), so none is recorded
+function _write_baseline(path::String, metrics::Dict{String,Int})
     open(path, "w") do io
         println(io, "# dev/parity_baseline.toml — enforced by test/parity_ratchet.jl.")
-        println(io, "# RATCHET: counts may only DECREASE. LOCKS: must match exactly.")
+        println(io, "# RATCHETS only: counts may only DECREASE. A lock passes only at 0 and is not recorded.")
         println(io, "# Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl")
-        for (name, d) in (("locks", locks), ("metrics", metrics))
+        for (name, d) in (("metrics", metrics),)
             println(io, "\n[", name, "]")
             for k in sort!(collect(keys(d)))
                 println(io, k, " = ", d[k])
@@ -78,7 +94,7 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
             # Windows: normalize separators so "codegen/values.jl" excludes match D:\...\codegen\values.jl
             _npath = replace(path, '\\' => '/')
             any(x -> endswith(_npath, x), exclude_files) && continue
-            for line in eachline(path)
+            for line in _file_lines(path)
                 _iscomment(line) && continue
                 occursin(rx, line) || continue
                 exclude_line !== nothing && occursin(exclude_line, line) && continue
@@ -89,69 +105,1751 @@ function count_sites(rx::Regex; roots=[SRC], exclude_files=String[],
     return n
 end
 
+"""
+Count every line in `.jl` files under `roots` matching `rx`, including comment lines.
+Used for metrics that must count sediment like marches and narration tags.
+"""
+function count_lines_all(rx::Regex; roots=[SRC])
+    n = 0
+    for root in roots
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            for line in _file_lines(joinpath(dir, f))
+                occursin(rx, line) && (n += 1)
+            end
+        end
+    end
+    return n
+end
+
+"""
+Return the line span of the top-level definition whose first line starts with `header`,
+using Julia's own parser (keyword-counting cannot see `@inbounds for`, trailing `do`, or
+one-line `if … end`). 0 if no such definition exists.
+"""
+function function_body_lines(path::String, header::AbstractString)::Int
+    lines = readlines(path)
+    start = findfirst(l -> startswith(l, header), lines)
+    start === nothing && return 0
+    ex = Meta.parseall(read(path, String); filename=path)
+    linenos(e, acc) = (e isa LineNumberNode ? push!(acc, e.line) :
+                       e isa Expr ? foreach(a -> linenos(a, acc), e.args) : nothing; acc)
+    for top in ex.args
+        top isa Expr || continue
+        ls = linenos(top, Int[])
+        isempty(ls) && continue
+        # a docstring makes the top-level expression begin before the header line
+        minimum(ls) <= start <= maximum(ls) && return maximum(ls) - start + 1
+    end
+    return 0
+end
+
+# ---- R30/R31 (Phase 12.I): parser-based, not regex-based ---------------------
+# Both walk Meta.parseall's AST rather than grep patterns: a return-type
+# annotation or a field's declared type can span lines, hide behind a `where`
+# clause, or sit inside a macrocall — none of which a line-oriented regex sees
+# reliably. Shared by R30 and R31 below.
+
+"""`where T` clauses wrap the real call/`::` signature; strip them to get at it."""
+function _strip_where(sig)
+    while sig isa Expr && sig.head === :where
+        sig = sig.args[1]
+    end
+    return sig
+end
+
+"""The name expr in call position of a (`where`-stripped) signature, or `nothing`
+if `sig` isn't a `::`-annotated or bare call signature at all (e.g. an anonymous
+`function (x) … end`, whose sig is a bare tuple/arg list)."""
+function _sig_call_name(sig)
+    core = _strip_where(sig)
+    if core isa Expr && core.head === :(::) && length(core.args) == 2
+        core = core.args[1]
+    end
+    (core isa Expr && core.head === :call) || return nothing
+    return core.args[1]
+end
+
+"""A named call signature: `f(...)`, `Mod.f(...)`, or `Foo{T}(...)` — as opposed
+to a functor/anonymous signature (`(c::Closure)(x)`, `function (x) … end`)."""
+function _is_named_call_sig(sig)::Bool
+    name = _sig_call_name(sig)
+    return name isa Symbol || (name isa Expr && (name.head === :(.) || name.head === :curly))
+end
+
+"""Does the (`where`-stripped) signature carry a `::T` return-type annotation?"""
+_has_return_annotation(sig) = sig isa Expr && sig.head === :(::) && length(sig.args) == 2
+
+"""
+The definitions whose `::Any` return is a named heterogeneous seam (dev/CHARTER.md C4: no
+`Any` outside named seams), by function name, each with why its value is open by
+construction. Any other `::Any` return counts in R30 as untyped.
+"""
+const R30_ANY_SEAMS = Dict{Symbol,String}(
+    :_resolve_nircall_callee => "a call's callee resolved to its object: a function, a type or any callable value",
+    :_nir_callee_object => "a callee operand's object: a function, a type or any callable value",
+    :resolve_call_callee => "a :call's callee resolved to its object, or the operand of a dynamic callee",
+    :nir_callee => "a callee operand resolved to its one representation: a constant's object, an unbound GlobalRef or a runtime value's node",
+    :nir_operand_callee => "a callee operand resolved by the one rule over its static type: a constant's object, an unbound GlobalRef, a singleton's instance or a runtime value's node",
+    :nir_const => "a literal operand's value, any Julia value",
+    :_nir_const_operand => "a constant operand's value, any Julia value",
+    :_nir_field_name => "a getfield operand's literal, whatever the IR wrote there",
+    :_runtime_composition_apply => "a runtime composition returns whatever its last function returns",
+)
+
+"""
+Count `function f(...)`/`f(...) = ...` definitions under `roots` with no `::T`
+return-type annotation. Walks Meta.parseall's AST rather than lines, so a
+signature split across lines or wrapped in `where`/a macrocall (`@inline`) is
+still seen correctly. Excluded, structurally (not by name-list):
+  - a definition nested inside another counted definition's body — a closure,
+    whose return type isn't part of any public signature;
+  - an anonymous/functor signature (`function (x) … end`, `(c::Closure)(x)`)
+    — there is no name to attach an annotation to;
+  - a qualified extension of another module's method (`Base.show`, dart's
+    `CC.abstract_apply`, …) — the return type is the interface's contract,
+    not WasmTarget's to annotate (still recursed into, to exclude any
+    closures defined inside it).
+"""
+function count_untyped_returns(roots::Vector{String})::Int
+    n = 0
+    for root in roots
+        isdir(root) || continue
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            path = joinpath(dir, f)
+            local ex
+            try
+                ex = Meta.parseall(read(path, String); filename=path)
+            catch
+                continue
+            end
+            n += _count_untyped_returns_in(ex, false)
+        end
+    end
+    return n
+end
+
+function _count_untyped_returns_in(ex, in_fn::Bool)::Int
+    ex isa Expr || return 0
+    is_def = ex.head === :function ||
+             (ex.head === :(=) && length(ex.args) == 2 && ex.args[1] isa Expr &&
+              (ex.args[1].head === :call || ex.args[1].head === :where ||
+               (ex.args[1].head === :(::) && ex.args[1].args[1] isa Expr &&
+                (ex.args[1].args[1].head === :call || ex.args[1].args[1].head === :where))))
+    if is_def
+        in_fn && return 0   # nested definition = closure — excluded, don't recurse further
+        sig = ex.args[1]
+        _is_named_call_sig(sig) || return 0   # anonymous/functor — excluded
+        body = length(ex.args) >= 2 ? ex.args[2] : nothing
+        name = _sig_call_name(sig)
+        if name isa Expr && name.head === :(.)   # qualified extension — interface's contract
+            return body === nothing ? 0 : _count_untyped_returns_in(body, true)
+        end
+        below = body === nothing ? 0 : _count_untyped_returns_in(body, true)
+        local core = _strip_where(sig)
+        typed = _has_return_annotation(core) &&
+                (core.args[2] !== :Any || (name isa Symbol && haskey(R30_ANY_SEAMS, name)))
+        return (typed ? 0 : 1) + below
+    end
+    return sum(a -> _count_untyped_returns_in(a, in_fn), ex.args; init=0)
+end
+
+"""Does the field-type expr `t` contain the symbol `Any` — as itself, or nested
+inside a parametric type (`Dict{Any,V}`, `Vector{Any}`, `Union{Nothing,Any}`)?
+A `Dict{Any,V}` seam is exactly as open as a literal `::Any` field: there is no
+fixed key type either way."""
+function _type_mentions_any(t)::Bool
+    t === :Any && return true
+    t isa Expr || return false
+    t.head === :curly && return any(_type_mentions_any, t.args)
+    t.head === :where && return _type_mentions_any(t.args[1])
+    return false
+end
+
+"""Extract `(fieldname::Symbol, type_expr_or_nothing)` from one element of a
+struct body, or `nothing` if `el` isn't a field decl at all (an inner
+constructor, a macro call, a docstring). `nothing` for the type means bare
+`field` — untyped, implicitly `Any`. Unwraps `Base.@kwdef`'s `field::T =
+default` down to `field::T`."""
+function _field_decl(el)
+    el isa Symbol && return (el, nothing)
+    el isa Expr || return nothing
+    if el.head === :(::) && length(el.args) == 2 && el.args[1] isa Symbol
+        return (el.args[1], el.args[2])
+    end
+    el.head === :(=) && length(el.args) == 2 && return _field_decl(el.args[1])
+    return nothing
+end
+
+# R31's allowlist: named heterogeneous seams where the field genuinely cannot
+# carry a fixed type, each with a one-line reason. (struct, field) => skip.
+const R31_ALLOWLIST = Set{Tuple{Symbol,Symbol}}([
+    (:WasmDiagnostic, :detail),         # the raw Expr/MethodInstance/Type a diagnostic points at — open by construction
+    (:WasmInternalError, :cause),       # the value a codegen bug threw — Julia can throw any value
+    (:NirGlobalRef, :value),            # a bound global's value — as open as a literal's
+    (:NirUnsupported, :raw),            # the raw IR node the boundary could not classify — open by construction
+    (:CompilationContext, :func_ref),   # the function being compiled — anything callable, as FunctionInfo.func_ref
+    (:CompilationContext, :captured_constant_fields),  # a closure's captured constants, by field — open values
+    (:RootBindings, :captured_constants),              # an entry closure's captured constants, by name — open values
+    (:RootBindings, :bound_leaves),     # (callable, argument types) of a bound leaf — the callable is open
+    (:TypeRegistry, :constant_globals),                # constants.dart's constant map: a constant is any value
+    (:TypeRegistry, :mutable_constant_globals),        # the same, for a mutable constant (by identity)
+    (:NirLiteral, :value),              # a Julia literal's runtime value — literals are open
+    (:NirCall, :callee),                # the callee object (Function/Type/Builtin) — callees are open
+    (:NirInvoke, :callee),              # ditto: an :invoke's own callee operand, which is a
+                                        # NirNode when a closure VALUE is invoked
+    (:FunctionInfo, :func_ref),         # the registries' Function values — holds a Function, Type, or Builtin (anything callable)
+    (:FunctionRegistry, :by_ref),       # keyed by the same open func_ref
+    (:DispatchTable, :func_ref),        # DispatchTableRegistry's func_ref keys — same "anything callable" seam
+    (:DispatchTableRegistry, :tables),
+    (:DispatchTableRegistry, :selector_axis),
+    (:DispatchTableRegistry, :selector_offset),
+    (:DispatchTableRegistry, :selector_positions),
+    (:DispatchTableRegistry, :selector_cascades),
+    (:WasmInterpreter, :layout_reads),  # the host-layout memo, keyed by a specialization's specTypes or its CodeInstance (ir_reads_host_layout's key) — open by construction
+    (:Translator, :constants_in_progress),  # the constant objects being emitted (cycle and depth guard) — any constant value
+    (:WasmInterpreter, :cache_token),   # Core.Compiler's AbstractInterpreter cache-owner token — the @nospecialize'd interface leaves its type open
+    (:ClosedWorld, :codeinfos),         # Core.Compiler.compile!'s output as it hands it: CodeInstance, CodeInfo alternating in a Vector{Any}
+    (:ClosedWorldPlan, :functions),     # (callable, argument types, name, MethodInstance) — the callable is open, as FunctionInfo.func_ref
+    (:ClosedWorldPlan, :external_leaves),  # (callable, argument types, MethodInstance) of each declared import — the callable is open, as FunctionInfo.func_ref
+])
+
+"""
+Count `struct`/`mutable struct` fields anywhere in `src` that are `::Any`,
+untyped, or `Any`-parametric (`Dict{Any,V}`), minus R31_ALLOWLIST's named
+seams. Parser-based (Meta.parseall): a field's type can span lines or sit
+behind `Base.@kwdef`'s `= default`, which a regex would misread as a value
+assignment rather than a field declaration.
+"""
+function count_any_typed_fields()::Int
+    n = 0
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        path = joinpath(dir, f)
+        local ex
+        try
+            ex = Meta.parseall(read(path, String); filename=path)
+        catch
+            continue
+        end
+        n += _count_any_fields_in(ex)
+    end
+    return n
+end
+
+function _count_any_fields_in(ex)::Int
+    ex isa Expr || return 0
+    n = 0
+    if ex.head === :struct
+        name_expr = ex.args[2]
+        sname = Symbol(name_expr isa Expr ? name_expr.args[1] : name_expr)
+        block = ex.args[3]
+        if block isa Expr && block.head === :block
+            for el in block.args
+                decl = _field_decl(el)
+                decl === nothing && continue
+                fname, ftype = decl
+                (ftype === nothing || _type_mentions_any(ftype)) || continue
+                (sname, fname) in R31_ALLOWLIST && continue
+                n += 1
+            end
+        end
+    end
+    for a in ex.args
+        n += _count_any_fields_in(a)
+    end
+    return n
+end
+
+# Prose files are read line-ending-agnostic: a Windows checkout may carry CRLF, and a check
+# that silently parses nothing there is a check that silently passes or fails by platform.
+_text(path::String)::String = replace(read(path, String), "\r\n" => "\n")
+_lines(path::String)::Vector{String} = String.(split(chomp(_text(path)), '\n'))
+
+# ---- dev/CHARTER.md support --------------------------------------------------
+const CHARTER_PATH = joinpath(ROOT, "dev", "CHARTER.md")
+
+# ---- R32: every definition carries its dart anchor or quarantine (dev/CHARTER.md C2) ----
+# Counted on the PARSED syntax tree, one entry per definition — every method separately, so an
+# anchored dart-shaped method never hides an invented method of the same name. A definition is
+# anchored when its docstring (read from the tree, not by scanning lines) or the contiguous
+# comment block directly above it contains `parity(`, or it lies inside a
+# `# parity-region(...)` … `# end parity-region` block.
+
+const _DEF_WRAPPERS = (Symbol("@inline"), Symbol("@noinline"), Symbol("@generated"),
+                       Symbol("@nospecialize"), Symbol("@assume_effects"), Symbol("@propagate_inbounds"))
+
+_macroname(x) = x isa Symbol ? x : x isa GlobalRef ? x.name :
+                (x isa Expr && x.head === :. ? _macroname(x.args[end]) : x isa QuoteNode ? x.value : nothing)
+
+"""The name a top-level definition defines, or `nothing` when `ex` is not a definition."""
+function _def_name(ex)::Union{Nothing,String}
+    ex isa Expr || return nothing
+    h = ex.head
+    callname(c) = c isa Expr && c.head === :where ? callname(c.args[1]) :
+                  c isa Expr && c.head === :(::) && length(c.args) == 2 ? callname(c.args[1]) :
+                  c isa Expr && c.head === :call ? string(c.args[1]) : nothing
+    typename(t) = t isa Symbol ? string(t) : t isa Expr && t.head in (:<:, :curly) ? typename(t.args[1]) : string(t)
+    h === :function && return length(ex.args) >= 1 ? something(callname(ex.args[1]), string(ex.args[1])) : nothing
+    h === :(=) && return callname(ex.args[1])
+    h === :struct && return typename(ex.args[2])
+    h in (:abstract, :primitive) && return typename(ex.args[1])
+    h === :macro && return "@" * something(callname(ex.args[1]), "?")
+    h === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) &&
+        return string(ex.args[1].args[1] isa Expr ? ex.args[1].args[1].args[1] : ex.args[1].args[1])
+    return nothing
+end
+
+"""
+Every top-level definition in one source file as `(name, line, anchored)`. Descends through
+`module`, `begin`/`toplevel` blocks and `if` bodies (a conditionally defined method is still a
+definition), and through docstring and annotation macros (`@inline`, …) to the definition.
+"""
+function toplevel_definitions(path::String)::Vector{Tuple{String,Int,Bool}}
+    src = _text(path)
+    lines = split(src, '\n')
+    regions = falses(length(lines) + 1)
+    inreg = false
+    for (i, l) in enumerate(lines)
+        startswith(l, "# parity-region(") && (inreg = true)
+        startswith(l, "# end parity-region") && (inreg = false)
+        regions[i] = inreg
+    end
+    comment_anchor(line) = begin   # contiguous comment block directly above `line`
+        j = line - 1; found = false
+        while j >= 1 && startswith(lstrip(lines[j]), "#")
+            occursin("parity(", lines[j]) && (found = true); j -= 1
+        end
+        found
+    end
+    out = Tuple{String,Int,Bool}[]
+    function visit(ex, line::Int)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :block, :module)
+            body = ex.head === :module ? ex.args[3].args : ex.args
+            l = line
+            for a in body
+                a isa LineNumberNode ? (l = a.line) : visit(a, l)
+            end
+            return
+        end
+        if ex.head === :if || ex.head === :elseif
+            foreach(a -> visit(a, line), ex.args[2:end])
+            return
+        end
+        doc = ""
+        d = ex
+        while d isa Expr && d.head === :macrocall
+            m = _macroname(d.args[1])
+            if m === Symbol("@doc")
+                doc *= string(d.args[3]); d = d.args[4]
+            elseif m in _DEF_WRAPPERS
+                d = d.args[end]
+            else
+                break
+            end
+        end
+        name = _def_name(d)
+        name === nothing && return
+        anchored = occursin("parity(", doc) || comment_anchor(line) || regions[line]
+        push!(out, (name, line, anchored))
+    end
+    visit(Meta.parseall(src; filename=path), 1)
+    return out
+end
+
+"""
+The top-level definitions of one source file whose syntax reads the field `field` on any receiver
+(`x.field`, whatever `x` is spelled), by name, one entry per definition that reads it; a top-level
+form that is not a definition and reads it counts as "<top level>". Walks Meta.parseall's tree,
+descending as toplevel_definitions does, so a reader is credited to the definition that holds it
+(a short form `f(m) = m.field` included) and a comment or a string never counts.
+"""
+function field_readers(path::String, field::Symbol)::Vector{String}
+    reads(ex) = ex isa Expr && ((ex.head === :. && length(ex.args) == 2 && ex.args[2] == QuoteNode(field)) ||
+                                any(reads, ex.args))
+    out = String[]
+    function visit(ex)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :block, :module)
+            foreach(visit, ex.head === :module ? ex.args[3].args : ex.args)
+            return
+        end
+        if ex.head === :if || ex.head === :elseif
+            reads(ex.args[1]) && push!(out, "<top level>")
+            foreach(visit, ex.args[2:end])
+            return
+        end
+        d = ex
+        while d isa Expr && d.head === :macrocall
+            m = _macroname(d.args[1])
+            m === Symbol("@doc") ? (d = d.args[4]) : m in _DEF_WRAPPERS ? (d = d.args[end]) : break
+        end
+        reads(d) && push!(out, something(_def_name(d), "<top level>"))
+    end
+    visit(Meta.parseall(_text(path); filename=path))
+    return out
+end
+
+"""
+Bare string literals among the top-level statements of `src` — each is a docstring cut off from
+its definition (a comment line between a docstring and its definition detaches it) or prose
+with no definition under it. Either way the documentation is attached to nothing: stale by
+construction (dev/CHARTER.md C9). Counted on the parsed syntax tree.
+"""
+function count_detached_docstrings(root::String=SRC)::Int
+    n = 0
+    function visit(ex)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :module, :block)
+            body = ex.head === :module ? ex.args[3].args : ex.args
+            for a in body
+                a isa String ? (n += 1) : visit(a)
+            end
+        end
+    end
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") && visit(Meta.parseall(_text(joinpath(dir, f)); filename=f))
+    end
+    return n
+end
+
+"""The top-level definitions in `src/` with no `parity(` anchor — dev/CHARTER.md C2."""
+function count_unanchored_definitions(root::String=SRC)::Int
+    n = 0
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") || continue
+        n += count(d -> !d[3], toplevel_definitions(joinpath(dir, f)))
+    end
+    return n
+end
+
+"""
+Catch clauses in `src` whose handler swallows the failure — it neither rethrows, throws,
+errors, nor records a located diagnostic (record_unsupported!/emit_unsupported_stub!/
+WasmInternalError/WasmCompileError). dev/CHARTER.md C6: a failure is correct or loud, never a
+silent default. Counted on the parsed AST (Expr(:try, body, var, handler)), not by regex.
+"""
+function count_silent_catches(root::String=SRC)::Int
+    loud = r"\brethrow\b|\bthrow\(|\berror\(|record_unsupported!|emit_unsupported_stub!|WasmInternalError|WasmCompileError"
+    n = 0
+    walk(x) = x isa Expr ? (x.head === :try && length(x.args) >= 3 && x.args[3] !== false &&
+                            !occursin(loud, string(x.args[3])) && (n += 1);
+                            foreach(walk, x.args)) : nothing
+    for (dir, _, files) in walkdir(root), f in files
+        endswith(f, ".jl") || continue
+        walk(Meta.parseall(read(joinpath(dir, f), String); filename=f))
+    end
+    return n
+end
+
+"""
+The `emit_value!` calls under `root` that name no expected type (three positional
+arguments), as `(file, line, source line)`. dart2wasm has exactly one such emission: the
+visitor call inside `translateExpression` (code_generator.dart:676 `node.accept1(this,
+expectedType)`), which is `emit_value!(b, val, ctx)` in `_emit_value_wrap!`, the body
+emit_value! and emit_value_as! share; that one call is not listed. Walks Meta.parseall's AST, so a call with nested
+parentheses, keywords or several lines is found like any other (R17, L35).
+"""
+function untyped_value_emissions(root::String=CODEGEN)::Vector{Tuple{String,Int,String}}
+    out = Tuple{String,Int,String}[]
+    positional(ex) = [a for a in ex.args[2:end] if !(a isa Expr && a.head in (:parameters, :kw))]
+    for (dir, _, files) in walkdir(root), f in sort(files)
+        endswith(f, ".jl") || continue
+        path = joinpath(dir, f)
+        lines = readlines(path)
+        claimed = Set{Int}()
+        line = Ref(0)
+        function visit(ex, in_funnel::Bool)
+            if ex isa LineNumberNode
+                line[] = ex.line
+            elseif ex isa Expr
+                if ex.head === :call && ex.args[1] === :emit_value!
+                    pos = positional(ex)
+                    if length(pos) == 3 && !(in_funnel && pos == Any[:b, :val, :ctx])
+                        needle = "emit_value!(" * string(pos[1])
+                        at = findfirst(k -> k >= line[] && !(k in claimed) &&
+                                            occursin(needle, lines[k]), eachindex(lines))
+                        at === nothing && (at = line[])
+                        push!(claimed, at)
+                        push!(out, (f, at, strip(lines[at])))
+                    end
+                end
+                if ex.head === :function || (ex.head === :(=) && ex.args[1] isa Expr &&
+                                             ex.args[1].head in (:call, :where))
+                    sig = _strip_where(ex.args[1])
+                    sig isa Expr && sig.head === :(::) && (sig = sig.args[1])
+                    funnel = sig isa Expr && sig.head === :call && sig.args[1] === :_emit_value_wrap! &&
+                             length(positional(sig)) == 5
+                    for a in ex.args[2:end]
+                        visit(a, funnel)
+                    end
+                    return
+                end
+                foreach(a -> visit(a, in_funnel), ex.args)
+            end
+        end
+        visit(Meta.parseall(read(path, String); filename=path), false)
+    end
+    return out
+end
+
+
+# ── R40: process-global compile state (one compilation's state lives on its Translator) ──
+# module-level mutable state in src/: a Ref, RefValue or TaskLocalRef, or a container
+# constructed empty and filled at run time. Each allowed one is named here exactly, with why it
+# is not one compilation's state; an entry that no longer names a definition counts too.
+const R40_ALLOWED_PROCESS_STATE = Dict{String,String}(
+    "codegen/builtins.jl BUILTIN_LOWERINGS" =>
+        "the lowering registry: filled at load by each @builtin_lowering, read-only after (dart's intrinsic tables, intrinsics.dart, are static)",
+    "bridge.jl _DESC_CACHE" => "the host bridge's memo of descriptor(T), a pure function of T",
+    "bridge.jl _FN_CACHE" => "the host bridge's memo of each type's generated accessor functions",
+    "bridge.jl _ARG_CACHE" => "the host bridge's memo of each argument type's converter")
+
+function process_global_state_sites()::Vector{String}
+    local rx = r"^const (\w+)(?:::[^=]+)? = (?:(?:Base\.)?(?:Ref|RefValue|TaskLocalRef)\b|(?:Vector|Dict|IdDict|Set|WeakKeyDict)\{.*\}\(\)\s*$)"
+    local found = String[]
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        local path = joinpath(dir, f)
+        local rel = replace(relpath(path, SRC), '\\' => '/')
+        for l in eachline(path)
+            local m = match(rx, l)
+            m === nothing || push!(found, rel * " " * m.captures[1])
+        end
+    end
+    local bad = String[s for s in found if !haskey(R40_ALLOWED_PROCESS_STATE, s)]
+    for k in keys(R40_ALLOWED_PROCESS_STATE)
+        k in found || push!(bad, "stale allowlist entry: " * k)
+    end
+    return sort!(bad)
+end
+
+"""
+The smoke xfails that compile and then fail when they run: the entries of test/smoke.jl's
+XFAIL_RUNTIME (a wrong value, a trap, or a result the harness cannot read back). The table
+is static; smoke's xfail lane measures every case and fails when the table disagrees.
+"""
+function smoke_runtime_xfails()::Int
+    src = _text(joinpath(ROOT, "test", "smoke.jl"))
+    m = match(r"const XFAIL_RUNTIME = Dict\{String,Symbol\}\((.*?)\n\)"s, src)
+    m === nothing && error("R39: test/smoke.jl has no XFAIL_RUNTIME table")
+    return count(l -> occursin(r"^\s*\"[^\"]+/[^\"]+\" => :(wrong|trap|unreadable),", l),
+                 split(m.captures[1], '\n'))
+end
+
+"""
+    overlays_without_reason() -> Vector{String}
+
+Every `@overlay …WASM_METHOD_TABLE` definition in src and ext whose line, the comment lines
+directly above it, or the docstring directly above it carries no `parity(` anchor
+(dev/CHARTER.md C3): an overlay replaces Julia's own body, so it either goes (Julia's body
+compiles) or states why Julia's body cannot.
+"""
+function overlays_without_reason()::Vector{String}
+    bad = String[]
+    paths = [joinpath(d, f) for root in (SRC, joinpath(ROOT, "ext")) for (d, _, fs) in walkdir(root)
+             for f in fs if endswith(f, ".jl")]
+    for path in paths
+        L = _lines(path)
+        for (i, l) in enumerate(L)
+            # any macro prefix (`@noinline @overlay …`) and any spelling of the table (the
+            # WMT alias) is still an overlay
+            occursin(r"^\s*(?:@\w+\s+)*@overlay\s+\S+\s", l) || continue
+            ok = occursin("parity(", l)
+            j = i - 1
+            while !ok && j >= 1 && startswith(strip(L[j]), "#")
+                ok = occursin("parity(", L[j]); j -= 1
+            end
+            if !ok && j >= 1 && endswith(strip(L[j]), "\"\"\"")
+                k = j - 1
+                while k >= 1 && !occursin("\"\"\"", L[k])
+                    ok = ok || occursin("parity(", L[k]); k -= 1
+                end
+                ok = ok || (k >= 1 && occursin("parity(", L[k]))
+            end
+            ok || push!(bad, "$(relpath(path, ROOT)):$i")
+        end
+    end
+    return bad
+end
+
+"""
+    unresolved_dart_anchors() -> Vector{String}
+
+Every `parity(<file>.dart:<line> <Symbol>)` anchor in src against dart-lang/sdk at the commit
+pinned in dev/PARITY_MASTER.md (dev/CHARTER.md C2): the file exists (a path is relative to
+pkg/dart2wasm/lib unless it names its package or sdk/lib), the line exists, and it names the
+cited symbol (its last dotted component). The sources are read from `WT_DART_SDK`, else
+~/.cache/wasmtarget/dart-sdk (`bash dev/fetch_dart_sdk.sh` fetches exactly the cited files);
+no checkout at the pinned commit is one violation — the check never skips.
+"""
+function unresolved_dart_anchors()::Vector{String}
+    pin = match(r"[0-9a-f]{40}", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))).match
+    sdk = get(ENV, "WT_DART_SDK", joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk"))
+    head = isdir(sdk) ? readchomp(ignorestatus(`git -C $sdk rev-parse HEAD`)) : ""
+    head == pin || return ["no dart-lang/sdk checkout at $pin in $sdk: run `bash dev/fetch_dart_sdk.sh`"]
+    rx = r"parity(?:-region)?\(([A-Za-z0-9_/.\-]+\.dart):(\d+)(?:-\d+)?\s+([A-Za-z_$][A-Za-z0-9_$.]*)"
+    lines = Dict{String,Vector{String}}()
+    bad = String[]
+    for (d, _, fs) in walkdir(SRC), f in fs
+        endswith(f, ".jl") || continue
+        path = joinpath(d, f)
+        for (ln, l) in enumerate(_lines(path)), m in eachmatch(rx, l)
+            cited, line, sym = m.captures[1], parse(Int, m.captures[2]), m.captures[3]
+            rel = startswith(cited, "pkg/") || startswith(cited, "sdk/") ? cited : "pkg/dart2wasm/lib/" * cited
+            src = joinpath(sdk, rel)
+            where = "$(relpath(path, ROOT)):$ln $(m.match)"
+            isfile(src) || (push!(bad, "no file: $where"); continue)
+            text = get!(() -> _lines(src), lines, src)
+            line <= length(text) || (push!(bad, "no line: $where"); continue)
+            occursin(split(sym, '.')[end], text[line]) || push!(bad, "line does not name the symbol: $where")
+        end
+    end
+    return bad
+end
+
+"""
+    unconsumed_files_outside_src() -> Vector{String}
+
+Tracked files outside `src/` that nothing consumes (dev/CHARTER.md C9): a file is consumed
+when a tracked file that is not prose names it (a `.md` only by its full path; the plan,
+the history and the changelog name files without consuming them), when a loader walks its
+directory, or when it is a repository convention file or a directory's README. A fuzz-ledger
+gap marked `status: fixed` records finished work and counts too.
+"""
+function unconsumed_files_outside_src()::Vector{String}
+    convention = Set(["Project.toml", "LICENSE.md", "CHANGELOG.md", "AGENTS.md",
+        ".gitignore", ".gitattributes", "release-please-config.json",
+        ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
+    # directories a loader walks, each with the files that loader consumes: run_tlc.sh (the
+    # models and their instances), the docs site's file routing, the fuzz ledger and corpus,
+    # Pkg's [extensions], GitHub Actions. Anything else in them is consumed by nothing.
+    walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "test/fuzz/failures/" => r"",
+              "test/fuzz/corpus/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$")
+    not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
+    files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
+    texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
+                 if !(f in not_consumers) && isfile(joinpath(ROOT, f)))
+    bad = String[]
+    for f in files
+        startswith(f, "src/") && continue
+        (f in convention || basename(f) == "README.md" ||
+         any(((d, rx),) -> startswith(f, d) && occursin(rx, f), walked)) && continue
+        needle = endswith(f, ".md") ? f : basename(f)
+        any(((g, t),) -> g != f && !endswith(g, ".md") && occursin(needle, t), texts) || push!(bad, f)
+    end
+    for f in files
+        startswith(f, "test/fuzz/failures/") && isfile(joinpath(ROOT, f)) &&
+            occursin(r"^status: fixed"m, _text(joinpath(ROOT, f))) && push!(bad, f)
+    end
+    return bad
+end
+
+"""
+    components_without_model() -> Vector{String}
+
+dev/formal/README.md's Components table against src (dev/CHARTER.md C8): a modeled row whose
+model file is missing or whose model no file it names anchors (`formal(dev/formal/<M>.tla)`),
+an unmodeled row with no reason, a `formal(` anchor in src whose model has no row, and a
+function holding a worklist or fixpoint loop (`while changed|verifying|true|!isempty`) that
+no row names.
+"""
+function components_without_model()::Vector{String}
+    readme = _text(joinpath(ROOT, "dev", "formal", "README.md"))
+    rows = [strip.(split(strip(l), '|')[2:end-1]) for l in split(readme, '\n')
+            if startswith(l, "| ") && !startswith(l, "| Component") && count('|', l) == 4]
+    srcfiles = [joinpath(d, f) for (d, _, fs) in walkdir(SRC) for f in fs if endswith(f, ".jl")]
+    text = Dict(f => _text(f) for f in srcfiles)
+    bad = String[]
+    listed = Set{String}()
+    tablemodels = Set{String}()
+    for (comp, fns, model) in rows
+        union!(listed, [m.captures[1] for m in eachmatch(r"`([A-Za-z_!0-9]+)`", fns)])
+        if startswith(model, "—")
+            # an algorithmic component with no model yet counts: C8 says every one carries a
+            # model. Only a row stating that there is no algorithmic claim to check (an
+            # encoding, a one-statement rule, a predicate list) stands on its reason.
+            occursin(r"—\s*\S", model) || push!(bad, "row without a reason: $comp")
+            occursin(r"^—\s*none yet", model) && push!(bad, "no model yet: $comp")
+            continue
+        end
+        push!(tablemodels, model)
+        isfile(joinpath(ROOT, "dev", "formal", model * ".tla")) || push!(bad, "no model file: $model")
+        files = [m.captures[1] for m in eachmatch(r"\(([a-z_]+\.jl)\)", fns)]
+        isempty(files) || any(f -> any(p -> basename(p) == f &&
+                                        occursin("formal(dev/formal/$model.tla)", text[p]), srcfiles), files) ||
+            push!(bad, "no formal( anchor for $model in $(join(files, ", "))")
+    end
+    for (p, t) in text, m in eachmatch(r"formal\(dev/formal/([A-Za-z0-9_]+)\.tla\)", t)
+        m.captures[1] in tablemodels || push!(bad, "anchor with no row: $(m.captures[1]) in $(relpath(p, ROOT))")
+    end
+    for (p, t) in text
+        cur = nothing
+        for l in split(t, '\n')
+            # a definition under macros counts too: `@inline function`, `@noinline @overlay T function`
+            mm = match(r"^(?:    )?(?:@[\w.]+\s+(?:[A-Z][\w.]*\s+)?)*function ([A-Za-z_!0-9.]+)\(", l)
+            mm === nothing || (cur = mm.captures[1])
+            if cur !== nothing && occursin(r"\bwhile (changed|verifying|true\b|!isempty)", l) && !(cur in listed)
+                push!(bad, "fixpoint with no row: $cur ($(basename(p)))"); cur = nothing
+            end
+        end
+    end
+    return unique(bad)
+end
+
+"""
+Why AGENTS.md is not current and lean — dev/CHARTER.md C0. It is the one agent-instructions
+file (a CLAUDE.md beside it is a second, drifting copy); it holds only timeless rules and
+pointers, so it is short, everything it names exists, and it carries no status vocabulary
+(dates, phase names, "currently"/"as of"/"remaining" — status lives in dev/MARCH.md and in
+this harness's output, where it is measured instead of remembered).
+"""
+function agents_md_violations()::Vector{String}
+    v = String[]
+    isfile(joinpath(ROOT, "CLAUDE.md")) && push!(v, "CLAUDE.md exists — AGENTS.md is the one instructions file")
+    path = joinpath(ROOT, "AGENTS.md")
+    isfile(path) || return push!(v, "AGENTS.md is missing")
+    lines = _lines(path)
+    length(lines) <= 90 || push!(v, "AGENTS.md has $(length(lines)) lines (cap 90)")
+    for (i, l) in enumerate(lines)
+        length(l) <= 100 || push!(v, "AGENTS.md:$i is $(length(l)) chars (cap 100)")
+        for m in eachmatch(r"\b20\d\d-\d\d\b|\bPhase \d+|\b(?:currently|as of|remaining|so far|recently|TODO|FIXME)\b"i, l)
+            push!(v, "AGENTS.md:$i status vocabulary: \"$(m.match)\"")
+        end
+    end
+    txt = _text(path)
+    for m in eachmatch(r"(?<![\w/.])((?:src|test|dev|ext|docs|\.github)/[\w./*-]*[\w/])", txt)
+        p = m.captures[1]
+        occursin('*', p) && continue
+        (isfile(joinpath(ROOT, p)) || isdir(joinpath(ROOT, p))) || push!(v, "AGENTS.md names $p, which does not exist")
+    end
+    ids = Set(_short_id(first(q)) for q in vcat(METRICS, LOCKS))
+    for m in eachmatch(r"\b([LR]\d+[a-z]?)\b", txt)
+        m.captures[1] in ids || push!(v, "AGENTS.md cites $(m.captures[1]), which is no check")
+    end
+    corpus = join((read(joinpath(d, f), String) for root in (SRC, joinpath(ROOT, "test"), joinpath(ROOT, "dev"))
+                   for (d, _, fs) in walkdir(root) for f in fs if endswith(f, ".jl") || endswith(f, ".sh")), "\n")
+    for m in eachmatch(r"\b(WT_[A-Z_]+)\b", txt)
+        occursin(m.captures[1], corpus) || push!(v, "AGENTS.md names $(m.captures[1]), which nothing reads")
+    end
+    pm = match(r"\b([0-9a-f]{40})\b", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md")))
+    for m in eachmatch(r"\b([0-9a-f]{40})\b", txt)
+        (pm !== nothing && m.captures[1] == pm.captures[1]) || push!(v, "AGENTS.md pins $(m.captures[1][1:8]), dev/PARITY_MASTER.md does not")
+    end
+    return v
+end
+
+"""The clauses of dev/CHARTER.md: clause id => (text, cited short check ids like "L110"/"R29a")."""
+function charter_clauses()::Vector{Pair{String,Tuple{String,Vector{String}}}}
+    out = Pair{String,Tuple{String,Vector{String}}}[]
+    isfile(CHARTER_PATH) || return out
+    txt = _text(CHARTER_PATH)
+    sec = match(r"## The clauses\n(.*?)\n## "s, txt)
+    sec === nothing && return out
+    for m in eachmatch(r"^- \*\*(C\d+) ·(.*?)(?=^- \*\*C\d+ ·|\z)"ms, sec.captures[1])
+        body = m.captures[2]
+        push!(out, m.captures[1] => (body, [c.captures[1] for c in eachmatch(r"`([LR]\d+[a-z]?)`", body)]))
+    end
+    return out
+end
+
+_short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
+
+# ---- R44: WT's own classifications still held as Symbols (dev/CHARTER.md C5, MARCH 13.20) ------------
+# the member Symbols of each: the heap kind, the memoryref source, the label kinds, the shift kind,
+# `:new`'s type kind and the NTuple length rule (`:eq`, a heap member too)
+const R44_MEMBERS = "any|eq|struct|array|i31|extern|func|exn|concrete_struct|concrete_array|concrete_func|unknown|zero|constant|indexed|pair|snapshot|boxed|shl|lshr|ashr|block|loop|if|try|try_table|literal|ssa|argument"
+const R44_RX = Regex("(?<![:A-Za-z0-9_]):(" * R44_MEMBERS * ")\\b")
+
+"""The member Symbols of WT's own classifications in src, one per occurrence, on every line but one
+that builds or reads a Julia `Expr` (`Expr(`, `.head`, `isexpr(`: its heads `:block` and `:if` are
+Julia's): a classification held as a Symbol, which 13.20 makes a closed sum. Docstrings and comments
+count, since a conversion rewrites them too."""
+function wt_symbol_classification_sites()::Int
+    n = 0
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        for l in split(_text(joinpath(dir, f)), '\n')
+            (occursin("Expr(", l) || occursin(".head", l) || occursin("isexpr(", l)) && continue
+            n += count(_ -> true, eachmatch(R44_RX, l))
+        end
+    end
+    return n
+end
+
+# ---- strict means by construction (dev/CHARTER.md C0, L201) --------------------------------------
+# The clauses on the compiler's code and its models, whose checks the standard classifies.
+const STRICT_SCOPE = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
+# The clauses whose every cited lock is classified (2026-10-21); C1 to C3 classify theirs before
+# they close, since L201 reads an unclassified lock in a clause with no Planned text as a violation.
+const STRICT_CLASSIFIED = ("C4", "C5", "C6", "C7", "C8")
+# Every lock a classified clause cites, by what decides it, and for a construction the definition in
+# src that is the construction (L201 resolves it: a definition of exactly that name must exist).
+# :construction: that definition makes the wrong choice inexpressible through WT's interfaces (a
+# type that cannot hold the wrong value, the one path every emission takes, a relation computed
+# where it is written), the lock guarding that it stays; a write into another component's fields
+# stays possible in Julia, which the stopgaps that scan for it (L13) watch. :behavior: a run decides
+# it (the differential lanes, a test of an algorithm). :stopgap: the lock finds the wrong choice by
+# reading WT's source, an allowlist or a count, so it can still be written and compiled, whatever
+# definition holds the rule. A ratchet (an R check, a lock or not) is a stopgap by its kind and has no
+# entry. Neither behavior nor a stopgap closes a clause.
+const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
+    # C4: typed internal APIs (L136: a constant pushed by i32_const! and its kind bypasses emit_value!'s check)
+    "L9" => (:stopgap, ""), "L35" => (:stopgap, ""), "L49" => (:stopgap, ""), "L74" => (:stopgap, ""),
+    "L136" => (:stopgap, ""),
+    # C5: wrong choices cannot land (L16, L155: an absent switch or opcode names no construction)
+    "L16" => (:stopgap, ""), "L94" => (:stopgap, ""), "L134" => (:stopgap, ""), "L155" => (:stopgap, ""),
+    "L190" => (:behavior, ""), "L191" => (:behavior, ""), "L192" => (:stopgap, ""),
+    # C6: correct or loud, and located
+    "L8" => (:stopgap, ""), "L15" => (:stopgap, ""), "L18" => (:stopgap, ""), "L19" => (:stopgap, ""),
+    "L37" => (:stopgap, ""), "L38" => (:stopgap, ""), "L39" => (:stopgap, ""), "L48" => (:stopgap, ""),
+    "L51" => (:stopgap, ""), "L58" => (:stopgap, ""), "L60" => (:stopgap, ""), "L63" => (:stopgap, ""),
+    "L64" => (:stopgap, ""), "L66" => (:stopgap, ""), "L71" => (:stopgap, ""), "L72" => (:stopgap, ""),
+    "L73" => (:stopgap, ""), "L75" => (:stopgap, ""), "L76" => (:stopgap, ""), "L78" => (:stopgap, ""),
+    "L79" => (:stopgap, ""), "L85" => (:stopgap, ""), "L89" => (:behavior, ""), "L90" => (:stopgap, ""),
+    "L93" => (:behavior, ""), "L96" => (:behavior, ""), "L101" => (:stopgap, ""), "L118" => (:stopgap, ""),
+    "L119" => (:stopgap, ""), "L127" => (:stopgap, ""), "L135" => (:stopgap, ""), "L139" => (:stopgap, ""),
+    "L146" => (:stopgap, ""), "L147" => (:behavior, ""), "L156" => (:stopgap, ""),
+    # C7: valid by construction
+    "L6" => (:construction, "_emit!"), "L7" => (:stopgap, ""), "L13" => (:stopgap, ""), "L14" => (:stopgap, ""),
+    "L22" => (:stopgap, ""), "L27" => (:stopgap, ""), "L29" => (:construction, "recursion_groups"),
+    "L65" => (:stopgap, ""), "L87" => (:stopgap, ""), "L99" => (:stopgap, ""),
+    "L151" => (:construction, "InstrBuilder"), "L164" => (:stopgap, ""),
+    "L165" => (:construction, "WasmValType"), "L166" => (:stopgap, ""), "L167" => (:stopgap, ""),
+    "L168" => (:construction, "_require_local!"), "L169" => (:stopgap, ""),
+    "L172" => (:construction, "_emit!"), "L173" => (:stopgap, ""),
+    # C8: formal methods (both read files: the models' pairing and the README table)
+    "L111" => (:stopgap, ""), "L131" => (:stopgap, ""),
+)
+
+# whether src defines `name`: a function, macro, struct, @enum or const of exactly that name, long or
+# short form (a definition grep by name, the construction L201 resolves)
+function strict_construction_defined(name::AbstractString)::Bool
+    isempty(name) && return false
+    local q = "\\Q" * name * "\\E"
+    local rx = Regex("^\\s*(?:@inline\\s+|@noinline\\s+)*(?:function\\s+" * q * "\\(|macro\\s+" * q *
+                     "\\(|(?:mutable\\s+)?struct\\s+" * q * "\\b|@enum\\s+" * q * "\\b|const\\s+" * q *
+                     "\\s*=|" * q * "\\([^=]*\\)\\s*(?:::\\S+\\s*)?=(?!=))")
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        any(l -> occursin(rx, l), eachline(joinpath(dir, f))) && return true
+    end
+    return false
+end
+
+# what a check is under the standard: a ratchet is a stopgap; a lock is what STRICT_KINDS says, or
+# :unclassified
+_strict_kind(id::AbstractString, kinds::Dict{String,Tuple{Symbol,String}})::Symbol =
+    startswith(id, "R") ? :stopgap : haskey(kinds, id) ? first(kinds[id]) : :unclassified
+
+# each check that a clause of STRICT_SCOPE with no Planned text (one the charter block reads CLOSED)
+# cites and that is not a construction, as "<clause> cites <check> (<kind>)"
+function strict_violations(clauses, kinds::Dict{String,Tuple{Symbol,String}})::Vector{String}
+    out = String[]
+    for (cid, (body, ids)) in clauses
+        (cid in STRICT_SCOPE && !occursin("Planned:", body)) || continue
+        for i in ids
+            local k = _strict_kind(i, kinds)
+            k === :construction || push!(out, "$cid cites $i ($k)")
+        end
+    end
+    return out
+end
+
+# the table's own faults: a lock a classified clause cites with no entry, an entry no classified
+# clause cites, an entry for a ratchet, a kind other than the three, a construction naming no
+# definition src holds, and a stopgap or behavior naming one (a name is a construction's alone)
+function strict_table_faults(clauses, kinds::Dict{String,Tuple{Symbol,String}};
+                             defined::Function=strict_construction_defined)::Vector{String}
+    out = String[]
+    local cited = Set{String}()
+    for (cid, (_, ids)) in clauses
+        cid in STRICT_CLASSIFIED || continue
+        for i in ids
+            push!(cited, i)
+            startswith(i, "L") && !haskey(kinds, i) && push!(out, "$cid cites $i, which STRICT_KINDS does not classify")
+        end
+    end
+    for (k, (v, name)) in kinds
+        k in cited || push!(out, "STRICT_KINDS classifies $k, which no clause of $(join(STRICT_CLASSIFIED, ' ')) cites")
+        startswith(k, "R") && push!(out, "STRICT_KINDS classifies the ratchet $k, a stopgap by its kind")
+        v in (:construction, :behavior, :stopgap) || push!(out, "STRICT_KINDS gives $k the kind $v")
+        v === :construction && !defined(name) && push!(out, "$k is a construction naming `$name`, which src does not define")
+        v !== :construction && !isempty(name) && push!(out, "$k is $v and names `$name`: only a construction names one")
+    end
+    return out
+end
+
+# L201's negative test, run with it: planted clauses each verdict must answer as stated, and a
+# planted table whose eight faults it must find
+function strict_negatives_missed()::Vector{String}
+    local k = Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "_emit!"), "L2" => (:stopgap, ""),
+                                                "L3" => (:behavior, ""))
+    plant(cid, body, ids) = Pair{String,Tuple{String,Vector{String}}}[cid => (body, String[ids...])]
+    local cases = [
+        ("a stopgap lock in a clause with no Planned text", plant("C4", " T. Checks: ", ["L1", "L2"]), 1),
+        ("a behavior check in a clause with no Planned text", plant("C8", " T. Checks: ", ["L1", "L3"]), 1),
+        ("a ratchet in a clause with no Planned text", plant("C7", " T. Checks: ", ["L1", "R9"]), 1),
+        ("an unclassified lock in a clause with no Planned text", plant("C1", " T. Checks: ", ["L4"]), 1),
+        ("a stopgap in a clause with Planned text", plant("C5", " T. Checks: Planned: 13.1", ["L2", "R9"]), 0),
+        ("constructions alone", plant("C6", " T. Checks: ", ["L1"]), 0),
+        ("a clause outside the scope", plant("C9", " T. Checks: ", ["L2", "R9"]), 0),
+    ]
+    local out = String[]
+    for (what, cl, want) in cases
+        length(strict_violations(cl, k)) == want || push!(out, "negative missed: $what")
+    end
+    # L5 unclassified; L6, R2, L1x, L7 and L8 uncited; R2 a ratchet; L1x a kind other than the three;
+    # L7 a construction naming nothing src defines; L8 a stopgap that names one. L1 resolves.
+    local tf = strict_table_faults(plant("C4", " T.", ["L1", "L5"]),
+                                   Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "_emit!"),
+                                        "L6" => (:stopgap, ""), "R2" => (:stopgap, ""), "L1x" => (:strict, ""),
+                                        "L7" => (:construction, "no_definition_has_this_name!"),
+                                        "L8" => (:stopgap, "_emit!")))
+    length(tf) == 10 || push!(out, "negative missed: the table's faults ($(length(tf)) of 10)")
+    # the resolution itself: a real definition resolves, a missing one does not
+    (strict_construction_defined("_emit!") && strict_construction_defined("WasmValType") &&
+     !strict_construction_defined("no_definition_has_this_name!")) ||
+        push!(out, "negative missed: the construction names do not resolve as stated")
+    return out
+end
+
+# ---- the landing log (L197): `dev/land.sh merge` appends a line per landing to the main tree's
+# dev/.loop/landings.tsv; these decide over its text and the march branch's history ----------------
+const L197_START = "36e3966ebd22fce82f2688f039e236287bebdc00"   # the last landing before the log
+const L197_TARGET = 300         # seconds from edit to landed, every change alike (Dale 2026-10-21: "a few
+                                # minutes"; "wicked fast, not tens of minutes to hours")
+const L197_COLUMNS = "landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming"
+
+# the seconds since 1970 of a `YYYY-MM-DDTHH:MM:SSZ` time (days from the civil date)
+function _l197_epoch(s::AbstractString)::Int
+    m = match(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$", s)
+    m === nothing && error("$(repr(s)) is not a UTC time YYYY-MM-DDTHH:MM:SSZ")
+    y, mo, d, h, mi, se = parse.(Int, m.captures)
+    y -= mo <= 2
+    era = fld(y, 400); yoe = y - era * 400
+    doe = yoe * 365 + yoe ÷ 4 - yoe ÷ 100 + (153 * (mo + (mo > 2 ? -3 : 9)) + 2) ÷ 5 + d - 1
+    return (era * 146097 + doe - 719468) * 86400 + h * 3600 + mi * 60 + se
+end
+
+# the commits after L197_START up to the march tip, oldest first, each (sha, author time, paths, lines
+# added), from `git log --reverse --no-merges --numstat --format='C %H %at'`, what dev/land.sh reads
+function _l197_history(text::AbstractString)
+    out = Tuple{String,Int,Vector{String},Int}[]
+    for l in split(text, '\n')
+        if startswith(l, "C ")
+            f = split(l)
+            push!(out, (String(f[2]), parse(Int, f[3]), String[], 0))
+        elseif count(==('\t'), l) >= 2 && !isempty(out)
+            a, _, p = split(l, '\t'; limit = 3)
+            c = out[end]
+            out[end] = (c[1], c[2], push!(c[3], String(p)), c[4] + (a == "-" ? 0 : parse(Int, a)))
+        end
+    end
+    return out
+end
+
+# what the log gets wrong against the history (a sentence each), and the median's window: every
+# landing has its line (the lines' commits in history order, the last the tip, and each line's files
+# and insertions git's over its range, so a landing that wrote no line changes the next line's
+# numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
+# that; and over the last 5 lines no excuse names (`excused`: the names of the tree's excuse files,
+# l197_excuses, nothing else), the upper median of edit_to_landed_s over L197_TARGET at most 1
+const L197_JUDGED_FROM = 3     # the fewest lines in the window its median is judged over
+function l197_check(log::AbstractString, hist, excused::AbstractSet; head::AbstractString = "")
+    bad = String[]
+    rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
+    if !isempty(rows)
+        join(rows[1], '\t') == L197_COLUMNS || push!(bad, "the log's first line is not its header")
+        rows = rows[2:end]
+    end
+    idx = Dict(h[1] => i for (i, h) in enumerate(hist))
+    ratios = Tuple{String,Float64}[]
+    k = 0
+    for r in rows
+        length(r) == 11 || (push!(bad, "a line of $(length(r)) fields, not 11: $(join(r, ' '))"); continue)
+        c = String(r[2]); i = get(idx, c, 0)
+        i == 0 && (push!(bad, "the line of $(first(c, 8)): no commit the march branch brought after $(first(L197_START, 8))"); continue)
+        i > k || (push!(bad, "the line of $(first(c, 8)): out of the history's order"); continue)
+        span = hist[k+1:i]
+        paths = unique(reduce(vcat, (h[3] for h in span); init = String[]))
+        ins = sum(h[4] for h in span); author = minimum(h[2] for h in span)
+        from = first(k == 0 ? L197_START : hist[k][1], 8)
+        (parse(Int, r[9]) == length(paths) && parse(Int, r[10]) == ins) ||
+            push!(bad, "the line of $(first(c, 8)): $(r[9]) files and $(r[10]) insertions, where git's range from $from holds $(length(paths)) and $ins: a landing in it wrote no line")
+        _l197_epoch(r[3]) == author || push!(bad, "the line of $(first(c, 8)): author_at $(r[3]) is not its range's earliest author time")
+        e2l = parse(Float64, r[8])
+        abs(e2l - (_l197_epoch(r[1]) - author)) <= 1 || push!(bad, "the line of $(first(c, 8)): edit_to_landed_s $(r[8]) is not landed_at less author_at")
+        push!(ratios, (c, e2l / L197_TARGET))
+        k = i
+    end
+    k == length(hist) || push!(bad, "$(length(hist) - k) commit(s) up to the march tip $(first(hist[end][1], 8)) landed with no line (dev/land.sh merge writes one per landing)")
+    named(c) = first(c, 8) in excused
+    # the line of the commit being gated is never judged by its own gate: a landing's judgement after
+    # its push runs on the landed head, whose line is already written
+    window = last(filter(x -> !named(x[1]) && x[1] != head, ratios), 5)
+    # judged once the window holds at least 3 lines: a median of fewer is one landing's own number
+    if length(window) >= L197_JUDGED_FROM
+        s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
+        med <= 1 || push!(bad, "the median edit to landed of the last $(length(window)) landings no excuse file names is $(round(med; digits = 2)) times its $L197_TARGET s target ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): fix the loop, or excuse a slower landing whose cause lay outside its change in dev/.loop/excuse/<sha8>")
+    end
+    return bad, window
+end
+
+# L197: the excuses a tree holds, its directory dev/.loop/excuse/ and nothing else (name => text): no
+# MARCH row, commit message or other text excuses a landing (A22E1)
+l197_excuses(root::AbstractString) =
+    (d = joinpath(root, "dev", ".loop", "excuse"); isdir(d) ? Dict(f => read(joinpath(d, f), String) for f in readdir(d)) : Dict{String,String}())
+
+# L197: the excuses, the tracked files dev/.loop/excuse/<sha8> (name => text): each named for a landed
+# commit's first 8 hex digits, one line naming a cause outside its change, `machine:`, `lock:` or
+# `crossing:`, and its measurement (what is wrong, a sentence each)
+function l197_excuse_problems(files::AbstractDict, landed::AbstractVector)
+    bad = String[]
+    for (name, text) in files
+        occursin(r"^[0-9a-f]{8}$", name) || (push!(bad, "dev/.loop/excuse/$name: not named for a commit's first 8 hex digits"); continue)
+        any(c -> startswith(c, name), landed) || push!(bad, "dev/.loop/excuse/$name: no landing of that commit")
+        ls = filter(!isempty, split(text, '\n'))
+        length(ls) == 1 && occursin(r"^(machine|lock|crossing): \S.{20,}", ls[1]) ||
+            push!(bad, "dev/.loop/excuse/$name: not one line `machine|lock|crossing: <the measured cause>`")
+    end
+    return bad
+end
+
+# L197 (A21E4): the landing log each landing carries in its own tree (dev/.loop/landings.log) against
+# the main tree's git-ignored one: a line-by-line prefix of it (an earlier line edited afterwards
+# differs), missing at most one landing that is HEAD or its ancestor (the tip's own line, which no
+# tree can carry before it lands); `isanc(c)` says whether commit c is HEAD or its ancestor
+function l197_carried(tracked::Vector, untracked::Vector, isanc)
+    bad = String[]
+    n = length(tracked)
+    if n > length(untracked) || tracked != untracked[1:n]
+        k = something(findfirst(i -> i > length(untracked) || tracked[i] != untracked[i], 1:n), n)
+        push!(bad, "the landing log this tree carries (dev/.loop/landings.log) differs from the main tree's at its line $k: a line edited after it was carried")
+        return bad
+    end
+    missing = [String(split(l, '\t')[2]) for l in untracked[n+1:end] if occursin(r"^[^\t]+\t[0-9a-f]{40}\t", l)]
+    owed = filter(isanc, missing)
+    length(owed) <= 1 || push!(bad, "the landing log this tree carries lacks $(length(owed)) landings this tree holds ($(join(first.(owed, 8), ", "))): only the tip's own may be missing")
+    return bad
+end
+
+# L198: every line of the landing log says whether its landing's timing was judged, and how (what
+# the log gets wrong, a sentence each)
+function l198_check(log::AbstractString)
+    bad = String[]
+    for r in [split(l, '\t') for l in split(log, '\n') if !isempty(l)][2:end]
+        t = length(r) >= 11 ? r[11] : ""
+        t == "judged" || occursin(r"^unjudged( \([^()]*\))?$", t) || occursin(r"^(FAILED( [a-z0-9.@-]+)+|SLOWER( [a-z0-9.@-]+)+( OVER( [a-z0-9.@-]+)+)?|OVER( [a-z0-9.@-]+)+)$", t) ||
+            push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), not judged, unjudged, FAILED <stages>, SLOWER <stages> or OVER <stages>")
+    end
+    return bad
+end
+
+# The one function in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
+# the NIR boundary's input (the typed-IR JSON transport is deleted).
+const IR_RAW_READERS = Set([
+    "get_typed_ir",
+])
+
+"""Matches of `pattern` in src/codegen/ir.jl outside the bodies of the IR_RAW_READERS
+functions, docstrings and `#` comments excluded: a raw IR reader ir.jl gains that is not on
+the list is counted."""
+function _ir_raw_reads_outside_allowlist(pattern::Regex)::Int
+    n = 0
+    current = nothing          # the top-level function whose body we are in
+    in_doc = false
+    for line in eachline(joinpath(CODEGEN, "ir.jl"))
+        if in_doc
+            occursin("\"\"\"", line) && (in_doc = false)
+            continue
+        end
+        if startswith(lstrip(line), "\"\"\"")
+            count("\"\"\"", line) >= 2 || (in_doc = true)
+            continue
+        end
+        startswith(lstrip(line), "#") && continue
+        if !isempty(line) && !isspace(line[1])      # a top-level line opens or closes a scope
+            m = match(r"^function ([\w!]+)\(", line)
+            m === nothing && (m = match(r"^([\w!]+)\(.*\)(::\S+)?\s*=", line))
+            current = m === nothing ? (line == "end" ? current : nothing) : m.captures[1]
+        end
+        (current !== nothing && current in IR_RAW_READERS) ||
+            (n += length(collect(eachmatch(pattern, line))))
+        line == "end" && (current = nothing)
+    end
+    return n
+end
+
+# ---- the emission-diff check (L190), its behavior run here without the package ---------------
+# test/emission_fingerprint.jl in a module of its own (it reads bytes and part files only)
+const _EMISSION = Ref{Union{Nothing,Module}}(nothing)
+function emission_module()::Module
+    if _EMISSION[] === nothing
+        local m = Module(:EmissionSandbox)
+        Base.include(m, joinpath(ROOT, "test", "emission_fingerprint.jl"))
+        _EMISSION[] = getfield(m, :EmissionFingerprint)
+    end
+    return _EMISSION[]
+end
+_sleb(n::Integer)::Vector{UInt8} = (out = UInt8[]; n = Int64(n);
+    while true; x = UInt8(n & 0x7f); n >>= 7; done = (n == 0 && x & 0x40 == 0) || (n == -1 && x & 0x40 != 0);
+        push!(out, done ? x : x | 0x80); done && break; end; out)
+# a module of the given types (each a type section entry's bytes) and functions (name, type
+# index, body bytes after the locals' count), with a name section naming each function
+function _emission_wasm(types::Vector{Vector{UInt8}}, funcs::Vector{Tuple{String,Int,Vector{UInt8}}})::Vector{UInt8}
+    local leb = emission_module().leb
+    sec(id, c) = UInt8[id; leb(length(c)); c]
+    vec(items) = UInt8[leb(length(items)); reduce(vcat, items; init=UInt8[])]
+    name(s) = UInt8[leb(sizeof(s)); codeunits(s)]
+    local names = vec([UInt8[leb(i - 1); name(f[1])] for (i, f) in enumerate(funcs)])
+    local bodies = [UInt8[0x00; f[3]] for f in funcs]
+    return UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                 sec(0x01, vec(types))...,
+                 sec(0x03, vec([leb(f[2]) for f in funcs]))...,
+                 sec(0x0a, vec([UInt8[leb(length(b)); b] for b in bodies]))...,
+                 sec(0x00, UInt8[name("name"); 0x01; leb(length(names)); names])...]
+end
+const _EM_FN = UInt8[0x60, 0x00, 0x01, 0x7f]               # () -> i32
+const _EM_TOP = UInt8[0x5f, 0x01, 0x7f, 0x00]              # the object root: (struct (field i32))
+const _EM_FNREF = UInt8[0x60, 0x01, 0x63, 0x01, 0x01, 0x7f]  # (ref null 1) -> i32, the root type 1
+# `a` (i32.const k) and `b` (a call of a, plus 2), defined in `order`
+function _emission_module_bytes(order::Vector{Symbol}, k::Int)::Vector{UInt8}
+    local at = Dict(s => i - 1 for (i, s) in enumerate(order))
+    local body = Dict(:a => UInt8[0x41; _sleb(k); 0x0b], :b => UInt8[0x10, UInt8(at[:a]), 0x41, 0x02, 0x6a, 0x0b])
+    return _emission_wasm([_EM_FN], [(string(s), 0, body[s]) for s in order])
+end
+_em_meta(specs, classes, top) = emission_module().Meta(Dict{Int,String}(specs), Union{Nothing,String}[classes...], top)
+_em_fps(bytes, meta) = Dict(k => (h, l) for (k, h, l) in emission_module().fingerprints(bytes, meta))
+# one function `c` over the object root: its class id read and compared with K (`op` 0x46 i32.eq),
+# masked with K (0x71 i32.and), or K built into a new object's field 0 and read back (`new`)
+function _emission_class_bytes(op::Symbol, K::Int)::Vector{UInt8}
+    local body = op === :new ? UInt8[0x41, _sleb(K)..., 0xfb, 0x00, 0x01, 0xfb, 0x02, 0x01, 0x00, 0x0b] :
+                 UInt8[0x20, 0x00, 0xfb, 0x02, 0x01, 0x00, 0x41, _sleb(K)..., op === :eq ? 0x46 : 0x71, 0x0b]
+    return _emission_wasm([_EM_FN, _EM_TOP, _EM_FNREF], [("c", op === :new ? 0 : 2, body)])
+end
+# the verdict over part files written from `files` (name => lines)
+function _emission_verdict(files::Vector{Pair{String,Vector{String}}}, identical::Bool)::Tuple{Bool,String}
+    local d = mktempdir()
+    for (f, ls) in files
+        write(joinpath(d, f), join(ls, "\n") * "\n")
+    end
+    local ok, lines = emission_module().verdict(d, identical)
+    rm(d; recursive=true)
+    return (ok, join(lines, "\n"))
+end
+
+# L190's checks, run in the world where test/emission_fingerprint.jl is defined
+function _l190_check()::Int
+    local E = emission_module()
+    local v = 0
+    local none = _em_meta(Pair{Int,String}[], String[], -1)
+    # renumbering: the functions in the other order fingerprint alike
+    local a1, a2, a3 = (_em_fps(_emission_module_bytes(o, k), none) for (o, k) in (([:a, :b], 1), ([:b, :a], 1), ([:a, :b], 3)))
+    v += length(a1) == 2 && a1 == a2 ? 0 : 1
+    # a changed constant that is no class id changes its body's fingerprint and its labeled one, not its caller's
+    v += a3["name a"][1] != a1["name a"][1] && a3["name a"][2] != a1["name a"][2] && a3["name b"] == a1["name b"] ? 0 : 1
+    # two specializations of one method that differ only in a mask constant: two keys, two labeled fingerprints
+    local spec = _em_meta([0 => "Tuple{typeof(f), UInt8}", 1 => "Tuple{typeof(f), UInt16}"], String[], -1)
+    local two = _em_fps(_emission_wasm([_EM_FN], [("f", 0, UInt8[0x41; _sleb(0xff); 0x0b]), ("f_1", 0, UInt8[0x41; _sleb(0xffff); 0x0b])]), spec)
+    local k8, k16 = "spec Tuple{typeof(f), UInt8}", "spec Tuple{typeof(f), UInt16}"
+    v += haskey(two, k8) && haskey(two, k16) && two[k8][2] != two[k16][2] ? 0 : 1
+    # a class id compared with a class id read, or built into an object's field 0, is its class's
+    # type: one labeled fingerprint for classes numbered apart (5 and 7 name Foo); a mask keeps its value
+    local cA = _em_meta(Pair{Int,String}[], [nothing, "A", "B", "C", "D", "Foo", "E", "F"], 1)
+    local cB = _em_meta(Pair{Int,String}[], [nothing, "A", "B", "C", "D", "E", "F", "Foo"], 1)
+    for (op, same) in ((:eq, true), (:new, true), (:and, false))
+        local x, y = _em_fps(_emission_class_bytes(op, 5), cA)["name c"], _em_fps(_emission_class_bytes(op, 7), cB)["name c"]
+        v += x[1] != y[1] && (x[2] == y[2]) == same ? 0 : 1
+    end
+    # the verdict: part files as smoke, the published base file and the delta write them
+    local ver = string(VERSION)
+    local smoke(rows...; pass=1) = "smoke-0-of-1.tsv" => ["part\tsmoke\t0\t1\t$ver", "C\tg/c\t$pass\th1", rows...]
+    local B(k, fp, e, l) = "B\tg/c\t$k\t$fp\t$e\t$l"
+    local base(rows...; v=ver) = "base.tsv" => ["base\tsha\t$v", "C\tg/c\th1", rows...]
+    local delta = "delta.tsv" => ["base\tsha\t$ver"]
+    local same = "B\tg/c\tk\tsame"
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1"), B("k", "same", 0, "l2")), base("B\tg/c\tf\told", same), delta], false)) ? 0 : 1
+    local ok, text = _emission_verdict([smoke(B("f", "new", 0, "l1"), B("k", "same", 0, "l2")), base("B\tg/c\tf\told", same), delta], false)
+    v += !ok && occursin("NOT RUN  f  [new]", text) ? 0 : 1
+    v += first(_emission_verdict([smoke(B("f", "new", 0, "l1"))], true)) ? 0 : 1                   # an unchanged tree
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), delta], false)) ? 1 : 0           # no base file
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), base(same)], false)) ? 1 : 0      # no delta
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1"); pass=0), base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict(["smoke-0-of-2.tsv" => ["part\tsmoke\t0\t2\t$ver", "C\tg/c\t1\th1"], base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), base(same; v="0.0.1"), delta], false)) ? 1 : 0
+    # the same specialization entered in another case's module whose classes are numbered apart (one
+    # labeled fingerprint) runs a change; another labeled fingerprint, or another key, does not
+    local twice(k2, l2) = "smoke-0-of-1.tsv" => ["part\tsmoke\t0\t1\t$ver", "C\tg/c\t1\th1", "C\tg/d\t1\th2",
+        "B\tg/c\tf\tnew\t0\tl1", "B\tg/d\t$k2\tnew2\t1\t$l2"]
+    v += first(_emission_verdict([twice("f", "l1"), base(same), delta], false)) ? 0 : 1
+    v += first(_emission_verdict([twice("f", "l9"), base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict([twice("g", "l1"), base(same), delta], false)) ? 1 : 0
+    # the two specializations above: only the UInt8 one entered fails, naming the UInt16 one (keys
+    # that merged them fail here too, without raising)
+    if haskey(two, k8) && haskey(two, k16)
+        local ok2, text2 = _emission_verdict([smoke(B(k8, two[k8][1], 1, two[k8][2]), B(k16, two[k16][1], 0, two[k16][2])), base(same), delta], false)
+        v += !ok2 && occursin("NOT RUN  $k16", text2) && !occursin("NOT RUN  $k8", text2) ? 0 : 1
+    else
+        v += 1
+    end
+    # the wiring
+    local lanes = _text(joinpath(ROOT, "dev", "lanes.sh"))
+    local utils = _text(joinpath(ROOT, "test", "utils.jl"))
+    local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+    local ed = _text(joinpath(ROOT, "dev", "emission_diff.sh"))
+    local code(f) = join(filter(l -> !startswith(lstrip(l), "#"), split(_text(joinpath(ROOT, ".github", "workflows", f)), '\n')), '\n')
+    local fast, gate, eb = code("gate-fast.yml"), code("gate.yml"), code("emission-base.yml")
+    v += occursin("[ \"\$only\" = smoke ] && export WT_EMISSION_DIR=\"\$PWD/emission-parts\"", lanes) ? 0 : 1
+    local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+    local cjw, cjwi, ec, smain = fbody(utils, "compare_julia_wasm"), fbody(utils, "compare_julia_wasm_inputs"),
+                                 fbody(utils, "_emission_compile"), fbody(sm, "main")
+    v += occursin("bytes, source_map, meta = _emission_compile(f, arg_types; optimize=optimize)\n", cjw) &&
+         occursin("_emitted!(bytes, func_name, [join(map(format_js_arg, args), \", \")], meta)", cjw) ? 0 : 1
+    v += occursin("_emission_compile(f, arg_types; optimize=false)", cjwi) && occursin("_emitted!(bytes, fname, js, meta)", cjwi) ? 0 : 1
+    v += occursin("WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url=\"module.wasm.map\",", ec) &&
+         occursin("optimize, return_registries=true)", ec) && occursin("string(info.mi.specTypes)", ec) &&
+         occursin("WasmTarget._class_names(tr)", ec) && occursin("tr.base_struct_idx", ec) ? 0 : 1
+    v += Set(String(m.match) for m in eachmatch(r"\bcompare_julia_wasm\w*(?=\()", smain)) ==
+         Set(["compare_julia_wasm", "compare_julia_wasm_inputs"]) &&
+         occursin("EmissionFingerprint.record!(rec, tag, passed, EmissionFingerprint.case_hash(f, Tuple(map(typeof, case[3:end]))),", smain) ? 0 : 1
+    v += occursin("differs() { ! git diff --quiet \"\$1\" \"\${2:-HEAD}\" -- src ext Project.toml; }", ed) &&
+         occursin("compile='(f, ts) -> _emission_compile(f, ts; optimize=false)'", ed) &&
+         occursin("code=\$({ cat test/emission_fingerprint.jl; sed -n '/^function _emission_compile(/,/^end\$/p' test/utils.jl; } | git hash-object --stdin | cut -c1-16)", ed) ? 0 : 1
+    # the head's tests that do not load over the base's src leave the delta empty, never the check
+    v += occursin("err = try; include(\\\"test/smoke.jl\\\"); nothing; catch e; e; end", ed) &&
+         occursin("EmissionFingerprint.delta_main(\\\"\$dir/delta.tsv\\\"", ed) &&
+         occursin("F\\\\t(the head's tests over the base's src)", ed) ? 0 : 1
+    local upload = "      - uses: actions/upload-artifact@v4\n        if: matrix.lane == 'smoke'\n        with:\n          name: emission-smoke-"
+    local cancel = "      - name: Cancel the run\n        if: failure()\n        env:\n          GH_TOKEN: \${{ github.token }}\n        run: gh run cancel \${{ github.run_id }} --repo \${{ github.repository }}\n"
+    for needle in (upload, cancel, "bash dev/emission_diff.sh plan emission-plan",
+                   "    needs: [lane, emission-plan]\n", "run: bash dev/emission_diff.sh merge emission-parts")
+        v += occursin(needle, gate) ? 0 : 1
+    end
+    v += count(cancel, gate) == 1 ? 0 : 1   # the lane's: a red plan cancels no lane
+    v += occursin("emission", fast) ? 1 : 0   # the CI inner loop holds no emission job
+    # a landed head's base is the nearest earlier landed head with a published base file
+    v += occursin("  if [ \"\$base\" = \"\$(git rev-parse HEAD)\" ]; then\n    base=\"\"\n    for c in \$(git rev-list --first-parent --max-count=50 HEAD^); do\n      [ -n \"\$(artifact \"\$(key \"\$c\" \"\$ver\")\")\" ] && { base=\$c; break; }\n    done\n", ed) ? 0 : 1
+    v += occursin("bash dev/emission_diff.sh publish emission-parts emission-base | tee publish.log", gate) &&
+         occursin("          name: \${{ steps.publish.outputs.name }}\n          path: emission-base/base.tsv\n          if-no-files-found: error\n          retention-days: 90\n", gate) ? 0 : 1
+    v += occursin("\non:\n  push:\n    branches: ['emission-base/**']\n", eb) &&
+         occursin("bash dev/emission_diff.sh bootstrap-part \${{ matrix.part }} emission-parts", eb) &&
+         occursin("bash dev/emission_diff.sh bootstrap-publish emission-parts emission-base | tee publish.log", eb) &&
+         occursin("          retention-days: 90\n", eb) ? 0 : 1
+    return v
+end
+
+# ---- defaults that choose a type, a register, an index or a sentinel (L192, R43) -------------
+const _L192_REGISTERS = Set([:I32, :I64, :F32, :F64, :V128, :FuncRef, :ExternRef, :AnyRef, :EqRef, :I31Ref,
+                             :StructRef, :ArrayRef, :ExnRef, :NonNullExternRef, :NonNullFuncRef])
+_l192_type(s::Symbol)::Bool = s !== :nothing &&
+    ((isdefined(Core, s) && getfield(Core, s) isa Type) || (isdefined(Base, s) && getfield(Base, s) isa Type))
+# a name, bare or qualified (`WasmTarget.I32`, `Core.Any`)
+_l192_name(x) = x isa Symbol ? x : (x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode &&
+                                    x.args[2].value isa Symbol) ? x.args[2].value : nothing
+_l192_register(x)::Bool = (n = _l192_name(x); n !== nothing && n in _L192_REGISTERS)
+_l192_atype(x)::Bool = (n = _l192_name(x); n !== nothing && _l192_type(n)) || (x isa Expr && x.head === :curly)
+# whether an expression mentions a register anywhere (a default computed from one)
+_l192_mentions(x)::Bool = _l192_register(x) || (x isa Expr && x.head !== :. && any(_l192_mentions, x.args))
+# a parameter named for a Julia type, a specialization or a signature
+_l192_typeish(n)::Bool = occursin(r"type|julia|spec|(^|_)sig|(^|_)(jt|ty|T|S)$", string(n))
+# a parameter named for an index or a position
+_l192_indexish(n)::Bool = occursin(r"idx|index|slot|(^|_)(i|pos|offset|local|depth|label)$", string(n))
+# an integer literal, a Bool not counted, or its negation
+_l192_int(d)::Bool = (d isa Integer && !(d isa Bool)) ||
+    (d isa Expr && d.head === :call && d.args[1] === :- && length(d.args) == 2 && d.args[2] isa Integer)
+# a parameter named for a width
+_l192_widthish(n)::Bool = occursin(r"width|(^|_)bits$", string(n))
+"""
+    _l192_kind(name, annotation, default) -> Union{Nothing,String}
+
+What a parameter's default chooses, or nothing: a type (`Any`, `Int64`, `Core.Any`, `Vector{T}`), a
+register (`I32`, `WasmTarget.AnyRef`), a value computed from a register (`lhs === I32 ? 32 : 64`), a
+sentinel (a negative integer, `typemax(…)`, `typemin(…)`), an index (an integer for a parameter
+named for one), a width (any value for a parameter named for one: the width is the type's, never
+the register's), or `nothing` for a Julia-type parameter (annotated with a `Type`, or named for one).
+"""
+function _l192_kind(name, ann, d)::Union{Nothing,String}
+    _l192_register(d) && return "a register"
+    _l192_atype(d) && return "a type"
+    _l192_mentions(d) && return "a value computed from a register"
+    (_l192_int(d) && (d isa Expr || d < 0)) && return "a sentinel"
+    (d isa Expr && d.head === :call && d.args[1] in (:typemax, :typemin)) && return "a sentinel"
+    (_l192_int(d) && _l192_indexish(name)) && return "an index"
+    (d !== :nothing && _l192_widthish(name)) && return "a width"
+    if d === :nothing
+        local a = ann === nothing ? "" : string(ann)
+        (occursin("Type", a) && !occursin("WasmValType", a)) && return "nothing for a Julia type"
+        _l192_typeish(name) && return "nothing for a Julia type"
+    end
+    return nothing
+end
+# The forms L192 scans for a register or a type supplied where the caller's answer is absent,
+# exactly these (a syntactic scan cannot see every spelling; the semantic guarantee is L190/L191);
+# (1), a parameter's default, is _l192_kind's:
+# 2. `something`, `coalesce`, `get` or `get!` whose last argument is one;
+# 3. a function's answers: the `return`s it reaches outside a tail `if`'s condition (an early return, `c && return X`,
+#    `if c; return X; end`, inside a nested branch or an arm) and its fall-through value, with a
+#    branch in tail position read arm by arm (each arm's last expression, its returns, a nested
+#    branch's arms; a missing `else` answers `nothing`), when one is a bare type or register and
+#    another is an answer;
+# 4. a branch in value position (a ternary or if/elseif/else assigned, passed or built into a
+#    value), its arms read the same way, under the same rule;
+# 5. a branch anywhere under a nothing test whose answer is one (`x === nothing ? AnyRef : I32`),
+#    and 6. a short-circuit under a nothing test that returns or yields one (`x === nothing &&
+#    return Any`, `x !== nothing || return I32`), each outside a function whose answers (3) fire.
+# A choice between named answers alone (`is32 ? I32 : I64`) is a mapping, a nested all-named branch
+# beside an answer is one named answer, and an answer that raises (`error`, `throw`, `rethrow`)
+# answers nothing.
+_l192_named(x)::Bool = _l192_register(x) || (n = _l192_name(x); n !== nothing && _l192_type(n))
+function _l192_nulltest(c)::Union{Nothing,Bool}   # true: `x is nothing`, false: `x is not nothing`
+    c isa Expr && c.head === :call || return nothing
+    c.args[1] in (:(===), :(==)) && :nothing in c.args && return true
+    c.args[1] in (:(!==), :(!=)) && :nothing in c.args && return false
+    c.args[1] === :isnothing && return true
+    c.args[1] === :! && length(c.args) == 2 && (t = _l192_nulltest(c.args[2]); t !== nothing) && return !t
+    return nothing
+end
+_l192_raises(v)::Bool = v isa Expr && v.head === :call && v.args[1] in (:error, :throw, :rethrow)
+_l192_stmts(b::Expr)::Vector{Any} = Any[x for x in b.args if !(x isa LineNumberNode)]
+# a definition (its body is its own function's answers): `function`, `->` or a short-form `f(x) = …`
+function _l192_def(x)
+    x isa Expr || return nothing
+    x.head in (:function, :->) && length(x.args) >= 2 && return x.args[2]
+    if x.head === :(=) && length(x.args) == 2
+        local s = x.args[1]
+        while s isa Expr && s.head in (:where, :(::)); s = s.args[1]; end
+        s isa Expr && s.head === :call && return x.args[2]
+    end
+    return nothing
+end
+# the values a `return` inside x returns, a nested definition's excluded
+function _l192_returns!(out::Vector{Any}, x)
+    (x isa Expr && _l192_def(x) === nothing) || return out
+    x.head === :return ? _l192_answers!(out, x.args[1]) : foreach(a -> _l192_returns!(out, a), x.args)
+    return out
+end
+# the values x answers as a tail: a block's returns and its last statement's answers, a branch's
+# arms (a missing `else` answers `nothing`), a returned value's
+function _l192_answers!(out::Vector{Any}, x)
+    if x isa Expr && x.head === :block
+        local st = _l192_stmts(x)
+        isempty(st) && return push!(out, nothing)
+        foreach(s -> _l192_returns!(out, s), st[1:end-1])
+        return _l192_answers!(out, last(st))
+    elseif x isa Expr && x.head === :return
+        return _l192_answers!(out, x.args[1])
+    elseif x isa Expr && x.head in (:if, :elseif)
+        _l192_answers!(out, x.args[2])
+        return length(x.args) == 3 ? _l192_answers!(out, x.args[3]) : push!(out, nothing)
+    end
+    _l192_returns!(out, x)   # `c && return X`, a return inside any other statement
+    return push!(out, x)
+end
+_l192_answers(x)::Vector{Any} = filter(!_l192_raises, _l192_answers!(Any[], x))
+# the rule over a set of answers: one a bare type or register and another an answer
+_l192_mixed(as::Vector{Any})::Bool = (n = count(_l192_named, as); 0 < n < length(as))
+_l192_text(x)::String = replace(string(x isa Expr ? Base.remove_linenums!(deepcopy(x)) : x), r"\s+" => " ")
+# a site's text; past 200 characters its first 180 and a hash of the whole (the key stays exact)
+_l192_key(t::AbstractString)::String =
+    length(t) <= 200 ? String(t) : first(t, 180) * " … #" * string(Base._crc32c(t); base=16, pad=8)
+# forms 2, 4, 5 and 6 at one expression (`vpos`: the expression is a value; `covered`: its
+# function's answers fire)
+function _l192_fallback(ex, vpos::Bool, covered::Bool)::Union{Nothing,String}
+    ex isa Expr || return nothing
+    if ex.head === :call && ex.args[1] in (:something, :coalesce, :get, :get!) && length(ex.args) >= 3 &&
+       (_l192_register(ex.args[end]) || _l192_atype(ex.args[end]))
+        return string(ex.args[1])
+    end
+    if ex.head === :if && (vpos || !covered)
+        local as = _l192_answers(ex)
+        (any(_l192_named, as) && _l192_nulltest(ex.args[1]) !== nothing) && return "a branch under a nothing test"
+        (vpos && _l192_mixed(as)) && return "a branch arm"
+    end
+    if ex.head in (:&&, :||) && length(ex.args) == 2 && !covered
+        local t = _l192_nulltest(ex.args[1])
+        local y = ex.args[2] isa Expr && ex.args[2].head === :return ? ex.args[2].args[1] : ex.args[2]
+        (t === (ex.head === :&&) && _l192_named(y)) && return "a nothing short-circuit"
+    end
+    return nothing
+end
+"""
+    type_default_sites(text, rel) -> Vector{String}
+
+Every parameter of a definition in `text` (keyword or optional positional, of a `function`, a
+short-form or an anonymous function) whose default chooses a type, a register, a value computed
+from one, an index, a width or a sentinel, or `nothing` for a Julia-type parameter (_l192_kind), and
+every site of the forms the scan reads (_l192_fallback, a function's answers), as
+"<rel>\\t<function>\\t<the parameter>", "<rel>\\t<function>\\t<the expression>" or
+"<rel>\\t<function>\\treturns <its answers>", one per site (a site repeated in one function is one
+entry per occurrence).
+"""
+function type_default_sites(text::AbstractString, rel::AbstractString)::Vector{String}
+    local out = String[]
+    function params!(fname, sig)
+        for a in sig
+            for p in (a isa Expr && a.head === :parameters ? a.args : (a,))
+                (p isa Expr && p.head === :kw) || continue
+                local lhs = p.args[1]
+                local name, ann = lhs isa Expr && lhs.head === :(::) ? (lhs.args[1], lhs.args[2]) : (lhs, nothing)
+                _l192_kind(name, ann, p.args[2]) === nothing || push!(out, "$rel\t$fname\t$name")
+            end
+        end
+    end
+    function walk(ex, within, vpos::Bool, covered::Bool)
+        ex isa Expr || return
+        local body = _l192_def(ex)
+        if ex.head in (:function, :(=)) && !isempty(ex.args)
+            local sig = ex.args[1]
+            while sig isa Expr && sig.head in (:where, :(::)); sig = sig.args[1]; end
+            if sig isa Expr && sig.head === :call
+                params!(sig.args[1], sig.args[2:end])
+                within = string(sig.args[1])   # a `function` or a short-form definition
+            end
+            (ex.head === :function && sig isa Expr && sig.head === :tuple) && params!("(anonymous)", sig.args)
+        elseif ex.head === :-> && !isempty(ex.args)
+            local sig = ex.args[1]
+            # `(x; t=Any) -> …` parses as a block whose keywords are assignments
+            sig isa Expr && sig.head === :block &&
+                (sig = Expr(:tuple, Expr(:parameters, (Expr(:kw, a.args...) for a in sig.args
+                                                       if a isa Expr && a.head === :(=))...)))
+            params!("(anonymous)", sig isa Expr && sig.head === :tuple ? sig.args : (sig,))
+        end
+        if body !== nothing
+            # form 3: the function's answers; its body is read as statements, not values
+            local as = _l192_answers(body)
+            covered = _l192_mixed(as)
+            covered && push!(out, "$rel\t$within\t" * _l192_key("returns " * join(map(_l192_text, as), " | ")))
+            return walk(body, within, false, covered)
+        end
+        local fb = _l192_fallback(ex, vpos, covered)
+        fb === nothing || push!(out, "$rel\t$within\t" * _l192_key(_l192_text(ex)))
+        # a block's statements, a branch's arms and a returned value are no values of their own
+        # (a branch in value position is read whole, its function's answers likewise)
+        local child_vpos = !(ex.head in (:block, :if, :elseif, :return, :&&, :||, :toplevel, :module))
+        foreach(a -> walk(a, within, child_vpos, covered), ex.args)
+    end
+    walk(Meta.parseall(text; filename=rel), "(top level)", false, false)
+    return out
+end
+type_default_parameters()::Vector{String} =
+    reduce(vcat, [type_default_sites(_text(joinpath(SRC, dir, f)), "$dir/$f")
+                  for dir in ("codegen", "frontend") for f in sort(readdir(joinpath(SRC, dir))) if endswith(f, ".jl")])
+# the defaults and fallbacks that stay, each with what its default means at its site (L192); every
+# other site type_default_parameters finds is a wrong default R43 counts
+const L192_ALLOWED = Dict{String,String}(
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tsomething(numeric_register(_t), AnyRef)" =>
+        "a selector slot's representation: a number in its register (the one width rule), any other value anyref, dart's dynamic slot type (dispatch_table.dart:396)",
+    "codegen/types.jl\tassign_type_ids!\textra_concrete_types" =>
+        "a set of extra classes to number, empty when absent; it chooses no type for any value",
+    "codegen/types.jl\tget_function\texpected_return" =>
+        "a lookup filter: absent, no registration is skipped for its return type; it types no value",
+    "codegen/types.jl\tget_exact_candidate\texpected_return" =>
+        "a lookup filter, as get_function's: absent, no candidate is skipped for its return type",
+    "codegen/calls.jl\t_sub_builder\tseed_types" =>
+        "the registers a fragment's operands are declared as when the parent's stack is short; absent, the parent's stack seeds them",
+    "codegen/trimcollect.jl\twt_method_matches\tlimit" =>
+        "Julia's own default for a method lookup's limit, -1 for none (Core.Compiler.findall's `limit::Int=-1`)",
+    "codegen/box_capture.jl\t_capture_propagate\tget(seeds, key, Union{})" =>
+        "a box's writes so far, joined: no write yet is Union{}, the join's identity, not a guess",
+    "codegen/box_capture.jl\t_capture_finalize\tif length(ts) == 1 && (first(ts) isa DataType && isconcretetype(first(ts))) first(ts) else Any end" =>
+        "the join of a captured field's writes: its one concrete type, else Any, the erased contents dart's top type holds (closures.dart:1102-1115)",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif mixed_returns Any else first(return_types) end" =>
+        "the join of a selector's targets' return types: their one type, else Any, dart's dynamic return (dispatch_table.dart:396)",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif all_no_return nothing else if mixed_returns AnyRef else julia_to_wasm_type(return_type) end end" =>
+        "the register of that join: none when no target returns, else the one return type's, else anyref",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif _lub == type_registry.base_struct_idx AnyRef else ConcreteRef(UInt32(_lub), true) end" =>
+        "the least upper bound of a slot's classes: a class below the root, else anyref, the root's representation",
+    "codegen/statements.jl\t_storage_element_type\treturns UInt8 | eltype(T)" =>
+        "a String's or Symbol's storage is its bytes: its element is UInt8, any other backing's its eltype",
+    "codegen/values.jl\tconvert_type!\tif _wt_ref_nullable(from) AnyRef else NonNullAbstractRef(UInt8(AnyRef)) end" =>
+        "the abstract anyref of the source's own nullability: both arms are the source's type, never a guess",
+    "codegen/calls.jl\t_compile_call_flipsign\treturns struct_rt | I32 | I64" =>
+        "the result's representation by its width: the 128-bit struct, else the register of 32 or 64 bits (a mapping by width, no fallback)",
+    "codegen/calls.jl\t_compile_call_flipsign\tif is_128bit nothing else if is_32bit I32 else I64 end end" =>
+        "the register a flipsign of 32 or 64 bits computes in, none for the 128-bit struct (a mapping by width)",
+    "codegen/compile.jl\tboundary_wasm_type\treturns AnyRef | ConcreteRef(register_memoryref_box!(mod, type_registry, T), true) | get_concrete_wasm_type(T, mod, type_registry)" =>
+        "a union boxed in anyref is the union's representation (translator.dart:1044); every other type its own",
+    "codegen/julia_numeric_tier.jl\temit_conversion!\treturns nothing | reject!(\"its source or target is not a type\") | reject!(\"a \$(sizeof(julia_src))-byte primitive other than Int128 and UInt128 has no representation\") | reject!(\"a  … #d79e0d58" =>
+        "the conversion's result register, the target width's (`target_is_32bit ? I32 : I64`), beside the conversions that answer a builder; no fallback",
+    "codegen/types.jl\tresolve_union_type\treturns StructRef | inner | AnyRef | find_common_wasm_type(non_nothing)" =>
+        "the representation of a union by its members (translateType's union arm): the struct root or anyref by what the members share",
+    "codegen/types.jl\t_resolve_multivariant_union\treturns AnyRef | result | ConcreteRef(if length(kinds) == 1 only(kinds) else registry.jl_type_idx end, true) | ArrayRef | StructRef | AnyRef" =>
+        "the representation of a union of several kinds (translateType's union arm): the shared root, the one kind, or anyref",
+    "codegen/types.jl\ttranslate_external_type\treturns ExternRef | julia_to_wasm_type(T) | AnyRef" =>
+        "the host boundary's representation: externref for a JS value, anyref for any other reference",
+)
+# One sample per spelling L192 names, each in a definition the scan must find, and the spellings
+# it must not (an empty container, a Bool flag, an optional sink, a join), so the lock's scan is
+# tested here, not only read
+const L192_SPELLINGS = [
+    "f(; t::Type=Any) = t", "f(; t=Int64) = t", "function f(; r=I32) end", "f(; r=WasmTarget.I32) = r",
+    "f(; t=Core.Any) = t", "f(x, t=Any) = t", "f(; t=Vector{Int}) = t", "f(x::T; t::Type{<:Number}=Float64) where {T} = 1",
+    "@inline f(; t=Any) = t", "h = (x; t=Any) -> t",
+    "f(; julia::Any=nothing) = 1", "f(; spectypes=nothing) = 1", "f(; from_julia::Union{Type,Nothing}=nothing) = 1",
+    "f(; julia_width::Int=(lhs_ty === I32 ? 32 : 64)) = 1", "f(; julia_width::Int=(is32 ? 32 : 64)) = 1",
+    "f(; obj_scratch::Integer=-1) = 1", "f(; stmt_idx::Int=0) = 1", "f(; n=typemax(Int)) = 1",
+    "g() = something(x, I32)", "g() = coalesce(x, AnyRef)", "g() = get(d, k, Any)", "g() = get(d, k, I32)",
+    "g() = x === nothing ? I32 : x", "g() = isnothing(x) ? Any : x", "g() = something(x, WasmTarget.I64)",
+    "g() = isconcretetype(T) ? T : Any", "function g(x); x === nothing && return Any; x; end",
+    "function g(x); x === nothing && return I32; I64; end",
+    "function g(x); x !== nothing || return I32; x; end", "function g(x); !isnothing(x) || return Core.Any; x; end",
+    "g(x) = x === nothing ? AnyRef : I32",
+    "g(T) = if T isa DataType; T.parameters[1]; elseif T isa Union; T.a; else; Any; end",
+    "function g(T); if isempty(T); return I32; else; return T[1]; end; end",
+    "function g(T); if T === Int32; return I32; end; T; end", "function g(x); x isa Type && return x; return Any; end",
+    "function g(x); if x isa GlobalRef; return x.T; end; Any; end",
+    "function g(x); if x isa Int; (x > 0 && return I32); error(\"no\"); end; x; end",
+    "g(big, is32) = big ? nothing : (is32 ? I32 : I64)", "g(T, is32) = isconcretetype(T) ? T : (is32 ? I32 : AnyRef)",
+]
+const L192_NOT_SPELLINGS = [
+    "f(; d=Dict{Int,Int}()) = 1", "f(; for_local::Bool=false) = 1", "f(; diagnostics_sink=nothing) = 1",
+    "g() = init === nothing ? vt : Union{init, vt}", "f(; check_overflow::Bool=false) = 1",
+    "g() = is32 ? I32 : I64", "function g(x); x === nothing && return 0; x; end",
+    "g(T) = if T === Int32; I32; elseif T === Int64; I64; else; F64; end",
+    "g(T) = if T === Int32; I32; else; error(\"no register\"); end",
+    "g(is64, is32) = is64 ? I64 : (is32 ? I32 : F64)",
+]
+_l192_spellings_missed()::Int = count(t -> isempty(type_default_sites(t, "sample")), L192_SPELLINGS) +
+                                count(t -> !isempty(type_default_sites(t, "sample")), L192_NOT_SPELLINGS)
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
 const METRICS = [
-    "R2_emit_raw_bridges" => ("emit_raw!( byte-bridges into the typed builder (M2 → 0; ZERO since march4 — see L13)",
-        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
-    "R3_infer_value_type" => ("infer_value_type( callers — RECLASSIFIED (march4): dart's node.getStaticType equivalent, legitimate PRE-EMIT type knowledge (never post-emission re-guessing, which is dead — L4); monotone consolidation only",
-        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
-    "R5_julia_type_reguess" => ("get_concrete_wasm_type( + julia_to_wasm_type_concrete( callers (M2 → pre-emit floor)",
-        () -> count_sites(r"get_concrete_wasm_type\(|julia_to_wasm_type_concrete\(";
-                          exclude_line=r"function (get_concrete_wasm_type|julia_to_wasm_type_concrete)\(")),
-    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (M2 → intrinsic floor)",
+    "R5_julia_type_reguess" => ("get_concrete_wasm_type( callers — each site either declares a storage type (dart translateType, translator.dart:1044) or re-derives the type of a value already emitted. Terminal state 0: declaring sites move to an exact per-site allowlist with their dart anchor (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"get_concrete_wasm_type\("; exclude_line=r"function get_concrete_wasm_type\(")),
+    "R7_raw_coercion_ops" => ("numeric-coercion opcodes outside values.jl's convert_type! funnel (dart convertType, translator.dart:1597). Terminal state 0 (dev/CHARTER.md C1/C9)",
         () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_S|I64_EXTEND_I32_U|I64_TRUNC_F|I32_TRUNC_F|F64_CONVERT_I|F32_CONVERT_I|F32_DEMOTE_F64|F64_PROMOTE_F32";
-                          roots=[CODEGEN], exclude_files=["values.jl"])),
+                          roots=[CODEGEN], exclude_files=["values.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
     # ── marches 6-9 progress ratchets (mapped 2026-07-05, discovery-grounded;
     # historical campaign rationale is summarized in dev/HISTORY.md) ───────────
-    "R12_try_drivers" => ("shape-specialized try/catch drivers (march 6 → 1: dart's ONE visitTryCatch)",
-        () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
-                          exclude_line=nothing)),
-    "R13_catch_all_clauses" => ("catch_all_clause emissions (march 6 → 0: the typed (exn,stackTrace) tag catches; catch_all reserved for host exns)",
-        () -> count_sites(r"catch_all_clause"; exclude_line=r"function |catch_all_clause`|catch_all_clause\(label::(?:Integer|ControlLabel)\)")),
-    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — fresh heap-constant materializations (march 7: internable kinds route through THE funnel; the remaining sites are the MUTABLE kinds [Vector/Dict/Memory/Core.Box — per-object identity, documented floor] + funnel fallbacks)",
+    "R14_fresh_constant_structs" => ("struct_new!(b in values.jl — heap constants built outside the ONE constant funnel (dart ensureConstant, constants.dart). Terminal state 0: per-object-identity kinds move to an exact per-site allowlist with their reason (dev/CHARTER.md C9, rule 2)",
         () -> count_sites(r"struct_new!\(b"; roots=[joinpath(SRC, "codegen")], exclude_files=setdiff(readdir(joinpath(SRC, "codegen")), ["values.jl"]))),
-    "R15_constant_data_segments" => ("add_passive_data_segment! in values.jl (march 7: segments are CONTENT-ADDRESSED at the builder — these sites now dedup by construction; count = the long-string + symbol fallback paths)",
-        () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
-    "R16_external_convert_ladders" => ("convert_type! callers outside values.jl (march 8 → 0: fold into the 4-arg wrap)",
-        () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
-    "R17_unwrapped_value_emissions" => ("3-arg emit_value! sites — no expectedType (march 8 → ~40 floor: dart wraps 100%)",
-        () -> count_sites(r"emit_value!\([^()]*, ctx\)"; exclude_line=r"function emit_value!")),
-    "R18_anyref_dispatch_sigs" => ("fill(AnyRef dispatch signatures (march 9 → 0: dart per-param LUB, dispatch_table.dart:86-205)",
-        () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
-    "R11_patch_markers" => ("patch-tag comment sediment PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- (monotone down via root-fixes)",
-        () -> begin  # markers live IN comments, so count comment lines too
-            n = 0
-            for (dir, _, files) in walkdir(SRC), f in files
-                endswith(f, ".jl") || continue
-                for line in eachline(joinpath(dir, f))
-                    occursin(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d", line) && (n += 1)
+    "R27_coercion_bypass" => ("raw coercion ops (I32_WRAP_I64 etc) outside values.jl/int128.jl/types.jl",
+        () -> count_sites(r"I32_WRAP_I64|I64_EXTEND_I32_[SU]|F64_PROMOTE_F32|F32_DEMOTE_F64";
+                          roots=[CODEGEN], exclude_files=["values.jl", "int128.jl", "types.jl", "intrinsics_table.jl", "julia_numeric_tier.jl"])),
+    # ── Phase 10.1a: the normalized frontend boundary (frontend/nir.jl; PARITY_MASTER item
+    # 4 / DESIGN.md §10.1) — dart: AstCodeGenerator reads every node's type through ONE
+    # StaticTypeContext (code_generator.dart:77 typeContext, :135 getStaticType), never
+    # re-derived per visitor. R29 tracks per-file migration off raw CodeInfo reads onto the
+    # NIR boundary; ir.jl is exempt (it's the boundary's OWN input side, `get_typed_ir`) and
+    # frontend/nir.jl itself is outside roots=[CODEGEN] entirely (it's the construction
+    # site — the boundary consuming CodeInfo is expected there, exactly like ir.jl).
+    # ── Phase 12.I: strictness ratchets (dev/MARCH.md item I) — "strict in every
+    # regard" made machine-checked for API types, not just codegen structure.
+    "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
+        () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
+    "R42_held_numeric_types" => ("numeric types the generated lowering-table cases hold out (test/registry_cases.jl's RC_HELD, each entry with its reason and its dev/MARCH.md row): no case of a held type is generated, as an operand or a target, until the width rule covers it (Bool is Julia's i1 under an integer intrinsic, a Float16 its 16 bits; dev/MARCH.md 13.1). dev/CHARTER.md C5. Terminal state 0",
+        () -> begin
+            # the table's pairs as Julia parses them, however they are laid out
+            local m = match(r"(?s)const RC_HELD = Dict\{DataType,String\}\(.*?\n\)", _text(joinpath(ROOT, "test", "registry_cases.jl")))
+            m === nothing ? 1000 : count(a -> Meta.isexpr(a, :call) && a.args[1] === :(=>), Meta.parse(m.match).args[1].args[2].args[2:end])
+        end),
+    "R43_wrong_default_sites" => ("parameter defaults and fallbacks in src/codegen and src/frontend that choose a type, a register, a width, an index or a sentinel where the caller's answer belongs (L192's scan, type_default_parameters), less L192_ALLOWED's entries: a statement's type read as `get(ctx.ssa_types, i, Any)`, a value's Julia type absent from the conversion funnel (`from_julia=nothing`), a body's slot types absent (`spectypes=nothing`), a width guessed from the register (`julia_width`), a rejection's statement absent (`idx=0`), a function's answers or a branch's arms that fall back to `Any` or a register beside an answer (`isconcretetype(T) ? T : Any`, an if/elseif arm's `else Any`, an early `return Any` beside a fall-through answer, `x === nothing && return Any`). Each is made required or answered by Julia (dev/MARCH.md 13.4). dev/CHARTER.md C5. Terminal state 0",
+        () -> count(k -> !haskey(L192_ALLOWED, k), type_default_parameters())),
+    "R44_wt_symbol_classifications" => ("a stopgap (dev/CHARTER.md C0): the sites in src of WT's own classifications still held as Symbols, each a member Symbol of one (R44_MEMBERS: the heap kind, the memoryref source, the builder's and the stackified label kinds, the shift kind, `:new`'s type kind, the NTuple length rule) on a line building or reading no Julia `Expr`, where a misspelled member compares false and a catch-all arm answers for a member it never names. dev/MARCH.md 13.20 makes each a closed sum matched by `@exhaustive` (L199), its commit deleting the Symbol path; retired at 0 when L199 covers every classification. dev/CHARTER.md C5. Terminal state 0",
+        () -> wt_symbol_classification_sites()),
+]
+
+# The builder alone: src/builder/*.jl, from builder/types.jl to builder/instr_builder.jl, loaded
+# in the order src/WasmTarget.jl includes them into a module of their own (named WasmTarget, as
+# InstrIR's `using ..WasmTarget` asks), without codegen/options.jl: the builder reads no OPTIONS
+# (L149), so a builder function that read it fails here. The builder's behavioral locks (L151, L164-L168, L172) run its
+# checks here in seconds, without loading the package.
+const _BUILDER_SANDBOX = Ref{Union{Nothing,Module}}(nothing)
+function builder_sandbox()::Module
+    _BUILDER_SANDBOX[] === nothing || return _BUILDER_SANDBOX[]
+    local files = String[]
+    local started = false
+    for m in eachmatch(r"^include\(\"([^\"]+)\"\)"m, read(joinpath(SRC, "WasmTarget.jl"), String))
+        m[1] == "builder/types.jl" && (started = true)
+        started && push!(files, m[1])
+        m[1] == "builder/instr_builder.jl" && break
+    end
+    local W = Module(:WasmTarget)
+    Core.eval(W, :(include(p) = Base.include($W, p)))
+    for f in files
+        Base.include(W, joinpath(SRC, f))
+    end
+    return _BUILDER_SANDBOX[] = W
+end
+include(joinpath(ROOT, "test", "builder_cases.jl"))
+# run `f(W)` on the sandbox in the newest world (the sandbox's methods are defined after the locks)
+in_builder_sandbox(f::Function) = (local W = builder_sandbox(); Base.invokelatest(f, W))
+# how many of test/builder_cases.jl's rows (all, or those named) do not hold over the sandbox
+builder_rows_failing(rows=nothing)::Int = in_builder_sandbox() do W
+    count(c -> (rows === nothing || c.row in rows) && !builder_case_holds(W, c), builder_cases(W))
+end
+# how many of test/builder_cases.jl's body_cases rows (all, or those named) do not hold over the sandbox
+body_rows_failing(rows=nothing)::Int = in_builder_sandbox() do W
+    count(c -> (rows === nothing || c.row in rows) && !builder_case_holds(W, c), body_cases(W))
+end
+# how many of test/builder_cases.jl's dead_cases rows do not hold over the sandbox
+dead_rows_failing()::Int = in_builder_sandbox() do W
+    count(c -> !builder_case_holds(W, c), dead_cases(W))
+end
+
+# ---- LOCKS (completed dimensions; exact match required) ---------------------
+const LOCKS = [
+    "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks. Reached 0 on 2026-10-12 (batch 116e-1: the options, the diagnostics ledger and the constants in progress on the Translator, the perf_now import and the RNG globals on the module's registry, the layout-read memo on the interpreter, the selector table's base index read from the registry) and locked; test/diagnostics_sink.jl's 'a compile inside another's hook, and after another's options, shares no state (R40)' (a compile inside another's link_roots hook leaves the outer module's RNG globals and perf_now import alone, and compile_module after a logging compile does not log, both of which the process-wide design failed; its ledger check, the outer ledger receiving none of the inner compile's diagnostics, is a regression check the process-wide design passed too, its sink set and restored around each compile, dev/AUDIT.md A17P6) (dev/CHARTER.md C2)",
+        () -> length(process_global_state_sites())),
+    # ratchets that reached 0 and were converted to locks (dev/CHARTER.md: a clause closes when
+    # each ratchet it cites "has reached 0 and been converted to a lock"), 2026-09-30
+    "R3_infer_value_type" => ("infer_value_type( callers — a value's Julia type computed at the use site instead of read once from its NIR node (dart reads node types through ONE StaticTypeContext, code_generator.dart:77). Reached 0 on 2026-10-11, when infer_value_type, get_ssa_type and _value_julia_type became the one reader, value_type (L174); stays 0 (dev/CHARTER.md C9, rule 2)",
+        () -> count_sites(r"infer_value_type\("; exclude_line=r"function infer_value_type\(")),
+    "R41_raw_local_declarations" => ("codegen sites that declare a local by pushing onto a function's locals list themselves (a push!/append!/pushfirst!/insert! onto any list named `locals`, bare or as a field, in src or ext), each computing its own index, beside the one declaration path, declare_local! (allocate_local!, builder_add_local!), which checks the local's type against the module (dart declares a local only through addLocal, instructions.dart:382). Reached 0 on 2026-10-11, when the last 165 sites moved to allocate_local! and builder_add_local!; stays 0 (dev/AUDIT.md A15B2; dev/CHARTER.md C7)",
+        () -> begin
+            # any push!/append!/pushfirst!/insert! onto a list named `locals` (bare or as a field), in src
+            # and ext, beside declare_local!'s own one push
+            local raw = r"(?:push|append|pushfirst|insert)!\(\s*(?:[A-Za-z_][A-Za-z0-9_.]*\.)?locals\s*,"
+            local n = count_sites(raw; roots=[SRC, joinpath(ROOT, "ext")])
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local m = match(r"function declare_local!\(.*?\nend"s, ib)
+            n - (m === nothing ? 0 : count(raw, m.match))
+        end),
+    "R38_overlays_without_reason" => ("`@overlay …WASM_METHOD_TABLE` definitions in src and ext (behind any macro prefix, `@noinline @overlay`, and through any alias of the table, `@overlay WMT`: both went uncounted until 2026-09-29) with no parity anchor on the line, in the comments directly above, or in the docstring directly above: each replaces Julia's own body without stating why Julia's body cannot compile (dev/CHARTER.md C3: Julia's own bodies compile instead of bespoke re-implementations). Terminal state 0: each overlay is deleted once Julia's body compiles, or carries its dart anchor or quarantine reason",
+        () -> length(overlays_without_reason())),
+    "R39_smoke_runtime_xfails" => ("smoke xfails that compile and then fail when they run — a wrong value, a trap, or a result the harness cannot read back — the entries of test/smoke.jl's XFAIL_RUNTIME, which the xfail lane keeps exact against what each case measures (dev/CHARTER.md C6: correct or loud, never a module that runs and answers wrong). Terminal state 0: each becomes a passing case or a compile-time reject",
+        () -> smoke_runtime_xfails()),
+    "L131_every_algorithm_has_its_model" => ("dev/formal/README.md's Components table maps every algorithmic component of src to its TLA+ model or states why it has none; each modeled row's model exists and is anchored `formal(dev/formal/<M>.tla)` in a file the row names; every anchor has a row; every function holding a worklist or fixpoint loop has a row; a component with no model yet counts. Terminal state 0; returns to the locks at 0 (dev/CHARTER.md C8)",
+        () -> length(components_without_model())),
+    "R37_name_keyed_callee_arms" => ("codegen sites that select a callee by its NAME rather than its identity, in any spelling: `is_func(func, :x)`, a bare `name === :x` / `name in (:x, …)`, `.def.name`, a Method's or callee's `.name`, a regex (`occursin`/`match`) or prefix (`startswith`/`endswith`) over `string(…)`, `nameof(f) ===`/`in`, and a comparison `v === :x` / `v in (:x, …)` through ANY variable `v` bound from a `nameof(…)` or a `.name` read (counted once per such variable; a TypeName's `.name.name` is a type's name, not a callee's) (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup). The one exemption is a `nameof` guarded by `isa Core.IntrinsicFunction` in the same expression: Core.Intrinsics binds one const object per name, so there the name is the identity. Terminal state 0. The last site, invoke.jl's `#_growend!/_growbeg!/_growat!` arm, waits on the structural item that gives WT's Vector {data, size} its MemoryRef offset: without it Julia's own growth closure body (`a.ref = memoryref(newmem, offset)`, array.jl:1156) cannot be represented (dev/CHARTER.md C1)",
+        () -> begin
+            n = count_sites(r"is_func\(func, :"; roots=[CODEGEN])
+            spellings = [r"(?<![.\w])name\s*(?:===|in)\s*\(?:",
+                         r"\.def\.name\s*(?:===|in\b)",
+                         r"\b(?:meth|method|m|_\w*_m|callee|func|f|g)\.name\s*(?:===|in)\s",
+                         r"(?:occursin|match)\(r\"[^\"]*\",\s*string\(",
+                         r"(?:startswith|endswith)\(string\(",
+                         r"nameof\([\w.]+\)\s*(?:===|in\b)"]
+            for (dir, _, files) in walkdir(CODEGEN), file in files
+                endswith(file, ".jl") || continue
+                src = read(joinpath(dir, file), String)
+                for re in spellings, m in eachmatch(re, src)
+                    line_start = something(findprev('\n', src, m.offset), 0) + 1
+                    startswith(lstrip(src[line_start:m.offset]), "#") && continue
+                    guard = src[thisind(src, max(1, m.offset - 200)):m.offset]
+                    (startswith(re.pattern, "nameof") && occursin("isa Core.IntrinsicFunction", guard)) && continue
+                    n += 1
+                end
+                # a name carried through a variable: `nm = callee.name` / `nameof(f)`, then
+                # `nm === :getfield` — one site per such variable that is compared
+                lines = split(src, '\n')
+                for line in lines
+                    startswith(lstrip(line), "#") && continue
+                    b = match(r"(?:^|\blocal\s+|\s)(\w+)\s*=(?!=)\s*(.*)", line)
+                    b === nothing && continue
+                    v, rhs = b.captures[1], b.captures[2]
+                    v == "name" && continue                       # the bare spelling above
+                    occursin(r"\bnameof\(|\.name\b(?!\.name)", rhs) || continue
+                    occursin(r"\.name\.name\b", rhs) && !occursin(r"\bnameof\(", rhs) && continue
+                    occursin("isa Core.IntrinsicFunction", rhs) && continue
+                    cmp = Regex("(?<![.\\w])" * v * "\\s*(?:===|in\\b)\\s*\\(?:")
+                    any(l -> !startswith(lstrip(l), "#") && occursin(cmp, l), lines) && (n += 1)
                 end
             end
             n
         end),
-]
-
-# ---- LOCKS (completed dimensions; exact match required) ---------------------
-const LOCKS = [
-    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted",
-        () -> count_sites(r"bytes shell|\(bytes::Vector\{UInt8\}|target_bytes::Vector\{UInt8\}";
-                          roots=[CODEGEN], exclude_files=["sourcemap.jl"])),
-    "L66_no_fabricated_string_results" => ("specialized string lowering either proves every input representation or rejects it; mixed arguments can never become an empty string",
+    "R15_constant_data_segments" => ("add_passive_data_segment! outside the builder and the string/type creators — the long-string and Symbol paths that bypass the one constant funnel. Terminal state 0 (dev/CHARTER.md C9)",
+        () -> count_sites(r"add_passive_data_segment!"; exclude_files=["builder/instructions.jl", "codegen/strings.jl", "codegen/compile.jl", "codegen/interpreter.jl", "codegen/types.jl"])),   # types.jl = the lazy creator's ONE legit segment site
+    "R17_unwrapped_value_emissions" => ("emit_value! calls with no expectedType, on the parse tree (untyped_value_emissions) — dart's only one is translateExpression's own accept1 call (code_generator.dart:676), which is not counted. Terminal state 0 (dev/CHARTER.md C4)",
+        () -> length(untyped_value_emissions())),
+    "R20_invoke_name_arms" => ("(?<![.\\w])name === :\\w+ arms in invoke.jl only (phase 5: 54 to migrate to registry)",
+        () -> count_sites(r"(?<![.\w])name === :\w+"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "R21_foreigncall_arms" => ("(_fc_sym|fname|cfn) === :\\w+, or an `if`/`elseif`-headed `name === :\\w+`/`name in (:` arm, anywhere in statements.jl compile_foreigncall! dispatch (want 0: every foreigncall symbol dispatches through FOREIGN_LOWERINGS only)",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
+                  split(stmt_src, '\n'))
+        end),
+    "R30_untyped_returns" => ("function definitions in codegen/frontend/builder with no `::T` return-type annotation, or with `::Any` outside R30_ANY_SEAMS's named seams (long `function f(...)` and short `f(...) = ...`; excludes closures, anonymous/functor signatures, and qualified Base./interface extensions — see count_untyped_returns' docstring)",
+        () -> count_untyped_returns([CODEGEN, joinpath(SRC, "frontend"), joinpath(SRC, "builder")])),
+    "R31_any_typed_fields" => ("`Any`-typed or untyped struct/mutable struct fields anywhere in src, minus R31_ALLOWLIST's named heterogeneous seams (WasmDiagnostic.detail, NirLiteral.value/NirCall.callee/NirInvoke.callee, the registries' Function values, DispatchTableRegistry's func_ref keys, the interpreter's cache-owner token)",
+        () -> count_any_typed_fields()),
+    # ── dev/CHARTER.md (2026-09-22) ─────────────────────────────────────────────
+    "R32_unanchored_definitions" => ("top-level definitions in src — every method separately, read from the parsed syntax tree — with no parity(<dart file:line>) or parity(quarantine: …) anchor in their docstring or directly above them — dev/CHARTER.md C2: every structure copies a named dart2wasm structure or names the Julia necessity that forces it. Terminal state 0",
+        () -> count_unanchored_definitions()),
+    "R35_detached_docstrings" => ("bare string literals among top-level statements in src: docstrings a comment line cut off from their definition (Julia then attaches them to nothing — a `# formal(…)` line between docstring and function did this repeatedly) or prose with no definition under it (dev/CHARTER.md C9). Terminal state 0: a docstring sits directly on its definition, with any anchor inside it",
+        () -> count_detached_docstrings()),
+    "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently); and a native stack exhaustion a test runs where Julia cannot detect it: Julia on Windows does not reliably detect one on a task's stack, so the process dies and the shard's failures go unreported (dev/AUDIT.md A20X4). The one oracle of a native stack exhaustion is `_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))`, exactly that line wherever a test uses it: Julia's own answer, on a task of its own, wherever Julia detects the exhaustion, and on Windows alone a stand-in raising StackOverflowError where the wasm body exhausts its stack (dev/AUDIT.md A22E9: Julia stays the oracle). Both arms counted: no other line hosts a task (`schedule(Task(`, `fetch(schedule(`); a stand-in that reaches a deep recursion, by its argument or at all, counts; and a deep self-recursion `f(n) = n == 0 ? 0 : 1 + f(n - 1)`, or a one-line definition reaching it, called with 10^6 or more, and a definition whose body makes such a call, or any definition reaching that one, called at all, only inside a definition (a body WT compiles, or the oracle's native arm, named by its function), never in a statement a test runs. Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
+        () -> begin
+            local n = count_sites(r"@test_skip\b|@test_broken\b"; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+            local files = [joinpath(d, f) for (d, _, fs) in walkdir(joinpath(ROOT, "test")) for f in fs if endswith(f, ".jl") && f != "parity_ratchet.jl"]
+            # the oracle's one definition, the one line that hosts a task (A22E9); a use without it counts
+            local oracle_def = "_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))"
+            local oracle_used = false; local oracle_defined = false
+            for p in files, l in _file_lines(p)
+                _iscomment(l) && continue
+                strip(l) == oracle_def && (oracle_defined = true; continue)
+                occursin(r"schedule\(Task\(|fetch\(schedule\(|_wt_own_task", l) && (n += 1)
+                occursin("_wt_stack_oracle(", l) && (oracle_used = true)
+            end
+            n += oracle_used && !oracle_defined ? 1 : 0
+            local recs = Set{String}()
+            for p in files, l in _file_lines(p)
+                local m = match(r"(\w+)\(n(?:::Int64)?\) = n == 0 \? 0 : 1 \+ (\w+)\(n - 1\)", l)
+                (m !== nothing && m[1] == m[2]) && push!(recs, m[1])
+            end
+            # the one-line definitions that reach a deep recursion: by their argument (a call of a
+            # recursion or of one of these, `deep`), or whatever their argument (a body holding a call
+            # of one with 10^6 or more, or a call of one of these, `exhausting`), to a fixpoint
+            local defrx = r"^\s*(?:@noinline\s+)?([\w.]+)\([^)]*\)(?:::\w+)?\s*=[^=](.*)$"
+            local defs = Tuple{String,String}[]
+            for p in files, l in _file_lines(p)
+                local m = match(defrx, l)
+                (m === nothing || _iscomment(l)) || push!(defs, (String(m[1]), String(m[2])))
+            end
+            local calls(body, fs, big) = any(f -> occursin(Regex("\\b" * f * "\\(" * big * "|invokelatest\\(" * f * ", " * big), body), fs)
+            local deep = copy(recs); local exhausting = Set{String}()
+            while true
+                local before = length(deep) + length(exhausting)
+                for (f, body) in defs
+                    f in recs && continue
+                    calls(body, deep, "") && push!(deep, f)
+                    (calls(body, deep, "10\\^[6-9]") || calls(body, exhausting, "")) && push!(exhausting, f)
+                end
+                length(deep) + length(exhausting) == before && break
+            end
+            for p in files, l in _file_lines(p)
+                _iscomment(l) && continue
+                occursin(defrx, l) && continue   # a definition's body: a body WT compiles
+                n += count(f -> calls(l, Set([f]), "10\\^[6-9]"), deep) + count(f -> calls(l, Set([f]), ""), exhausting)
+                # the oracle's Windows arm, its stand-in, reaches no deep recursion (A22E9)
+                for m in eachmatch(r"_wt_stack_oracle\(([\w.]+), ([\w.]+)", l)
+                    (m[2] in recs || m[2] in deep || m[2] in exhausting) && (n += 1)
+                end
+            end
+            n
+        end),
+    "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
+        () -> count_silent_catches()),
+    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted, and no codegen definition takes a module's bytes: the host runtime is generated from the compile's record of the module's imports (host_runtime_js(imports)), never read back from its bytes (until 2026-10-21 host_runtime_js(bytes) read them through a reader in the builder; dev/AUDIT.md A19B1)",
+        () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
+                          roots=[CODEGEN])),
+    "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
+        () -> begin
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
             strings_src = read(joinpath(CODEGEN, "strings.jl"), String)
+            builtins_src = read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["Fall back to empty string", "array_new_fixed!(bms, str_type_idx, 0, I32)",
-                         "For now, just do first two", "Multi-string concat: concat pairwise"]
-            required = ["specialized multi-argument string lowering requires every argument to be String or Symbol",
-                        "unreachable!(bms)  # polymorphic bottom; no fabricated String value",
-                        "function compile_string_concat_many_b", "for loc in str_locals",
-                        "_wt_many_string_length"]
-            all_src = invoke_src * strings_src * test_src
-            count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                         "For now, just do first two", "Multi-string concat: concat pairwise",
+                         "_invoke_string_concat_or_reject_b", "_invoke_star_concat_b"]
+            required = ["function compile_string_concat_many_b", "for loc in str_locals"]
+            # both operands of `*`, read from their nodes, proven String or Symbol
+            builtins_required = ["callee === (*) && length(vals) == 2 && all(t -> t === String || t === Symbol, ts)"]
+            test_required = ["compare_julia_wasm(_wt_many_string_length).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, strings_src), required) +
+                count(p -> !occursin(p, builtins_src), builtins_required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
     "L67_one_exception_and_block_owner" => ("the stackifier alone owns block and try-region structure; no dead block-emission adapter or statement-level EnterNode implementation may coexist",
         () -> begin
@@ -162,7 +1860,7 @@ const LOCKS = [
             forbidden = ["codegen/conditionals.jl", "generate_block_code!",
                          "For now, we just skip this - full implementation requires try_table"]
             required = ["THE stackifier owns the", "every CFG shape, including a single block",
-                        "try_open_at", "try_table!(b"]
+                        "try_open_at", "try_legacy!(b"]
             all_src = api_src * stmt_src * flow_src * stack_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
@@ -184,20 +1882,26 @@ const LOCKS = [
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
-    "L69_one_vector_mutation_path" => ("push!, pop!, and resize! compile their collected pure-Julia overlays; name-routed mutation emitters and capacity assumptions are extinct",
+    "L69_one_vector_mutation_path" => ("Vector mutation compiles Julia's own bodies — push!, pop!, resize!, pushfirst!, popfirst!, insert!, deleteat!, append!, prepend!, empty! and _deleteend!, growing through _growend!/_growbeg!/_growat! and the reallocating closures the collector enrolls as statically invoked closures — with no WASM_METHOD_TABLE overlay of them and no name-routed mutation emitter or grow stand-in (restated 2026-09-27: it pinned the reallocating push!/resize! overlays, which put a Vector's MemoryRef back at offset 1, dev/CHARTER.md C3)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            runtime_src = read(joinpath(SRC, "runtime", "arrayops.jl"), String)
+            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["is_func(func, :push!)", "is_func(func, :pop!)",
                          "is_func(func, :resize!)", "assume capacity is sufficient",
-                         "function _resize!"]
-            required = ["function Base.push!(v::Vector{T}, x)",
-                        "function Base.pop!(v::Vector{T})",
-                        "function Base.resize!(v::Vector{T}, n::Integer)",
-                        "_wt_vector_mutation_semantics"]
-            all_src = calls_src * interp_src * runtime_src * test_src
+                         "function _resize!", "function Base.pop!(v::Vector{T})",
+                         "function Base.push!(v::Vector{T}, x)",
+                         "function Base.resize!(v::Vector{T}, n::Integer)",
+                         "function Base.pushfirst!(v::Vector{T}, x)",
+                         "function Base.popfirst!(v::Vector{T})",
+                         "function Base.insert!(v::Vector{T}", "function Base.deleteat!(v::Vector{T}",
+                         "function Base.append!(v::Vector{T}", "function Base.prepend!(v::Vector{T}",
+                         "function Base.empty!(v::Vector{T})", "function Base._deleteend!(a::Vector{T}",
+                         "function Base._growend_internal!", "^#_growend!", "^#_(?:growend"]
+            required = ["_wt_vector_mutation_semantics", "ftyp in invoked_closures"]
+            all_src = calls_src * interp_src * invoke_src * trim_src * test_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
         end),
@@ -212,16 +1916,19 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src * compile_src), forbidden) +
                 count(p -> !occursin(p, test_src), required)
         end),
-    "L71_no_silent_io_argument_skip" => ("out-of-scope IO glue may reject an unrepresentable show argument but cannot silently omit it and report success",
+    "L71_no_silent_io_argument_skip" => ("show of any argument compiles Julia's own show body or rejects at its statement; no show builder exists that could silently omit an argument and report success",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
-            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            forbidden = ["show: unsupported argument type \$arg_type, skipping"]
-            required = ["show has no IO bridge representation for argument type",
-                        "_wt_unsupported_show", "@test_throws WasmTarget.WasmCompileError"]
-            all_src = invoke_src * test_src
-            count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String) *
+                       read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            # no show builder exists: show(x) compiles Julia's own body, whose console
+            # write rejects at its statement
+            forbidden = ["show: unsupported argument type \$arg_type, skipping", "_invoke_show_b"]
+            required = ["@test_throws WasmTarget.WasmCompileError WasmTarget.compile(_wt_unsupported_show, ())",
+                        "receiver-free print/println/show reject loudly at their statement",
+                        "(DiagAttrib.shows, (Float64,))"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
         end),
     "L72_no_fabricated_string_encoder" => ("the JS string boundary exposes only implemented imports; no unused encoder API may alias the decoder as a placeholder",
         () -> begin
@@ -229,20 +1936,25 @@ const LOCKS = [
             forbidden = ["encode_idx", "add_string_io_imports!", "old approach as a stub"]
             count(p -> occursin(p, strings_src), forbidden)
         end),
-    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation",
+    "L73_capture_analysis_never_silently_disables" => ("capture/value-channel proof failures propagate; no catch-all may erase all inferred joins and continue compilation — the joins are computed once, by numeric_local_joins, whose body holds no catch (restated 2026-09-28: the captured-variable record replaced the closure-local guess)",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             capture_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
             capture_test = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             forbidden = ["catch\n        Dict{Int,Type}()", "capture analysis fallback"]
-            required = ["_numeric_joins = try", "catch\n        rethrow()",
+            # the joins are computed once, by numeric_local_joins, whose body holds no catch:
+            # a failure inside any capture/value-channel proof propagates
+            required = ["_numeric_joins = numeric_local_joins(ctx)",
                         "propagate_numeric_value_types",
-                        "f3_self_box_joins", "f3_closure_box_seeds",
-                        "isconcretetype(T) && isstructtype(T)",
+                        "plan_joins(ctx.translator.plan, ctx.mi)", "function record_capture_contents(",
+                        "no fixpoint within the bound: every captured variable stays erased",
                         "Tuple{Vararg{Int64}}"]
+            body = match(r"(?s)\nnumeric_local_joins\(ctx::AbstractCompilationContext\).*?\n\n", context_src)
             all_src = context_src * capture_src * capture_test
             count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                count(p -> !occursin(p, all_src), required) +
+                (body === nothing ? 1 : count("catch", body.match)) +
+                max(count("= numeric_local_joins(ctx)", context_src) - 1, 0)
         end),
     "L74_builder_owns_statement_arity" => ("post-emission drop decisions use the builder's actual stack delta; no Julia-type/registry heuristic may re-guess whether a call produced a value",
         () -> begin
@@ -263,32 +1975,50 @@ const LOCKS = [
             forbidden = ["actual_val = getfield(val.mod, val.name)\n            return get_phi_edge_wasm_type(actual_val",
                          "called_func = try\n            getfield(func.mod, func.name)",
                          "ft_early = try\n            infer_value_type"]
-            required = ["isdefined(val.mod, val.name) || return nothing",
-                        "isdefined(callee.mod, callee.name)",
-                        "isdefined(actual_func_ref.mod, actual_func_ref.name)",
-                        "isdefined(func.mod, func.name)"]
-            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required)
+            # dispatch.jl's own binding test moved to the NIR boundary in Phase 12D
+            # (resolve_call_callee resolves a GlobalRef ONCE, leaving it a GlobalRef when
+            # unbound), so what find_dispatch_call must still state explicitly is that an
+            # unresolved callee is SKIPPED — not swallowed into a table lookup.
+            required = ["val.bound || return nothing",
+                        "callee_func isa NirNode || callee_func isa GlobalRef",
+                        "\n        called_func = func isa GlobalRef ? nothing : func"]
+            # an :invoke's callee is resolved at the boundary too (nir_callee, one rule for
+            # every call kind), so an unbound global reaches codegen as its GlobalRef
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            count(p -> occursin(p, src), forbidden) + count(p -> !occursin(p, src), required) +
+                (occursin("x isa NirGlobalRef && return x.bound ? x.value : GlobalRef(x.mod, x.name)", nirs) ? 0 : 1)
         end),
-    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; unsupported IO cannot disappear or fabricate question-mark output",
+    "L76_no_silent_invoke_or_io_substitution" => ("invoke resolution uses explicit singleton/binding predicates; receiver-free print/println/show compile Julia's own bodies and reject loudly at their statement — no console builder exists that could disappear or fabricate question-mark output",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            diag_src = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
             forbidden = ["func_type.instance\n                    catch", "try infer_value_type",
                          "No IO imports — stub as no-op", "unsupported argument type \$arg_type, skipping",
-                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup"]
-            required = ["function _compile_invoke_print_b", "_invoke_singleton_instance",
-                        "Base.issingletontype(T)",
-                        "println/print requires an explicitly configured IO bridge",
-                        "println/print has no IO bridge representation"]
-            count(p -> occursin(p, invoke_src), forbidden) +
-                count(p -> !occursin(p, invoke_src), required)
+                         "Unsupported element type — just write \"?\"", "Create a synthetic GlobalRef for lookup",
+                         "_compile_invoke_print", "_invoke_print_b", "_invoke_println_b"]
+            # the singleton predicate is the boundary's one callee rule (nir_operand_callee, Compiler's
+            # singleton_type, the rule nir_callee_self reads), which an :invoke's callee is resolved by too
+            local nir_src = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            # receiver-free print/println/show compile Julia's own bodies, whose console
+            # write rejects loudly at its statement — pinned behaviorally
+            diag_required = ["(DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,))",
+                             "@test_throws WasmTarget.WasmCompileError WasmTarget.compile(f, argtypes)",
+                             "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                (occursin("    local v = CC.singleton_type(static_type)\n    return v === nothing ? c : v", nir_src) ? 0 : 1) +
+                count(p -> !occursin(p, diag_src), diag_required)
         end),
     "L77_call_reflection_is_structural" => ("call lowering tests binding, singleton, tuple, and field structure explicitly; reflection failures cannot silently select another lowering",
         () -> begin
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The field-access lowerings are BUILTIN_LOWERINGS entries in
+            # builtins.jl since Phase 12F; the structural tests they carry are
+            # the same text, read from both halves of `compile_call!`'s chain.
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             forbidden = ["try getfield(func.mod, func.name) catch", "try infer_value_type",
                          "try fieldtypes(obj_type) catch", "return try Base.padding",
                          "try getfield(target_type_ref.mod", "try getfield(args[1].value"]
-            required = ["isdefined(func.mod, func.name)",
+            required = ["\n        called_func = func isa GlobalRef ? nothing : func",
                         "obj_type isa DataType && isconcretetype(obj_type)",
                         "sext_int target is not a defined Julia type",
                         "zext_int target is not a defined Julia type",
@@ -296,21 +2026,45 @@ const LOCKS = [
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src), required)
         end),
-    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and explicit-invoke discovery share one unconditional fixpoint with protected roots and no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure",
+    "L78_closed_world_reaches_a_real_fixpoint" => ("dynamic and edge discovery share one unconditional fixpoint with no environment opt-out, round ceiling, method-count cliff, or swallowed specialization failure: the loop only adds, so no collected body is ever dropped (the superseded trim, `unreachable=true` with its `prune_roots`, `pruned_superseded` and `intrinsic_body_roots`, was deleted in batch 111 and may not return), and every compile! output, the first and each later round's, is cut by the declared imports before it merges (an import's native body never enters the plan); every edge of the closed world — an :invoke, a call a builtin hides (invoke_in_world, a runtime-Vararg splat) and each edge Julia's collectinvokes! follows besides :invoke (a finalizer, a :cfunction, 1.13's :new of a Function, an :invoke_modify) — is ONE edge relation, _closed_world_edge, that the collector enrolls its target by, the external-leaf cut keeps it by and the collector's walk records its reason by (the plan reads the world and writes none of it), resolved in the overlay table (never the native `which`); every root's reason is the one its enrollment recorded, the fma roots' included: collect_new_pairs! takes no reason (no default) and raises a WasmInternalError for a root with none; plan_closed_world reads the world and writes none of it, which test/diagnostic_attribution.jl's \"planning writes nothing into the collected world\" pins over a program with a closure, a dynamic call and an edge (dev/AUDIT.md A2C4, A2C5). Until 2026-09-29 the pruner knew only the splat edge, so an invoke_in_world callee the collector enrolled was pruned back out (\"unresolved dynamic call Base.sqrt (Float64,)\"), and an argument operand went untyped (smoke invoke_in_world)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            tests_src = read(joinpath(ROOT, "test", "runtests.jl"), String) *
+                        read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
             forbidden = ["WT_DYNDISPATCH", "for _round in 1:8", "length(ms) <= 64",
-                         "try CC.specialize_method", "try collect(methods", "try which(f, ats)"]
-            required = ["while true", "hasmethod(f, ats) ? which(f, ats) : nothing",
+                         "try CC.specialize_method", "try collect(methods", "which(f, ats)",
+                         "unreachable=true", "unreachable::Bool", "pruned_superseded",
+                         "superseded_invokes", "prune_roots", "intrinsic_body_roots",
+                         "_builtin_call_edge_mi",
+                         # every reason is recorded by the collection (no default), the plan writes none
+                         "why::String=", "get(enrolled_by, root_mi, why)", "enrolled_as[edge[2]] =",
+                         "_closed_world_edge(n, src, slot_types, arg_type, edge_interp)"]
+            required = ["while true",
+                        "local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)",
+                        "local edge = _closed_world_edge(s.node, pair[2], pair_slot_types, arg_type, interp)",
+                        "function collect_new_pairs!(mis)\n",
+                        # the plan reads the world, its behavior pinned (diagnostic_attribution.jl)
+                        "return plan_closed_world(world, entry_keys, entry_values, external_leaves)",
+                        "@testset \"planning writes nothing into the collected world\" begin",
+                        "@test world.enrolled_as == reasons",
+                        "local why = get(enrolled_by, root_mi, nothing)\n            why === nothing && throw(WasmInternalError(",
+                        "CC.findall(sig, CC.method_table(interp); limit)",
+                        "if (mi = _apply_iterate_vararg_target_mi(interp, node, arg_type)) !== nothing",
+                        "elseif (mi = _invoke_in_world_target_mi(interp, node, arg_type)) !== nothing",
+                        "kind = :finalizer", "kind = :cfunction", "kind = :new_function", "kind = :invoke_modify",
+                        "local matches = wt_method_matches(interp, Tuple{Core.Typeof(f), arg_types...})",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
-                        "collect_new_pairs!", "original_mi in protected ||",
-                        "append!(prune_roots, _DYNAMIC_ROOT_MIS[])",
+                        "collect_new_pairs!",
+                        "# the loop only adds: no collected body is ever dropped",
+                        "codeinfos = _prune_external_leaf_subgraphs(interp, codeinfos, entries, external_leaves; numeric_joins, capture)",
+                        "fresh_ci = _prune_external_leaf_subgraphs(interp, fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
             count(p -> occursin(p, all_src), forbidden) +
-                count(p -> !occursin(p, all_src), required)
+                count(p -> !occursin(p, all_src), required) +
+                # no code writes a reason into the plan's record (the world's), anywhere in src
+                count_sites(r"enrolled_as\[[^\]]*\]\s*=[^=]"; roots=[SRC])
         end),
     "L79_partial_new_requires_definite_initialization" => ("Wasm physical defaults for missing primitive fields are emitted only when a closed-world CFG must-analysis proves every field is written before read or escape",
         () -> begin
@@ -318,7 +2072,7 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
             forbidden = ["struct_type === Random.Xoshiro", "nameof(struct_type)",
                          "primitive_init_proven = true", "allow_uninitialized"]
-            required = ["function _definitely_initializes_in_ir", "intersect(incoming[dest], assigned)",
+            required = ["function _definitely_initializes_in_nir", "intersect(incoming[dest], assigned)",
                         "_partial_new_is_definitely_initialized", "primitive_init_proven",
                         "_wt_make_undefined_field", "_wt_use_definitely_initialized_fields"]
             all_src = stmts_src * test_src
@@ -337,24 +2091,31 @@ const LOCKS = [
             count(p -> occursin(p, trim_src), forbidden) +
                 count(p -> !occursin(p, trim_src), required)
         end),
-    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths throw a real MethodError with Core.kwcall, exact argument tuple, and collection world instead of a generic trap",
+    "L81_kwerr_throws_exact_methoderror" => ("reachable invalid-keyword paths compile Base.kwerr's own body, which throws a real MethodError with Core.kwcall, the exact argument tuple, and the module's one world age (WASM_WORLD_AGE — never the host counter) instead of a generic trap",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            # Base.kwerr's own body builds the MethodError; its tls_world_age() is the
+            # jl_get_tls_world_age foreigncall, which lowers to the module's one age
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
+            stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :kwerr", "emit_value!(bkw, Core.kwcall",
-                        "args_tuple_type = Tuple{arg_julia_types...}",
-                        "Base.get_world_counter()", "_wt_exact_kwerr_exception"]
-            count(p -> !occursin(p, invoke_src * test_src), required)
+            forbidden = ["_invoke_kwerr_b"]
+            stmts_required = ["function _fc_jl_get_tls_world_age!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::InstrBuilder\n    i64_const!(b, Int64(WASM_WORLD_AGE))"]
+            test_required = ["err.args isa Tuple{NamedTuple{(:unsupported_keyword,), Tuple{Bool}}, typeof(identity)}",
+                             "compare_julia_wasm(_wt_exact_kwerr_exception).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, stmts_src), stmts_required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
-    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
+    "L82_inexact_helper_throws_exact_payload" => ("Core.throw_inexacterror compiles its own body, which constructs the real InexactError func and argument tuple and throws it through the Julia exception tag",
         () -> begin
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
+            # Core.throw_inexacterror's own body builds InexactError(func, (T, val))
+            codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
             test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
-            required = ["name === :throw_inexacterror", "payload = args[2:end]",
-                        "payload_type = Tuple{payload_types...}",
-                        "register_struct_type!(ctx.mod, ctx.type_registry, InexactError)",
-                        "_wt_exact_inexact_exception"]
-            count(p -> !occursin(p, invoke_src * test_src), required)
+            forbidden = ["_invoke_throw_inexacterror_b"]
+            required = ["err isa InexactError && err.func === :convert && err.args isa Tuple{DataType, UInt64}",
+                        "compare_julia_wasm(_wt_exact_inexact_exception).pass"]
+            count(p -> occursin(p, codegen_src), forbidden) +
+                count(p -> !occursin(p, test_src), required)
         end),
     "L83_fieldwise_constructors_are_structural" => ("concrete exact-field constructors route through the sole %new implementation before dynamic dispatch, even when inference erased a field expression",
         () -> begin
@@ -364,7 +2125,7 @@ const LOCKS = [
                          "constructor_allowlist"]
             required = ["A concrete field-wise constructor is structural, not dynamic",
                         "called_func === _ctor_result && length(args) == fieldcount(_ctor_result)",
-                        "return compile_new!(b, Expr(:new, _ctor_result, args...)",
+                        "return compile_new!(b, nir_new(_ctor_result, args)",
                         "_la_solve", "_la_lusolve"]
             count(p -> occursin(p, calls_src), forbidden) +
                 count(p -> !occursin(p, calls_src * linalg_src), required)
@@ -379,7 +2140,7 @@ const LOCKS = [
                          "wasm_type === I32 ? Int32", "emit_classid_box!(b, ctx, src_type, nothing)",
                          "emit_classid_box!(_xcb, ctx, ret_wasm, nothing)"]
             required = ["julia_type::Type", "isconcretetype(julia_type)",
-                        "emit_type_id!(b, ctx.type_registry, julia_type)",
+                        "emit_type_id!(b, registry, julia_type)",
                         "There is no width-based fallback"]
             count(p -> occursin(p, all_codegen), forbidden) +
             count(p -> !occursin(p, values_src), required)
@@ -394,7 +2155,7 @@ const LOCKS = [
                         "emit_struct_prefix!(b, ctx.type_registry, size_tuple_type_inner, size_info_inner)",
                         "coerce_stack_top!(b, I64, ctx;",
                         "registered union field \$i has no physical Wasm type",
-                        "emit_value!(b, val, ctx, _cn_expected;"]
+                        "emit_value!(b, val, ctx, _cn_expected)"]
             count(p -> occursin(p, statements_src), forbidden) +
             count(p -> !occursin(p, statements_src), required)
         end),
@@ -402,9 +2163,9 @@ const LOCKS = [
         () -> begin
             unions_src = read(joinpath(CODEGEN, "unions.jl"), String)
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
-            required = ["stmt isa GlobalRef && stmt.name === :nothing",
-                        "stmt.typ === Nothing && return true",
-                        "return is_nothing_value(stmt.val, ctx)",
+            required = ["def isa NirGlobalRef && def.name === :nothing",
+                        "def.typ === Nothing && return true",
+                        "return is_nothing_value(def.value, ctx)",
                         "if is_nothing_value(val, ctx)",
                         "before compiling SSA aliases"]
             count(p -> !occursin(p, unions_src * stack_src), required)
@@ -421,14 +2182,11 @@ const LOCKS = [
                          r"br_if!\([^,]+,\s*(?:UInt32\()?\d",
                          r"br_on_(?:non_)?null!\([^,]+,\s*\d",
                          r"function\s+get_(?:forward|loop)_label_depth",
-                         r"br!\(b::InstrBuilder,\s*depth::Integer",
-                         r"catch_clause\(tag::Integer,\s*label::Integer"]
+                         r"br!\(b::InstrBuilder,\s*depth::Integer"]
             required = ["mutable struct ControlLabel", "handle::ControlLabel",
                         "function _label_depth(b::InstrBuilder, target::ControlLabel)",
                         "br!(b::InstrBuilder, target::ControlLabel)",
                         "branch target is not an open label",
-                        "try_table catches must retain symbolic ControlLabel targets",
-                        "catch target type mismatch",
                         "label_stack = Tuple{Symbol,Int,ControlLabel}[]",
                         "get_forward_label(target_block::Int)::ControlLabel"]
             sum(rx -> length(collect(eachmatch(rx, all_codegen * builder_src))), forbidden) +
@@ -440,31 +2198,28 @@ const LOCKS = [
             forbidden = ["from_julia=fieldtype(T, fi)", "from_julia=fieldtype(T, i)",
                          "has_undefined\n            ref_null!"]
             required = ["A materialized constant supplies stronger evidence than its declared",
-                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))",
+                        "emit_value_as!(b, NirLiteral(field_val), ctx, expected, typeof(field_val))",
                         "closure constant of type \$T has undefined captures; WT never fabricates capture values"]
             count(p -> occursin(p, values_src), forbidden) +
                 count(p -> !occursin(p, values_src), required)
         end),
-    "L89_erased_boundschecks_preserve_cfg_edges" => ("erasing explicit @inbounds checks forwards their control edges before dominator and loop ownership analysis",
+    "L89_erased_boundschecks_preserve_cfg_edges" => ("an always-taken @inbounds boundscheck branch is FOLDED (its fall-through edge dropped) and dead code is whatever the folded CFG cannot reach from the entry — never the statements between the jump and its target (that span carving dropped the live loop of reduce(max, 1:n) on 1.13); reachability runs before dominator and loop ownership analysis (re-pinned 2026-09-02)",
         () -> begin
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
-            resolver = findfirst("function resolve_through_dead_boundscheck", stack_src)
-            cfg = findfirst("# Build successor/predecessor maps", stack_src)
+            reach = findfirst("Dead code = unreachable from the entry over the folded CFG", stack_src)
+            cfg = findfirst("# The folded CFG: every block's edges as Julia's CFG has them (nir_cfg)", stack_src)
             dominators = findfirst("# Compute block dominators from the real CFG", stack_src)
-            ordering_fail = resolver === nothing || cfg === nothing || dominators === nothing ||
-                            first(resolver) > first(cfg) || first(resolver) > first(dominators)
-            required = ["dropping the nodes without forwarding their edges disconnects the graph",
-                        "dest_block = resolve_through_dead_boundscheck(dest_block)",
-                        "fall_through_block = resolve_through_dead_boundscheck(fall_through_block)",
-                        "next_block = resolve_through_dead_boundscheck(next_block)"]
-            Int(ordering_fail) + count(p -> !occursin(p, stack_src), required)
+            ordering_fail = reach === nothing || cfg === nothing || dominators === nothing ||
+                            first(cfg) > first(reach) || first(reach) > first(dominators)
+            forbidden = ["for j in (i + 2):(target - 1)", "resolve_through_dead_boundscheck"]
+            Int(ordering_fail) + count(p -> occursin(p, stack_src), forbidden)
         end),
     "L90_crossing_regions_are_normalized_or_rejected" => ("shared terminal CFG tails are duplicated through the canonical visitor and every physical label closure is LIFO-checked",
         () -> begin
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             required = ["duplicated_terminal_targets = Set{Int}()",
                         "terminal && phi_free && !prev_can_fallthrough",
-                        "compile_statement!(tb, stmt, i, ctx)",
+                        "compile_statement!(tb, i, ctx)",
                         "crossing control regions at block",
                         "_lb == length(label_stack)",
                         "_lp == length(label_stack)"]
@@ -473,7 +2228,8 @@ const LOCKS = [
     "L91_framework_roots_are_declarative" => ("framework closure globals, exact constants, and root-to-root calls are declarative inputs to the one closed-world compilation route",
         () -> begin
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             test_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
             required = ["captured_constants::Dict{Symbol,Any}",
@@ -485,33 +2241,35 @@ const LOCKS = [
                         "root \$name binds closure fields twice",
                         "invokes unknown compilation roots",
                         "selects arguments for unbound invoke sites",
-                        "static_wasm_type(_captured_value, ctx)",
-                        "Declaratively bound invoke", "params, _ = _true_call_sig",
+                        "static_wasm_type(NirLiteral(_captured_value), ctx)",
+                        "Declaratively bound invoke", "params = _function_type(ctx.mod, target_idx).params",
                         "emit_value!(bii, arg, ctx, expected",
                         "root entry call \$target_idx must have signature () -> ()",
                         "add_root_global_initializer!",
                         "registry.module_init_functions",
                         "add_string_global!",
-                        "the root linker cannot add imports after function indices are frozen",
+                        # the linker cannot add an import: add_import! refuses one after a definition
+                        "@test_throws MBV.ModuleValidationError MBV.compile_multi(",
                         "constant_root", "root-link fixture", "unknown_link", "bad_entry",
                         "linked_indices", "bindings.bound_leaves"]
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             count(p -> !occursin(p, compile_src * calls_src * invoke_src * stack_src * test_src), required)
         end),
-    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup",
+    "L93_recovered_capture_calls_are_exact_closed_world_edges" => ("verified Core.Box capture types enroll one exact overlay MethodInstance and devirtualize only an all-concrete exact candidate signature without exposing candidates to fuzzy lookup (restated 2026-09-28: the types come from record_capture_contents over the collected world)",
         () -> begin
             box_src = read(joinpath(CODEGEN, "box_capture.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
-            required = ["direct_types = Type[]", "vt isa Type && vt <: cand",
-                        "_capture_joins", "if isempty(absp)", "_closed_world_exact_type",
+            required = ["capture.record = record_capture_contents(",
+                        "capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record;",
+                        "_body_joins(interp, numeric_joins, capture, host_mi, src, nir, st)", "if isempty(absp)", "_closed_world_exact_type",
                         "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
-                        "root_mi in _DYNAMIC_ROOT_MIS[] && push!(_DYNAMIC_ROOT_MIS[], resolved_mi)",
+                        "root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
                         "info.is_candidate && info.arg_types == arg_types",
-                        "infos = FunctionInfo[i for i in infos if !i.is_candidate]",
+                        "infos = FunctionInfo[i for i in infos if !i.is_candidate && !i.invoke_only]",
                         "_target = get_exact_candidate", "target_info = get_exact_candidate",
                         "boxed_vector_capture", "vmod isa Vector{UInt8}"]
             count(p -> !occursin(p, box_src * trim_src * types_src * calls_src * test_src), required)
@@ -521,9 +2279,9 @@ const LOCKS = [
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             test_src = read(joinpath(ROOT, "test", "diagnostics_sink.jl"), String)
             forbidden = ["code generation failed for", "sprint(showerror, err)"]
-            required = ["body = generate_body(ctx)",
+            required = ["b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)",
                         "err isa WasmTarget.WasmCompileError", "err.diag in err.all",
-                        "DIAGNOSTICS_SINK[] === nothing"]
+                        "@test isempty(outer_sink)"]
             count(p -> occursin(p, compile_src), forbidden) +
             count(p -> !occursin(p, compile_src * test_src), required)
         end),
@@ -535,32 +2293,48 @@ const LOCKS = [
                         "(mi.def, canonical_sig) in collected_method_specs"]
             count(p -> !occursin(p, trim_src), required)
         end),
-    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls, so host IO imports cannot shift framework-owned function indices",
+    "L96_explicit_io_never_becomes_host_console" => ("print(io, ...) and show(io, ...) remain ordinary compiled Julia formatting calls — a module compiling print(::IOBuffer, ...) declares no import but the runtime's `wasmtarget.stack_trace`, which every module declares before its definitions (L145) — so host IO imports cannot shift framework-owned function indices: no host-console import exists anywhere in src, and receiver-free println/print/show reject loudly at their statement (no IO bridge exists to configure)",
         () -> begin
-            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
-            invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             docs_ci = read(joinpath(ROOT, ".github", "workflows", "docs.yml"), String)
-            required = ["_ir_call_has_explicit_io(stmt, code_info)",
-                        "_invoke_has_explicit_io(param_types)",
-                        "explicit IO formatting does not activate host-console imports",
-                        "Verify interactive docs islands compiled",
-                        "window.TherapyHydrate[\"examplelorenz\"]"]
-            count(p -> !occursin(p,
-                compile_src * invoke_src * read(joinpath(ROOT, "test", "module_builder_validation.jl"), String) * docs_ci),
-                required)
+            mbv_src = read(joinpath(ROOT, "test", "module_builder_validation.jl"), String)
+            src_all = String[]
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") && push!(src_all, read(joinpath(dir, f), String))
+            end
+            src_all = join(src_all)
+            # no host-console import exists anywhere in src (it would shift the
+            # framework's function indices); no IO classifier exists — print(io, ...)
+            # is an ordinary call and compiles to a module with no imports
+            forbidden = ["add_io_imports!(", "_invoke_has_explicit_io", "\"io\", \"write_", "fromCharCodeArray"]
+            required = ["explicit IO formatting does not activate host-console imports",
+                        "compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), \"p\")]; options=MBV.options_from_env())",
+                        "@test [(i.module_name, i.field_name) for i in compiled.imports] == [(\"wasmtarget\", \"stack_trace\")]"]
+            # the receiver-free rejection, pinned where it is exercised (the reject is
+            # Julia's own console write, located at its statement)
+            diag_src = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            diag_required = ["receiver-free print/println/show reject loudly at their statement",
+                             "e.diag.stmt_idx > 0 && !isempty(e.diag.stmt)"]
+            docs_required = ["Verify interactive docs islands compiled",
+                             "window.TherapyHydrate[\"examplelorenz\"]"]
+            count(p -> occursin(p, src_all), forbidden) +
+                count(p -> !occursin(p, mbv_src), required) +
+                count(p -> !occursin(p, diag_src), diag_required) +
+                count(p -> !occursin(p, docs_ci), docs_required)
         end),
-    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("Julia 1.13 UnionAll predicates use the canonical nominal hierarchy and bottom phi producers preserve their real terminator without inventing a runtime type",
+    "L92_runtime_predicates_and_bottom_edges_are_exact" => ("`UnionAll(v, t)` is the jl_type_unionall foreigncall, which constructs a type (boot.jl): its lowering is jltypes.c's jl_type_unionall over the runtime jl_has_typevar (get_has_typevar_function!), and nothing retypes its result (it was read as an `isa UnionAll` predicate, answered by a ref.test of v and typed Bool; restated 2026-09-27); bottom phi producers preserve their real terminator without inventing a runtime type, and a phi source without a local that is a phi or `nothing` is a codegen bug (restated 2026-09-28)",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             stmts_src = read(joinpath(CODEGEN, "statements.jl"), String)
             stack_src = read(joinpath(CODEGEN, "stackified.jl"), String)
             forbidden = ["jl_type_unionall` (no lowering)",
-                         "get_concrete_wasm_type(Union{}"]
-            required = ["extract_foreigncall_name(stmt.args[1]) === :jl_type_unionall",
-                        "elseif _fc_sym === :jl_type_unionall",
-                        "ref_test!(b, Int64(unionall_idx), false)",
+                         "get_concrete_wasm_type(Union{}",
+                         "node isa NirForeignCall && node.c_symbol === :jl_type_unionall",
+                         "ref_test!(b, Int64(unionall_idx), false)",
+                         "UnionAll(v, t) builds a type at run time (jl_type_unionall)"]
+            required = [":jl_type_unionall => _fc_jl_type_unionall!",
+                        "call!(b, get_has_typevar_function!(ctx.mod, reg)",
                         "A bottom producer has no runtime value to classify or coerce",
-                        "bottom phi source has no terminating statement"]
+                        "is a phi or `nothing` without a local"]
             all_src = context_src * stmts_src * stack_src
             count(p -> occursin(p, all_src), forbidden) +
                 count(p -> !occursin(p, all_src), required)
@@ -571,12 +2345,16 @@ const LOCKS = [
             forbidden = ["If we can't evaluate, default to Int64",
                          "phi_julia_type = Int64", "phic_julia_type = Int64",
                          "phi_wasm_type = I64  # Default for Any/Union"]
-            required = ["An unresolved global has no numeric type evidence",
-                        "Preserve missing type evidence as Any", "end\n    return Any\nend"]
+            nir_src = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            # an unbound global's type is Any (the boundary's julia_type), and a node that is no
+            # operand has no type to guess: value_type raises
+            required = ["T = constant ? Core.Typeof(val) : bound ? Core.get_binding_type(x.mod, x.name) : Any",
+                        "Preserve missing type evidence as Any",
+                        "    error(\"value_type of \$(node), which is not an operand\")\nend"]
             count(p -> occursin(p, context_src), forbidden) +
-                count(p -> !occursin(p, context_src), required)
+                count(p -> !occursin(p, context_src * nir_src), required)
         end),
-    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values",
+    "L63_no_control_or_allocation_defaults" => ("dynamic dispatch and Bool conditions never synthesize values; partial %new uses null only as Julia's explicit undefined-reference sentinel and rejects missing physical values; and `#undef` is never `nothing`, nor read as a value: a pointer slot whose type admits `nothing` (Any, a Union with Nothing, any other supertype of Nothing, as a Memory element or a field `new` may leave unset; an abstract type that excludes Nothing, a Number slot, is a reference slot whose null is `#undef`) is held in the any hierarchy (undef_slot_storage, read by get_array_type! and _struct_fields!) and marks `#undef` with the module's one undefined value, any other reference slot with its null (undef_slot, undef.jl, the one decision: no file but undef.jl asks undef_slot or emit_is_undef!); memorynew and jl_alloc_genericmemory fill a new Memory through emit_new_slots!, a constant's slots (a Dict's keys and vals, a Vector's, a Memory's) are emitted by one rule, emit_constant_slots!, which reads isassigned and emits an unset one through emit_undef!, a partial %new, Julia's slot unset (atomic_pointerset of C_NULL) and a constant Box's unset contents store emit_undef!, memoryref_isassigned and isdefined (a field's, a Box's contents) test emit_is_unset!, and memoryrefget of every reference element, a field read (by a static or a run-time name) and a Box's contents read test it and throw UndefRefError (emit_undef_read_check!, Julia's null_pointer_check, cgutils.cpp:1633). Its behavior: smoke undef_slots (isassigned and isdefined of a stored `nothing` answered 2, native 1, the read of an unset slot 0 where native throws UndefRefError, A17E1; a Vector{String} slot's unset read 1 or a null dereference, a Union{Nothing,String} slot's isassigned of a stored nothing 2 and its unset read `nothing`, a run-time name's read of an unset field 1, a splat's copy of an unset slot (`[v...]`) read as assigned, all native UndefRefError or 1, measured on 52c0a9bd; an initialized Union{Nothing,S} field holding `nothing` is defined (isdefined_tfunc), and memoryrefget, memoryrefset! and isassigned read the element type from the reference's own type, memoryref_eltype, one whose type is no MemoryRef DataType rejecting at its statement; smoke memoryref_barrier: an Int64 element read into a statement typed Any raised a WasmInternalError, 52c0a9bd; smoke undef_slots' const_ cases: a Dict{Int,Any} constant's unoccupied vals slot answered isassigned 1 and read `nothing`, native 2 and UndefRefError, a Vector constant with an unset slot raised an internal error and a Memory one rejected, measured on 0bc84e05, A18B3; a Vector{Number} slot's unset read throws, A18P6) and dev/formal/Undef.tla (a slot's kind and storage derived from the attributes the code reads, pointer_slot, pointer_slot_admits_nothing, undef_slot_storage and undef_slot, every slot unmade at the start so each Broken instance reaches its violation by a step, A18P4: MCUndefAnyAsNullBroken, MCUndefUnionAsNullBroken, MCUndefUnionConcreteBroken, MCUndefRefUncheckedBroken, MCUndefAnyUncheckedBroken, MCUndefInlineCheckedBroken, MCUndefInlinePointerBroken, MCUndefConstAsNullBroken: an isbits union is inline in Julia, never `#undef`, and its box's null `nothing` is never tested as `#undef`, pointer_slot; a constant's unset slot is `#undef`; a slot that holds `nothing` and `#undef` in a host reference (a Union{Nothing,Function}, an externref), which has no undefined value, keeps it and rejects at the statement that allocates, unsets, tests or reads it (_undef_unrepresentable!, smoke xfail undef_host_reference, A18E4: an unlocated internal error at type registration on 0bc84e05); a MemoryRef's element type is read by memoryref_eltype alone, no name arm beside it (A18E5); MCUndefInlinePointerBroken: an inline struct with a pointer field (Some{String}, Tuple{Int64,String}) is `#undef` by its NULL first pointer, cgutils.cpp:2270, so pointer_slot answers true for it, `!allocatedinline(T) || !datatype_pointerfree(T)`, and its null is tested: smoke undef_slots inline_ptr_*, on 0bc84e05 isassigned of an unset slot answered assigned and its read trapped on the null, native false and UndefRefError, A18B1) (dev/CHARTER.md C6)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
@@ -588,9 +2366,58 @@ const LOCKS = [
                         "Bool condition has a non-boolean reference representation",
                         "struct construction leaves a non-reference Julia field undefined",
                         "_wt_make_undefined_field"]
+            # `#undef` in a pointer slot: each reader and writer (A17E1)
+            local blt_src = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local undef_src = read(joinpath(CODEGEN, "undef.jl"), String)
+            local types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            local structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local undef_needles = (
+                (types_src, "local wasm_elem_type = undef_slot_storage(elem_type, get_concrete_wasm_type(elem_type, mod, registry))"),
+                (structs_src, "field_may_be_undef(T, fi) && (wasm_vt = undef_slot_storage(ft, wasm_vt))"),
+                (blt_src, "emit_new_slots!(_mnb, ctx, arr_type_idx, elem_type)"),
+                (stmts_src, "emit_new_slots!(b, ctx, arr_type_idx, elem_type)"),
+                (blt_src, "_wt_is_ref(_mrg_def.elem.valtype) && emit_undef_read_check!(_mrgb, ctx, elem_type, _mrg_def.elem.valtype)"),
+                (blt_src, "emit_is_unset!(mib, ctx, elem_type, elem_wasm)"),
+                (blt_src, "    emit_undef!(_apb, ctx, T, elem)\n"),
+                (blt_src, "            emit_undef_read_check!(_mb_ib, ctx, Any, _mb_ft)\n"),
+                (blt_src, "_emit_field_undef_check!(_sfb, ctx, obj_type, field_sym, field_idx, info)"),
+                (blt_src, "_emit_field_undef_check!(_sfgb, ctx, effective_obj_type, field_sym, field_idx, info)"),
+                (calls_src, "_emit_field_undef_check!(_gfb_ib, ctx, _gfb_T, _gfb_fld, _gfb_fi, _gfb_info)"),
+                (calls_src, "_emit_field_undef_check!(ib, ctx, T, i, i, info)"),
+                (calls_src, "emit_slots_undef_check!(bld, ctx, arr_type_idx, elem_type, src_arr_local, src_off_local, len_local)"),
+                (calls_src, "emit_slots_undef_check!(bld, ctx, arr_type_idx, elem_type, src_local, src_off_local, tail_len)"),
+                (calls_src, "if _wt_is_ref(_isd_ft) && field_may_be_undef(_isd_T, Base.fieldindex(_isd_T, _isd_f))"),
+                (calls_src, "emit_is_unset!(_bxd_ib, ctx, Any, AnyRef)"),
+                # a constant's slots, one rule for a Dict's keys and vals, a Vector and a Memory: an
+                # unset slot is `#undef` (A18B3)
+                (values_src, "        if !isassigned(mem, i)\n            emit_undef!(b, ctx, elem_type, w)\n"),
+                (calls_src, "emit_is_unset!(_isd_b, ctx, fieldtype(_isd_T, _isd_f), _isd_ft)"),
+                (stmts_src, "emit_undef!(b, ctx, fieldtype(struct_type, _mjfi), missing_type)"),
+                (values_src, "            emit_undef!(b, ctx, Any, ctx.mod.types[type_idx + 1].fields[2].valtype)\n            struct_new!(b, type_idx)"),
+                (undef_src, "    return pointer_slot_admits_nothing(julia_type)\nend"),
+                (undef_src, "pointer_slot(@nospecialize(T))::Bool =\n    T isa Type && (!Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T)))"),
+                (smk, "_g(\"undef_slots\""))
+            # the one decision: undef_slot and the identity test are asked in undef.jl alone
+            local others = 0
+            for (root, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") && f != "undef.jl" || continue
+                local t = read(joinpath(root, f), String)
+                others += count(r"\bundef_slot\(|\bemit_is_undef!\(", t)
+            end
             count(p -> occursin(p, calls_src) || occursin(p, values_src) || occursin(p, stmts_src), forbidden) +
                 count(p -> !(occursin(p, calls_src) || occursin(p, values_src) ||
-                             occursin(p, stmts_src) || occursin(p, test_src)), required)
+                             occursin(p, stmts_src) || occursin(p, test_src)), required) +
+                count(((src, n),) -> !occursin(n, src), undef_needles) + others +
+                # one element-type rule for memoryrefget, memoryrefset! and isassigned, no guessed element
+                abs(count("elem_type = memoryref_eltype(ref_type)", blt_src) - 3) +
+                abs(count(r"\bemit_constant_slots!\(b, ctx, (?!mem, arr_type_idx)", values_src) - 4) +   # its four callers, not its docstring
+                # a MemoryRef's element type read by memoryref_eltype alone, never by its name's arms (A18E5)
+                count_sites(r"name\.name === :GenericMemoryRef \?|name\.name === :MemoryRef && length\(") +
+                # a slot that holds `nothing` and `#undef` in a host reference rejects at its use (A18E4)
+                abs(count("_undef_unrepresentable!(b, ctx, ", undef_src) - 6) +
+                (occursin("which alone holds the undefined value\")", undef_src) ? 1 : 0) +
+                count(occursin(p, blt_src) for p in ("elem_type = Int32  # default", "ssa_result_type = get(ctx.ssa_types, idx, Any)"))
         end),
     "L62_exact_primitive_reinterpret_layout" => ("primitive ReinterpretArray construction folds exact bits/padding predicates, preserves runtime dimension errors, and bottom helpers never acquire a result representation",
         () -> begin
@@ -621,10 +2448,17 @@ const LOCKS = [
             forbidden = ["struct_new_default!(_thrb", "Default: push null ref for ref fields",
                          "ref_null!(berr, ArrayRef)", "name === :throw || name === :throw_boundserror",
                          "PURE-9032: Error constructors"]
-            required = ["constant exception contains undefined fields",
-                        "isempty(args) ? \"\" : args[1]"]
+            test_src = read(joinpath(ROOT, "test", "no_fabricated_values.jl"), String)
+            # error(...), throw payloads and tuple errors compile Julia's own bodies;
+            # the builders that re-implemented them are deleted
+            forbidden_builders = ["_invoke_error_b", "_invoke_throw_payload_b", "_invoke_tuple_error_b"]
+            required = ["constant exception contains undefined fields"]
+            test_required = ["err isa ErrorException && err.msg == \"bad n\"",
+                             "compare_julia_wasm(_wt_exact_error_exception, Int64(1)).pass"]
             count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden) +
-                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required)
+                count(p -> occursin(p, calls_src) || occursin(p, invoke_src), forbidden_builders) +
+                count(p -> !(occursin(p, calls_src) || occursin(p, invoke_src)), required) +
+                count(p -> !occursin(p, test_src), test_required)
         end),
     "L59_real_base_exception_helpers" => ("Bounds/Inexact/Domain/Overflow helper bodies construct and throw their real Julia exceptions; no name-routed null-payload helper family remains",
         () -> begin
@@ -647,13 +2481,18 @@ const LOCKS = [
             count(p -> occursin(p, invoke_src), forbidden) +
                 count(p -> !occursin(p, test_src), required)
         end),
-    "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func, context, expected type, and the concretely boxed got value",
+    "L57_exact_typeassert_exception" => ("proven typeassert failure throws a classed TypeError preserving func (:typeassert, the emitter's default; the UnionAll constructor passes :UnionAll, as jl_type_unionall's jl_type_error does), context, expected type, and the concretely boxed got value",
         () -> begin
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The typeassert LOWERING is `_lower_typeassert!` (builtins.jl, an
+            # identity-keyed BUILTIN_LOWERINGS entry since Phase 12F); the
+            # `_emit_typeerror_throw!` helper it calls still lives in calls.jl.
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             test_src = read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String)
-            required = ["function _emit_typeerror_throw!", "Any[:typeassert, \"\", target, got]",
-                        "i == 4 ? get_ssa_type(ctx, got)",
-                        "_emit_typeerror_throw!(fb, args[1], _ta_target",
+            required = ["function _emit_typeerror_throw!", "func::Symbol=:typeassert",
+                        "for (i, v) in enumerate((func, \"\", target))",
+                        "push_got!(b, field(4))",
+                        "_emit_typeerror_throw!(fb, ctx, _ta_target, (bb, w) -> emit_value!(bb, args[1], ctx, w))",
                         "err.expected === String", "err.got isa Int64"]
             forbidden = ["null-payload throw", "union_bottom_throw_stub shape"]
             count(p -> !occursin(p, calls_src * test_src), required) +
@@ -677,24 +2516,20 @@ const LOCKS = [
                         "f === _wt_type_name_str"]
             count(p -> !occursin(p, interp_src), required)
         end),
-    "L54_pure_dense_statistics_correlation" => ("dense float correlation retains Statistics corm arithmetic over one explicitly length-validated index domain",
+    "L54_statistics_compiles_from_its_source" => ("Statistics compiles from its own source: no extension and no overlay of a Statistics method anywhere in ext/ or src/. Until 2026-09-29 six overlays replaced cor, corm, _quantilesort!, mean! and (on 1.13) the median and quantile wrappers; deleted, Julia's bodies matched native in every case of the Statistics lane on 1.12 and 1.13 (dev/CHARTER.md C3)",
         () -> begin
-            stats_src = read(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl"), String)
-            required = ["Statistics.corm(", "x::Vector{T}, mx::T, y::Vector{T}, my::T",
-                        "length(y) == n", "@simd for i in eachindex(x)",
-                        "Statistics.clampcor("]
-            forbidden = ["@simd for i in eachindex(x, y)"]
-            count(p -> !occursin(p, stats_src), required) +
-                count(p -> occursin(p, stats_src), forbidden)
+            project = read(joinpath(ROOT, "Project.toml"), String)
+            isfile(joinpath(ROOT, "ext", "WasmTargetStatisticsExt.jl")) +
+                occursin("WasmTargetStatisticsExt", project) +
+                count_sites(r"@overlay\s+\S+\s+(?:function\s+)?Statistics\."; roots=[SRC, joinpath(ROOT, "ext")])
         end),
-    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain",
+    "L53_pure_dense_linalg_kernels" => ("dense float norm/opnorm and mutating vector kernels stay in pure Julia with homogeneous signatures and one explicitly validated index domain (rotate!/reflect! compile Julia's own bodies since 2026-09-29, so they are no longer overlays)",
         () -> begin
             linalg_src = read(joinpath(ROOT, "ext", "WasmTargetLinearAlgebraExt.jl"), String)
             required = ["LinearAlgebra.norm(x::Array{T,N})",
                         "LinearAlgebra.opnorm(", "_wt_osj_svdvals(A)",
                         "a::T, x::Vector{T}, y::Vector{T}",
                         "a::T, x::Vector{T}, b::T, y::Vector{T}",
-                        "LinearAlgebra.rotate!(", "LinearAlgebra.reflect!(",
                         "length(x) == length(y)", "for i in eachindex(x)"]
             forbidden = ["for i in eachindex(x, y)",
                          "LinearAlgebra.norm(x::Vector{T})"]
@@ -728,37 +2563,48 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L50_closed_world_result_lub_and_reinterpret_bits" => ("dynamic selector results use the closed-world target LUB, proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
+    "L50_julia_call_result_and_reinterpret_bits" => ("a call's result type is Julia's own answer — the statement's type, or, where Julia stopped at its max_methods cutoff and typed a call to a known function `Any`, the call is the dynamic dispatch Julia's IR asks for, its result the dispatched method's, read at run time (codegen re-infers nothing: closed_world_call_result, which lifted the cutoff, was deleted 2026-10-11, L152) — never its first argument's type, a field's type, or a join over the registry's specializations; the typeId dispatch converts each target's result to that statement type; an unused `:invoke` reads the return type of the function its MethodInstance compiles to (get_function_by_mi: a planned body's rettype in the plan, a declared import's declared one), never another registry entry's — proven numeric phis are globally typed, and primitive ReinterpretArray operations use structural value bits rather than host layout queries",
         () -> begin
             context_src = read(joinpath(CODEGEN, "context.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["foldl(typejoin, returns)",
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            required = ["result_julia = get(ctx.ssa_types, idx, Any)",
+                        "local target = get_function_by_mi(ctx.func_registry, rec.node.mi)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
-                        "stmt0.head === :new",
+                        # a `%new`'s class, as every concretely typed statement's (the one class set's statement rule)
+                        "(made isa DataType && isconcretetype(made)) && observe_type!(made)",
                         "entry.specTypes",
                         "target_type <: atypes[p]",
-                        "concrete_args = Tuple{spec...}",
-                        "m = which(g, concrete_args)",
+                        "ssig = Tuple{Core.Typeof(g), spec...}",
+                        "local selected = wt_method_which(interp, ssig)",
                         "Base.array_subpadding",
                         "Core.bitcast(T, bits)",
                         "% TargetBits",
                         "% SourceBits"]
-            forbidden = ["getfield(a, :parent)"]
-            all_src = context_src * interp_src * trim_src
+            forbidden = ["getfield(a, :parent)", "closed_world_call_result",
+                         "infer_call_type", "foldl(typejoin, returns)", "infos[1].return_type",
+                         "candidate <: actual", "info.arg_types...} == spec"]
+            all_src = context_src * interp_src * trim_src * calls_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden",
+    "L49_monomorphic_invokes_and_typed_args" => ("explicit invokes specialize from concrete SSA types and every argument converts at emission; positional post-push repairs and runtime-generic _compute_sparams lowering are forbidden. _closed_world_edge types each operand as the edge's consumer reads it: a finalizer's and a `:cfunction`'s by Julia's argextype (value_type over the slot types and the boundary's SSA types, no join), as Julia's queue does (typeinfer.jl:1353, :1361 on 1.12.7; :1502, :1510 on 1.13.1); the `:new_function` edge specializes `Tuple{node.T, Vararg}`, typing no operand (:1523 on 1.13.1); an :invoke re-specialization, a splat and an invoke_in_world by the call-site type codegen's call reads (_edge_arg_type: value_type over the body's joins, _body_joins: its numeric joins and its captured-box reads, plan.joins' union), so the MethodInstance collected is the one called (dev/AUDIT.md A13P8)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             invoke_src = read(joinpath(CODEGEN, "invoke.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            required = ["ir_arg_type = function", "CC.findall(ftype, lookup_table; limit=-1)",
+            required = ["arg_types = Any[arg_type(a) for a in node.operands]",
+                        "local body = _body_joins(interp, joins, capture, mi, src, nir, slot_types)\n    return a -> value_type(a, slot_types, body)",
+                        "local _call_type = let st = nir_slot_types(src), j = _body_joins(interp, numeric_joins, capture, host_mi, src, nir, st)",
+                        "local argextype(a) = value_type(a, slot_types, nothing)   # Julia's queue's operand type",
+                        "Tuple{argextype(node.operands[1]), argextype(node.operands[2])}",
+                        "mi = CC.compileable_specialization_for_call(interp, Tuple{argextype(ops[2]),",
+                        "matches = wt_method_matches(interp, ftype)",
                         "f isa Function || f isa Type",
-                        "param_types = first_explicit <= length(target_info_early.arg_types)",
+                        "target.arg_types[(takes_closure ? 2 : 1):end]",
                         "Push arguments through the resolved target signature",
                         "Base.ReinterpretArray{T,N,S,A,false}"]
             forbidden = ["only handle the case where the LAST arg",
@@ -777,7 +2623,7 @@ const LOCKS = [
             all_src = compile_src * context_src * types_src * values_src
             required = ["mutable_constant_globals", "module_init_functions",
                         "finalize_module_initializers!", "function_wasm_signature",
-                        "GlobalRef is not defined in its source module"]
+                        "unbound_global_text(node.mod, node.name); detail=val,"]
             forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
                          "If we can't evaluate, might be a type reference"]
             count(p -> !occursin(p, all_src), required) +
@@ -786,23 +2632,26 @@ const LOCKS = [
     "L47_single_memmove_lowering" => ("memmove/memcpy has one array-copy lowering and its one pointer walk recognizes Vector, Memory, String, and Symbol backing identities",
         () -> begin
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            required = ["extract_foreigncall_name(st.args[1]) in (:jl_string_ptr, :jl_symbol_name)",
-                        "backing_type === String || backing_type === Symbol"]
+            required = ["st.c_symbol in (:jl_string_ptr, :jl_symbol_name)",
+                        "backing_type === String || backing_type === Symbol",
+                        ":memmove => _fc_memmove!", ":memcpy => _fc_memmove!"]
             count(p -> !occursin(p, stmt_src), required) +
-                abs(length(collect(eachmatch(r"if \(name === :memmove \|\| name === :memcpy\)", stmt_src))) - 1)
+                abs(length(collect(eachmatch(r"function _fc_memmove!\(", stmt_src))) - 1)
         end),
-    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification travels on the classed Symbol/string value across normal calls; unknown dynamic Symbols trap instead of defaulting false",
+    "L46_symbol_syntax_value_metadata" => ("operator and syntactic-operator classification of ANY name, literal or built at run time, is Julia's parser answer: Base._isoperator / Base.is_syntactic_operator are overlaid by the port of julia-parser.scm `operator?` / `syntactic-op?` over tables read from jl_is_operator / jl_is_syntactic_operator at build time; no classed string carries a baked flag and no foreigncall lowering answers from one (a Symbol built from bytes once trapped there)",
         () -> begin
-            types_src = read(joinpath(CODEGEN, "types.jl"), String)
-            values_src = read(joinpath(CODEGEN, "values.jl"), String)
-            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            all_src = types_src * values_src * stmt_src
-            required = ["symbol_syntax_flags", "syntax_flags::Integer=-1",
-                        "name in (:jl_is_operator, :jl_is_syntactic_operator)",
-                        "dynamically-created Symbol lacks operator metadata"]
-            forbidden = [":name_is_operator", ":singleton_is_operator",
-                         "ASCII-only operator"]
-            count(p -> !occursin(p, all_src), required) +
+            interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
+            all_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")), "\n")
+            required = ["@overlay WASM_METHOD_TABLE Base._isoperator(s::Symbol) = _wt_parser_is_operator(String(s))",
+                        "@overlay WASM_METHOD_TABLE function Base._isoperator(s::AbstractString)",
+                        "@overlay WASM_METHOD_TABLE Base.is_syntactic_operator(s::Symbol) =",
+                        "function _wt_parser_is_operator(s::String)::Bool",
+                        "function _wt_op_suffix_start(s::String)::Int",
+                        "const _WT_NO_SUFFIX_OPERATORS"]
+            forbidden = ["syntax_flags", ":jl_is_operator =>", ":jl_is_syntactic_operator =>",
+                         "lacks operator metadata", ":name_is_operator", ":singleton_is_operator",
+                         "ASCII-only operator", "name === :jl_is_operator"]
+            count(p -> !occursin(p, interp_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
     "L45_one_source_slot_and_vararg_abi" => ("semantic Core.Argument source types have one slot authority while the one physical vararg projection path maps fixed-prefix packs by their ABI offset",
@@ -812,7 +2661,7 @@ const LOCKS = [
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             flow_src = read(joinpath(CODEGEN, "flow.jl"), String)
             helpers_src = read(joinpath(CODEGEN, "helpers.jl"), String)
-            required = ["function source_slot_type", "source_type = source_slot_type(ctx, val.n)",
+            required = ["T = value_type(ctx, NirArgument(source_slot))", "    value_type(node, ctx.slot_types, ctx.ssa_types)",
                         "function packed_vararg_source_type",
                         "packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)",
                         "Reconstruct the one source-level vararg tuple",
@@ -835,7 +2684,7 @@ const LOCKS = [
             all_src = types_src * values_src * calls_src * stmt_src
             required = ["get_module_constant_global!", "_closed_world_isvisible",
                         "emit_closed_world_isvisible!", "name_visible_main",
-                        "_fc_sym === :jl_module_parent", "_fc_sym === :jl_module_name"]
+                        ":jl_module_parent => _fc_jl_module_parent!", ":jl_module_name => _fc_jl_module_name!"]
             forbidden = ["Module constant — empty struct", "module_name (mut string ref)",
                          "module_name → string"]
             count(p -> !occursin(p, all_src), required) +
@@ -857,7 +2706,7 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper; target Wasm never substitutes ASCII-only answers",
+    "L42_exact_unicode_property_table" => ("utf8proc category/width and Julia identifier predicates share one exact version-matched packed table and one pre-indexed helper, and Base's Char case mapping/predicates read utf8proc's own case records through the same two-stage lookup; target Wasm never substitutes ASCII-only answers",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
@@ -865,9 +2714,14 @@ const LOCKS = [
             required = ["const _UTF8PROC_PROPERTY_DATA",
                         "get_or_create_unicode_property_func!",
                         "needs_unicode_properties && get_or_create_unicode_property_func!",
-                        "_fc_sym === :utf8proc_category",
-                        "_fc_sym === :utf8proc_charwidth",
-                        "name === :jl_id_start_char", "name === :jl_id_char"]
+                        ":utf8proc_category => _fc_utf8proc_category!",
+                        ":utf8proc_charwidth => _fc_utf8proc_charwidth!",
+                        ":jl_id_start_char => _fc_jl_id_start_char!", ":jl_id_char => _fc_jl_id_char!",
+                        "const _UTF8PROC_CASE_DATA",
+                        "needs_unicode_case && get_or_create_unicode_case_func!",
+                        ":utf8proc_toupper => _fc_utf8proc_toupper!", ":utf8proc_tolower => _fc_utf8proc_tolower!",
+                        ":utf8proc_totitle => _fc_utf8proc_totitle!", ":utf8proc_isupper => _fc_utf8proc_isupper!",
+                        ":utf8proc_islower => _fc_utf8proc_islower!"]
             forbidden = ["assume valid, conservative", "true = always a grapheme break"]
             all_src = types_src * compile_src * stmt_src
             count(p -> !occursin(p, all_src), required) +
@@ -881,42 +2735,62 @@ const LOCKS = [
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint; unspecialized Vararg signatures never become physical Wasm entries",
+    "L40_explicit_invokes_in_closed_world" => ("every explicit invoke MethodInstance is enrolled in the joint reachability fixpoint, an invoke whose concrete call-site types select another MethodInstance retargeted in place (nir_retarget_invoke!) so its edge agrees with the overlay dispatch, recomputed every round from Julia's own MethodInstance (invoke_originals), so a round's retarget made under a capture typing a later round widens is restored, never kept (dev/AUDIT.md A16C1: smoke capture_typed_invoke trapped, native 19; dev/formal/ClosedWorld.tla RetargetsSound); an unspecialized Vararg signature becomes a physical Wasm entry ONLY as the one packed runtime-Vararg-tuple parameter — the {Object, data, size} struct the splat call site already holds (Phase 12 H) — and every other open-ended signature is still skipped",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["function _missing_explicit_invoke_mis",
                         "changed = collect_new_pairs!(_missing_explicit_invoke_mis(",
-                        "original_mi in protected || push!(superseded, original_mi)",
-                        "any(T -> T isa Core.TypeofVararg, arg_types) && continue"]
-            count(p -> !occursin(p, trim_src), required)
+                        "if kind === :invoke",
+                        "nir_retarget_invoke!(src, nir, k, mi)",
+                        "original_mi = originals === nothing ? mi : get(originals, k, mi)",
+                        "if mi isa Core.MethodInstance && mi !== current_mi",
+                        "if any(T -> T isa Core.TypeofVararg, arg_types)",
+                        "is_runtime_vararg_tuple_type(packed_vararg) || continue",
+                        "arg_types = (packed_vararg,)"]
+            count(p -> !occursin(p, trim_src), required) +
+                (occursin("_g(\"capture_typed_invoke\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1)
         end),
     "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",
         () -> begin
             diag_src = read(joinpath(CODEGEN, "diagnostics.jl"), String)
             gen_src = read(joinpath(CODEGEN, "generate.jl"), String)
+            # (the byte-vector emit_unsupported_stub! method, which carried `!_dead`, is deleted:
+            # every stub goes through the builder method)
             required = ["function stmt_is_proven_unreachable",
                         "!stmt_is_proven_unreachable",
-                        "soundness_fatal=(soundness_fatal && !_dead2)",
-                        "soundness_fatal=(soundness_fatal && !_dead)"]
+                        "soundness_fatal=(soundness_fatal && !_dead2)"]
             forbidden = ["soundness_fatal && _me", "soundness_fatal && _me2",
                          "sound *silent* trap", "A non-must-execute"]
             count(p -> !occursin(p, diag_src * gen_src), required) +
                 count(p -> occursin(p, diag_src), forbidden)
         end),
-    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, and grapheme gaps reject instead of substituting null, zero, one, or an arbitrary arm",
+    "L38_no_known_value_substitutions" => ("known Memory, ifelse, allocation, grapheme and isa gaps reject instead of substituting null, zero, one, or an arbitrary arm; an isa of an unboxed numeric answers Julia's own subtype test of its exact type",
         () -> begin
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
-            calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            # The ifelse LOWERING is `_lower_ifelse!` (builtins.jl, an
+            # identity-keyed BUILTIN_LOWERINGS entry since Phase 12F).
+            calls_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                        read(joinpath(CODEGEN, "builtins.jl"), String)
             stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
-            required = ["Memory constant of type \$T has an undefined slot",
+            required = ["            emit_constant_slots!(b, ctx, mem, array_type_idx, elem_type; contents=_ -> true)\n",
                         "array.new_fixed 0",
                         "ifelse condition did not lower to i32",
                         "ifelse operand emitted no runtime value",
-                        "utf8proc_grapheme_break_stateful requires the Unicode grapheme runtime",
-                        "jl_alloc_string without its required length operand"]
+                        # an unlowered foreigncall (utf8proc's grapheme state machine
+                        # among them) rejects at its statement, never a constant
+                        "record_unsupported!(ctx, :unsupported_method, \"foreigncall `\$(name)` (no lowering)\"; idx=idx, detail=node)",
+                        "jl_alloc_string without its required length operand",
+                        "_isa_reject!(bld, ctx, \"isa(x, T) with a runtime type T\")",
+                        "i32_const!(bld, isa2_julia <: check_type ? 1 : 0)",
+                        "i32_const!(bld, isa3_julia <: check_type ? 1 : 0)"]
             forbidden = ["Memory constant too large to materialize (\$n_mem elements) — emitting null",
                          "Fall back to emitting just the true value",
-                         "true = always a grapheme break"]
+                         # isa: a constant in place of a test (calls.jl _compile_call_isa)
+                         "Unknown concrete type — can't test, return false",
+                         "Unknown type - drop value and return false",
+                         "can never be Nothing, so isa(x, T) is true",
+                         "I64=>Int64, I32=>Int32, F64=>Float64, F32=>Float32",
+                         "true = always a grapheme break", "_fc_utf8proc_grapheme_break_stateful!"]
             all_src = values_src * calls_src * stmt_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
@@ -926,7 +2800,7 @@ const LOCKS = [
             values_src = read(joinpath(CODEGEN, "values.jl"), String)
             required = ["WT never fabricates field values",
                         "emit_struct_prefix!(b, ctx.type_registry, T, info)",
-                        "emit_value!(b, field_val, ctx, expected; from_julia=typeof(field_val))"]
+                        "emit_value_as!(b, NirLiteral(field_val), ctx, expected, typeof(field_val))"]
             forbidden = ["emit ref.null for the field's expected type",
                          "type-correct defaults",
                          "mismatched concrete struct ref"]
@@ -951,24 +2825,13 @@ const LOCKS = [
                 for name in (:add_ptr, :sub_ptr, :pointerref, :pointerset))
         end),
     "L35_unwrapped_emissions_classified" => ("every intentional no-expectedType emission is explicitly classified by why its actual type is the consumer contract",
-        () -> begin
-            n = 0
-            for (dir, _, files) in walkdir(CODEGEN), f in files
-                endswith(f, ".jl") || continue
-                for line in eachline(joinpath(dir, f))
-                    occursin(r"emit_value!\([^()]*, ctx\)", line) || continue
-                    occursin("function emit_value!", line) && continue
-                    occursin("R17-floor:", line) || (n += 1)
-                end
-            end
-            n
-        end),
-    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton: dynamic Any-versus-() egal tests its concrete tuple type rather than heap identity",
+        () -> count(site -> !occursin("R17-floor:", site[3]), untyped_value_emissions())),
+    "L32_empty_tuple_egal" => ("Tuple{} is an immutable zero-field singleton, so two of them are egal without heap identity: the static egal arm answers one singleton type with 1, and the runtime egal function answers 1 for any singleton class once the two classIds match (dev/CHARTER.md C3)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
-            required = ["tuples are still egal in Julia",
-                        "(arg_type === Any && arg2_type === Tuple{})",
-                        "ref_test!(bld, Int64(empty_info.wasm_type_idx), false)"]
+            required = ["if concrete && Base.issingletontype(T)\n        i32_const!(b, 1)",
+                        "local single = Base.issingletontype(C) && !(C <: Type)",
+                        "    if single\n        i32_const!(b, 1)"]
             count(p -> !occursin(p, calls_src), required)
         end),
     "L31_multi_container_apply" => ("homogeneous multi-Vector _apply_iterate reductions traverse every container through one loop generator and never return an identity for Julia's invalid all-empty +()/*() call",
@@ -976,17 +2839,17 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             required = ["container_args = args[3:end]",
                         "for (container_arg, container_type) in zip(container_args, container_types)",
-                        "_emit_apply_method_error!",
+                        "emit_method_error!(bld, ctx.mod, ctx.type_registry, Tuple{},",
                         "MethodError(f, (), world)",
-                        "Base.get_world_counter()",
-                        "_get_binary_reduce_opcode(target_value, elem_type)",
-                        "func === (+)",
+                        "Int64(WASM_WORLD_AGE)",
+                        "reduce_op = reduce_intrinsic(target_value, elem_type)",
+                        "return op in (:sub_int, :sub_float) ? nothing : op",
                         "local_set!(bld, has_value)"]
             forbidden = ["_get_binary_reduce_opcode(func_name"]
             count(p -> !occursin(p, calls_src), required) +
                 count(p -> occursin(p, calls_src), forbidden)
         end),
-    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples and tests Tuple{} from runtime arity; it never fabricates an empty tuple",
+    "L30_runtime_vararg_tuple" => ("Core._apply_iterate uses a real Object/data/size representation for runtime Vararg tuples, and isa of one against a tuple type (Tuple{} included) tests its runtime arity against the lengths that type admits; it never fabricates an empty tuple (restated 2026-10-06 when the Tuple{} test became every length's, A5E3, and every tuple type's, A6E1)",
         () -> begin
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
@@ -995,32 +2858,37 @@ const LOCKS = [
                         "is_runtime_vararg_tuple_type",
                         "unsupported Vararg tuple layout",
                         "result_type=result_type",
-                        "A runtime-length tuple is empty iff its immutable size tuple says zero"]
+                        "so it is a T exactly for the lengths T admits"]
             forbidden = ["produces a Tuple{Vararg{Symbol}} which is checked",
                          "must emit a struct.new of the actual Tuple{} type"]
             all_src = calls_src * structs_src
             count(p -> !occursin(p, all_src), required) +
                 count(p -> occursin(p, all_src), forbidden)
         end),
-    "L29_recursive_type_groups" => ("recursive definitions use ordered contiguous Wasm recursion-group intervals; no post-hoc nominal regrouping or process-global registration stack may reorder type indices",
+    "L29_recursive_type_groups" => ("the type section's recursion groups are its strongly connected components, computed when it is written and never declared: each a contiguous run of indices, every reference out of a group backward, and a type refers only to types defined before it or in its group; a struct, tuple, Vector wrapper, array or MemoryRef box whose fields reach it again registers pending and is added with its component (finish_pending!, dev/formal/RecGroup.tla), never erased to an abstract ref, patched after a placeholder, or tracked in process-global or task-local registration state (restated 2026-09-28 from the declared, placeholder-and-patch groups)",
         () -> begin
             builder_src = read(joinpath(SRC, "builder", "instructions.jl"), String)
-            structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
+            codegen_src = read(joinpath(CODEGEN, "structs.jl"), String) * read(joinpath(CODEGEN, "types.jl"), String)
             required = [
-                "recursive groups must be contiguous type-section intervals",
-                "recursive group indices must be in type-section order",
-                "sort!(rec_group_types)",
-                "_struct_reg_stack() = get!",
-                "ft === T && return true",
-                "The wrapper's size tuple must precede the contiguous recursive group",
-                "The recursive struct's own superclass must also precede its reserved",
+                "function recursion_groups(mod::WasmModule)::Vector{UnitRange{Int}}",
+                "is not a contiguous run of indices",
+                "refers forward to type",
+                "function add_type_group!(mod::WasmModule, types::Vector{CompositeType})::UInt32",
+                "_check_refs_defined(mod, ct, length(mod.types))",
+                "local groups = recursion_groups(mod)",
+                "function finish_pending!(mod::WasmModule, registry::TypeRegistry, id::UInt32, ct::CompositeType)::UInt32",
+                "local id = begin_pending!(registry, :arrays, elem_type)",
+                "local id = begin_pending!(registry, :memoryref_box_idxs, T)",
             ]
-            all_src = builder_src * structs_src
+            forbidden = ["add_rec_group!", "rec_groups", "_registering_types", "is_self_referential_type",
+                         "mod.types[reserved_idx", "_struct_reg_stack", "TaskLocalDict",
+                         "ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"]
+            all_src = builder_src * codegen_src
             count(p -> !occursin(p, all_src), required) +
-                count(p -> occursin(p, all_src),
-                      ["ensure_nominal_struct_types!", "const _STRUCT_REG_STACK"])
+                count(p -> occursin(p, all_src), forbidden) +
+                abs(count("begin_pending!(registry, :structs, T)", codegen_src) - 3)
         end),
-    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel",
+    "L28_ordinary_object_prefix" => ("ordinary structs, tuples, and Array wrappers inherit Object's classId/identityHash prefix through one representation-aware allocation funnel (each registrar records field offset 2 when it records its type pending, finish_pending!; restated 2026-09-28)",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
@@ -1034,8 +2902,9 @@ const LOCKS = [
                 "wasm_fields = object_prefix_fields()",
                 "if T === Core.Box",
                 "StructInfo(T, idx, [:contents], Type[Any], UInt32(1))",
-                "StructInfo(T, type_idx, field_names, field_types, UInt32(2))",
-                "StructInfo(T, type_idx, field_names, field_types_vec, UInt32(2))",
+                "Type[fieldtype(T, i) for i in 1:fieldcount(T)], UInt32(2))",
+                "Type[ft isa DataType ? ft : Any for (_, ft) in fixed], UInt32(2))",
+                "Type[Array{elem_type, 1}, size_tuple_type], UInt32(2))",
                 "emit_struct_prefix!(b, ctx.type_registry, struct_type, info)",
                 "ctx.type_registry.structs[object_type].field_offset == 2",
             ]
@@ -1059,15 +2928,16 @@ const LOCKS = [
     "L26_dispatch_roots_only" => ("dynamic selector candidates are only discovery roots; their transitive helper dependencies remain ordinary cross-call-visible functions",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            required = ["_DYNAMIC_ROOT_MIS", "union!(_DYNAMIC_ROOT_MIS[], extra)",
-                        "mi in _DYNAMIC_ROOT_MIS[]"]
+            required = ["dynamic_roots::Set{Core.MethodInstance}", "union!(dynamic_roots, extra)",
+                        "mi in world.dynamic_roots"]
             forbidden = ["pair_no > base_pairs", "_TRIM_BASE_PAIRS"]
             count(p -> !occursin(p, trim_src), required) + count(p -> occursin(p, trim_src), forbidden)
         end),
     "L25_flat_runtime_composition" => ("runtime-length composition is typed before optimization as a valid-Julia flat callable and allocated through normal struct codegen",
         () -> begin
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
-            call_src = read(joinpath(CODEGEN, "calls.jl"), String)
+            call_src = read(joinpath(CODEGEN, "calls.jl"), String) *
+                       read(joinpath(CODEGEN, "builtins.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             required = ["struct _RuntimeComposition", "function CC.abstract_apply(interp::WasmInterpreter",
@@ -1083,8 +2953,8 @@ const LOCKS = [
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
-            required = ["_ENROLLED_CALLABLE_TYPES", "isdefined(T, :instance)",
-                        "typeof(f) in _ENROLLED_CALLABLE_TYPES[]", "takes_context ? 1 : 0",
+            required = ["callable_types::Set{DataType}", "isdefined(T, :instance)",
+                        "typeof(f) in plan.callable_types", "takes_context ? 1 : 0",
                         "get_nothing_global!(ctx.mod, ctx.type_registry)"]
             forbidden = ["static_tearoff_struct", "tearoff_base_idx", "tearoff_callsite"]
             all_src = trim_src * compile_src * closure_src
@@ -1099,7 +2969,8 @@ const LOCKS = [
             required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
                         "haskey(type_globals, closure_type)",
                         "global_get!(b, type_global",
-                        "observe_callable!(CC.widenconst(t))"]
+                        # the SSA-typed callable observation, now read off the boundary (Phase 12D)
+                        "observe_callable!(s.julia_type)"]
             forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
             count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
             count(p -> occursin(p, types_src * closure_src), forbidden)
@@ -1121,8 +2992,8 @@ const LOCKS = [
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             load_src = read(joinpath(CODEGEN, "calls.jl"), String) *
                        read(joinpath(CODEGEN, "invoke.jl"), String)
-            required = ["T === Int8 || T === UInt8 ? UInt8(0x78)",
-                        "T === Int16 || T === UInt16 ? UInt8(0x77)",
+            required = ["T === Int8 || T === UInt8 ? I8",
+                        "T === Int16 || T === UInt16 ? I16",
                         "packed_array_signedness(elem_type)"]
             count(p -> !occursin(p, types_src * load_src), required) +
             count(_ -> true, eachmatch(r"signed=\(elem_type === UInt8", load_src))
@@ -1137,12 +3008,12 @@ const LOCKS = [
                 "StructType(fields, top)",
                 "FieldType(I32, true)",
                 "get_identity_counter_global!",
-                "struct_get!(b, object_idx, UInt32(1), I32)",
-                "struct_set!(b, object_idx, UInt32(1), I32)",
+                "struct_get!(b, object_idx, UInt32(1))",
+                "struct_set!(b, object_idx, UInt32(1))",
                 "StructType(fields, object)",
-                "struct_get!(tb, base_idx, UInt32(2), AnyRef)",
-                "struct_get!(b, base_idx, UInt32(3), StructRef)",
-                "ensure_type_id!(registry, body_return_type)",
+                "struct_get!(tb, base_idx, UInt32(2))",
+                "struct_get!(b, base_idx, UInt32(3))",
+                "emit_classid_box!(tb, mod, registry, scratch, body.results[1], body.return_type)",
             ]
             all_src = types_src * stmt_src * closure_src
             missing = count(p -> !occursin(p, all_src), required)
@@ -1158,7 +3029,7 @@ const LOCKS = [
             forbidden_count = count_sites(
                 r"needs_type_safe_default|_emit_default!|_append_default!|_gv_replaced|ssa_type_mismatch|Push a type-correct default|compile_value produced empty bytes")
             forbidden_count +
-                (occursin("emit_return_coerced!(b, stmt.val, ctx)", statements_src) ? 0 : 1)
+                (occursin("emit_return_coerced!(b, node.value, ctx)", statements_src) ? 0 : 1)
         end),
     "L17_one_compilation_path" => ("public compilation always enters the closed-world planner; legacy discovery, recursive mode switching, byte shells, and legacy body compilers are extinct",
         () -> count_sites(r"_TRIM_ACTIVE|discovery=:legacy|discover_dependencies|AUTODISCOVER|FrozenCompilationState|InplaceCompilationContext|compile_from_ir_(?:inplace|prebaked)|compile_module_from_ir_frozen|compile_handler|compile_closure_body|compile_function_into!|compile_const_value|overlay_entries|_autodiscover_closure_deps!|run_selfhost|run_direct|to_bytes_mvp|FakeGlobalRef|wasm_compile_(?:flat|source)|function _compile_function_legacy|function compile_(?:value|statement|call|invoke|new|foreigncall|condition_to_i32)\([^!]")),
@@ -1173,9 +3044,8 @@ const LOCKS = [
         () -> count_sites(r"emit_box_type_id!\(";
                           exclude_files=["codegen/values.jl", "codegen/types.jl"],
                           exclude_line=r"function emit_box_type_id!")),
-    "L2_ref_i31_callers" => ("ref_i31! callers (i31 box family deleted; locked 2026-06-30)",
-        () -> count_sites(r"ref_i31!\(";
-                          exclude_line=r"^ref_i31!\(b::InstrBuilder\)|function ref_i31!")),
+    "L2_ref_i31_callers" => ("no i31 value representation: the ref_i31!/i31_get_s!/i31_get_u! emitters and their RefI31/I31GetS/I31GetU nodes are deleted (the i31 box family went 2026-06-30; the emitters, left without a caller, went 2026-09-29) — a value is boxed through its class",
+        () -> count_sites(r"ref_i31!|i31_get_[su]!|\bRefI31\b|\bI31Get[SU]\b")),
     "L9_no_unjustified_untyped_emission" => ("every untyped compile_value splice carries the god-fn-seam annotation; unjustified untyped emission is DEAD (M4; locked 2026-07-02)",
         () -> count_sites(r"compile_value\("; exclude_line=r"function compile_value\(|god-fn seam")),
     "L8_no_silent_traps" => ("every unreachable! is record_unsupported!-routed OR an annotated structural trap — NO silent stubs (M5; locked 2026-07-01)",
@@ -1184,7 +3054,7 @@ const LOCKS = [
             for (dir, _, files) in walkdir(CODEGEN), f in files
                 endswith(f, ".jl") || continue
                 recent = String[]
-                for line in eachline(joinpath(dir, f))
+                for line in _file_lines(joinpath(dir, f))
                     if occursin(r"unreachable!\(", line) && !occursin("function unreachable!", line) &&
                        !startswith(lstrip(line), "#") &&
                        !occursin("structural trap", line) &&
@@ -1213,8 +3083,11 @@ const LOCKS = [
         () -> count_sites(r"needs_tagged_union\(|emit_wrap_union_value\(|emit_unwrap_union_value\(")),
     "L4_no_postemit_reguess" => ("infer_value_wasm_type is GONE — renamed to static_wasm_type (pre-emit-ONLY contract); the post-emission re-guess anti-pattern is dead (M2; locked 2026-07-01)",
         () -> count_sites(r"infer_value_wasm_type\(")),
-    "L13_no_byte_bridges" => ("THE byte-bridge class is EXTINCT — zero emit_raw! call sites exist; every emission is a typed method or a tracked merge (march4 COMPLETE; locked 2026-07-04)",
-        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "L13_no_byte_bridges" => ("no bytes enter a module body unvalidated: function bodies and global initializers are typed builders the module made. The builder has no raw-bytes path: every emission is a typed method or a tracked merge (append_builder!), and emit_raw! and its RawBytes instruction node are deleted (2026-09-29); a function's body bytes are written only by fill_function!, from its builder, and a global's initializer only by fill_global!, from its constant expression, so src/builder constructs a WasmFunction exactly twice (define_function!'s unfilled one and fill_function!'s) and a WasmGlobalDef exactly twice (define_global!'s and fill_global!'s), and nothing else does (L167; dev/CHARTER.md C7)",
+        () -> count_sites(r"emit_raw!|RawBytes") +
+              abs(count_sites(r"\bWasmFunction\(\w"; roots=[joinpath(SRC, "builder")], exclude_line=r"function WasmFunction\(|ArgumentError") - 2) +
+              abs(count_sites(r"\bWasmGlobalDef\("; roots=[joinpath(SRC, "builder")], exclude_line=r"^\s*WasmGlobalDef$") - 2) +
+              count_sites(r"\bWasmFunction\(|\bWasmGlobalDef\("; roots=[CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")])),
     "L12_god_fn_seams_only" => ("every emit_raw! splice is an ANNOTATED god-fn seam or front — the byte-bridge class is closed to new members; R2 falls only by killing seams (march3; locked 2026-07-04)",
         () -> count_sites(r"emit_raw!\(";
                           exclude_line=r"function emit_raw!|god-fn seam|THE front seam|`emit_raw!")),
@@ -1227,42 +3100,2914 @@ const LOCKS = [
     "L3_legacy_flow_family" => ("ALL legacy lowering strategies — nested_conditionals/if_then_else/nested_if_else/void_flow/linear_flow/loop_code/branched_loops/complex_flow router (M1 COMPLETE: ONE lowering = the stackifier; DELETED + locked 2026-07-01)",
         () -> count_sites(r"generate_nested_conditionals\(|generate_if_then_else\(|compile_nested_if_else\(|generate_void_flow\(|generate_linear_flow\(|generate_loop_code\(|generate_branched_loops\(|generate_complex_flow\(";
                           exclude_line=r"function (generate_nested_conditionals|generate_if_then_else|compile_nested_if_else|generate_void_flow|generate_linear_flow|generate_loop_code|generate_branched_loops|generate_complex_flow)\(")),
+    "L99_emit_raw_bridges_extinct" => ("emit_raw!( byte-bridges into the typed builder — EXTINCT since march4; the typed branch/try/catch generators emit structurally (locked 2026-09-01)",
+        () -> count_sites(r"emit_raw!\("; exclude_line=r"function emit_raw!|`emit_raw!")),
+    "L100_try_drivers_unified" => ("shape-specialized try/catch drivers — THE ONE stackifier owns all CFG shape generation (march 6 → locked 2026-09-01)",
+        () -> count_sites(r"^function (generate_(try_catch|branch_split_try|catch_arm|catch_try_chain|sequential_try_catch|nested_try_catch)|_compile_(catch_region|try_body))";
+                          exclude_line=nothing)),
+    "L101_catch_all_clauses_extinct" => ("a Julia region catches only the typed exception tag: every catch_legacy! in codegen names the exception tag by its handle, exc_tag(ctx.type_registry) (the tag ensure_provenance_imports! defines, held by recover_module_handles!, as the one throw site's throw_!(b, exc_tag(registry))), and there is no catch_all in src, neither a constructor nor an opcode nor an IR instruction, and codegen builds no InstrIR.CatchLegacy past the builder. No wasm catch observes stack exhaustion or a trap (legacy catch_all, a catch of the imported JSTag and catch_all_ref alike, measured on Node 22.23.3), so the export boundary is the host's glue (host_glue_js) and an export entry has no handler; dart's builder has no catch_all_legacy (instructions.dart:799 catch_legacy only). A catch of any other tag, a literal or computed, counts (dev/CHARTER.md C6)",
+        () -> count_sites(r"\bcatch_legacy!\((?![^,()]+,\s*exc_tag\(ctx\.type_registry\)\s*\))"; roots=[CODEGEN]) +
+              count_sites(r"catch_all|CatchAll|CATCH_ALL") +
+              count_sites(r"InstrIR\.CatchLegacy\("; roots=[CODEGEN])),
+    "L102_convert_ladders_unified" => ("convert_type! callers outside values.jl — all external calls folded into the 4-arg wrap (march 8 → locked 2026-09-01)",
+        () -> count_sites(r"convert_type!\("; exclude_files=["codegen/values.jl"], exclude_line=r"function convert_type!")),
+    "L103_anyref_dispatch_extinct" => ("fill(AnyRef dispatch signatures — EXTINCT; dart's per-param LUB is the selector mechanism (march 9 → locked 2026-09-01)",
+        () -> count_sites(r"fill\(AnyRef"; exclude_line=nothing)),
+    "L108_no_campaign_narration" => ("no march<N>/P2-batch<N> campaign-narration tags anywhere in src, comment lines included; constraint-bearing content stays as untagged comments, parity( anchors cite dart source (locked 2026-09-02)",
+        () -> count_lines_all(r"march\d+|P2-batch"; roots=[SRC])),
+    "L110_parity_anchors_cite_dart" => ("every parity( anchor in src cites a dart file:line at the pinned oracle commit or is an explicit quarantine — phase labels are narration, not anchors (locked 2026-09-02)",
+        () -> count_lines_all(r"parity(?:-region)?\((?![A-Za-z0-9_/]+\.dart:\d+|quarantine:)"; roots=[SRC])),
+    "L104_table_ops_have_no_ladder_arm" => ("per-symbol exclusivity: every op key in any INTRINSIC_* table has ZERO name-keyed is_func ladder arms anywhere in codegen — a table entry and an arm can never coexist, so a half-wired table cannot stall again (the M11 lesson; locked 2026-09-02)",
+        () -> begin
+            table_src = read(joinpath(CODEGEN, "intrinsics_table.jl"), String)
+            keys_set = Set{Symbol}()
+            # Extract keys from all INTRINSIC_* dict definitions — both 2-tuple and 3-tuple keys
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            for m in eachmatch(r"\(\s*[A-Z0-9]+\s*,\s*:([a-z_0-9]+)\s*\)\s*=>", table_src)
+                push!(keys_set, Symbol(m.captures[1]))
+            end
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                (endswith(f, ".jl") && f != "intrinsics_table.jl") || continue
+                for line in _file_lines(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    any(key -> occursin("is_func(func, :$(key))", line), keys_set) || continue
+                    occursin("table residue", line) || (n += 1)
+                end
+            end
+            n
+        end),
+    "L109_no_patch_marker_tags" => ("no PURE-/WBUILD-/CG-/TRUE-PARSE-/E2E- patch-tag tokens anywhere in src, comment lines included — constraint-bearing sentences stay as untagged comments (locked 2026-09-02)",
+        () -> count_lines_all(r"(PURE|WBUILD|CG|TRUE-PARSE|E2E)-\d"; roots=[SRC])),
+    "L106_dead_codegen_defs_extinct" => ("the dead codegen definitions the march census found stay deleted (locked 2026-09-02). JL_TYPE_KIND_UNION and JL_TYPE_KIND_UNIONALL left the list on 2026-09-27: every type constant was a \$JlDataType then, and they are live again as the \$kind that tells a Union from a UnionAll, which share one wasm struct",
+        () -> begin
+            dead_names = ["has_loop", "has_branch_past_first_loop", "has_short_circuit_patterns",
+                          "emit_string_data!",
+                          "JL_TYPE_KIND_TYPEVAR", "get_return_type", "get_param_types",
+                          "is_supported_intrinsic", "_WASM_LN2", "_IB", "SimpleCodeInfo",
+                          "has_dispatch_table", "get_string_ref_array_type!"]
+            all_src = join((read(joinpath(dir, f), String)
+                            for (dir, _, files) in walkdir(SRC)
+                            for f in files if endswith(f, ".jl")), "\n")
+            count(dead_names) do name
+                q = replace(name, "!" => "\\!")
+                # multiline anchors: a definition at the start of any LINE
+                occursin(Regex("^function\\s+$(q)\\s*\\(", "m"), all_src) ||
+                occursin(Regex("^$(q)\\s*\\(.*\\)\\s*=(?!=)", "m"), all_src) ||
+                occursin(Regex("^const\\s+$(q)\\s*=", "m"), all_src) ||
+                occursin(Regex("^(?:mutable\\s+)?struct\\s+$(q)\\b", "m"), all_src)
+            end
+        end),
+    "L111_formal_models_paired_and_anchored" => ("every TLA+ model dev/formal/<Name>.tla has its MC<Name>.tla + MC<Name>.cfg instance AND an MC<Name>Broken.cfg instance TLC must reject (a model with no counterexample-producing variant is vacuous), and is anchored by a formal(dev/formal/<Name>.tla) line in src or test; every formal( anchor names a model that exists (locked 2026-09-02)",
+        () -> begin
+            formal = joinpath(ROOT, "dev", "formal")
+            isdir(formal) || return 0
+            models = [f[1:end-4] for f in readdir(formal)
+                      if endswith(f, ".tla") && !startswith(f, "MC")]
+            anchors = Set{String}()
+            for root in (SRC, joinpath(ROOT, "test")), (dir, _, files) in walkdir(root), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"formal\(dev/formal/([A-Za-z0-9_]+)\.tla\)", read(joinpath(dir, f), String))
+                    push!(anchors, m.captures[1])
+                end
+            end
+            n = 0
+            for name in models
+                for inst in ("MC$(name).tla", "MC$(name).cfg")
+                    isfile(joinpath(formal, inst)) || (n += 1)
+                end
+                # at least one counterexample-producing variant (MC<Name>[Variant]Broken.cfg)
+                any(f -> startswith(f, "MC$(name)") && endswith(f, "Broken.cfg"), readdir(formal)) || (n += 1)
+                name in anchors || (n += 1)
+            end
+            n + count(a -> !(a in models), anchors)
+        end),
+    "L112_struct_registry_iterated_in_one_order" => ("the struct registry Dict is walked ONLY through registered_structs (sorted by wasm index then name) — a raw `for … in registry.structs` / keys/values/pairs walk picks a hash-order-dependent first match or id and emits process-varying bytes (the Dict-constant nondeterminism finding; dart numbers classes once, class_info.dart:831; locked 2026-09-02)",
+        () -> begin
+            walk = r"\b(?:in|keys|values|pairs)\(?\s*[\w.]*\.structs\b|collect\([^)]*\.structs\b"
+            # the helper's own collect is the one sanctioned walk; if it ever
+            # disappears the subtraction must not mask a rogue walk elsewhere
+            in_types = count_sites(walk; roots=[CODEGEN], exclude_files=String[]) -
+                       count_sites(walk; roots=[CODEGEN], exclude_files=["types.jl"])
+            in_types >= 1 || return 1000
+            count_sites(walk; roots=[SRC]) - 1
+        end),
+    "L113_builtin_registry_consulted_once_and_first" => ("compile_call! consults the identity-keyed builtin registry EXACTLY ONCE, right after its ONE SSAValue→GlobalRef callee resolution, and no lowering arm precedes that consult — dev/formal/ConsultChain.tla showed the retired egal/getglobal arms' predicates overlapped the registry's (a late `is_func(func, :(===))` also matched the string/typeof/nothing shapes the registry owns), so their correctness was a program-ORDER invariant; with Phase 12F those arms ARE registry entries and the invariant is now that the consult is single and first (relocked 2026-09-08)",
+        () -> begin
+            lines = readlines(joinpath(CODEGEN, "calls.jl"))
+            start = findfirst(l -> startswith(l, "function compile_call!("), lines)
+            start === nothing && return 1000
+            stop = findnext(l -> startswith(l, "end"), lines, start + 1)
+            stop = stop === nothing ? length(lines) : stop
+            body = view(lines, start:stop)
+            live = l -> !_iscomment(l)
+            consults = count(l -> occursin("_try_builtin_lowering!(", l) && live(l), body)
+            first_builtin = findfirst(l -> occursin("_try_builtin_lowering!(", l) && live(l), body)
+            first_arm = findfirst(l -> occursin(r"is_func\(func, :", l) && live(l), body)
+            (consults == 1 ? 0 : 1) +
+                (first_arm !== nothing && first_builtin !== nothing && first_arm < first_builtin ? 1 : 0)
+        end),
+    "L114_foreigncalls_dispatch_through_registry_only" => ("compile_foreigncall! has exactly one consult point — FOREIGN_LOWERINGS — and its body carries no name-keyed arm; parity(intrinsics.dart:607) the FFI call codegen's helper-table dispatch (also :685 the arg-count table, :1018 the direct-call funnel) never hand-writes a name ladder either, locked here (2026-09-02)",
+        () -> begin
+            stmt_src = read(joinpath(CODEGEN, "statements.jl"), String)
+            count(line -> !_iscomment(line) &&
+                          (occursin(r"(_fc_sym|fname|cfn) === :\w+", line) ||
+                           (occursin(r"^\s*(if|elseif)\b", line) &&
+                            occursin(r"(?<![.\w])name\s+(===\s*:\w+|in\s*\(:)", line))),
+                  split(stmt_src, '\n'))
+        end),
+    "L124_no_name_keyed_call_arms" => ("Phase 12F (dev/MARCH.md item F, formal(dev/formal/ConsultChain.tla)): ZERO `is_func(func, :sym)` arms anywhere in codegen — every Core/Base builtin call lowers through THE identity-keyed BUILTIN_LOWERINGS entry for its resolved callee OBJECT (dart keys on the resolved member, intrinsics.dart:401 KernelNodes._lookup, never on a bare name that any module's same-named function also answers to). Retires ratchet R19_call_is_func_arms and lock L116_call_arms_are_the_allowlist, whose fifteen-site allowlist this reduces to zero (locked 2026-09-08)",
+        () -> count_sites(r"is_func\(func, :"; roots=[CODEGEN])),
+    "L117_identity_keyed_registries_walk_in_program_order" => ("every identity-keyed registry dictionary (type_ids, type_ranges, type_constant_globals, typename_constant_globals, constant_globals, arrays, numeric_boxes, dispatch tables/positions/cascades) is walked ONLY through ordered_pairs — a raw walk orders by address-based hashes, which differ per process AND per architecture (the whole probe corpus differed x64 vs aarch64 until this lock); reads by key are fine (locked 2026-09-02)",
+        () -> begin
+            regs = "type_ids|type_ranges|type_constant_globals|typename_constant_globals|constant_globals|arrays|numeric_boxes|tables|selector_positions|selector_cascades"
+            walk = Regex("\\bfor\\s+\\(?[^\\n]*?\\bin\\s+(?:keys|values|pairs)?\\(?\\s*[\\w.]*\\.(?:" * regs * ")\\b(?!\\[)")
+            # order-insensitive folds (a max over ids, a Set collect that is sorted before use)
+            benign = ["for (_, id) in registry.type_ids", "for id in values(registry.type_ids)",
+                      "for (_, (_, high)) in registry.type_ranges",
+                      "for T in keys(registry.type_ids)", "for T in keys(registry.type_ranges)"]
+            n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for line in _file_lines(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    occursin(walk, line) || continue
+                    any(b -> occursin(b, line), benign) && continue
+                    n += 1
+                end
+            end
+            n
+        end),
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the collection's rejection (trimcollect.jl _collection_rejection), made while collecting and located at a statement with its source line and inline chain, for the walk of the constants past its bound at the statement holding the constant (audit #13 A13C7) and for a dynamic call's candidate tuples past _CANDIDATE_BOUND at the first statement making it (A9C2). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02); and the plan's rejection of a signature a `show` outside Base and Core would print (trimcollect.jl _julia_signature_text, naming the method and its line), made while naming the planned functions, before any statement (2026-10-20); and the plan's rejection of two functions whose names are alike by the name's one limit, two same-named functions printed unqualified whose methods of one signature one module defines (trimcollect.jl plan_function_names!, naming both methods' lines; 2026-10-21, dev/AUDIT.md A19C2)",
+        () -> begin
+            local allowed = [("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(kind, _collection_host_text(ci), why,") =>
+                                 "the collection runs before codegen; its rejection is located at a statement (the constant's, or the dynamic call's)",
+                             ("trimcollect.jl", "        throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(m.name),") =>
+                                 "naming a planned function runs before codegen, with no statement: a signature a show outside Base and Core would print is rejected at the plan, naming the method and its source line (_julia_signature_text)",
+                             ("trimcollect.jl", "                throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(mm.name),") =>
+                                 "naming the planned functions runs before codegen, with no statement: two functions whose names are alike by the name's one limit are rejected at the plan, naming both methods' source lines (plan_function_names!)"]
+            local n = count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
+                                  exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])
+            abs(n - length(allowed)) +
+                count((((f, needle), _),) -> length(findall(needle, read(joinpath(CODEGEN, f), String))) != 1, allowed)
+        end),
+    "L119_one_located_statement_entry" => ("compile_statement! is the ONE per-statement entry and locates every failure raised below it — diagnostics through the funnel, anything else wrapped as WasmInternalError with the statement, its inline chain, and the compiler frames it was raised through (its catch_backtrace(), dart's CFECrashError.stackTrace), whose innermost WT frame heads the message; _compile_statement_located! has no other caller (locked 2026-09-02; the raising frames since 2026-09-29, when finding a codegen bug still meant patching a stack print into the compiler)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "statements.jl"), String)
+            required = ["ctx.current_stmt_idx = idx", "return _compile_statement_located!(b, idx, ctx)",
+                        "(err isa WasmCompileError || err isa WasmInternalError) && rethrow()",
+                        "throw(located_internal_error(ctx, idx, err, catch_backtrace()))"]
+            callers = count_sites(r"_compile_statement_located!\("; roots=[SRC], exclude_line=r"^function _compile_statement_located!")
+            count(p -> !occursin(p, src), required) + abs(callers - 1)
+        end),
+    "L121_retired_names_absent_from_src" => ("a symbol this campaign deleted must not appear ANYWHERE in src — comments and docstrings included. A reference to a function that no longer exists sends the next reader (human or agent) looking for it; the cloud review of 2026-09-04 spent a finding on exactly that (a docstring naming julia_to_wasm_type_concrete, folded into get_concrete_wasm_type in Phase 4.1). Historical records in dev/ and test/ ledgers are exempt — they document what WAS (locked 2026-09-04)",
+        () -> begin
+            retired = ["julia_to_wasm_type_concrete", "get_or_create_string_hash_func",
+                       "builder_diagnose",   # the builder's post-mortem printer, with no caller
+                       # 116a: an :invoke's callee is its MethodInstance's function, the plan the one consult
+                       "_invoke_registered_signatures", "mi_target", "target_info_early",
+                       "_build_standalone_intrinsic_bodies!", "_standalone_intrinsic_body",
+                       "method_error_args", "_emit_apply_method_error!", "_is_direct_struct_constructor",
+                       # 115b: bodies and initializers are builders the module made, globals held by handle
+                       "global_named", "add_global_ref!", "builder_set_local_type!", "locals_fn",
+                       "_seed_builder_locals!", "exc_cell_type!", "ensure_exception_top_global!",
+                       "ensure_import_tops_global!", "_const_init_bytes!", "_fill_egal_body!",
+                       "_string_constant_initializer!",
+                       "string_hash_func_idx", "_wasm_string_fnv1a",
+                       "resolve_through_dead_boundscheck",
+                       "_is_typelevel_foldable",   # Phase 12 C: the fold enumeration
+                       # the two `===` ladders `emit_egal!` replaced
+                       "_compile_call_egaleq", "_lower_egal_early", "_emit_egal_box_vs_num",
+                       "_egal_num_eqop", "_is_typeof_ssa", "_resolve_type_const",
+                       # C3 deletion wave: the Method-keyed invoke builders, all unreached
+                       "INVOKE_INTRINSICS", "InvokeIntrinsicEntry", "_register_invoke_intrinsic!",
+                       "_build_invoke_intrinsics!", "_invoke_receiver_free_method",
+                       "_invoke_box_arith_result!", "_emit_str_arg!", "_skip_cross_call",
+                       # C3 deletion wave: the host-console IO bridge, left with no caller
+                       "IOImports", "add_io_imports!", "_IO_IMPORTS", "get_io_imports",
+                       "set_io_imports!", "clear_io_imports!", "create_utf8_to_js_helper!",
+                       "emit_jl_string_to_js!", "_UTF8_TO_JS_FUNC_IDX", "clear_utf8_to_js_func!",
+                       "get_char_array_type!", "_CHAR_ARRAY_TYPE_IDX", "clear_char_array_type!",
+                       # the typed-IR JSON transport and its planner entry (2026-09-27)
+                       "compile_from_codeinfo", "compile_module_from_ir", "_PrecomputedIRKey",
+                       "preprocess_ir_entries", "serialize_ir_entries", "deserialize_ir_entries",
+                       "collect_and_resolve_all_globalrefs", "substitute_globalrefs",
+                       "wasm_bytes_length", "wasm_bytes_get",
+                       # the compiled-bytes cache: its key hashed only the entry method's
+                       # world, so a redefined callee was answered with stale bytes (2026-09-27)
+                       "compile_cached", "compile_multi_cached", "enable_cache!",
+                       "disable_cache!", "clear_cache!", "cache_stats", "CompileCache",
+                       "compute_cache_key", "compute_multi_cache_key", "_GLOBAL_CACHE",
+                       # the superseded trim and the builtin-only edge relation (batch 111):
+                       # _closed_world_edge is the one relation, and the collection only adds
+                       "_builtin_call_edge_mi", "pruned_superseded", "superseded_invokes",
+                       "intrinsic_body_roots", "prune_roots",
+                       # the export entry's handler and the wasm-side count (batch 112b-1): the
+                       # boundary is the host's glue, host_glue_js
+                       "catch_all_ref_clause", "throw_ref!", "ThrowRef", "THROW_REF",
+                       # the try_table form (batch 112b-2): a region is dart's legacy try and catch
+                       "try_table", "TryTable", "SymbolicTryCatch", "catch_clause", "InstrIR.TryCatch",
+                       "TryCatch(", "_encode_catch!", "TRY_TABLE", "CATCH_REF", "CATCH_ALL",
+                       "except H6, H7 and A13E1"]
+            n = 0
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                src = read(joinpath(dir, f), String)
+                n += count(name -> occursin(name, src), retired)
+            end
+            n
+        end),
+    "L123_wt_only_intrinsic_surface_extinct" => ("the WT-only str_*/arr_* runtime intrinsic surface (src/runtime/{stringops,arrayops,intrinsics}.jl, compile.jl's name-ladder is_intrinsic_function/generate_intrinsic_body, and their invoke.jl standalone builders) is DELETED — dart2wasm has no hand-written-wasm runtime library keyed by function NAME; users reach strings/arrays through Base, which lowers through Base's own overlays and compiled bodies (L115) (H(4); locked 2026-09-07)",
+        () -> begin
+            retired = ["is_intrinsic_function", "generate_intrinsic_body",
+                       "str_char", "str_getchar", "str_charlen", "str_setchar!",
+                       "str_new", "str_copy", "str_substr", "str_concat", "str_eq",
+                       "str_hash", "str_find", "str_contains",
+                       "arr_new", "arr_get", "arr_set!", "arr_len", "arr_fill!",
+                       "INTRINSIC_MAPPING", "get_wasm_opcode"]
+            n = 0
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                src = read(joinpath(dir, f), String)
+                n += count(name -> occursin(name, src), retired)
+            end
+            n
+        end),
+    "L120_one_inference_path" => ("every typed IR and every inferred return type WasmTarget consumes comes from the WasmInterpreter through ir.jl (get_typed_ir / infer_return_type) — Base.code_typed, code_typed_by_type, Core.Compiler.return_type / _return_type and Base.infer_return_type are called only inside ir.jl, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; box-capture joins once asked the native interpreter, which does not see the overlays; locked 2026-09-07); and one compile asks one interpreter, as dart's one Translator.hierarchy (translator.dart:108): src makes a WasmInterpreter outside interpreter.jl only in trim_compile_plan, the compile's one (a fresh cache token, the world the compile starts in), which the entries, every collection round's inference, its return-type questions (_rettype_question), its lookups (the consult) and the plan's vtable pre-pass ask (the ClosedWorld and the plan hold it), and in the failure path's re-inference of one root (_compile_root_alone, at the compile's world); get_wasm_interpreter(), the inspection interpreter, is asked only by ir.jl's defaults; its behavior: test/ir_one_inference_path.jl's 'one compile infers in one cache partition (A18C5)' (each collection pass once made a fresh partition, and the return-type questions asked the shared :wasm_target partition at another world, dev/AUDIT.md A18C5)",
+        () -> begin
+            n = count_sites(r"Base\.code_typed\(\w|code_typed_by_type\(|(?<![\w.])_?return_type\(\s*[^)]|Base\.infer_return_type\(|Compiler\.return_type\(|CC\.return_type\(";
+                            roots=[SRC], exclude_files=["codegen/ir.jl"])
+            ir = read(joinpath(CODEGEN, "ir.jl"), String)
+            occursin("interp::WasmInterpreter=get_wasm_interpreter()", ir) || (n += 1)
+            occursin("interp=nothing", ir) && (n += 1)
+            # one compile, one interpreter (A18C5): made in trim_compile_plan and the failure path alone
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            n += abs(count_sites(r"(?<![\w.])WasmInterpreter\("; roots=[SRC], exclude_files=["codegen/interpreter.jl"]) - 2)
+            n += occursin("::ClosedWorldPlan\n    local interp = WasmInterpreter(Base.RefValue(0))\n    entry_mis = Any[]\n", trim) ? 0 : 1
+            n += occursin("function _compile_root_alone(world::UInt, mi)::Nothing\n    local interp = WasmInterpreter(Base.RefValue(0); world)\n", trim) ? 0 : 1
+            n += count_sites(r"\bget_wasm_interpreter\("; roots=[SRC], exclude_files=["codegen/ir.jl", "codegen/interpreter.jl"])
+            n += occursin("@testset \"one compile infers in one cache partition (A18C5)\" begin",
+                          read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)) ? 0 : 1
+            n
+        end),
+    "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE among them, CompilerOptions.validate; locked 2026-09-02)",
+        () -> count_sites(r"\"WT_[A-Z_]+\""; roots=[SRC], exclude_files=["codegen/options.jl"])),
+    "L97_planner_entries_are_closed" => ("every public compilation converges on the closed-world planner through exactly ONE entry — the trim collector (_compile_module_trim); the precomputed-IR installer and its JSON transport are deleted, and a second entry is a new discovery regime (locked 2026-09-01, one entry since 2026-09-27)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            # the one sanctioned planner entry must exist verbatim, so a swap
+            # (delete the legitimate caller, add a rogue one) cannot keep the
+            # total and slip through
+            required = ["return _compile_closed_world_plan(plan; kwargs...)"]
+            extra = count_sites(r"_compile_closed_world_plan\(";
+                                exclude_line=r"function _compile_closed_world_plan\(") - 1
+            max(extra, 0) + count(p -> !occursin(p, compile_src), required)
+        end),
+    "L98_single_external_link_road" => ("external wasm-merge linking is a single road living only in compile_with_base; merged output bypasses the typed builder, so any new call site must be reviewed here (locked 2026-09-01)",
+        () -> begin
+            wt_src = read(joinpath(ROOT, "src", "WasmTarget.jl"), String)
+            # zero merge references outside src/WasmTarget.jl, the sanctioned
+            # count inside it (all within compile_with_base), and the road's
+            # host function must still exist
+            outside = count_sites(r"wasm-merge|wasm_merge"; exclude_files=["WasmTarget.jl"])
+            total = count_sites(r"wasm-merge|wasm_merge")
+            outside + max(total - 6, 0) +
+                (occursin("function compile_with_base", wt_src) ? 0 : 1)
+        end),
+    "L115_invokes_dispatch_through_registry_only" => ("parity(code_generator.dart:1668-1686 visitStaticInvocation): an invoke of a member with a body is a direct `call` of that member's compiled function — compile_invoke! keeps no intrinsic table (INVOKE_INTRINSICS: 35 entries measured unreached 2026-09-22, deleted) and no bare-Symbol `name === :sym` ladder arm; neither can return to invoke.jl",
+        () -> count_sites(r"(?<![.\w])name === :\w+|INVOKE_INTRINSICS|_register_invoke_intrinsic!|InvokeIntrinsicEntry"; roots=[CODEGEN],
+                          exclude_files=setdiff(readdir(CODEGEN), ["invoke.jl"]))),
+    "L122_closed_world_numbered_once" => ("Phase 12B (dev/MARCH.md, formal(dev/formal/ClassIdDispatch.tla)): assign_type_ids! numbers the WHOLE closed world in ONE DFS — _collect_reachable_ir_types (ir.jl) admits every concrete kind that can carry a classId (structs, closures, Core.Box, Memory/MemoryRef, primitives incl. Char/Int128/a user `primitive type`, a Tuple with a Type{X} element or a runtime-length Vararg tuple) before the DFS runs. A type reaching ensure_type_id! unnumbered is a loud collector bug, never a second, order-dependent id — `type_extra_ids` and its allocating branch are extinct (locked 2026-09-07)",
+        () -> begin
+            types_src = read(joinpath(CODEGEN, "types.jl"), String)
+            required = ["existing > 0 && return existing", "reached codegen unnumbered"]
+            forbidden_alloc = count_sites(r"for \(_, id\) in registry\.type_ids|registry\.type_ids\[T\] = new_id"; roots=[CODEGEN])
+            count_sites(r"type_extra_ids") + forbidden_alloc +
+                count(p -> !occursin(p, types_src), required)
+        end),
+    # ── dev/CHARTER.md (2026-09-22): the charter and the enforcement stack cite each other ──
+    "L125_charter_is_the_definition_of_done" => ("dev/CHARTER.md exists; every check a clause cites exists here, and every lock and ratchet here is cited by exactly one clause (an uncited check is either obsolete or a clause is missing; a cited check that does not exist is a promise nobody keeps)",
+        () -> begin
+            clauses = charter_clauses()
+            isempty(clauses) && return 1
+            cited = String[]
+            for (_, (_, ids)) in clauses; append!(cited, ids); end
+            have = Set(_short_id(first(p)) for p in vcat(METRICS, LOCKS))
+            missing_ = count(c -> c ∉ have, unique(cited))
+            dup = length(cited) - length(unique(cited))
+            uncited = count(h -> h ∉ Set(cited), have)
+            missing_ + dup + uncited
+        end),
+    "L127_one_inference_path_keeps_source_lines" => ("dev/CHARTER.md C6: every inference call in ir.jl (the one inference path) asks for debuginfo=:source, so IR it returns carries its statements' locations and inline chains — code_typed's default dropped them, and every statement then read no location (behavioral twin: test/diagnostic_attribution.jl 'the one inference path keeps source lines')",
+        () -> begin
+            ir_lines = readlines(joinpath(CODEGEN, "ir.jl"))
+            count(l -> !_iscomment(l) && occursin(r"Base\.code_typed(_by_type)?\(", l) &&
+                       !occursin("debuginfo=:source", l), ir_lines)
+        end),
+    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 90 lines of at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions (dev/CHARTER.md C0)",
+        () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L133_standalone_bodies_are_exact" => ("the functions that compile to a bespoke standalone body instead of Julia's own (STANDALONE_INTRINSIC_BODIES) are exactly the allowlist below, each for a stated reason, and each body carries its parity anchor; INVOKE_INTRINSICS is deleted (L121). Base.rethrow: its native body is a foreigncall to the C runtime's jl_rethrow (dev/CHARTER.md C3)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            allowed = Set(["Base.rethrow"])   # native body: a foreigncall to jl_rethrow
+            reg = match(r"(?s)\nconst STANDALONE_INTRINSIC_BODIES = IdDict\{Method,Function\}\((.*?)\)\n", compile_src)
+            reg === nothing && return 1
+            registered = Set(m.captures[1] for m in eachmatch(r"methods\(([A-Za-z_.]+)\)", reg.captures[1]))
+            bodies = Set(m.captures[1] for m in eachmatch(r"m => ([A-Za-z_!]+)", reg.captures[1]))
+            unanchored = count(bodies) do fn
+                d = match(Regex("(?s)\"\"\"((?:(?!\"\"\").)*)\"\"\"\\nfunction " * fn * "\\("), compile_src)
+                d === nothing || !occursin("parity(", d.captures[1])
+            end
+            length(symdiff(registered, allowed)) + unanchored
+        end),
+    "L132_dart_anchors_resolve" => ("every parity(<file>.dart:<line> <Symbol>) anchor in src resolves at the pinned dart-lang/sdk commit: the file and line exist and the line names the cited symbol; with no checkout at the pinned commit the check fails, never skips (dev/CHARTER.md C2)",
+        () -> length(unresolved_dart_anchors())),
+    "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README; and no fuzz-ledger gap is `status: fixed` (dev/CHARTER.md C9)",
+        () -> length(unconsumed_files_outside_src())),
+    "L134_the_wasm_runtime_is_required" => ("no test branches on the wasm runtime's absence: test/wasm_runner.jl's one Node detection errors at load when Node ≥ 20 is missing, and no test skips, reports a pass, or answers `skipped` without it (runner_available, :nonode, :no_node, NODE_OK, a `skipped` result field) — every differential lane either runs its wasm or fails (dev/CHARTER.md C5)",
+        () -> count_sites(r"runner_available|:nonode\b|:no_node\b|\bNODE_OK\b|NODE_CMD|NEEDS_(EXPERIMENTAL_)?FLAG|\bdetect_node\b|\.skipped\b|\bskipped\s*="; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])),
+    "L135_callee_by_exact_signature" => ("get_function binds a call to a compiled specialization only on its exact argument types (the return-compatibility gate aside): no subtype or reverse-subtype pass between argument types. An :invoke never asks it: its callee is its MethodInstance's function (L170); any other mismatch is dynamic dispatch, lowered as such or rejected. The reverse pass bound `RW(::Any)` holding a Symbol to `RW(::String)` and answered 1001 for 1100 (smoke xfail dynamic_constructor; dev/CHARTER.md C6)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "types.jl"), String)
+            m = match(r"(?s)\nfunction get_function\(registry::FunctionRegistry.*?\nend\n", src)
+            m === nothing && return 1
+            body = filter(l -> !_iscomment(l) && !occursin("_ret_ok(info) =", l) &&
+                               !occursin(r"^\s*info\.return_type <: expected_return", l),
+                          split(m.match, '\n'))
+            count(l -> occursin("<:", l), body)
+        end),
+    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) inside its located try and maps the code after it back to the function's definition (L159); the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land, and the destination's own mapping resumes after them, so a fragment's last mapping does not run on into its destination; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm, through its one compile line _emission_compile) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
+        () -> begin
+            src(f) = read(joinpath(CODEGEN, f), String)
+            bsrc(f) = read(joinpath(SRC, "builder", f), String)
+            tsrc(f) = read(joinpath(ROOT, "test", f), String)
+            required = [
+                (src("statements.jl"), "        map_to_statement!(b, ctx, idx)\n        return _compile_statement_located!(b, idx, ctx)"),
+                (src("stackified.jl"), "        map_to_statement!(b, ctx, terminator_idx)\n"),
+                (src("stackified.jl"), "map_to_statement!(b, ctx, i)   # this edge's store maps to its phi"),
+                (src("stackified.jl"), "                map_to_statement!(bb, ctx, i)\n"),
+                (bsrc("instr_builder.jl"), "_add_source_mapping!(dst, shift_by(m, shift))"),
+                (bsrc("instr_builder.jl"), "_add_source_mapping!(dst, SourceMapping(shift + length(src.instrs), resume))"),
+                (bsrc("instructions.jl"), "push!(code_mappings, shift_by(m, entry_start + body_start))"),
+                (bsrc("instructions.jl"), "push!(module_mappings, shift_by(m, contents_start))"),
+                (src("compile.jl"), "b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)"),
+                (tsrc("utils.jl"), "bytes, source_map, meta = _emission_compile(f, arg_types; optimize=optimize)"),
+                (tsrc("utils.jl"), "local r = WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url=\"module.wasm.map\","),
+                (tsrc("wasm_runner.jl"), "located_frames(String(r[\"stack\"]), source_map, bytes)"),
+            ]
+            forbidden = ["collect_source_info", "update_function_offsets!"]
+            all_src = join((read(joinpath(dir, f), String) for (dir, _, fs) in walkdir(SRC) for f in fs if endswith(f, ".jl")))
+            count(((text, needle),) -> !occursin(needle, text), required) +
+                count(p -> occursin(p, all_src), forbidden) +
+                isfile(joinpath(CODEGEN, "sourcemap.jl"))
+        end),
+    "L145_a_throw_carries_its_stack" => ("every Julia throw carries the stack trace of its throw, and every rethrow the stack its throw captured, in the exception tag's stack slot, in every module (one module shape: a source map only maps the code): codegen has exactly one throw site, _emit_throw_top!, which throws the top entry of Julia's exception stack (its exception, its stack and the entry itself); no throw_ref is anywhere in src, and the export entry (emit_export_entry!) is a prologue that calls its inner last, so an escape passes it untouched, its payload (the exception and the stack its throw captured) exact (until batch 110 the entry's handler was a second throw site, and until batch 112b-1 it rethrew with throw_ref); emit_throw_value! pushes that entry with the JS stack it captures through the `wasmtarget.stack_trace` import every module has (dart: every throw captures StackTrace.current, code_generator.dart:2955 visitThrow, `errorThrowWithCurrentStackTrace`), and a rethrow throws the entry again, pushing nothing (dart's visitRethrow, code_generator.dart:2966, throws its catch's stackTraceLocal); the runner answers the import from the module's runtime and reads an escaped exception's stack from the exported tag, through the host's one escape helper (host_escape_js). _emit_throw_top!'s callers are exactly those two, emit_throw_value! and emit_rethrow!, read by the function each call sits in, so a third that throws the top without pushing fires it. test/source_maps.jl runs it: an escaped exception, rethrown, rethrown with `rethrow(e)` or not, names its first throw (dev/AUDIT.md H1; dev/CHARTER.md C10)",
+        () -> begin
+            local throws = count_sites(r"\bthrow_!\("; roots=[CODEGEN])   # _emit_throw_top!'s, alone
+            local throw_refs = count_sites(r"throw_ref|ThrowRef|THROW_REF")
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
+            local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)))\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod, registry)"),
+                              (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
+                              (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod, translator.export_namer)\n    trace === nothing || ensure_trace_imports!(mod)"),
+                              (gen, "const st = e.getArg(tag, 1);"),
+                              (runner, "catch (e) { return [(\$(WasmTarget.host_escape_js()))(instance.exports, e)]; }"),
+                              (runner, "    \$(host_runtime_merge_js(bytes))"),
+                              (gen, "    global_get!(b, top)\n    struct_get!(b, cell, 1)\n    global_get!(b, top)\n    throw_!(b, exc_tag(registry))"),
+                              (gen, "    global_set!(b, top)\n    for i in 0:length(ft.params) - 1; local_get!(b, i); end\n    call!(b, inner_idx)\n    finish_function!(b)"),
+                              (gen, "        struct_set!(b, cell, 0)\n    end\n    return _emit_throw_top!(b, mod, registry)\nend")]
+            # _emit_throw_top!'s callers, exactly: the throw that pushes (emit_throw_value!) and
+            # the rethrow that does not (emit_rethrow!); a call from any other function, one that
+            # throws the top without pushing it, fires
+            local callers = String[]
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local enclosing = ""
+                for line in _file_lines(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    (_iscomment(line) || d !== nothing) && continue
+                    occursin("_emit_throw_top!(", line) && push!(callers, enclosing)
+                end
+            end
+            abs(throws - 1) + throw_refs + count(((text, needle),) -> !occursin(needle, text), required) +
+                (sort(callers) == ["emit_rethrow!", "emit_throw_value!"] ? 0 : 1)
+        end),
+    "L146_a_collection_failure_is_located" => ("a closed-world collection failure names the method it was inferring and why it entered the closed world, as a compile-time rejection names its statement: every enrollment records its reason (_enrollment_text: for each kind of _closed_world_edge, the collector's one walk of the edges records each target's, collected already or not, and the plan reads it — its _EDGE_ENROLLMENT text: the call, the finalizer registered by, the function of, the body of the callable built by, the operator of the atomic modify; the dynamic call, the dispatch candidate for a runtime class, or the constructed closure's body — with the host, the statement and its source line); a failure planning the module outside any statement is a WasmInternalError at the module's entries, and one declaring a function's signature names the function and why it was enrolled; and collect_new_pairs! and the first collection throw a failure through throw_located_collection_failure (an interrupt or exhausted memory, the process's, passing through it and through the re-inference; test/diagnostic_attribution.jl plants a failure in the first collection and an ArgumentError in a re-inference), which re-infers the failed batch's roots alone (the failure path only; the success path keeps one batch, so every module's bytes are unchanged) and names the one that fails with its reason, its error and the frames it was raised through. Until 2026-09-29 a failure escaped as a raw MethodError from inside Core.Compiler after 738 s of collection, naming nothing (MARCH 13.10; test/diagnostic_attribution.jl; dev/CHARTER.md C6)",
+        () -> begin
+            trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            required = ["haskey(reasons, mi) || (reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node))",
+                        "const _EDGE_ENROLLMENT = (invoke = \"the call\", splat = \"the call\", invoke_in_world = \"the call\",",
+                        "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
+                        "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
+                        "reasons[cmi] = \"the body of the closure",
+                        "throw_located_collection_failure(batch, err, catch_backtrace(), Base.Fix1(_compile_root_alone, interp.world))",
+                        "throw_located_collection_failure(Tuple{Any,String}[(e, \"a compilation entry\") for e in entries],",
+                        "(err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()\n        throw_located_collection_failure(Tuple{Any,String}[",
+                        "(e isa InterruptException || e isa OutOfMemoryError) && rethrow()\n            throw(WasmInternalError(",
+                        "_missing_explicit_invoke_mis(\n            interp, codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,\n            invoke_originals))",
+                        "_dynamic_dispatch_candidate_mis(interp, codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,"]
+            comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            # a failure outside any statement (planning the module, declaring a signature) is
+            # located too: at the module's entries, or at the function and why it is there
+            required_comp = ["String[\"while planning the module (no statement was being compiled)\"],",
+                             "\"enrolled as \" * plan.enrolled_as[fd_mi]]"]
+            diag = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            required_diag = ["@testset \"diagnostics: a failure of the first collection names its entry\" begin",
+                             "@testset \"diagnostics: a collection failure passes the process's errors and locates an ArgumentError\" begin"]
+            count(p -> !occursin(p, trim), required) + count(p -> !occursin(p, comp), required_comp) +
+                count(p -> !occursin(p, diag), required_diag)
+        end),
+    "L147_a_wrong_value_names_its_statement" => ("a wrong answer is located at the first statement whose value differs, as a trap and a rejection are: a traced compile (compile_with_statement_trace) traces every function compiled from Julia IR — each reports its entry (emit_trace_enter!) and, for each statement of a traced type (TRACED_STATEMENT_TYPES: exactly Julia's bits in its wasm local), its value after the store (emit_statement_trace!), through imports added before any definition, recording each function's probed statements; test/trace_localize.jl runs each traced function's CodeInfo natively as an OpaqueClosure with the same probes, every traced call routed to its callee's closure with the callee value it was invoked with, each closure taking its function's own `#self#` as an explicit first argument (Argument(n) becomes Argument(n + 1)), so the native run follows WT's IR all the way down into every traced function, closures included, each call reading its own instance's captures (until batch 114 a closure that read its own captures stayed native, `_reads_self`, and its events were dropped), compares the two event streams on what both report, and names the first divergent event — its function, text, inline chain, iteration and both values — or, when every event agrees and WT's IR run natively already answers differently from Julia, says the difference is in the IR, not codegen; smoke's WRONG lines and the statement-generator lane's wrong outcomes carry that report. A planted mul_int→sub miscompile is named at its statement, line and first iteration, in the entry, inside a separately compiled callee and inside a closure that reads its capture, and a closure built per iteration runs with each instance (test/wrong_value_locator.jl; dev/CHARTER.md C6)",
+        () -> begin
+            gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            loc = read(joinpath(ROOT, "test", "trace_localize.jl"), String)
+            smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
+            required = [(stm, "local_set!(b, local_idx)\n                emit_statement_trace!(b, ctx, idx, local_idx, local_type)"),
+                        (gen, "push!(ctx.translator.trace.probed[id], idx)"),
+                        (read(joinpath(CODEGEN, "flow.jl"), String), "emit_trace_enter!(b, ctx)"),
+                        (loc, "ir.stmts[i][:stmt] = Expr(:call, _run_traced, callee, st.args[2:end]...)"),
+                        (loc, "v isa Core.Argument && (op[] = Core.Argument(v.n + 1))"),
+                        (loc, "pushfirst!(ir.argtypes, Tuple{})"),
+                        (loc, "(:ok, Base.invokelatest(_OCS[trace.entry], f, args...))"),
+                        (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
+                        (comp, "    local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))\n    ensure_provenance_imports!(mod, translator.export_namer)\n    trace === nothing || ensure_trace_imports!(mod)"),
+                        (loc, "filter!(keep, nevents)"),
+                        (loc, "filter!(keep, wevents)"),
+                        (smoke, "replace(_smoke_locate(f, args), "),
+                        (lane, "replace(_locate(fn, Tuple(o.input)), ")]
+            # one path: no function's calls stay native because it reads its own `#self#`
+            count(((text, needle),) -> !occursin(needle, text), required) +
+                length(collect(eachmatch(r"_reads_self|routable|haskey\(_OCS", loc)))
+        end),
+    "L149_the_builder_knows_no_julia_ir" => ("the builder layer (src/builder) holds and names no Julia compiler object — no CodeInfo, MethodInstance, CodeInstance or DebugInfo, no NIR node, no compilation context, and no compile option (no OPTIONS read, audit #2 A2B8): dart's wasm_builder knows nothing of kernel (module.dart:24 ModuleBuilder holds wasm parts only); what codegen needs to remember about Julia per compilation lives on its Translator (context.jl). The builder sandbox the builder's behavioral locks run in loads src/builder from builder/types.jl, without codegen/options.jl, so a builder function that reads OPTIONS fails there (dev/CHARTER.md C2)",
+        () -> count_sites(r"Core\.(?:CodeInfo|MethodInstance|CodeInstance|DebugInfo)\b|\bNir[A-Z]\w*|\bCompilationContext\b|\bTranslator\b|\bStatementTrace\b|\bOPTIONS\b";
+                          roots=[joinpath(SRC, "builder")]) +
+              (occursin("        m[1] == \"builder/types.jl\" && (started = true)\n        started && push!(files, m[1])",
+                        read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)) ? 0 : 1)),
+    "L150_every_host_import_has_its_runtime" => ("WT's own imports are one list, WT_IMPORTS (generate.jl), which every reader reads: every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src, and the traced compile's per-type probes, ensure_trace_imports!), is on it or is the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and it lists none that no code creates; host_runtime_js answers each of them a module declares, _is_host_declared_import calls every other function import the host's (by that list alone, no module-name rule), and the glue leaves exactly them unwrapped. The runtime is generated per module by the compile, from its own record of the imports it added, as dart2wasm generates its runtime's JS methods from its translator's record (runtime_generator.dart:60 generateJsMethods over translatedProcedures, :128 RuntimeFinalizer.generate) and writes it beside the module (compile.dart:648-669): host_runtime_js has one method, over that record (function_import_names, through imported_function), and _compile hands the runtime back beside the bytes (CompileResult.runtime; compile_with_runtime, compile_multi_with_runtime), so no harness answers a module with a fixed list or another module's runtime (no `host_runtime_js()` call in src, test or docs), and src reads no module's bytes back (a harness that holds bytes alone reads their imports with the test tool test/wasm_reader.jl, as dart's tools use wasm_builder's Deserializer). Behavior: test/host_imports.jl's 'the host runtime is the module's own imports' compiles a module that reads the clock and one that draws random words, each runtime equal to the one built from what its bytes declare, its fields equal to the engine's own reading of the function imports, and with any one field taken out raising a LinkError (until 2026-10-20 every harness instantiated every module with all three fixed answers; until 2026-10-21 the runtime was read back from the bytes by a reader in the builder; dev/AUDIT.md A2C9, A2E4, A13E4, A19B1; dev/CHARTER.md C1)",
+        () -> begin
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            local created = Set{Tuple{String,String}}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"add_(?:global_)?import!\(mod, \"(\w+)\", \"(\w+)\"", read(joinpath(dir, f), String))
+                    push!(created, (m.captures[1], m.captures[2]))
+                end
+            end
+            for m in eachmatch(r"\(\"(trace_\w+)\", [IF](?:32|64)\)", fbody(gen, "ensure_trace_imports!"))
+                push!(created, ("wasmtarget", m.captures[1]))
+            end
+            local list = match(r"(?s)\nconst WT_IMPORTS = Tuple\{String,String,Union\{Nothing,String\}\}\[\n.*?\n\]\n", gen)
+            local listed = list === nothing ? Set{Tuple{String,String}}() :
+                Set{Tuple{String,String}}((m.captures[1], m.captures[2]) for m in eachmatch(r"\(\"(\w+)\", \"(\w+)\", (?:\"|nothing)", list.match))
+            # the glue answers its count, and reads the imports it leaves alone from WT_IMPORTS
+            local glue = fbody(gen, "host_glue_js")
+            local glue_ok = occursin("for (mm, f, _) in WT_IMPORTS if mm == m", glue) &&
+                            occursin("once(glued.wasmtarget, 'wasmtarget', 'host_imports_open', open)", glue) &&
+                            !occursin("m === 'wasmtarget'", glue)
+            glue_ok && push!(listed, ("wasmtarget", "host_imports_open"))
+            local required = [
+                (gen, "_is_host_declared_import(imp::WasmImport)::Bool =\n    !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, WT_IMPORTS)\n"),
+                (fbody(gen, "host_runtime_js"), "local imported = Set{Tuple{String,String}}(imports)\n    local answered = [(m, f, js) for (m, f, js) in WT_IMPORTS if js !== nothing && (m, f) in imported]"),
+                # the compile generates the runtime from its own record and hands it back beside the bytes
+                (read(joinpath(SRC, "WasmTarget.jl"), String), "return CompileResult(bytes, host_runtime_js(function_import_names(result[1])), source_map,"),
+                (fbody(gen, "function_import_names"), "for imp in (something(imported_function(mod, k)) for k in 0:num_imported_funcs(mod) - 1)]"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test rt == WasmReader.module_runtime_js(bytes)   # the compile's record is what the bytes declare"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"given\"] == r[\"declared\"] == sort([\"wasmtarget.stack_trace\", has])"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"missing\"] == [x * \" LinkError\" for x in r[\"given\"]]")]
+            local v = length(symdiff(created, listed)) + (glue_ok ? 0 : 1) +
+                      count(((text, needle),) -> !occursin(needle, text), required)
+            # one method, over the record of a module's imports; no fixed runtime anywhere, and no reader
+            # of a module's bytes in src
+            v += abs(count_sites(r"^function host_runtime_js\(|^host_runtime_js\(.*\)(?:::\w+)?\s*=") - 1)
+            v += count_sites(r"^function host_runtime_js\((?!imports::Vector\{Tuple\{String,String\}\}\)::String$)")
+            v += count_sites(r"\b(?:module_function_imports|module_sections|WasmDeserializer|read_unsigned!|read_signed!)\b")
+            v += count_sites(r"host_runtime_js\(\)|HOST_RUNTIME\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "docs")],
+                             exclude_files=["parity_ratchet.jl"])
+            v
+        end),
+    "L151_every_builder_has_its_module" => ("every builder has its module, as every dart InstructionsBuilder has one (instructions.dart:233): InstrBuilder and WasmStackValidator have no method without a WasmModule (`mod` is a required keyword, never `Union{Nothing}`), so a module-less builder cannot be made and its fallbacks (a caller's global type, an unchecked global.set, a guessed struct for an unresolvable index, a call's claimed signature) are unreachable; no `=== nothing` test of a module in src/builder and no `mod=nothing` in src; every InstrBuilder codegen constructs names its module (`mod=`). Its behavior, over src/builder alone: `InstrBuilder(; func_name)` and `WasmStackValidator(; func_name)` throw (dev/AUDIT.md A2B7, A3B5, B5; dev/CHARTER.md C7)",
+        () -> begin
+            local n = 0
+            for (dir, _, files) in walkdir(CODEGEN), f in files
+                endswith(f, ".jl") || continue
+                for m in eachmatch(r"InstrBuilder\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)", read(joinpath(dir, f), String))
+                    occursin("mod=", m.match) || (n += 1)
+                end
+            end
+            n += count_sites(r"\b(mod|_mod|v\.mod|b\.v\.mod)\s*[!=]==?\s*nothing\b"; roots=[joinpath(SRC, "builder")])
+            n += count_sites(r"\bmod\s*=\s*nothing\b|mod::Union\{Nothing"; roots=[SRC])
+            n += in_builder_sandbox() do W
+                count((() -> W.InstrBuilder(; func_name="no module"), () -> W.WasmStackValidator(; func_name="no module"))) do make
+                    try; make(); true; catch e; !(e isa UndefKeywordError); end
+                end
+            end
+            n
+        end),
+    "L152_codegen_reads_the_plans_ir" => ("codegen reads each function's typed IR from the collected closed world, through the plan (plan_ir, ctx.translator.plan) or the collected pairs, and never asks Julia's inference again: no `get_typed_ir(` call in src outside its own definitions in ir.jl, and no process-global IR cache (TRIM_IR_CACHE, which a later read could find unset and fall back to a second inference, dev/AUDIT.md A2C3); codegen asks no inference at all: no `infer_return_type(` call, qualified (`Base.infer_return_type(`) or not, and no `typeinf(`, `typeinf_type(`, `typeinf_ext…(`, `typeinf_frame(`, `code_typed(`, `abstract_call…(`, `Base.return_types`, `return_type(` or `CC.findall(` call in src/codegen outside trimcollect.jl's collector and planner and ir.jl's inspection definitions, and no `closed_world_call_result` or `analyze_ssa_types!` anywhere in src (a callee's return type, an unused :invoke's and every join are the plan's: plan_ir, plan_joins, FunctionInfo.return_type); the box-capture analysis takes its closure bodies and its return-type question as required arguments (closure_bodies, rettype), so box_capture.jl names no inference, and collection passes them; its behavior: test/ir_one_inference_path.jl compiles a plan with the one inference entry counting its calls and the interpreter counting every query of its cache (CC.cache_owner, which any inference with a WasmInterpreter asks, cached or not, through any entry), and the compile asks each 0 times (dev/AUDIT.md A3C1; dev/CHARTER.md C1); and a statement's codegen asks no method table either (L171)",
+        () -> begin
+            local n = count_sites(r"\bget_typed_ir\("; roots=[SRC], exclude_files=["codegen/ir.jl"])
+            n += count_sites(r"TRIM_IR_CACHE"; roots=[SRC])
+            n += count_sites(r"(?<!\w)infer_return_type\(|\btypeinf\(|\btypeinf_type\(|\btypeinf_ext\w*\(|\btypeinf_frame\(|\bcode_typed\(|\babstract_call\w*\(|Base\.return_types|(?<![\w])return_type\(|CC\.findall\(";
+                             roots=[CODEGEN], exclude_files=["trimcollect.jl", "ir.jl"])
+            n += count_sites(r"closed_world_call_result|analyze_ssa_types!"; roots=[SRC])
+            local box = read(joinpath(CODEGEN, "box_capture.jl"), String)
+            n += occursin("closure_bodies::Function", box) && occursin("rettype::Function", box) &&
+                 !occursin("closure_ir", box) ? 0 : 1
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            n += occursin("@testset \"codegen asks no inference; an unused :invoke reads the plan's rettype\"", oip) &&
+                 occursin("@test calls[] == 0", oip) && occursin("@test queries[] == 0", oip) ? 0 : 1
+            n
+        end),
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a march/** push whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** or march/** push or workflow_dispatch: `dev/land.sh merge` pushes the head it lands to march/<branch> (so a landed head whose commit carries `Closes: C<n>` gets the run), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #122 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or march/** push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
+        () -> begin
+            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
+            # the script's code, its comment lines dropped (a commented-out lane runs nothing)
+            local lanes = _code(joinpath(ROOT, "dev", "lanes.sh"))
+            local i = findfirst("if [ \$fast -eq 0 ]; then", lanes)
+            i === nothing && return 3
+            local gated = lanes[last(i):end]
+            local agents = read(joinpath(ROOT, "AGENTS.md"), String)
+            local wf = joinpath(ROOT, ".github", "workflows")
+            local gate = isfile(joinpath(wf, "gate.yml")) ? _code(joinpath(wf, "gate.yml")) : ""
+            # gate.yml's matrix (lane => its parts) against every lane the default run has: a
+            # lane missing, a lane the script does not have, or a split lane missing a part
+            local runs = Set(m[1] for m in eachmatch(r"(?:^|\s)lane ([a-z][a-z0-9.-]*)\s+(?:\$JULIA|julia|bash|suite|fuzz)\b"m, lanes))
+            local jobs = Dict{String,Vector{String}}()
+            for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, gate)
+                push!(get!(jobs, m[1], String[]), m[2])
+            end
+            local whole = parts -> parts == [""] || (all(p -> occursin(r"^[0-9]+/[1-9][0-9]*$", p), parts) &&
+                length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
+                sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
+            local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
+            # the closure predicate (A23E4, A23E6): a dispatch or schedule, a gate/** push, or a pushed head
+            # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
+            # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
+            # run-name, its closure job and every job with no `needs:` of ci.yml, formal.yml and downstream.yml
+            local P = "github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || " *
+                join(("contains(format('{0}{1}', fromJSON('\"\\n\"'), github.event.head_commit.message), format('{0}Closes: C$d', fromJSON('\"\\n\"')))" for d in 0:9), " || ")
+            local pinned_push = map(("ci.yml", "formal.yml", "downstream.yml")) do f
+                local c = _code(joinpath(wf, f))
+                local js = split(last(split(c, "\njobs:\n"; limit = 2)), r"(?m)^(?=  [A-Za-z0-9_-]+:\s*$)"; keepempty = false)
+                local roots = filter(j -> occursin(r"^  [A-Za-z0-9_-]+:\s*$"m, j) && !occursin(r"^    needs:"m, j), js)
+                occursin("\non:\n  push:\n    branches: ['gate/**', 'march/**']\n  workflow_dispatch:\n", c) &&
+                    !occursin(r"^\s*(pull_request|pull_request_target|workflow_run|workflow_call):"m, c) &&
+                    count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) && !occursin(r"^on:[ \t]*\S"m, c) &&
+                    !isempty(roots) && all(j -> occursin(r"^  [A-Za-z0-9_-]+:\n    if: >-\n      \$\{\{ "m * P * " }}\n", j), roots)
+            end
+            count(!, [occursin("lane suite suite", gated),
+                      occursin(raw"shards=\"0,2 1,2\"; [ \"$only\" = suite ] && [ -n \"$part\" ] && shards=\"$pi,$pn\"", lanes),
+                      occursin(raw"  for s in $shards; do" * "\n" * raw"    WT_VALIDATE=1 WT_SHARD=\"$s\" $JULIA --project=. -e 'using Pkg; Pkg.test()' > \"$d/shard$s.log\" 2>&1 &", lanes),
+                      occursin("WT_VALIDATE=1 WT_FUZZ=1 \$JULIA --project=. -e 'using Pkg; Pkg.test()'", lanes),
+                      occursin("lane smoke-1.13 julia +1.13 --project=. test/smoke.jl", gated),
+                      occursin("\n| full matrix at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |\n", agents),
+                      # the full matrix only at clause closure (Dale 2026-10-21): the closure job decides, every other job waits on it,
+                      # a `Closes: C<n>` line only on a tree whose ratchet reads C<n> CLOSED (the commit hook and the landing)
+                      occursin("\n  closure:\n", gate) &&
+                          occursin("          RUN: >-\n            \${{ " * P * " }}\n        run: |\n          if [ \"\$RUN\" = true ]; then\n", gate) &&
+                          occursin("\nrun-name: >-\n  \${{ (" * P * ") && 'Gate closure' || 'Gate (no closure)' }}\n", gate) &&
+                          count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 2,
+                      occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", read(joinpath(ROOT, "dev", "hooks", "commit-msg"), String)),
+                      occursin(raw"            grep -qE \"^$c +.* CLOSED( |$)\" \"$rlog\" 2>/dev/null ||", read(joinpath(ROOT, "dev", "land.sh"), String)),
+                      # a landed head reaches gate.yml: the landing pushes it to march/<branch>
+                      occursin(raw"    git push -q --force origin \"$head:refs/heads/march/$leaf\"", read(joinpath(ROOT, "dev", "land.sh"), String)),
+                      # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
+                      occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
+                      occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
+                      occursin(join([raw"join_bg \"$d/s113\" \"$d/formal\"; rm -rf dev/formal/states", "stop"], '\n'), lanes),
+                      occursin(join([raw"  stop", raw"  lane suite suite", raw"  lane fuzz  fuzz"], '\n'), gated),
+                      # --lane runs one lane of the same run: every other lane is a no-op
+                      occursin(raw"want() { [ -z \"$only\" ] || [ \"$only\" = \"$1\" ]; }", lanes),
+                      occursin(join([raw"  local name=$1; shift", raw"  want \"$name\" || return 0"], '\n'), lanes),
+                      # each skip fails the gate (A12P6): a default julia that is not 1.12 ...
+                      occursin(join([
+                          raw"  if ! want probes && ! want coverage && ! want suite && ! want fuzz; then :",
+                          raw"  elif $JULIA -e 'exit(VERSION.major == 1 && VERSION.minor == 12 ? 0 : 1)'; then",
+                          raw"    bg \"$d/coverage\" lane coverage $JULIA --project=. test/registry_coverage.jl",
+                          raw"    lane probes $JULIA --project=. test/probe_bytes.jl",
+                          raw"    join_bg \"$d/coverage\"",
+                          raw"  else",
+                          raw"    printf '  FAIL probes         (the default julia is not 1.12: probes, coverage and the suite are 1.12 lanes; juliaup default 1.12)\n'; fail=1",
+                          raw"  fi"], '\n'), gated),
+                      # ... no working java ...
+                      occursin(join([
+                          raw"  if ! want formal; then :",
+                          raw"  elif java -version >/dev/null 2>&1; then bg \"$d/formal\" lane formal bash dev/formal/run_tlc.sh",
+                          raw"  else printf '  FAIL formal         (no working java: TLC needs one, brew install openjdk@17)\n'; fail=1; fi"], '\n'), gated),
+                      # ... and a JULIA= override or no julia +1.13
+                      occursin(join([
+                          raw"  if ! want smoke-1.13; then :",
+                          raw"  elif [ \"$JULIA\" != \"julia\" ]; then",
+                          raw"    printf '  FAIL smoke-1.13     (the gate runs on the default julia, not %s)\n' \"$JULIA\"; fail=1",
+                          raw"  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then",
+                          raw"    bg \"$d/s113\" lane smoke-1.13 julia +1.13 --project=. test/smoke.jl",
+                          raw"  else",
+                          raw"    printf '  FAIL smoke-1.13     (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1",
+                          raw"  fi"], '\n'), gated),
+                      # the wasm engine is CI's: ci.yml's node-version, a Node of another major fails
+                      occursin(join([
+                          raw"NODE_MAJOR=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)",
+                          raw"ci_node=\"$(brew --prefix \"node@$NODE_MAJOR\" 2>/dev/null)/bin\"",
+                          raw"[ -x \"$ci_node/node\" ] && export PATH=\"$ci_node:$PATH\"",
+                          raw"node_major=$(node --version 2>/dev/null | sed 's/^v\([0-9]*\).*/\1/')",
+                          raw"printf '  node %s (CI: %s)\n' \"$(node --version 2>/dev/null)\" \"$NODE_MAJOR\"",
+                          raw"if [ -z \"$NODE_MAJOR\" ] || [ \"$node_major\" != \"$NODE_MAJOR\" ]; then",
+                          raw"  printf '  FAIL node           (the wasm engine is not CI'\"'\"'s Node %s: brew install node@%s)\n' \"$NODE_MAJOR\" \"$NODE_MAJOR\"; fail=1",
+                          raw"fi"], '\n'), lanes),
+                      # gate.yml: the default run's lanes, each part of each split lane, one job each ...
+                      matrix_ok,
+                      occursin(raw"          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}", gate),
+                      # ... the first red job cancels the rest ...
+                      occursin("      fail-fast: true\n", gate) && !occursin("fail-fast: false", gate),
+                      # ... `julia` 1.12 and `julia +1.13` as the script calls them ...
+                      # (in every job that installs Julia)
+                      count("      - name: Julia (juliaup)\n", gate) >= 1 &&
+                          count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
+                      occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ]; then channel 1.13; fi", gate),
+                      # ... CI's Node major, read from ci.yml's node-version ...
+                      # (every job's: a job of its own Node passed while another kept the line)
+                      let majors = count("      - name: CI's Node major\n", gate),
+                          reads = count(raw"          echo \"node=$(sed -n \"s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p\" .github/workflows/ci.yml | head -1)\" >> \"$GITHUB_OUTPUT\"", gate),
+                          versions = filter(l -> occursin(r"^\s*node-version:", l), split(gate, '\n'))
+                          majors >= 1 && reads == majors && length(versions) == majors &&
+                              all(==(raw"          node-version: ${{ steps.ci.outputs.node }}"), versions)
+                      end,
+                      # ... no lane variable set by the workflow (the script sets them) ...
+                      !occursin(r"\b(WT|TLC)_[A-Z_]+", gate),
+                      # ... and split coverage's verdict on the union of every part's hits
+                      get(jobs, "coverage", [""]) == [""] ||
+                          (occursin("  coverage-merge:\n    needs: lane\n", gate) &&
+                           occursin("          bash dev/lanes.sh --lane coverage --merge\n", gate) &&
+                           occursin(raw"  export WT_COVERAGE_MERGE=1 WT_COVERAGE_DIR=\"$PWD/coverage-parts\"", lanes) &&
+                           occursin(raw"    coverage) export WT_COVERAGE_PART=\"$part\" WT_COVERAGE_DIR=\"$PWD/coverage-parts\" ;;", lanes)),
+                      # ... and on gate/** and march/**, where ci.yml and formal.yml never run
+                      occursin("\non:\n  push:\n    branches: ['gate/**', 'march/**']\n  workflow_dispatch:\n\n", gate) &&
+                          !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
+                      # ci.yml's, formal.yml's and downstream.yml's triggers are gate.yml's (gate/** and
+                      # march/** pushes, a dispatch; no pull request, no branches-ignore, no inline push),
+                      # each job with no `needs:` under the closure predicate
+                      pinned_push...,
+                      occursin("\n| CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |\n", agents)])
+        end),
+    "L155_exception_handling_is_dart_legacy" => ("Exception handling is dart's legacy form: no try_table, throw_ref, catch_all, catch_ref or delegate, as a constructor or opcode in src. Every region opens with try_legacy!, whose outputs are the tag's payload, and closes with catch_legacy! on the exception tag, held by handle. Every printed probe module holds no `try_table`, `throw_ref`, `delegate` or `catch_all`. dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy; try_table exists only in wasm_builder), and its try runs with a concrete-reference result on CI's engine, V8 12.4 in Node 22, where a try_table with one traps (batch 108). The source half counts each such name outside a comment in src, a try_legacy! or catch_legacy! call in codegen beyond the region's one each, and the region's opener, its catch and the tag's payload as written (stackified.jl, generate.jl ensure_exception_tag!); the behavior half is test/probe_bytes.jl, which prints every probe's module with wasm-tools and fails on any of the four, required here as written (dev/MARCH.md 13.17 A13E7; dev/CHARTER.md C5)",
+        () -> begin
+            # no try_table, throw_ref, catch_all, catch_ref or delegate as a constructor or opcode
+            local n = count_sites(r"try_table|TryTable|TRY_TABLE|throw_ref|ThrowRef|THROW_REF|catch_all|CatchAll|CATCH_ALL|catch_ref|CatchRef|CATCH_REF|\bdelegate[!_(]|Delegate\b|DELEGATE")
+            # the region: one try whose outputs are the tag's payload, closed by one catch of tag 0
+            local stack = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            n += occursin("local try_label = try_legacy!(b; results=WasmValType[AnyRef, ExternRef,\n" *
+                          "                                                                    ConcreteRef(exc_cell_type(ctx.type_registry), true)])", stack) ? 0 : 1
+            n += occursin("                    unreachable!(b)        # structural trap: no normal path reaches the try's end\n                    catch_legacy!(b, exc_tag(ctx.type_registry))", stack) ? 0 : 1
+            n += occursin("tag_ft = FuncType(WasmValType[AnyRef, ExternRef, ConcreteRef(cell, true)], WasmValType[])", gen) ? 0 : 1
+            n += abs(count_sites(r"\btry_legacy!\("; roots=[CODEGEN]) - 1) +
+                 abs(count_sites(r"\bcatch_legacy!\("; roots=[CODEGEN]) - 1) +
+                 count_sites(r"InstrIR\.(BeginTry|CatchLegacy)\("; roots=[CODEGEN])
+            # the behavior: every probe module, printed, holds none of the four
+            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
+            for req in ("const _NON_DART_EH = r\"\\b(try_table|throw_ref|delegate|catch_all)\\b\"",
+                        "        printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)",
+                        "_non_dart_eh(printed::String)::Bool = occursin(_NON_DART_EH, printed)",
+                        "        _non_dart_eh(printed) && push!(non_dart_eh, name)",
+                        "    if !isempty(non_dart_eh)")
+                occursin(req, probe) || (n += 1)
+            end
+            n
+        end),
+    "L156_every_host_import_call_is_counted" => ("every call of a host-declared import is counted, by the host: the glue (host_glue_js) raises the imported count `wasmtarget.host_imports_open` around it and lowers it in a finally, and in wasm the call sits directly between the save of the top at its slot (`import_tops save`, index count of `\$import_tops`) and the restore of the top from that slot after a normal return (emit_direct_call!), the premise of the export boundary's claim (dev/formal/ExceptionStack.tla ImportCall and ImportReturn): an unsaved call leaves an export the host calls back from inside it a stale top, and an unrestored one leaves its caller the callee's (Julia's J2: native 1, 2). The boundary is the host's: no wasm code writes the count, and no export entry (a function named \"<name> (export)\") holds a try or a try_table or declares a local (a prologue that passes every escape untouched, emit_export_entry!). Both are checked on the code itself, not on its text: test/utils.jl's unsaved_host_import_calls and wasm_boundary_sites read a module as wasm-tools prints it, its name section stripped; the first counts each call of a host-declared import (by the compiler's own rule, _is_host_declared_import) not directly between the save and the restore, the second each `global.set` of the count and each try, try_table or local of an entry; test/real_bottom_exceptions.jl asserts both 0 on the export boundary's module, and every module the suite builds with import_stubs asserts the first: in each test file the `import_stubs=` compile sites, less its refusals (a compile in `try … nothing catch`, which builds no module), number exactly its `@test unsaved_host_import_calls(` assertions, so a module built and not asserted fires it (until 2026-10-11 the lock pinned a count of assertion texts per file, and five modules built with import_stubs, two in real_bottom_exceptions.jl and source_maps.jl's two host modules and its later-round one, went unasserted, audit #15 A15P1). This lock requires the assertions and the helpers' bodies as written (audit #13 A13P3: about 25 raw call! sites remain in codegen, and nothing stopped one from reaching a host import; dev/CHARTER.md C6)",
+        () -> begin
+            local t(f) = read(joinpath(ROOT, "test", f), String)
+            local norm(x) = filter(!isempty, map(strip, split(x, '\n')))
+            local helpers = [raw"""
+function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
+    local funcs = mod.imports
+    local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
+    local count = _global_by_name(mod, "\$host_imports_open")
+    local tops = _global_by_name(mod, "\$import_tops")
+    local top = _global_by_name(mod, "\$exc_top")
+    local save = findfirst(f -> f.name == "import_tops save", mod.functions)
+    local lines = _printed_lines(mod)
+    local n = 0
+    for (k, l) in enumerate(lines)
+        local c = match(r"^call (\d+)$", l)
+        (c !== nothing && parse(Int, c.captures[1]) in host) || continue
+        local saved = save !== nothing && k > 1 && lines[k-1] == "call $(length(funcs) + save - 1)"
+        local restored = tops !== nothing && count !== nothing && top !== nothing && k + 4 <= length(lines) &&
+            lines[k+1:k+4] == ["global.get $tops", "global.get $count",
+                               "array.get $(mod.globals[tops + 1].valtype.type_idx)", "global.set $top"]
+        (saved && restored) || (n += 1)
+    end
+    return n
+end
+""", raw"""
+function wasm_boundary_sites(mod::WasmTarget.WasmModule)::Int
+    local count = _global_by_name(mod, "\$host_imports_open")
+    local entries = Set(WasmTarget.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
+                        if endswith(f.name, " (export)"))
+    local n = 0
+    local in_entry = false
+    for l in _printed_lines(mod)
+        local f = match(r"^\(func \(;(\d+);\)", l)
+        if f !== nothing
+            in_entry = parse(Int, f.captures[1]) in entries
+        elseif startswith(l, "(") && !startswith(l, "(local")
+            in_entry = false
+        end
+        count !== nothing && l == "global.set $count" && (n += 1)
+        in_entry && (startswith(l, "(local") || occursin(r"^try(_table)?\b", l)) && (n += 1)
+    end
+    return n
+end
+"""]
+            local printed = raw"""
+_printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
+    String[strip(l) for l in split(read(pipeline(pipeline(`wasm-tools strip --all`;
+        stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String), '\n')]
+"""
+            local u = t("utils.jl")
+            local missing_ = count(h -> begin
+                    local name = match(r"function (\w+)\(", h).captures[1]
+                    local m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), u)
+                    m === nothing || norm(m.match) != norm(h)
+                end, helpers)
+            missing_ += occursin(strip(printed), u) ? 0 : 1
+            missing_ += length(findall("@test wasm_boundary_sites(m) == 0", t("real_bottom_exceptions.jl"))) == 1 ? 0 : 1
+            # in every test file, each compile site with import_stubs that builds a module (not a
+            # refusal: a compile in `try … nothing catch`) has its assertion
+            local unasserted = 0
+            for (dir, _, fs) in walkdir(joinpath(ROOT, "test")), f in fs
+                (endswith(f, ".jl") && f != "parity_ratchet.jl") || continue
+                local lines = readlines(joinpath(dir, f))
+                local sites = 0
+                for (k, l) in enumerate(lines)
+                    (_iscomment(l) || !occursin(r"\bimport_stubs=", l)) && continue
+                    local after = lines[k + 1:min(k + 4, length(lines))]
+                    local j = findfirst(x -> occursin(r"^\s*nothing\s*$", x), after)
+                    (j !== nothing && j < length(after) && occursin(r"^\s*catch\b", after[j + 1])) && continue
+                    sites += 1
+                end
+                unasserted += abs(sites - count(l -> occursin("@test unsaved_host_import_calls(", l), lines))
+            end
+            missing_ + unasserted
+        end),
+    "L157_every_function_named" => ("every function codegen defines is named where it is defined, so the name section names every frame of a trap: define_function!'s and add_function!'s `name` is a required keyword (no default), and every `define_function!(` and `add_function!(` call in src and ext passes `name=` (read to its closing paren across lines; the definitions, comment lines and a docstring's signature line are not calls). A function compiled from Julia IR takes its Julia name; one the compiler generates takes its construct's, from generated_function_name's one vocabulary (GENERATED_CONSTRUCTS, diagnostics.jl): dart's text where dart has the construct (\"\$name trampoline\", \"\${selector.name} (polymorphic dispatcher)\", \"\$name (lazy initializer)\", \"\$memberName field initializer\", \"#init\"), what it ports where it is Julia's alone (jl_egal, jl_has_typevar, __udivmodti4, Random.__init__). Julia raises UndefKeywordError only when a call runs, so this lock carries the requirement to the edit site; a function's body is filled into it under the name it was defined with (fill_function!); an empty name, which the name section cannot carry, is refused with an ArgumentError naming the call by define_function! (which add_function! calls) and by WasmFunction's inner constructor, and the name-section writer writes every function's name, skipping none. 18 sites once defined an unnamed function, and a trap there printed \"no statement (the function's entry, or code the compiler generated)\" (test/generated_names.jl; dev/CHARTER.md C10)",
+        () -> begin
+            local n = 0
+            for root in (SRC, joinpath(ROOT, "ext")), (dir, _, fs) in walkdir(root), f in fs
+                endswith(f, ".jl") || continue
+                local s = read(joinpath(dir, f), String)
+                for m in findall(r"\b(?:add|define)_function!\(", s)
+                    local ls = something(findprev('\n', s, first(m)), 0) + 1
+                    local nl = findnext('\n', s, first(m))
+                    local line = s[ls:(nl === nothing ? lastindex(s) : prevind(s, nl))]
+                    _iscomment(line) && continue
+                    occursin(r"\bfunction\s+(?:add|define)_function!\(", line) && continue
+                    occursin(r"^\s*(?:add|define)_function!\(.*\)\s*->", line) && continue   # a docstring's signature
+                    local j = last(m); local k = j; local depth = 0
+                    while k <= lastindex(s)
+                        s[k] == '(' && (depth += 1)
+                        s[k] == ')' && (depth -= 1; depth == 0 && break)
+                        k = nextind(s, k)
+                    end
+                    occursin(r"\bname\s*=", s[j:min(k, lastindex(s))]) || (n += 1)
+                end
+            end
+            # the keyword itself carries no default, and an empty name is refused at both definitions
+            local def = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            n + !occursin("results::Vector{<:WasmValType};\n                          name::String)::UInt32", def) +
+                !occursin("function add_function!(mod::WasmModule, b::InstrBuilder; name::String)::UInt32", ib) +
+                !occursin("    isempty(name) && throw(ArgumentError(\"define_function!(…; name=\\\"\\\"): ", def) +
+                !occursin("        isempty(name) && throw(ArgumentError(\"WasmFunction(type \$type_idx; name=\\\"\\\"): ", def) +
+                occursin("isempty(f.name) || push!(func_names", def)
+        end),
+    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone reads the options (options_from_env) and hands them with the caller's ledger to the compile, whose Translator holds them (no OPTIONS, no DIAGNOSTICS_SINK in src: R40); among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_runtime, compile_multi_with_runtime, compile_with_statement_trace, compile_with_base — is one call of it, so the source-map, runtime and trace entries take diagnostics_sink and the source-map entries and compile_multi_with_runtime the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: its `options` is required (a test passes options_from_env() or CompilerOptions()), it reads no options itself and, called directly, routes no ledger, which its docstring says. No ENV is read in src outside codegen/options.jl, the switches' one reader (the `locals` trace point there replaces codegen's WASMTARGET_DEBUG_LOCALS reads and their process-wide `@warn maxlog` counters, dev/AUDIT.md A17P5 = A17C6 = A17E9), the wasm-tools cross-check's WT_VALIDATE included: CompilerOptions.validate, which an entry's `validate` keyword overrides when given (_compile); `optimize`, the post-pass over finished bytes, takes `validate` required from its caller and reads no options (compile_with_base passes it the options its compile used, CompileResult.options, unless its own `validate` decides). options_from_env has one reader in src, the entry (dev/AUDIT.md A18P1: compile_module's keyword default and optimize's validate default read it too, which entry 17's A17P5 resolution accepted). test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
+        () -> begin
+            local api = read(joinpath(SRC, "WasmTarget.jl"), String)
+            local body(name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), api); m === nothing ? "" : m.match)
+            local entry = body("_compile")
+            local v = isempty(entry) ? 1 : 0
+            # every keyword of the one entry is typed: `name::T=default`
+            local sig = match(r"(?s)\nfunction _compile\(functions::Vector;(.*?)\)::CompileResult\n", api)
+            if sig === nothing
+                v += 1
+            else
+                local parts = String[]; local depth = 0; local cur = IOBuffer()
+                for c in sig.captures[1]   # the keywords, split at top-level commas
+                    c in "({[" && (depth += 1); c in ")}]" && (depth -= 1)
+                    c == ',' && depth == 0 ? push!(parts, String(take!(cur))) : write(cur, c)
+                end
+                push!(parts, String(take!(cur)))
+                v += count(k -> !occursin(r"^\s*\w+::", k), parts)
+            end
+            # the one entry reads the options once and hands them and the caller's ledger to the
+            # compile (its Translator holds them, R40): no process-wide options or ledger exists
+            v += occursin("    local options = options_from_env()\n", entry) && occursin("options, diagnostics=diagnostics_sink", entry) ? 0 : 1
+            v += count_sites(r"\bOPTIONS\b|\bDIAGNOSTICS_SINK\b"; roots=[SRC])
+            # no ENV read in src outside options.jl, the cross-check's WT_VALIDATE included, and the
+            # options read by the entry alone: options_from_env is called once in src, by _compile
+            v += count_sites(r"\bENV\b"; roots=[SRC], exclude_files=["codegen/options.jl"])
+            v += abs(count_sites(r"\boptions_from_env\(\)"; roots=[SRC], exclude_files=["codegen/options.jl"]) - 1)
+            v += occursin("options_from_env()", replace(api, entry => "")) ? 1 : 0
+            # compile_module( and _emit_module( called in src/WasmTarget.jl only inside the one entry
+            local outside = replace(api, entry => "")
+            for l in split(outside, '\n')
+                _iscomment(l) && continue
+                occursin(r"^function\s", l) && continue
+                occursin(r"^\s*_emit_module\(.*\)\s*->", l) && continue   # a docstring's signature
+                v += length(collect(eachmatch(r"\b(compile_module|_emit_module)\(", l)))
+            end
+            # each exported entry is one call of the one entry
+            for name in ("compile", "compile_multi", "compile_with_sourcemap",
+                         "compile_multi_with_sourcemap", "compile_with_runtime", "compile_multi_with_runtime",
+                         "compile_with_statement_trace", "compile_with_base")
+                local b = body(name)
+                v += (!isempty(b) && length(collect(eachmatch(r"\b_compile\(", b))) == 1) ? 0 : 1
+            end
+            # compile_function is gone from src and test
+            v + count_sites(r"\bcompile_function\b"; roots=[SRC, joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+        end),
+    "L159_every_julia_offset_mapped" => ("every byte of a function compiled from Julia IR maps to its statement or to its definition, and only a statement Julia gives no location of its own is unmapped, as dart2wasm maps a member: map_to_definition! (statement 0: the method's definition, derived once per function from the plan's MethodInstance by definition_source_info in the compile loop, which the whole-body arms use too) maps the entry before any instruction (generate_body; code_generator.dart:3625), compile_statement!'s `finally` and the stackifier's return and block ends map the code after a statement back to it (translateStatement's `finally` restores the member's offset, :721), and a body that replaces a whole compiled function — a selector caller or a standalone intrinsic body — is mapped whole to its definition (`start_source_mapping!(b, definition)` before the body builder's first instruction, the one arm of the compile loop both take; :3627-3634); stop_source_mapping! is called in codegen exactly once, map_to_statement!'s arm for a statement with no location of its own (code_generator.dart:196 noOffset); _stmt_line_nodes takes no earlier statement's location (no backward walk), so the source map, stmt_frames and julia_loc share one decoding that names the definition for such a statement; and every recorded body's mappings end at its end through one builder-layer rule, body_end_mapping (instructions.dart:78): builder_code_mapped appends it to every serialized builder's, which fill_function! reads a body's mappings from (a generated function's too, as dart's serializer ends every body), and the code-section writer only shifts mappings, so no function borrows another's segment. test/source_maps.jl measures it over straight-line code, a loop with phis, a try/catch, a closure, a selector caller and a standalone rethrow body: no byte borrowed across functions, and unmapped bytes only in a function with a statement Julia gives no location, the exact per-function counts pinned on Julia 1.12 (dev/CHARTER.md C10)",
+        () -> begin
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local stk = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local diag = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            local ins = read(joinpath(SRC, "builder", "instructions.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            # exactly one stop in codegen, in map_to_statement!'s no-location arm
+            local v = abs(count_sites(r"\bstop_source_mapping!\("; roots=[CODEGEN]) - 1) +
+                      (occursin("return info === nothing ? stop_source_mapping!(b) : start_source_mapping!(b, info)",
+                                fbody(stm, "map_to_statement!")) ? 0 : 1)
+            local required = [(stm, "map_to_definition!(b::InstrBuilder, ctx::AbstractCompilationContext)::InstrBuilder = map_to_statement!(b, ctx, 0)"),
+                              (stm, "local info = idx == 0 ? ctx.stmt_sources[0] : get!(() -> stmt_source_info(ctx, idx), ctx.stmt_sources, idx)"),
+                              (comp, "            ctx.stmt_sources[0] = definition\n            b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)"),
+                              (stm, "    finally\n        # the code after the statement maps to the function's definition again, as dart's\n        # `finally` restores the enclosing member's offset (code_generator.dart:721)\n        map_to_definition!(b, ctx)\n    end"),
+                              (fbody(gen, "generate_body"), "::InstrBuilder\n    # the function's entry, before any instruction, maps to its definition, as dart sets the\n    # member's offset before it generates the body (code_generator.dart:3625)\n    map_to_definition!(b, ctx)\n"),
+                              (stk, "map_to_definition!(bb, ctx)   # the code after the return is the function's again"),
+                              (stk, "        map_to_definition!(b, ctx)\n"),
+                              (read(joinpath(SRC, "builder", "instr_builder.jl"), String), "records_source_maps(b) && push!(mapped, body_end_mapping(code))")]
+            v += count(((text, needle),) -> !occursin(needle, text), required)
+            # both whole-body arms map to the definition at the body builder's first instruction, in
+            # the one arm they share, and end through the builder's rule (fill_function! reads it)
+            v += abs(length(collect(eachmatch(r"\n            b = function_builder\(mod, func_idx\)\n            definition === nothing \|\| start_source_mapping!\(b, definition\)\n", comp))) - 1)
+            v += occursin("    local code, mappings = builder_code_mapped(b)\n    mod.functions[slot] = WasmFunction(fn.type_idx, copy(b.locals), code, mappings, fn.name)",
+                          read(joinpath(SRC, "builder", "instr_builder.jl"), String)) ? 0 : 1
+            # one writer of a body's end: the code-section writer appends no mapping of its own
+            v += length(collect(eachmatch(r"push!\(code_mappings, SourceMapping\(", ins)))
+            # no backward walk in the one decoding
+            local nodes = fbody(diag, "_stmt_line_nodes")
+            v + (isempty(nodes) || occursin(r"-=\s*1|\bwhile\b|\bfor\b", nodes) ? 1 : 0)
+        end),
+    "L160_an_escape_names_its_type" => ("an escaped Julia exception names its type, as dart's minified build names a class through its source map: every module compile_module builds defines one exported reader, `wasmtarget.class_id: (anyref) -> i32` (ensure_class_id_reader!, generate.jl), at the end of compile_module over the final numbering, its body the class of the value's typeof: a type object's class its kind's (emit_type_object_kind!, the kind rule typeof reads), then emit_class_id!'s rule over `Any` (code_generator.dart:6076 loadClassId), so null is Nothing, a bare array one class has answers its class, and a value with no header traps at the cast, never a guessed class; the host's one escape helper (host_escape_js) reads the class from the payload's exception (`getArg(tag, 0)`, after any rethrow(e) replaced it; invoke_main_patch.dart:43-52) and answers `minified:Class<id>` (type.dart:344), or a trap saying the class could not be read; _compile hands compile_module's class names (`string(T)` per classId, compile.dart:617) to _emit_module, which has every mapped build's source map name them after serialization and before the map is encoded (source_map_json's add_minified_class_names!, source_map_utils.dart:15; compile.dart:633-639), and _run_wasm_opt reads them from the input map and adds them to the decoded output map (minified_class_names, source_map_utils.dart:63; io_util.dart:162-171, :206-211); in test/, `getArg(tag, 0)` appears nowhere (the helper is the one reader), every fuzz runner, run_wasm_single and the locator catch through the helper, and the runner alone writes \"uncaught Julia exception <type>\", resolved through the map (escaped_class_name). test/source_maps.jl runs it: ArgumentError, DomainError, a user exception, `nothing` and a type object (DataType) escape named, with and without wasm-opt, a rethrow(e) names its replacement while its stack names the first throw, a shared bare array reports its class unreadable in the reader's frame, and a class numbered in a later collection round of a host-import module is named (dev/CHARTER.md C10)",
+        () -> begin
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local api = read(joinpath(SRC, "WasmTarget.jl"), String)
+            local smap = read(joinpath(SRC, "builder", "source_map.jl"), String)
+            local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            local reader = fbody(gen, "ensure_class_id_reader!")
+            local helper = fbody(gen, "host_escape_js")
+            local required = [(reader, "add_export!(mod, generated_export_name!(translator.export_namer, \"wasmtarget.class_id\"), 0,"),
+                              (reader, "emit_type_object_kind!(b, registry, 0, allocate_local!(ctx, I32), done, id!)"),
+                              (reader, "local_get!(b, 0)\n    emit_class_id!(b, ctx, Any)\n    end_block!(b)\n    finish_function!(b)"),
+                              (comp, "    ensure_class_id_reader!(mod, type_registry, translator)\n"),
+                              (helper, "exports['wasmtarget.class_id'](e.getArg(tag, 0))"),
+                              (helper, "return { throw: 'minified:Class' + id, stack }"),
+                              (fbody(api, "_compile"), "_emit_module(result[1]; optimize, validate=something(validate, options.validate),\n                                           class_names=_class_names(result[2]))"),
+                              (fbody(api, "_emit_module"), "to_bytes_with_source_map(mod; class_names)"),
+                              (smap, "    class_names === nothing || add_minified_class_names!(sm, class_names)\n    return _json_write(sm)"),
+                              (fbody(api, "_run_wasm_opt"), "minified_class_names(source_map_json)"),
+                              (fbody(api, "_run_wasm_opt"), "_json_write(add_minified_class_names!(_json_read(out_map)::Vector{Pair{String,Any}}, class_names))"),
+                              (smap, "const _SOURCE_MAP_EXTENSION_NAME = \"x_org_dartlang_dart2js\""),
+                              (smap, "\"minified_names\" => "),
+                              (smap, "\"Class\$("),
+                              (runner, "\"uncaught Julia exception \" * escaped_class_name(String(r[\"throw\"]), source_map)")]
+            local v = count(((text, needle),) -> !occursin(needle, text), required)
+            # one reader of the payload's exception: getArg(tag, 0) once in src, in the helper,
+            # and nowhere in test/ (this file aside); no JS catch in test/ writes the escape's text
+            v += abs(count_sites(r"\.getArg\(tag, 0\)") - 1)
+            v += count_sites(r"\.getArg\(tag, 0\)|'uncaught Julia exception"; roots=[joinpath(ROOT, "test")],
+                             exclude_files=["parity_ratchet.jl"])
+            # every runner catch that reports an outcome goes through the helper
+            for (f, n) in (("wasm_runner.jl", 1), (joinpath("fuzz", "harness.jl"), 2), (joinpath("fuzz", "bridge.jl"), 1),
+                           (joinpath("fuzz", "bridge_args.jl"), 1), ("trace_localize.jl", 1))
+                local t = read(joinpath(ROOT, "test", f), String)
+                v += abs(length(collect(eachmatch(r"host_escape_js\(\)", t))) - n) +
+                     length(collect(eachmatch(r"catch\s*\((?:e|err)\)\s*\{\s*return \{ trap: String\(", t)))
+            end
+            v
+        end),
+    "L161_the_lane_is_strict_on_throws" => ("the differential lanes the fuzz property drives (the statement-generator lane, test/fuzz/test_statements.jl, and the bounded fuzz) count a native throw as matched only by a Julia exception of native's type in wasm: Julia is the ground truth, and a Julia `catch` catches an exception of a type, never a wasm trap. FuzzProperty.classify is the one rule: the wasm side is `(:ok, v)`, `(:throw, type)` (an escaped Julia exception, named through the source map, L160) or `(:trap, msg)`; native returns and wasm throws or traps is :runtime_trap; native throws and wasm returns, traps or throws another type is :divergent_throw; it has no `both error` match, and _differential_args calls it for every sample (its own both-failed fall-through, a second copy of the loose rule, is gone), as the reproducer of a recorded gap reads the same rule (test/fuzz/run.jl). The lane prints a divergent throw with its full program, input, native exception and wasm outcome, and fails. test/fuzz/test_statements.jl runs it on synthetic outcomes and two planted miscompiles of `÷`'s guard (no guard: native DivideError, wasm trap \"divide by zero\"; a guard throwing StackOverflowError), each :divergent_throw (until batch 114 any wasm failure matched a native throw, and both plants passed; dev/CHARTER.md C10)",
+        () -> begin
+            local prop = read(joinpath(ROOT, "test", "fuzz", "property.jl"), String)
+            local lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
+            local run = read(joinpath(ROOT, "test", "fuzz", "run.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            local required = [(fbody(prop, "classify"), "wstat === :throw && wv[2] == string(typeof(nv[2])) && return :match\n    return :divergent_throw"),
+                              (fbody(prop, "_differential_args"), "cat = classify(nv, (w[1], w[2]), cmp)"),
+                              (run, "_ok = _nat[1] === :throw ? (_res[1] === :throw && _res[2] == string(typeof(_nat[2]))) :"),
+                              (lane, "@testset \"the statement lane is strict on throws\" begin"),
+                              (lane, "_WT.INTRINSIC_BINOPS[k] = _WT.BinOpEmit((b, ctx, jw) -> _WT.num!(b, _WT.Opcode.I64_DIV_S), _WT.I64)"),
+                              (lane, "_WT._emit_throw_error_struct!(bld, ctx, StackOverflowError)"),
+                              (lane, "@test o.native[2] isa DivideError && o.wasm == (:throw, \"StackOverflowError\")")]
+            count(((text, needle),) -> !occursin(needle, text), required) +
+                length(collect(eachmatch(r"both error|nstat === :throw && wstat === :ok|wstat === :trap", prop)))
+        end),
+    "L162_the_gate_has_a_budget" => ("the full matrix gives its verdict in minutes, though it never holds a landing (L153): every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest; coverage-merge's timeout is at most 10 minutes, the emission-diff check's (L190) emission-plan's the budget and its emission job's at most 10 minutes, and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's enforcement table names `bash dev/gate.sh` as the full matrix at clause closure (`Closes: C<n>`), on #122's merge head and on dispatch. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"; dev/CHARTER.md C10)",
+        () -> begin
+            local gate = read(joinpath(ROOT, ".github", "workflows", "gate.yml"), String)
+            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
+            local agents = replace(read(joinpath(ROOT, "AGENTS.md"), String), r"\s+" => " ")
+            local job(name) = (m = match(Regex("(?s)\\n  " * name * ":\\n(.*?)(?=\\n  [a-z][a-z-]*:\\n|\\z)"), gate); m === nothing ? "" : m.captures[1])
+            local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job("lane"))]
+            local tmo(name) = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job(name))]
+            local merge_t, plan_t, em_t = tmo("coverage-merge"), tmo("emission-plan"), tmo("emission")
+            count(!, [lane_t == [20],
+                      length(merge_t) == 1 && merge_t[1] <= 10,
+                      plan_t == [20] && length(em_t) == 1 && em_t[1] <= 10,
+                      length(collect(eachmatch(r"timeout-minutes:", gate))) == 4,
+                      occursin("| full matrix at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |", agents),
+                      occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
+                          occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
+                          occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
+        end),
+    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/land.sh calls neither it nor `dev/lanes.sh --fast` (a landing's gate is `bash dev/gate.sh --block`, L194). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
+        () -> begin
+            _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
+            local wf = joinpath(ROOT, ".github", "workflows")
+            isfile(joinpath(wf, "gate-fast.yml")) || return 1
+            local fast_raw = read(joinpath(wf, "gate-fast.yml"), String)
+            local fast = _code(joinpath(wf, "gate-fast.yml"))
+            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
+            local agents = replace(read(joinpath(ROOT, "AGENTS.md"), String), r"\s+" => " ")
+            local v = 0
+            # the triggers, exactly
+            v += occursin("\non:\n  push:\n    branches: ['gate-fast/**']\n  workflow_dispatch:\n", fast) &&
+                 count(r"^\s*push:"m, fast) == 1 && !occursin("branches-ignore", fast) ? 0 : 1
+            # the matrix: the ratchet, smoke 0..N-1, smoke-1.13 0..M-1, with the N and M the header states
+            local jobs = Dict{String,Vector{String}}()
+            for m in eachmatch(r"^\s*- \{ lane: ([a-z0-9.-]+), part: '([0-9/]*)' \}\s*$"m, fast)
+                push!(get!(jobs, m[1], String[]), m[2])
+            end
+            local stated = match(r"N = (\d+) and M = (\d+)", fast_raw)
+            local N = stated === nothing ? -1 : parse(Int, stated[1])
+            local M = stated === nothing ? -1 : parse(Int, stated[2])
+            local parts(n) = String["$i/$n" for i in 0:n-1]
+            v += (sort(collect(keys(jobs))) == ["ratchet", "smoke", "smoke-1.13"] && jobs["ratchet"] == [""] &&
+                  sort(jobs["smoke"]) == sort(parts(N)) && sort(jobs["smoke-1.13"]) == sort(parts(M))) ? 0 : 1
+            v += 1 + N + M <= 20 ? 0 : 1
+            v += occursin("      fail-fast: true\n", fast) && !occursin("fail-fast: false", fast) ? 0 : 1
+            # the budget: the lane job's timeout, the one gate.sh --fast reads, and no other timeout
+            local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, fast)]
+            v += length(lane_t) == 1 && length(collect(eachmatch(r"timeout-minutes:", fast))) == 1 ? 0 : 1
+            v += occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate-fast.yml)", sh) ? 0 : 1
+            v += occursin("bash dev/lanes.sh --lane \${{ matrix.lane }}\${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}\n", fast) ? 0 : 1
+            # no lane variable set by the workflow
+            v += occursin(r"\b(WT|TLC)_[A-Z_]+", fast) ? 1 : 0
+            # ci.yml, formal.yml and gate.yml never run on a gate-fast/** push
+            for f in ("ci.yml", "formal.yml", "gate.yml")
+                local c = _code(joinpath(wf, f))
+                v += occursin("gate-fast", c) || occursin("'**'", c) || occursin("branches-ignore", c) ? 1 : 0
+            end
+            # gate.sh --fast pushes to gate-fast/ and never to gate/
+            v += occursin("[ \$fast -eq 0 ] || { prefix=gate-fast; workflow=\"Gate fast\"; verdict=FAST; }", sh) &&
+                 occursin("name=\$prefix/\${name//\\//-}", sh) ? 0 : 1
+            v += occursin("#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to", sh) ? 0 : 1
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            v += occursin("--fast", land) ? 1 : 0
+            # the smoke dealing's durations: exactly the groups (smoke.jl's, its lazy ones and those of
+            # the files it includes), each measured on both versions
+            local smk_main = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smk_src = join([smk_main; [read(joinpath(ROOT, "test", m[1]), String)
+                                             for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk_main)]], '\n')
+            local want = Set{String}(m[1] in ("g", "lazy_g") ? m[2] : "xfail " * m[2]
+                                     for m in eachmatch(r"^_(g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smk_src))
+            local got = String[]
+            for ln in eachline(joinpath(ROOT, "test", "smoke_times.tsv"))
+                (isempty(ln) || startswith(ln, '#')) && continue
+                local f = split(ln, '\t'; limit = 3)
+                (length(f) == 3 && tryparse(Float64, f[1]) !== nothing && tryparse(Float64, f[2]) !== nothing) || (v += 1; continue)
+                push!(got, String(f[3]))
+            end
+            v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
+            v
+        end),
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names (the cover of the file's pieces by the QA families the locks cite as behavior, test/block_impact.jl), so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a hard limit of wall, never scaled (a machine more than 1.5 times slower than its best leaves the timing ratchet unjudged, never the checks or the budgets, L195); a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate, and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types, as the export namer src/codegen/trimcollect.jl does, names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; every line of code of a src file is in a piece (a definition's, keyed by its line so two methods of one name are two, each line of a multi-line `const` its own, any other form's, dev/AUDIT.md A20C12 = A19C1), and a change to a numeric lowering table's entry runs the generated cases that case it, read from test/block_tables.tsv (test/block_impact.jl --tables: every entry of each table a generator cases, by its key's text, an entry with no row failing the gate, and an entry of a table no generator cases failing it, naming the table, dev/AUDIT.md A22E3; a const is a lowering table by its registration in dev/block.jl's LOWERING_TABLES, exactly the consts of src declared as a Dict or IdDict of emitter values, never by its shape, so a planted const of `key => value` lines under another name fails nothing, dev/AUDIT.md A26E3), the matrix-only group's named cases alone (WT_SMOKE_CASES, a name no selected case has refused) (dev/AUDIT.md A20C12: the F32_COPYSIGN → F32_MIN plant in intrinsics_table.jl selects registry_binops/copysign_float_Float32 and fails); a body no native run executes, an overlay or a bespoke one, counts as run by each probe and case whose plan compiles it (block_impact's planned_lines); the row of every file holding a numeric lowering table, and of calls.jl and int128.jl, which hold their lowering, names registry_sample and narrow_primitive, so a fix's revert there runs its witness at the gate (dev/AUDIT.md A20P12); the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree test/block_impact.jl measured, and a change to src/ fails when that map is stale (more than STALE_PIECES = 8 pieces of src changed between the measured tree and the change's base, the count and the re-record command printed, the re-record a measurement off the landing path landing as its own commit, incremental from the sets the last measurement saved in the main tree's dev/.block/impact_sets.tsv (test/block_impact.jl --pieces: only the probes, groups and QA families whose saved lines touch a src file that moved, and any the sets lack, measured again), in full when none are saved; a measured tree this repository does not hold; a changed line of code in no piece), as does any change to ext/, which no map measures (dev/AUDIT.md A20C13); what the selection still cannot see is stated in test/block_groups.tsv's header, A19C1's (a)-(g) each closed or open (dev/AUDIT.md A20C14); a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family or phase`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) green otherwise (exit 0, 1, 3), a run whose warm runner was cold (its first request, or the first after a revise) red only for a failing check and otherwise green with `timing = \"unjudged\"` (neither its budgets nor its bests judged: `dev/land.sh land` judges them by a warm run of the landed tree right after the landing, L198). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the last closure matrix is not red: it reads gate.yml's newest run on a dispatch, a gate/** push or a march/** head whose commit carries `Closes: C<n>` (read from the commit, `gh run list`), names it, refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check (dev/CHARTER.md C10)",
+        () -> begin
+            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
+            local corpus = read(joinpath(ROOT, "test", "probe_corpus.jl"), String)
+            local tlc = read(joinpath(ROOT, "dev", "formal", "run_tlc.sh"), String)
+            local v = 0
+            v += occursin("if [ \"\${1:-}\" = --block ]; then shift; exec julia --startup-file=no dev/block.jl \"\$@\"; fi", sh) ? 0 : 1
+            # every stage, started side by side
+            for line in [raw"    ld = launch!(Stage(\"load\", setenv(`$jl --project=. -e 'using WasmTarget; print(VERSION)'`, stage_env()), logf(\"load\")))",
+                         raw"    rat = launch!(Stage(\"ratchet\", setenv(`$jl -O0 --project=. test/parity_ratchet.jl`, stage_env()), logf(\"ratchet\")))",
+                         raw"        launch!(Stage(\"smoke-core\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $core`, smokeenv), logf(\"smoke-core\")))",
+                         raw"            launch!(Stage(\"smoke-batch\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $batch`, batchenv), logf(\"smoke-batch\")))",
+                         raw"        launch!(Stage(\"smoke-1.13\", setenv(`julia +1.13 --startup-file=no --project=. -L dev/block_jit.jl test/smoke.jl $smoke113`, smokeenv), logf(\"smoke-1.13\")))",
+                         raw"    smoke113 = setdiff(unique(vcat(newgroups, v113)), matrix)",
+                         raw"        append!(mapped, row[1]); append!(tests, row[2]); append!(v113, row[3])",
+                         raw"    probe_env(c) = stage_env(Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
+                         raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, stage_env(Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
+                         raw"    smokeenv = stage_env(Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
+                         raw"    batch = unique(vcat(setdiff(unique(vcat(mapped, newgroups)), core, matrix), case_groups))",
+                         raw"            append!(out, last.(spans))",
+                         raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
+                         raw"    cases, tablefails = table_cases(touched_table_entries(base, changed), read_tables())",
+                         raw"    append!(fails, stale_map(moved, measured, changed, head_texts, Dict(f => touched_lines(base, f) for f in keys(head_texts))))",
+                         raw"    moved = pieces_moved(measured, gitok(\"rev-parse\", \"$base:src\") ? git(\"rev-parse\", \"$base:src\") : \"\")",
+                         raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups and QA families that exercise it\")",
+                         raw"    foreach(wait, tasks)",
+                         raw"        isempty(tests) || launch!(Stage(\"tests\", setenv(`$jl --project=. test/runtests.jl`, tests_env), logf(\"tests\")))",
+                         raw"        isempty(tests) || push!(chain, Stage(\"tests\", setenv(`$runner test/runtests.jl`, tests_env), logf(\"tests\")))",
+                         raw"    tests_env = stage_env(Dict(\"WT_QA_ONLY\" => join(tests, '\n')))",
+                         raw"    unchanged || push!(efails, \"the tree changed while the stages ran (HEAD, or what is uncommitted): no verdict, rerun\")",
+                         raw"    if clean && unchanged",
+                         raw"            name in families && name != \"parity_ratchet.jl\" && (push!(tests, name); continue)",
+                         raw"            f == \"test/runtests.jl\" && (append!(tests, touched_runtests(base)); continue)",
+                         raw"        ok = s.exit == 0 && isempty(missing)"]
+                v += occursin(line, blk) ? 0 : 1
+            end
+            # the budgets: the whole run at most 60 s, every stage within it
+            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
+            local sec = match(r"(?s)\n\[budget\]\n(.*?)(?:\n\[|\z)", bt)
+            local budgets = sec === nothing ? Dict{String,Float64}() :
+                Dict(String(m[1]) => parse(Float64, m[2]) for m in eachmatch(r"^\"([a-z0-9.@-]+)\" = ([0-9.]+)$"m, sec[1]))
+            local stages = ["total", "load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tests@warm", "tlc", "case-median"]
+            v += sort(collect(keys(budgets))) == sort(stages) ? 0 : 1
+            v += get(budgets, "total", Inf) <= 60 && all(k -> get(budgets, k, Inf) <= get(budgets, "total", 0), stages) ? 0 : 1
+            v += get(budgets, "tests@warm", Inf) <= 20 ? 0 : 1
+            v += occursin(raw"    total > tb && push!(tfails, \"total: $(fmt(total)) s of wall, over the budget of $tb s\")", blk) ? 0 : 1
+            v += occursin(raw"            push!(tfails, \"$name: $(fmt(wall)) s of wall, over its budget of $b s\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
+            # no budget is scaled to pass: the scaled time is the ratchet's alone (A19P5)
+            v += occursin(r"scaled <= b|total / factor <= tb|not blocking", blk) ? 1 : 0
+            # the map: every src file has a row, every group and probe exists
+            # smoke's groups: smoke.jl's, its lazy ones (registry_cases.jl's) and those of the case files it includes
+            local smoke_all = join([smoke; [read(joinpath(ROOT, "test", m[1]), String)
+                                            for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smoke)]], '\n')
+            local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smoke_all))
+            local cases = Set(m[1] for m in eachmatch(r"^_c\(\"([^\"]+)\""m, corpus))
+            local rt = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            local families = Set(m[1] !== nothing ? String(m[1]) : String(m[2]) * "/" * String(m[3])
+                                 for m in eachmatch(r"_wt_qa_include\((?:\"([^\"]+)\"|joinpath\(@__DIR__, \"([^\"]+)\", \"([^\"]+)\"\))\)", rt))
+            local rows = Dict{String,Vector{String}}()
+            for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
+                (isempty(strip(l)) || startswith(l, '#')) && continue
+                local f = split(l, '\t')
+                local names(x) = filter(!=("-"), String.(split(x)))
+                if f[1] == "measured"
+                    v += length(f) == 2 && occursin(r"^[0-9a-f]{40}$", f[2]) ? 0 : 1
+                elseif f[1] in ("core", "probes", "matrix-only")
+                    length(f) == 2 ? (rows[String(f[1])] = names(f[2])) : (v += 1)
+                else
+                    length(f) == 4 || (v += 1; continue)
+                    rows[String(f[1])] = vcat(names(f[2]), names(f[4]))
+                    v += count(t -> !(t in families), names(f[3]))
+                end
+            end
+            v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
+            # the matrix-only row: exactly the generated registry groups (Amendment 117-14) and
+            # entered_paths (it exists for the matrix-only emission-diff check, L190), none in the
+            # core, never the sample; the gate drops them from every stage
+            local rcs = read(joinpath(ROOT, "test", "registry_cases.jl"), String)
+            local generated = Set(String(m[1]) for m in eachmatch(r"^    \"(registry_\w+)\" => _rc_\w+,$"m, rcs))
+            occursin("    RC_GROUPS[\"registry_operators_rejected\"] = RC_OPERATOR_REJECTS\n", rcs) && push!(generated, "registry_operators_rejected")
+            local mo = get(rows, "matrix-only", String[])
+            v += !isempty(generated) && Set(mo) == union(generated, ["entered_paths"]) && length(mo) == length(generated) + 1 &&
+                 isempty(intersect(mo, get(rows, "core", String[]))) && !("registry_sample" in mo) ? 0 : 1
+            # a run that selects no lazy group never includes registry_cases.jl: smoke.jl declares the
+            # generated groups lazily and builds only the selected ones before main runs; every reader
+            # of all cases builds them all first
+            v += !occursin(r"^include\(joinpath\(@__DIR__, \"registry_cases.jl\"\)\)"m, smoke) &&
+                 count(r"^_lazy_(?:g|xf)\(\"registry_\w+\", \"registry_cases.jl\"\)$"m, smoke) == length(generated) + 2 &&
+                 occursin("        haskey(LAZY_BUILDERS, file) || Base.include(@__MODULE__, joinpath(@__DIR__, file))\n", smoke) &&
+                 occursin("abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())\nabspath(PROGRAM_FILE) == (@__FILE__) && main()", smoke) &&
+                 occursin("LAZY_BUILDERS[\"registry_cases.jl\"] = rc_groups", rcs) ? 0 : 1
+            for (f, needle) in (("test/registry_coverage.jl", "_build!(collect(keys(LAZY_FILE)))"), ("test/block_impact.jl", "_build!(collect(keys(LAZY_FILE)))"),
+                                ("dev/emission_diff.sh", "include(\\\"test/smoke.jl\\\"); _build!(collect(keys(LAZY_FILE))); \$2"),
+                                ("dev/emission_diff.sh", "err === nothing && (err = try; _build!(collect(keys(LAZY_FILE))); nothing; catch e; e; end)"))
+                v += occursin(needle, read(joinpath(ROOT, f), String)) ? 0 : 1
+            end
+            v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = unique(vcat(setdiff(unique(vcat(mapped, newgroups)), core, matrix), case_groups))", blk) &&
+                 occursin("            append!(f[1] == \"core\" ? core : f[1] == \"probes\" ? probes : matrix, names(f[2]))", blk) ? 0 : 1
+            v += count(l -> startswith(l, "measured\t"), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) == 1 ? 0 : 1
+            v += any(l -> occursin(r"^src/codegen/trimcollect\.jl\t[^\t]*\t[^\t]*\t[a-z_]", l), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) ? 0 : 1
+            # every file holding a numeric lowering table, and the two holding their lowering (calls.jl's
+            # shifts and counts, int128.jl's 128-bit route), runs registry_sample and narrow_primitive
+            # when it changes, so a fix's revert there is red at the gate (dev/AUDIT.md A20P12)
+            local tables = Set{String}(["src/codegen/calls.jl", "src/codegen/int128.jl"])
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                occursin(r"^const (?:INTRINSIC_\w+|CHECKED_OPS|SHIFT_OPS|FMA_OPS|MISC_OPS|INT128_OPS|BUILTIN_LOWERINGS)\b"m,
+                         read(joinpath(dir, f), String)) && push!(tables, "src/" * replace(relpath(joinpath(dir, f), SRC), '\\' => '/'))
+            end
+            for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
+                local f = split(l, '\t')
+                (length(f) >= 2 && f[1] in tables) || continue
+                delete!(tables, f[1])
+                v += ("registry_sample" in split(f[2]) && "narrow_primitive" in split(f[2])) ? 0 : 1
+            end
+            v += length(tables)   # a table's file with no row of its own
+            for (k, gs) in rows
+                v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
+            end
+            for (d, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(d, f), ROOT), '\\' => '/')
+                v += any(k -> k == rel || (endswith(k, "/") && startswith(rel, k)), keys(rows)) ? 0 : 1
+            end
+            # a selection naming nothing fails its own run
+            v += occursin("        println(\"smoke: no group named \", join(unknown, \", \"))\n        exit(1)", smoke) ? 0 : 1
+            v += occursin("isempty(unknown) || (println(\"probe_bytes: WT_PROBE_ONLY names no probe \", join(unknown, \", \")); return 1)", probe) ? 0 : 1
+            v += occursin(raw"[[ \" ${cfgs[*]} \" == *\" $o \"* ]] || { echo \"TLC_ONLY names $o, which is no instance\" >&2; exit 1; }", tlc) ? 0 : 1
+            v += occursin("        isempty(unknown) || (println(\"runtests: WT_QA_ONLY names no QA family or phase \", join(unknown, \", \")); exit(1))", rt) ? 0 : 1
+            # the record, on a clean tree only, and the landing on it alone
+            v += occursin("    if clean && unchanged\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
+            for line in [raw"    path = joinpath(RECORD_DIR, \"$tree-$n.toml\")",
+                         raw"    verdict = run_verdict(fails, judged_tfails, efails, cold)",
+                         raw"    return verdict == \"green\" ? 0 : verdict == \"red\" ? 1 : 3"]
+                v += occursin(line, blk) ? 0 : 1
+            end
+            # a check's failure is red, never classed as the machine's or the runner's
+            v += occursin(r"push!\((tfails|efails), \"(no row|ratchet|smoke|probes|tests|tlc: [^n])", blk) ? 1 : 0
+            # a stage sees no WT_*, TLC_* or WASMTARGET_* variable but the gate's own (run, A19P3), and
+            # every stage's Cmd is built from stage_env: no merge(ENV, ...) and no Cmd without setenv
+            v += occursin(r"merge\(ENV", blk) ? 1 : 0
+            local Bm = Module(:BlockEnv)
+            try
+                Base.include(Bm, joinpath(ROOT, "dev", "block.jl"))
+                local e = withenv("WT_RATCHET_INCLUDED" => "1", "WT_SMOKE_PART" => "0/8", "WT_RATCHET_UPDATE" => "1",
+                                  "TLC_DEEP" => "x", "WASMTARGET_X" => "1", "BLOCK_KEEP" => "k") do
+                    Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_QA_ONLY" => "q"))
+                end
+                v += e == merge(Dict(k => v2 for (k, v2) in ENV if !any(p -> startswith(k, p), ("WT_", "TLC_", "WASMTARGET_"))), Dict("WT_QA_ONLY" => "q", "BLOCK_KEEP" => "k")) ? 0 : 1
+                v += (try; Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_RATCHET_UPDATE" => "1")); false; catch; true; end) ? 0 : 1
+                # the selections, run on fixed text (A19P11): a selection that silently picks nothing fails here
+                local g = (n, a...) -> Base.invokelatest(getglobal(Bm, n), a...)
+                local smoke_l = ["# harness", "_g(\"a\", Any[", "  case", "])", "helper() = 1", "_xf(\"b\", Any[", "  case", "])", "main()"]
+                local corpus_l = ["# head", "_c(\"p1\", f1, (Int,))", "  x", "_c(\"p2\", f2, (Int,))", "  y"]
+                local rt_l = ["x", "_wt_qa_include(\"a.jl\")", "_wt_qa_include(joinpath(@__DIR__, \"s\", \"t.jl\"))", "begin",
+                              "    @pphase \"Phase 1: A\" begin", "  y", "    end", "    @pphase \"Phase 2: B\" begin", "  z",
+                              "end  # end of phase-registration block", "tail"]
+                local rows_ = ["src/" => (["g1"], ["t1"]), "src/a.jl" => (["g2"], String[]), "ext/" => (String[], String[])]
+                v += count(!, [g(:hunk_lines, "@@ -3,2 +3,3 @@\n@@ -10 +11,0 @@\n@@ -20 +20 @@\n") == [3, 4, 5, 11, 12, 20],
+                               g(:groups_touched, smoke_l, [3], true) == ["a"], g(:groups_touched, smoke_l, [5], true) == ["b"],
+                               isempty(g(:groups_touched, smoke_l, [1], true)), isempty(g(:groups_touched, smoke_l, [9], true)),
+                               g(:groups_touched, smoke_l, g(:hunk_lines, "@@ -5 +4,0 @@\n"), true) == ["a", "b"],
+                               # an included case file: its generators feed every group it defines; a one-line group is its line
+                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [1], false) == ["c", "d"],
+                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [3], false) == ["d"],
+                               isempty(g(:groups_touched, ["no_groups() = 1"], [1], false)),
+                               g(:groups_touched, ["_g(\"c\", gen())", "_g(\"d\", Any[", "  x", "])"], [3], false) == ["d"],
+                               g(:probes_touched, corpus_l, [3, 5, 1], ["p1\tabc", "p2\tdef"], [2]) == ["p1", "p2"],
+                               isempty(g(:probes_touched, corpus_l, [1], String[], Int[])),
+                               g(:runtests_touched, rt_l, [1, 2, 3, 6, 9, 11]) == ["a.jl", "s/t.jl", "Phase 1: A", "Phase 2: B"],
+                               g(:tlc_select, ["dev/formal/Foo.tla", "dev/formal/nightly/Bar.tla", "src/x.jl", "dev/formal/MCBazBroken.cfg"],
+                                 ["MCFoo.cfg", "MCFooDeep.cfg", "MCBar.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]) == (["MCFoo.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]),
+                               g(:row_for, "src/a.jl", rows_) == (["g2"], String[]), g(:row_for, "src/b.jl", rows_) == (["g1"], ["t1"]),
+                               g(:row_for, "test/x.jl", rows_) === nothing])
+                # every line of code is in a piece: a multi-line const's lines each their own, any
+                # other form's, a definition's by its line (A20C12)
+                local tab = "x = 1\nconst MISC_OPS = Dict(\n    (A, B, :f) => g(1),   # c\n    (A, B, :h) =>\n        g(2),\n)\n"
+                v += count(!, [g(:line_keys, tab, "src/t.jl")[3] == "src/t.jl:3", g(:line_keys, tab, "src/t.jl")[1] == "src/t.jl:L1#0",
+                               g(:line_keys, "f(x) = 1\nf(x::Int) = 2\n", "src/t.jl")[2] == "src/t.jl:f@2#0"])
+                # a changed lowering-table entry, by its key, over its lines (A20C12)
+                local tab2 = replace(tab, "g(1)" => "g(9)")
+                v += count(!, [g(:table_entries_touched, "src/t.jl", tab, tab2, "@@ -3 +3 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :f)")],
+                               g(:table_entries_touched, "src/t.jl", tab, tab, "@@ -5 +5 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :h)")],
+                               isempty(g(:table_entries_touched, "src/t.jl", tab, tab, "@@ -1 +1 @@\n")),
+                               # a deleted entry, on the base's side alone
+                               g(:table_entries_touched, "src/t.jl", tab, replace(tab, "    (A, B, :f) => g(1),   # c\n" => ""),
+                                 "@@ -3 +2,0 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :f)")]])
+                # a lowering table is one by its registration (LOWERING_TABLES), never by its shape: a
+                # planted const of `key => value` lines under another name keys no entry and its change
+                # fails nothing, while the same lines under a registered name key their entries and an
+                # uncased one fails, naming the table (dev/AUDIT.md A26E3)
+                local ntab = "const _INTS = Dict{Type,Tuple{Int,Bool}}(\n    Int8 => (8, true),\n    Bool => (1, false),\n)\n"
+                local rtab = replace(ntab, "const _INTS" => "const INT128_OPS")
+                local nent = g(:table_entries_touched, "src/t.jl", ntab, replace(ntab, "(1, false)" => "(1, true)"), "@@ -3 +3 @@\n")
+                local rent = g(:table_entries_touched, "src/t.jl", rtab, replace(rtab, "(1, false)" => "(1, true)"), "@@ -3 +3 @@\n")
+                local rfail = g(:table_cases, rent, Dict{Tuple{String,String,String},Vector{String}}())
+                v += count(!, [isempty(g(:table_entry_keys, ntab, "src/t.jl")), isempty(nent),
+                               g(:table_cases, nent, Dict{Tuple{String,String,String},Vector{String}}()) == (String[], String[]),
+                               rent == [("src/t.jl", "INT128_OPS", "Bool")],
+                               length(rfail[2]) == 1 && occursin("no generator cases the table INT128_OPS", only(rfail[2]))])
+                # the registration is exactly the consts of src declared as a Dict or IdDict whose values are
+                # emitters (Function, BinOpEmit, UnOpEmit, ConvEmit) over more than one line, each named once
+                local declared = String[]
+                for (d, _, fs) in walkdir(SRC), f in fs
+                    endswith(f, ".jl") || continue
+                    for l in _file_lines(joinpath(d, f))
+                        local m = match(r"^const (\w+) = (?:Id)?Dict\{.*,(?:Function|BinOpEmit|UnOpEmit|ConvEmit)\}\($", l)
+                        m === nothing || push!(declared, String(m[1]))
+                    end
+                end
+                local registered = collect(String, getglobal(Bm, :LOWERING_TABLES))
+                v += allunique(registered) && sort(declared) == sort(registered) ? 0 : 1
+                # a changed entry runs its rows' cases; an entry of a cased table with no row, and an entry
+                # of a table no generator cases, fail, naming the table (A20C12, A22E3)
+                local trs = Dict(("src/t.jl", "T", "(A, B, :f)") => ["g/c1", "g/c2"], ("src/t.jl", "T", "(A, B, :h)") => ["g/c1"])
+                local tc1 = g(:table_cases, [("src/t.jl", "T", "(A, B, :f)"), ("src/t.jl", "T", "(A, B, :h)")], trs)
+                local tc2 = g(:table_cases, [("src/t.jl", "T", "(A, B, :k)"), ("src/u.jl", "INT128_OPS", ":add_int")], trs)
+                v += count(!, [tc1 == (["g/c1", "g/c2"], String[]), isempty(tc2[1]), length(tc2[2]) == 2,
+                               occursin("re-record it with test/block_impact.jl --tables", tc2[2][1]),
+                               occursin("no generator cases the table INT128_OPS", tc2[2][2])])
+                # a stale map fails a change to src/: more than STALE_PIECES pieces of src moved between the
+                # measured tree and the change's base, a measured tree unknown here, a changed line of code
+                # in no piece (a module's own line, when the parse keys it to no form); a change to ext/ always; a change elsewhere never (A20C13)
+                local mtab = "module M\nf(x) = 1\nend\n"
+                local ns, ni = Dict{String,String}(), Dict{String,Vector{Int}}()
+                v += count(!, [getglobal(Bm, :STALE_PIECES) == 8,
+                               isempty(g(:stale_map, 8, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1, 3]))),
+                               occursin("9 pieces of src changed", only(g(:stale_map, 9, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1])))),
+                               occursin("test/block_impact.jl --pieces", only(g(:stale_map, 9, "m", ["src/t.jl"], ns, ni))),
+                               length(g(:stale_map, nothing, "m", ["src/t.jl"], ns, ni)) == 1,
+                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => mtab), Dict("src/t.jl" => [1, 2])) ==
+                                   (haskey(g(:line_keys, mtab, "src/t.jl"), 1) ? String[] :
+                                    ["src/t.jl:1 is a line of code in no piece of the map (dev/block.jl line_keys)"]),
+                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => "x = 1\n"), Dict("src/t.jl" => [1])) == String[],
+                               length(g(:stale_map, 0, "m", ["ext/E.jl"], ns, ni)) == 1,
+                               isempty(g(:stale_map, 99, "m", ["test/x.jl", "dev/MARCH.md"], ns, ni))])
+                # test/block_tables.tsv holds every entry of the tables it names, each numeric lowering
+                # table a generator cases, and no other (an entry with no row would select nothing)
+                local trows = Set(k for k in keys(Base.invokelatest(getglobal(Bm, :read_tables))))
+                local tfiles = unique(first.(collect(trows)))
+                local want = Set{Tuple{String,String,String}}()
+                for f in tfiles, (_, (t, k)) in g(:table_entry_keys, read(joinpath(ROOT, f), String), f)
+                    any(r -> r[1] == f && r[2] == t, trows) && push!(want, (f, t, k))
+                end
+                v += trows == want && Set(r[2] for r in trows) == Set(["INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS",
+                     "CHECKED_OPS", "SHIFT_OPS", "FMA_OPS", "MISC_OPS"]) ? 0 : 1
+            catch err
+                println("    ✗ dev/block.jl does not load for its environment rule: ", sprint(showerror, err))
+                v += 1
+            end
+            v += occursin("\ndev/.block/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
+            for line in [raw"        for f in \"$w/dev/.block/$tree\"-*.toml; do [ -f \"$f\" ] && recs+=(\"$f\"); done",
+                         raw"        grep -qx 'verdict = \"red\"' \"$f\" && { echo \"$f is red: a red run of this tree stands — refusing\"; grep -A8 '^failures' \"$f\"; exit 1; }",
+                         raw"    grep -qx \"head = \\\"$head\\\"\" \"$rec\" || { echo \"$rec, the last record of this tree, is of another commit — refusing\"; exit 1; }",
+                         raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
+                         raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' \"$rec\")) — refusing\"; exit 1; }",
+                         raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
+                         raw"    bash dev/gate.sh --block"]
+                v += occursin(line, land) ? 0 : 1
+            end
+            # the last closure matrix read, never waited for: gate.yml's newest run on a dispatch, a
+            # gate/** push or a march/** head carrying `Closes: C<n>` (from the commit itself), red
+            # refusing, unfinished or absent a WARNING in the record; no other check read
+            for line in [raw"    prev=$(git -C \"$MAIN\" rev-parse \"$MARCH\")",
+                         raw"        runs=$(gh run list --limit 200 --json databaseId,status,conclusion,workflowName,event,headBranch,headSha \\",
+                         raw"                                and (.workflowName == \"Gate\" or .workflowName == \".github/workflows/gate.yml\"))]",
+                         raw"           git -C \"$MAIN\" log -1 --format=%B \"$rsha\" 2>/dev/null | grep -qE '^Closes: C[0-9]+'; then",
+                         raw"    completed:failure | completed:timed_out | completed:startup_failure)",
+                         raw"        echo \"the last closure matrix is red, the next item (gate.yml run $mrun on $msha, $mconclusion): fix it first — refusing\"; exit 1 ;;",
+                         raw"        printf '\n[landing]\nwarning = \"%s\"\n' \"$warning\" >> \"$rec\""]
+                v += occursin(line, land) ? 0 : 1
+            end
+            v += length(collect(eachmatch(r"\$\(gh run list", land))) == 1 ? 0 : 1
+            v += occursin(raw"    mb=$(git -C \"$MAIN\" merge-base \"$head\" \"$MARCH\")", land) &&
+                 occursin(raw"    grep -qx \"base = \\\"$mb\\\"\" \"$rec\" ||", land) ? 0 : 1
+            # the warm runner is this tree's, versioned, its reset the one quarantined mechanism (A19P4)
+            local rn = read(joinpath(ROOT, "dev", "block_runner.jl"), String)
+            for (txt, line) in [(rn, raw"const REFUSED = (\"WT_PROBE_RECORD\", \"WT_RATCHET_UPDATE\", \"WT_RECORD_TIMES\")"),
+                                (rn, raw"        state = get(ran_on, key, -1) == version[] ? \"warm\" :"),
+                                (rn, raw"        isempty(s) || (version[] += 1)"),
+                                (rn, raw"        key = join(vcat(normpath(abspath(cwd, target)), args, sort([k * \"=\" * v for (k, v) in env if startswith(k, \"WT_\")])), '\0')"),
+                                (rn, raw"        s isa String || !usings_changed() || (s = \"Main's `using` list differs from its start after the reset\")"),
+                                (rn, raw"        frame(sock, 'e', \"block_runner: $state $BLOB\n\")"),
+                                (rn, raw"    c1 == c2 > COUNTER0 || error("),
+                                (rn, "# The reset (parity(quarantine: a Julia process has no API to give Main a fresh binding table;"),
+                                (blk, raw"    haskey(ENV, \"WT_BLOCK_RUNNER\") && error("),
+                                (blk, raw"    runner = \"--warm\" in args ? `julia --startup-file=no dev/block_runner.jl run` : ``"),
+                                (blk, raw"                m[2] == runner_blob || push!(efails,"),
+                                (blk, raw"    occursin(\"Precompiling\", read(ld.log, String)) && pushfirst!(rstates,"),
+                                (land, raw"    [ -z \"$runner\" ] || [ \"$runner\" = \"dev/block_runner.jl $(git -C \"$MAIN\" rev-parse \"$head:dev/block_runner.jl\")\" ] ||")]
+                v += occursin(line, txt) ? 0 : 1
+            end
+            # Main's table is stored only by reset_main!, and dev/runner_env pins every package exactly
+            local rm_ = match(r"(?s)    function reset_main!\(\)\n.*?\n    end\n", rn)
+            v += rm_ !== nothing && count("unsafe_store!", rn) == 4 && count("unsafe_store!", rm_.match) == 4 ? 0 : 1
+            v += occursin(raw"        error(\"block_runner: a `using` added to Main is not taken back by storing its length at byte $USINGS_LEN_OFFSET (Julia $VERSION)\")", rn) ? 0 : 1
+            local renv = read(joinpath(ROOT, "dev", "runner_env", "Project.toml"), String)
+            local compat = match(r"(?s)\n\[compat\]\n(.*)", renv)
+            v += compat !== nothing && occursin("Revise = \"=", compat[1]) &&
+                 all(l -> occursin(r"^[A-Za-z]+ = \"=[0-9.]+\"$", l), filter(!isempty, split(compat[1], '\n'))) ? 0 : 1
+            v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api|gh pr checks"i, land) ? 1 : 0
+            v
+        end),
+    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under the warm runner (`--warm`) every stage holds a best of its own, `<stage>@warm`, smoke-core and probes included: the compiler's speed is held warm, against a best recorded from a warm run, never a cold one (A19P4); a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row the change itself adds to dev/MARCH.md (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md` under a row number the base's MARCH does not have: an existing row, edited, exempts nothing, A20P26) that names the stages it leaves slower, which alone are exempt, and whose bests that run's update raises in the same diff (A19P7); the budgets are literal walls: a machine more than 1.5 times slower than its best while the stages ran (FACTOR_CAP, `capped`) leaves the run's timing ratchet unjudged, never a scaled pass: no stage is compared with its best (a slower stage a note, `timing_failures`), no best is recorded from it, every check still judged; a budget missed past the cap is the machine's by the cap's definition, so a run whose checks pass is green with its timing unjudged, the missed budgets named (`timing = \"unjudged (budget <stage> <wall> past cap, factor <f>)\"`) in its record (`dev/land.sh land` printing the unjudged streak, L198), a failing check or a missed budget red, a cold run (correctness only: no budget and no best judged) green with its timing unjudged; CI judges no timing, so the ratchet is judged here whenever the machine is quiet enough, recorded as unjudged otherwise; and under that cap a budget or best exceeded is red; no verdict only for a reason of the tools or the tree (a tool missing, the tree changed during the run), never for load (A19P2, A19P5). `WT_TIMING_UPDATE=1` runs the gate three times (update_main) and, only when all three are green with their timing judged on a clean tree on a quiet machine (load average at most the machine's CPUs), sets each ratcheted stage's best to the median of its three times (updated_bests), lowered only, raised only for a stage the commit's own exemption names, so one fast run sets no best, and writes each best's source into dev/timing_best.toml's [best_from] (its records, the commit they ran on, their machine factors; a rescaled best its own source and the update that rescaled it), every best having one (A20P20); a best is set only so, never by hand: one whose entry is not the median of an update's three records at machine factors within FACTOR_CAP (source_problem) bounds nothing, its want of a source a timing failure outside the update (judged on a warm run under the cap), and the update re-records it whichever way it moves, a rise still held to the base's (A20P25); a calibration lower than the best, the runs' median lower quartile, lowers every best in proportion in the same write. A change is judged by its own dev/timing_best.toml held to its base's (`git show <base>:dev/timing_best.toml`, A19P6): a budget or best of the base's removed, or raised (a best compared at one calibration, as best / calibration), fails the gate. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
+        () -> begin
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
+            local v = 0
+            v += occursin("const SLOWER_FRACTION = 0.15\nconst SLOWER_SECONDS = 0.3\n", blk) ? 0 : 1
+            v += occursin("const RATCHETED = (\"load\", \"ratchet\", \"smoke-core\", \"probes\")", blk) ? 0 : 1
+            v += occursin("        if name in RATCHETED && ok && fixed && slower(scaled, bw)", blk) ? 0 : 1
+            v += occursin("        timing_exemption(msg, git(\"diff\", \"\$base..HEAD\", \"--\", \"dev/MARCH.md\"),\n                         gitok(\"cat-file\", \"-e\", \"\$base:dev/MARCH.md\") ? git(\"show\", \"\$base:dev/MARCH.md\") : \"\")", blk) &&
+                 occursin("    isempty(exempt_problem) || push!(fails, exempt_problem)", blk) &&
+                 occursin("            if name in exempt_stages\n", blk) ? 0 : 1
+            v += occursin("        scaled = wall / factor\n", blk) ? 0 : 1
+            v += occursin("const FACTOR_CAP = 1.5\n", blk) && occursin("    capped = factor > FACTOR_CAP\n", blk) ? 0 : 1
+            # past the cap a stage slower than its best is a note, never a failure, and no best is recorded; a budget still fails
+            v += occursin("    judged_tfails = timing_failures(tfails, sfails, capped, cold)\n", blk) &&
+                 occursin("    verdict = run_verdict(fails, judged_tfails, efails, cold)\n", blk) &&
+                 occursin("    timing = cold ? \"unjudged (cold)\" :\n", blk) &&
+                 occursin("                push!(sfails, \"\$name: more than 15% and 0.3 s slower than its best: \$why\"); v = capped ? \"UNJUDGED\" : \"SLOWER\"", blk) &&
+                 occursin("\"timing\" => timing,", blk) ? 0 : 1
+            v += occursin("    cpus = length(Sys.cpu_info())\n    quiet = loadavg[1] <= cpus\n", blk) && !occursin("CPU_THREADS)", blk) && !occursin(r"\bbusy = ", blk) ? 0 : 1
+            v += occursin("    bestkey(name) = !isempty(runner) ? name * \"@warm\" : name", blk) && !occursin("warm_stage", blk) ? 0 : 1
+            # the update: three runs, every one green with its timing judged on a clean tree on a quiet
+            # machine, then updated_bests, each best written with its source (A20P20)
+            v += occursin("const UPDATE_RUNS = 3\n", blk) &&
+                 occursin("        if r === nothing || !(r.verdict == \"green\" && r.timing == \"judged\" && r.clean && r.quiet)\n", blk) &&
+                 occursin("    best, changes, how = updated_bests(timing[\"best\"], [r.fastest for r in runs], [r.calib for r in runs],", blk) &&
+                 occursin("        best_from[k] = best_source(h, get(best_from, k, \"\"), [r.record for r in runs], runs[end].head, [r.factor for r in runs])\n", blk) &&
+                 occursin("    write_best(timing[\"budget\"], best, best_cpu, best_from)\n", blk) &&
+                 occursin("exit(get(ENV, \"WT_TIMING_UPDATE\", \"\") == \"1\" ? update_main(ARGS) : main(ARGS))", blk) &&
+                 !occursin("write_best(budget, best, best_cpu)", blk) ? 0 : 1
+            v += occursin("    quiet = loadavg[1] <= cpus\n    updating && !quiet && (updating = false;", blk) ? 0 : 1
+            # a best not recorded fails the gate outside the update, which records it
+            v += occursin(raw"                push!(fails, \"$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\")", blk) ? 0 : 1
+            v += occursin(raw"                    push!(fails, \"calibration: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\"))", blk) ? 0 : 1
+            v += occursin("\n[best]\n", bt) && occursin("\n[budget]\n", bt) ? 0 : 1
+            v += occursin("    loosened = isempty(base_text) ? String[] : timing_against_base(timing, Base.invokelatest(TOML.parse, base_text), exempt_stages)", blk) &&
+                 occursin("    append!(fails, loosened)\n", blk) &&
+                 occursin("            k == \"calibration\" || (out[k] = round(out[k] * cal / bcal; digits = 2); how[k] = :rescaled)", blk) ? 0 : 1
+            # a best is set only by the update (A20P25): one whose source is not an update's median bounds
+            # nothing, its want a timing failure outside the update, which re-records it whichever way it moves
+            v += occursin("    best = Dict{String,Any}(k => v for (k, v) in timing[\"best\"] if k == \"calibration\" || !haskey(unsourced, k))\n", blk) &&
+                 occursin("                push!(sfails, \"\$bkey: its best \$(unsourced[bkey]) (WT_TIMING_UPDATE=1 re-records it)\")", blk) &&
+                 occursin("    rerecord = String[k for k in keys(timing[\"best\"]) if !isempty(source_problem(get(best_from, k, nothing)))]\n", blk) &&
+                 occursin("        if !haskey(out, k) || w < out[k] || k in rerecord\n", blk) &&
+                 occursin("    if isnan(bcal) || cal < bcal || \"calibration\" in rerecord\n", blk) ? 0 : 1
+            # every best names where it came from (A20P20)
+            local sec = name -> (m = match(Regex("\\n\\[" * name * "\\]\\n((?:\"[^\"\\n]+\" = [^\\n]*\\n?)*)"), bt);
+                                 m === nothing ? Set{String}() : Set(String(x[1]) for x in eachmatch(r"^\"([^\"]+)\" = "m, m[1])))
+            for k in sort(collect(setdiff(sec("best"), sec("best_from"))))
+                println("    ✗ L195: dev/timing_best.toml's best $k has no [best_from] entry (WT_TIMING_UPDATE=1 writes it)"); v += 1
+            end
+            # the decisions, run
+            local B = Module(:BlockDecisions)
+            try
+                Base.include(B, joinpath(ROOT, "dev", "block.jl"))
+                local f = (n, a...) -> Base.invokelatest(getglobal(B, n), a...)
+                v += count(!, [f(:slower, 11.6, 10.0), !f(:slower, 11.4, 10.0), !f(:slower, 1.25, 1.0), f(:slower, 1.4, 1.0),
+                               !f(:slower, 100.0, NaN), f(:machine_factor, 0.04, 0.02) == 2.0, f(:machine_factor, 0.01, 0.02) == 1.0,
+                               f(:timing_exemption, "Charter: C10\n", "+| 13.4 | C1 |", "") == ("", String[]),
+                               f(:timing_exemption, "x\nTiming: correctness fix (MARCH 13.20)\n", "+| 13.20 | C6 | win back smoke-core and probes |", "| 13.4 | C1 | x |\n") ==
+                                   ("correctness fix, MARCH 13.20 (smoke-core, probes)", ["smoke-core", "probes"]),
+                               # a row the change does not add (context or an existing row), or one naming no stage, raises
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.4)", " | 13.4 | C1 | smoke-core |", ""); false; catch; true; end),
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.20)", "+| 13.20 | C6 | the time |", ""); false; catch; true; end),
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.99)", "+| 13.4 | C1 | smoke-core |", ""); false; catch; true; end),
+                               # an existing row, edited, is a `+` line yet exempts nothing: the number is the base's (A20P26, 36e3966e's form)
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.18)", "+| 13.18 | C10 | gate: the ratchet stage grew; re-recorded |",
+                                       "| 13.17 | all | x |\n| 13.18 | C10 | gate: the ratchet stage grew |\n"); false; catch; true; end),
+                               f(:run_verdict, ["x"], String[], String[], false) == "red", f(:run_verdict, ["x"], String[], ["tools"], true) == "red",
+                               f(:run_verdict, String[], ["over"], ["tools"], false) == "none", f(:run_verdict, String[], ["over"], String[], true) == "green",
+                               f(:run_verdict, String[], ["over"], String[], false) == "red", f(:run_verdict, String[], String[], String[], false) == "green",
+                               # past the cap a stage slower than its best is unjudged, a budget missed still fails
+                               f(:timing_failures, ["budget"], ["slower"], false, false) == ["budget", "slower"], f(:timing_failures, ["budget"], ["slower"], true, false) == String[],
+                               f(:timing_failures, String[], ["slower"], true, false) == String[], f(:timing_failures, String[], ["slower"], false, false) == ["slower"],
+                               # a cold run's timing is judged by nothing: its budgets and bests are not failures
+                               f(:timing_failures, ["budget"], ["slower"], false, true) == String[], f(:timing_failures, ["budget"], ["slower"], true, true) == String[],
+                               # held to the base: a raised budget, a raised best, a removed one, a best raised by a lowered calibration fail; a lowered one passes
+                               let tb(bu, be) = Dict("budget" => bu, "best" => be), base = tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.0))
+                                   isempty(f(:timing_against_base, base, base)) &&
+                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 50), Dict("calibration" => 0.004, "ratchet" => 9.0)), base)) &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.5)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 10.0)), base)) == 1 &&
+                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 5.0)), base))
+                               end,
+                               # the update's bests: the median of three, one fast run setting none; lowered only, raised for an
+                               # exempt stage; a lower calibration rescaling the others first; how each was set (A20P19, A20P20)
+                               let b0 = Dict{String,Any}("calibration" => 0.004, "ratchet@warm" => 10.0, "probes@warm" => 6.0), c3 = [0.004, 0.004, 0.004]
+                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [9.0, 8.0, 20.0]), String[]))["ratchet@warm"] == 9.0 &&
+                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [12.0, 11.0, 13.0]), String[]))["ratchet@warm"] == 10.0 &&
+                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [12.0, 11.0, 13.0]), ["ratchet"]))["ratchet@warm"] == 12.0 &&
+                                   first(f(:updated_bests, b0, c3, c3, Dict("probes@warm" => [7.0, 7.0, 7.0]), ["ratchet"]))["probes@warm"] == 6.0 &&
+                                   last(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [9.0, 8.0, 20.0], "probes@warm" => [7.0, 7.0, 7.0]), String[])) == Dict("ratchet@warm" => :median) &&
+                                   let (b, _, h) = f(:updated_bests, b0, [0.002, 0.002, 0.003], c3, Dict{String,Vector{Float64}}(), String[])
+                                       b["calibration"] == 0.002 && b["probes@warm"] == 3.0 && h == Dict("calibration" => :median, "ratchet@warm" => :rescaled, "probes@warm" => :rescaled)
+                                   end
+                               end,
+                               # a best's source: the median of the update's records on its commit, or its own source rescaled (A20P20)
+                               f(:best_source, :median, "", ["3ee4c795-7", "3ee4c795-8", "3ee4c795-9"], "72dc53fb0000", [1.0, 1.04, 1.1]) ==
+                                   "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.04 1.1",
+                               f(:best_source, :rescaled, "the median of records a; rescaled by records b", ["c"], "d", [1.0]) ==
+                                   "the median of records a; rescaled by records c on d at machine factor 1.0",
+                               (try; f(:best_source, :rescaled, "", ["c"], "d", [1.0]); false; catch; true; end),
+                               # a source is an update's median of three records within FACTOR_CAP; anything else is none (A20P25)
+                               f(:source_problem, "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.04 1.1") == "",
+                               f(:source_problem, "the median of records a1b2c3d4-1 a1b2c3d4-2 a1b2c3d4-3 on 72dc53fb at machine factor 1.0 1.0 1.0; rescaled by records x on y at machine factor 1.2") == "",
+                               startswith(f(:source_problem, nothing), "has no"),
+                               startswith(f(:source_problem, "one run, record 3ee4c795-6 on 72dc53fb at machine factor 1.0"), "is not the median"),
+                               startswith(f(:source_problem, "the median of records 3ee4c795-7 on 72dc53fb at machine factor 1.0"), "is the median of 1 records"),
+                               startswith(f(:source_problem, "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.54 1.1"), "was recorded past"),
+                               startswith(f(:source_problem, "one run; rescaled by records a1b2c3d4-1 a1b2c3d4-2 a1b2c3d4-3 on 72dc53fb at machine factor 1.0 1.0 1.0"), "is not the median"),
+                               # a best with no source is re-recorded either way; a calibration with none re-recorded rescales the rest
+                               let b0 = Dict{String,Any}("calibration" => 0.004, "ratchet@warm" => 10.0), c3 = [0.004, 0.004, 0.004]
+                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [14.0, 13.0, 15.0]), String[], ["ratchet@warm"]))["ratchet@warm"] == 14.0 &&
+                                   let (b, _, h) = f(:updated_bests, b0, [0.005, 0.005, 0.005], c3, Dict{String,Vector{Float64}}(), String[], ["calibration"])
+                                       b["calibration"] == 0.005 && b["ratchet@warm"] == 12.5 && h["ratchet@warm"] == :rescaled
+                                   end
+                               end])
+            catch e
+                println("    ✗ dev/block.jl does not load for its decisions: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a branch more than one commit ahead of the march tip (one landing is one commit, its own tree gated: `merge` judges the head alone, A24E1), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: C<a> C<b> … authorised by Dale <date>` line (CHANGE_SED; several clauses in one commit, since L148 counts commits), the change's parent and new dev/CHARTER.md blobs listed with those clauses, as a set, and that date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit; `authorised`), and every changed line in one of those clauses (CLAUSE_AWK, HUNK_AWK, `clause_in`); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> of 300 s`. Here: the landing log each landing carries in its own tree (dev/.loop/landings.log, written by `land` into the branch's head before the gate, A21E4) is a line-by-line prefix of the main tree's git-ignored log, missing at most one landing this tree holds (the tip's own); every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no excuse names (an excuse being the tracked file dev/.loop/excuse/<sha8> alone, one line `machine|lock|crossing: <the measured cause>`, written for a landing whose cause lay outside its change, never a MARCH row or any text search, A22E1), once at least 3 such lines exist (L197_JUDGED_FROM: fewer are printed with the target and pass), the median of edit_to_landed_s over the one target is at most 1: 300 s for every change (Dale 2026-10-21, \"wicked fast, not tens of minutes to hours\"), this lock's literal, never raised; every excuse file is named for a landed commit and holds that one line. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's charter programs, a two-clause Charter-change line read and matched to an authorisation listing its clauses in another order, a clause missing, added or a date changed refused, and a change in C0 refused under a line listing C4; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; an excused landing and the gated commit's own line leave the window, and a scratch tree whose dev/MARCH.md names a slower landing excuses nothing where its excuse file does; the carried copy and the excuse files' form each checked; `land` prints `LOOP <s> of` the same target; .gitignore tracks the carried log and the excuse directory alone of dev/.loop. Negative-tested: a planted slow line, the excuses read from dev/MARCH.md's text, a malformed excuse file name and a raised target each fire it (dev/CHARTER.md C10)",
+        () -> begin
+            local v = 0
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local rx = read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)
+            for line in [raw"        set +e; bash dev/gate.sh --block --warm 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
+                         raw"    LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash \"$W/dev/land.sh\" merge \"$br\"",
+                         # merge is land's internal step alone: it runs only inside the landing holding the hold (A21E5)
+                         raw"    [ -n \"${LAND_HOLDER:-}\" ] && [ \"$holder\" = \"$LAND_HOLDER\" ] && kill -0 \"$holder\" 2>/dev/null ||",
+                         raw"    [ -z \"$(git status --porcelain)\" ] || { echo \"land: $W has uncommitted or untracked files — refusing\"; git status --short | awk 'NR <= 10'; exit 1; }",
+                         raw"    until ( set -o noclobber; echo \"$$ $(iso \"$(now)\") $br\" > \"$HOLD\" ) 2>/dev/null; do",
+                         raw"LOG=\"$MAIN/dev/.loop/landings.tsv\"",
+                         raw"HOLD=\"$MAIN/dev/.block/HOLD\"",
+                         raw"AUTHORISED=\"$MAIN/dev/.block/charter_authorised\"",
+                         # the landing log through the previous landing carried in the landing's own tree (A21E4)
+                         raw"        mkdir -p dev/.loop && cp \"$LOG\" dev/.loop/landings.log && git add dev/.loop/landings.log" * "\n" * raw"        git commit -q --amend --no-edit",
+                         raw"        a=$(printf '%s\n' \"$msg\" | sed -n \"$CHANGE_SED\" | head -1)",
+                         raw"        authorised \"$AUTHORISED\" \"$ob\" \"$nb\" \"$a\" ||",
+                         raw"            clause_in \"$c\" \"${a% *}\" ||",
+                         # one landing is one commit, its own tree gated (A24E1)
+                         raw"    ahead=$(git rev-list --count \"$tip..HEAD\")" * "\n" * raw"    [ \"$ahead\" -eq 1 ] ||",
+                         raw"        if [ \"$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' \"$h^\" \"$h\" -- dev/CHARTER.md | awk \"$EXEMPT_AWK\")\" = yes ]; then",
+                         raw"    git push -q origin \"$MARCH\"" * "\n" * raw"    landed=$(now)"]
+                v += occursin(line, land) ? 0 : 1
+            end
+            # the runner it starts builds the tree's package image first, in a process of its own (A20P23)
+            v += occursin(raw"    built.exitcode == 0 || (println(stderr, \"block_runner: this tree's package does not load",
+                          read(joinpath(ROOT, "dev", "block_runner.jl"), String)) ? 0 : 1
+            # the targets are literals, never raised
+            v += occursin("const L197_TARGET = 300 ", rx) && occursin("const L197_JUDGED_FROM = 3 ", rx) ? 0 : 1
+            # `land` prints the loop against the same target
+            v += occursin(raw"    echo \"LOOP $(printf '%s' \"$line\" | cut -f8) of " * string(L197_TARGET) * raw" s\"", land) ? 0 : 1
+            v += occursin("\ndev/.loop/*\n!dev/.loop/landings.log\n!dev/.loop/excuse/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
+            try
+                # land.sh's charter programs, run on fixed text (A21E6)
+                local prog = name -> (m = match(Regex("\n" * name * "='([^']+)'\n"), land); m === nothing ? error("dev/land.sh has no $name") : String(m[1]))
+                local runawk = (p, text; vars = String[]) -> mktemp() do path, io
+                    write(io, text); close(io)
+                    readlines(Cmd(vcat(["awk"], vars, [p, path])))
+                end
+                local cmap = runawk(prog("CLAUSE_AWK"), "intro\n- **C1 · one\n  two\n- **C10 · ten\n  more\n\n## next\n")
+                local omap, nmap = tempname(), tempname()
+                write(omap, "-\nC1\nC1\nC10\n"); write(nmap, "-\nC1\nC10\nC10\n")
+                local hv = ["-v", "O=$omap", "-v", "N=$nmap"]
+                local ex = t -> only(runawk(prog("EXEMPT_AWK"), t))
+                v += count(!, [cmap == ["-", "C1", "C1", "C10", "C10", "-", "-"],
+                               runawk(prog("HUNK_AWK"), "@@ -3 +3 @@\n"; vars = hv) == ["C1", "C10"],
+                               runawk(prog("HUNK_AWK"), "@@ -2,1 +1,0 @@\n"; vars = hv) == ["C1"],
+                               ex("+13.19,\n") == "yes", ex("-13.18\n+13.18,\n+13.19\n") == "yes", ex("+and\n+13.19\n") == "yes",
+                               ex("-13.18\n") == "no", ex("-and\n") == "no", ex("+budget\n") == "no", ex("-13.18\n+13.19\n") == "no"])
+                rm(omap; force = true); rm(nmap; force = true)
+                # a change to several clauses as one commit: the Charter-change line's clauses and date, the
+                # authorisation's clauses matched as a set, every changed line in one of them
+                local csed = t -> readchomp(pipeline(Cmd(["sed", "-n", prog("CHANGE_SED")]); stdin = IOBuffer(t * "\n")))
+                local shfn = name -> (m = match(Regex("\n" * name * "\\(\\) \\{\n.*?\n\\}\n", "s"), land); m === nothing ? error("dev/land.sh has no $name") : m.match)
+                local shok = (name, args...) -> success(Cmd(["bash", "-c", shfn(name) * name * " \"\$@\"", "l197", args...]))
+                local af = tempname()
+                write(af, "ob1 nb1 C4 C0 2026-10-21\nob2 nb2 C10 2026-10-21\n")
+                v += count(!, [csed("Charter-change: C0 C4 C5 authorised by Dale 2026-10-21") == "C0 C4 C5 2026-10-21",
+                               csed("Charter-change: C10 authorised by Dale 2026-10-21") == "C10 2026-10-21",
+                               csed("Charter-change: C0, C4 authorised by Dale 2026-10-21") == "",
+                               csed("Charter-change: authorised by Dale 2026-10-21") == "",
+                               shok("authorised", af, "ob1", "nb1", "C0 C4 2026-10-21"), shok("authorised", af, "ob2", "nb2", "C10 2026-10-21"),
+                               !shok("authorised", af, "ob1", "nb1", "C0 2026-10-21"), !shok("authorised", af, "ob1", "nb1", "C0 C4 C5 2026-10-21"),
+                               !shok("authorised", af, "ob1", "nb1", "C0 C4 2026-10-22"), !shok("authorised", af, "ob2", "nb1", "C0 C4 2026-10-21"),
+                               !shok("authorised", af * ".none", "ob1", "nb1", "C0 C4 2026-10-21"),
+                               # a line listing C4 while C0 changed refuses
+                               !shok("clause_in", "C0", "C4"), shok("clause_in", "C4", "C0 C4"), shok("clause_in", "C10", "C1 C10"),
+                               !shok("clause_in", "C1", "C10"), !shok("clause_in", "-", "C4")])
+                rm(af; force = true)
+                # behavior on fixed text: three commits, the second landing two
+                local t0 = _l197_epoch("2026-10-21T14:00:00Z")
+                local hist = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n")
+                local ln = (c, landed, author, f, i) -> join([landed, c, author, landed, "2", "40.0", "60.0",
+                                                              string(_l197_epoch(landed) - _l197_epoch(author)) * ".0", f, i, "judged"], '\t')
+                local good = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                             ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
+                # 340 s for a 90 s landing: the upper median of 0.83 and 3.78
+                local slow = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                             ln("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
+                local gap = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "1", "1") * "\n"
+                local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6") * "\n" *
+                              ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
+                local partial = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
+                # four commits: the median judged over three lines (0.83 for b, c and d at 40 s or 340 s)
+                local hist4 = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n\nC dddddddd44 $(t0 + 600)\n1\t0\tdev/x.md\n")
+                local three = (lc, ld) -> L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                                          ln("cccccccc33", lc, "2026-10-21T14:06:40Z", "1", "1") * "\n" * ln("dddddddd44", ld, "2026-10-21T14:10:00Z", "1", "1") * "\n"
+                local good3 = three("2026-10-21T14:07:20Z", "2026-10-21T14:10:40Z")
+                local slow3 = three("2026-10-21T14:12:20Z", "2026-10-21T14:15:40Z")
+                local oneslow3 = three("2026-10-21T14:12:20Z", "2026-10-21T14:10:40Z")
+                v += count(!, [isempty(first(l197_check(good, hist, Set{String}()))),
+                               length(last(l197_check(good, hist, Set{String}()))) == 2,
+                               # fewer than 3 lines in the window: not judged, a slower one included
+                               isempty(first(l197_check(slow, hist, Set{String}()))),
+                               isempty(first(l197_check(good3, hist4, Set{String}()))), length(last(l197_check(good3, hist4, Set{String}()))) == 3,
+                               # two of three slower: the median slower, failed; one of three: passed
+                               !isempty(first(l197_check(slow3, hist4, Set{String}()))), isempty(first(l197_check(oneslow3, hist4, Set{String}()))),
+                               # an excused slower landing leaves the window (then two lines: not judged)
+                               isempty(first(l197_check(slow3, hist4, Set(["cccccccc"])))),
+                               # the gated commit's own line is out of its own window
+                               isempty(first(l197_check(slow3, hist4, Set{String}(); head = "dddddddd44"))),
+                               !isempty(first(l197_check(gap, hist, Set{String}()))),
+                               !isempty(first(l197_check(order, hist, Set{String}()))),
+                               !isempty(first(l197_check(partial, hist, Set{String}()))),
+                               isempty(first(l197_check("", hist[1:0], Set{String}()))),
+                               !isempty(first(l197_check("", hist, Set{String}()))),
+                               _l197_epoch("1970-01-01T00:00:00Z") == 0, _l197_epoch("2026-10-21T14:00:00Z") == 1792591200])
+                # the carried copy (A21E4): a prefix missing only the tip's own line passes; an edited earlier
+                # line, or two of this tree's landings missing, fail
+                local cl = c -> "2026-10-21T14:00:00Z\t" * c * "\tx"
+                local A = repeat("a", 40); local B = repeat("b", 40); local C = repeat("c", 40)
+                local U = [L197_COLUMNS, cl(A), cl(B), cl(C)]
+                v += count(!, [isempty(l197_carried(U, U, c -> true)), isempty(l197_carried(U[1:3], U, c -> true)),
+                               !isempty(l197_carried(U[1:2], U, c -> true)), isempty(l197_carried(U[1:2], U, c -> c == B)),
+                               !isempty(l197_carried([U[1], cl(A) * "y", U[3]], U, c -> true)), !isempty(l197_carried(String[], U, c -> true))])
+                # an excuse is its file alone (A22E1): a tree whose MARCH names the slower landing excuses
+                # nothing, the file takes it out of the window
+                mktempdir() do t
+                    mkpath(joinpath(t, "dev", ".loop"))
+                    write(joinpath(t, "dev", "MARCH.md"), "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |\n")
+                    local e0 = l197_excuses(t)
+                    mkpath(joinpath(t, "dev", ".loop", "excuse"))
+                    write(joinpath(t, "dev", ".loop", "excuse", "cccccccc"), "lock: waited 600 s behind two landings, then landed in 70 s\n")
+                    local e1 = l197_excuses(t)
+                    v += count(!, [isempty(e0), !isempty(first(l197_check(slow3, hist4, Set(keys(e0))))),
+                                   collect(keys(e1)) == ["cccccccc"], isempty(first(l197_check(slow3, hist4, Set(keys(e1)))))])
+                end
+                # the excuse files: one line of a kind outside the change, for a landed commit
+                local ok_ex = "lock: waited 600 s behind two landings, then landed in 70 s"
+                v += count(!, [isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n"), [A])),
+                               !isempty(l197_excuse_problems(Dict("bbbbbbbb" => ok_ex), [A])),
+                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => "slow, sorry"), [A])),
+                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n" * ok_ex), [A])),
+                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => "change: the commit was large and compiled for long"), [A])),
+                               !isempty(l197_excuse_problems(Dict("aaaa" => ok_ex), [A]))])
+                if get(ENV, "GITHUB_ACTIONS", "") == "true"
+                    println("    · L197: a CI checkout: the landing log is the landing machine's; nothing counted here")
+                else
+                    local mt = nothing; local cur = ""
+                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
+                        startswith(l, "worktree ") && (cur = l[10:end])
+                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                    end
+                    if mt === nothing
+                        println("    ✗ L197: no worktree holds wt-p0-strict-hygiene, so there is no landing log to read")
+                        v += 1
+                    else
+                        local tip = readchomp(`git -C $ROOT rev-parse wt-p0-strict-hygiene`)
+                        local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
+                        local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
+                        local exfiles = l197_excuses(ROOT)
+                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, Set(keys(exfiles));
+                                                       head = readchomp(`git -C $ROOT rev-parse HEAD`))
+                        append!(bad, l197_excuse_problems(exfiles, first.(real)))
+                        # the copy each landing carries in its own tree (A21E4)
+                        local tp = joinpath(ROOT, "dev", ".loop", "landings.log")
+                        local lines_of = t -> String.(filter(!isempty, split(t, '\n')))
+                        append!(bad, l197_carried(isfile(tp) ? lines_of(read(tp, String)) : String[],
+                                                  isfile(logp) ? lines_of(read(logp, String)) : String[],
+                                                  c -> success(`git -C $ROOT merge-base --is-ancestor $c HEAD`)))
+                        foreach(b -> println("    ✗ L197: ", b), bad)
+                        println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
+                                isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "),
+                                length(window) < L197_JUDGED_FROM ? " (edit to landed over its target, $L197_TARGET s: fewer than $L197_JUDGED_FROM lines, not judged)" : "")
+                        v += length(bad)
+                    end
+                end
+            catch e
+                println("    ✗ L197: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
+    "L198_timing_is_recorded" => ("a landing whose timing the gate could not judge says so, and the streak of such landings is shown at every landing until a judged run ends it, never forgotten (Dale 2026-10-21; the machine's working floor is other work, so a cap that refused would stall the loop): the blocking gate leaves a run's timing ratchet unjudged on a machine more than FACTOR_CAP times slower than its best (L195: `timing = \"unjudged\"` in its record, `judged` otherwise), `dev/land.sh merge` writes the record's timing into the landing log's `timing` column (a record from before the rule judged), a cold run whose checks pass is green with its timing unjudged and `dev/land.sh land` lands on it, prints `LOOP <s> of 300 s` right after the push, then, still holding the machine, judges the timing by a warm run of the landed tree (`--base` the tip it landed on) and writes it into the landing's line: judged; unjudged (past the cap, with the reason its record gives); SLOWER <stages> and OVER <stages> for bests and budgets missed under the cap (the record's `timing_slower`, `timing_over`); FAILED <stages> for any check that failed, the ratchet's included (`checks_failed`; a lock red on the landed head though the cold run passed it, A21E1), its red record standing; after a line judged red the next landing lands on a judged green run (`land` runs the gate once more rather than land a cold run, and `merge` refuses a record whose timing is not judged) or carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (a cause outside the change, or a `Timing: correctness fix` row's), which lifts a timing debt, SLOWER or OVER, so no timing rule needs a quiet machine to be met; a FAILED debt no excuse lifts: the next landing lands only as a fix, green on a warm run (`land` runs a cold run once more, `merge` refuses a record whose runner_state is not warm, A21E1); `land` refuses a worktree whose Manifest.toml names other WasmTarget extensions than Project.toml (a stale manifest's image build fails, A20P23), printing the resolve command; and `land` prints the unjudged streak, `timing unjudged for N landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm`: the log's last lines in a row whose timing is unjudged, counted newest first until one whose commit's tree has a green run with its timing judged recorded in any worktree. Here: those steps in dev/land.sh and dev/block.jl, every line of the main tree's landing log with a timing, and land.sh's own streak program run on fixed text: three unjudged lines after a judged one give those three newest first, a judged last line none, an empty log none; and its owed program: a last line SLOWER or FAILED names it, a judged or unjudged one and an empty log none; and its lift program on a scratch repository: a dev/MARCH.md row naming the red landing lifts nothing, its excuse file lifts SLOWER and OVER, never FAILED, nor another landing's debt. Negative-tested: the record's field, the streak's count, the owed program, the merge's refusal, a lift read from dev/MARCH.md's text, an excuse lifting a FAILED debt and the ratchet's check dropped from FAILED each broken fire it, and a planted SLOWER line made `dev/land.sh merge` refuse a cold-green record (dev/CHARTER.md C10)",
+        () -> begin
+            local v = 0
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            v += occursin("    timing = cold ? \"unjudged (cold)\" :\n", blk) && occursin("\"timing\" => timing, \"timing_failed\" => timing_failed,", blk) ? 0 : 1
+            for line in [raw"    timing=$(sed -n 's/^timing = \"\(.*\)\"$/\1/p' \"$rec\"); timing=${timing:-judged}",
+                         raw"\"$files\" \"$ins\" \"$timing\" >> \"$LOG\"",
+                         raw"                [ -f \"$f\" ] && grep -qx 'verdict = \"green\"' \"$f\" && grep -qx 'timing = \"judged\"' \"$f\" && judged=1",
+                         raw"        [ $judged -eq 0 ] || break",
+                         raw"        echo \"land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm\"",
+                         raw"OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) \" \" $11 }'",
+                         raw"owed_lifted() { case \"${2#* }\" in FAILED*) return 1 ;; esac",
+                         raw"                git cat-file -e \"$1:dev/.loop/excuse/${2:0:8}\" 2>/dev/null; }",
+                         # a failed check's debt: only a fix, green on a warm run (A21E1)
+                         raw"        grep -qx 'runner_state = \"warm\"' \"$rec\" ||",
+                         raw"    owed=$(tail -n 1 \"$LOG\" 2>/dev/null | awk -F'\t' \"$OWED_AWK\" || true)" * "\n" * raw"    case \"${owed#* }\" in FAILED*)",
+                         raw"    if [ -n \"$owed\" ] && [ \"$timing\" != judged ]; then" * "\n" * raw"        if owed_lifted \"$head\" \"$owed\"; then",
+                         raw"    if [ -n \"$owed\" ] && owed_lifted HEAD \"$owed\"; then",
+                         raw"               chk=$(field checks_failed)",
+                         raw"    [ \"$want\" = \"$have\" ] ||",
+                         raw"        0) if grep -q '^BLOCK green (timing unjudged: the run was cold' \"$glog\"; then",
+                         raw"            set +e; bash dev/gate.sh --block --warm --base \"$tip\" 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
+                         raw"        awk -F'\t' -v OFS='\t' -v n=\"$n\" -v h=\"$head\" -v t=\"$verdict_t\" 'NR == n && $2 == h { $11 = t } { print }' \"$LOG\" > \"$LOG.new\""]
+                v += occursin(line, land) ? 0 : 1
+            end
+            try
+                # land.sh's streak program, run on fixed logs
+                local m = match(r"for c in \$\(awk -F'\\t' '([^']+)' \"\$LOG\"\)", land)
+                m === nothing && error("dev/land.sh has no streak program")
+                local streak = log -> mktemp() do path, io
+                    write(io, log); close(io)
+                    split(readchomp(`awk -F'\t' $(m[1]) $path`))
+                end
+                local hd = L197_COLUMNS * "\n"
+                local ln = (c, t) -> join(["2026-10-21T14:02:30Z", c, "2026-10-21T14:00:00Z", "2026-10-21T14:01:00Z", "1", "30.0", "90.0", "150.0", "1", "1", t], '\t') * "\n"
+                local three = hd * ln("aaaaaaaa", "judged") * ln("bbbbbbbb", "unjudged") * ln("cccccccc", "unjudged") * ln("dddddddd", "unjudged")
+                # the push is the landing: LOOP printed before the warm judgement, the hold released after it
+                local iL = findfirst("    echo \"LOOP ", land); local iJ = findfirst(raw"    if [ $cold_green -eq 1 ]; then", land)
+                local iR = findnext("    release\n", land, something(iJ, 1:1).stop)
+                v += iL !== nothing && iJ !== nothing && iR !== nothing && iL.start < iJ.start < iR.start ? 0 : 1
+                local om = match(r"\nOWED_AWK='([^']+)'\n", land)
+                om === nothing && error("dev/land.sh has no owed program")
+                local owed = log -> mktemp() do path, io
+                    write(io, last(split(chomp(log), '\n'))); close(io)
+                    readchomp(`awk -F'\t' $(om[1]) $path`)
+                end
+                v += count(!, [owed(three * ln("eeeeeeee", "SLOWER probes ratchet")) == "eeeeeeee SLOWER probes ratchet",
+                               owed(three * ln("eeeeeeee", "OVER total")) == "eeeeeeee OVER total",
+                               isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes OVER total"))),
+                               !isempty(l198_check(three * ln("eeeeeeee", "FAILED"))),
+                               owed(three * ln("eeeeeeee", "FAILED smoke-core")) == "eeeeeeee FAILED smoke-core",
+                               isempty(owed(three)), isempty(owed(three * ln("eeeeeeee", "judged"))), isempty(owed(hd)),
+                               isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes")))])
+                v += count(!, [streak(three) == ["dddddddd", "cccccccc", "bbbbbbbb"],
+                               isempty(streak(three * ln("eeeeeeee", "judged"))),
+                               streak(three * ln("eeeeeeee", "judged") * ln("ffffffff", "unjudged")) == ["ffffffff"],
+                               isempty(streak(hd)),
+                               isempty(l198_check(three)), !isempty(l198_check(hd * ln("aaaaaaaa", "")))])
+                # land.sh's lift program on a scratch repository (A22E1): a tree whose dev/MARCH.md names the
+                # red landing lifts nothing; its excuse file lifts a timing debt (SLOWER, OVER), never a FAILED one
+                local lm = match(r"\nowed_lifted\(\) \{.*?; \}\n"s, land)
+                lm === nothing && error("dev/land.sh has no lift program")
+                mktempdir() do t
+                    local gitq = args -> Base.run(pipeline(`git -C $t -c user.name=l198 -c user.email=l198@localhost $args`; stdout = devnull, stderr = devnull))
+                    gitq(`init -q`)
+                    mkpath(joinpath(t, "dev", ".loop", "excuse"))
+                    write(joinpath(t, "dev", "MARCH.md"), "| 13.99 | C10 | eeeeeeee was slower: its runner was cold | x |\n")
+                    gitq(`add -A`); gitq(`commit -q -m row`)
+                    local byrow = readchomp(`git -C $t rev-parse HEAD`)
+                    write(joinpath(t, "dev", ".loop", "excuse", "eeeeeeee"), "lock: waited 600 s behind two landings, then landed in 70 s\n")
+                    gitq(`add -A`); gitq(`commit -q -m file`)
+                    local byfile = readchomp(`git -C $t rev-parse HEAD`)
+                    local lifted = (c, o) -> success(Cmd(`bash -c $(lm.match * "owed_lifted \"\$1\" \"\$2\"") l198 $c $o`; dir = t))
+                    v += count(!, [!lifted(byrow, "eeeeeeee SLOWER probes"), !lifted(byrow, "eeeeeeee OVER total"),
+                                   lifted(byfile, "eeeeeeee SLOWER probes"), lifted(byfile, "eeeeeeee OVER total"),
+                                   !lifted(byfile, "eeeeeeee FAILED ratchet"), !lifted(byfile, "ffffffff SLOWER probes")])
+                end
+                if get(ENV, "GITHUB_ACTIONS", "") != "true"
+                    local mt = nothing; local cur = ""
+                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
+                        startswith(l, "worktree ") && (cur = l[10:end])
+                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                    end
+                    local logp = mt === nothing ? "" : joinpath(mt, "dev", ".loop", "landings.tsv")
+                    local bad = isfile(logp) ? l198_check(read(logp, String)) : String[]
+                    foreach(b -> println("    ✗ L198: ", b), bad)
+                    v += length(bad)
+                end
+            catch e
+                println("    ✗ L198: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
+    "L164_one_subtype_relation" => ("one subtype relation, in the builder, as dart's isSubtypeOf lives beside its types (type.dart:236 RefType.isSubtypeOf, :733 DefType.isSubtypeOf): wasm_subtype, the heap-kind resolver, the same-top predicate and the non-null map are each defined once, in src/builder/types.jl; src/codegen defines none of the lattice names and no `_non_null` exists. Its behavior, run over src/builder alone: a defined function type is a subtype of itself, of func and of its nullable form, never of another function type, of an abstract type outside func or of a struct; a struct reaches its declared supertype; a non-null exn reference is a subtype of exnref; and test/builder_cases.jl's rows a-c (funcref is no (ref null \$sig), two function types are unrelated, an undefined type index is invalid, never a guessed struct) reject at their call (dev/AUDIT.md A3B3; dev/CHARTER.md C7)",
+        () -> begin
+            local names = ["wasm_subtype", "_wt_is_ref", "_wt_ref_nullable", "_wt_drop_nullable", "_wt_heap_kind",
+                           "_wt_heap_kind_of_byte", "_wt_hierarchy_top", "_wt_same_hierarchy", "_wt_top_ref",
+                           "_wt_defined_type", "_wt_concrete_supertype_idx", "_wt_concrete_chain_reaches", "_non_null"]
+            local def_rx = Regex("^\\s*(?:@inline\\s+)?(?:function\\s+)?(" * join(names, "|") * ")\\(")
+            local v = 0
+            local homes = Dict{String,Set{String}}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                local rel = relpath(joinpath(dir, f), SRC)
+                for line in _file_lines(joinpath(dir, f))
+                    local m = match(def_rx, line)
+                    m === nothing && continue
+                    # a definition: `function name(` or a short form `name(…)::T =`
+                    (startswith(lstrip(line), "function") || occursin(r"\)\s*(::\S+)?\s*=(?!=)", line)) || continue
+                    push!(get!(homes, m[1], Set{String}()), replace(rel, '\\' => '/'))
+                end
+            end
+            for n in names
+                local h = get(homes, n, Set{String}())
+                v += n == "_non_null" ? length(h) : (h == Set(["builder/types.jl"]) ? 0 : 1)
+            end
+            # the behavior, over the builder alone
+            v += in_builder_sandbox() do W
+            local m = W.WasmModule()
+            local base = W.add_struct_type!(m, [W.FieldType(W.I32, false)])
+            local mid = W.add_type!(m, W.StructType([W.FieldType(W.I32, false), W.FieldType(W.I64, false)], UInt32(base)))
+            local f = W.add_type!(m, W.FuncType(W.WasmValType[], W.WasmValType[W.I32]))
+            local g = W.add_type!(m, W.FuncType(W.WasmValType[], W.WasmValType[W.I64]))
+            local cr(i, n=true) = W.ConcreteRef(UInt32(i), n)
+            local T = m.types
+            local holds = [W.wasm_subtype(cr(f, false), cr(f), T), W.wasm_subtype(cr(f), W.FuncRef, T),
+                           W.wasm_subtype(cr(mid), cr(base), T), W.wasm_subtype(cr(mid, false), W.StructRef, T),
+                           W.wasm_subtype(W.NonNullAbstractRef(UInt8(W.ExnRef)), W.ExnRef, T),
+                           !W.wasm_subtype(cr(f), cr(g), T), !W.wasm_subtype(cr(g), cr(f), T),
+                           !W.wasm_subtype(cr(f), W.AnyRef, T), !W.wasm_subtype(cr(f), W.StructRef, T),
+                           !W.wasm_subtype(W.FuncRef, cr(f), T), !W.wasm_subtype(cr(base), cr(f), T),
+                           !W.wasm_subtype(cr(base), cr(mid), T)]
+            count(!, holds)
+            end
+            v += builder_rows_failing(("a", "b", "c"))
+            v
+        end),
+    "L165_storage_types_are_darts" => ("dart's StorageType split (type.dart:11 StorageType, :39 ValueType, :1370 PackedType): WasmValType's union holds no UInt8 and no PackedType, so no local, parameter, result, label, global or select holds a raw byte or a packed type; PackedType (I8, I16) is a type of its own, which a field's type admits (StorageType, held by FieldType and ArrayType, read through `unpacked`, written by write_storage_type!), StorageType annotating exactly FieldType's field and constructor, ArrayType's constructor, _wt_is_ref, add_array_type! and _defaultable; no `isa UInt8` in src/builder; the packed bytes 0x78 and 0x77 are spelled in src only by PackedType's own definition (and the Opcode constants I32_ROTL and I32_ROTR), so the packed test is `isa PackedType` / `unpacked`, never `in (0x78, 0x77)`; the void block type is InstrIR's VOID_BLOCK, not the byte 0x40. Its behavior, over src/builder alone: test/builder_cases.jl's row d (no local is an i8) rejects and row g (struct.new of a packed field pops its unpacked i32) builds (dev/AUDIT.md A3B4, A12B6; dev/CHARTER.md C7 C1)",
+        () -> begin
+            local types_src = read(joinpath(SRC, "builder", "types.jl"), String)
+            local u = match(r"const WasmValType = Union\{([^}]*)\}", types_src)
+            local v = u === nothing ? 1 : (occursin("UInt8", u[1]) || occursin("PackedType", u[1]) ? 1 : 0)
+            v += occursin("const StorageType = Union{WasmValType, PackedType}", types_src) ? 0 : 1
+            # StorageType annotates exactly these definitions
+            local allowed = Dict("builder/types.jl" => 4, "builder/instructions.jl" => 1, "builder/instr_builder.jl" => 1)
+            local seen = Dict{String,Int}()
+            for (dir, _, files) in walkdir(SRC), f in files
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                for line in _file_lines(joinpath(dir, f))
+                    _iscomment(line) && continue
+                    seen[rel] = get(seen, rel, 0) + length(collect(eachmatch(r"::StorageType\b", line)))
+                end
+            end
+            filter!(p -> p.second > 0, seen)
+            v += seen == allowed ? 0 : 1
+            v += count_sites(r"\bisa\s+UInt8\b"; roots=[joinpath(SRC, "builder")])
+            v += count_sites(r"0x7[78]\b"; exclude_line=r"const I32_ROT[LR] = 0x7[78]$|^\s*I(8|16) = 0x7[78]\s+#")
+            v += count_sites(r"\b0x40\b"; roots=[joinpath(SRC, "builder")], exclude_line=r"push!\(c, 0x40\)|byte & 0x40")
+            v += builder_rows_failing(("d", "g"))
+            v
+        end),
+    "L166_operands_typed_by_the_module" => ("every instruction typed as dart types it, by the module's own types (instructions.dart: struct_get :1657, struct_set :1696, struct_new :1711, array_get :1735, array_set :1774, array_new_fixed :1802, array_fill :1875, call :947, call_indirect :960, call_ref :973, global_get :1063 each take the type or function object itself; ref_null :1570 its heap type; one _verifyCast :1927 for ref_test :1944 and ref_cast :1961; the conversions keep nullability :2028 :2040; ref_eq :1632): none of struct_get!, struct_set!, array_get!, array_set!, array_new_fixed!, array_fill!, call!, global_get!, call_ref!, call_indirect!, struct_new! and ref_null! takes a claimed type (each is defined exactly with dart's arguments); one resolver, _module_type, with one policy (an undefined index or another kind is invalid) and _true_call_sig, _true_field_type, _true_elem_type and _function_type_sig gone; ref_test! and ref_cast! both go through _verify_cast!; num! refuses a non-numeric opcode (validate_instruction! holds no constant, memory, parametric or reference arm) and ref_eq! emits ref.eq. Its behavior, over src/builder alone: every row of test/builder_cases.jl holds (each invalid program throws at its call, each valid one builds), which test/module_builder_validation.jl's testset '115a: every instruction typed as dart types it' also runs with wasm-tools; among them a function body takes no constant fragment, whose ref.func was checked as a global initializer's (row w) (dev/AUDIT.md A3B2, A3B6-A3B10, A3B14, A16B2; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local val = read(joinpath(SRC, "builder", "validator.jl"), String)
+            local expected = Dict(
+                "struct_get!" => ["struct_get!(b::InstrBuilder, type_idx::Integer, field_idx::Integer)"],
+                "struct_set!" => ["struct_set!(b::InstrBuilder, type_idx::Integer, field_idx::Integer)"],
+                "array_get!" => ["array_get!(b::InstrBuilder, type_idx::Integer; signed::Union{Nothing,Bool}=nothing)"],
+                "array_set!" => ["array_set!(b::InstrBuilder, type_idx::Integer)"],
+                "array_new_fixed!" => ["array_new_fixed!(b::InstrBuilder, type_idx::Integer, n::Integer)"],
+                "array_fill!" => ["array_fill!(b::InstrBuilder, type_idx::Integer)"],
+                "call!" => ["call!(b::InstrBuilder, func_idx::Integer)"],
+                "global_get!" => ["global_get!(b::InstrBuilder, idx::Integer)"],
+                "call_ref!" => ["call_ref!(b::InstrBuilder, type_idx::Integer)"],
+                "call_indirect!" => ["call_indirect!(b::InstrBuilder, type_idx::Integer, table_idx::Integer)"],
+                "struct_new!" => ["struct_new!(b::InstrBuilder, type_idx::Integer)"],
+                "ref_null!" => ["ref_null!(b::InstrBuilder, heaptype::Integer)", "ref_null!(b::InstrBuilder, rt::RefType)"])
+            local v = 0
+            for (name, sigs) in expected
+                local defs = String[]
+                local rx = Regex("^(?:function\\s+)?(" * replace(name, "!" => "\\!") * "\\([^)]*\\))(?:::InstrBuilder)?\\s*(?:=|\$)")
+                for (dir, _, files) in walkdir(SRC), f in files
+                    endswith(f, ".jl") || continue
+                    for line in _file_lines(joinpath(dir, f))
+                        local m = match(rx, line)
+                        m === nothing || push!(defs, m[1])
+                    end
+                end
+                v += sort(defs) == sort(sigs) ? 0 : 1
+            end
+            v += count_sites(r"\b(_true_call_sig|_true_field_type|_true_elem_type|_function_type_sig)\b")
+            v += length(collect(eachmatch(r"^function _module_type\("m, ib))) == 1 ? 0 : 1
+            v += count_sites(r"^function _module_type\(|^_module_type\(") == 1 ? 0 : 1
+            # ref_test! (each form) and ref_cast! (each form) check through _verify_cast!
+            for m in eachmatch(r"^function (ref_test!|ref_cast!)\(.*?^end"ms, ib)
+                occursin("_verify_cast!(b, ", m.match) || (v += 1)
+            end
+            length(collect(eachmatch(r"^function (ref_test!|ref_cast!)\("m, ib))) == 4 || (v += 1)
+            # num!'s validator: no arm for an instruction with an immediate, a memory access, a
+            # parametric or a reference instruction
+            local vi = match(r"function validate_instruction!\(.*?\nend\n"s, val)
+            v += vi === nothing ? 1 :
+                 length(collect(eachmatch(r"Opcode\.(I32_CONST|I64_CONST|F32_CONST|F64_CONST|DROP|SELECT|SELECT_T|REF_\w+|\w+_LOAD|\w+_STORE|MEMORY_\w+)\b", vi.match)))
+            v += occursin("ref_eq!(b::InstrBuilder)::InstrBuilder =", ib) && occursin("InstrIR.RefEq()", ib) ? 0 : 1
+            v += count_sites(r"num!\([^,]*,\s*Opcode\.REF_EQ\)")
+            v += builder_rows_failing()
+            v
+        end),
+    "L167_every_body_is_a_module_builder" => ("every body the module holds is a builder the module made, as dart's module holds only builders it made from a declared type (functions.dart:31 define, function.dart:19 FunctionBuilder, its body an InstructionsBuilder of the type's inputs and outputs; globals.dart:29 define, global.dart:13 GlobalBuilder, its initializer an InstructionsBuilder with outputs [type] and constantExpression): define_function! declares a function and function_builder gives its body; fill_function! fills it only from a function's builder (no fragment, no constant expression), complete, of the function's own parameters and results, once, reading the locals and the source mappings from the builder; add_function!(mod, b; name) is define then fill, and no add_function! takes body bytes; define_global! gives a global's initializer, a constant expression whose outputs are the global's type, which fill_global! fills; to_bytes refuses a module holding a function or a global never filled. In text: no assignment to a module's `.functions[…]`, no `push!` onto one, and no WasmFunction or WasmGlobalDef construction outside src/builder; no `add_function!` method takes a `Vector{UInt8}`; `add_global_ref!` does not exist; src/codegen builds no `UInt8[` vector holding an `Opcode.` or a raw byte; `locals_fn` and `builder_set_local_type!` do not exist (a function's builder and its fragments share one locals list, the function's). Its behavior, over src/builder alone: test/builder_cases.jl's body_cases rows f-j reject (a body with no results put in a function [] -> [i64], a function [] -> [i32] filled with a body [i64] -> [i64], an i32 initializing a (ref \$st) global, a call in an initializer, a global.get of a later global), and an unfilled function and an unfilled global each make to_bytes refuse (dev/AUDIT.md A3B16, A5B9, A3B1, A4B1, A11E6, B5; dev/CHARTER.md C7)",
+        () -> begin
+            local v = count_sites(r"\b(?:mod|m|_m|\w+_mod)\.functions\[[^\]]*\]\s*=(?!=)|push!\((?:\w+\.)*(?:mod|m|_m|\w+_mod)\.functions\b|\bWasmFunction\(|\bWasmGlobalDef\(";
+                                  roots=[CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")])
+            v += count_sites(r"function add_function!\([^)]*Vector\{UInt8\}")
+            v += count_sites(r"\badd_global_ref!"; roots=[SRC, joinpath(ROOT, "ext"), joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+            v += count_sites(r"UInt8\[[^\]]*(?:Opcode\.|0x[0-9A-Fa-f]{2})"; roots=[CODEGEN])
+            v += count_sites(r"\blocals_fn\b|\bbuilder_set_local_type!|_seed_builder_locals!")
+            v += body_rows_failing(["f", "g", "h", "i", "j"])
+            v += in_builder_sandbox() do W
+                local refused(f) = try; f(); false; catch e; e isa W.ModuleValidationError; end
+                local m = W.WasmModule(); W.define_function!(m, W.WasmValType[], W.WasmValType[]; name="f")
+                local m2 = W.WasmModule(); W.define_global!(m2, W.I32, false)
+                count(!, [refused(() -> W.to_bytes(m)), refused(() -> W.to_bytes(m2))])
+            end
+            v
+        end),
+    "L168_locals_initialized_before_use" => ("a local whose type has no default value (a non-null reference) is read only where it is set on every path, as dart's builder tracks it (instructions.dart:216-219 _localInitialized and _localInitializationStack; :375 a parameter is set; :382 addLocal sets a defaultable local; :393 local_set and local_tee set it; :1018-1030 local_get requires it, reachable or not; :701 _pushLabel records the stack's height and :566 _verifyEndOfBlock resets to it at end, else and catch_legacy): local_get! requires the local (_require_local!), local_set! and local_tee! set it (_initialize_local!), and _verify_end_of_block!, which validate_block_end!, validate_else! and validate_catch_legacy! each call, resets it (reset_local_initialization!), unconditionally. A fragment, which has not seen what its destination set, records each read of a local unset in it and each set at its outer level, and append_builder! replays the record in order through the destination's own rules: a function's builder rejects an unmet read there, a fragment destination records it in turn (dev/formal/LocalInit.tla, its four Broken instances in run_tlc.sh's list: NoResetAtEnd, MergeIgnoresRequires, MergeAppliesNestedSets, ReplayRejectsInFragment). Its behavior, over src/builder alone: test/builder_cases.jl's body_cases rows a-d reject (a read before any set, a set inside a block read after it, a set in the then arm read in the else, a fragment's unmet read appended where the local was never set) and row e builds (a fragment's outer set meets the next fragment's read) (dev/AUDIT.md A13B1 = A13B6; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local val = read(joinpath(SRC, "builder", "validator.jl"), String)
+            local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+            local v = 0
+            v += occursin("    _require_local!(b, idx)\n    _emit!(b, InstrIR.LocalGet(UInt32(idx)))", fbody(ib, "local_get!")) ? 0 : 1
+            v += occursin("    _initialize_local!(b, idx)\n    _emit!(b, InstrIR.LocalSet(UInt32(idx)))", fbody(ib, "local_set!")) ? 0 : 1
+            v += occursin("    _initialize_local!(b, idx)\n    _emit!(b, InstrIR.LocalTee(UInt32(idx)))", fbody(ib, "local_tee!")) ? 0 : 1
+            v += occursin("    # the frame's local initializations end with it, reachable or not\n    reset_local_initialization!(v, label)\n    v.reachable || return nothing",
+                          fbody(val, "_verify_end_of_block!")) ? 0 : 1
+            for f in ("validate_block_end!", "validate_else!", "validate_catch_legacy!")
+                v += occursin("_verify_end_of_block!(v, label, ", fbody(val, f)) ? 0 : 1
+            end
+            v += occursin("    for (kind, x) in src.init_log\n        kind === :init ? _initialize_local!(dst, x) : _require_local!(dst, x, src.func_name)\n    end",
+                          fbody(ib, "append_builder!")) ? 0 : 1
+            v += occursin("(b.fragment && length(b.v.labels) == 1) && push!(b.init_log, (:init, Int(idx)))", fbody(ib, "_initialize_local!")) ? 0 : 1
+            local formal = joinpath(ROOT, "dev", "formal")
+            for c in ("NoResetAtEnd", "MergeIgnoresRequires", "MergeAppliesNestedSets", "ReplayRejectsInFragment")
+                local cfg = joinpath(formal, "MCLocalInit" * c * "Broken.cfg")
+                v += isfile(cfg) && startswith(read(cfg, String), "\\* expect: ") ? 0 : 1
+            end
+            v += all(f -> isfile(joinpath(formal, f)), ("LocalInit.tla", "MCLocalInit.tla", "MCLocalInit.cfg", "MCLocalInitNested.tla", "MCLocalInitNested.cfg")) ? 0 : 1
+            v += occursin("cfgs=(MC*.cfg)", read(joinpath(formal, "run_tlc.sh"), String)) ? 0 : 1
+            v + body_rows_failing(["a", "b", "c", "d", "e"])
+        end),
+    "L170_one_callee_per_method_instance" => ("an :invoke's callee is the function the plan compiles its MethodInstance to, as dart's static invocation calls its target's one function (code_generator.dart:1668, functions.dart:90): compile_invoke! names get_function_by_mi and nothing else, invoke.jl has no get_function( lookup by the callee's object and argument types, no _invoke_registered_signatures, no `<: ctx.arg_types` self rule and no self-call arm (a call of this function is the one call arm's, as dart's static invocation has no recursion case), and a MethodInstance with no function rejects at its statement; every per-function fact the plan holds is keyed by MethodInstance (ClosedWorldPlan's ir_cache, candidate_mis and bespoke), the IR read only through plan_ir / plan_ir_or_nothing (no other `.ir_cache` read in src), and the bespoke decision made once, in trim_compile_plan, from STANDALONE_INTRINSIC_BODIES (no other reader). Behavior: smoke one_consult's invoke_names_its_method (two methods share Int64; `invoke` names the less specific one: native 103004) fails under a signature-first lookup, and test/ir_one_inference_path.jl checks the plan's keys and that a closure body both invoked and called through an `Any` slot is a candidate by its MethodInstance. Until 2026-10-11 the signature lookup ran first and the MethodInstance answered only when it missed (dev/CHARTER.md C1)",
+        () -> begin
+            local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            local n = 0
+            n += occursin("local target = get_function_by_mi(ctx.func_registry, mi)", inv) ? 0 : 1
+            n += occursin("# one call arm, self-recursion included", inv) ? 0 : 1
+            n += occursin("ctx.func_idx", inv) ? 1 : 0   # no self-call arm: a self call is the call
+            n += count(p -> occursin(p, inv), ["get_function(", "_invoke_registered_signatures", "<: ctx.arg_types"])
+            n += count(p -> !occursin(p, trim), ["    ir_cache::IdDict{Core.MethodInstance,Tuple{Core.CodeInfo,Type}}\n",
+                                                 "    candidate_mis::Set{Core.MethodInstance}\n",
+                                                 "    bespoke::IdDict{Core.MethodInstance,Function}\n"])
+            # the IR read only by plan_ir_or_nothing (plan_ir reads through it)
+            n += abs(count_sites(r"\.ir_cache\b"; roots=[SRC]) - 1)
+            n += occursin("    local hit = get(plan.ir_cache, mi, nothing)\n    return hit === nothing ? nothing : (hit[1], hit[2])", trim) ? 0 : 1
+            # the bespoke table read once, by the planner
+            n += abs(count_sites(r"get\(STANDALONE_INTRINSIC_BODIES\b"; roots=[SRC]) - 1)
+            n += occursin("local gen = mi.def isa Method ? get(STANDALONE_INTRINSIC_BODIES, mi.def, nothing) : nothing", trim) ? 0 : 1
+            n += count_sites(r"STANDALONE_INTRINSIC_BODIES\[|haskey\(STANDALONE_INTRINSIC_BODIES"; roots=[SRC])
+            # the behavior pins
+            n += occursin("(\"invoke_names_its_method\", (n::Int64) -> invoke(_sm_oc, Tuple{Integer}, n) * 1000 + _sm_oc(n), Int64(3))", smoke) ? 0 : 1
+            n += occursin("@test keytype(plan.ir_cache) === Core.MethodInstance", oip) ? 0 : 1
+            n += occursin("@test only(bodies) in plan.candidate_mis", oip) ? 0 : 1
+            n
+        end),
+    "L171_one_method_consult" => ("one consult answers which methods Julia selects: Julia's matching in the WasmInterpreter's overlay table at its world (trimcollect.jl wt_method_matches = CC.findall, wt_method_which = CC.findsup, wt_methods_ambiguous), as dart consults one class hierarchy (translator.dart:108). No hasmethod(, which( (Sys.which aside), _which(, _methods_by_ftype( or isambiguous( outside that block, qualified or not (its ambiguity check is Julia's isambiguous algorithm, base/reflection.jl, run over the consult's matches with the ambiguous ones kept, merged across the overlay table as CC.findall merges it; it calls no Base.isambiguous and never raises), CC.findall( and CC.findsup( (or Core.Compiler.'s) only there, and get_world_counter() only at the interpreter's world (interpreter.jl) and the TypeName world-bound projection (types.jl `host_world`). A statement's codegen asks no table: calls.jl, dispatch.jl, selector_table.jl and invoke.jl name no consult; the vtable pre-pass's ambiguity search, which decides a rejection before any body compiles, asks the one consult (compile.jl wt_methods_ambiguous, closures.jl ambiguous_class_tuple's wt_method_which, its one consult in that file). No flat method_error_args exists; a dynamic call's and a closure entry's MethodError index the plan's per-callee record (no_method), which holds an entry, empty or not, for every callee whose dynamic call the collector enrolled and every planned callable with a vtable, so a missing one raises, and no `get(…no_method…)` default reads it; test/dispatch_method_error.jl reads the module: each no-row block builds one MethodError per tuple of its own callee's record (a flat read adds the other callee's arms, which no answer shows, the rows coming first). Exactly one emitter builds a MethodError (emit_method_error!). Until 2026-10-11 enrollment asked Base's table at the latest world while the plan read the overlay table, and codegen re-asked hasmethod and _methods_by_ftype per switch over one flat set of every callee's tuples (dev/CHARTER.md C1). One site asks the native table another question, exactly: which `show` or `print` Julia's own printer runs, on its IOContext{IOBuffer}, for the function slot, a type or a type parameter of a planned function's signature (_printer_method, trimcollect.jl, asked by _user_shown_in_signature), the printing running natively, so that no name is printed by code outside Base and Core (2026-10-20; the IOContext and `print` questions 2026-10-21, dev/AUDIT.md A19C3)",
+        () -> begin
+            local n = 0
+            local consult_fns = Set(["wt_method_matches", "wt_method_which", "wt_dispatch_mi", "wt_methods_ambiguous", "_wt_matches_with_ambiguous"])
+            local banned = r"(?<!\w)hasmethod\(|(?<![\w]|Sys\.)which\(|(?<!\w)_which\(|_methods_by_ftype\(|isambiguous\(|(?:CC|Core\.Compiler|Compiler)\.find(?:all|sup)\("
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                local enclosing = ""
+                for line in _file_lines(joinpath(dir, f))
+                    local d = match(r"^(?:function\s+|)([A-Za-z_][A-Za-z0-9_!]*)\(.*\)(?:::[^=]+)?\s*=|^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = something(d.captures[1], d.captures[2]))
+                    _iscomment(line) && continue
+                    if occursin(banned, line)
+                        (rel == "codegen/trimcollect.jl" && enclosing in consult_fns) ||
+                            # exactly one site asks a question of the native table that is not dispatch of
+                            # compiled code: which `show` or `print` Julia's own printer runs for a value of a
+                            # planned function's signature, the printer running natively (_printer_method)
+                            (rel == "codegen/trimcollect.jl" && enclosing == "_printer_method" &&
+                             occursin("_printer_method(f::Function, @nospecialize(x))::Method = which(f, Tuple{IOContext{IOBuffer},Core.Typeof(x)})", line)) ||
+                            (n += 1)
+                    end
+                    if occursin("get_world_counter()", line)
+                        (rel == "codegen/interpreter.jl" ||
+                         (rel == "codegen/types.jl" && occursin("host_world = Base.get_world_counter()", line))) || (n += 1)
+                    end
+                end
+            end
+            # who asks the consult, in src/codegen and src/frontend: the collector and planner
+            # (trimcollect.jl) and the vtable pre-pass's ambiguity search (compile.jl's
+            # _compile_closed_world_plan, closures.jl's ambiguous_class_tuple); a statement's
+            # codegen asks none; every other site counts
+            local consult_rx = r"\b(wt_method_matches|wt_method_which|wt_dispatch_mi|wt_methods_ambiguous|_wt_matches_with_ambiguous|entry_method_instance)\("
+            local allowed_callers = Set([("codegen/compile.jl", "_compile_closed_world_plan"),
+                                         ("codegen/closures.jl", "ambiguous_class_tuple")])
+            for root in (CODEGEN, joinpath(SRC, "frontend")), (dir, _, fs) in walkdir(root), f in fs
+                endswith(f, ".jl") || continue
+                local rel = replace(relpath(joinpath(dir, f), SRC), '\\' => '/')
+                rel == "codegen/trimcollect.jl" && continue
+                local enclosing = ""
+                for line in _file_lines(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    (_iscomment(line) || d !== nothing) && continue
+                    occursin(consult_rx, line) && !((rel, enclosing) in allowed_callers) && (n += 1)
+                end
+            end
+            n += count_sites(r"\bmethod_error_args\b|\berror_args_types\b"; roots=[SRC])
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            # each reads its callee's record, which the plan holds for every callee it can reach (a
+            # missing one raises), never a default
+            n += occursin("local tuples = DataType[T for T in ctx.translator.plan.no_method[Core.Typeof(f)]", calls) ? 0 : 1
+            n += occursin("no_method=plan.no_method[_T])", read(joinpath(CODEGEN, "compile.jl"), String)) ? 0 : 1
+            n += count_sites(r"get\([^)]*no_method"; roots=[SRC])
+            # the behavior pin: a callable's MethodError arms are its own record's, read from the module
+            # (an answer cannot tell a flat record apart: the rows come first)
+            n += occursin("@test count(l -> strip(l) == \"struct.new \$me\", split(body, '\\n')) == length(rf) + length(rg)",
+                          read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String)) ? 0 : 1
+            # one MethodError builder
+            n += abs(count_sites(r"emit_struct_prefix!\([^,]+,\s*[^,]+,\s*MethodError\b"; roots=[SRC]) - 1)
+            n += abs(count_sites(r"^function emit_method_error!\("; roots=[SRC]) - 1)
+            n
+        end),
+    "L169_held_by_handle" => ("the module objects codegen defines once it holds by handle, never finds again, as dart's code generator keeps each GlobalBuilder, FunctionBuilder and Tag it defines as an object (translator.dart:96 Translator): the exception tag and the stack entry type its payload carries, `\$exc_top`, `\$host_imports_open`, `\$import_tops`, its array type and the import_tops save helper are the TypeRegistry's ModuleHandles (codegen's own state; the builder holds none), each defined at its first use or, for what a host framework's setup made before the compile (ensure_provenance_imports!, ensure_host_imports_open!), recovered once at the compile's entry by recover_module_handles!, a quarantined host-framework boundary (dev/MARCH.md 13.16). In text: no `global_named` anywhere in src or test; no find of a function or a global by its `.name ==` (the entry's refusal of a module already holding a global named `\$exc_top` or `\$import_tops`, in check_existing_module, aside), and no `exc_cell_type!` (the entry type found by its content through add_type!'s deduplication) in src/codegen; the entry type's StructType is written once, where ensure_exception_tag! defines the tag; no throw_! or catch_legacy! in codegen names a tag by a literal index; exc_tag and exc_cell_type read the handles; recover_module_handles! is called once, at compile_module's entry, and _imported_global (the boundary's find of an imported global by its import name) only by recover_module_handles!, ensure_host_imports_open!, _refuse_late_host_imports_open (the entry's and the setup's one refusal of a host-declared import without its count) and _refuse_imported_global. Its behavior: the name section names every named global (subsection 7, dart's NameSection, serialize/sections.dart:844), and test/probe_bytes.jl requires every global the probe's module object names (compile_module, then each global's `name`, never names read back from the section it checks) printed by wasm-tools as `(global \$<name>`, required here as written (dev/AUDIT.md A3B15 = A2B6, A4B4, A2E7; dev/CHARTER.md C7)",
+        () -> begin
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local v = count_sites(r"\bglobal_named\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "ext")], exclude_files=["parity_ratchet.jl"])
+            v += count_sites(r"\bexc_cell_type!"; roots=[CODEGEN])
+            # a find of a function or a global by its name, outside the one boundary that refuses a
+            # module already holding the compile's own global names (check_existing_module, at the entry)
+            for (dir, _, fs) in walkdir(CODEGEN), f in fs
+                endswith(f, ".jl") || continue
+                local enclosing = ""
+                for line in _file_lines(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    _iscomment(line) && continue
+                    occursin(r"\.name\s*==(?!=)[^\n]*\b(?:functions|globals)\b", line) &&
+                        enclosing != "check_existing_module" && (v += 1)
+                end
+            end
+            v += abs(count_sites(r"StructType\(\[FieldType\(AnyRef, true\), FieldType\(ExternRef, false\)\]\)"; roots=[CODEGEN]) - 1)
+            v += count_sites(r"\b(?:throw_|catch_legacy)!\([^,()]+,\s*\d+\s*\)"; roots=[CODEGEN])
+            v += occursin("exc_tag(registry::TypeRegistry)::UInt32 = something(registry.handles.exc_tag)", gen) &&
+                 occursin("exc_cell_type(registry::TypeRegistry)::UInt32 = something(registry.handles.exc_cell)", gen) ? 0 : 1
+            v += abs(count_sites(r"\brecover_module_handles!\(type_registry, mod\)"; roots=[CODEGEN]) - 1)
+            local finders = String[]
+            for (dir, _, fs) in walkdir(SRC), f in fs
+                endswith(f, ".jl") || continue
+                local enclosing = ""
+                for line in _file_lines(joinpath(dir, f))
+                    local d = match(r"^function\s+([^\s(]+)\(", line)
+                    d === nothing || (enclosing = d.captures[1])
+                    (_iscomment(line) || d !== nothing) && continue
+                    occursin(r"(?<![\w])_imported_global\(", line) && push!(finders, enclosing)
+                end
+            end
+            v += sort(unique(finders)) == ["_refuse_imported_global", "_refuse_late_host_imports_open", "ensure_host_imports_open!", "recover_module_handles!"] ? 0 : 1
+            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
+            for req in ("    count(g -> g.name !== nothing && !occursin(\"(global \\\$\" * g.name * \" \", printed), m.globals)",
+                        "        m = WasmTarget.compile_module([(f, argtypes, name)]; options=WasmTarget.options_from_env())\n        bytes = WasmTarget.to_bytes(m)",
+                        "        _unnamed_globals(m, printed) == 0 || push!(unnamed, name)",
+                        "    if !isempty(unnamed)")
+                occursin(req, probe) || (v += 1)
+            end
+            v
+        end),
+    "L172_dead_code_is_not_recorded" => ("an instruction added while the code is unreachable is not recorded, as dart's `_add` returns when `!_reachable` (instructions.dart:363-368), so the builder holds no dead code, which it does not type, and wasm-tools never meets an instruction the builder did not check: `_emit!` returns (through _check!, so a validation error still throws) before it records anything while `b.v.reachable` is false; unreachable!, _br_depth!, return_! and throw_! record their instruction before they make the code unreachable (dart's unreachable :676, br :863, return_ :933 and throw_ :820 call `_add` first), and end_block!, else_! and catch_legacy! record theirs after their validator restores the frame's entry reachability (end :842, else_ :767, catch_legacy :799), so a frame entered in dead code is dropped whole; append_builder! records no instruction of a fragment appended where its function's code is unreachable; nothing in src/builder sets `.reachable = false` before an `_emit!` on one line. dev/formal/OperandStack.tla's Sound (the program the builder records for one it accepts is valid) has its Broken instance MCOperandStackDeadCodeBroken (every instruction recorded). Its behavior, over src/builder alone: every row of test/builder_cases.jl's dead_cases holds (each program's builder holds exactly the instructions it wants: `unreachable; f64.const 0; i32.eqz; drop` holds `unreachable` alone), which test/module_builder_validation.jl's testset 'dead code is not recorded' also runs with wasm-tools (dev/AUDIT.md A15B1; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local fbody(name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), ib); m === nothing ? "" : m.match)
+            local v = 0
+            local em = match(r"(?s)\n@inline function _emit!\(.*?\nend\n", ib)
+            v += em !== nothing && occursin("    b.v.reachable || return _check!(b)\n    push!(b.instrs, instr)", em.match) ? 0 : 1
+            v += occursin("unreachable!(b::InstrBuilder)::InstrBuilder = (_emit!(b, InstrIR.Unreachable()); b.v.reachable = false; b)", ib) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Br(UInt32(depth)))\n    b.v.reachable = false", fbody("_br_depth!")) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Return())\n    b.v.reachable = false", fbody("return_!")) ? 0 : 1
+            v += occursin("    _emit!(b, InstrIR.Throw(UInt32(tag)))\n    b.v.reachable = false", fbody("throw_!")) ? 0 : 1
+            local ab = fbody("append_builder!")
+            local k1, k2 = findfirst("    lands || return _check!(dst)", ab), findfirst("push!(dst.instrs, ins)", ab)
+            v += (k1 !== nothing && k2 !== nothing && first(k1) < first(k2) && occursin("    local lands = dst.v.reachable\n", ab)) ? 0 : 1
+            v += count_sites(r"\.reachable\s*=\s*false\s*;\s*_emit!"; roots=[joinpath(SRC, "builder")])
+            v += occursin("function validate_br!(", read(joinpath(SRC, "builder", "validator.jl"), String)) ? 1 : 0
+            local formal = joinpath(ROOT, "dev", "formal")
+            local cfg = joinpath(formal, "MCOperandStackDeadCodeBroken.cfg")
+            v += isfile(cfg) && startswith(read(cfg, String), "\\* expect: Sound\n") ? 0 : 1
+            v += occursin("Sound == done \\in BOOLEAN /\\ (WtAccepts(prog) => SpecAccepts(Emitted(prog)))", read(joinpath(formal, "OperandStack.tla"), String)) ? 0 : 1
+            v + dead_rows_failing()
+        end),
+    "L173_one_local_declaration" => ("a local is declared through one path, as dart declares one only through addLocal (instructions.dart:382): declare_local! (src/builder/instr_builder.jl) checks its type against the module and appends it to the function's one locals list, returning its index; builder_add_local! and allocate_local!(ctx, ::WasmValType) are each that call, allocate_local!(ctx, ::Type) translates its type and calls the other, and src/builder pushes onto a locals list nowhere else; no codegen site pushes one itself (R41), and none computes a local's index beside it: a trampoline's or a dispatch wrapper's scratch is read by the index its declaration returned, an absent one `nothing` in a `Union{Nothing,UInt32}` its callee requires, never a `-1` sentinel, a keyword default, `1 + arity`, `dt.arity` or a default 0, a parameter (dev/AUDIT.md A16B4, A17B1), and the box producer refuses a scratch that is a parameter or a local of another type than the boxed value's. Its behavior: test/builder_cases.jl's row c (a local of a type index the module does not define) rejects at its declaration, over src/builder alone, and test/dispatch_method_error.jl's 'a box's scratch is the local declared for it (L173)' (the box takes its declared local and refuses a parameter and a local of another type) (dev/AUDIT.md A15B2; dev/CHARTER.md C7)",
+        () -> begin
+            local ib = read(joinpath(SRC, "builder", "instr_builder.jl"), String)
+            local cx = read(joinpath(CODEGEN, "context.jl"), String)
+            local v = abs(count_sites(r"push!\(\s*[\w.]*locals\s*,"; roots=[joinpath(SRC, "builder")]) - 1)
+            v += occursin("    typ isa ConcreteRef && _module_type(mod, typ.type_idx, :add_local)   # a type the module defines\n    push!(locals, typ)\n    return Int(nparams) + length(locals) - 1", ib) ? 0 : 1
+            v += occursin("builder_add_local!(b::InstrBuilder, typ::WasmValType)::Int = declare_local!(b.v.mod, b.locals, length(b.params), typ)", ib) ? 0 : 1
+            v += occursin("allocate_local!(ctx::AbstractCompilationContext, wasm_type::WasmValType)::Int =\n    declare_local!(ctx.mod, ctx.locals, ctx.n_params, wasm_type)", cx) ? 0 : 1
+            v += occursin("allocate_local!(ctx::AbstractCompilationContext, T::Type)::Int =\n    allocate_local!(ctx, get_concrete_wasm_type(T, ctx.mod, ctx.type_registry; for_local=true))", cx) ? 0 : 1
+            # a local's index computed beside the declaration path (A16B4), or an absent one spelled
+            # as a sentinel or a keyword default (A17B1)
+            v += count_sites(r"UInt32\(1 \+ arity\)|UInt32\(Int\(dt\.arity\)\)|entry\.return_type, dt\.arity\)|get\(scratch_of, [^)]*, UInt32\(0\)\)|scratch[^\n]*:\s*-1\b|tmp[^\n]*\(-1, -1\)|scratch::[\w{},]+\s*=\s*-?\d"; roots=[CODEGEN])
+            # the box producer refuses a scratch that is no local declared with the boxed value's type
+            local vals = read(joinpath(CODEGEN, "values.jl"), String)
+            v += occursin("(scratch >= length(b.params) && _local_type(b, scratch, \"the box's scratch\") === wasm_type) ||", vals) ? 0 : 1
+            local dme = read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String)
+            v += occursin("a box's scratch is the local declared for it (L173)", dme) ? 0 : 1
+            v + builder_rows_failing(["c"])
+        end),
+    "L174_one_value_type_reader" => ("an operand's Julia type has one reader, value_type (context.jl), Julia's argextype widened (Compiler optimize.jl:423 on 1.12.7, :502 on 1.13.1): an SSA value's statement type (ctx.ssa_types, the boundary's type plus the plan's joins), a slot's type, a literal's Core.Typeof, a global's type the boundary read; collection and codegen both read it, as dart's dartTypeOf answers every node (code_generator.dart:129). Exactly its two methods (the rule over (slot types, SSA types) and the context's form) are defined; no other reader exists in src (get_ssa_type, infer_value_type, _value_julia_type, _call_site_arg_type, _collector_static_type, source_slot_type, the box analyses' _f3_ssa_type and _f3_literal_type), and no site reads `ssa_types` keyed by an operand node's `.id` or indexes a slot table outside value_type and the NIR boundary (a statement's own type, keyed by its statement index, is no operand read; a physical `ctx.arg_types` entry is the wasm signature's parameter, not an operand's Julia type); the joins codegen applies are the plan's (numeric_local_joins reads plan_joins), and the box analyses (propagate_numeric_value_types, capture_read_types, record_capture_contents, f3_box_value_types, box_contents_type) run nowhere outside box_capture.jl and trimcollect.jl's collector. Its behavior: test/ir_one_inference_path.jl compares value_type with Compiler's argextype for every call operand of every planned body of a program (dev/AUDIT.md A3C1, A3C4; dev/CHARTER.md C1)",
+        () -> begin
+            local cx = read(joinpath(CODEGEN, "context.jl"), String)
+            local v = abs(count_sites(r"^function value_type\(|^value_type\(ctx::AbstractCompilationContext"; roots=[SRC]) - 2)
+            v += occursin("function value_type(node::NirNode, slot_types::Union{Nothing,AbstractVector}, ssa_types)::Type", cx) ? 0 : 1
+            v += occursin("value_type(ctx::AbstractCompilationContext, node::NirNode)::Type =\n    value_type(node, ctx.slot_types, ctx.ssa_types)", cx) ? 0 : 1
+            v += count_sites(r"\b(get_ssa_type|infer_value_type|_value_julia_type|_call_site_arg_type|_collector_static_type|source_slot_type|_f3_ssa_type|_f3_literal_type)\b"; roots=[SRC])
+            # an operand's type read past the reader: ssa_types keyed by an operand node's id (a
+            # statement's own type, keyed by its index, is no operand read) or a slot table indexed,
+            # outside value_type's own lines and the boundary (frontend/nir.jl)
+            v += count_sites(r"ssa_types(\[|,\s*)[A-Za-z_][\w.]*(\[\d+\])?\.id\b|(?<!dt\.)\bslot_types\[";
+                             roots=[SRC], exclude_files=["frontend/nir.jl"],
+                             exclude_line=r"return ssa_types === nothing \? node\.julia_type|^\s*return slot_types\[n\]$")
+            v += occursin("numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type} =\n    ctx.mi === nothing ? Dict{Int,Type}() : plan_joins(ctx.translator.plan, ctx.mi)", cx) ? 0 : 1
+            v += count_sites(r"(?<![\w.])(propagate_numeric_value_types|capture_read_types|record_capture_contents|f3_box_value_types|box_contents_type)\(";
+                             roots=[SRC], exclude_files=["codegen/box_capture.jl", "codegen/trimcollect.jl"],
+                             exclude_line=r"^\s*#|^\s{4}\w+\(.*\) ->")
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            v += occursin("@testset \"value_type is Julia's argextype\"", oip) ? 0 : 1
+            v
+        end),
+    "L175_globalref_resolved_once" => ("a global's binding is resolved once, at the NIR boundary (resolve_operand, frontend/nir.jl), as dart's StaticGet carries its resolved target (expressions.dart:1363, read by visitStaticGet, code_generator.dart:2183): NirGlobalRef carries `bound`, `value`, `constant` (isconst) and `julia_type` (abstract_eval_globalref_type's answer), resolve_call_callee and _resolve_type_operand read that one resolution, and no `isdefined(`, `isconst(`, `getglobal(`, `getfield(`, `eval(` (Core.eval), `get_binding_type(` or `isdefinedglobal(` over a `.mod, .name` pair appears outside frontend/nir.jl (isa's type operand reads the boundary's `value`, a global that is no constant rejecting at its statement). (The getglobal builtin's constant fold, builtins.jl, asks of a constant module and a literal name, the intrinsic's own operands, not of a NirGlobalRef.) Its behavior: value_type's argextype comparison covers every global operand (L174's test) (dev/AUDIT.md 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local nir = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local v = count_sites(r"\b(isdefined|isconst|getglobal|getfield|eval|get_binding_type|isdefinedglobal)\(\s*[\w.\[\]]+\.mod\s*,\s*[\w.\[\]]+\.name\b";
+                                  roots=[SRC], exclude_files=["frontend/nir.jl"])
+            v += occursin("    bound::Bool\n    constant::Bool\n    julia_type::Type\nend", nir) ? 0 : 1
+            v += count(r"resolve_operand\(x, (types|Type\[\])\)::NirGlobalRef", nir) == 1 ? 0 : 1   # _resolve_type_operand's
+            v += occursin("resolve_call_callee(x, types)::Any = nir_callee(resolve_operand(x, types))", nir) ? 0 : 1
+            v += count(r"isdefined\(x\.mod, x\.name\)", nir) == 1 ? 0 : 1
+            v
+        end),
+    "L176_one_class_set" => ("the classes a value of the closed world may have are one set, computed by one function, closed_world_classes (trimcollect.jl), once per round of the collection's fixpoint over the world collected so far, the last round's carried by the ClosedWorld and the plan (`classes`), as dart's ClassInfoCollector numbers one class list whose allocated classes every selector's targets range over (class_info.dart:666, dispatch_table.dart:501): the enrollment (runtime_types and the candidates, class_candidates), the union-split MethodError tuples (_collect_reachable_ir_types over closed_world_class_list), the vtable pre-pass's ambiguity search (ambiguous_class_tuple over class_candidates, never the numbered classes) read it, and the numbering numbers every class of it (_collect_reachable_ir_types reg!s each); a constant's contents are walked once, by hold!, the class of every value reached observed whatever it is, its one bound a loud rejection past 10^6 own objects, and no second contents walk exists (contents!, whose silent stop at 4096 objects was A13C10, is gone); one statement rule observes the class of every statement whose inferred type is concrete (whatever makes it: a builtin, an intrinsic, a foreign call, an invoke of a declared import), one statement_operands rule says a static callee is no evidence of a class (A4C4) while a call's `self`, the constant callable its callee receives, is a value it passes on, read through the one operand table, nir_expr_operands, by the class set, the callable observation and the numbering walk alike (A17C2, A18C4: test/lazy_classid_isa.jl's 'the numbering walk reads a call's operands through the one table, its self included' fails with the walk reading `node.operands`, which omit `self`), and every value a statement carries is observed by the numbering's own rule of what a statement carries, _collected_operand_value (a literal, its value unresolved, a quoted GlobalRef the GlobalRef object, as Julia's jl_quotenode_value; a bound global's value, constant or not; a statement that is a value), everything it holds walked by hold!, and a vararg method's packed tuple, a value no statement makes, is observed from the body's slot (dev/formal/Enrollment.tla SlotsObserved). Its behavior: smoke's closure_ambiguity_numbered_unreached_class (a class a field's type numbers and no value has: asked about over the numbered classes it rejected a program Julia runs, native 3) and closure_union_nothing_erased (the constant `nothing` a statement passes, a value the candidate set missed: a trap where native answers 1) (dev/AUDIT.md A7C4, A3S3, A11C7; dev/formal/Enrollment.tla AskNumbered; dev/CHARTER.md C1)",
+        () -> begin
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local clo = read(joinpath(CODEGEN, "closures.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = 0
+            # one function computes the set, called once (the fixpoint's round)
+            v += abs(count_sites(r"\bclosed_world_classes\("; roots=[SRC], exclude_line=r"^function closed_world_classes\(|^\s*closed_world_classes\(codeinfos, entry_mis, nir_for\) ->") - 1)
+            v += count("runtime_types = Set{DataType}()", trim) == 1 ? 0 : 1
+            # its readers
+            for (src, needle) in ((trim, "local runtime_types = classes.runtime"),
+                                  (trim, "local observed_classes = class_candidates(classes)"),
+                                  (trim, "for (p, S, rt) in error_args, C in closed_world_class_list(classes)"),
+                                  (trim, "    for C in closed_world_class_list(classes)\n        C in LOWERING_INSTANTIATED_CLASSES || reg!(C)\n    end"),
+                                  (trim, "            local made = CC.widenconst(s0.julia_type)\n            (made isa DataType && isconcretetype(made)) && observe_type!(made)\n"),
+                                  (trim, "    holds_exceptions && foreach(observe_type!, LOWERING_INSTANTIATED_CLASSES)\n"),
+                                  (comp, "    for _exn_T in LOWERING_INSTANTIATED_CLASSES\n"),
+                                  (comp, "_reachable = _collect_reachable_ir_types(function_data, plan.bespoke, plan.classes)"),
+                                  (comp, "local _amb = ambiguous_class_tuple(plan.interp, _T, _ov, plan.classes)"),
+                                  (clo, "local candidates = class_candidates(classes)"),
+                                  (trim, "        local has, v = _collected_operand_value(node)\n        (has && !(v isa Expr)) || return\n        hold!(v)"),
+                                  (trim, "(node0 isa NirLiteral || node0 isa NirGlobalRef) && observe_runtime_operand!(node0)"),
+                                  # a literal is its value, unresolved (A16C5); a packed vararg tuple observed from its slot (A16C2)
+                                  (trim, "    operand isa NirLiteral && return (true, operand.value)\n"),
+                                  (trim, "        if mi_j.def isa Method && mi_j.def.isva\n"),
+                                  # a call's values, its `self` included, through the one operand table (A17C2)
+                                  (trim, "        (node isa NirCall || node isa NirInvoke) && return nir_expr_operands(node)\n"),
+                                  (trim, "for a in (node isa NirNew ? node.operands : nir_expr_operands(node))"),
+                                  # the numbering walk reads the same table, `self` included (A18C4)
+                                  (trim, "            foreach(value!, nir_expr_operands(node))\n            (node isa NirLiteral || node isa NirGlobalRef) && value!(node)\n"),
+                                  (read(joinpath(ROOT, "test", "lazy_classid_isa.jl"), String),
+                                   "@testset \"the numbering walk reads a call's operands through the one table, its self included\" begin"),
+                                  (smoke, "(\"closure_ambiguity_numbered_unreached_class\""),
+                                  (smoke, "(\"closure_union_nothing_erased\""),
+                                  (read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String),
+                                   "@testset \"a constant's contents are classes of the one set\" begin"),
+                                  (read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String),
+                                   "@testset \"the classes lowering instantiates are in the one class set\" begin"),
+                                  (smoke, "(\"caught_methoderror_union_split\""),
+                                  (read(joinpath(ROOT, "test", "host_imports.jl"), String),
+                                   "@testset \"an import's result is a class of the one class set\" begin"),
+                                  (trim, "            observe_type!(typeof(v))\n            (isbits(v) || v isa Module) && continue"))
+                v += occursin(needle, src) ? 0 : 1
+            end
+            # no reader iterates another class source: not the numbered classes, not the numbering's own set
+            v += occursin("registry.type_ids", clo) ? 1 : 0
+            v += occursin("local classes = collect(out)", trim) ? 1 : 0
+            # one walk of what a constant holds (hold!): no second contents walk for the numbering
+            v += count_sites(r"\bcontents!\("; roots=[SRC])
+            v += occursin("held::Set{DataType},", trim * clo * comp) ? 1 : 0   # a reader handed another set
+            v += occursin("held::Set{DataType})", trim * clo * comp) ? 1 : 0
+            v
+        end),
+    "L177_one_match_rule" => ("one definition decides whether a match of Julia's is one signature, the MethodInstance a call at its types runs, _match_is_one_signature (trimcollect.jl): its intersection is one DataType and every static parameter it leaves a TypeVar is mentioned only where the argument is one value's dispatch type (a concrete class that is not a kind, or a Type{X}): a TypeVar left there Julia leaves at run time too (`h(x::Union{T,Nothing}) where T` at Nothing), one left at an abstract argument or a kind it fixes per value. The static signature's match, each candidate tuple's and each per-class candidate's (the dynamic call of a function) call it, and no other test of a match's spec_types or sparams exists in src. Its behavior: smoke's closure_type_parameter_at_kind (a match at the kind DataType facing Type{S} built a body whose static parameter rejected, native 8) and closure_union_nothing_erased (dev/AUDIT.md A9C6; dev/formal/Enrollment.tla NoTypeVarCheck; dev/CHARTER.md C1)",
+        () -> begin
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = abs(count_sites(r"spec_types isa"; roots=[SRC]) - 1)
+            v += abs(count_sites(r"sparams[^\n]*isa TypeVar|isa TypeVar[^\n]*sparams"; roots=[SRC]) - 1)
+            v += count("function _match_is_one_signature(m::Core.MethodMatch)::Bool", trim) == 1 ? 0 : 1
+            v += occursin("if _match_is_one_signature(mm)", trim) ? 0 : 1
+            v += occursin("(cm.method === mm.method && _match_is_one_signature(cm)) || continue", trim) ? 0 : 1
+            v += count("(ssig <: m.sig && _match_is_one_signature(selected)) || continue", trim) == 2 ? 0 : 1
+            v += occursin("(\"closure_type_parameter_at_kind\"", smoke) ? 0 : 1
+            v
+        end),
+    "L178_one_conversion" => ("a value meets a sink through one conversion, convert_type! (dart's convertType, translator.dart:1597), typed by the source value's own static type, never the sink's: the runtime-length tuple's widening check is the funnel's alone (no statement check beside it, no _erased_vararg_tuple_operand), and it and a closure context's erasure read the value's class through one rule, source_class (a concrete source type; an abstract one, as a sink's type a caller gave, names none and rejects); the heterogeneous tuple read converts each field through the funnel (no box, extern bridge or null of its own; a function's singleton, a classed object already, is held as it is, as before, A7S1's open representation), as does memoryrefset!'s element (no ladder of numeric boxes, closure wraps and extern bridges); no hand box: every numeric box is built or read by emit_classid_box!/emit_classid_unbox! (get_numeric_box_type! named only in values.jl's two, types.jl and compile.jl's pre-registration), and the numeric-to-anyref/externref helpers are gone; no caller passes a Memory's element type or a field's type as from_julia (a sink's type, never the value's own) but memoryrefget's read of an element held in a numeric register, whose own type the element type is (memoryrefget_tfunc's answer: a primitive, the class of every value its slot holds; one exact line, its value boxed into a statement typed wider, smoke memoryref_barrier), nor a field's declared type but the read of a field by a run-time name, the read's own type (getfield_tfunc's answer; one exact line in calls.jl), and no from_julia defaults: convert_type! and coerce_stack_top! take it required (a value with no Julia type of its own states `nothing`) and no caller reads it with a default (`from_julia=get(…)`: a statement's type is read from ctx.ssa_types, which raises on a missing entry, dev/AUDIT.md A18P2), emit_value! reads the node's own static type (value_type) and emit_value_as! the narrower class its caller states; `nothing` meeting any nullable reference of the any hierarchy (a nullable single representation, anyref, eqref, structref) is its null in the funnel, never boxed, a nothing held in a reference is never unboxed or cast (its placeholder, boxed for a non-null reference, NothingNeverCast; a closure entry's Nothing argument the same), and isa(x, Nothing) of a value of any class reads the one nothing test `===` reads (_emit_is_nothing!). Behavior: test/diagnostic_attribution.jl's 'the one widening check rejects a source type that names no class' testset (the representation into anyref with from_julia Any, a union, its own type or none: each a located rejection) and its 'nothing at every nullable reference of the any hierarchy is its null' testset (which fails with the funnel's nothing arm limited to a nullable concrete sink, as it was), smoke heterogeneous_tuple_read's nothing_isa (a nothing boxed at anyref and read by ref.is_null: native 1, wasm 2 at baae2757), and smoke runtime_length_tuple_class's into_any_field and erased_isa_ntuple reject loud (the second, through a Memory{Any} store, answered wrong with the statement check off before memoryrefset! converted through the funnel); the regression cases runtime_length_tuple's into_union_field and heterogeneous_tuple_read's other five fields answered as native before the funnel's fix too (dev/AUDIT.md A7E4, A6E4, A11E7, A16E2, A16P5; dev/formal/Coercion.tla NoUnclassedWidening, NothingIsNull; dev/CHARTER.md C1)",
+        () -> begin
+            local vals = read(joinpath(CODEGEN, "values.jl"), String)
+            local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = count_sites(r"_erased_vararg_tuple_operand")
+            v += abs(count_sites(r"source_class\(from_julia\) === nothing") - 2)
+            v += occursin("source_class(@nospecialize(from_julia))::Union{DataType, Nothing} =", vals) ? 0 : 1
+            v += count_sites(r"emit_numeric_to_anyref!|emit_numeric_to_externref!")
+            v += count("coerce_stack_top!(_hetb, union_wasm, ctx; from_julia=T)", blt) == 1 ? 0 : 1
+            v += count_sites(r"emit_classid_box!\(_hetb|any_convert_extern!\(_hetb|ref_null!\(_hetb|maybe_wrap_closure!\(_msb|any_convert_extern!\(_msb|extern_convert_any!\(_msb")
+            v += occursin("coerce_stack_top!(_msb, wasm_elem_type, ctx; from_julia=mset_val_T)", blt) ? 0 : 1
+            v += count_sites(r"get_numeric_box_type!\("; exclude_files=["codegen/values.jl", "codegen/types.jl", "codegen/compile.jl"])
+            v += abs(count(r"get_numeric_box_type!\(", vals) - 2)
+            # a Memory's element type is a sink's, never a source's, but memoryrefget's read of an
+            # element held in a numeric register: the read's own type, a primitive (the one line)
+            local _mrg_read = "        coerce_stack_top!(_mrgb, ctx.locals[_mrg_li - ctx.n_params + 1], ctx; from_julia=elem_type)"
+            v += count_sites(r"from_julia=elem_type\b|from_julia=\(julia_field";
+                             exclude_line=r"^        coerce_stack_top!\(_mrgb, ctx\.locals\[_mrg_li - ctx\.n_params \+ 1\], ctx; from_julia=elem_type\)$")
+            v += count(_mrg_read * "\n", blt) == 1 ? 0 : 1
+            # the source type is never defaulted: convert_type!, coerce_stack_top! and their callers
+            # state it, emit_value! reads the node's own (emit_value_as! a narrower one it is given)
+            v += count_sites(r"from_julia::[^=\s]*\s*=\s*nothing"; roots=[SRC])
+            # nor read with a default (`get(ssa_types, id, default)`): a missing entry raises; and a
+            # field's declared type is a source type only where it is the read's own (getfield_tfunc's
+            # answer), the one field read by a run-time name (the one exact line)
+            local _fld_read = "        out === AnyRef && coerce_stack_top!(ib, AnyRef, ctx; from_julia=fieldtype(T, i))"
+            v += count_sites(r"from_julia\s*=\s*(get|fieldtype)\(";
+                             exclude_line=r"^        out === AnyRef && coerce_stack_top!\(ib, AnyRef, ctx; from_julia=fieldtype\(T, i\)\)$")
+            v += count(_fld_read * "\n", read(joinpath(CODEGEN, "calls.jl"), String)) == 1 ? 0 : 1
+            v += occursin("if from_julia === Nothing && from != to && _wt_is_ref(to) && _wt_ref_nullable(to) &&\n       _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&", vals) ? 0 : 1
+            # isa(x, Nothing) of a value of any class reads the one nothing test `===` reads
+            v += occursin("            _emit_is_nothing!(bld, ctx.type_registry, _isa_l)\n", read(joinpath(CODEGEN, "calls.jl"), String)) ? 0 : 1
+            for c in ("(\"into_any_field\"", "(\"erased_isa_ntuple\"", "(\"into_union_field\"", "_g(\"heterogeneous_tuple_read\"", "(\"nothing_isa\"")
+                v += occursin(c, smoke) ? 0 : 1
+            end
+            local diag = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            v += occursin("the funnel: nothing at every nullable reference of the any hierarchy is its null", diag) ? 0 : 1
+            v += occursin("    if from_julia === Nothing && _wt_is_ref(from) && from != to &&\n       (!_wt_is_ref(to) || (!_wt_ref_nullable(to) &&", vals) ? 0 : 1
+            v += occursin("the one widening check rejects a source type that names no class", diag) &&
+                 occursin("for src in (Any, Union{Nothing,Tuple{Vararg{Int64}}}, Tuple{Vararg{Int64}}, nothing)", diag) ? 0 : 1
+            v
+        end),
+    "L179_one_type_test" => ("each type test has one lowering: one TypeError builder, _emit_typeerror_throw! (its three constant fields typed by their values, the value that failed pushed by its caller), which a typeassert's always-failing arm, its as-checker's body (as_checker!, L183) and the UnionAll constructor call, as dart's as-checker throws one TypeError (types.dart:763 generateAsChecker), and the only `register_struct_type!(…TypeError)` in codegen; one `Type{X}` element rule, type_element_kind (X's kind, as jl_f_tuple types the element), read by tuple_runtime_type, a tuple type's registration (_canonical_tuple_type), a MethodError's args tuple and a type-object argument's canonical signature (_canonical_type_object_arg); the type-object test partitions the bare arrays and the kinds over the value's static type, as every class read does (bare_array_partition), never over every class; and a phi edge's class test is the one class test, emit_isa_class_header! (it reads the header's classId, code_generator.dart:6076 loadClassId), the box-layout test beside it deleted. Behavior: test/dispatch_method_error.jl's 'one Type{X} element rule: the tuple Core.tuple builds is the tuple type registered' (a second rule in either reader, every type object a DataType, fails it for Vector, a Union and Union{}); the regression cases smoke tuple_type_element, kind_isa's kind_partition_static_type, union_nothing (the phi edges whose class flow.jl tests), typeassert_checks and test/real_bottom_exceptions.jl's TypeError fields (L57) answered as native before the lock's fixes too, which were restructurings (dev/AUDIT.md A4E5, A5E5, A5E8, A9E6, A16P5, A16P6; dev/CHARTER.md C1)",
+        () -> begin
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local flow = read(joinpath(CODEGEN, "flow.jl"), String)
+            local structs = read(joinpath(CODEGEN, "structs.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local v = abs(count_sites(r"register_struct_type!\([^)]*TypeError\)"; roots=[CODEGEN]) - 1)
+            v += abs(count_sites(r"_emit_typeerror_throw!\(") - 5)   # its definition, docstring and three callers
+            v += count("type_element_kind(@nospecialize(P))::Union{Nothing, Type} =", trim) == 1 ? 0 : 1
+            v += occursin("Any[something(type_element_kind(P), P) for P in T.parameters]", structs) ? 0 : 1
+            v += occursin("local K = type_element_kind(T)", trim) ? 0 : 1
+            v += occursin("Any[something(type_element_kind(C), C) for C in cs]", trim) ? 0 : 1
+            v += occursin("local runtime_class = type_element_kind(T)", trim) ? 0 : 1
+            v += count_sites(r"Type\.body\.name\) \? (typeof\(|P\.parameters\[1\])")
+            v += abs(count("check_type, val_jt)", calls) - 3)
+            v += occursin("bare_array_partition(ctx.mod, reg, nothing)", calls) ? 1 : 0
+            v += occursin("if K <: T && typeintersect(K, static_type) !== Union{}]", calls) ? 0 : 1
+            v += count_sites(r"emit_isa_classid!")
+            v += occursin("emit_isa_class_header!(b, ctx, phi_julia)", flow) ? 0 : 1
+            for c in ("_g(\"tuple_type_element\"", "(\"kind_partition_static_type\"", "_g(\"union_nothing\"", "_g(\"typeassert_checks\"")
+                v += occursin(c, smoke) ? 0 : 1
+            end
+            v += occursin("@testset \"one Type{X} element rule: the tuple Core.tuple builds is the tuple type registered\" begin",
+                          read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String)) ? 0 : 1
+            v
+        end),
+    "L180_one_table_per_construct" => ("each lowering reads one table: one operator table, INTRINSIC_BINOPS (dart's `_binaryOperatorMap`, intrinsics.dart:437, its lookup :995), which the surface `+ - *` lowering and the `_apply_iterate` reduce reach through operator_intrinsic (the intrinsic Julia's own method runs, base/int.jl:86-88 on 1.12.7 and 1.13.1, base/float.jl:495-497 on 1.12.7 and :492-494 on 1.13.1; no `_OPERATOR_OPCODES`, no `_get_binary_reduce_opcode`), and one conversion table, INTRINSIC_CONVERSIONS, whose bitcast every reinterpretation reads (emit_bitcast!: no `*_REINTERPRET_*` opcode outside julia_numeric_tier.jl); one width rule, julia_to_wasm_type for a value's register (dart's translateType, translator.dart:1044; numeric_register, and exact_register for a register that holds exactly its value) and `_julia_int_width(T)` for a primitive's bits, Julia's own (8*sizeof, jl_datatype_size: every primitive held in a register, an 8- or 16-bit one in an i32 whatever its type, and a 128-bit integer; `nothing` for any other type, never a register-width stand-in, and `_operand_width`, its reader for an intrinsic's operand, raises there), which every width decision in codegen reads, normalise_narrow!, the shifts, the comparisons, the division guard and the egal (a 128-bit integer is `_julia_int_width(T) == 128`, a float register `numeric_register(T) in (F32, F64)`; no width keyword defaults to a register's): no list of two or more numeric types (8- to 128-bit integers, Float16/32/64, Bool, Char) deciding a width, as an `||` chain, an `in (…)` tuple, an `isa Union{…}` or `<: Union{…}`, a table of `=>` pairs, a tuple of them on one line or continued (a named one, a keyword's, a ternary's arms), a `Union{…}` anywhere (a const) or a chain of `isa(x, T)` tests, but the lines of one exact allowlist, each with its reason: the rule's own body, packed_array_storage (the packed storage rule), translate_external_type (the numbers the JS boundary carries unboxed), assign_type_ids!'s fixed primitive classes (which classes are numbered), `_struct_fields!` (13.4's one struct-field translation, 116f), the constant encoders (values.jl's, `_const_init!`'s: each constant's bits, as dart's constant visitors encode each class), the getfield constant fold's constant kinds (calls.jl), calls.jl's one-byte pointer-element tests and the storage pointer's element-type sets (a byte layout: _STORAGE_PRIMITIVE_ELTYPES, _BYTE_ELTYPES, `_PRB_WIDE`), the byte-tuple reinterpret overlays' operand unions (interpreter.jl, by byte count) and the statement-value trace's own table (generate.jl); and one widening rule: a source narrower than its register is normalised before it widens into a target of any register, signed for sext_int and sitofp, unsigned for zext_int and uitofp; every width narrower than its register (an 8-, 16- or 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64) is sign-extended or masked by one rule, emit_extend_from_width! (no `extend8_s`/`extend16_s` outside it), which normalise_narrow!, the shifts, the comparisons and divisions, the egal and the checked arithmetic read (smoke narrow_primitive's 24- and 40-bit cases: sext of a dirty 24-bit value answered 32754, native -32782, and of a 40-bit one 1099511627762, native -14, dev/AUDIT.md A17E2), and the 128-bit sext and zext read it whatever register their source rides in, no normalisation gated on an i32-held operand (smoke narrow_primitive's sext128_p40, zext128_dirty_p40, A18E2 (c)); a narrow ctlz, cttz or ctpop and a flipsign read their operand at its own width in an i32 or an i64, never the full register (A18B2 = A18E2 (a)(b)): no normalisation gated on an i32 test on its line, the unary route normalising a narrow count operand before the table's CLZ, CTZ or POPCNT row (masked; a trailing count stopped at the width by a bit set there, a leading count less the register's bits above it) and the flipsign normalising y before its sign shift, as the shift normalises a narrow amount in either register (smoke registry_unops' ctlz_int, cttz_int and ctpop_int cases and registry_misc's flipsign_int cases, narrow_primitive's ctlz_p40, cttz_zero_p40, ctpop_dirty_p40 and flipsign_p40 over a 40-bit primitive in an i64, each failing with its fix reverted (measured with the fixes gated on an i32-held operand: 62, 64, 2 and 5 where native answers 38, 40, 1 and -5)); every conversion's target is resolved once from its operand (a literal type, or a constant global's value: nir_type_operand, the one rule isa and typeassert read too, dev/AUDIT.md A17E6), an unresolved one rejecting at its statement, never a default register; one operand table, `_nir_any_operand`, which count_ssa_uses! and the local allocation's second pass read (an upsilon's value is a use), and the use index (ssa_users) answers every whole-body use scan; and one loop-bounds definition, loop_bounds (a loop's header and its last back edge), which the local allocation and the branching-loop index read (no loop-header bitmap, no first-goto table). Behavior: test/m11_intrinsics_table.jl's 'operator_intrinsic is the intrinsic Julia's method runs' (for every admitted operator and type, the one intrinsic in Julia's typed body; an intrinsic callee only for its own kind, so smoke's xfail reduce_intrinsic_kind rejects where it added floats), test/nir_use_index.jl's 'the use count and the loop bounds read one table each' (count_ssa_uses! equals the one table's count on a body with an upsilon carrying an SSA value; a loop entered by a forward goto keeps its last back edge), smoke narrow_widening (a dirty Int8 widened to Int32 answered 200, native -56, and a UInt8 sign-extended answered 128, native -128, at baae2757), conversion_target (sitofp to a Float32 named by a GlobalRef rounded twice), int128_extends (a narrow source normalised before it widens into Int128: sext_int(Int128, 0x80) raised a StackImbalanceError and a dirty Int8 answered 200 on the base acc1ac87) and pointer_float_bytes (a StackImbalanceError on that base), each failing with its fix reverted; dispatch_slot_registers' int8_slot and enum_slot are regression cases that answered as native before the width rule too (a Float16 rejects at its statement, xfail dispatch_slot_float16) (dev/AUDIT.md the first audit's side notes, A16B1 = A16E1, A16E3, A16P1, A16P2, A16P5; 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local v = count_sites(r"_OPERATOR_OPCODES|_get_binary_reduce_opcode")
+            v += count("function operator_intrinsic(", blt) == 1 ? 0 : 1
+            # an intrinsic callee over its own kind only
+            v += occursin("f === g && return int ? sym : nothing", blt) && occursin("f === g && return flt ? sym : nothing", blt) ? 0 : 1
+            v += occursin("emit_intrinsic_binop!(fb, wt, wt, op, ctx, _operand_width(T))", blt) ? 0 : 1
+            # the width is the type's bits for every primitive, never a register's (A17E2)
+            v += count_sites(r"_julia_int_width\([^()]*,|julia_width::Int\s*=|nbits = 8 \* sizeof"; roots=[CODEGEN])
+            # every narrower width is extended or masked by one rule (A17E2)
+            v += count_sites(r"EXTEND8_S|EXTEND16_S"; roots=[CODEGEN]) == 1 ? 0 : 1
+            v += count_sites(r"_operand_width\([^)]*\) < 32"; roots=[CODEGEN])
+            v += occursin("(numeric_register(T) !== nothing || T <: Base.BitInteger) || return nothing\n    return 8 * sizeof(T)", calls) ? 0 : 1
+            v += occursin("emit_intrinsic_binop!(bld, elem_wasm_type, elem_wasm_type, reduce_op, ctx,", calls) ? 0 : 1
+            v += count_sites(r"REINTERPRET_"; roots=[CODEGEN], exclude_files=["codegen/julia_numeric_tier.jl"])
+            # one widening rule, and every conversion target resolved once (no default register)
+            local jnt = read(joinpath(CODEGEN, "julia_numeric_tier.jl"), String)
+            # (each op normalises its source before any register's target, the I64 extension or none)
+            for needle in ("        normalise_narrow!(b, ctx, julia_src, true)   # the one widening rule: its sign at its width\n        (src_reg === I32 && dst_reg === I64) && return table!(I32, I64, :sext_int)\n        return dst_reg",
+                           "        normalise_narrow!(b, ctx, julia_src, false)   # the one widening rule: its bits\n        (src_reg === I32 && dst_reg === I64) && return table!(I32, I64, :zext_int)\n        return dst_reg",
+                           "        normalise_narrow!(b, ctx, julia_src, true)    # the one widening rule: its sign at its width\n        return table!(src_reg, dst_reg, :sitofp)",
+                           "        normalise_narrow!(b, ctx, julia_src, false)   # the one widening rule: its bits\n        return table!(src_reg, dst_reg, :uitofp)")
+                v += occursin(needle, jnt) ? 0 : 1
+            end
+            v += occursin(r"reg\(T, default\)|_resolve_bitcast_target|something\(dst_reg, I32\)", jnt) ? 1 : 0
+            v += occursin("    (op in (:sext_int, :zext_int, :trunc_int) && !dst_128 && !(dst_reg === I32 || dst_reg === I64)) &&\n        return reject!(\"its target is held in no integer register\")", jnt) ? 0 : 1
+            v += occursin("local _cv_julia_dst = length(args) >= 1 ? nir_type_operand(args[1]) : nothing", calls) ? 0 : 1
+            # the width rule: a list of numeric types deciding a width (an `||` chain over 8- to
+            # 128-bit integers or floats, an `in (…)` tuple, an `isa Union{…}` or `<: Union{…}`, a
+            # table of `=>` pairs) is a line of the exact allowlist, each with its reason; any other
+            # such line, or an entry no line uses, fires
+            local num = raw"\b(U?Int(8|16|32|64|128)|Float(16|32|64)|Bool|Char)\b"
+            local wrx = Regex(raw"=== U?Int(8|16|32|64|128)\b[^\n]*\|\||\|\|[^\n]*=== U?Int(8|16|32|64|128)\b|isa U?Int(8|16|32|64|128) \|\|" *
+                              raw"|=== Float(16|32|64)\b[^\n]*(\?|\|\|)|\|\|[^\n]*=== Float(16|32|64)\b|isa Float(16|32|64) \|\|" *
+                              raw"|\bin \((?:[^()]*?" * num * raw"){2}|(\bisa|<:) Union\{(?:[^{}]*?" * num * raw"){2}|" *
+                              num * raw"\s*=>[^\n]*" * num * raw"\s*=>" *
+                              # a tuple of them, on one line or continued; a Union anywhere; isa chains
+                              raw"|\(\s*" * num * raw"(?:\s*,\s*" * num * raw")+\s*(?:,\s*$|,?\s*\))" *
+                              raw"|Union\{(?:[^{}]*?" * num * raw"){2}" *
+                              raw"|isa\([^()]*,\s*" * num * raw"\)[^\n]*isa\([^()]*,\s*" * num * raw"\)")
+            local rule = "the width rule's own body, julia_to_wasm_type (translator.dart:1044 translateType)"
+            local packed = "packed_array_storage, the packed storage rule (translator.dart:344 builtinTypes' WasmI8/WasmI16)"
+            local external = "translate_external_type: the numbers the JS boundary carries unboxed (translator.dart:1239 translateExternalType)"
+            local numbered = "assign_type_ids!'s fixed primitive classes, which classes are numbered (class_info.dart:864 ClassIdNumbering._number)"
+            local fields = "_struct_fields!'s field translation, 13.4's one struct-field translation (116f)"
+            local encode = "a constant encoder: each constant's bits by its class (constants.dart:622 visitIntConstant)"
+            local fold = "the getfield constant fold's constant kinds, the values it folds (calls.jl)"
+            local bytes = "a one-byte pointer-element test, a byte layout (pointer.jl's unsafe_load of a UInt8 or Int8)"
+            local trace = "the statement-value trace's own table, the types a traced compile reports (parity(quarantine) on TRACED_STATEMENT_TYPES)"
+            local storage = "a storage pointer's element types, a numeric or byte storage array's layout (statements.jl's _STORAGE_PRIMITIVE_ELTYPES, _BYTE_ELTYPES)"
+            local bytecount = "Base._reinterpret's byte-tuple methods, overlaid by a primitive's byte count (interpreter.jl)"
+            local allow = Tuple{String,String,String}[
+                ("codegen/types.jl", "if T === Int32 || T === UInt32", rule),
+                ("codegen/types.jl", "elseif T === Int64 || T === UInt64 || T === Int", rule),
+                ("codegen/types.jl", "elseif T === UInt8 || T === Int8 || T === UInt16 || T === Int16", rule),
+                ("codegen/types.jl", "elseif T === Int128 || T === UInt128", rule),
+                ("codegen/types.jl", "elseif fv isa Int8 || fv isa Int16 || fv isa Int32", encode),
+                ("codegen/types.jl", "elseif fv isa UInt8 || fv isa UInt16 || fv isa UInt32", encode),
+                ("codegen/types.jl", "for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,", numbered),
+                ("codegen/types.jl", "T === Int8 || T === UInt8 ? I8 :", packed),
+                ("codegen/types.jl", "T === Int16 || T === UInt16 ? I16 : nothing", packed),
+                ("codegen/types.jl", "T === Int8 || T === UInt8 || T === Int16 || T === UInt16 ||", external),
+                ("codegen/types.jl", "T === Int32 || T === UInt32 || T === Int64 || T === UInt64 || T === Int ||", external),
+                ("codegen/types.jl", "T === Float32 || T === Float64)", external),
+                ("codegen/structs.jl", "elseif ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||", fields),
+                ("codegen/structs.jl", "ft === Int8 || ft === UInt8 || ft === Int16 || ft === UInt16", fields),
+                ("codegen/structs.jl", "elseif ft === Int64 || ft === UInt64 || ft === Int", fields),
+                ("codegen/values.jl", "elseif lit isa Int128 || lit isa UInt128", encode),
+                ("codegen/values.jl", "elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16", encode),
+                ("codegen/values.jl", "elseif val isa Int64 || val isa Int", encode),
+                ("codegen/values.jl", "elseif val isa Int128 || val isa UInt128", encode),
+                ("codegen/calls.jl", "if _pr_vec !== nothing && (_pr_tp0 === UInt8 || _pr_tp0 === Int8 || _pr_tp0 === Nothing || _pr_tp0 === nothing)", bytes),
+                ("codegen/calls.jl", "local _prb_vec = (ptr_arg !== nothing && (_prb_tp === UInt8 || _prb_tp === Int8)) ?", bytes),
+                ("codegen/calls.jl", "if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)", bytes),
+                ("codegen/calls.jl", "if _psw_te === UInt8 || _psw_te === Int8", bytes),
+                ("codegen/calls.jl", "if _gfc_val isa Union{Integer, Bool, Char, Float32, Float64, String, Symbol} &&", fold),
+                ("codegen/calls.jl", "!(_gfc_val isa Union{Int128, UInt128, BigInt})", fold),
+                ("codegen/statements.jl", "const _STORAGE_PRIMITIVE_ELTYPES = (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)", storage),
+                ("codegen/statements.jl", "const _BYTE_ELTYPES = (UInt8, Int8)", storage),
+                ("codegen/calls.jl", "local _PRB_WIDE = (Int16, UInt16, Int32, UInt32, Int64, UInt64)", storage),
+                ("codegen/interpreter.jl", "const _WT_BITS32 = Union{Int32, UInt32, Float32, Char}", bytecount),
+                ("codegen/interpreter.jl", "const _WT_BITS64 = Union{Int64, UInt64, Float64}", bytecount),
+                ("codegen/interpreter.jl", "const _WT_BITS16 = Union{Int16, UInt16}", bytecount),
+                ("codegen/interpreter.jl", "const _WT_BITS8  = Union{Int8, UInt8, Bool}", bytecount),
+                ("codegen/values.jl", "elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&", encode),
+                ("codegen/values.jl", "!isa(val, Int8) && !isa(val, Int16) && !isa(val, Int32) && !isa(val, Int64) &&", encode),
+                ("codegen/values.jl", "!isa(val, UInt8) && !isa(val, UInt16) && !isa(val, UInt32) && !isa(val, UInt64) &&", encode),
+                ("codegen/values.jl", "!isa(val, Float32) && !isa(val, Float64)", encode),
+                ("codegen/generate.jl", "const TRACED_STATEMENT_TYPES = Dict{Type,WasmValType}(Int64 => I64, UInt64 => I64, Int32 => I32,", trace),
+                ("codegen/generate.jl", "Bool => I32, Float32 => F32, Float64 => F64)", trace)]
+            local unused = copy(allow)
+            for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
+                endswith(f, ".jl") || continue
+                local rel = "codegen/" * relpath(joinpath(dir, f), CODEGEN)
+                for l in _file_lines(joinpath(dir, f))
+                    (!_iscomment(l) && occursin(wrx, l)) || continue
+                    local k = findfirst(e -> e[1] == rel && e[2] == strip(l), unused)
+                    k === nothing ? (v += 1) : deleteat!(unused, k)
+                end
+            end
+            v += length(unused)
+            v += occursin("    _count(rec.node)\n    _nir_any_operand(_count, rec.node)", ctxs) ? 0 : 1
+            v += occursin("_nir_any_operand(x -> (x isa NirSSA && push!(needs_local_set, x.id); false), node)", ctxs) ? 0 : 1
+            v += count_sites(r"for use_rec in nir\b|any\(nir\) do|for \(phic_idx, phic_rec\) in enumerate")
+            v += occursin(r"loop_headers|first_goto_to", ctxs) ? 1 : 0   # (the stackifier's own, block-level loops are 116d-3's one CFG)
+            v += occursin("for phic_idx in ssa_users(ctx, idx)", stm) && occursin("for j in ssa_users(ctx, idx)   # the statements that use the new object", stm) ? 0 : 1
+            v += count("function loop_bounds(cfg::NirCFG)", ctxs) == 1 ? 0 : 1
+            local m11 = read(joinpath(ROOT, "test", "m11_intrinsics_table.jl"), String)
+            v += occursin("operator_intrinsic is the intrinsic Julia's method runs", m11) ? 0 : 1
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            for c in ("_g(\"int128_extends\"", "_g(\"pointer_float_bytes\"", "_g(\"dispatch_slot_registers\"", "_xf(\"reduce_intrinsic_kind\"", "_xf(\"dispatch_slot_float16\"",
+                      "_g(\"narrow_widening\"", "_g(\"conversion_target\"")
+                v += occursin(c, smk) ? 0 : 1
+            end
+            # the width rule is read whatever the register: no normalisation gated on an i32-held
+            # operand, which leaves a 40-, 48- or 56-bit one in an i64 unnormalised (A18E2 (c): the
+            # 128-bit sext and zext)
+            for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
+                endswith(f, ".jl") || continue
+                local ls = readlines(joinpath(dir, f))
+                for (i, l) in enumerate(ls)
+                    (_iscomment(l) || !occursin(r"\bif julia_to_wasm_type\([^)]*\) === I32\s*$", l)) && continue
+                    v += occursin(r"normalise_narrow!\(|emit_extend_from_width!\(", join(ls[i+1:min(i + 3, end)], "\n")) ? 1 : 0
+                end
+            end
+            v += occursin("(\"sext128_p40\"", smk) && occursin("(\"zext128_dirty_p40\"", smk) ? 0 : 1
+            # a narrow ctlz/cttz/ctpop or flipsign reads its operand at its own width, in an i32 or an
+            # i64, never the full register (A18B2 = A18E2 (a)(b)): no normalisation gated on an i32
+            # test on its line, the unary route normalises a narrow count operand before the table's
+            # CLZ/CTZ/POPCNT row with no i32 gate, and the flipsign normalises y before its sign shift
+            for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
+                endswith(f, ".jl") || continue
+                for l in _file_lines(joinpath(dir, f))
+                    _iscomment(l) && continue
+                    v += occursin(r"\b(is_?32(bit)?|=== I32)\s*&&.*\b(normalise_narrow!|emit_extend_from_width!)\(", l) ? 1 : 0
+                end
+            end
+            local cls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local un = (k = findfirst("    elseif _it_name !== nothing && !is_128bit\n", cls);
+                        e = k === nothing ? nothing : findnext("local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)", cls, last(k));
+                        k === nothing || e === nothing ? "" : cls[first(k):first(e)])
+            v += occursin("_it_name in (:ctlz_int, :cttz_int, :ctpop_int)", un) && occursin("normalise_narrow!(fb, ctx, arg_type, false)", un) &&
+                 !occursin("=== I32 &&", un) ? 0 : 1
+            v += occursin("        local_get!(bld, y_local)\n        normalise_narrow!(bld, ctx, arg_type, true)\n", cls) ? 0 : 1
+            # a narrow shift amount read at its width in either register (the W6 fix)
+            v += occursin("((_cnt === I32 || _cnt === I64) && !(nir_const(args[2]) isa Integer && nir_const(args[2]) >= 0)) &&\n            normalise_narrow!(fb, ctx, value_type(ctx, args[2]), false)", cls) ? 0 : 1
+            for c in ("(\"ctlz_p40\"", "(\"cttz_zero_p40\"", "(\"ctpop_dirty_p40\"", "(\"flipsign_p40\"")
+                v += occursin(c, smk) ? 0 : 1
+            end
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("the use count and the loop bounds read one table each", nui) &&
+                 occursin("@test WasmTarget.loop_bounds(WasmTarget.nir_cfg(synth)) == [(3, 6)]", nui) ? 0 : 1
+            v
+        end),
+    "L181_one_cfg" => ("a body's control-flow graph is one, Julia's own: nir_cfg (frontend/nir.jl), a port of Compiler's basic_blocks_starts and compute_basic_blocks (Compiler/src/ssair/ir.jl:46, :94 on 1.12.7 and 1.13.1; an Enter starts and ends a block, its catch destination a successor; a :leave ends one), built once per compiled body (the context's `cfg`) and read by generate_body, the stackifier (its blocks, successors and predecessors, the boundscheck fold the only edit; no region split, no handler edges of its own), the trampoline threading (nir_cfg of each round's rewritten statements), the proven-dead proof (the context's CFG; its reachability sees a handler through its catch edge, so a body with a try is no longer excluded), the definite-initialization proof (its statement successors: the context's CFG over the caller's own body, never rebuilt, and nir_cfg of a callee's body for the interprocedural step), the statement visitor's stub reset (a block start), the loop bounds (a back edge is a successor block at or before its own, a backward goto-if-not too) and the stackifier's jump targets (its folded successors); one dominator computation, cfg_dominators (Julia's naive_idoms, Compiler/src/ssair/domtree.jl:681), read by the trampolines and the loop labels. No analyze_blocks, no _split_blocks_for_regions, no successor rule outside nir_cfg (no back-edge test on a jump's raw target; the emission reads a jump's target only to emit its branch), no second dominator loop. Behavior: test/nir_use_index.jl's 'nir_cfg is Julia's compute_basic_blocks' (its blocks and edges equal Compiler's over bodies with loops, phis and try/catch, and trailing `nothing` statements in no block, ir.jl:84) and 'the proven-dead proof sees a try body through the one CFG' (a handler's first statement is not proven dead; a statement after an `unreachable` inside a try body is), 'the use count and the loop bounds read one table each' (a loop whose only back edge is a goto-if-not), smoke loop_backward_branch (1.13 lays findfirst's String search loop with a goto-if-not back edge, which the raw-goto rule missed: green before and after), dev/formal/ProvenDead.tla (MCProvenDeadNoCatchEdgeBroken: an Enter's catch edge dropped proves a handler dead) and DefiniteInit.tla (MCDefiniteInitNoCatchEdgeBroken), and the probes byte-identical across the move (the first audit's side notes; 13.4's one CFG; dev/CHARTER.md C1)",
+        () -> begin
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local stk = read(joinpath(CODEGEN, "stackified.jl"), String)
+            local gen = read(joinpath(CODEGEN, "generate.jl"), String)
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            local v = count_sites(r"analyze_blocks|_split_blocks_for_regions")
+            v += count("function nir_cfg(nir::Vector{NirStmt})::NirCFG", nirs) == 1 ? 0 : 1
+            v += occursin("edge!(k, block_of[t.catch_target])", nirs) && occursin("push!(starts, idx); push!(starts, idx + 1)", nirs) ? 0 : 1
+            v += count_sites(r"\bnir_cfg\("; roots=[CODEGEN]) == 3 ? 0 : 1   # the context, the trampolines, the definite-initialization proof over a callee's body
+            # the caller's own body is proven over the context's CFG, built once (A17E7)
+            v += occursin("_definitely_initializes_in_nir(ctx.nir, ctx.cfg, idx + 1, subject, T, missing)", stm) &&
+                 occursin("_definitely_initializes_in_nir(callee_nir, nir_cfg(callee_nir), 1,", stm) ? 0 : 1
+            local diag = read(joinpath(CODEGEN, "diagnostics.jl"), String)
+            v += count("stmt_is_proven_unreachable(_ctx_cfg(ctx), idx)", diag) == 2 ? 0 : 1   # the proven-dead proof reads the context's CFG
+            # no successor rule from a jump's raw target: no back-edge test on a target, the loop
+            # bounds and the stackifier's jump targets read the CFG's successors
+            v += count_sites(r"\.target\s*<"; roots=[CODEGEN])
+            local ctxs = read(joinpath(CODEGEN, "context.jl"), String)
+            local lb = match(r"function loop_bounds\(cfg::NirCFG\).*?\nend\n"s, ctxs)
+            v += lb !== nothing && !occursin(".target", lb.match) && occursin("for k in eachindex(cfg.blocks), s in cfg.succs[k]", lb.match) ? 0 : 1
+            local ntt = match(r"non_trivial_targets = Set\{Int\}\(\).*?\n\n"s, stk)
+            v += ntt !== nothing && !occursin(".target", ntt.match) && occursin("for s in successors[block_idx]", ntt.match) ? 0 : 1
+            v += occursin("return generate_structured(b, ctx, ctx.cfg)", gen) ? 0 : 1
+            v += occursin("successors = Dict{Int, Vector{Int}}(k => copy(cfg.succs[k]) for k in eachindex(blocks))", stk) ? 0 : 1
+            v += occursin("ctx.cfg.blocks[ctx.cfg.block_of[idx]].start_idx == idx", stm) ? 0 : 1
+            v += occursin("Int[cfg.blocks[s].start_idx for s in cfg.succs[bk]]", stm) ? 0 : 1
+            v += count_sites(r"push!\((succs|successors|preds|predecessors)\["; roots=[CODEGEN])
+            v += count_sites(r"Set\{Int\}\(1:n\)|start2id|has_try_catch\(nir\) && return false"; roots=[CODEGEN])
+            v += count("function cfg_dominators(", stk) == 1 ? 0 : 1
+            v += count(r"while changed", stk) == 1 ? 0 : 1
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("nir_cfg is Julia's compute_basic_blocks", nui) ? 0 : 1
+            v += occursin("the proven-dead proof sees a try body through the one CFG", nui) ? 0 : 1
+            v += occursin("_g(\"loop_backward_branch\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1
+            for f in ("MCProvenDeadNoCatchEdgeBroken.cfg", "MCDefiniteInitNoCatchEdgeBroken.cfg")
+                v += isfile(joinpath(ROOT, "dev", "formal", f)) ? 0 : 1
+            end
+            v
+        end),
+    "L182_one_callee_representation" => ("a call's constant callee has one representation, its object, resolved once at the NIR boundary by one rule for a :call, an :invoke and a call codegen builds (nir_callee over resolve_operand, and _resolve_nircall_callee's SSA, Core.Const and singleton-argument arms for both statement kinds), as Kernel's StaticInvocation carries its resolved target (expressions.dart:2820): an intrinsic the IR embeds as the object, a type object an :invoke embeds and a function a singleton-typed argument names are their objects; NirCall and NirInvoke refuse a NirLiteral callee at construction (_refuse_literal_callee); a callee passed as an operand (a call codegen builds, nir_call; invoke_in_world's `f`; `_apply_iterate`'s function) is read by the same rule over the operand's static type (nir_operand_callee: a runtime value of a singleton function type is its instance); a constant whose type does not determine it (Compiler's singleton_type over its Core.Typeof answers nothing: not a function singleton, not a type object, not a Builtin) carries its self operand in the node's own field `self` (nir_callee_self, FunctionInvocation.receiver, expressions.dart:2262), which an :invoke of a closure's function pushes first (nir_callee_value) and the operand walkers read; no callee is unwrapped or resolved in codegen (no nir_const of a callee, no `callee isa NirLiteral`, no manual global resolution of a callee operand, no _resolve_builtin_callee, _invoke_in_world_callee) and no :invoke callee is resolved again from its MethodInstance (no _invoke_named_callee, _invoke_callee_object). Behavior: test/nir_use_index.jl's 'a call's constant callee has one representation' (expm1's embedded have_fma, Dict's constructor, a singleton-typed argument's :invoke, a const closure's self; a NirLiteral callee refused) and smoke constant_callees (dev/AUDIT.md A4C5; dev/CHARTER.md C1)",
+        () -> begin
+            local nirs = read(joinpath(SRC, "frontend", "nir.jl"), String)
+            local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            local v = count("        _refuse_literal_callee(callee)\n", nirs) == 2 ? 0 : 1
+            v += count("function nir_callee(x::NirNode)::Any", nirs) == 1 ? 0 : 1
+            v += occursin("callee = length(args) >= 2 ? _resolve_nircall_callee(args[2], code_info, types, slot_types) : nothing", nirs) ? 0 : 1
+            v += occursin("NirCall(nir_operand_callee(callee, static_type), NirNode[operands...])", nirs) ? 0 : 1
+            v += count("nir_callee_self(@nospecialize(callee))::Union{Nothing,NirLiteral} =", nirs) == 1 ? 0 : 1
+            v += occursin("closure_self_to_push = something(nir_callee_value(node), NirLiteral(node.callee))", inv) ? 0 : 1
+            v += count_sites(r"nir_const\((func|f|fref|target_func|[\w.]*callee[\w.]*)\)|\b(fref|target_func|target)\s+isa\s+NirGlobalRef|_resolve_builtin_callee|_invoke_named_callee|_invoke_callee_object|_invoke_in_world_callee|callee\.value\b|callee isa NirLiteral|isa NirLiteral \? [\w.]*callee";
+                             exclude_files=["frontend/nir.jl"])
+            # every callee passed as an operand is read by the one rule (nir_operand_callee): the
+            # boundary's argument arm, nir_call, invoke_in_world's and _apply_iterate's
+            v += count_sites(r"\bnir_operand_callee\("; roots=[SRC]) == 8 ? 0 : 1
+            v += occursin("CC.singleton_type(Core.Typeof(callee)) !== nothing", nirs) ? 0 : 1
+            local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
+            v += occursin("a call's constant callee has one representation", nui) ? 0 : 1
+            v += occursin("_g(\"constant_callees\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1
+            v
+        end),
+    "L183_one_as_checker" => ("a typeassert's run-time check is one function per (target, static type), as dart's as-check calls one checker per tested type (types.dart:763 AsCheckers.generateAsChecker, cached in `_asCheckers`, :758): as_checker! builds it on its first use in a codegen context of its own (its one statement `typeassert(x, T)`), with dart's shape: from the top type (anyref, types.dart:784) to the register of S ∩ T (:783), its body narrowing the argument to the static type's register, the one isa lowering over that type (Julia's emit_isa tests S ∩ T, which is why the key holds the static type), the one TypeError throw and the argument converted to S ∩ T's register (:1172-1173); the calling statement converts its operand to the top type; the module's registry caches it (`as_checkers`, the function and its parameter, or the rejection its body raised) and names it as dart does, \"<obj> as T\" (types.dart:1039); _lower_typeassert!'s run-time arm calls it and lowers no isa and allocates no local of its own; a check WT cannot lower rejects at each calling statement with the body's rejection (the checker's own copy leaves the ledger). Behavior: test/diagnostic_attribution.jl's 'an as-checker's rejection is its caller's' (x::Type{<:AbstractVector} over Any: one diagnostic, at the caller's statement) and 'one as-checker per (target, static type)' (two statements and two functions, one function), smoke as_checkers and typeassert_checks (dev/AUDIT.md A4E5; dev/CHARTER.md C1)",
+        () -> begin
+            local bi = read(joinpath(CODEGEN, "builtins.jl"), String)
+            local calls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local ta = match(r"function _lower_typeassert!.*?\nend\n"s, bi)
+            local v = ta === nothing ? 1 : 0
+            ta === nothing || (v += occursin("as_checker!(ctx, _ta_target, _ta_static)", ta.match) &&
+                                    !occursin("_compile_call_isa", ta.match) && !occursin("allocate_local!", ta.match) ? 0 : 1)
+            v += count_sites(r"\bas_checker!\(") == 3 ? 0 : 1   # its definition, docstring and the one caller
+            v += occursin("ctx.type_registry.as_checkers[key] = result", calls) ? 0 : 1
+            v += occursin("_compile_call_isa(check.operands, cb, cctx)", calls) ? 0 : 1
+            # dart's shape: from the top type (types.dart:784) to S ∩ T's register (:783, :1172-1173)
+            v += occursin("local cb = InstrBuilder(WasmValType[AnyRef], results;", calls) &&
+                 occursin("coerce_stack_top!(cb, only(results), cctx; from_julia=(R === Nothing ? static_type : R))", calls) ? 0 : 1
+            v += (ta !== nothing && occursin("coerce_stack_top!(fb, AnyRef, ctx; from_julia=_ta_static)", ta.match)) ? 0 : 1
+            v += occursin("as_checker = GeneratedConstruct(\"as-checker\", \"<obj> as \", \"\", true)", read(joinpath(CODEGEN, "diagnostics.jl"), String)) ? 0 : 1
+            local da = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
+            v += occursin("an as-checker's rejection is its caller's", da) && occursin("one as-checker per (target, static type)", da) ? 0 : 1
+            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            v += occursin("_g(\"as_checkers\"", smk) && occursin("(\"empty_intersection_throws\"", smk) ? 0 : 1
+            v
+        end),
+    "L184_one_export_namer" => ("a module's export names come from one export namer, as dart's translator holds one exportNamer (translator.dart:163; namer.dart:23 Namer): ExportNamer, made at a compile's setup from the module's exports and held by its Translator (one per compile; the one other construction is a host's setup of the module it prepares before any compile, ensure_provenance_imports!(mod)), with the names of the exports WasmTarget generates reserved (namer.dart:32 reserveName); every add_export! in codegen takes its name from it, export_name! or generated_export_name! (the compile's functions and its link_roots hook's requests, decided before any body compiles, the exception tag, the class reader), and a name already held is refused naming its holder, never renamed with a counter (no `_d<k>`, `name_<k>` or `base_<n>`: a compiled function's name is its Julia identity, plan_function_names!, the call form Julia prints for its MethodInstance (show_mi: argument types only, the function qualified unless exported from its module or Main's) then ` @ ` and its method's module as a stack frame prints it, printed from a fixed empty module (JuliaNameContext) with type aliases off and unlimited, so no `using` in Main renames a function, and refused where a `show` or `print` outside Base and Core would print part of it, as the printer runs them, on its IOContext; of two methods over one specialization the one Julia's dispatch selects keeps it (the plan's invoke_only, the one consult) and the invoke-only one adds its method's own signature before the module, the choice never the plan's order; each signature printed once per plan; the name's one limit, two same-named functions printed unqualified whose methods of one signature one module defines, is a WasmCompileError naming both methods' lines, and any other name held twice a WasmInternalError naming both methods; a closure type's gensym (`#h#2`) is Julia's identity of the type and follows the order code is lowered in, so a name holding one, and the probe bytes, follow the load order, dev/AUDIT.md A19E8); a link_roots hook returns the exports it requests (`name => function index`, each a function of the module, or refused) and adds none itself (run_link_roots refuses one), and no export is retargeted after codegen (no assignment into a module's `.exports`). Behavior: test/real_bottom_exceptions.jl's 'each export is made once' (a hook's request exported once through its entry; a hook's own add_export!, a hook's request for a name a compiled function holds or an index no function has, a requested reserved name and a host export of a function's signature each refused, naming the holder) and test/generated_names.jl's 'a compiled function is named by its signature' (names independent of the order, smoke's invoke_names_its_method and closure_invoke_only_body named by the invoke-only rule, two generic functions of one name in two modules compiled and answering as native, the limit refused naming both lines, a specialization planned twice an internal error) and 'a compiled function's name does not depend on Main's `using`s' (the same names before and after a `using` in Main; a type or value parameter whose text a user `show` or `print` would write refused); a hook that retargets an export the module holds is refused too (dev/AUDIT.md A13C2, A12C5, P6, A19C2-A19C4, A19C8; dev/MARCH.md 13.4; dev/CHARTER.md C1)",
+        () -> begin
+            local comp = read(joinpath(CODEGEN, "compile.jl"), String)
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            local v = count_sites(r"^struct ExportNamer$") == 1 ? 0 : 1
+            # every export codegen makes is named by the namer: each add_export! line names it
+            # there, or is the compile's one loop over the names the namer took before codegen
+            for root in (CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")), (dir, _, files) in walkdir(root), f in files
+                endswith(f, ".jl") || continue
+                for line in eachline(joinpath(dir, f))
+                    (_iscomment(line) || !occursin(r"\badd_(?:global_|table_|memory_)?export!\(", line)) && continue
+                    (occursin(r"\badd_export!\(mod, (?:generated_)?export_name!\(", line) ||
+                     strip(line) == "add_export!(mod, name, 0, target)") || (v += 1)
+                end
+            end
+            local required = [(comp, "push!(compile_exports, (export_name!(namer, String(name), \"the compiled function \\\"\$(name)\\\"\"),"),
+                              (comp, "push!(compile_exports, (export_name!(namer, name, \"the link_roots hook's request for function \$(idx)\"), idx))"),
+                              (comp, "    for (name, idx) in compile_exports\n        local target = (exc_top === nothing || idx < num_imported_funcs(mod)) ? idx :\n                       emit_export_entry!(mod, type_registry, idx, name)\n        add_export!(mod, name, 0, target)\n    end"),
+                              (comp, "    local before = copy(mod.exports)\n    local requested = link_roots(mod, root_indices, registry)\n    mod.exports == before || throw(ArgumentError("),
+                              # a name held is refused where it is taken, never renamed
+                              (comp, "    prior === nothing || throw(ArgumentError(\n        \"the export name \\\"\$name\\\" is taken (\$(prior)), the name \$(holder) is exported under: \" *"),
+                              (comp, "    prior === nothing || throw(ArgumentError(\n        \"the export name \\\"\$name\\\" is taken (\$(prior)), the name of the export WasmTarget generates\"))"),
+                              # the selected method's function keeps the signature, by the plan's one answer
+                              (trim, "mi in invoke_only ? invoke_only_function_name(mi) : get!(() -> julia_function_name(mi), signatures, mi)"),
+                              (trim, "    plan_function_names!(functions, entry_keys, invoke_only, signatures)\n"),
+                              (trim, "julia_function_name(mi::Core.MethodInstance)::String =\n    string(_julia_signature_text(mi.def::Method, mi.specTypes), \" @ \", (mi.def::Method).module)"),
+                              (trim, "    local shown = _user_shown_in_signature(sig)\n    if shown !== nothing"),
+                              (trim, "IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m.name, sig;\n        qualified=true))"),
+                              (read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String), "occursin(\"the link_roots hook's request\", err.msg)"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test \"\$S._sm_oc(::Int64) [\$S._sm_oc(::Integer)] @ \$S\" in names(mi)"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test run_i64(ma, \"alike\") == _gn_alike(3) == 9"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test err isa _GN.WasmInternalError && occursin(\"print alike\", sprint(showerror, err))")]
+            v += count(((text, needle),) -> !occursin(needle, text), required)
+            # one place each export is made: the compile's loop runs once, after codegen, over names
+            # decided before it; nothing retargets an export, and no counter renames one
+            v += count_sites(r"\.exports\[[^\]]*\]\s*=(?!=)|codegen_export_names|used_names|export_name_counts|given_names|\"_d\"")
+            # one namer per compile, made at its setup and held by its Translator; a host's setup of
+            # the module it prepares, before any compile, names its one export through its own
+            v += count_sites(r"\bExportNamer\(mod\)"; exclude_line=r"^    ExportNamer\(mod\)$") == 2 ? 0 : 1   # (its docstring's signature line aside)
+            v += occursin("local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))", comp) ? 0 : 1
+            v += occursin("ensure_provenance_imports!(mod::WasmModule)::Nothing = ensure_provenance_imports!(mod, ExportNamer(mod))",
+                          read(joinpath(CODEGEN, "generate.jl"), String)) ? 0 : 1
+            v += count("local namer = translator.export_namer", comp) == 1 ? 0 : 1
+            v
+        end),
+    "L185_one_import_query" => ("the import at a function index is read by one builder query, imported_function(mod, idx), as wasm_builder's FunctionsBuilder holds its imported functions (functions.dart:13 _importedFunctions) and FunctionsBuilder.import (:43) hands its caller the imported function: codegen, the frontend and ext read no module's `.imports` (no filter over a module's imports at a call site, no index into them), every import query there being imported_function, with num_imported_funcs for the count; inside the builder the list is read only by the functions that keep it (add_import!, num_imported_funcs, imported_function) and the serializer (to_bytes_mapped). Behavior: test/host_imports.jl's 'one query for the import at a function index', its assertions pinned (the k-th function import for each k from 0, nothing at a defined function's index, a host-declared import told apart by that answer alone), and the import section the bytes declare read back the same (dev/AUDIT.md A13E4; dev/CHARTER.md C1)",
+        () -> begin
+            local v = count_sites(r"\.imports\b"; roots=[CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")])
+            v += count_sites(r"filter\([^\n]*\bimports\b")
+            v += count_sites(r"^function imported_function\(") == 1 ? 0 : 1
+            # the builder: the definitions that read the list, on any receiver, each credited by
+            # the parser to the definition that holds it, exactly
+            local readers = String[]
+            for (dir, _, fs) in walkdir(joinpath(SRC, "builder")), f in fs
+                endswith(f, ".jl") && append!(readers, field_readers(joinpath(dir, f), :imports))
+            end
+            local keepers = ["add_import!", "add_import!", "imported_function", "num_imported_funcs", "to_bytes_mapped"]
+            v += sort!(readers) == keepers ? 0 : max(1, length(symdiff(Set(readers), Set(keepers))))
+            local hi = read(joinpath(ROOT, "test", "host_imports.jl"), String)
+            v += occursin("@testset \"one query for the import at a function index\" begin", hi) &&
+                 occursin("""
+                    @test [(i.module_name, i.field_name) for i in (WasmTarget.imported_function(mod, k) for k in 0:n - 1)] ==
+                          [("wasmtarget", "stack_trace"), ("host", "late")]
+                    @test WasmTarget.imported_function(mod, n) === nothing
+                    @test WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, h))
+                    @test !WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, 0))
+                """, hi) ? 0 : 1
+            v
+        end),
+    "L196_type_taking_methods_compile_once" => ("a compile of a program the process has not seen compiles WT's methods that take the program's types or functions once, not once per type or function a program has (dev/AUDIT.md A19X4): its behavior, test/ir_one_inference_path.jl's 'a program's own types compile WT's type-taking methods once (A19X4)': after two programs that differ only in their struct types, no specialization of convert_type!, _narrow_ref!, coerce_stack_top!, emit_value_as!, _emit_value_wrap!, register_tuple_type! or registry_order_key, nor of their keyword calls (a keyword call's NamedTuple is typed by its values, A19X2), names the second program's type or function; and reading the one class list (closed_world_class_list, class_candidates) prints no type's order key, the list being sorted once when the set is built (A18C2) (dev/CHARTER.md C10)",
+        () -> begin
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            local v = 0
+            for needle in ("@testset \"a program's own types compile WT's type-taking methods once (A19X4)\" begin",
+                           "WasmTarget.emit_value_as!, WasmTarget._emit_value_wrap!, WasmTarget.register_tuple_type!,",
+                           "WasmTarget.registry_order_key]",
+                           "@test isempty(mentions(\"_WtPinB\"))",
+                           "@test isempty(mentions(\"_wt_pin_b\"))",
+                           "@test keys[] == 0")
+                v += occursin(needle, oip) ? 0 : 1
+            end
+            v
+        end),
+    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
+        () -> begin
+            local rx = r"\b(A\d+[A-Z]\d+|[BEHMPS]\d+)\b"
+            local charter = read(joinpath(ROOT, "dev", "CHARTER.md"), String)
+            local plan = read(joinpath(ROOT, "dev", "MARCH.md"), String)
+            local rows = Dict{String,Set{String}}()
+            local row1317 = ""
+            for l in split(plan, '\n')
+                local m = match(r"^\| (13\.\d+) \| ([^|]*) \|", l)
+                m === nothing && continue
+                rows[m.captures[1]] = Set(String[x.match for x in eachmatch(r"C\d+", m.captures[2])])
+                m.captures[1] == "13.17" && (row1317 = String(l))
+            end
+            local v = 0
+            local cites = Dict{String,Set{String}}()
+            for blk in split(charter, r"\n(?=- \*\*C\d+)")
+                local h = match(r"^- \*\*(C\d+)", blk)
+                h === nothing && continue
+                local i = findfirst("Planned:", blk)
+                i === nothing && continue
+                local seg = blk[first(i):end]
+                local j = findfirst("\n## ", seg)
+                j === nothing || (seg = seg[1:first(j)])
+                v += length(collect(eachmatch(rx, seg)))
+                for r in eachmatch(r"13\.\d+", seg)
+                    haskey(rows, r.match) || (v += 1)
+                    push!(get!(cites, r.match, Set{String}()), h.captures[1])
+                end
+            end
+            for (r, cs) in rows
+                r == "13.17" && continue
+                cs == get(cites, r, Set{String}()) || (v += 1)
+            end
+            # 13.17: each ID after a label, and labels' clauses == the clauses citing 13.17
+            local labels = collect(eachmatch(r"[A-Za-z][^:;()]{1,60} \((C\d+(?: C\d+)*)[^()]*\):", row1317))
+            local first_label = isempty(labels) ? lastindex(row1317) + 1 : labels[1].offset
+            v += length(collect(m for m in eachmatch(rx, row1317) if m.offset < first_label))
+            local label_clauses = Set(String[c.match for l in labels for c in eachmatch(r"C\d+", l.captures[1])])
+            label_clauses == get(cites, "13.17", Set{String}()) || (v += 1)
+            v
+        end),
+    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted; and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
+        () -> begin
+            local audit = joinpath(ROOT, "dev", "AUDIT.md")
+            isfile(audit) || return 1
+            local txt = read(audit, String)
+            local entries = split(txt, r"\n(?=## )")[2:end]
+            isempty(entries) && return 1
+            local v = 0
+            for e in entries
+                for area in ("Area: builder", "Area: collection and planning",
+                             "Area: emission and diagnostics", "Area: enforcement and prose")
+                    occursin(area, e) || (v += 1)
+                end
+                occursin("Resolution:", e) || (v += 1)
+            end
+            # the entries chain: each one's range starts where the one before it was audited
+            # through, and every audited-through commit is an ancestor of HEAD (a rewritten
+            # history fails, never skips: A2P5)
+            local prev = nothing
+            local sha = nothing
+            for e in entries
+                local m = match(r"audited through ([0-9a-f]{8,40})", e)
+                m === nothing && (v += 1; continue)
+                sha = m.captures[1]
+                success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || (v += 1)
+                if prev !== nothing
+                    local r = match(r"\(([0-9a-f]{7,40})(?:~1)?\.\.", e)
+                    (r !== nothing && (startswith(prev, r.captures[1]) || startswith(r.captures[1], prev))) || (v += 1)
+                end
+                prev = sha
+            end
+            sha === nothing && return v + 1
+            success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v   # counted above
+            # the commits since the last audited one, merges not counted: a pull request's
+            # merge checkout and a landed march branch count the same
+            local behind = parse(Int, readchomp(`git -C $ROOT rev-list --count --no-merges $sha..HEAD`))
+            return v + (behind > 5 ? 1 : 0)
+        end),
+    "L143_one_storage_pointer_rule" => ("a storage-relative pointer becomes an array index through one rule, _emit_storage_byte_offset! (statements.jl): its value is the byte offset into the traced backing array, 1-based for a String or Symbol (jl_string_ptr answers 1), so the rule subtracts 1 for those; _emit_storage_element_offset! narrows it and divides by the element size, _emit_storage_pointer_offset! (a pointer load's or store's offset) adds the index term, and memcmp and memchr read it too. No lowering converts a pointer to an index itself: no `from_julia=Ptr{UInt8}` coercion, and no String-or-Symbol test (spelled `=== String || … === Symbol` or `in (String, Symbol)`) followed within three lines by a constant 1 and a subtraction (`_SUB`) outside the rule (E5 of the first audit's side notes, dev/AUDIT.md A17P1: four sites kept their own `- 1`). Until 2026-09-29 jl_pchar_to_string used the pointer's value as the index: String(::SubString{String}) copied from one byte late and string(SubString(\"cde\", 1, 2)) answered \"de\" (smoke substring_to_string; dev/CHARTER.md C1)",
+        () -> begin
+            local v = count_sites(r"from_julia\s*=\s*Ptr\{UInt8\}"; roots=[CODEGEN])
+            local test_rx = r"===\s*String\s*\|\|[^\n]*===\s*Symbol|\bin \(String, Symbol\)"
+            local one_rx = r"(i64|i32)_const!\([^,()]+,\s*(Int64\()?1\)?\)"
+            for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
+                endswith(f, ".jl") || continue
+                local ls = readlines(joinpath(dir, f))
+                local in_rule = false
+                for (i, l) in enumerate(ls)
+                    startswith(l, "function ") && (in_rule = startswith(l, "function _emit_storage_byte_offset!("))
+                    (_iscomment(l) || in_rule || !occursin(test_rx, l)) && continue
+                    local window = join(ls[i:min(i + 3, end)], "\n")
+                    v += occursin(one_rx, window) && occursin("_SUB", window) ? 1 : 0
+                end
+            end
+            local stm = read(joinpath(CODEGEN, "statements.jl"), String)
+            v += count("function _emit_storage_byte_offset!(", stm) == 1 ? 0 : 1
+            v += occursin("I32_SUB)  # 0-based index", stm) ? 1 : 0   # memchr's own `ptr - 1`
+            v
+        end),
+    "L142_struct_layout_by_structure" => ("a concrete struct is laid out by its fields whatever it subtypes, and a type's layout does not depend on the route that meets it first: is_struct_type decides by structure (concrete, isstructtype, no dedicated representation) and names no type — no `name.name`, no `<: Number` or `<: AbstractArray` test, no extension-filled name set (_ARRAY_STRUCT_CARVEOUT is gone); every field translator (the struct, tuple and closure registrars) and register_reachable_type! register a concrete Array through register_array_wrapper!, the Vector layout for rank 1 and the Matrix layout otherwise; and a constructor :invoke is called as the function of its MethodInstance, never replaced by a bare struct.new (compile_invoke! emits none; the arm that did when the body was proven `%new(T, args...)` needed a body the plan holds only for a MethodInstance with a function, so it could not run, and is gone). Until 2026-09-29 AbstractArray and Number subtypes were excluded by name and a few re-admitted by name: a Diagonal took the Matrix layout `[:ref, :size]` (so `D.diag` was not lowerable), a Complex was an erased structref in locals (ifelse over two emitted invalid wasm), a struct's Matrix field registered the Matrix with the Vector layout, and six LinearAlgebra overlays stood in for Julia's bodies (dev/CHARTER.md C1)",
+        () -> begin
+            structs = read(joinpath(CODEGEN, "structs.jl"), String)
+            inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            m = match(r"(?s)\nfunction is_struct_type\(.*?\nend\n", structs)
+            body = m === nothing ? "" : m.match
+            n = m === nothing ? 1 : 0
+            n += count(p -> occursin(p, body), ["name.name", "<: Number", "<: AbstractArray", "CARVEOUT"])
+            n += count_sites(r"_ARRAY_STRUCT_CARVEOUT"; roots=[SRC, joinpath(ROOT, "ext")])
+            # the four routes that register a field's or a signature's Array
+            n += (count(r"register_array_wrapper!\(mod, registry, ft\)", structs) >= 3 ? 0 : 1)
+            n += occursin("register_array_wrapper!(mod, registry, T)", structs) ? 0 : 1
+            n += occursin("struct_new!", inv) ? 1 : 0   # an :invoke is called, never replaced by a struct.new
+            n += occursin("fieldcount(_sc_tt) == length(args)", inv) ? 1 : 0
+            n
+        end),
+    "L141_constants_intern_by_egal" => ("a constant is interned by `===`, Julia's egal and dart's Constant equality (a dart Constant equals only one of its own class with equal fields, constants.dart:154 constantInfo): every `*constant_globals` map of the TypeRegistry is an IdDict, or a Dict whose key type is one where isequal is `===` (String, Symbol, Core.TypeName). Until 2026-09-29 constant_globals was a Dict{Any} keyed by isequal: the constant `(0x01,)` read the `(1,)` global randperm had made, and Random's own hash_seed trapped on the cast for a negative seed; a same-layout pair such as `(true,)` and `(0x01,)` passed the cast carrying the wrong type (dev/formal/Constants.tla SharedOnlyIfEgal; dev/CHARTER.md C3)",
+        () -> begin
+            types = read(joinpath(CODEGEN, "types.jl"), String)
+            maps = collect(eachmatch(r"^\s+(\w*constant_globals)::([^#\n]+?)\s*(?:#.*)?$"m, types))
+            egal_keys = ("Dict{Union{String,Symbol},", "Dict{Core.TypeName,", "Dict{String,", "Dict{Symbol,")
+            (length(maps) < 6 ? 1 : 0) +
+                count(m -> !(startswith(m.captures[2], "IdDict{") ||
+                             any(k -> startswith(m.captures[2], k), egal_keys)), maps)
+        end),
+    "L140_overlay_reasons_are_verified" => ("an overlay's quarantine reason that names a BLAS or LAPACK routine is checked, not believed: test/overlay_reasons.jl (one QA family of runtests.jl) finds, for each such overlay, that Julia's own method at the overlay's signature reaches that routine's foreigncall through its invokes, and every such reason in ext/ uses the one form it parses, `parity(quarantine: BLAS gemm: …)`. The first run found a reason naming BLAS trsv where Julia's ldiv! calls LAPACK trtrs (dev/CHARTER.md C3)",
+        () -> begin
+            n = isfile(joinpath(ROOT, "test", "overlay_reasons.jl")) ? 0 : 1
+            n += occursin("include(\"overlay_reasons.jl\")", read(joinpath(ROOT, "test", "runtests.jl"), String)) ? 0 : 1
+            for (d, _, fs) in walkdir(joinpath(ROOT, "ext")), f in fs
+                endswith(f, ".jl") || continue
+                for l in _file_lines(joinpath(d, f))
+                    occursin(r"quarantine:\s*(BLAS|LAPACK)\b", l) || continue
+                    occursin(r"^# parity\(quarantine: (BLAS|LAPACK) [a-z0-9]+: ", l) || (n += 1)
+                end
+            end
+            n
+        end),
+    "L139_invoke_names_its_method" => ("an :invoke calls the method its MethodInstance names: the closed-world plan keeps one function per MethodInstance (never one per (f, arg_types): two methods share a specialization's argument types when Base calls a less specific one with `invoke(f, Tuple{Super}, x)`), marks the one dispatch does not select invoke-only, the collector's re-specialization keeps the invoked method (or its same-signature overlay) even where a more specific method fully covers it, and codegen decides self-recursion and the callee by the MethodInstance's function. Until 2026-09-28 the rebuild took dispatch's choice and the plan deduplicated by (f, arg_types): unique(::Vector{Float64}) compiled to a function that called itself forever (dev/CHARTER.md C6)",
+        () -> begin
+            trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            inv = read(joinpath(CODEGEN, "invoke.jl"), String)
+            types = read(joinpath(CODEGEN, "types.jl"), String)
+            required = ["((mi.def, mi.specTypes) in seen_mis) && continue",
+                        "push!(functions, (f, arg_types, name, mi))",
+                        "if m.method.sig == mi.def.sig",
+                        "if m.method.sig == root_mi.def.sig",
+                        "CC.specialize_method(root_mi.def, root_mi.specTypes, root_mi.sparam_vals)",
+                        "local target = get_function_by_mi(ctx.func_registry, mi)",
+                        "# one call arm, self-recursion included",
+                        "get_function_by_mi(registry::FunctionRegistry, mi::Core.MethodInstance)"]
+            count(p -> !occursin(p, trim * inv * types), required) +
+                count(p -> occursin(p, trim), ["seen_sigs", "(f, arg_types) in seen_sigs"])
+        end),
+    "L138_oracle_is_bit_exact" => ("the differential oracle is bit-exact: a float matches when its bits are Julia's (0.0 and -0.0 differ) or both are NaN — compare_julia_wasm and the vector bridges by isequal, the fuzz oracle's vals_match by isequal, Bridge._float_match by `===` — and the result transports carry -0.0 (JSON writes it as 0). The one tolerance (a relative 1e-9) applies only where tree_matches is told why the native value's last bits are not Julia's portable answer, and only four per-case allowlists say so: linalg_diff.jl's _LA_C_LIBRARY (each a BLAS or LAPACK routine), stats_diff.jl's _ST_NONPORTABLE and staticarrays_diff.jl's _SA_NONPORTABLE (each an @simd reduction, whose order and contraction Julia leaves to the target), and simplediffeq_diff.jl's _SDE_NONPORTABLE (each a muladd, which Julia leaves free to round once or twice — every case, since every solver's step is @muladd, and the lane checks that of each solver's step method, _sde_step_calls_muladd). Until 2026-09-28 every float compared within 1e-9 (the fuzz oracle, the bridge) or 1e-10 (the vector bridges), which passed a last-bit error in Julia's own math and a -0.0 read as 0.0 (dev/CHARTER.md C3)",
+        () -> begin
+            bridge = read(joinpath(SRC, "bridge.jl"), String)
+            utils = read(joinpath(ROOT, "test", "utils.jl"), String)
+            prop = read(joinpath(ROOT, "test", "fuzz", "property.jl"), String)
+            n = count_sites(r"isapprox\(|≈|\brtol\b|\batol\b"; roots=[joinpath(ROOT, "test")],
+                            exclude_files=["parity_ratchet.jl"])
+            n += count_sites(r"isapprox\(|\brtol\b|\batol\b"; roots=[SRC],
+                             exclude_line=r"return isapprox\(Float64\(a\), Float64\(b\); rtol = 1e-9, atol = 1e-12\)")
+            n += count(p -> !occursin(p, bridge * utils * prop),
+                       ["nonportable === nothing && return false", "a === b && return true",
+                        "pass=isequal(expected, actual)", "return isequal(a, b)",
+                        "if (Object.is(value, -0)) return \"__-0__\";", "out.push('__-0__')",
+                        "result == \"__-0__\" && return -0.0"])
+            # a SimpleDiffEq allowance is checked against the solver's own step, not believed
+            n += occursin("calls = _sde_step_calls_muladd(S)",
+                          read(joinpath(ROOT, "test", "fuzz", "simplediffeq_diff.jl"), String)) ? 0 : 1
+            for (file, dict, rx) in (("linalg_diff.jl", "_LA_C_LIBRARY", r"^(BLAS|LAPACK) [a-z]"),
+                                     ("stats_diff.jl", "_ST_NONPORTABLE", r"^@simd [A-Za-z]"),
+                                     ("staticarrays_diff.jl", "_SA_NONPORTABLE", r"^@simd [A-Za-z]"),
+                                     ("simplediffeq_diff.jl", "_SDE_NONPORTABLE", r"^muladd [A-Za-z]"))
+                src = read(joinpath(ROOT, "test", "fuzz", file), String)
+                m = match(Regex("(?s)const $(dict) = Dict\\{Function,String\\}\\((.*?)\\n?\\)\\n"), src)
+                m === nothing && (n += 1; continue)
+                n += count(v -> !occursin(rx, v), [x.captures[1] for x in eachmatch(r"=> \"([^\"]*)\"", m.captures[1])])
+            end
+            n
+        end),
+    "L137_any_is_anyref" => ("one representation of `Any`: the \$JlType hierarchy is created right after Top, before any type registers (compile_module; dart's ClassInfoCollector.collect creates Top and `_Type` first), so every `Any` field, local and signature is anyref — no code branches on the hierarchy's absence and no pass rewrites a finished type. Until 2026-09-28 the exception and signature types registered before the hierarchy took externref `Any` fields and a second, stale DataType struct, which patch_any_fields_for_jltype_hierarchy! rewrote afterwards (dev/CHARTER.md C1)",
+        () -> begin
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
+            count_sites(r"jl_type_idx\s*(===|!==)\s*nothing"; exclude_line=r"# Already created") +
+                count_sites(r"\bmod\.types\[[^\]]*\]\s*=[^=]") +
+                count_sites(r"patch_any_fields_for_jltype_hierarchy!") +
+                (occursin("get_base_struct_type!(mod, type_registry)\n    create_jl_type_hierarchy!(mod, type_registry)", compile_src) ? 0 : 1)
+        end),
+    "L136_constant_type_is_its_emission" => ("a constant's static type (static_wasm_type, dart's TypeOfConstantVisitor) is the type its emission pushes: the one visitor, emit_value!(b, val, ctx), checks it for every literal and bound GlobalRef it emits, as dart asserts it of every constant (constants.dart:811), and every reference constant is non-null (constants.dart:821). A long String constant pushed (ref null \$JlString) under a non-null static type until 2026-09-28 (dev/CHARTER.md C4)",
+        () -> begin
+            src = read(joinpath(CODEGEN, "values.jl"), String)
+            m = match(r"(?s)\nfunction emit_value!\(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext\)::.*?\nend\n", src)
+            m === nothing && return 1
+            count(r -> !occursin(r, m.match),
+                  ["local st = static_wasm_type(val, ctx)", "st == ty || error("])
+        end),
+    "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output (dev/CHARTER.md C9)",
+        () -> begin
+            v = String[]
+            plan = _lines(joinpath(ROOT, "dev", "MARCH.md"))
+            length(plan) <= 60 || push!(v, "dev/MARCH.md has $(length(plan)) lines (cap 60)")
+            for (i, l) in enumerate(plan)
+                (occursin(r"\|\s*done\s*\|"i, l) || occursin(r"^#+ .*\bresults?\b"i, l)) &&
+                    push!(v, "dev/MARCH.md:$i holds finished work: $(first(l, 60))")
+            end
+            hist = _lines(joinpath(ROOT, "dev", "HISTORY.md"))
+            length(hist) <= 160 || push!(v, "dev/HISTORY.md has $(length(hist)) lines (cap 160)")
+            starts = [i for (i, l) in enumerate(hist) if startswith(l, "## ")]
+            for (k, i) in enumerate(starts)
+                n = (k < length(starts) ? starts[k + 1] : length(hist) + 1) - i
+                n <= 25 || push!(v, "dev/HISTORY.md entry at line $i is $n lines (cap 25)")
+            end
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    # ── the NIR boundary (frontend/nir.jl) is codegen's one reader of Julia's typed IR ──
+    "R29a_raw_codeinfo_reads" => ("Expr.head/.args[ / ssavaluetypes raw reads in codegen/ — every codegen consumer reads ctx.nir nodes built once by frontend/nir.jl (dart reads every node through one typeContext, code_generator.dart:77). Inside ir.jl only an exact list of functions may read a raw CodeInfo: get_typed_ir (the boundary's input) and the typed-IR transport (IR_RAW_READERS); the host-layout query reads NIR; the closed-world type collector reads NIR (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
+        () -> count_sites(r"\.args\[|\.head ==|\.head ===|ssavaluetypes"; roots=[CODEGEN], exclude_files=["ir.jl"]) +
+              _ir_raw_reads_outside_allowlist(r"\.args\[|\.head ==|\.head ===|ssavaluetypes")),
+    "R29b_code_info_identifier" => ("the `code_info` identifier in codegen/ — CompilationContext is built from a NirBody and carries no CodeInfo; the planner hands typed IR to nir_body, and inside ir.jl only the IR_RAW_READERS functions name it (locked 2026-09-22; ir.jl narrowed 2026-09-23)",
+        () -> count_sites(r"\bcode_info\b"; roots=[CODEGEN], exclude_files=["ir.jl"]) +
+              _ir_raw_reads_outside_allowlist(r"\bcode_info\b")),
+    "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
+        () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
+    "L190_emission_changes_have_a_running_case" => ("every function body whose emission a change alters is entered by a passing differential case, checked in the non-blocking matrix at clause closure (its base the nearest ancestor whose run published one, so a closure run far from the last stays correct) and in the full gate (gate.yml, never a landing's gate: L163, L194), at function entry, no finer: a changed branch inside an entered function counts as entered (block-level entry of a changed body is planned, dev/MARCH.md 13.17) (Amendment 117-1 (a): in 116b-116dx reviews found ~15 wrong answers by reading, among them one-path rewrites that dropped cases the old paths covered). Smoke on Julia 1.12, as a lane (dev/lanes.sh exports WT_EMISSION_DIR for `--lane smoke`), fingerprints every body of the module each case's runner compiles (compare_julia_wasm and compare_julia_wasm_inputs compile through _emission_compile, the one compile line, and report the module through EMITTED_MODULES; main calls no other runner; a typed-result wrapper, which the harness compiles to read an Any result, is not the case's module) and records which a run of the case's inputs entered (an exported counter set at each function's entry, in a copy of the module) and each case's source hash. A body is keyed by its specialization (the MethodInstance's specTypes from the compile's function registry; a function no entry names by its name), and its fingerprint names each operand by what it denotes (a function by its key, a type by its structure, a global by its name, type and initializer), so renumbering a module changes no unrelated body; its labeled fingerprint writes each class-id constant (compared with a class id read from an object's field 0, or built into one) as its class's type, any other constant keeping its value. The base side is computed once per landed head: gate.yml's emission job publishes the commit's own smoke rows on a green verdict as its base file (an artifact named by the base sha, the Julia version and a hash of test/emission_fingerprint.jl and _emission_compile, kept 90 days), and .github/workflows/emission-base.yml publishes one for a base no gate published (`bash dev/emission_diff.sh bootstrap`). In gate.yml alone (gate-fast.yml holds no emission job), when src, ext or Project.toml differ from the base, the head's merge base with the march branch or, for a landed head (its own merge base), the nearest first-parent ancestor whose base file a run published, emission-plan fetches that file (absent, it fails, naming the key) and compiles with the base's src only the cases it lacks or whose source hash changed, beside the lanes (when the head's tests do not load over the base's src, none: the delta holds the load error, and the head's bodies are compared with the cached file's alone, which only adds bodies the base does not emit); the emission job fails on a (key, fingerprint) the head emits and the base does not, entered by no passing case nor by a body of the same key and labeled fingerprint (one specialization in modules whose classes are numbered apart), naming it; a red lane cancels the run, a red emission-plan no lane (the lanes' verdict on a landed head stands). Behavior, run here on test/emission_fingerprint.jl: a module and its copy with the functions in the other order fingerprint alike; a changed constant that is no class id changes its body's fingerprint and labeled fingerprint, not its caller's; two specializations of one method that differ only in a mask constant have two keys and two labeled fingerprints, and with only one entered the verdict fails naming the other; a class id compared with a class id read or built into an object's field 0 has one labeled fingerprint when classes are numbered apart, and a mask of a class id keeps its value; the verdict passes a changed body a passing case entered, or one of the same key and labeled fingerprint another passing case entered, and an unchanged tree, and fails a changed body no passing case entered (naming it), another labeled fingerprint or another key, a missing base file or delta, a failed case, a missing smoke part and a base compiled by another Julia (dev/CHARTER.md C5)",
+        () -> (emission_module(); Base.invokelatest(_l190_check))),
+    "L191_numeric_tables_generate_their_cases" => ("every key of the numeric lowering tables, INTRINSIC_BINOPS, INTRINSIC_UNOPS, INTRINSIC_CONVERSIONS, CHECKED_OPS, SHIFT_OPS, FMA_OPS and MISC_OPS, has generated differential cases in smoke, one per Julia type whose register is the key's, less RC_HELD's types (R42) (test/registry_cases.jl, one GROUPS group per table, enumerated from the tables themselves, never a copy of their keys; a key no Julia type reaches raises when smoke loads, naming it), a shift's per pair of shifted and amount types the intrinsic accepts; and the operator fallback's cases are asked of operator_intrinsic itself: its callees those it answers for some type among BUILTIN_LOWERINGS's keys (the call) and among every Core.Intrinsics intrinsic and Base binary operator (the reduce, a splat of two), a case per callee and type the consumer's rule answers (operator_intrinsic for the call, reduce_intrinsic for the reduce), and a loud case (an xfail) for the first type it answers `nothing` for where Julia answers. The blocking gate runs registry_sample, derived from those groups (Amendment 117-14: split, never exempt; the full groups are test/block_groups.tsv's matrix-only row, L194): the first generated case of each class, its table, its function's arity (a unary and a binary operation of one table, the operator fallback's call and reduce, are two kinds) and the register classes of the values it operates on (a narrow integer apart from a full one, a shift's amount beside its value, a conversion's target by its register), with that case's function and inputs, at most 60 (more raises when smoke loads); every generated case names its types. Each case is compiled once and run over its inputs (compare_julia_wasm_inputs): each type's boundaries and, for a narrow type, a dirty operand whose register holds junk above its width; a float travels as its bits and a float result is compared by its bits, an arithmetic NaN as a NaN (IEEE 754's sign bit operations and a bitcast by every bit). The class of silent wrong answers the reviews found by reading in 116d-2 and audit #16: A16E1 (a narrow sext, zext or sitofp source read with its junk), A16E3 (a sitofp to Float32 rounded twice) and 116d-2's operator kind swap; 116d-2's other, the Int128 sext of a UInt8, is a 128-bit conversion, which no generated case holds (smoke's int128_extends is its case); A16E4's arity, a splat of one or three elements where native throws, waits for the strict throw match (117b). Behavior: smoke's registry groups, each failing under a plant of a fix: normalise_narrow! deleted from emit_conversion!'s sext arm (the A16E1 fix) fails registry_conversions, sitofp to a Float32 converted through a Float64 (A16E3) fails registry_conversions, operator_intrinsic answering a float intrinsic for an integer (116d-2) fails registry_operators, a narrow shift amount read with its junk (the W6 fix reverted) fails registry_shift, and a key no type reaches added to INTRINSIC_UNOPS fails smoke's load (dev/CHARTER.md C5)",
+        () -> begin
+            local rc = _text(joinpath(ROOT, "test", "registry_cases.jl"))
+            local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+            local v = 0
+            for t in ("INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS", "CHECKED_OPS", "SHIFT_OPS", "FMA_OPS", "MISC_OPS")
+                v += occursin("keys(WasmTarget.$t)", rc) && occursin("_rc_unreached(:$t,", rc) ? 0 : 1
+            end
+            # the operator fallback's callees asked of operator_intrinsic; per type, each consumer's
+            # rule: operator_intrinsic for the call, reduce_intrinsic for the reduce
+            v += occursin("_rc_answers(rule, f, types) = any(T -> rule(f, T) !== nothing, types)", rc) &&
+                 occursin("local calls = sort!(Any[f for f in keys(WasmTarget.BUILTIN_LOWERINGS) if _rc_answers(WasmTarget.operator_intrinsic, f, types)]; by=string)", rc) &&
+                 occursin("local reduced = Any[f for f in _rc_operator_candidates() if _rc_answers(WasmTarget.operator_intrinsic, f, types)]", rc) &&
+                 count("WasmTarget.operator_intrinsic(f, T) !== nothing", rc) == 1 &&
+                 count("WasmTarget.reduce_intrinsic(f, T) !== nothing", rc) == 1 &&
+                 # the reduce's case wherever Julia answers the splat of two
+                 occursin("_rc_accepts(f, _rc_in(T, inputs[end][1]), _rc_in(T, inputs[end][2])) || continue", rc) ? 0 : 1
+            # a shift's amount over every integer type
+            v += occursin("for T in ints, U in ints", rc) && occursin("_rc_product(_rc_operands(T), _rc_amounts(U, 8 * sizeof(T)))", rc) ? 0 : 1
+            # the dirty operand: every narrow type whose bit patterns are all values
+            v += occursin("_rc_dirtyable(T) = T in (Int8, UInt8, Int16, UInt16, Float16)", rc) &&
+                 occursin("append!(out, [(_rc_c(a), _rc_c(b)) for (a, b) in _rc_dirty_pairs(T)])", rc) ? 0 : 1
+            # a float by its bits
+            v += occursin("_rc_carrier(T) = T <: AbstractFloat ? Base.uinttype(T) : T", rc) &&
+                 occursin("@inline _rc_out(r) = (r isa AbstractFloat && isnan(r)) ? _rc_exact(typeof(r)(NaN)) : _rc_exact(r)", rc) ? 0 : 1
+            for g in ("binops", "unops", "conversions", "checked", "shift", "fma", "misc", "operators")
+                v += occursin("    \"registry_$g\" => _rc_$g,\n", rc) && occursin("_lazy_g(\"registry_$g\", \"registry_cases.jl\")", sm) ? 0 : 1
+            end
+            v += occursin("    RC_GROUPS[\"registry_operators_rejected\"] = RC_OPERATOR_REJECTS\n", rc) &&
+                 occursin("_lazy_xf(\"registry_operators_rejected\", \"registry_cases.jl\")", sm) ? 0 : 1
+            # the blocking sample (Amendment 117-14): derived from the generated groups, the first case
+            # of each class (its table, its arity and its types' register classes, a narrow integer
+            # apart), at most 60, every generated case given its types
+            v += occursin("    RC_CLASS[\"\$gname/\$name\"] = (gname, length(inputs[1]), map(_rc_class, types)...)", rc) &&
+                 occursin("_rc_class(x) = x isa DataType ? (_rc_register(x) in (WasmTarget.I32, WasmTarget.I64) &&", rc) &&
+                 occursin("const RC_SAMPLE_MAX = 60\n", rc) &&
+                 occursin("    length(g) <= RC_SAMPLE_MAX ||\n        error(", rc) &&
+                 occursin("        key in seen && continue\n", rc) &&
+                 occursin("    RC_GROUPS[\"registry_sample\"] = _rc_sample_group([n => RC_GROUPS[n] for (n, _) in RC_GENERATORS])", rc) &&
+                 occursin("_lazy_g(\"registry_sample\", \"registry_cases.jl\")", sm) ? 0 : 1
+            v += count(r"_rc_case!\(g, ", rc) == count(r"_rc_case!\(g, [^\n]*; types=", rc) ? 0 : 1
+            # a shift's amount classed beside its value, a conversion's target by its register
+            v += occursin("_rc_case!(g, \"registry_shift\", \"\$(op)_\$(T)_\$(U)\", f, inputs; types=(T, U), entry=(:SHIFT_OPS, op))", rc) &&
+                 occursin("_rc_case!(g, \"registry_conversions\", \"\$(op)_\$(S)_\$(D)\", f, inputs; types=(S, rd),", rc) ? 0 : 1
+            v += occursin("_lazy_g(\"registry_foreign\", \"registry_cases.jl\")", sm) &&
+                 occursin("haskey(CASE_INPUTS, tag) ? compare_julia_wasm_inputs(f, CASE_INPUTS[tag]; admit=_rc_admit)", sm) ? 0 : 1
+            v
+        end),
+    "L192_no_default_type_parameter" => ("a syntactic scan of src/codegen and src/frontend for exactly these forms (it cannot see every spelling of a fallback; the semantic guarantee against a wrong default is the generated cases and the emission-diff check, L190 and L191), each site found either on L192_ALLOWED's exact entries (a legitimate site with what its default means there; each entry matches exactly one site, so a stale entry or one matching two fires) or a wrong default R43 counts (terminal 0): (1) a keyword or optional positional parameter, of a `function`, a short-form or an anonymous function, whose default is a type (`::Type=Any`, `=Core.Any`, `=Vector{Int}`), a register (`=I32`, `=WasmTarget.I32`), a value computed from a register (`(lhs_ty === I32 ? 32 : 64)`), any value for a parameter named for a width (the A16E1 class), an integer for one named for an index, a sentinel (`-1`, `typemax(…)`), or `nothing` for a Julia-type parameter (annotated with a `Type`, or named for one: `julia::Any`, `spectypes`); (2) a `something`, `coalesce`, `get` or `get!` whose last argument is a type or a register; (3) a function's answers, the `return`s it reaches outside a tail `if`'s condition (an early `c && return X`, an `if c; return X; end`, a return inside an arm or a nested branch) with its fall-through value and a tail branch read arm by arm, when one is a bare type or register and another is an answer; (4) a ternary or if/elseif/else in value position (assigned, passed or built into a value), its arms read the same way, under the same rule; (5) a branch anywhere under a nothing test whose answer is a bare type or register (`x === nothing ? AnyRef : I32`), and (6) a short-circuit under a nothing test that returns or yields one (`x === nothing && return Any`), each outside a function whose answers (3) fire. A choice between named answers alone (`is32 ? I32 : I64`) is a mapping, a nested all-named branch beside an answer is one named answer, and an answer that raises answers nothing. A site is keyed by its text without line numbers, past 200 characters its first 180 and a hash of the whole (Amendment 117-1 (b): silent defaults such as `julia::Any=Any`, `something(reg, I32)` and `reg(T, default)` let one-path rewrites answer wrong in 116c). Behavior, run here: each sample in L192_SPELLINGS is found by the scan, and none in L192_NOT_SPELLINGS (an empty container, a Bool flag, an optional sink, a join, a mapping, a raising arm, a short-circuit returning no type) (dev/CHARTER.md C5)",
+        () -> begin
+            # each entry names exactly one site: a stale entry, or one that matches two sites, fires
+            local found = type_default_parameters()
+            count(k -> count(==(k), found) != 1, keys(L192_ALLOWED)) + _l192_spellings_missed()
+        end),
+    "L201_closed_cites_no_stopgap" => ("strict means by construction (Dale, 2026-10-21): a clause of C1 to C8 with no Planned text (one the charter block reads CLOSED) cites only constructions: no ratchet, no lock STRICT_KINDS classifies :stopgap (a scan of WT's source, an allowlist or a count, finding the wrong choice at gate time) or :behavior (a run that must reach it), and no lock it does not classify; every lock C4 to C8 cite is classified, every entry names a lock one of them cites, and every :construction names the definition in src that is the construction, which a definition of exactly that name must exist for (a hand label naming nothing is a stopgap). Behavior, run here: planted clauses (a stopgap, a behavior check, a ratchet or an unclassified lock with no Planned text fires; Planned text, constructions alone, or a clause outside the scope do not), a planted table's ten faults, and the name resolution of a real and a missing definition (dev/CHARTER.md C0)",
+        () -> begin
+            local cl = charter_clauses()
+            local v = vcat(strict_violations(cl, STRICT_KINDS), strict_table_faults(cl, STRICT_KINDS), strict_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
 ]
+
 
 function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     baseline = _read_baseline(BASELINE_PATH)
     bm = get(baseline, "metrics", Dict{String,Int}())
-    bl = get(baseline, "locks", Dict{String,Int}())
 
     ok = true
     current_m = Dict{String,Int}()
     current_l = Dict{String,Int}()
 
-    println("── parity ratchet (dev/PARITY_MASTER.md) ──")
+    # function_body_lines must see the whole god function (4,583 lines at the march baseline);
+    # a helper that exits early would make every span lock vacuous
+    _fbl_check = function_body_lines(joinpath(CODEGEN, "calls.jl"), "function compile_call!(")
+    _fbl_check > 1000 || (println("⚠ function_body_lines sanity check: got $_fbl_check (expected > 1000)"); ok = false)
+
+    println("── parity ratchet (dev/CHARTER.md's locks and ratchets) ──")
     for (id, (desc, thunk)) in METRICS
         c = thunk()
         current_m[id] = c
         b = get(bm, id, nothing)
-        status = b === nothing ? "NEW(baseline)" :
+        # a ratchet with no baseline line bounds nothing: outside update mode it fails, and only
+        # WT_RATCHET_UPDATE=1 records it, a reviewable diff of the baseline (A12P5)
+        status = b === nothing ? (update ? "NEW(baseline): recorded by this update" :
+                                  "❌ MISSING from dev/parity_baseline.toml (record it with WT_RATCHET_UPDATE=1)") :
                  c > b ? "❌ RATCHET BROKEN (+$(c - b))" :
                  c < b ? "▼ improved ($b→$c — tighten with WT_RATCHET_UPDATE=1)" : "= holding"
+        b === nothing && !update && (ok = false)
         b !== nothing && c > b && (ok = false)
         println(rpad(id, 28), lpad(string(c), 6), "  ", status, "   # ", desc)
     end
     for (id, (desc, thunk)) in LOCKS
         c = thunk()
         current_l[id] = c
-        want = get(bl, id, 0)
-        good = (c == want)
+        # a lock passes only at 0, whatever the baseline holds (A3P9)
+        good = (c == 0)
         good || (ok = false)
-        println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want $want)", "   # ", desc)
+        println(rpad(id, 28), lpad(string(c), 6), "  ", good ? "🔒 locked" : "❌ LOCK BROKEN (want 0)", "   # ", desc)
+    end
+    # a baseline key that names no METRICS ratchet fails outside update mode: a lock is not
+    # recorded (A3P9), and a key left by a renamed or deleted ratchet bounds nothing (A12P5)
+    metric_ids = Set{String}(first(p) for p in METRICS)
+    for sec in sort!(collect(keys(baseline))), k in sort!(collect(keys(baseline[sec])))
+        (sec == "metrics" && k in metric_ids) && continue
+        if update
+            println("baseline key [", sec, "] ", k, " names no METRICS ratchet: dropped by this update")
+        else
+            println("❌ STRAY baseline key [", sec, "] ", k, ": names no METRICS ratchet, FAIL (delete the line; a lock is not recorded, A3P9)")
+            ok = false
+        end
     end
 
+
+    # dev/CHARTER.md: the per-clause verdict. A clause is CLOSED only when every check it
+    # cites is a passing lock (a cited ratchet keeps it open, at 0 too, until it moves to
+    # LOCKS) and it names no planned check.
+    println("── charter (dev/CHARTER.md) ──")
+    allc = merge(current_m, current_l)
+    byshort = Dict(_short_id(k) => k for k in keys(allc))
+    for (cid, (body, ids)) in charter_clauses()
+        title = strip(first(split(body, "."; limit=2)))
+        title = replace(title, "*" => "")
+        open_ = String[]
+        for i in ids
+            k = get(byshort, i, nothing)
+            k === nothing && (push!(open_, "$i?"); continue)
+            # a cited ratchet keeps its clause open until it is a lock: "reached 0 and been
+            # converted to a lock" (dev/CHARTER.md), not merely at 0
+            haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
+            haskey(current_l, k) && current_l[k] != 0 && push!(open_, "$i BROKEN")
+        end
+        # a stopgap or behavior check a clause on the compiler cites is named beside its planned check (L201)
+        if cid in STRICT_SCOPE
+            for i in ids
+                local _sk = startswith(i, "L") ? _strict_kind(i, STRICT_KINDS) : :construction
+                (_sk === :stopgap || _sk === :behavior) && push!(open_, "$i $_sk")
+            end
+        end
+        occursin("Planned:", body) && push!(open_, "planned check")
+        println(rpad(cid, 4), rpad(first(title, 42), 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
+    end
     if update
         if !ok
             println("refusing WT_RATCHET_UPDATE: a ratchet/lock is BROKEN (ratchets never loosen).")
         else
-            _write_baseline(BASELINE_PATH, current_m, current_l)
+            _write_baseline(BASELINE_PATH, current_m)
             println("baseline tightened → ", BASELINE_PATH)
         end
     end
@@ -1272,7 +6017,7 @@ end
 end # module
 
 # Standalone: exit 0/1. From runtests, include this file then assert
-# `@test ParityRatchet.run()` inside a @testset (see runtests.jl shard-0 block).
+# `@test ParityRatchet.run()` inside a @testset (see runtests.jl's `_wt_qa("parity_ratchet.jl")` block).
 if get(ENV, "WT_RATCHET_INCLUDED", "0") != "1"
     exit(ParityRatchet.run() ? 0 : 1)
 end

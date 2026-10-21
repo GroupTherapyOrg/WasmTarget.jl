@@ -111,10 +111,20 @@ for i in 1:10
     @eval struct $(Symbol("_M11D", i)) <: _M11Z; v::Int64; end
     @eval _m11dv(x::$(Symbol("_M11D", i)), k::Int64)::Int64 = x.v * $i + k
 end
-_m11_disp(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3), _M11D4(4), _M11D5(5), _M11D6(6), _M11D7(7), _M11D8(8), _M11D9(9), _M11D10(10)]; for x in xs; t += _m11dv(x, n); end; t)
+# Julia types each `_m11dv(x, n)` call `::Any` (ten methods pass its max_methods cutoff), so the
+# call is the dynamic dispatch its IR asks for, and its result is the method's, read at run time:
+# asserted Int64, the two-arg dispatch answers; summed as `Any`, `+` over an `Any` operand is
+# two-position dispatch, which rejects located at its statement (dev/MARCH.md 13.10; smoke xfail
+# erased_arithmetic) — it compiled only while codegen re-inferred the call with the cutoff lifted.
+_m11_disp(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3), _M11D4(4), _M11D5(5), _M11D6(6), _M11D7(7), _M11D8(8), _M11D9(9), _M11D10(10)]; for x in xs; t += _m11dv(x, n)::Int64; end; t)
+_m11_disp_any(n::Int64)::Int64 = (t = 0; xs = _M11Z[_M11D1(1), _M11D2(2), _M11D3(3), _M11D4(4), _M11D5(5), _M11D6(6), _M11D7(7), _M11D8(8), _M11D9(9), _M11D10(10)]; for x in xs; t += _m11dv(x, n); end; t)
 @testset "march13: two-arg megamorphic dispatch (FIXED — the six-link chain)" begin
     r = try compare_julia_wasm(_m11_disp, Int64(3)) catch; (pass=false,) end
     @test r.pass
+    err = try WasmTarget.compile_multi(Any[(_m11_disp_any, (Int64,), "m11_any")]); nothing catch e; e end
+    @test err isa WasmTarget.WasmCompileError
+    @test occursin("has no single opcode", sprint(showerror, err))
+    @test err.diag.stmt_idx > 0   # located at its statement
 end
 
 # march15: :the_exception reads the ENCLOSING region's payload local (dart's named
