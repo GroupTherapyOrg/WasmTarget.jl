@@ -214,7 +214,7 @@ parity(pkg/dart2wasm/lib/compile.dart:617 classNames): one name per classId, `tr
 """
 function _class_names(registry::TypeRegistry)::Vector{Union{Nothing,String}}
     local names = Union{Nothing,String}[]
-    for (T, id) in ordered_pairs(registry.type_ids, type_order_key)
+    for (T, id) in ordered_pairs(registry.type_ids, registry_order_key(registry))
         while length(names) <= id
             push!(names, nothing)
         end

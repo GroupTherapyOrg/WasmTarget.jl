@@ -629,6 +629,8 @@ mutable struct TypeRegistry
     pending::PendingTypes
     # the module objects codegen holds by handle (ModuleHandles)
     handles::ModuleHandles
+    # each type's order key, printed once per compile (registry_order_key)
+    order_keys::IdDict{Type, Tuple{String,String}}
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -661,7 +663,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing,                                            # perf_now_idx
     nothing,                                            # rng_globals
     PendingTypes(),                                     # types being registered
-    ModuleHandles()                                     # the module's handles
+    ModuleHandles(),                                    # the module's handles
+    IdDict{Type, Tuple{String,String}}()                # order keys
 )
 
 """
@@ -1174,7 +1177,17 @@ own iteration order is the objects' addresses, which differ from process to proc
 parity(quarantine: the program-derived order of the type constants, see type_order_key.)
 """
 ordered_type_constants(registry::TypeRegistry)::Vector{<:Pair} =
-    ordered_by(collect(registry.type_constant_globals), p -> (type_order_key(p.first), p.second))
+    ordered_by(collect(registry.type_constant_globals), p -> (registry_order_key(registry)(p.first), p.second))
+
+"""
+    registry_order_key(registry) -> (T -> type_order_key(T))
+
+The type order key of this compile, each type printed once: every ordered walk of a registry map
+reads it, so a compile prints a type at most once instead of once per walk.
+parity(quarantine: the program-derived order key for identity-hashed keys, see type_order_key.)
+"""
+registry_order_key(registry::TypeRegistry)::Function =
+    T -> get!(() -> type_order_key(T), registry.order_keys, T)
 
 # parity(quarantine: the program-derived order key for a Core.TypeName, see type_order_key.)
 typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))
@@ -1211,7 +1224,7 @@ range window (class_info.dart:831 getConcreteClassIdRange).
 parity(class_info.dart:831 ClassIdNumbering.getConcreteClassIdRange): the concrete ids below T.
 """
 function concrete_class_ids(registry::TypeRegistry, @nospecialize(T))::Vector{Int32}
-    ids = Int32[id for (_, id) in ordered_pairs(registry.type_ids, type_order_key, C -> C isa Type && C <: T)]
+    ids = Int32[id for (_, id) in ordered_pairs(registry.type_ids, registry_order_key(registry), C -> C isa Type && C <: T)]
     return sort!(ids)
 end
 
@@ -1235,13 +1248,13 @@ parity(quarantine: a JSON dump of the registries for WT's tooling (a host framew
 function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
     result = Dict{String, Any}()
     ids = Dict{String, Int32}()
-    for (T, id) in ordered_pairs(registry.type_ids, type_order_key)
+    for (T, id) in ordered_pairs(registry.type_ids, registry_order_key(registry))
         ids[string(T)] = id
     end
     result["type_ids"] = ids
 
     ranges = Dict{String, Any}()
-    for (T, (low, high)) in ordered_pairs(registry.type_ranges, type_order_key)
+    for (T, (low, high)) in ordered_pairs(registry.type_ranges, registry_order_key(registry))
         ranges[string(T)] = Dict("low" => low, "high" => high)
     end
     result["type_ranges"] = ranges
@@ -1273,7 +1286,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
 
     # Array types
     arrays = Dict{String, Int}()
-    for (T, idx) in ordered_pairs(registry.arrays, type_order_key)
+    for (T, idx) in ordered_pairs(registry.arrays, registry_order_key(registry))
         arrays[string(T)] = Int(idx)
     end
     result["arrays"] = arrays
@@ -2526,7 +2539,7 @@ function _populate_jl_hierarchy!(mod::WasmModule, registry::TypeRegistry)::Union
             global_get!(b, dt_global_idx)
             _gvt === AnyRef && ref_cast!(b, Int64(dt_type_idx), true)   # anyref-stored type globals narrow at use
         end
-        i32_const!(b, Int64(Int32(hash(type_order_key(type_val)) & 0x7FFFFFFF)))
+        i32_const!(b, Int64(Int32(hash(registry_order_key(registry)(type_val)) & 0x7FFFFFFF)))
         struct_set!(b, dt_type_idx, UInt32(4))  # field 4 = hash
 
         # Field 5: abstract → i32 (1 if abstract, 0 if concrete)
@@ -2741,7 +2754,7 @@ function ensure_all_type_globals!(mod::WasmModule, registry::TypeRegistry)::Noth
 
     # Create DataType globals for each (get_type_constant_global! is idempotent),
     # in program order — this is where the type-name strings get interned.
-    for T in sort!(collect(all_typed); by = type_order_key)
+    for T in sort!(collect(all_typed); by = registry_order_key(registry))
         T isa DataType || continue
         get_type_constant_global!(mod, registry, T)
     end
@@ -2817,7 +2830,7 @@ function populate_type_lookup_table!(b::InstrBuilder, registry::TypeRegistry)::I
     table_size = registry.type_lookup_table_size
 
     # For each concrete type with a DFS ID and a DataType global, populate the table
-    for (T, type_id) in ordered_pairs(registry.type_ids, type_order_key)
+    for (T, type_id) in ordered_pairs(registry.type_ids, registry_order_key(registry))
         T isa DataType || continue
         haskey(registry.type_constant_globals, T) || continue
         type_id >= table_size && continue  # Skip late-arriving types that exceed table bounds

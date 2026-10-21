@@ -1797,7 +1797,7 @@ function _egal_body(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Inst
     local cb = registry.closure_base_idx
     # a mutable callable struct is compared by identity, as jl_egal compares any mutable
     # object (julia.h jl_egal__unboxed_: `name->mutabl` answers 0; A10B2 answered 1)
-    local closures = Any[(C, id) for (C, id) in ordered_pairs(registry.type_ids, type_order_key,
+    local closures = Any[(C, id) for (C, id) in ordered_pairs(registry.type_ids, registry_order_key(registry),
                                                                C -> C isa DataType && is_closure_type(C) &&
                                                                     !ismutabletype(C))
                          if get(registry.structs, C, nothing) isa StructInfo &&
@@ -1858,7 +1858,7 @@ function _egal_body(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Inst
     local_get!(b, 0); emit_typeof!(b, top); local_tee!(b, cid)
     local_get!(b, 1); emit_typeof!(b, top); num!(b, Opcode.I32_NE)
     ret!(() -> i32_const!(b, 0))
-    for (C, id) in ordered_pairs(registry.type_ids, type_order_key)
+    for (C, id) in ordered_pairs(registry.type_ids, registry_order_key(registry))
         (C isa DataType && isconcretetype(C)) || continue
         local single = Base.issingletontype(C) && !(C <: Type)
         (single || _egal_needs_value_compare(C)) || continue
@@ -4713,7 +4713,7 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
     local cid = allocate_local!(ctx, I32)
     local_get!(bld, v); emit_class_id!(bld, ctx, S); local_set!(bld, cid)
     local f_type = value_type(args[1], ctx.slot_types, nothing)
-    for (C, id) in ordered_pairs(reg.type_ids, type_order_key,
+    for (C, id) in ordered_pairs(reg.type_ids, registry_order_key(reg),
                                  C -> C isa DataType && isconcretetype(C) && C <: S && !(C <: Type) &&
                                       (isstructtype(C) || isprimitivetype(C)))
         local T = Tuple{(j == p ? C : rt[j] for j in eachindex(rt))...}

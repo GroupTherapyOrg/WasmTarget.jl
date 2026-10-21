@@ -1661,7 +1661,7 @@ numbered classes, so their class is read off the array type.)
 function bare_array_partition(mod::WasmModule, reg::TypeRegistry, @nospecialize(T))::NamedTuple{
         (:told, :shared, :all), Tuple{Vector{Tuple{Type, UInt32}}, Vector{Type}, Vector{Tuple{Type, UInt32}}}}
     local all = Tuple{Type, UInt32}[]
-    for (C, _) in ordered_pairs(reg.type_ids, type_order_key, is_bare_array_class)
+    for (C, _) in ordered_pairs(reg.type_ids, registry_order_key(reg), is_bare_array_class)
         (T === nothing || typeintersect(T, C) !== Union{}) || continue
         if C === Core.SimpleVector
             reg.jl_svec_idx === nothing && error("SimpleVector is numbered without its array type")

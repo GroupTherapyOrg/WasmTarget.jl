@@ -296,6 +296,11 @@ function emit_dispatch_wrappers!(mod::WasmModule,
                                   type_registry::TypeRegistry,
                                   dt_registry::DispatchTableRegistry)::Nothing
     isempty(dt_registry.tables) && return
+    # the first type of each classId in the registry's order, found once (the wrappers read it per slot)
+    local _type_of_id = Dict{Int32, Any}()
+    for (T, id) in ordered_pairs(type_registry.type_ids, registry_order_key(type_registry))
+        haskey(_type_of_id, id) || (_type_of_id[id] = T)
+    end
 
     for (func_ref, dt) in ordered_pairs(dt_registry.tables, r -> selector_order_key(dt_registry, r))
         # Dispatch signature result type
@@ -324,13 +329,7 @@ function emit_dispatch_wrappers!(mod::WasmModule,
             # For each parameter: local.get + unbox/cast to concrete type
             for (j, tid) in enumerate(entry.type_ids)
                 # Find the concrete Julia type for this typeId
-                concrete_type = nothing
-                for (T, id) in ordered_pairs(type_registry.type_ids, type_order_key)
-                    if id == tid
-                        concrete_type = T
-                        break
-                    end
-                end
+                concrete_type = get(_type_of_id, tid, nothing)
                 local _tparam = (_tsig isa FuncType && j <= length(_tsig.params)) ? _tsig.params[j] : AnyRef
 
                 # parity(quarantine: dart's wrapper only downcasts, code_generator.dart:2028

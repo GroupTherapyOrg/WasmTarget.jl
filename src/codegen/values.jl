@@ -483,7 +483,7 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
         if_!(b)
         local_get!(b, v); ref_cast!(b, Int64(to.type_idx), false); br!(b, done)
         end_block!(b)
-        for (T, _) in ordered_pairs(reg.type_ids, type_order_key,
+        for (T, _) in ordered_pairs(reg.type_ids, registry_order_key(reg),
                                     T -> T isa DataType && T <: V && isconcretetype(T) &&
                                          !is_runtime_vararg_tuple_type(T))
             local tinfo = get(reg.structs, T, nothing)
