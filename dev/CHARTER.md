@@ -39,141 +39,80 @@ with the per-clause status. A clause is never closed by argument.
 
 - **C1 · One path.** Every construct has exactly one lowering; every fact has exactly one
   source (one inference path, one numbering, one consult, one type chain, one IR reader).
-  Checks: `L1` `L3` `L5` `L10` `L11` `L12` `L17` `L24` `L25` `L26` `L34` `L36` `L40` `L41`
-  `L45` `L47` `L61` `L67` `L68` `L69` `L80` `L91` `L97` `L98` `L100` `L102` `L103` `L104`
-  `L112` `L113` `L114` `L115` `L117` `L120` `L122` `L124` `L137` `L142` (a struct's layout is
-  decided by its structure, one route per Array) `L143` (one rule turns a storage pointer into
-  an index) `L150` (WT's imports are one list; a module's runtime is generated from its
-  imports) `R20` `R21` `R29a` `R29b` `R37` `L152` (codegen reads a function's IR, its callees'
-  return types and its joins from the plan and asks no inference) `L170` (an :invoke calls its
-  MethodInstance's function) `L171` (one consult for which methods Julia selects, asked by collection, planning and the
-  vtable pre-pass; a statement's codegen asks it nowhere) `L174` (one reader of an operand's
-  Julia type, value_type, Julia's argextype) `L175` (a global's binding resolved once, at the
-  boundary) `L176` (one class set, closed_world_classes, read by the enrollment, the no-method
-  records, the ambiguity search and the numbering) `L177` (one rule for a match that is one
-  signature) `L178` (a value meets a sink through one conversion, typed by its own type: one
-  widening check, no ladder, one box producer) `L179` (one TypeError builder, one `Type{X}`
-  element rule, the type-object test over the static type, one class test) `L180` (one operator
-  table, one conversion table, one width rule, one operand table, one loop-bounds definition)
-  `L181` (one CFG, Julia's own, nir_cfg; one dominator computation) `L182` (a constant callee's
-  one representation, its object, resolved once at the boundary) `L183` (one as-checker per
-  target and static type) `L184` (one export namer; a compiled function named by its Julia
-  identity, never a counter) `L185` (one query for the import at a function index).
-  Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
-  and codegen's remaining inference questions answered by the plan.
+  Legacy (WT1's checks, retired with the rebuild's switch: they measured WT1's source, which
+  `legacy/` keeps only as the agreement oracle): L1 L3 L5 L10 L11 L12 L17 L24 L25 L26 L34 L36
+  L40 L41 L45 L47 L61 L67 L68 L69 L80 L91 L97 L98 L100 L102 L103 L104 L112 L113 L114 L115 L117
+  L120 L122 L124 L137 L142 L143 L150 R20 R21 R29a R29b R37 L152 L170 L171 L174 L175 L176 L177
+  L178 L179 L180 L181 L182 L183 L184 L185.
+  Planned: dev/MARCH.md 1.A9, 1.A10, 1.C — two translators the only Type-to-wasm methods, NIR
+  Julia's one inference, the type chain computed once on the translator.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
   that forces it. Nothing else may exist: a mechanism dart does not have and Julia does not
-  force is a defect even when every test passes. Checks: `L2` `L20` `L21` `L23` `L28` `L30`
-  `L31` `L32` `L43` `L44` `L46` `L50` `L55` `L77` `L83` `L84` `L86` `L88` `L95` `L110` `L132`
-  (anchors resolve: each cited line exists at the pinned commit and names the cited symbol; CI
-  fetches the pinned sources and a missing checkout fails, never skips) `L149` (the builder
-  holds no Julia compiler object) `R32` `R40` (no process-global compile state: one
-  compilation's state lives on its Translator). Planned: dev/MARCH.md 13.7, 13.17 — inventions
-  without a Julia necessity.
+  force is a defect even when every test passes.
+  Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
+  L84 L86 L88 L95 L110 L132 L149 R32 R40.
+  Planned: dev/MARCH.md 1.A3, 1.A4, 1.A5, 1.A6, 1.A7, 1.E — `src/` generated file for file from
+  the pinned SDK, every definition anchored at load, the anchors resolved at the pin, the
+  subset Julia's verifier's, dispatch by signature in the quarantine.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
-  approximated; Julia's own bodies compile instead of bespoke re-implementations. Checks:
-  `L42` `L52` `L53` `L54` `L56` `L57` `L59` `L62` `L70` `L81` `L82` `L92` `L123` `L133` (each
-  bespoke body in `STANDALONE_INTRINSIC_BODIES` is on an exact allowlist with the reason
-  Julia's body cannot compile; `INVOKE_INTRINSICS` is deleted) `L138` (the differential oracle
-  is bit-exact; a tolerance only where the native value comes from a named BLAS or LAPACK
-  routine) `L140` (an overlay's BLAS/LAPACK reason is verified against Julia's own method)
-  `L141` (a constant is interned by `===`, never by `isequal`) `R38` (each `@overlay` states
-  why Julia's body cannot compile, or goes). Planned: dev/MARCH.md 13.3, 13.7, 13.14, 13.17 —
-  the SimpleDiffEq tolerance answered by a native reference that rounds each muladd once, the
-  index test Julia makes, a tuple's `Type{X}` element typed as tuple_tfunc types it.
+  approximated; Julia's own bodies compile instead of bespoke re-implementations.
+  Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
+  L138 L140 L141 R38.
+  Planned: dev/MARCH.md 1.A7, 1.A10, 1.C, 1.E — Julia's trim verifier, Julia's typed IR, Julia's
+  answers for layouts and dispatch, each quarantined definition naming its Julia API.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
-  Checks: `L9` `L35` `L49` `L74` `L136` `R17` `R30` `R31` (with Aqua and ExplicitImports in shard 0).
-  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction: no emission without its
-  expected type, no input through which a drop or an invoke's argument re-guesses, no field
-  typed `Any`, and no definition without its result type when the package loads.
+  Legacy (retired with the switch): L9 L35 L49 L74 L136 R17 R30 R31.
+  Planned: dev/MARCH.md 1.A8 — typed signatures and no `Any` field, checked when the package loads.
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected at
   the edit site (load-time typing, the enforcing builder, a closed sum matched exhaustively when
   the package loads; a lock that scans is a stopgap, C0) or by the minute-scale
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
-  missing wasm runtime. Checks: `L16` `L94` `L134` `L155` `R33` `R36` `L190` (every body a
-  change's emission alters is entered by a passing differential case, at function entry, no
-  finer: the emission-diff check, in the non-blocking matrix on every landed head, gate.yml)
-  `L191` (the numeric lowering
-  tables generate their cases, one per type each key serves, dirty narrow operands among the
-  inputs) `L192` (a scan of six forms, a parameter's default, a something/coalesce/get/get!
-  fallback, a function's answers (its early returns, its fall-through value and its tail branch's
-  arms), a value-position branch's arms (ternary or if/elseif/else), a branch and a short-circuit
-  under a nothing test: each site that chooses a type, a register, a width, an index or a sentinel is on
-  its exact allowlist or counted by R43; the guarantee against a wrong default is L190 and L191)
-  `R42` (the numeric types the generated cases hold out) `R43` (the wrong defaults L192's scan
-  finds) `R44` (the sites of WT's own Symbol classifications: a stopgap, retired at 0 when L199
-  covers every classification).
-  Planned: dev/MARCH.md 13.1, 13.3, 13.4, 13.14, 13.17, 13.20 — the checks the audits found
-  pinning text, the numeric types the generated cases hold out, the wrong defaults, and each
-  stopgap (C0) made a construction: WT's own classifications closed sums, a match over one
-  refusing a missing arm or a catch-all when it expands (L199) and each NIR node type answering
-  each member function itself, checked when the package loads (L200), each conversion deleting
-  the Symbol path and every catch-all arm in its own commit; every lowering a rule that cannot
-  exist without its witness; every translation one table.
+  missing wasm runtime.
+  Legacy (retired with the switch): L16 L94 L134 L155 R33 R36 L190 L191 L192 R42 R43 R44.
+  Planned: dev/MARCH.md 1.A8, 1.D — closed sums matched exhaustively at load, the lowering on
+  the typed stack.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
-  result; every rejection is attributed to its statement with the inline chain
-  innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
-  `L63` `L64` `L66` `L71` `L72` `L73` `L75` `L76` `L78` `L79` `L85` `L89` `L90` `L93` `L96`
-  `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `L156` (every call of a host-declared
-  import is counted) `R34` `R39` (no smoke xfail compiles and then answers wrong, traps, or
-  returns what the harness cannot read).
-  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.17, 13.20 — the exception stack across calls,
-  the traps where Julia answers, the audits' unlocated and lossy paths, and each stopgap (C0)
-  made a construction where Julia has one, first the eleven catch-alls that answer only by
-  convention, each a located rejection.
+  result; every rejection is attributed to its statement with the inline chain innermost-first.
+  Legacy (retired with the switch): L8 L15 L18 L19 L37 L38 L39 L48 L51 L58 L60 L63 L64 L66 L71
+  L72 L73 L75 L76 L78 L79 L85 L89 L90 L93 L96 L101 L118 L119 L127 L135 L139 L146 L147 L156 R34
+  R39.
+  Planned: dev/MARCH.md 1.A2c, 1.A7, 1.D — rejections a closed sum, every unported path a
+  located rejection, the smoke ladder derived from them.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
-  the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every builder has its module)
-  `L164` (one subtype relation, in the builder) `L165` (dart's storage types: no raw byte or
-  packed type as a value type) `L166` (every operand typed by the module's own types) `L167`
-  (every body is a builder the module made) `L168` (locals initialized before use) `L169`
-  (module objects held by handle) `L172` (no instruction recorded in dead code)
-  `L173` (one declaration path for a local, its type checked) `R41` (no local declared beside it).
-  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction, and no operand a type
-  can hold wrong: one type per opcode, each immediate a handle its declaration made, the locals
-  list and the module's bytes out of codegen's reach, the heap and label kinds closed sums.
+  the disagreement alarm.
+  Legacy (retired with the switch): L6 L7 L13 L14 L22 L27 L29 L65 L87 L99 L151 L164 L165 L166
+  L167 L168 L169 L172 L173 R41.
+  Planned: dev/MARCH.md 1.A4, 1.B — wasm_builder's ir, typestate builders and serializer, 1:1.
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
-  model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
-  `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
-  its model or states why it has none).
-  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction: both checks read files
-  today (the models' pairing, the components' table); a model's TLC run is behavior.
+  model first; a counterexample is a finding, never a reason to weaken an invariant.
+  Legacy (retired with the switch): L111 L131.
+  Planned: dev/MARCH.md 1.C, 1.D, 1.E — each phase's models re-pointed at the definitions it fills.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
   entries; every tracked file outside `src/` is consumed — by the build, a test, a lane, CI or
   the docs site, by path or by the loader that walks its directory — and none records finished
-  work. Checks: `L4` `L106` `L107` `L108` `L109` `L121` `L129` `L130` `R35` `R3` `R5` `R7`
-  `R14` `R15` `R27`. Planned: dev/MARCH.md 13.4, 13.5, 13.17 — the stale code and prose the
-  audits found.
+  work. Checks: `L129` `L130`.
+  Legacy (retired with the switch): L4 L106 L107 L108 L109 L121 R35 R3 R5 R7 R14 R15 R27.
+  Planned: dev/MARCH.md 1.A6, 1.F — the skeleton derived and never drifting, `legacy/` deleted
+  by its rule.
 - **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20): a
   landing's gate is `bash dev/gate.sh --block` on this machine, about a minute of wall (a 60-s
   target, red only past twice it: Dale 2026-10-21, a 61-s run is no failure of an under-a-minute
   goal), measured by the gate itself, which `dev/land.sh merge` lands on (its green record of the exact commit,
   made on a clean tree); the full CI matrix runs on every landed head and never holds a landing
   (its red is the next batch's first item: `dev/land.sh merge` refuses while the last landed
-  head's matrix is red), and once, blocking, on PR #122's merge head; a
-  failure names its site. Checks: `L144` (every instruction a statement emits maps to its
-  source, so a trap at run time names its statement as a rejection at compile time does)
-  `L145` (every throw carries the stack it was raised on, so an escaped exception names its
-  throw site) `L153` (the full matrix runs every test family CI runs, on every landed head,
-  non-blocking) `L157` (every
-  function is named where it is defined, so a trap in code the compiler generated names its
-  function and construct) `L158` (one compile entry: every exported compile entry is one call
-  of it, which alone reads the options and routes the caller's diagnostics ledger; compile_module
-  below it is internal) `L159` (every byte
-  of a function compiled from Julia IR maps to its statement or its definition, except a
-  statement Julia gives no location of its own, which is unmapped, so a trap outside a statement
-  names its function's definition) `L160` (an escaped exception names its type, through the
-  source map's class names) `L161` (the statement lane counts a throw as matched only by a
-  Julia exception of native's type) `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's
+  head's matrix is red), and once, blocking, on PR #128's merge head; a
+  failure names its site. Checks: `L153` (the full matrix runs every test family CI runs, on
+  every landed head, non-blocking) `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's
   runners, gives its verdict within its 20-minute budget per lane job) `L163` (the CI inner loop,
   `bash dev/gate.sh --fast`, is never a landing's gate) `L194` (the blocking gate: the ratchet, a
   fixed smoke core with the groups the change maps to and its own cases on 1.12 and 1.13, the
@@ -185,14 +124,14 @@ with the per-clause status. A clause is never closed by argument.
   the commit declares a correctness fix with its MARCH row; the budgets are targets red only past
   twice them, and a
   machine more than 1.5 times slower than its best leaves the timing unjudged, never a scaled
-  pass, its checks and budgets still judged) `L196` (a compile of a new program compiles WT's
-  methods that take its types or functions once, and reads the one class list without sorting it)
+  pass, its checks and budgets still judged)
   `L197` (the full loop: `dev/land.sh land` rebases, holds the machine, gates and lands a change
   in one command, logging each landing's seconds from edit to landed; the median of the last five
   inside its band, a 300-s target for every change red only past 600 s: Dale 2026-10-21, minutes,
   never tens of minutes) `L198` (each landing records
   whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
-  Planned: dev/MARCH.md 13.18 and 13.24 and 13.25 and 13.26 and 13.27 — the ratchet stage's time to win back (L195).
+  Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
+  Planned: dev/MARCH.md 1.A2c — the gate re-pointed at the rebuild's compiler.
 - **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C0
   to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
@@ -221,9 +160,8 @@ with the per-clause status. A clause is never closed by argument.
   the band) `L206` (AGENTS.md carries every live requirement, generated from the ledger) `L207`
   (every lock's negative runs in every gate, inside the ratchet stage) `R45` (the locks that owe
   theirs).
-  Planned: dev/MARCH.md 13.20 and 1.R — each of these checks a construction, or Dale's ruling that a
-  prose clause is checked by behavior; the ledger's planned checks, and the rows its other planned
-  requirements name (1.A4, 1.A6, 1.A7, 1.A8, 1.A9).
+  Planned: dev/MARCH.md 1.R, 1.S — the ledger's planned checks; each of these checks a
+  construction, or Dale's ruling that a prose clause is checked by behavior.
 
 ## Rules that keep the goal from drifting
 

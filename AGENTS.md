@@ -54,7 +54,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
   (`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`) for structure, Julia for behavior, and
   native-vs-wasm differential execution for soundness.
 - Install the hook: `cp dev/hooks/commit-msg "$(git rev-parse --git-common-dir)/hooks/"`. A new
-  lowering-registry entry arrives with a case (R33); no new silent `catch` (R34).
+  lowering-registry entry arrives with a case; no new silent `catch`.
 - Report evidence, the command and its output, never a claim. Measure: dump the IR
   (`WasmTarget.get_typed_ir`) or a module (`WT_PROBE_DUMP=<probe>:<path>`, then `wasm-tools print`).
 - Work in a worktree under `../.worktrees/`; never `git stash`, never `git checkout <file>` over

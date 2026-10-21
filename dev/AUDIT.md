@@ -43,6 +43,17 @@ text: `git log -p -- dev/MARCH.md`, the commit that opened Phase 1):
 - 14.4 (all): clauses close as consequences with `Closes: C<n>` matrices; unchanged under the rebuild.
 - 14.5 (C0 C10): decisions Dale held (C10's sentence, the final gate); carried to the charter proposals.
 
+Phase 13 closed the charter on WT1; the rebuild's charter change (Planned text re-pointed to Phase 1's rows)
+archived it. Its rows, in short (full text: `git log -p -- dev/MARCH.md`):
+- 13.1, 13.10, 13.14 (C3 C5 C6): WT1's silent-wrong-value suspects, capability gaps and run-time type objects; their
+  programs are corpus requirements for phases D and E.
+- 13.3, 13.4, 13.5, 13.7 (C1 C2 C3 C5 C9): WT1's registry witnesses, facts computed twice, floor ratchets and
+  inventions; WT2 is generated from dart and has none of them to retire.
+- 13.17 (all): the audits' open findings, grouped; each stays in its audit entry below, the rebuild's requirements.
+- 13.18, 13.24–13.27 (C10): WT1's ratchet-stage timing rows; the rebuild's ratchet holds the process locks only.
+- 13.20 (C0 C4–C8): strict by construction on WT1; its C0 part is Phase 1's row 1.S, its C4–C8 part rows A3–A9.
+- 13.11, 13.16: the merge and the downstream adoption, carried as Phase 1's rows 1.M and 1.P.
+
 ## 2026-09-29 — audited through 7acc21c9 (4fc785d2~1..7acc21c9: batches 51–59)
 
 The first audit, done because none had been: 45 findings. Two were read as silent wrong
