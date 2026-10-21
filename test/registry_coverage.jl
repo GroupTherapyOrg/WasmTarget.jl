@@ -130,6 +130,7 @@ end
 include(joinpath(@__DIR__, "probe_corpus.jl"))
 const _SMOKE = joinpath(@__DIR__, "smoke.jl")
 include(_SMOKE)   # defines GROUPS; main() runs only when smoke.jl is the program
+_build!(collect(keys(LAZY_FILE)))   # every lazy group's cases (test/registry_cases.jl's)
 
 failed = String[]
 # the cases, probes then smoke, the k-th compiled by part (k-1) % N

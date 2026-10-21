@@ -80,13 +80,14 @@ budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 
               inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate-fast.yml)
 fi
 [ -n "$budget" ] || { echo "gate: $prefix.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
-api gh run view "$id" --json jobs --jq '.jobs[] | [.conclusion, .name,
+# a job whose step failed is red, though its own `Cancel the run` step leaves it cancelled
+api gh run view "$id" --json jobs --jq '.jobs[] | [(if any(.steps[]?; .conclusion == "failure") then "failure" else .conclusion end), .name,
     (if (.startedAt // "") != "" and (.completedAt // "") != "" and .startedAt < .completedAt
      then ((.completedAt | fromdateiso8601) - (.startedAt | fromdateiso8601) | tostring) else "" end)] | @tsv' |
   awk -F'\t' -v B="$budget" '{ v = $1 == "success" ? "ok  " : $1 == "failure" ? "FAIL" : "--  ";
                  past = ($3 != "" && $3 + 0 >= B * 60) ? sprintf("  PAST THE %d-MINUTE BUDGET", B) : "";
                  printf "  %s %-16s %6s  %s%s\n", v, $2, ($3 == "" ? "" : $3 "s"), ($1 == "success" ? "" : $1), past
-                 if ($2 != "coverage-merge" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
+                 if ($2 != "coverage-merge" && $2 != "emission-plan" && $2 != "emission" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
                END { if (slowest != "") printf "gate: slowest lane job %s %d s of the budget %d min (%d s)%s\n",
                        slowest, slow, B, B * 60, (slow >= B * 60 ? ", PAST IT" : "") }'
 conclusion=$(api gh run view "$id" --json conclusion --jq .conclusion)

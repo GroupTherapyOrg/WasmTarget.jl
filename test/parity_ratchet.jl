@@ -892,6 +892,446 @@ function _ir_raw_reads_outside_allowlist(pattern::Regex)::Int
     return n
 end
 
+# ---- the emission-diff check (L190), its behavior run here without the package ---------------
+# test/emission_fingerprint.jl in a module of its own (it reads bytes and part files only)
+const _EMISSION = Ref{Union{Nothing,Module}}(nothing)
+function emission_module()::Module
+    if _EMISSION[] === nothing
+        local m = Module(:EmissionSandbox)
+        Base.include(m, joinpath(ROOT, "test", "emission_fingerprint.jl"))
+        _EMISSION[] = getfield(m, :EmissionFingerprint)
+    end
+    return _EMISSION[]
+end
+_sleb(n::Integer)::Vector{UInt8} = (out = UInt8[]; n = Int64(n);
+    while true; x = UInt8(n & 0x7f); n >>= 7; done = (n == 0 && x & 0x40 == 0) || (n == -1 && x & 0x40 != 0);
+        push!(out, done ? x : x | 0x80); done && break; end; out)
+# a module of the given types (each a type section entry's bytes) and functions (name, type
+# index, body bytes after the locals' count), with a name section naming each function
+function _emission_wasm(types::Vector{Vector{UInt8}}, funcs::Vector{Tuple{String,Int,Vector{UInt8}}})::Vector{UInt8}
+    local leb = emission_module().leb
+    sec(id, c) = UInt8[id; leb(length(c)); c]
+    vec(items) = UInt8[leb(length(items)); reduce(vcat, items; init=UInt8[])]
+    name(s) = UInt8[leb(sizeof(s)); codeunits(s)]
+    local names = vec([UInt8[leb(i - 1); name(f[1])] for (i, f) in enumerate(funcs)])
+    local bodies = [UInt8[0x00; f[3]] for f in funcs]
+    return UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+                 sec(0x01, vec(types))...,
+                 sec(0x03, vec([leb(f[2]) for f in funcs]))...,
+                 sec(0x0a, vec([UInt8[leb(length(b)); b] for b in bodies]))...,
+                 sec(0x00, UInt8[name("name"); 0x01; leb(length(names)); names])...]
+end
+const _EM_FN = UInt8[0x60, 0x00, 0x01, 0x7f]               # () -> i32
+const _EM_TOP = UInt8[0x5f, 0x01, 0x7f, 0x00]              # the object root: (struct (field i32))
+const _EM_FNREF = UInt8[0x60, 0x01, 0x63, 0x01, 0x01, 0x7f]  # (ref null 1) -> i32, the root type 1
+# `a` (i32.const k) and `b` (a call of a, plus 2), defined in `order`
+function _emission_module_bytes(order::Vector{Symbol}, k::Int)::Vector{UInt8}
+    local at = Dict(s => i - 1 for (i, s) in enumerate(order))
+    local body = Dict(:a => UInt8[0x41; _sleb(k); 0x0b], :b => UInt8[0x10, UInt8(at[:a]), 0x41, 0x02, 0x6a, 0x0b])
+    return _emission_wasm([_EM_FN], [(string(s), 0, body[s]) for s in order])
+end
+_em_meta(specs, classes, top) = emission_module().Meta(Dict{Int,String}(specs), Union{Nothing,String}[classes...], top)
+_em_fps(bytes, meta) = Dict(k => (h, l) for (k, h, l) in emission_module().fingerprints(bytes, meta))
+# one function `c` over the object root: its class id read and compared with K (`op` 0x46 i32.eq),
+# masked with K (0x71 i32.and), or K built into a new object's field 0 and read back (`new`)
+function _emission_class_bytes(op::Symbol, K::Int)::Vector{UInt8}
+    local body = op === :new ? UInt8[0x41, _sleb(K)..., 0xfb, 0x00, 0x01, 0xfb, 0x02, 0x01, 0x00, 0x0b] :
+                 UInt8[0x20, 0x00, 0xfb, 0x02, 0x01, 0x00, 0x41, _sleb(K)..., op === :eq ? 0x46 : 0x71, 0x0b]
+    return _emission_wasm([_EM_FN, _EM_TOP, _EM_FNREF], [("c", op === :new ? 0 : 2, body)])
+end
+# the verdict over part files written from `files` (name => lines)
+function _emission_verdict(files::Vector{Pair{String,Vector{String}}}, identical::Bool)::Tuple{Bool,String}
+    local d = mktempdir()
+    for (f, ls) in files
+        write(joinpath(d, f), join(ls, "\n") * "\n")
+    end
+    local ok, lines = emission_module().verdict(d, identical)
+    rm(d; recursive=true)
+    return (ok, join(lines, "\n"))
+end
+
+# L190's checks, run in the world where test/emission_fingerprint.jl is defined
+function _l190_check()::Int
+    local E = emission_module()
+    local v = 0
+    local none = _em_meta(Pair{Int,String}[], String[], -1)
+    # renumbering: the functions in the other order fingerprint alike
+    local a1, a2, a3 = (_em_fps(_emission_module_bytes(o, k), none) for (o, k) in (([:a, :b], 1), ([:b, :a], 1), ([:a, :b], 3)))
+    v += length(a1) == 2 && a1 == a2 ? 0 : 1
+    # a changed constant that is no class id changes its body's fingerprint and its labeled one, not its caller's
+    v += a3["name a"][1] != a1["name a"][1] && a3["name a"][2] != a1["name a"][2] && a3["name b"] == a1["name b"] ? 0 : 1
+    # two specializations of one method that differ only in a mask constant: two keys, two labeled fingerprints
+    local spec = _em_meta([0 => "Tuple{typeof(f), UInt8}", 1 => "Tuple{typeof(f), UInt16}"], String[], -1)
+    local two = _em_fps(_emission_wasm([_EM_FN], [("f", 0, UInt8[0x41; _sleb(0xff); 0x0b]), ("f_1", 0, UInt8[0x41; _sleb(0xffff); 0x0b])]), spec)
+    local k8, k16 = "spec Tuple{typeof(f), UInt8}", "spec Tuple{typeof(f), UInt16}"
+    v += haskey(two, k8) && haskey(two, k16) && two[k8][2] != two[k16][2] ? 0 : 1
+    # a class id compared with a class id read, or built into an object's field 0, is its class's
+    # type: one labeled fingerprint for classes numbered apart (5 and 7 name Foo); a mask keeps its value
+    local cA = _em_meta(Pair{Int,String}[], [nothing, "A", "B", "C", "D", "Foo", "E", "F"], 1)
+    local cB = _em_meta(Pair{Int,String}[], [nothing, "A", "B", "C", "D", "E", "F", "Foo"], 1)
+    for (op, same) in ((:eq, true), (:new, true), (:and, false))
+        local x, y = _em_fps(_emission_class_bytes(op, 5), cA)["name c"], _em_fps(_emission_class_bytes(op, 7), cB)["name c"]
+        v += x[1] != y[1] && (x[2] == y[2]) == same ? 0 : 1
+    end
+    # the verdict: part files as smoke, the published base file and the delta write them
+    local ver = string(VERSION)
+    local smoke(rows...; pass=1) = "smoke-0-of-1.tsv" => ["part\tsmoke\t0\t1\t$ver", "C\tg/c\t$pass\th1", rows...]
+    local B(k, fp, e, l) = "B\tg/c\t$k\t$fp\t$e\t$l"
+    local base(rows...; v=ver) = "base.tsv" => ["base\tsha\t$v", "C\tg/c\th1", rows...]
+    local delta = "delta.tsv" => ["base\tsha\t$ver"]
+    local same = "B\tg/c\tk\tsame"
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1"), B("k", "same", 0, "l2")), base("B\tg/c\tf\told", same), delta], false)) ? 0 : 1
+    local ok, text = _emission_verdict([smoke(B("f", "new", 0, "l1"), B("k", "same", 0, "l2")), base("B\tg/c\tf\told", same), delta], false)
+    v += !ok && occursin("NOT RUN  f  [new]", text) ? 0 : 1
+    v += first(_emission_verdict([smoke(B("f", "new", 0, "l1"))], true)) ? 0 : 1                   # an unchanged tree
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), delta], false)) ? 1 : 0           # no base file
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), base(same)], false)) ? 1 : 0      # no delta
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1"); pass=0), base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict(["smoke-0-of-2.tsv" => ["part\tsmoke\t0\t2\t$ver", "C\tg/c\t1\th1"], base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict([smoke(B("f", "new", 1, "l1")), base(same; v="0.0.1"), delta], false)) ? 1 : 0
+    # the same specialization entered in another case's module whose classes are numbered apart (one
+    # labeled fingerprint) runs a change; another labeled fingerprint, or another key, does not
+    local twice(k2, l2) = "smoke-0-of-1.tsv" => ["part\tsmoke\t0\t1\t$ver", "C\tg/c\t1\th1", "C\tg/d\t1\th2",
+        "B\tg/c\tf\tnew\t0\tl1", "B\tg/d\t$k2\tnew2\t1\t$l2"]
+    v += first(_emission_verdict([twice("f", "l1"), base(same), delta], false)) ? 0 : 1
+    v += first(_emission_verdict([twice("f", "l9"), base(same), delta], false)) ? 1 : 0
+    v += first(_emission_verdict([twice("g", "l1"), base(same), delta], false)) ? 1 : 0
+    # the two specializations above: only the UInt8 one entered fails, naming the UInt16 one (keys
+    # that merged them fail here too, without raising)
+    if haskey(two, k8) && haskey(two, k16)
+        local ok2, text2 = _emission_verdict([smoke(B(k8, two[k8][1], 1, two[k8][2]), B(k16, two[k16][1], 0, two[k16][2])), base(same), delta], false)
+        v += !ok2 && occursin("NOT RUN  $k16", text2) && !occursin("NOT RUN  $k8", text2) ? 0 : 1
+    else
+        v += 1
+    end
+    # the wiring
+    local lanes = _text(joinpath(ROOT, "dev", "lanes.sh"))
+    local utils = _text(joinpath(ROOT, "test", "utils.jl"))
+    local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+    local ed = _text(joinpath(ROOT, "dev", "emission_diff.sh"))
+    local code(f) = join(filter(l -> !startswith(lstrip(l), "#"), split(_text(joinpath(ROOT, ".github", "workflows", f)), '\n')), '\n')
+    local fast, gate, eb = code("gate-fast.yml"), code("gate.yml"), code("emission-base.yml")
+    v += occursin("[ \"\$only\" = smoke ] && export WT_EMISSION_DIR=\"\$PWD/emission-parts\"", lanes) ? 0 : 1
+    local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
+    local cjw, cjwi, ec, smain = fbody(utils, "compare_julia_wasm"), fbody(utils, "compare_julia_wasm_inputs"),
+                                 fbody(utils, "_emission_compile"), fbody(sm, "main")
+    v += occursin("bytes, source_map, meta = _emission_compile(f, arg_types; optimize=optimize)\n", cjw) &&
+         occursin("_emitted!(bytes, func_name, [join(map(format_js_arg, args), \", \")], meta)", cjw) ? 0 : 1
+    v += occursin("_emission_compile(f, arg_types; optimize=false)", cjwi) && occursin("_emitted!(bytes, fname, js, meta)", cjwi) ? 0 : 1
+    v += occursin("WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url=\"module.wasm.map\",", ec) &&
+         occursin("optimize, return_registries=true)", ec) && occursin("string(info.mi.specTypes)", ec) &&
+         occursin("WasmTarget._class_names(tr)", ec) && occursin("tr.base_struct_idx", ec) ? 0 : 1
+    v += Set(String(m.match) for m in eachmatch(r"\bcompare_julia_wasm\w*(?=\()", smain)) ==
+         Set(["compare_julia_wasm", "compare_julia_wasm_inputs"]) &&
+         occursin("EmissionFingerprint.record!(rec, tag, passed, EmissionFingerprint.case_hash(f, Tuple(map(typeof, case[3:end]))),", smain) ? 0 : 1
+    v += occursin("differs() { ! git diff --quiet \"\$1\" \"\${2:-HEAD}\" -- src ext Project.toml; }", ed) &&
+         occursin("compile='(f, ts) -> _emission_compile(f, ts; optimize=false)'", ed) &&
+         occursin("code=\$({ cat test/emission_fingerprint.jl; sed -n '/^function _emission_compile(/,/^end\$/p' test/utils.jl; } | git hash-object --stdin | cut -c1-16)", ed) ? 0 : 1
+    # the head's tests that do not load over the base's src leave the delta empty, never the check
+    v += occursin("err = try; include(\\\"test/smoke.jl\\\"); nothing; catch e; e; end", ed) &&
+         occursin("EmissionFingerprint.delta_main(\\\"\$dir/delta.tsv\\\"", ed) &&
+         occursin("F\\\\t(the head's tests over the base's src)", ed) ? 0 : 1
+    # the bootstrap's parts take the same rule (a group that does not build over the base's src is
+    # left out, an F line naming why), and `bootstrap <base>` pushes the commit it runs: this
+    # checkout's tree with <base> as its parent
+    v += occursin("    lazy = err === nothing ? (try; _build!(collect(keys(LAZY_FILE))); nothing; catch e; e; end) : nothing\n", ed) &&
+         occursin("(the head's lazy groups over the base's src)", ed) &&
+         occursin("  shim=\$(git commit-tree \"HEAD^{tree}\" -p \"\$base\" -m ", ed) &&
+         occursin("  [ \"\$(merge_base \"\$shim\")\" = \"\$base\" ] ||", ed) &&
+         occursin("  git push -q --force origin \"\$shim:refs/heads/\$branch\"\n", ed) ? 0 : 1
+    local upload = "      - uses: actions/upload-artifact@v4\n        if: matrix.lane == 'smoke'\n        with:\n          name: emission-smoke-"
+    local cancel = "      - name: Cancel the run\n        if: failure()\n        env:\n          GH_TOKEN: \${{ github.token }}\n        run: gh run cancel \${{ github.run_id }} --repo \${{ github.repository }}\n"
+    for needle in (upload, cancel, "bash dev/emission_diff.sh plan emission-plan",
+                   "    needs: [lane, emission-plan]\n", "run: bash dev/emission_diff.sh merge emission-parts")
+        v += occursin(needle, gate) ? 0 : 1
+    end
+    v += count(cancel, gate) == 1 ? 0 : 1   # the lane's: a red plan cancels no lane
+    v += occursin("emission", fast) ? 1 : 0   # the CI inner loop holds no emission job
+    # a landed head's base is the nearest earlier landed head with a published base file
+    v += occursin("  if [ \"\$base\" = \"\$(git rev-parse HEAD)\" ]; then\n    base=\"\"\n    for c in \$(git rev-list --first-parent --max-count=50 HEAD^); do\n      [ -n \"\$(artifact \"\$(key \"\$c\" \"\$ver\")\")\" ] && { base=\$c; break; }\n    done\n", ed) ? 0 : 1
+    v += occursin("bash dev/emission_diff.sh publish emission-parts emission-base | tee publish.log", gate) &&
+         occursin("          name: \${{ steps.publish.outputs.name }}\n          path: emission-base/base.tsv\n          if-no-files-found: error\n          retention-days: 90\n", gate) ? 0 : 1
+    v += occursin("\non:\n  push:\n    branches: ['emission-base/**']\n", eb) &&
+         occursin("bash dev/emission_diff.sh bootstrap-part \${{ matrix.part }} emission-parts", eb) &&
+         occursin("bash dev/emission_diff.sh bootstrap-publish emission-parts emission-base | tee publish.log", eb) &&
+         occursin("          retention-days: 90\n", eb) ? 0 : 1
+    return v
+end
+
+# ---- defaults that choose a type, a register, an index or a sentinel (L192, R43) -------------
+const _L192_REGISTERS = Set([:I32, :I64, :F32, :F64, :V128, :FuncRef, :ExternRef, :AnyRef, :EqRef, :I31Ref,
+                             :StructRef, :ArrayRef, :ExnRef, :NonNullExternRef, :NonNullFuncRef])
+_l192_type(s::Symbol)::Bool = s !== :nothing &&
+    ((isdefined(Core, s) && getfield(Core, s) isa Type) || (isdefined(Base, s) && getfield(Base, s) isa Type))
+# a name, bare or qualified (`WasmTarget.I32`, `Core.Any`)
+_l192_name(x) = x isa Symbol ? x : (x isa Expr && x.head === :. && length(x.args) == 2 && x.args[2] isa QuoteNode &&
+                                    x.args[2].value isa Symbol) ? x.args[2].value : nothing
+_l192_register(x)::Bool = (n = _l192_name(x); n !== nothing && n in _L192_REGISTERS)
+_l192_atype(x)::Bool = (n = _l192_name(x); n !== nothing && _l192_type(n)) || (x isa Expr && x.head === :curly)
+# whether an expression mentions a register anywhere (a default computed from one)
+_l192_mentions(x)::Bool = _l192_register(x) || (x isa Expr && x.head !== :. && any(_l192_mentions, x.args))
+# a parameter named for a Julia type, a specialization or a signature
+_l192_typeish(n)::Bool = occursin(r"type|julia|spec|(^|_)sig|(^|_)(jt|ty|T|S)$", string(n))
+# a parameter named for an index or a position
+_l192_indexish(n)::Bool = occursin(r"idx|index|slot|(^|_)(i|pos|offset|local|depth|label)$", string(n))
+# an integer literal, a Bool not counted, or its negation
+_l192_int(d)::Bool = (d isa Integer && !(d isa Bool)) ||
+    (d isa Expr && d.head === :call && d.args[1] === :- && length(d.args) == 2 && d.args[2] isa Integer)
+# a parameter named for a width
+_l192_widthish(n)::Bool = occursin(r"width|(^|_)bits$", string(n))
+"""
+    _l192_kind(name, annotation, default) -> Union{Nothing,String}
+
+What a parameter's default chooses, or nothing: a type (`Any`, `Int64`, `Core.Any`, `Vector{T}`), a
+register (`I32`, `WasmTarget.AnyRef`), a value computed from a register (`lhs === I32 ? 32 : 64`), a
+sentinel (a negative integer, `typemax(…)`, `typemin(…)`), an index (an integer for a parameter
+named for one), a width (any value for a parameter named for one: the width is the type's, never
+the register's), or `nothing` for a Julia-type parameter (annotated with a `Type`, or named for one).
+"""
+function _l192_kind(name, ann, d)::Union{Nothing,String}
+    _l192_register(d) && return "a register"
+    _l192_atype(d) && return "a type"
+    _l192_mentions(d) && return "a value computed from a register"
+    (_l192_int(d) && (d isa Expr || d < 0)) && return "a sentinel"
+    (d isa Expr && d.head === :call && d.args[1] in (:typemax, :typemin)) && return "a sentinel"
+    (_l192_int(d) && _l192_indexish(name)) && return "an index"
+    (d !== :nothing && _l192_widthish(name)) && return "a width"
+    if d === :nothing
+        local a = ann === nothing ? "" : string(ann)
+        (occursin("Type", a) && !occursin("WasmValType", a)) && return "nothing for a Julia type"
+        _l192_typeish(name) && return "nothing for a Julia type"
+    end
+    return nothing
+end
+# The forms L192 scans for a register or a type supplied where the caller's answer is absent,
+# exactly these (a syntactic scan cannot see every spelling; the semantic guarantee is L190/L191);
+# (1), a parameter's default, is _l192_kind's:
+# 2. `something`, `coalesce`, `get` or `get!` whose last argument is one;
+# 3. a function's answers: the `return`s it reaches outside a tail `if`'s condition (an early return, `c && return X`,
+#    `if c; return X; end`, inside a nested branch or an arm) and its fall-through value, with a
+#    branch in tail position read arm by arm (each arm's last expression, its returns, a nested
+#    branch's arms; a missing `else` answers `nothing`), when one is a bare type or register and
+#    another is an answer;
+# 4. a branch in value position (a ternary or if/elseif/else assigned, passed or built into a
+#    value), its arms read the same way, under the same rule;
+# 5. a branch anywhere under a nothing test whose answer is one (`x === nothing ? AnyRef : I32`),
+#    and 6. a short-circuit under a nothing test that returns or yields one (`x === nothing &&
+#    return Any`, `x !== nothing || return I32`), each outside a function whose answers (3) fire.
+# A choice between named answers alone (`is32 ? I32 : I64`) is a mapping, a nested all-named branch
+# beside an answer is one named answer, and an answer that raises (`error`, `throw`, `rethrow`)
+# answers nothing.
+_l192_named(x)::Bool = _l192_register(x) || (n = _l192_name(x); n !== nothing && _l192_type(n))
+function _l192_nulltest(c)::Union{Nothing,Bool}   # true: `x is nothing`, false: `x is not nothing`
+    c isa Expr && c.head === :call || return nothing
+    c.args[1] in (:(===), :(==)) && :nothing in c.args && return true
+    c.args[1] in (:(!==), :(!=)) && :nothing in c.args && return false
+    c.args[1] === :isnothing && return true
+    c.args[1] === :! && length(c.args) == 2 && (t = _l192_nulltest(c.args[2]); t !== nothing) && return !t
+    return nothing
+end
+_l192_raises(v)::Bool = v isa Expr && v.head === :call && v.args[1] in (:error, :throw, :rethrow)
+_l192_stmts(b::Expr)::Vector{Any} = Any[x for x in b.args if !(x isa LineNumberNode)]
+# a definition (its body is its own function's answers): `function`, `->` or a short-form `f(x) = …`
+function _l192_def(x)
+    x isa Expr || return nothing
+    x.head in (:function, :->) && length(x.args) >= 2 && return x.args[2]
+    if x.head === :(=) && length(x.args) == 2
+        local s = x.args[1]
+        while s isa Expr && s.head in (:where, :(::)); s = s.args[1]; end
+        s isa Expr && s.head === :call && return x.args[2]
+    end
+    return nothing
+end
+# the values a `return` inside x returns, a nested definition's excluded
+function _l192_returns!(out::Vector{Any}, x)
+    (x isa Expr && _l192_def(x) === nothing) || return out
+    x.head === :return ? _l192_answers!(out, x.args[1]) : foreach(a -> _l192_returns!(out, a), x.args)
+    return out
+end
+# the values x answers as a tail: a block's returns and its last statement's answers, a branch's
+# arms (a missing `else` answers `nothing`), a returned value's
+function _l192_answers!(out::Vector{Any}, x)
+    if x isa Expr && x.head === :block
+        local st = _l192_stmts(x)
+        isempty(st) && return push!(out, nothing)
+        foreach(s -> _l192_returns!(out, s), st[1:end-1])
+        return _l192_answers!(out, last(st))
+    elseif x isa Expr && x.head === :return
+        return _l192_answers!(out, x.args[1])
+    elseif x isa Expr && x.head in (:if, :elseif)
+        _l192_answers!(out, x.args[2])
+        return length(x.args) == 3 ? _l192_answers!(out, x.args[3]) : push!(out, nothing)
+    end
+    _l192_returns!(out, x)   # `c && return X`, a return inside any other statement
+    return push!(out, x)
+end
+_l192_answers(x)::Vector{Any} = filter(!_l192_raises, _l192_answers!(Any[], x))
+# the rule over a set of answers: one a bare type or register and another an answer
+_l192_mixed(as::Vector{Any})::Bool = (n = count(_l192_named, as); 0 < n < length(as))
+_l192_text(x)::String = replace(string(x isa Expr ? Base.remove_linenums!(deepcopy(x)) : x), r"\s+" => " ")
+# a site's text; past 200 characters its first 180 and a hash of the whole (the key stays exact)
+_l192_key(t::AbstractString)::String =
+    length(t) <= 200 ? String(t) : first(t, 180) * " … #" * string(Base._crc32c(t); base=16, pad=8)
+# forms 2, 4, 5 and 6 at one expression (`vpos`: the expression is a value; `covered`: its
+# function's answers fire)
+function _l192_fallback(ex, vpos::Bool, covered::Bool)::Union{Nothing,String}
+    ex isa Expr || return nothing
+    if ex.head === :call && ex.args[1] in (:something, :coalesce, :get, :get!) && length(ex.args) >= 3 &&
+       (_l192_register(ex.args[end]) || _l192_atype(ex.args[end]))
+        return string(ex.args[1])
+    end
+    if ex.head === :if && (vpos || !covered)
+        local as = _l192_answers(ex)
+        (any(_l192_named, as) && _l192_nulltest(ex.args[1]) !== nothing) && return "a branch under a nothing test"
+        (vpos && _l192_mixed(as)) && return "a branch arm"
+    end
+    if ex.head in (:&&, :||) && length(ex.args) == 2 && !covered
+        local t = _l192_nulltest(ex.args[1])
+        local y = ex.args[2] isa Expr && ex.args[2].head === :return ? ex.args[2].args[1] : ex.args[2]
+        (t === (ex.head === :&&) && _l192_named(y)) && return "a nothing short-circuit"
+    end
+    return nothing
+end
+"""
+    type_default_sites(text, rel) -> Vector{String}
+
+Every parameter of a definition in `text` (keyword or optional positional, of a `function`, a
+short-form or an anonymous function) whose default chooses a type, a register, a value computed
+from one, an index, a width or a sentinel, or `nothing` for a Julia-type parameter (_l192_kind), and
+every site of the forms the scan reads (_l192_fallback, a function's answers), as
+"<rel>\\t<function>\\t<the parameter>", "<rel>\\t<function>\\t<the expression>" or
+"<rel>\\t<function>\\treturns <its answers>", one per site (a site repeated in one function is one
+entry per occurrence).
+"""
+function type_default_sites(text::AbstractString, rel::AbstractString)::Vector{String}
+    local out = String[]
+    function params!(fname, sig)
+        for a in sig
+            for p in (a isa Expr && a.head === :parameters ? a.args : (a,))
+                (p isa Expr && p.head === :kw) || continue
+                local lhs = p.args[1]
+                local name, ann = lhs isa Expr && lhs.head === :(::) ? (lhs.args[1], lhs.args[2]) : (lhs, nothing)
+                _l192_kind(name, ann, p.args[2]) === nothing || push!(out, "$rel\t$fname\t$name")
+            end
+        end
+    end
+    function walk(ex, within, vpos::Bool, covered::Bool)
+        ex isa Expr || return
+        local body = _l192_def(ex)
+        if ex.head in (:function, :(=)) && !isempty(ex.args)
+            local sig = ex.args[1]
+            while sig isa Expr && sig.head in (:where, :(::)); sig = sig.args[1]; end
+            if sig isa Expr && sig.head === :call
+                params!(sig.args[1], sig.args[2:end])
+                within = string(sig.args[1])   # a `function` or a short-form definition
+            end
+            (ex.head === :function && sig isa Expr && sig.head === :tuple) && params!("(anonymous)", sig.args)
+        elseif ex.head === :-> && !isempty(ex.args)
+            local sig = ex.args[1]
+            # `(x; t=Any) -> …` parses as a block whose keywords are assignments
+            sig isa Expr && sig.head === :block &&
+                (sig = Expr(:tuple, Expr(:parameters, (Expr(:kw, a.args...) for a in sig.args
+                                                       if a isa Expr && a.head === :(=))...)))
+            params!("(anonymous)", sig isa Expr && sig.head === :tuple ? sig.args : (sig,))
+        end
+        if body !== nothing
+            # form 3: the function's answers; its body is read as statements, not values
+            local as = _l192_answers(body)
+            covered = _l192_mixed(as)
+            covered && push!(out, "$rel\t$within\t" * _l192_key("returns " * join(map(_l192_text, as), " | ")))
+            return walk(body, within, false, covered)
+        end
+        local fb = _l192_fallback(ex, vpos, covered)
+        fb === nothing || push!(out, "$rel\t$within\t" * _l192_key(_l192_text(ex)))
+        # a block's statements, a branch's arms and a returned value are no values of their own
+        # (a branch in value position is read whole, its function's answers likewise)
+        local child_vpos = !(ex.head in (:block, :if, :elseif, :return, :&&, :||, :toplevel, :module))
+        foreach(a -> walk(a, within, child_vpos, covered), ex.args)
+    end
+    walk(Meta.parseall(text; filename=rel), "(top level)", false, false)
+    return out
+end
+type_default_parameters()::Vector{String} =
+    reduce(vcat, [type_default_sites(_text(joinpath(SRC, dir, f)), "$dir/$f")
+                  for dir in ("codegen", "frontend") for f in sort(readdir(joinpath(SRC, dir))) if endswith(f, ".jl")])
+# the defaults and fallbacks that stay, each with what its default means at its site (L192); every
+# other site type_default_parameters finds is a wrong default R43 counts
+const L192_ALLOWED = Dict{String,String}(
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tsomething(numeric_register(_t), AnyRef)" =>
+        "a selector slot's representation: a number in its register (the one width rule), any other value anyref, dart's dynamic slot type (dispatch_table.dart:396)",
+    "codegen/types.jl\tassign_type_ids!\textra_concrete_types" =>
+        "a set of extra classes to number, empty when absent; it chooses no type for any value",
+    "codegen/types.jl\tget_function\texpected_return" =>
+        "a lookup filter: absent, no registration is skipped for its return type; it types no value",
+    "codegen/types.jl\tget_exact_candidate\texpected_return" =>
+        "a lookup filter, as get_function's: absent, no candidate is skipped for its return type",
+    "codegen/calls.jl\t_sub_builder\tseed_types" =>
+        "the registers a fragment's operands are declared as when the parent's stack is short; absent, the parent's stack seeds them",
+    "codegen/trimcollect.jl\twt_method_matches\tlimit" =>
+        "Julia's own default for a method lookup's limit, -1 for none (Core.Compiler.findall's `limit::Int=-1`)",
+    "codegen/box_capture.jl\t_capture_propagate\tget(seeds, key, Union{})" =>
+        "a box's writes so far, joined: no write yet is Union{}, the join's identity, not a guess",
+    "codegen/box_capture.jl\t_capture_finalize\tif length(ts) == 1 && (first(ts) isa DataType && isconcretetype(first(ts))) first(ts) else Any end" =>
+        "the join of a captured field's writes: its one concrete type, else Any, the erased contents dart's top type holds (closures.dart:1102-1115)",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif mixed_returns Any else first(return_types) end" =>
+        "the join of a selector's targets' return types: their one type, else Any, dart's dynamic return (dispatch_table.dart:396)",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif all_no_return nothing else if mixed_returns AnyRef else julia_to_wasm_type(return_type) end end" =>
+        "the register of that join: none when no target returns, else the one return type's, else anyref",
+    "codegen/dispatch.jl\tbuild_dispatch_tables\tif _lub == type_registry.base_struct_idx AnyRef else ConcreteRef(UInt32(_lub), true) end" =>
+        "the least upper bound of a slot's classes: a class below the root, else anyref, the root's representation",
+    "codegen/statements.jl\t_storage_element_type\treturns UInt8 | eltype(T)" =>
+        "a String's or Symbol's storage is its bytes: its element is UInt8, any other backing's its eltype",
+    "codegen/values.jl\tconvert_type!\tif _wt_ref_nullable(from) AnyRef else NonNullAbstractRef(UInt8(AnyRef)) end" =>
+        "the abstract anyref of the source's own nullability: both arms are the source's type, never a guess",
+    "codegen/calls.jl\t_compile_call_flipsign\treturns struct_rt | I32 | I64" =>
+        "the result's representation by its width: the 128-bit struct, else the register of 32 or 64 bits (a mapping by width, no fallback)",
+    "codegen/calls.jl\t_compile_call_flipsign\tif is_128bit nothing else if is_32bit I32 else I64 end end" =>
+        "the register a flipsign of 32 or 64 bits computes in, none for the 128-bit struct (a mapping by width)",
+    "codegen/compile.jl\tboundary_wasm_type\treturns AnyRef | ConcreteRef(register_memoryref_box!(mod, type_registry, T), true) | get_concrete_wasm_type(T, mod, type_registry)" =>
+        "a union boxed in anyref is the union's representation (translator.dart:1044); every other type its own",
+    "codegen/julia_numeric_tier.jl\temit_conversion!\treturns nothing | reject!(\"its source or target is not a type\") | reject!(\"a \$(sizeof(julia_src))-byte primitive other than Int128 and UInt128 has no representation\") | reject!(\"a  … #d79e0d58" =>
+        "the conversion's result register, the target width's (`target_is_32bit ? I32 : I64`), beside the conversions that answer a builder; no fallback",
+    "codegen/types.jl\tresolve_union_type\treturns StructRef | inner | AnyRef | find_common_wasm_type(non_nothing)" =>
+        "the representation of a union by its members (translateType's union arm): the struct root or anyref by what the members share",
+    "codegen/types.jl\t_resolve_multivariant_union\treturns AnyRef | result | ConcreteRef(if length(kinds) == 1 only(kinds) else registry.jl_type_idx end, true) | ArrayRef | StructRef | AnyRef" =>
+        "the representation of a union of several kinds (translateType's union arm): the shared root, the one kind, or anyref",
+    "codegen/types.jl\ttranslate_external_type\treturns ExternRef | julia_to_wasm_type(T) | AnyRef" =>
+        "the host boundary's representation: externref for a JS value, anyref for any other reference",
+)
+# One sample per spelling L192 names, each in a definition the scan must find, and the spellings
+# it must not (an empty container, a Bool flag, an optional sink, a join), so the lock's scan is
+# tested here, not only read
+const L192_SPELLINGS = [
+    "f(; t::Type=Any) = t", "f(; t=Int64) = t", "function f(; r=I32) end", "f(; r=WasmTarget.I32) = r",
+    "f(; t=Core.Any) = t", "f(x, t=Any) = t", "f(; t=Vector{Int}) = t", "f(x::T; t::Type{<:Number}=Float64) where {T} = 1",
+    "@inline f(; t=Any) = t", "h = (x; t=Any) -> t",
+    "f(; julia::Any=nothing) = 1", "f(; spectypes=nothing) = 1", "f(; from_julia::Union{Type,Nothing}=nothing) = 1",
+    "f(; julia_width::Int=(lhs_ty === I32 ? 32 : 64)) = 1", "f(; julia_width::Int=(is32 ? 32 : 64)) = 1",
+    "f(; obj_scratch::Integer=-1) = 1", "f(; stmt_idx::Int=0) = 1", "f(; n=typemax(Int)) = 1",
+    "g() = something(x, I32)", "g() = coalesce(x, AnyRef)", "g() = get(d, k, Any)", "g() = get(d, k, I32)",
+    "g() = x === nothing ? I32 : x", "g() = isnothing(x) ? Any : x", "g() = something(x, WasmTarget.I64)",
+    "g() = isconcretetype(T) ? T : Any", "function g(x); x === nothing && return Any; x; end",
+    "function g(x); x === nothing && return I32; I64; end",
+    "function g(x); x !== nothing || return I32; x; end", "function g(x); !isnothing(x) || return Core.Any; x; end",
+    "g(x) = x === nothing ? AnyRef : I32",
+    "g(T) = if T isa DataType; T.parameters[1]; elseif T isa Union; T.a; else; Any; end",
+    "function g(T); if isempty(T); return I32; else; return T[1]; end; end",
+    "function g(T); if T === Int32; return I32; end; T; end", "function g(x); x isa Type && return x; return Any; end",
+    "function g(x); if x isa GlobalRef; return x.T; end; Any; end",
+    "function g(x); if x isa Int; (x > 0 && return I32); error(\"no\"); end; x; end",
+    "g(big, is32) = big ? nothing : (is32 ? I32 : I64)", "g(T, is32) = isconcretetype(T) ? T : (is32 ? I32 : AnyRef)",
+]
+const L192_NOT_SPELLINGS = [
+    "f(; d=Dict{Int,Int}()) = 1", "f(; for_local::Bool=false) = 1", "f(; diagnostics_sink=nothing) = 1",
+    "g() = init === nothing ? vt : Union{init, vt}", "f(; check_overflow::Bool=false) = 1",
+    "g() = is32 ? I32 : I64", "function g(x); x === nothing && return 0; x; end",
+    "g(T) = if T === Int32; I32; elseif T === Int64; I64; else; F64; end",
+    "g(T) = if T === Int32; I32; else; error(\"no register\"); end",
+    "g(is64, is32) = is64 ? I64 : (is32 ? I32 : F64)",
+]
+_l192_spellings_missed()::Int = count(t -> isempty(type_default_sites(t, "sample")), L192_SPELLINGS) +
+                                count(t -> !isempty(type_default_sites(t, "sample")), L192_NOT_SPELLINGS)
+
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
 # definition line (`function name`) so they count CALLERS.
@@ -919,6 +1359,14 @@ const METRICS = [
     # regard" made machine-checked for API types, not just codegen structure.
     "R33_unexercised_registry_entries" => ("lowering-registry entries no fast-lane case exercises — the entries of test/registry_coverage.jl's ALLOWLIST, which that lane keeps exact (a covered entry left in the list fails it; a new entry without a case fails it). dev/CHARTER.md C5. Terminal state 0",
         () -> count(l -> occursin(r"^\s*\(:[A-Z_]+, ", l), readlines(joinpath(ROOT, "test", "registry_coverage.jl")))),
+    "R42_held_numeric_types" => ("numeric types the generated lowering-table cases hold out (test/registry_cases.jl's RC_HELD, each entry with its reason and its dev/MARCH.md row): no case of a held type is generated, as an operand or a target, until the width rule covers it (Bool is Julia's i1 under an integer intrinsic, a Float16 its 16 bits; dev/MARCH.md 13.1). dev/CHARTER.md C5. Terminal state 0",
+        () -> begin
+            # the table's pairs as Julia parses them, however they are laid out
+            local m = match(r"(?s)const RC_HELD = Dict\{DataType,String\}\(.*?\n\)", _text(joinpath(ROOT, "test", "registry_cases.jl")))
+            m === nothing ? 1000 : count(a -> Meta.isexpr(a, :call) && a.args[1] === :(=>), Meta.parse(m.match).args[1].args[2].args[2:end])
+        end),
+    "R43_wrong_default_sites" => ("parameter defaults and fallbacks in src/codegen and src/frontend that choose a type, a register, a width, an index or a sentinel where the caller's answer belongs (L192's scan, type_default_parameters), less L192_ALLOWED's entries: a statement's type read as `get(ctx.ssa_types, i, Any)`, a value's Julia type absent from the conversion funnel (`from_julia=nothing`), a body's slot types absent (`spectypes=nothing`), a width guessed from the register (`julia_width`), a rejection's statement absent (`idx=0`), a function's answers or a branch's arms that fall back to `Any` or a register beside an answer (`isconcretetype(T) ? T : Any`, an if/elseif arm's `else Any`, an early `return Any` beside a fall-through answer, `x === nothing && return Any`). Each is made required or answered by Julia (dev/MARCH.md 13.4). dev/CHARTER.md C5. Terminal state 0",
+        () -> count(k -> !haskey(L192_ALLOWED, k), type_default_parameters())),
 ]
 
 # The builder alone: src/builder/*.jl, from builder/types.jl to builder/instr_builder.jl, loaded
@@ -2062,8 +2510,8 @@ const LOCKS = [
                         "emit_method_error!(bld, ctx.mod, ctx.type_registry, Tuple{},",
                         "MethodError(f, (), world)",
                         "Int64(WASM_WORLD_AGE)",
-                        "reduce_op = operator_intrinsic(target_value, elem_type)",
-                        "reduce_op in (:sub_int, :sub_float) && (reduce_op = nothing)",
+                        "reduce_op = reduce_intrinsic(target_value, elem_type)",
+                        "return op in (:sub_int, :sub_float) ? nothing : op",
                         "local_set!(bld, has_value)"]
             forbidden = ["_get_binary_reduce_opcode(func_name"]
             count(p -> !occursin(p, calls_src), required) +
@@ -2650,7 +3098,7 @@ const LOCKS = [
                           split(m.match, '\n'))
             count(l -> occursin("<:", l), body)
         end),
-    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) inside its located try and maps the code after it back to the function's definition (L159); the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land, and the destination's own mapping resumes after them, so a fragment's last mapping does not run on into its destination; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
+    "L144_statements_are_source_mapped" => ("every instruction a Julia statement emits maps to that statement's source, end to end, as dart2wasm's source maps do (pkg/wasm_builder/lib/source_map.dart): compile_statement! maps the statement (map_to_statement!, the one mapping entry) inside its located try and maps the code after it back to the function's definition (L159); the stackifier maps a block's terminator code to the terminator, each phi store on an edge to its phi, and an in-block return to itself; append_builder! carries a fragment's mappings shifted to where its instructions land, and the destination's own mapping resumes after them, so a fragment's last mapping does not run on into its destination; the serializer moves a body's mappings by the body's place in the code section and the section's place in the module; the differential runner compiles with the map (compare_julia_wasm, through its one compile line _emission_compile) and names a trap's frames through it (located_frames); and the function-level approximation retired 2026-09-29 (collect_source_info, whose i-th mapping took the i-th defined function's size prefix) does not return (test/source_maps.jl; dev/CHARTER.md C10)",
         () -> begin
             src(f) = read(joinpath(CODEGEN, f), String)
             bsrc(f) = read(joinpath(SRC, "builder", f), String)
@@ -2665,7 +3113,8 @@ const LOCKS = [
                 (bsrc("instructions.jl"), "push!(code_mappings, shift_by(m, entry_start + body_start))"),
                 (bsrc("instructions.jl"), "push!(module_mappings, shift_by(m, contents_start))"),
                 (src("compile.jl"), "b = generate_body(_ctx_function_builder(ctx, func_idx), ctx)"),
-                (tsrc("utils.jl"), "bytes, source_map = WasmTarget.compile_with_sourcemap(f, arg_types; optimize=optimize)"),
+                (tsrc("utils.jl"), "bytes, source_map, meta = _emission_compile(f, arg_types; optimize=optimize)"),
+                (tsrc("utils.jl"), "local r = WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url=\"module.wasm.map\","),
                 (tsrc("wasm_runner.jl"), "located_frames(String(r[\"stack\"]), source_map, bytes)"),
             ]
             forbidden = ["collect_source_info", "update_function_offsets!"]
@@ -3217,23 +3666,25 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             count(((text, needle),) -> !occursin(needle, text), required) +
                 length(collect(eachmatch(r"both error|nstat === :throw && wstat === :ok|wstat === :trap", prop)))
         end),
-    "L162_the_gate_has_a_budget" => ("the full matrix gives its verdict in minutes, though it never holds a landing (L153): every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest; coverage-merge's timeout is at most 10 minutes and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's enforcement table names `bash dev/gate.sh` as the full matrix, non-blocking. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"; dev/CHARTER.md C10)",
+    "L162_the_gate_has_a_budget" => ("the full matrix gives its verdict in minutes, though it never holds a landing (L153): every lane of `bash dev/lanes.sh`'s default run on CI's runners (gate.yml, one job each) within a budget of 20 minutes per lane job, the lane job's `timeout-minutes: 20` exactly, so a slow lane and a hung one are both cut at the budget, red, and fail-fast cancels the rest; coverage-merge's timeout is at most 10 minutes, the emission-diff check's (L190) emission-plan's the budget and its emission job's at most 10 minutes, and gate.yml holds no other timeout; dev/gate.sh reads the budget from gate.yml's lane job (one source), prints the slowest lane job against it and marks a job past it; AGENTS.md's enforcement table names `bash dev/gate.sh` as the full matrix, non-blocking. The budget is admitted by five consecutive green runs on the final matrix, cold-cache runs (a new gate branch) among them, each with every lane job <= 0.95 B = 1140 s; it is lowered only, never raised: a lane past it is rebalanced or split first (Dale 2026-10-09, the gate \"~15-20 min\"; dev/CHARTER.md C10)",
         () -> begin
             local gate = read(joinpath(ROOT, ".github", "workflows", "gate.yml"), String)
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
             local agents = replace(read(joinpath(ROOT, "AGENTS.md"), String), r"\s+" => " ")
             local job(name) = (m = match(Regex("(?s)\\n  " * name * ":\\n(.*?)(?=\\n  [a-z][a-z-]*:\\n|\\z)"), gate); m === nothing ? "" : m.captures[1])
             local lane_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job("lane"))]
-            local merge_t = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job("coverage-merge"))]
+            local tmo(name) = [parse(Int, m[1]) for m in eachmatch(r"^    timeout-minutes: (\d+)\b"m, job(name))]
+            local merge_t, plan_t, em_t = tmo("coverage-merge"), tmo("emission-plan"), tmo("emission")
             count(!, [lane_t == [20],
                       length(merge_t) == 1 && merge_t[1] <= 10,
-                      length(collect(eachmatch(r"timeout-minutes:", gate))) == 2,
+                      plan_t == [20] && length(em_t) == 1 && em_t[1] <= 10,
+                      length(collect(eachmatch(r"timeout-minutes:", gate))) == 4,
                       occursin("| the full matrix, CI, non-blocking | `bash dev/gate.sh` (L153, L162)", agents),
                       occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
         end),
-    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/land.sh calls neither it nor `dev/lanes.sh --fast` (a landing's gate is `bash dev/gate.sh --block`, L194). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups, each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
+    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/land.sh calls neither it nor `dev/lanes.sh --fast` (a landing's gate is `bash dev/gate.sh --block`, L194). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             local wf = joinpath(ROOT, ".github", "workflows")
@@ -3277,10 +3728,13 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to", sh) ? 0 : 1
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
             v += occursin("--fast", land) ? 1 : 0
-            # the smoke dealing's durations: exactly the groups, each measured on both versions
-            local smk_src = read(joinpath(ROOT, "test", "smoke.jl"), String)
-            local want = Set{String}(m[1] == "g" ? m[2] : "xfail " * m[2]
-                                     for m in eachmatch(r"^_(g|xf)\(\"([^\"]+)\""m, smk_src))
+            # the smoke dealing's durations: exactly the groups (smoke.jl's, its lazy ones and those of
+            # the files it includes), each measured on both versions
+            local smk_main = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smk_src = join([smk_main; [read(joinpath(ROOT, "test", m[1]), String)
+                                             for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk_main)]], '\n')
+            local want = Set{String}(m[1] in ("g", "lazy_g") ? m[2] : "xfail " * m[2]
+                                     for m in eachmatch(r"^_(g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smk_src))
             local got = String[]
             for ln in eachline(joinpath(ROOT, "test", "smoke_times.tsv"))
                 (isempty(ln) || startswith(ln, '#')) && continue
@@ -3291,7 +3745,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
             v
         end),
-    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl, those also on `julia +1.13`; the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12 and the probes through `WT_BLOCK_RUNNER` when it names a warm session's runner (one after another), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`). dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, each a hard limit (L195 scales them by the machine's measured speed); a changed file under src/ or ext/ with no row in test/block_groups.tsv fails the gate, and every src file has one; every group the file names is a smoke group or xfail group and every probe a corpus probe; a selection naming no group or probe fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, run_tlc.sh's `no instance`), never a green run of nothing. The evidence record dev/.block/<tree>.toml (git-ignored) is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of exactly that commit, green, made on a clean tree, from a clean main tree, and reads no CI check (dev/CHARTER.md C10)",
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12 and the probes through `WT_BLOCK_RUNNER` when it names a warm session's runner (one after another), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`). dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, each a hard limit (L195 scales them by the machine's measured speed); a changed file under src/ or ext/ with no row in test/block_groups.tsv fails the gate, and every src file has one; every group the file names is a smoke group or xfail group and every probe a corpus probe; a selection naming no group or probe fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, run_tlc.sh's `no instance`), never a green run of nothing. The evidence record dev/.block/<tree>.toml (git-ignored) is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of exactly that commit, green, made on a clean tree, from a clean main tree, and reads no CI check (dev/CHARTER.md C10)",
         () -> begin
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
@@ -3311,7 +3765,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                          raw"    probe_env(c) = merge(ENV, Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
                          raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, merge(ENV, Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
                          raw"    smokeenv = merge(ENV, Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
-                         raw"    batch = setdiff(unique(vcat(mapped, newgroups)), core)",
+                         raw"                append!(out, last.(spans))   # an included case file's generators feed every group it defines",
                          raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
                          raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups that exercise it\")",
                          raw"    foreach(wait, tasks)"]
@@ -3328,7 +3782,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin(raw"        push!(fails, \"total: $(fmt(total)) s, over the budget of $tb s ($(fmt(total / factor)) s at the machine's best speed)\")", blk) ? 0 : 1
             v += occursin(raw"                push!(fails, \"$name: $(fmt(wall)) s, over its budget of $b s ($(fmt(scaled)) s at the machine's best speed)\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
             # the map: every src file has a row, every group and probe exists
-            local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf)\(\"([^\"]+)\""m, smoke))
+            # smoke's groups: smoke.jl's, its lazy ones (registry_cases.jl's) and those of the case files it includes
+            local smoke_all = join([smoke; [read(joinpath(ROOT, "test", m[1]), String)
+                                            for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smoke)]], '\n')
+            local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smoke_all))
             local cases = Set(m[1] for m in eachmatch(r"^_c\(\"([^\"]+)\""m, corpus))
             local rows = Dict{String,Vector{String}}()
             for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
@@ -3337,6 +3794,30 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 length(f) == 2 ? (rows[String(f[1])] = filter(!=("-"), String.(split(f[2])))) : (v += 1)
             end
             v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
+            # the matrix-only row: exactly the generated registry groups (Amendment 117-14) and
+            # entered_paths (it exists for the matrix-only emission-diff check, L190), none in the
+            # core, never the sample; the gate drops them from every stage
+            local rcs = read(joinpath(ROOT, "test", "registry_cases.jl"), String)
+            local generated = Set(String(m[1]) for m in eachmatch(r"^    \"(registry_\w+)\" => _rc_\w+,$"m, rcs))
+            occursin("    RC_GROUPS[\"registry_operators_rejected\"] = RC_OPERATOR_REJECTS\n", rcs) && push!(generated, "registry_operators_rejected")
+            local mo = get(rows, "matrix-only", String[])
+            v += !isempty(generated) && Set(mo) == union(generated, ["entered_paths"]) && length(mo) == length(generated) + 1 &&
+                 isempty(intersect(mo, get(rows, "core", String[]))) && !("registry_sample" in mo) ? 0 : 1
+            # a run that selects no lazy group never includes registry_cases.jl: smoke.jl declares the
+            # generated groups lazily and builds only the selected ones before main runs; every reader
+            # of all cases builds them all first
+            v += !occursin(r"^include\(joinpath\(@__DIR__, \"registry_cases.jl\"\)\)"m, smoke) &&
+                 count(r"^_lazy_(?:g|xf)\(\"registry_\w+\", \"registry_cases.jl\"\)$"m, smoke) == length(generated) + 2 &&
+                 occursin("        haskey(LAZY_BUILDERS, file) || Base.include(@__MODULE__, joinpath(@__DIR__, file))\n", smoke) &&
+                 occursin("abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())\nabspath(PROGRAM_FILE) == (@__FILE__) && main()", smoke) &&
+                 occursin("LAZY_BUILDERS[\"registry_cases.jl\"] = rc_groups", rcs) ? 0 : 1
+            for (f, needle) in (("test/registry_coverage.jl", "_build!(collect(keys(LAZY_FILE)))"), ("test/block_impact.jl", "_build!(collect(keys(LAZY_FILE)))"),
+                                ("dev/emission_diff.sh", "lazy = err === nothing ? (try; _build!(collect(keys(LAZY_FILE))); nothing; catch e; e; end) : nothing"),
+                                ("dev/emission_diff.sh", "err === nothing && (err = try; _build!(collect(keys(LAZY_FILE))); nothing; catch e; e; end)"))
+                v += occursin(needle, read(joinpath(ROOT, f), String)) ? 0 : 1
+            end
+            v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = setdiff(unique(vcat(mapped, newgroups)), core, matrix)", blk) &&
+                 occursin("            f[1] == \"matrix-only\" ? append!(matrix, gs) : push!(rows, String(f[1]) => gs)", blk) ? 0 : 1
             for (k, gs) in rows
                 v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
             end
@@ -3901,7 +4382,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                           read(joinpath(ROOT, "test", "dispatch_method_error.jl"), String)) ? 0 : 1
             v
         end),
-    "L180_one_table_per_construct" => ("each lowering reads one table: one operator table, INTRINSIC_BINOPS (dart's `_binaryOperatorMap`, intrinsics.dart:437, its lookup :995), which the surface `+ - *` lowering and the `_apply_iterate` reduce reach through operator_intrinsic (the intrinsic Julia's own method runs, base/int.jl:86-88 on 1.12.7 and 1.13.1, base/float.jl:495-497 on 1.12.7 and :492-494 on 1.13.1; no `_OPERATOR_OPCODES`, no `_get_binary_reduce_opcode`), and one conversion table, INTRINSIC_CONVERSIONS, whose bitcast every reinterpretation reads (emit_bitcast!: no `*_REINTERPRET_*` opcode outside julia_numeric_tier.jl); one width rule, julia_to_wasm_type for a value's register (dart's translateType, translator.dart:1044; numeric_register, and exact_register for a register that holds exactly its value) and `_julia_int_width(T)` for a primitive's bits, Julia's own (8*sizeof, jl_datatype_size: every primitive held in a register, an 8- or 16-bit one in an i32 whatever its type, and a 128-bit integer; `nothing` for any other type, never a register-width stand-in, and `_operand_width`, its reader for an intrinsic's operand, raises there), which every width decision in codegen reads, normalise_narrow!, the shifts, the comparisons, the division guard and the egal (a 128-bit integer is `_julia_int_width(T) == 128`, a float register `numeric_register(T) in (F32, F64)`; no width keyword defaults to a register's): no list of two or more numeric types (8- to 128-bit integers, Float16/32/64, Bool, Char) deciding a width, as an `||` chain, an `in (…)` tuple, an `isa Union{…}` or `<: Union{…}`, a table of `=>` pairs, a tuple of them on one line or continued (a named one, a keyword's, a ternary's arms), a `Union{…}` anywhere (a const) or a chain of `isa(x, T)` tests, but the lines of one exact allowlist, each with its reason: the rule's own body, packed_array_storage (the packed storage rule), translate_external_type (the numbers the JS boundary carries unboxed), assign_type_ids!'s fixed primitive classes (which classes are numbered), `_struct_fields!` (13.4's one struct-field translation, 116f), the constant encoders (values.jl's, `_const_init!`'s: each constant's bits, as dart's constant visitors encode each class), the getfield constant fold's constant kinds (calls.jl), calls.jl's one-byte pointer-element tests and the storage pointer's element-type sets (a byte layout: _STORAGE_PRIMITIVE_ELTYPES, _BYTE_ELTYPES, `_PRB_WIDE`), the byte-tuple reinterpret overlays' operand unions (interpreter.jl, by byte count) and the statement-value trace's own table (generate.jl); and one widening rule: a source narrower than its register is normalised before it widens into a target of any register, signed for sext_int and sitofp, unsigned for zext_int and uitofp; every width narrower than its register (an 8-, 16- or 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64) is sign-extended or masked by one rule, emit_extend_from_width! (no `extend8_s`/`extend16_s` outside it), which normalise_narrow!, the shifts, the comparisons and divisions, the egal and the checked arithmetic read (smoke narrow_primitive's 24- and 40-bit cases: sext of a dirty 24-bit value answered 32754, native -32782, and of a 40-bit one 1099511627762, native -14, dev/AUDIT.md A17E2), and the 128-bit sext and zext read it whatever register their source rides in, no normalisation gated on an i32-held operand (smoke narrow_primitive's sext128_p40, zext128_dirty_p40, A18E2 (c)); every conversion's target is resolved once from its operand (a literal type, or a constant global's value: nir_type_operand, the one rule isa and typeassert read too, dev/AUDIT.md A17E6), an unresolved one rejecting at its statement, never a default register; one operand table, `_nir_any_operand`, which count_ssa_uses! and the local allocation's second pass read (an upsilon's value is a use), and the use index (ssa_users) answers every whole-body use scan; and one loop-bounds definition, loop_bounds (a loop's header and its last back edge), which the local allocation and the branching-loop index read (no loop-header bitmap, no first-goto table). Behavior: test/m11_intrinsics_table.jl's 'operator_intrinsic is the intrinsic Julia's method runs' (for every admitted operator and type, the one intrinsic in Julia's typed body; an intrinsic callee only for its own kind, so smoke's xfail reduce_intrinsic_kind rejects where it added floats), test/nir_use_index.jl's 'the use count and the loop bounds read one table each' (count_ssa_uses! equals the one table's count on a body with an upsilon carrying an SSA value; a loop entered by a forward goto keeps its last back edge), smoke narrow_widening (a dirty Int8 widened to Int32 answered 200, native -56, and a UInt8 sign-extended answered 128, native -128, at baae2757), conversion_target (sitofp to a Float32 named by a GlobalRef rounded twice), int128_extends (a narrow source normalised before it widens into Int128: sext_int(Int128, 0x80) raised a StackImbalanceError and a dirty Int8 answered 200 on the base acc1ac87) and pointer_float_bytes (a StackImbalanceError on that base), each failing with its fix reverted; dispatch_slot_registers' int8_slot and enum_slot are regression cases that answered as native before the width rule too (a Float16 rejects at its statement, xfail dispatch_slot_float16) (dev/AUDIT.md the first audit's side notes, A16B1 = A16E1, A16E3, A16P1, A16P2, A16P5; 13.4; dev/CHARTER.md C1)",
+    "L180_one_table_per_construct" => ("each lowering reads one table: one operator table, INTRINSIC_BINOPS (dart's `_binaryOperatorMap`, intrinsics.dart:437, its lookup :995), which the surface `+ - *` lowering and the `_apply_iterate` reduce reach through operator_intrinsic (the intrinsic Julia's own method runs, base/int.jl:86-88 on 1.12.7 and 1.13.1, base/float.jl:495-497 on 1.12.7 and :492-494 on 1.13.1; no `_OPERATOR_OPCODES`, no `_get_binary_reduce_opcode`), and one conversion table, INTRINSIC_CONVERSIONS, whose bitcast every reinterpretation reads (emit_bitcast!: no `*_REINTERPRET_*` opcode outside julia_numeric_tier.jl); one width rule, julia_to_wasm_type for a value's register (dart's translateType, translator.dart:1044; numeric_register, and exact_register for a register that holds exactly its value) and `_julia_int_width(T)` for a primitive's bits, Julia's own (8*sizeof, jl_datatype_size: every primitive held in a register, an 8- or 16-bit one in an i32 whatever its type, and a 128-bit integer; `nothing` for any other type, never a register-width stand-in, and `_operand_width`, its reader for an intrinsic's operand, raises there), which every width decision in codegen reads, normalise_narrow!, the shifts, the comparisons, the division guard and the egal (a 128-bit integer is `_julia_int_width(T) == 128`, a float register `numeric_register(T) in (F32, F64)`; no width keyword defaults to a register's): no list of two or more numeric types (8- to 128-bit integers, Float16/32/64, Bool, Char) deciding a width, as an `||` chain, an `in (…)` tuple, an `isa Union{…}` or `<: Union{…}`, a table of `=>` pairs, a tuple of them on one line or continued (a named one, a keyword's, a ternary's arms), a `Union{…}` anywhere (a const) or a chain of `isa(x, T)` tests, but the lines of one exact allowlist, each with its reason: the rule's own body, packed_array_storage (the packed storage rule), translate_external_type (the numbers the JS boundary carries unboxed), assign_type_ids!'s fixed primitive classes (which classes are numbered), `_struct_fields!` (13.4's one struct-field translation, 116f), the constant encoders (values.jl's, `_const_init!`'s: each constant's bits, as dart's constant visitors encode each class), the getfield constant fold's constant kinds (calls.jl), calls.jl's one-byte pointer-element tests and the storage pointer's element-type sets (a byte layout: _STORAGE_PRIMITIVE_ELTYPES, _BYTE_ELTYPES, `_PRB_WIDE`), the byte-tuple reinterpret overlays' operand unions (interpreter.jl, by byte count) and the statement-value trace's own table (generate.jl); and one widening rule: a source narrower than its register is normalised before it widens into a target of any register, signed for sext_int and sitofp, unsigned for zext_int and uitofp; every width narrower than its register (an 8-, 16- or 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64) is sign-extended or masked by one rule, emit_extend_from_width! (no `extend8_s`/`extend16_s` outside it), which normalise_narrow!, the shifts, the comparisons and divisions, the egal and the checked arithmetic read (smoke narrow_primitive's 24- and 40-bit cases: sext of a dirty 24-bit value answered 32754, native -32782, and of a 40-bit one 1099511627762, native -14, dev/AUDIT.md A17E2), and the 128-bit sext and zext read it whatever register their source rides in, no normalisation gated on an i32-held operand (smoke narrow_primitive's sext128_p40, zext128_dirty_p40, A18E2 (c)); a narrow ctlz, cttz or ctpop and a flipsign read their operand at its own width in an i32 or an i64, never the full register (A18B2 = A18E2 (a)(b)): no normalisation gated on an i32 test on its line, the unary route normalising a narrow count operand before the table's CLZ, CTZ or POPCNT row (masked; a trailing count stopped at the width by a bit set there, a leading count less the register's bits above it) and the flipsign normalising y before its sign shift, as the shift normalises a narrow amount in either register (smoke registry_unops' ctlz_int, cttz_int and ctpop_int cases and registry_misc's flipsign_int cases, narrow_primitive's ctlz_p40, cttz_zero_p40, ctpop_dirty_p40 and flipsign_p40 over a 40-bit primitive in an i64, each failing with its fix reverted (measured with the fixes gated on an i32-held operand: 62, 64, 2 and 5 where native answers 38, 40, 1 and -5)); every conversion's target is resolved once from its operand (a literal type, or a constant global's value: nir_type_operand, the one rule isa and typeassert read too, dev/AUDIT.md A17E6), an unresolved one rejecting at its statement, never a default register; one operand table, `_nir_any_operand`, which count_ssa_uses! and the local allocation's second pass read (an upsilon's value is a use), and the use index (ssa_users) answers every whole-body use scan; and one loop-bounds definition, loop_bounds (a loop's header and its last back edge), which the local allocation and the branching-loop index read (no loop-header bitmap, no first-goto table). Behavior: test/m11_intrinsics_table.jl's 'operator_intrinsic is the intrinsic Julia's method runs' (for every admitted operator and type, the one intrinsic in Julia's typed body; an intrinsic callee only for its own kind, so smoke's xfail reduce_intrinsic_kind rejects where it added floats), test/nir_use_index.jl's 'the use count and the loop bounds read one table each' (count_ssa_uses! equals the one table's count on a body with an upsilon carrying an SSA value; a loop entered by a forward goto keeps its last back edge), smoke narrow_widening (a dirty Int8 widened to Int32 answered 200, native -56, and a UInt8 sign-extended answered 128, native -128, at baae2757), conversion_target (sitofp to a Float32 named by a GlobalRef rounded twice), int128_extends (a narrow source normalised before it widens into Int128: sext_int(Int128, 0x80) raised a StackImbalanceError and a dirty Int8 answered 200 on the base acc1ac87) and pointer_float_bytes (a StackImbalanceError on that base), each failing with its fix reverted; dispatch_slot_registers' int8_slot and enum_slot are regression cases that answered as native before the width rule too (a Float16 rejects at its statement, xfail dispatch_slot_float16) (dev/AUDIT.md the first audit's side notes, A16B1 = A16E1, A16E3, A16P1, A16P2, A16P5; 13.4; dev/CHARTER.md C1)",
         () -> begin
             local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
             local calls = read(joinpath(CODEGEN, "calls.jl"), String)
@@ -4031,6 +4512,29 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 end
             end
             v += occursin("(\"sext128_p40\"", smk) && occursin("(\"zext128_dirty_p40\"", smk) ? 0 : 1
+            # a narrow ctlz/cttz/ctpop or flipsign reads its operand at its own width, in an i32 or an
+            # i64, never the full register (A18B2 = A18E2 (a)(b)): no normalisation gated on an i32
+            # test on its line, the unary route normalises a narrow count operand before the table's
+            # CLZ/CTZ/POPCNT row with no i32 gate, and the flipsign normalises y before its sign shift
+            for (dir, _, files) in walkdir(CODEGEN), f in sort(files)
+                endswith(f, ".jl") || continue
+                for l in _file_lines(joinpath(dir, f))
+                    _iscomment(l) && continue
+                    v += occursin(r"\b(is_?32(bit)?|=== I32)\s*&&.*\b(normalise_narrow!|emit_extend_from_width!)\(", l) ? 1 : 0
+                end
+            end
+            local cls = read(joinpath(CODEGEN, "calls.jl"), String)
+            local un = (k = findfirst("    elseif _it_name !== nothing && !is_128bit\n", cls);
+                        e = k === nothing ? nothing : findnext("local _ut_result = emit_intrinsic_unop!(fb, _ut_w, _it_name)", cls, last(k));
+                        k === nothing || e === nothing ? "" : cls[first(k):first(e)])
+            v += occursin("_it_name in (:ctlz_int, :cttz_int, :ctpop_int)", un) && occursin("normalise_narrow!(fb, ctx, arg_type, false)", un) &&
+                 !occursin("=== I32 &&", un) ? 0 : 1
+            v += occursin("        local_get!(bld, y_local)\n        normalise_narrow!(bld, ctx, arg_type, true)\n", cls) ? 0 : 1
+            # a narrow shift amount read at its width in either register (the W6 fix)
+            v += occursin("((_cnt === I32 || _cnt === I64) && !(nir_const(args[2]) isa Integer && nir_const(args[2]) >= 0)) &&\n            normalise_narrow!(fb, ctx, value_type(ctx, args[2]), false)", cls) ? 0 : 1
+            for c in ("(\"ctlz_p40\"", "(\"cttz_zero_p40\"", "(\"ctpop_dirty_p40\"", "(\"flipsign_p40\"")
+                v += occursin(c, smk) ? 0 : 1
+            end
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("the use count and the loop bounds read one table each", nui) &&
                  occursin("@test WasmTarget.loop_bounds(WasmTarget.nir_cfg(synth)) == [(3, 6)]", nui) ? 0 : 1
@@ -4414,6 +4918,62 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
               _ir_raw_reads_outside_allowlist(r"\bcode_info\b")),
     "L126_ratchets_terminate_at_zero" => ("dev/CHARTER.md rule 2: a ratchet's only terminal state is 0. No ratchet description may declare a floor or its sites legitimate/reclassified — a site that belongs moves into an exact per-site allowlist with its anchor, a reviewable diff",
         () -> count(p -> occursin(r"floor|legitimate|reclassif"i, first(last(p))), METRICS)),
+    "L190_emission_changes_have_a_running_case" => ("every function body whose emission a change alters is entered by a passing differential case, checked in the non-blocking matrix on every landed head and in the full gate (gate.yml, never a landing's gate: L163, L194), at function entry, no finer: a changed branch inside an entered function counts as entered (block-level entry of a changed body is planned, dev/MARCH.md 13.17) (Amendment 117-1 (a): in 116b-116dx reviews found ~15 wrong answers by reading, among them one-path rewrites that dropped cases the old paths covered). Smoke on Julia 1.12, as a lane (dev/lanes.sh exports WT_EMISSION_DIR for `--lane smoke`), fingerprints every body of the module each case's runner compiles (compare_julia_wasm and compare_julia_wasm_inputs compile through _emission_compile, the one compile line, and report the module through EMITTED_MODULES; main calls no other runner; a typed-result wrapper, which the harness compiles to read an Any result, is not the case's module) and records which a run of the case's inputs entered (an exported counter set at each function's entry, in a copy of the module) and each case's source hash. A body is keyed by its specialization (the MethodInstance's specTypes from the compile's function registry; a function no entry names by its name), and its fingerprint names each operand by what it denotes (a function by its key, a type by its structure, a global by its name, type and initializer), so renumbering a module changes no unrelated body; its labeled fingerprint writes each class-id constant (compared with a class id read from an object's field 0, or built into one) as its class's type, any other constant keeping its value. The base side is computed once per landed head: gate.yml's emission job publishes the commit's own smoke rows on a green verdict as its base file (an artifact named by the base sha, the Julia version and a hash of test/emission_fingerprint.jl and _emission_compile, kept 90 days), and .github/workflows/emission-base.yml publishes one for a base no gate published (`bash dev/emission_diff.sh bootstrap <base>`, run from the head whose matrix needs it, pushes an unattached commit, that checkout's tree with <base> as its parent, so its merge base is <base> and its tests make the key; its parts take the plan's rule: a group the head's tests cannot build over the base's src is left out, an F line naming why, so a base file is always published). In gate.yml alone (gate-fast.yml holds no emission job), when src, ext or Project.toml differ from the base, the head's merge base with the march branch or, for a landed head (its own merge base), the nearest first-parent ancestor whose base file a run published, emission-plan fetches that file (absent, it fails, naming the key) and compiles with the base's src only the cases it lacks or whose source hash changed, beside the lanes (when the head's tests do not load over the base's src, none: the delta holds the load error, and the head's bodies are compared with the cached file's alone, which only adds bodies the base does not emit); the emission job fails on a (key, fingerprint) the head emits and the base does not, entered by no passing case nor by a body of the same key and labeled fingerprint (one specialization in modules whose classes are numbered apart), naming it; a red lane cancels the run, a red emission-plan no lane (the lanes' verdict on a landed head stands). Behavior, run here on test/emission_fingerprint.jl: a module and its copy with the functions in the other order fingerprint alike; a changed constant that is no class id changes its body's fingerprint and labeled fingerprint, not its caller's; two specializations of one method that differ only in a mask constant have two keys and two labeled fingerprints, and with only one entered the verdict fails naming the other; a class id compared with a class id read or built into an object's field 0 has one labeled fingerprint when classes are numbered apart, and a mask of a class id keeps its value; the verdict passes a changed body a passing case entered, or one of the same key and labeled fingerprint another passing case entered, and an unchanged tree, and fails a changed body no passing case entered (naming it), another labeled fingerprint or another key, a missing base file or delta, a failed case, a missing smoke part and a base compiled by another Julia (dev/CHARTER.md C5)",
+        () -> (emission_module(); Base.invokelatest(_l190_check))),
+    "L191_numeric_tables_generate_their_cases" => ("every key of the numeric lowering tables, INTRINSIC_BINOPS, INTRINSIC_UNOPS, INTRINSIC_CONVERSIONS, CHECKED_OPS, SHIFT_OPS, FMA_OPS and MISC_OPS, has generated differential cases in smoke, one per Julia type whose register is the key's, less RC_HELD's types (R42) (test/registry_cases.jl, one GROUPS group per table, enumerated from the tables themselves, never a copy of their keys; a key no Julia type reaches raises when smoke loads, naming it), a shift's per pair of shifted and amount types the intrinsic accepts; and the operator fallback's cases are asked of operator_intrinsic itself: its callees those it answers for some type among BUILTIN_LOWERINGS's keys (the call) and among every Core.Intrinsics intrinsic and Base binary operator (the reduce, a splat of two), a case per callee and type the consumer's rule answers (operator_intrinsic for the call, reduce_intrinsic for the reduce), and a loud case (an xfail) for the first type it answers `nothing` for where Julia answers. The blocking gate runs registry_sample, derived from those groups (Amendment 117-14: split, never exempt; the full groups are test/block_groups.tsv's matrix-only row, L194): the first generated case of each class, its table, its function's arity (a unary and a binary operation of one table, the operator fallback's call and reduce, are two kinds) and the register classes of the values it operates on (a narrow integer apart from a full one, a shift's amount beside its value, a conversion's target by its register), with that case's function and inputs, at most 60 (more raises when smoke loads); every generated case names its types. Each case is compiled once and run over its inputs (compare_julia_wasm_inputs): each type's boundaries and, for a narrow type, a dirty operand whose register holds junk above its width; a float travels as its bits and a float result is compared by its bits, an arithmetic NaN as a NaN (IEEE 754's sign bit operations and a bitcast by every bit). The class of silent wrong answers the reviews found by reading in 116d-2 and audit #16: A16E1 (a narrow sext, zext or sitofp source read with its junk), A16E3 (a sitofp to Float32 rounded twice) and 116d-2's operator kind swap; 116d-2's other, the Int128 sext of a UInt8, is a 128-bit conversion, which no generated case holds (smoke's int128_extends is its case); A16E4's arity, a splat of one or three elements where native throws, waits for the strict throw match (117b). Behavior: smoke's registry groups, each failing under a plant of a fix: normalise_narrow! deleted from emit_conversion!'s sext arm (the A16E1 fix) fails registry_conversions, sitofp to a Float32 converted through a Float64 (A16E3) fails registry_conversions, operator_intrinsic answering a float intrinsic for an integer (116d-2) fails registry_operators, a narrow shift amount read with its junk (the W6 fix reverted) fails registry_shift, and a key no type reaches added to INTRINSIC_UNOPS fails smoke's load (dev/CHARTER.md C5)",
+        () -> begin
+            local rc = _text(joinpath(ROOT, "test", "registry_cases.jl"))
+            local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+            local v = 0
+            for t in ("INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS", "CHECKED_OPS", "SHIFT_OPS", "FMA_OPS", "MISC_OPS")
+                v += occursin("keys(WasmTarget.$t)", rc) && occursin("_rc_unreached(:$t,", rc) ? 0 : 1
+            end
+            # the operator fallback's callees asked of operator_intrinsic; per type, each consumer's
+            # rule: operator_intrinsic for the call, reduce_intrinsic for the reduce
+            v += occursin("_rc_answers(rule, f, types) = any(T -> rule(f, T) !== nothing, types)", rc) &&
+                 occursin("local calls = sort!(Any[f for f in keys(WasmTarget.BUILTIN_LOWERINGS) if _rc_answers(WasmTarget.operator_intrinsic, f, types)]; by=string)", rc) &&
+                 occursin("local reduced = Any[f for f in _rc_operator_candidates() if _rc_answers(WasmTarget.operator_intrinsic, f, types)]", rc) &&
+                 count("WasmTarget.operator_intrinsic(f, T) !== nothing", rc) == 1 &&
+                 count("WasmTarget.reduce_intrinsic(f, T) !== nothing", rc) == 1 &&
+                 # the reduce's case wherever Julia answers the splat of two
+                 occursin("_rc_accepts(f, _rc_in(T, inputs[end][1]), _rc_in(T, inputs[end][2])) || continue", rc) ? 0 : 1
+            # a shift's amount over every integer type
+            v += occursin("for T in ints, U in ints", rc) && occursin("_rc_product(_rc_operands(T), _rc_amounts(U, 8 * sizeof(T)))", rc) ? 0 : 1
+            # the dirty operand: every narrow type whose bit patterns are all values
+            v += occursin("_rc_dirtyable(T) = T in (Int8, UInt8, Int16, UInt16, Float16)", rc) &&
+                 occursin("append!(out, [(_rc_c(a), _rc_c(b)) for (a, b) in _rc_dirty_pairs(T)])", rc) ? 0 : 1
+            # a float by its bits
+            v += occursin("_rc_carrier(T) = T <: AbstractFloat ? Base.uinttype(T) : T", rc) &&
+                 occursin("@inline _rc_out(r) = (r isa AbstractFloat && isnan(r)) ? _rc_exact(typeof(r)(NaN)) : _rc_exact(r)", rc) ? 0 : 1
+            for g in ("binops", "unops", "conversions", "checked", "shift", "fma", "misc", "operators")
+                v += occursin("    \"registry_$g\" => _rc_$g,\n", rc) && occursin("_lazy_g(\"registry_$g\", \"registry_cases.jl\")", sm) ? 0 : 1
+            end
+            v += occursin("    RC_GROUPS[\"registry_operators_rejected\"] = RC_OPERATOR_REJECTS\n", rc) &&
+                 occursin("_lazy_xf(\"registry_operators_rejected\", \"registry_cases.jl\")", sm) ? 0 : 1
+            # the blocking sample (Amendment 117-14): derived from the generated groups, the first case
+            # of each class (its table, its arity and its types' register classes, a narrow integer
+            # apart), at most 60, every generated case given its types
+            v += occursin("    RC_CLASS[\"\$gname/\$name\"] = (gname, length(inputs[1]), map(_rc_class, types)...)", rc) &&
+                 occursin("_rc_class(x) = x isa DataType ? (_rc_register(x) in (WasmTarget.I32, WasmTarget.I64) &&", rc) &&
+                 occursin("const RC_SAMPLE_MAX = 60\n", rc) &&
+                 occursin("    length(g) <= RC_SAMPLE_MAX ||\n        error(", rc) &&
+                 occursin("        key in seen && continue\n", rc) &&
+                 occursin("    RC_GROUPS[\"registry_sample\"] = _rc_sample_group([n => RC_GROUPS[n] for (n, _) in RC_GENERATORS])", rc) &&
+                 occursin("_lazy_g(\"registry_sample\", \"registry_cases.jl\")", sm) ? 0 : 1
+            v += count(r"_rc_case!\(g, ", rc) == count(r"_rc_case!\(g, [^\n]*; types=", rc) ? 0 : 1
+            # a shift's amount classed beside its value, a conversion's target by its register
+            v += occursin("_rc_case!(g, \"registry_shift\", \"\$(op)_\$(T)_\$(U)\", f, inputs; types=(T, U))", rc) &&
+                 occursin("_rc_case!(g, \"registry_conversions\", \"\$(op)_\$(S)_\$(D)\", f, inputs; types=(S, rd))", rc) ? 0 : 1
+            v += occursin("_lazy_g(\"registry_foreign\", \"registry_cases.jl\")", sm) &&
+                 occursin("haskey(CASE_INPUTS, tag) ? compare_julia_wasm_inputs(f, CASE_INPUTS[tag]; admit=_rc_admit)", sm) ? 0 : 1
+            v
+        end),
+    "L192_no_default_type_parameter" => ("a syntactic scan of src/codegen and src/frontend for exactly these forms (it cannot see every spelling of a fallback; the semantic guarantee against a wrong default is the generated cases and the emission-diff check, L190 and L191), each site found either on L192_ALLOWED's exact entries (a legitimate site with what its default means there; each entry matches exactly one site, so a stale entry or one matching two fires) or a wrong default R43 counts (terminal 0): (1) a keyword or optional positional parameter, of a `function`, a short-form or an anonymous function, whose default is a type (`::Type=Any`, `=Core.Any`, `=Vector{Int}`), a register (`=I32`, `=WasmTarget.I32`), a value computed from a register (`(lhs_ty === I32 ? 32 : 64)`), any value for a parameter named for a width (the A16E1 class), an integer for one named for an index, a sentinel (`-1`, `typemax(…)`), or `nothing` for a Julia-type parameter (annotated with a `Type`, or named for one: `julia::Any`, `spectypes`); (2) a `something`, `coalesce`, `get` or `get!` whose last argument is a type or a register; (3) a function's answers, the `return`s it reaches outside a tail `if`'s condition (an early `c && return X`, an `if c; return X; end`, a return inside an arm or a nested branch) with its fall-through value and a tail branch read arm by arm, when one is a bare type or register and another is an answer; (4) a ternary or if/elseif/else in value position (assigned, passed or built into a value), its arms read the same way, under the same rule; (5) a branch anywhere under a nothing test whose answer is a bare type or register (`x === nothing ? AnyRef : I32`), and (6) a short-circuit under a nothing test that returns or yields one (`x === nothing && return Any`), each outside a function whose answers (3) fire. A choice between named answers alone (`is32 ? I32 : I64`) is a mapping, a nested all-named branch beside an answer is one named answer, and an answer that raises answers nothing. A site is keyed by its text without line numbers, past 200 characters its first 180 and a hash of the whole (Amendment 117-1 (b): silent defaults such as `julia::Any=Any`, `something(reg, I32)` and `reg(T, default)` let one-path rewrites answer wrong in 116c). Behavior, run here: each sample in L192_SPELLINGS is found by the scan, and none in L192_NOT_SPELLINGS (an empty container, a Bool flag, an optional sink, a join, a mapping, a raising arm, a short-circuit returning no type) (dev/CHARTER.md C5)",
+        () -> begin
+            # each entry names exactly one site: a stale entry, or one that matches two sites, fires
+            local found = type_default_parameters()
+            count(k -> count(==(k), found) != 1, keys(L192_ALLOWED)) + _l192_spellings_missed()
+        end),
 ]
 
 

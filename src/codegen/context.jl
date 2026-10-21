@@ -1374,9 +1374,9 @@ The Julia type of an operand node, Julia's own answer for it: Compiler's `argext
 - An SSA value: its statement's type, `ssa_types[id]` (in codegen `ctx.ssa_types`, the
   boundary's type plus the plan's joins; in collection the body's joins), else, and when
   `ssa_types` is `nothing`, the type the boundary recorded on the node.
-- An argument or a slot: its slot type (`CodeInfo.slottypes`, widened at the boundary); `Any`
-  with no slot table (`slot_types` is `nothing`), and one outside the table is invalid IR
-  (argextype's InvalidIRError).
+- An argument or a slot: its slot type (`CodeInfo.slottypes`, widened at the boundary); one
+  outside the table is invalid IR (argextype's InvalidIRError), and one read with no slot table
+  (`slot_types` is `nothing`) raises: every compile passes its body's table.
 - A literal (a QuoteNode payload or an embedded constant): `widenconst(Const(v))`,
   `Core.Typeof(v)`.
 - A global: the type the boundary read for its binding (NirGlobalRef.julia_type).
@@ -1388,7 +1388,8 @@ function value_type(node::NirNode, slot_types::Union{Nothing,AbstractVector}, ss
     if node isa NirSSA
         return ssa_types === nothing ? node.julia_type : get(ssa_types, node.id, node.julia_type)
     elseif node isa NirArgument || node isa NirSlot
-        slot_types === nothing && return Any
+        slot_types === nothing &&
+            error("value_type of $(node) with no slot table: its body's slot types are the answer")
         local n = node isa NirArgument ? node.n : node.id
         1 <= n <= length(slot_types) ||
             error("$(node) is outside the slot table ($(length(slot_types)) slots): invalid IR")
