@@ -2260,3 +2260,58 @@ Resolution: this entry lands alone, prose only, and fixes nothing. Every finding
 and A21E5 come first, one commit each through `dev/land.sh land` with its case and its negative's evidence. A21N1,
 A21N2 and the charter halves of A21E6 and A21E8 are proposals to Dale through the orchestrator; dev/CHARTER.md is not
 edited here. A21E9 stands recorded: the next negatives carry their evidence.
+
+## 2026-10-21 — audited through d41b08ab (2da1eab3..d41b08ab: entry 21, one landing path, the gate's map and tables, the stack stand-ins)
+
+The twenty-second audit covers b0466fa0 (entry 21, prose; its own author's, nothing to add), f83c3365 (one landing
+path and one hold, A21E5), da8d5b69 (the gate's map keys every top-level form, a plan's overlay bodies count as run,
+the lowering files' rows name the sample), cd42cae5 (a changed numeric lowering-table entry runs the generated cases
+that case it, test/block_tables.tsv) and d41b08ab (stand-ins raise StackOverflowError where the wasm body exhausts its
+stack; R36 counts a native exhaustion in a test statement). It is audited against Dale's order of 17:05Z as well: a
+large run (the full matrix, a full Pkg.test, lanes.sh, a long re-record) only when a clause closes, a landing's evidence
+its blocking-gate record. No wrong answer, and no landing in the range landed on a red record. Eleven findings:
+A22E1-A22E9, A22N1, A22N2. A21E5 is fixed by f83c3365: `merge` refuses unless the landing holding the hold called it,
+and the orchestrator's hold is the same file with owner 0.
+
+Area: builder — empty by diff: `git diff 2da1eab3..d41b08ab --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff in src; the gate's map of src, its recorder (test/block_impact.jl) and
+the generated cases' entry records are tooling, audited under enforcement.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/land.sh, dev/block.jl, test/block_impact.jl, test/block_groups.tsv,
+test/block_tables.tsv, test/registry_cases.jl, test/smoke.jl, test/real_bottom_exceptions.jl, test/parity_ratchet.jl
+and dev/MARCH.md, against the landing log. (A22E1, high) L197 has never judged and is now met by mention: 13.18 names
+seven of the ten landings since its start, six by their cause and f83c3365 (308 s, 3.42 times its target) only inside
+da8d5b69's cause, which takes it out of the window; the window holds 2da1eab3 and d41b08ab, two lines, not judged.
+f83c3365's first tree was red on L197 and the answer was rows naming landings. A21E3, witnessed. (A22E2, medium)
+cd42cae5's and d41b08ab's author_at equal their land_start to the second: edit to landed measures commit to landed.
+(A22E3, medium) A changed entry of INT128_OPS (julia_numeric_tier.jl) runs no generated case and fails nothing:
+dev/block.jl skips any const no generator cases (`(e[1], e[2]) in known || continue`), and block_tables.tsv holds
+seven tables; a numeric lowering table no generator cases should fail or sit on an exact allowlist with its reason.
+(A22E4, medium) The map is part measured, part hand-written: five rows of block_groups.tsv gain registry_sample and
+narrow_primitive by hand on a map measured on src tree d77ad3e1, 17 pieces moved since, and nothing marks the hand
+rows; its re-record, about 34 minutes of one Julia process, is a long re-record Dale's order confines to a clause's
+closure, so A20C13's "the map re-recorded" cannot land before C10 closes as written. (A22E5, medium) The warm runner
+answers differently from a fresh process: on d41b08ab test/diagnostic_attribution.jl's "receiver-free
+print/println/show reject loudly" fails under the runner (string_index_err collected with no recorded reason) and
+passes in a fresh process (119x's measurement); the orchestrator reads it as A20N3, Base.stdout's live value read as a
+program value, fixed in compile3's first commit, not landed. No check compares the runner's answer with a fresh one.
+(A22E6, low) The merge guard is a convention: a shell that writes its pid into dev/.block/HOLD and passes LAND_HOLDER
+passes it; the owner-0 hold reads as alive only because `kill -0 0` succeeds for the caller's process group; jlhold
+and the scheduler that honours the hold are outside the repository, so no lock reads them. (A22E7, medium) Against
+Dale's order, at d41b08ab every landing pushes march/<leaf>, gate.yml runs the full matrix on it, and `merge` reads the
+last landed head's matrix and refuses on its red: each landing relies on a full run; C10's text (the full matrix on
+every landed head, L153, L162) and AGENTS.md say the same. opus-loop's commit 8 moves gate.yml; C10's text is Dale's.
+(A22E8, low) cd42cae5's plant evidence ran on 42f4e6b2, another tree (A20P16's class). (A22E9, medium, C3 C5)
+d41b08ab's stand-ins replace the native oracle on every platform: `_wt_eb_sn` and `_wt_hb_s2n` throw
+StackOverflowError by hand, so s_then_r, o and o_again compare the wasm body with the test's account of what Julia
+does, not Julia's answer, on macOS and Linux too, where the native exhaustion was caught; a stand-in only where Julia
+cannot detect the exhaustion, or the native oracle in a process whose death is reported, keeps Julia the oracle.
+(A22N1, low) 13.18 records finished work ("holds: fixed, `merge` runs only as land's internal step"). (A22N2, low)
+`prepare` still ends by printing "dev/land.sh merge <branch> lands it", a command that now refuses.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A22E1-A22E8, A22N1 and A22N2 are open on MARCH 13.18,
+A22E9 on 13.17; A22E4's re-record and A22E7's charter text are for Dale under the order of 17:05Z; A22E5 closes when
+compile3's first commit lands and the case passes under the runner.
