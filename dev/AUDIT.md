@@ -2556,3 +2556,101 @@ between 733f4785 and 21e36053. Excuse files name the first three causes.
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A28E1-A28E3 and A28N1 are open on
 MARCH 13.18. A28E1's calibration is for the orchestrator to rule, since it sets what every later timing verdict means.
+
+## 2026-10-21 — audited through e2371eca (21e36053..e2371eca: entry 28, the by-construction charter, one interpreter per compile, the march branch wt2)
+
+The twenty-ninth audit covers 82c16480 (entry 28, prose; its author's), b104dfbb (the charter: strict means by
+construction; L201; R44; C4, C7 and C8 reopen; 13.20; landed by hand under `Charter-change: C0 C4 C5 C6 C7 C8
+authorised by Dale 2026-10-21`), 82a227bd (one WasmInterpreter per compile, A18C5; a compile reads no stream of the
+compiling session, A20N3; every collected body has its reason, ClosedWorld.tla ReasonsComplete; the type-taking methods
+pinned, A19X4, L196 cited in C10 under its Charter-change line; ClosedWorldClasses one constructor, A19X5) and e2371eca
+(the march branch is wt2 in land.sh, block.jl and L197, with 82a227bd's excuse). No wrong answer. Each landed head's
+record is green. b104dfbb's landing gate's ratchet log (wt-strict-adt, tree 44ff74b0) reads C4, C7 and C8 OPEN, each
+stopgap named beside its planned check, C0 alone CLOSED, R44 = 225. A18C5, A20N3, A19X4, A19X5 and A22E5 are fixed as
+82a227bd states. Two red flags: A29S1 and A29S2. From this entry on each landing also answers two questions: does every
+requirement it touches have its programmatic check, and does a lock fire inside its stated intent band. Eleven
+findings: A29S1-A29S3, A29C1-A29C4 and A29E1-A29E4.
+
+Area: builder — empty by diff: `git diff 21e36053..e2371eca --stat` names no file under src/builder/.
+
+Area: collection and planning — every hunk of 82a227bd in src/codegen/trimcollect.jl, interpreter.jl, ir.jl,
+compile.jl, closures.jl, src/frontend/nir.jl, dev/formal/ClosedWorld.tla and MCClosedWorldGarbage.cfg. The compile's one
+interpreter is made by trim_compile_plan (trimcollect.jl:1821) and held by the ClosedWorld and the plan; every consult
+takes it positionally (wt_method_matches(interp, …), wt_method_which(interp, …), ambiguous_class_tuple(interp, …),
+wt_methods_ambiguous(plan.interp, …)), so no consult can run without it. That is what dart does: one
+ClosedWorldClassHierarchy for the compilation (translator.dart:108 Translator.hierarchy). The model changed first:
+MCClosedWorldGarbage checks ReasonsComplete, TLC rejected it, then passed. is_host_stream asks Base.binding_module, so
+`println(stdout, 1)` in the test's own module rejects naming the stream. (A29C1, medium, C3 C6) The class A20N3 belongs
+to is wider than three names. resolve_operand takes any bound non-constant global at the compiling session's value.
+juliac snapshots globals but re-runs each module's `__init__` at load, and Base.__init__ re-initializes more than the
+three streams (reinit_stdio, the depot and load paths, the active project, the environment-derived state).
+is_host_stream enumerates `:stdout`, `:stderr` and `:stdin` (nir.jl:450). (A29C4, medium, C1, the nuke rule) The second
+path stays. get_wasm_interpreter() and its shared :wasm_target partition remain the keyword default of get_typed_ir and
+infer_return_type (ir.jl:25, :41, :58), so a collection call that omits `interp` infers in the shared partition and
+compiles. Only L120's count of other `WasmInterpreter(` constructions and `get_wasm_interpreter()` calls holds it.
+infer_return_type has no caller outside the compile's _rettype_question; its `interp` can be required, with the
+inspection default kept only on the exported get_typed_ir. (A29C3, low) The dead widened original stays collected (H9,
+open, its row updated).
+stopgap in disguise: one interpreter per compile is a construction for the consult (no consult method without
+`interp`). Its second path is a keyword default held by a count: a stopgap (A29C4). "A compile reads no stream" is one
+predicate at the one boundary that resolves a global (L175), a funnel; its stream set is an enumerated list, a stopgap
+for A29C1's class. A19X5's inner constructor is a construction: the four-argument default that took caller-sorted
+lists no longer exists. A19X4's pin and ReasonsComplete are behavior and a model, and claim nothing more.
+precedent: one interpreter: dart2wasm's one hierarchy (translator.dart:108), and juliac's one interpreter per world
+(typeinfer.jl typeinf_ext_toplevel). Host streams: dart2wasm has no console global and prints through an import
+(printToConsole); a non-constant static field is initialized by its own initializer in the module (globals.dart:19,
+:189 staticFieldInitializer), never the compiler's value. juliac re-creates the streams in Base.__init__ (reinit_stdio).
+WT differs because it runs no `__init__`, so a session-initialized global must be named; the construction is to derive
+the set from the `__init__` bodies the closed world holds, not from a list. One constructor: Rust's private fields with
+one `new`; dart's single generative constructor.
+
+Area: emission and diagnostics — 82a227bd's hunks in statements.jl and values.jl. An unbound global rejects through
+unbound_global_text at its statement: loud and located, one text for the three sites. Nothing else in the range touches
+src/codegen/ outside collection. (A29C2, low, C9) Every measurement 82a227bd's message cites ran on another tree
+(2a1bffe8, e3ddab45, ff8c1f71, 76d37b15, working trees of 7fec4fda), each named, none the landed commit: A20P16's
+class. Its landing gate is the only evidence on the landed tree.
+
+Area: enforcement and prose — every hunk of b104dfbb (dev/CHARTER.md, test/parity_ratchet.jl, dev/MARCH.md,
+dev/parity_baseline.toml), 82a227bd's tests and prose (test/ir_one_inference_path.jl, test/diagnostic_attribution.jl,
+test/generated_names.jl, test/host_imports.jl, the C10 citation of L196, the 13.17 and H9 rows), e2371eca (dev/land.sh,
+dev/block.jl, test/parity_ratchet.jl, the excuse), and dev/.loop/landings.log with the main tree's landings.tsv.
+(A29S1, high, red flag) C7's six :construction entries are not all constructions by b104dfbb's own sentence, "a lock
+that reads src to find the wrong choice is :stopgap, whatever definition holds the rule". L6 is a count_sites scan for
+a strict field, an environment switch or a setter: the wrong choice can be written and compiled, and the scan finds
+it. L29 holds a list of forbidden names found by text. L165's union excludes UInt8 by type, a real construction, but
+its other checks are a per-file allowlist of `::StorageType` counts and scans for the raw bytes 0x77, 0x78 and 0x40.
+L172 and L151 mix a pin of the mechanism with scans that find its misuse. L168 pins `_require_local!` in the emitters
+and is the closest to a construction. L201 resolves each entry by a regex over src that a definition of the named name
+exists (strict_construction_defined), which holds whatever the lock's body does: a hand label carrying a name. The
+construction that retires it: a :construction lock asserts facts about its definition only by reflection or a
+load-time check (its fields, signature or method table), and L201 refuses one whose body reads src text. C7 cannot
+close today (14 stopgaps), so nothing closed on it. (A29S2, low, red flag) C0 stays CLOSED on six checks (L125 L126
+L128 L148 L154 L201) that each scan the charter's, AGENTS.md's, AUDIT.md's or MARCH's text. The standard names C1 to C8
+and gives no reason C0 sits outside it; C0 has no closure matrix (A23E5). (A29S3, medium) The precedent rule (Dale,
+20:45Z: a construction names its definition and its precedent, `precedent(rust|dart|ocaml|wasm: …)`, and the Julia
+reason it differs) has no programmatic check: STRICT_KINDS's six entries carry no precedent and L201 asks for none.
+The ledger lane's L204-L206 are its home. (A29E1, medium) The staleness budget turns every large src landing into a
+map landing. 82a227bd moved 55 src pieces, so the next src landing went red on the budget, not on its own change, and
+the map's re-record had to land between them: A24E2's shape, shortened by the incremental re-record, not ended. The
+construction is `land` re-recording the moved pieces in the landing's own tree. (A29E2, medium, intent band) Two locks
+read their literals outside their intent. L197 refused 82a227bd twice for b104dfbb's 3218 s, which lacked its excuse
+until 82a227bd carried it, a cause the permission classifier made: a lock firing on a landing for another's time
+(A25E1's class). The 60-s gate wall bound nothing on 82a227bd's own landing: 244.3 s of gate wall, every stage over
+its budget (ratchet 56.1, smoke-core 70.2, tests 110.9, tlc 174.8, total 238.6 s), landed green as "unjudged, past
+cap" at factor 1.96 (A21N1, A23E1: C10's "budgets still judged" is untrue of run_verdict). block.jl's header (lines
+65-69) still says the budgets hold at any factor. Neither lock states its band. (A29E3, low) Prose names the wrong PR
+and the old plan. e2371eca's message names the rebuild PR #123; it is #128. land.sh, the four workflows, AGENTS.md and
+C10 still name PR #122's merge head as the final gate, and MARCH's Phase 14 plans WT1's in-place conversion, which the
+rebuild replaced (WT2-DESIGN §E: MARCH restarts at the rebuild's Phase 1). e2371eca says "No other change" and also
+adds 82a227bd's excuse and landing line. C10's text is Dale's to direct. (A29E4, low) Requirements and checks:
+b104dfbb's standard has its check (L201, A29S1 aside); e2371eca's branch rename is held by L197 reading wt2; 82a227bd's
+one interpreter is held by L120's count and a behavior test, with no construction (A29C4).
+
+Landing times: b104dfbb 3218 s (the agent permission classifier denied its `land` for about 50 minutes; excuse file),
+82a227bd 9166 s (committed 18:25Z, rebased four times and refused twice by L197; excuse file), e2371eca 214 s,
+judged, its gate 36.4 s.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A29S1 is accepted by the
+orchestrator and is the strict lane's fix in flight (a :construction asserts only by reflection or a load-time check;
+L201 refuses one whose body reads src text; the six reclassified); it and A29S3 are open on MARCH 13.20. A29S2 is
+Dale's decision, on 14.5. A29C1-A29C4 are open on 13.17. A29E1-A29E4 are open on 13.18.
