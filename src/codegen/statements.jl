@@ -2182,7 +2182,7 @@ function _fc_memmove!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abst
             arr_copy_type = get_string_array_type!(ctx.mod, ctx.type_registry)
             if dest_arr_ssa isa NirSSA && haskey(ctx.ssa_locals, dest_arr_ssa.id)
                 local_idx = ctx.ssa_locals[dest_arr_ssa.id]
-                local_type = _get_local_type(ctx, local_idx)
+                local_type = _local_type(b, local_idx, "array.copy")   # the builder's one reader of a local's type
                 if local_type isa ConcreteRef
                     arr_copy_type = local_type.type_idx
                 end

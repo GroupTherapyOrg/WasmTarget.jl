@@ -328,6 +328,7 @@ end
 # The type of local `idx`: a parameter's, or a declared local's; a local the function does not
 # hold is invalid, and the instruction naming it is rejected.
 # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
+# precedent(dart: wasm_builder types a local by its declaration, instructions.dart:1018): the one reader of a local's type.
 function _local_type(b::InstrBuilder, idx::Integer, op::String)::WasmValType
     0 <= idx < length(b.params) && return b.params[idx + 1]
     local k = idx - length(b.params)

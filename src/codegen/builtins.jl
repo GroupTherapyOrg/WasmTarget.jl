@@ -2564,11 +2564,10 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         local_get!(_htb, idx_local)
                         array_get!(_htb, array_type_idx; signed=packed_array_signedness(elem_type))
 
-                        # If array element type is ExternRef (e.g., elem_type=Any),
-                        # array_get returns externref. Downstream code may ref_cast to a struct
-                        # type, which requires anyref input. Add any_convert_extern.
-                        wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-                        if wasm_elem_type === ExternRef
+                        # If the array's element type is ExternRef, array_get pushed an externref
+                        # (the builder's stack holds the type it pushed). Downstream code may
+                        # ref_cast to a struct type, which requires anyref input. Add any_convert_extern.
+                        if _htb.v.stack[end] === ExternRef
                             any_convert_extern!(_htb)
                         end
 

@@ -4,37 +4,6 @@
 
 
 """
-    _get_local_type(ctx, local_idx) -> Union{WasmValType, Nothing}
-
-Get the Wasm type of a local variable by its index. Parameters come first,
-then additional locals from ctx.locals.
-parity(pkg/wasm_builder/lib/src/builder/instructions.dart:1018 InstructionsBuilder.local_get)
-"""
-function _get_local_type(ctx::AbstractCompilationContext, local_idx::Int)::Union{WasmValType, Nothing}
-    if local_idx < ctx.n_params
-        # It's a parameter — get type from arg_types (skip WasmGlobal args)
-        param_count = 0
-        for (i, T) in enumerate(ctx.arg_types)
-            if i in ctx.global_args
-                continue
-            end
-            if param_count == local_idx
-                return get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
-            end
-            param_count += 1
-        end
-        return nothing
-    else
-        # It's an additional local
-        local_offset = local_idx - ctx.n_params
-        if local_offset >= 0 && local_offset < length(ctx.locals)
-            return ctx.locals[local_offset + 1]  # 1-indexed
-        end
-        return nothing
-    end
-end
-
-"""
     generate_body(b, ctx) -> b
 
 Generate the body of the function `ctx` compiles from its Julia IR into `b`, the function's
