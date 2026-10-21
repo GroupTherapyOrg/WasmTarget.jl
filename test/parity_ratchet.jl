@@ -857,6 +857,165 @@ end
 
 _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
 
+# ---- R44: WT's own classifications still held as Symbols (dev/CHARTER.md C5, MARCH 13.20) ------------
+# the member Symbols of each: the heap kind, the memoryref source, the label kinds, the shift kind,
+# `:new`'s type kind and the NTuple length rule (`:eq`, a heap member too)
+const R44_MEMBERS = "any|eq|struct|array|i31|extern|func|exn|concrete_struct|concrete_array|concrete_func|unknown|zero|constant|indexed|pair|snapshot|boxed|shl|lshr|ashr|block|loop|if|try|try_table|literal|ssa|argument"
+const R44_RX = Regex("(?<![:A-Za-z0-9_]):(" * R44_MEMBERS * ")\\b")
+
+"""The member Symbols of WT's own classifications in src, one per occurrence, on every line but one
+that builds or reads a Julia `Expr` (`Expr(`, `.head`, `isexpr(`: its heads `:block` and `:if` are
+Julia's): a classification held as a Symbol, which 13.20 makes a closed sum. Docstrings and comments
+count, since a conversion rewrites them too."""
+function wt_symbol_classification_sites()::Int
+    n = 0
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        for l in split(_text(joinpath(dir, f)), '\n')
+            (occursin("Expr(", l) || occursin(".head", l) || occursin("isexpr(", l)) && continue
+            n += count(_ -> true, eachmatch(R44_RX, l))
+        end
+    end
+    return n
+end
+
+# ---- strict means by construction (dev/CHARTER.md C0, L201) --------------------------------------
+# The clauses on the compiler's code and its models, whose checks the standard classifies.
+const STRICT_SCOPE = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
+# The clauses whose every cited lock is classified (2026-10-21); C1 to C3 classify theirs before
+# they close, since L201 reads an unclassified lock in a clause with no Planned text as a violation.
+const STRICT_CLASSIFIED = ("C4", "C5", "C6", "C7", "C8")
+# Every lock a classified clause cites, by what decides it, and for a construction the definition in
+# src that is the construction (L201 resolves it: a definition of exactly that name must exist).
+# :construction: that definition makes the wrong choice inexpressible through WT's interfaces (a
+# type that cannot hold the wrong value, the one path every emission takes, a relation computed
+# where it is written), the lock guarding that it stays; a write into another component's fields
+# stays possible in Julia, which the stopgaps that scan for it (L13) watch. :behavior: a run decides
+# it (the differential lanes, a test of an algorithm). :stopgap: the lock finds the wrong choice by
+# reading WT's source, an allowlist or a count, so it can still be written and compiled, whatever
+# definition holds the rule. A ratchet (an R check, a lock or not) is a stopgap by its kind and has no
+# entry. Neither behavior nor a stopgap closes a clause.
+const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
+    # C4: typed internal APIs (L136: a constant pushed by i32_const! and its kind bypasses emit_value!'s check)
+    "L9" => (:stopgap, ""), "L35" => (:stopgap, ""), "L49" => (:stopgap, ""), "L74" => (:stopgap, ""),
+    "L136" => (:stopgap, ""),
+    # C5: wrong choices cannot land (L16, L155: an absent switch or opcode names no construction)
+    "L16" => (:stopgap, ""), "L94" => (:stopgap, ""), "L134" => (:stopgap, ""), "L155" => (:stopgap, ""),
+    "L190" => (:behavior, ""), "L191" => (:behavior, ""), "L192" => (:stopgap, ""),
+    # C6: correct or loud, and located
+    "L8" => (:stopgap, ""), "L15" => (:stopgap, ""), "L18" => (:stopgap, ""), "L19" => (:stopgap, ""),
+    "L37" => (:stopgap, ""), "L38" => (:stopgap, ""), "L39" => (:stopgap, ""), "L48" => (:stopgap, ""),
+    "L51" => (:stopgap, ""), "L58" => (:stopgap, ""), "L60" => (:stopgap, ""), "L63" => (:stopgap, ""),
+    "L64" => (:stopgap, ""), "L66" => (:stopgap, ""), "L71" => (:stopgap, ""), "L72" => (:stopgap, ""),
+    "L73" => (:stopgap, ""), "L75" => (:stopgap, ""), "L76" => (:stopgap, ""), "L78" => (:stopgap, ""),
+    "L79" => (:stopgap, ""), "L85" => (:stopgap, ""), "L89" => (:behavior, ""), "L90" => (:stopgap, ""),
+    "L93" => (:behavior, ""), "L96" => (:behavior, ""), "L101" => (:stopgap, ""), "L118" => (:stopgap, ""),
+    "L119" => (:stopgap, ""), "L127" => (:stopgap, ""), "L135" => (:stopgap, ""), "L139" => (:stopgap, ""),
+    "L146" => (:stopgap, ""), "L147" => (:behavior, ""), "L156" => (:stopgap, ""),
+    # C7: valid by construction
+    "L6" => (:construction, "_emit!"), "L7" => (:stopgap, ""), "L13" => (:stopgap, ""), "L14" => (:stopgap, ""),
+    "L22" => (:stopgap, ""), "L27" => (:stopgap, ""), "L29" => (:construction, "recursion_groups"),
+    "L65" => (:stopgap, ""), "L87" => (:stopgap, ""), "L99" => (:stopgap, ""),
+    "L151" => (:construction, "InstrBuilder"), "L164" => (:stopgap, ""),
+    "L165" => (:construction, "WasmValType"), "L166" => (:stopgap, ""), "L167" => (:stopgap, ""),
+    "L168" => (:construction, "_require_local!"), "L169" => (:stopgap, ""),
+    "L172" => (:construction, "_emit!"), "L173" => (:stopgap, ""),
+    # C8: formal methods (both read files: the models' pairing and the README table)
+    "L111" => (:stopgap, ""), "L131" => (:stopgap, ""),
+)
+
+# whether src defines `name`: a function, macro, struct, @enum or const of exactly that name, long or
+# short form (a definition grep by name, the construction L201 resolves)
+function strict_construction_defined(name::AbstractString)::Bool
+    isempty(name) && return false
+    local q = "\\Q" * name * "\\E"
+    local rx = Regex("^\\s*(?:@inline\\s+|@noinline\\s+)*(?:function\\s+" * q * "\\(|macro\\s+" * q *
+                     "\\(|(?:mutable\\s+)?struct\\s+" * q * "\\b|@enum\\s+" * q * "\\b|const\\s+" * q *
+                     "\\s*=|" * q * "\\([^=]*\\)\\s*(?:::\\S+\\s*)?=(?!=))")
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        any(l -> occursin(rx, l), eachline(joinpath(dir, f))) && return true
+    end
+    return false
+end
+
+# what a check is under the standard: a ratchet is a stopgap; a lock is what STRICT_KINDS says, or
+# :unclassified
+_strict_kind(id::AbstractString, kinds::Dict{String,Tuple{Symbol,String}})::Symbol =
+    startswith(id, "R") ? :stopgap : haskey(kinds, id) ? first(kinds[id]) : :unclassified
+
+# each check that a clause of STRICT_SCOPE with no Planned text (one the charter block reads CLOSED)
+# cites and that is not a construction, as "<clause> cites <check> (<kind>)"
+function strict_violations(clauses, kinds::Dict{String,Tuple{Symbol,String}})::Vector{String}
+    out = String[]
+    for (cid, (body, ids)) in clauses
+        (cid in STRICT_SCOPE && !occursin("Planned:", body)) || continue
+        for i in ids
+            local k = _strict_kind(i, kinds)
+            k === :construction || push!(out, "$cid cites $i ($k)")
+        end
+    end
+    return out
+end
+
+# the table's own faults: a lock a classified clause cites with no entry, an entry no classified
+# clause cites, an entry for a ratchet, a kind other than the three, a construction naming no
+# definition src holds, and a stopgap or behavior naming one (a name is a construction's alone)
+function strict_table_faults(clauses, kinds::Dict{String,Tuple{Symbol,String}};
+                             defined::Function=strict_construction_defined)::Vector{String}
+    out = String[]
+    local cited = Set{String}()
+    for (cid, (_, ids)) in clauses
+        cid in STRICT_CLASSIFIED || continue
+        for i in ids
+            push!(cited, i)
+            startswith(i, "L") && !haskey(kinds, i) && push!(out, "$cid cites $i, which STRICT_KINDS does not classify")
+        end
+    end
+    for (k, (v, name)) in kinds
+        k in cited || push!(out, "STRICT_KINDS classifies $k, which no clause of $(join(STRICT_CLASSIFIED, ' ')) cites")
+        startswith(k, "R") && push!(out, "STRICT_KINDS classifies the ratchet $k, a stopgap by its kind")
+        v in (:construction, :behavior, :stopgap) || push!(out, "STRICT_KINDS gives $k the kind $v")
+        v === :construction && !defined(name) && push!(out, "$k is a construction naming `$name`, which src does not define")
+        v !== :construction && !isempty(name) && push!(out, "$k is $v and names `$name`: only a construction names one")
+    end
+    return out
+end
+
+# L201's negative test, run with it: planted clauses each verdict must answer as stated, and a
+# planted table whose eight faults it must find
+function strict_negatives_missed()::Vector{String}
+    local k = Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "_emit!"), "L2" => (:stopgap, ""),
+                                                "L3" => (:behavior, ""))
+    plant(cid, body, ids) = Pair{String,Tuple{String,Vector{String}}}[cid => (body, String[ids...])]
+    local cases = [
+        ("a stopgap lock in a clause with no Planned text", plant("C4", " T. Checks: ", ["L1", "L2"]), 1),
+        ("a behavior check in a clause with no Planned text", plant("C8", " T. Checks: ", ["L1", "L3"]), 1),
+        ("a ratchet in a clause with no Planned text", plant("C7", " T. Checks: ", ["L1", "R9"]), 1),
+        ("an unclassified lock in a clause with no Planned text", plant("C1", " T. Checks: ", ["L4"]), 1),
+        ("a stopgap in a clause with Planned text", plant("C5", " T. Checks: Planned: 13.1", ["L2", "R9"]), 0),
+        ("constructions alone", plant("C6", " T. Checks: ", ["L1"]), 0),
+        ("a clause outside the scope", plant("C9", " T. Checks: ", ["L2", "R9"]), 0),
+    ]
+    local out = String[]
+    for (what, cl, want) in cases
+        length(strict_violations(cl, k)) == want || push!(out, "negative missed: $what")
+    end
+    # L5 unclassified; L6, R2, L1x, L7 and L8 uncited; R2 a ratchet; L1x a kind other than the three;
+    # L7 a construction naming nothing src defines; L8 a stopgap that names one. L1 resolves.
+    local tf = strict_table_faults(plant("C4", " T.", ["L1", "L5"]),
+                                   Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "_emit!"),
+                                        "L6" => (:stopgap, ""), "R2" => (:stopgap, ""), "L1x" => (:strict, ""),
+                                        "L7" => (:construction, "no_definition_has_this_name!"),
+                                        "L8" => (:stopgap, "_emit!")))
+    length(tf) == 10 || push!(out, "negative missed: the table's faults ($(length(tf)) of 10)")
+    # the resolution itself: a real definition resolves, a missing one does not
+    (strict_construction_defined("_emit!") && strict_construction_defined("WasmValType") &&
+     !strict_construction_defined("no_definition_has_this_name!")) ||
+        push!(out, "negative missed: the construction names do not resolve as stated")
+    return out
+end
+
 # ---- the landing log (L197): `dev/land.sh merge` appends a line per landing to the main tree's
 # dev/.loop/landings.tsv; these decide over its text and the march branch's history ----------------
 const L197_START = "36e3966ebd22fce82f2688f039e236287bebdc00"   # the last landing before the log
@@ -1491,6 +1650,8 @@ const METRICS = [
         end),
     "R43_wrong_default_sites" => ("parameter defaults and fallbacks in src/codegen and src/frontend that choose a type, a register, a width, an index or a sentinel where the caller's answer belongs (L192's scan, type_default_parameters), less L192_ALLOWED's entries: a statement's type read as `get(ctx.ssa_types, i, Any)`, a value's Julia type absent from the conversion funnel (`from_julia=nothing`), a body's slot types absent (`spectypes=nothing`), a width guessed from the register (`julia_width`), a rejection's statement absent (`idx=0`), a function's answers or a branch's arms that fall back to `Any` or a register beside an answer (`isconcretetype(T) ? T : Any`, an if/elseif arm's `else Any`, an early `return Any` beside a fall-through answer, `x === nothing && return Any`). Each is made required or answered by Julia (dev/MARCH.md 13.4). dev/CHARTER.md C5. Terminal state 0",
         () -> count(k -> !haskey(L192_ALLOWED, k), type_default_parameters())),
+    "R44_wt_symbol_classifications" => ("a stopgap (dev/CHARTER.md C0): the sites in src of WT's own classifications still held as Symbols, each a member Symbol of one (R44_MEMBERS: the heap kind, the memoryref source, the builder's and the stackified label kinds, the shift kind, `:new`'s type kind, the NTuple length rule) on a line building or reading no Julia `Expr`, where a misspelled member compares false and a catch-all arm answers for a member it never names. dev/MARCH.md 13.20 makes each a closed sum matched by `@exhaustive` (L199), its commit deleting the Symbol path; retired at 0 when L199 covers every classification. dev/CHARTER.md C5. Terminal state 0",
+        () -> wt_symbol_classification_sites()),
 ]
 
 # The builder alone: src/builder/*.jl, from builder/types.jl to builder/instr_builder.jl, loaded
@@ -5732,6 +5893,13 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local found = type_default_parameters()
             count(k -> count(==(k), found) != 1, keys(L192_ALLOWED)) + _l192_spellings_missed()
         end),
+    "L201_closed_cites_no_stopgap" => ("strict means by construction (Dale, 2026-10-21): a clause of C1 to C8 with no Planned text (one the charter block reads CLOSED) cites only constructions: no ratchet, no lock STRICT_KINDS classifies :stopgap (a scan of WT's source, an allowlist or a count, finding the wrong choice at gate time) or :behavior (a run that must reach it), and no lock it does not classify; every lock C4 to C8 cite is classified, every entry names a lock one of them cites, and every :construction names the definition in src that is the construction, which a definition of exactly that name must exist for (a hand label naming nothing is a stopgap). Behavior, run here: planted clauses (a stopgap, a behavior check, a ratchet or an unclassified lock with no Planned text fires; Planned text, constructions alone, or a clause outside the scope do not), a planted table's ten faults, and the name resolution of a real and a missing definition (dev/CHARTER.md C0)",
+        () -> begin
+            local cl = charter_clauses()
+            local v = vcat(strict_violations(cl, STRICT_KINDS), strict_table_faults(cl, STRICT_KINDS), strict_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
 ]
 
 
@@ -5802,6 +5970,13 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
             # converted to a lock" (dev/CHARTER.md), not merely at 0
             haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
             haskey(current_l, k) && current_l[k] != 0 && push!(open_, "$i BROKEN")
+        end
+        # a stopgap or behavior check a clause on the compiler cites is named beside its planned check (L201)
+        if cid in STRICT_SCOPE
+            for i in ids
+                local _sk = startswith(i, "L") ? _strict_kind(i, STRICT_KINDS) : :construction
+                (_sk === :stopgap || _sk === :behavior) && push!(open_, "$i $_sk")
+            end
         end
         occursin("Planned:", body) && push!(open_, "planned check")
         println(rpad(cid, 4), rpad(first(title, 42), 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))

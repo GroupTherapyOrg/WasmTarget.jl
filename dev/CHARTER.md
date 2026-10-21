@@ -88,8 +88,12 @@ with the per-clause status. A clause is never closed by argument.
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
   Checks: `L9` `L35` `L49` `L74` `L136` `R17` `R30` `R31` (with Aqua and ExplicitImports in shard 0).
+  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction: no emission without its
+  expected type, no input through which a drop or an invoke's argument re-guesses, no field
+  typed `Any`, and no definition without its result type when the package loads.
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected at
-  the edit site (load-time typing, the enforcing builder, the locks) or by the minute-scale
+  the edit site (load-time typing, the enforcing builder, a closed sum matched exhaustively when
+  the package loads; a lock that scans is a stopgap, C0) or by the minute-scale
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
   missing wasm runtime. Checks: `L16` `L94` `L134` `L155` `R33` `R36` `L190` (every body a
@@ -103,9 +107,15 @@ with the per-clause status. A clause is never closed by argument.
   under a nothing test: each site that chooses a type, a register, a width, an index or a sentinel is on
   its exact allowlist or counted by R43; the guarantee against a wrong default is L190 and L191)
   `R42` (the numeric types the generated cases hold out) `R43` (the wrong defaults L192's scan
-  finds).
-  Planned: dev/MARCH.md 13.1, 13.3, 13.4, 13.14, 13.17 — the checks the audits found pinning text,
-  the numeric types the generated cases hold out, and the wrong defaults.
+  finds) `R44` (the sites of WT's own Symbol classifications: a stopgap, retired at 0 when L199
+  covers every classification).
+  Planned: dev/MARCH.md 13.1, 13.3, 13.4, 13.14, 13.17, 13.20 — the checks the audits found
+  pinning text, the numeric types the generated cases hold out, the wrong defaults, and each
+  stopgap (C0) made a construction: WT's own classifications closed sums, a match over one
+  refusing a missing arm or a catch-all when it expands (L199) and each NIR node type answering
+  each member function itself, checked when the package loads (L200), each conversion deleting
+  the Symbol path and every catch-all arm in its own commit; every lowering a rule that cannot
+  exist without its witness; every translation one table.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain
   innermost-first. Checks: `L8` `L15` `L18` `L19` `L37` `L38` `L39` `L48` `L51` `L58` `L60`
@@ -113,8 +123,10 @@ with the per-clause status. A clause is never closed by argument.
   `L101` `L118` `L119` `L127` `L135` `L139` `L146` `L147` `L156` (every call of a host-declared
   import is counted) `R34` `R39` (no smoke xfail compiles and then answers wrong, traps, or
   returns what the harness cannot read).
-  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.17 — the exception stack across calls,
-  the traps where Julia answers, and the audits' unlocated and lossy paths.
+  Planned: dev/MARCH.md 13.1, 13.10, 13.14, 13.17, 13.20 — the exception stack across calls,
+  the traps where Julia answers, the audits' unlocated and lossy paths, and each stopgap (C0)
+  made a construction where Julia has one, first the eleven catch-alls that answer only by
+  convention, each a located rejection.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm. Checks: `L6` `L7` `L13` `L14` `L22` `L27` `L29` `L65` `L87` `L99` `L151` (every builder has its module)
@@ -123,11 +135,16 @@ with the per-clause status. A clause is never closed by argument.
   (every body is a builder the module made) `L168` (locals initialized before use) `L169`
   (module objects held by handle) `L172` (no instruction recorded in dead code)
   `L173` (one declaration path for a local, its type checked) `R41` (no local declared beside it).
+  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction, and no operand a type
+  can hold wrong: one type per opcode, each immediate a handle its declaration made, the locals
+  list and the module's bytes out of codegen's reach, the heap and label kinds closed sums.
 - **C8 · Formal methods through and through.** Every algorithmic component carries a TLA+
   model with a Broken variant TLC must reject; a change to a modeled algorithm changes the
   model first; a counterexample is a finding, never a reason to weaken an invariant. Checks:
   `L111` `L131` (dev/formal/README.md's Components table maps every algorithmic component to
   its model or states why it has none).
+  Planned: dev/MARCH.md 13.20 — each stopgap (C0) made a construction: both checks read files
+  today (the models' pairing, the components' table); a model's TLC run is behavior.
 - **C9 · Nothing stale, nothing bloated, nothing re-derived — anywhere in the repository.** No
   dead definition, fossil comment, retired name, campaign narration, or second computation of
   a fact the first already produced; the plan holds only open work and the history only short
@@ -172,11 +189,22 @@ with the per-clause status. A clause is never closed by argument.
   at most its target, 180 s when it changes src, 90 s otherwise) `L198` (each landing records
   whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
   Planned: dev/MARCH.md 13.18 and 13.24 and 13.25 and 13.26 and 13.27 — the ratchet stage's time to win back (L195).
-- **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
+- **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C1
+  to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
+  express the wrong choice (a type that cannot hold the wrong value; an interface with no
+  method, field or switch for it; a closed sum matched exhaustively when the package loads; the
+  builder refusing at the emitting line), each check naming the definition that is its
+  construction. A check that finds the wrong choice at gate time (a
+  scan of WT's source, an allowlist of exceptions, a ratchet at 0 or not, or a test that must
+  reach it) is a stopgap, which keeps its clause OPEN with the Planned construction that
+  retires it; the differential lanes stay the soundness gate and close no clause. Calling a check, a clause or a
+  batch strict or CLOSED on a stopgap is a red flag. Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
   charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
-  rows, and every finding sits on a row).
+  rows, and every finding sits on a row) `L201` (no clause of C1 to C8 without Planned text cites
+  a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a construction naming a
+  definition src holds; every lock C4 to C8 cite is classified).
 
 ## Rules that keep the goal from drifting
 
