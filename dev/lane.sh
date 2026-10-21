@@ -3,7 +3,8 @@
 # Kaimon session, which `dev/land.sh land` requires (dev/kaimon_session.sh).
 #
 #   bash dev/lane.sh start <name>   # ../.worktrees/<name> on a new branch <name> from origin/wt2, the
-#       main tree's Manifest.toml copied in, a git-excluded LocalPreferences.toml turning WasmTarget's
+#       main tree's Manifest.toml copied in and resolved for the lane's project when it names other
+#       extensions (dev/manifest_check.sh), a git-excluded LocalPreferences.toml turning WasmTarget's
 #       precompile workload off (a src edit reloads in seconds), the worktree added to Kaimon's projects
 #       (~/.config/kaimon/projects.json: enabled, 4 threads, no startup file; every other entry kept),
 #       and the call that starts its session printed
@@ -45,6 +46,12 @@ start)
     git -C "$MAIN" fetch -q origin
     git -C "$MAIN" worktree add -q -b "$name" "$WT" "origin/$MARCH"
     cp "$MAIN/Manifest.toml" "$WT/Manifest.toml"
+    # the main tree's Manifest can name another project's extensions (WT1's, after A2c): resolved for the
+    # lane's own Project.toml when dev/manifest_check.sh says so, and checked again, or the lane refuses
+    if ! bash "$WT/dev/manifest_check.sh" "$WT" >/dev/null; then
+        (cd "$WT" && julia --startup-file=no --project=. -e 'using Pkg; Pkg.resolve()')
+        mc=$(bash "$WT/dev/manifest_check.sh" "$WT") || { echo "lane: $mc after Pkg.resolve() — refusing"; exit 1; }
+    fi
     printf '[WasmTarget]\nprecompile_workload = false\n' > "$WT/LocalPreferences.toml"
     projects add
     echo "lane: $WT on $name from origin/$MARCH $(git -C "$WT" rev-parse --short HEAD), a Kaimon project in $PROJ"

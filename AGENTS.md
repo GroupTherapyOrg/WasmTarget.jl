@@ -22,7 +22,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D10** The builder refuses invalid wasm at the emitting line; wasm-tools is only the alarm.
 - **D11** Model an algorithm in dev/formal/ first, with a Broken variant; never weaken an invariant.
 - **D12** Fix a bug at its source with a case that reaches it; never route around it.
-- **D13** Land one small commit through bash dev/land.sh land; a landing takes minutes.
+- **D13** Queue and land one small commit with bash dev/land.sh wait; a landing takes minutes.
 - **D14** The blocking gate is a landing's evidence; it takes about a minute; never edit a budget.
 - **D15** A speedup in src is a real fix to WT's algorithm, never a dev flag or test-only path.
 - **D16** A landing runs the blocking gate only; the full matrix runs at Closes: C<n>.

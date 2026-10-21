@@ -19,6 +19,11 @@
 #       from the main tree and pushes it, the landing's one push (gate.yml runs the full matrix on
 #       that push when its head carries `Closes: C<n>`, non-blocking); appends the landing's line to
 #       the landing log (below).
+#   dev/land.sh wait
+#       queues the branch in the landing queue, the main tree's dev/.loop/QUEUE (dev/land_queue.sh, one
+#       total order: the orchestrator edits it, a lane appends itself), blocks until it heads the queue,
+#       then lands it; `land` takes the hold only at the head of the queue or while it is empty, and pops
+#       its own line at its end; a head that takes no free hold within 5 minutes is skipped, with a note
 #   dev/land.sh warm
 #       right after a commit, in the lane's worktree: outside any hold (it waits while one exists), starts
 #       the tree's runner when absent and runs the blocking gate once at JLRUN_PRIO=5, so the landing's
@@ -126,6 +131,8 @@ END { for (t in rem) if (rem[t] > add[t]) bad = 1; print (bad ? "no" : "yes") }'
 LOG="$MAIN/dev/.loop/landings.tsv"
 STEPS="$MAIN/dev/.loop/steps.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
+# the landing queue (dev/land_queue.sh; git-ignored): one total order of the lanes' landings
+QUEUE="$MAIN/dev/.loop/QUEUE"
 # the red history (dev/block.jl writes a line per red run; git-ignored, kept when a worktree goes) and
 # the change's own red seconds over it (A33E4): over the history's lines sorted by start, those of the
 # change (field 3, its author time, author and subject) from its author time to this land's start, each
@@ -142,8 +149,8 @@ owed_lifted() { case "${2#* }" in FAILED*) return 1 ;; esac
                 git cat-file -e "$1:dev/.loop/excuse/${2:0:8}" 2>/dev/null; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
-cmd=${1:?usage: dev/land.sh land | warm (in the worktree of the branch) | prepare <branch> [old-base]}
-if [ "$cmd" = land ] || [ "$cmd" = warm ]; then
+cmd=${1:?usage: dev/land.sh land | wait | warm (in the worktree of the branch) | prepare <branch> [old-base]}
+if [ "$cmd" = land ] || [ "$cmd" = warm ] || [ "$cmd" = wait ]; then
     br=$(git symbolic-ref --short -q HEAD) || { echo "land: HEAD is detached: run it on the batch's branch — refusing"; exit 1; }
 else
     br=${2:?branch}
@@ -307,6 +314,26 @@ merge)
     # head carries `Closes: C<n>` (no other ref is pushed, L153)
     echo "landed $br @ ${head:0:8} on $MARCH"
     ;;
+wait)
+    # queues this branch in the landing queue (dev/land_queue.sh) and lands it at its turn: blocks while
+    # another lane heads the queue, then runs `bash dev/land.sh land`; a lane's one watcher, never a loop
+    # on origin; a lane skipped as a stale head while it waits queues itself again, at the tail
+    W=$(git rev-parse --show-toplevel)
+    [ "$W" != "$MAIN" ] || { echo "wait: run it in the lane's worktree, not the main tree — refusing"; exit 1; }
+    cd "$W"
+    bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)"
+    last=""
+    while ! qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br" 2>&1); do
+        case $qmsg in *"$br is not queued"*)
+            echo "wait: $br left the queue (a stale head skipped): queued again at the tail"
+            bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)" ;;
+        esac
+        [ "$qmsg" = "$last" ] || { echo "wait: $qmsg"; last=$qmsg; }
+        sleep 5
+    done
+    echo "wait: $br heads the landing queue: landing"
+    exec bash "$W/dev/land.sh" land
+    ;;
 warm)
     # pre-warms this tree's runner right after a commit, outside any hold, so the landing's gate runs
     # warm (a gate's first run on a server is cold, 80-265 s against 30-40 s warm): waits while a landing
@@ -342,10 +369,8 @@ land)
     [ -z "$(git status --porcelain)" ] || { echo "land: $W has uncommitted or untracked files — refusing"; git status --short | awk 'NR <= 10'; exit 1; }
     # the worktree's untracked Manifest.toml resolved for this Project.toml: a stale one names extensions
     # WasmTarget no longer has, and a package image built over it fails (A20P23)
-    want=$(awk '/^\[extensions\]/ { f = 1; next } /^\[/ { f = 0 } f && NF { print $1 }' Project.toml | sort | tr '\n' ' ')
-    have=$([ -f Manifest.toml ] && awk '/^ *\[deps\.WasmTarget\.extensions\]/ { f = 1; next } /^ *\[/ { f = 0 } f && NF { print $1 }' Manifest.toml | sort | tr '\n' ' ' || true)
-    [ "$want" = "$have" ] ||
-        { echo "land: Manifest.toml's WasmTarget extensions ($have) are not Project.toml's ($want): julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
+    mc=$(bash dev/manifest_check.sh "$W") ||
+        { echo "land: $mc: julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
     # every lane develops in a live Kaimon session (dev/kaimon_session.sh; dev/lane.sh makes the lane's
     # worktree a Kaimon project): a worktree with none refuses here, in a second, printing the call that
     # starts one (a CI checkout runs none)
@@ -366,7 +391,13 @@ land)
     # hold is this file with owner 0): one landing at a time, and while it exists no other agent's
     # Julia job starts; created only if absent, with this shell's pid, removed only by it
     mkdir -p "$(dirname "$HOLD")"
-    release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"; return 0; }
+    # the landing queue (ledger D13): the hold goes only to the lane heading the queue, or to any lane
+    # while it is empty; a lane queues itself with `bash dev/land.sh wait`, which lands it at its turn
+    qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br") ||
+        { echo "land: $qmsg — refusing (\`bash dev/land.sh wait\` queues $br and lands it at its turn)"; exit 1; }
+    # the landing pops its own line from the queue whatever its end, its turn spent
+    release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"
+                bash "$W/dev/land_queue.sh" "$QUEUE" "$HOLD" pop "$br" >/dev/null 2>&1 || true; return 0; }
     trap release EXIT
     waited=0
     until ( set -o noclobber; echo "$$ $(iso "$(now)") $br" > "$HOLD" ) 2>/dev/null; do
