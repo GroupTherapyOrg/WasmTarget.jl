@@ -2666,3 +2666,54 @@ Resolution: this entry lands alone, as one commit, prose only, and fixes nothing
 orchestrator and is the strict lane's fix in flight (a :construction asserts only by reflection or a load-time check;
 L201 refuses one whose body reads src text; the six reclassified); it and A29S3 are open on MARCH 13.20. A29S2 is
 Dale's decision, on 14.5. A29C1-A29C4 are open on 13.17. A29E1-A29E4 are open on 13.18.
+
+## 2026-10-21 — audited through 4f63d628 (e2371eca..4f63d628: entry 29, a stale plant, measured excuses, the plan restarted, one push per landing)
+
+The thirtieth audit covers 3911e790 (entry 29; its author's), 9d6cdedd (the L195 [best_from] plant names its line by
+the best's key), 24690061 (`land` writes the previous landing's measurable excuse from its steps; a hand excuse is
+checked against them, A25E1, A25E2; cherry-picked from 5fd0a637), cd8defc9 (dev/MARCH.md restarts as the rebuild's
+Phase 1; Phase 14 archived in this file's preamble) and 4f63d628 (a landing pushes wt2 alone; the four workflows
+trigger on gate/** and wt2, a wt2 run its head's own concurrency group; PR #128 named outside the charter, A29E3). The
+precedent locks (360cb793) and the skeleton's 1.A1 (945eef47) went red at their gates and are not in the range. No
+wrong answer. Each landed head's record is green. A25E1 and A25E2 are fixed as 24690061 states; A29E3 is fixed outside
+dev/CHARTER.md, whose preamble and C10 still name PR #122 (Dale's), and has its row 1.L. No red flag: no commit in the
+range claims strictness or closure. Six findings: A30E1-A30E6.
+
+Area: builder — empty by diff: `git diff e2371eca..4f63d628 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of 24690061 (dev/land.sh, dev/loop_excuse.sh, test/parity_ratchet.jl,
+test/lock_negatives.jl, the two corrected excuses), 9d6cdedd (test/lock_negatives.jl), cd8defc9 (dev/MARCH.md, this
+file's preamble), 4f63d628 (dev/land.sh, the four workflows, AGENTS.md, dev/gate.sh, dev/block_runner.jl,
+dev/emission_diff.sh, test/block_groups.tsv's header, test/parity_ratchet.jl, test/lock_negatives.jl), the landing log,
+steps.tsv and the red records of 360cb793 and 945eef47. 4f63d628's closure read is right: `merge` keeps a wt2 run only
+when its head carries `Closes: C<n>` (land.sh:241-246), so the skipped runs of plain landings never stand in for the
+matrix. (A30E1, medium, intent band) 24690061 takes out of L197's window every landing over 300 s whose overrun the
+hold, a runner start, a gate run again or a gate past its 60-s budget explains, a cold gate included, whose time on a
+src change is compiling that change. L197's median then measures the landings that met no blocker, so the 300-s intent
+no longer bounds what a landing takes on this machine (A21E3's class). 24690061 itself took 2777 s from its author
+time, kept from 5fd0a637 of a cancelled stack, with 57 s of steps; the writer measures none of the wait, and no excuse
+names it. No precedent is named for the writer, a dev-side mechanism outside src. (A30E2, low) 9d6cdedd fixes one stale
+plant, not its cause. The gate runs test/lock_negatives.jl only when that file changes, so a plant whose target another
+file changes (here dev/timing_best.toml, re-recorded by 21e36053) goes stale until someone touches the negatives. The
+construction is each plant naming its target files and the gate selecting the negatives when one changes. (A30E3,
+medium) cd8defc9 dropped findings from the ledger. A29S2 sat on 14.5 as item 7 and is now on no row. 14.5's six
+decisions Dale holds are archived as "carried to the charter proposals", which no file holds. A finding about C0 has
+no row L154 admits, since C0 has no Planned text. 13.18 keeps A25E1 and A25E2 as "fixed" notes, finished work in the
+plan (L129's class). (A30E4, low) Phase 1's preamble says "the stopgap count measuring WT2 is 0 at every landing",
+true only while WT2 has no code; the head's ratchet measures 73. (A30E5, medium, intent band) The staleness budget
+refused 360cb793, whose src hunks are four comment and docstring lines, on 55 pieces 82a227bd moved (record
+ab57e81e-1: its one failed check "test/block_groups.tsv is stale"). The map selects the cases a changed body runs, and
+a comment changes no body: a lock firing outside its intent, A29E1's class, and it held the A29S1 fix out of the range.
+(A30E6, low) Requirements and checks: 24690061's measured excuses are held by L197 running loop_excuse.sh check;
+cd8defc9's open plan by L129 and L154; 4f63d628's one push by L153 (one `git push`, no refs/heads/march/), with a
+lock-negative plant; none of the five has a construction, and none is claimed.
+
+Landing times: 3911e790 142 s, 9d6cdedd 185 s, 24690061 2777 s (unexcused, A30E1), cd8defc9 149 s, all judged;
+4f63d628 599 s, unjudged (cold), its excuse the next landing's to write.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A30E1-A30E6 are open on MARCH 13.18.
+A29S2 returns to 13.20, where C0's findings sit until a row may carry them (A30E3).
