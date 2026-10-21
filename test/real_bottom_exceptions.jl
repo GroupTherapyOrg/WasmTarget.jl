@@ -101,10 +101,17 @@ end
 _wt_eb_r(x::Int64) = (try; rethrow(); catch e; e isa ArgumentError ? 1 : e isa DomainError ? 3 : e isa DivideError ? 4 : e isa ErrorException ? 2 : 5; end) + x
 @noinline _wt_eb_rec(n::Int64) = n == 0 ? 0 : 1 + _wt_eb_rec(n - 1)
 _wt_eb_s(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_rec(x); end
-# natively, a stand-in raises StackOverflowError where the wasm body exhausts its stack: the test
-# process never exhausts its own, which Julia on Windows does not reliably detect on a task's stack
-# (dev/AUDIT.md A20X4)
+# The stack-exhaustion oracle: Julia's own answer, the native stack exhausted on a task of its own,
+# wherever Julia detects the exhaustion; on Windows, which does not reliably detect it on a task's
+# stack (the process dies and the shard's failures go unreported, dev/AUDIT.md A20X4), the stand-in,
+# which raises StackOverflowError where the wasm body exhausts its stack (A22E9). R36 holds both arms:
+# this definition alone hosts a task, and a stand-in reaches no deep recursion
+_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))
+const _WT_STACK_ORACLE = Sys.iswindows() ? "the stand-ins (Julia on Windows does not detect the exhaustion, A20X4)" : "native Julia"
+# invokelatest: compiled in a closure, a direct call's try is elided (stack exhaustion is not an effect)
+_wt_eb_s_then_r() = (try; Base.invokelatest(_wt_eb_s, 10^8); catch; end; _wt_eb_r(0))
 _wt_eb_sn(x::Int64) = try; throw(ArgumentError("a")); catch; throw(StackOverflowError()); end
+_wt_eb_sn_then_r() = (try; _wt_eb_sn(10^8); catch; end; _wt_eb_r(0))
 _wt_eb_b(x::Int64) = x > 0 ? throw(DomainError(x)) : x
 _wt_eb_d(x::Int64) = x > 0 ? throw(DivideError()) : x
 @noinline _wt_eb_cb(x::Int64) = (_wt_eb_b(x); nothing)
@@ -138,8 +145,9 @@ _wt_eb_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_eb_cbr(x); end
 _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_eb_cbr(0); end
 
 @testset "the export boundary restores Julia's stack for every catchable escape" begin
+    println("    s_then_r's oracle: ", _WT_STACK_ORACLE)
     native = Dict("h5" => _wt_eb_h5(1), "p2" => _wt_eb_p2(1),
-                  "s_then_r" => (try; _wt_eb_sn(10^8); catch; end; _wt_eb_r(0)),
+                  "s_then_r" => _wt_stack_oracle(_wt_eb_s_then_r, _wt_eb_sn_then_r),
                   "it_then_r" => (try; _wt_eb_it(1); catch; end; _wt_eb_r(0)),
                   "trap_then_r" => _wt_eb_r(0), "lc_trap_then_r" => (_wt_eb_lc(1); _wt_eb_r(0)),
                   "o" => _wt_eb_o(0), "o2" => _wt_eb_o2(1), "o2_trap_then_r" => (_wt_eb_o2(1); _wt_eb_r(0)))
@@ -211,8 +219,9 @@ _wt_hb_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb(x); try; r
 # o_again: then, inside the same import, cb calls r, which reads o's ArgumentError
 @noinline _wt_hb_cbg(x::Int64) = (try; Base.invokelatest(_wt_hb_s2, x); catch; end; Base.invokelatest(_wt_eb_r, 0)::Int64)
 _wt_hb_og(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cbg(x); end
-# natively, o and o_again with s2's stand-in, which raises StackOverflowError where the wasm s2
-# exhausts its stack (A20X4); cb and cbg stay the import stubs the compile reads
+# on Windows, o and o_again run natively with s2's stand-in, which raises StackOverflowError where
+# the wasm s2 exhausts its stack (_wt_stack_oracle, A20X4); cb and cbg stay the import stubs the
+# compile reads
 _wt_hb_s2n(x::Int64) = try; throw(DomainError(x)); catch; throw(StackOverflowError()); end
 @noinline _wt_hb_cbn(x::Int64) = (try; _wt_hb_s2n(x); catch; end; nothing)
 _wt_hb_on(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cbn(x); try; rethrow(); catch e; e isa ArgumentError ? 1 : 2; end; end
@@ -228,8 +237,9 @@ _wt_hb_o6(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb6(x); try;
 _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; end
 
 @testset "the export boundary is the host's: stack exhaustion and traps leave Julia's stack" begin
-    native = Dict("a_then_r" => (try; _wt_hb_a(1); catch; end; _wt_eb_r(0)), "o" => _wt_hb_on(1),
-                  "o_again" => _wt_hb_ogn(1), "h6" => _wt_hb_o6(1), "h7_then_r" => (try; _wt_hb_o7(1); catch; end; _wt_eb_r(0)))
+    println("    o's and o_again's oracle: ", _WT_STACK_ORACLE)
+    native = Dict("a_then_r" => (try; _wt_hb_a(1); catch; end; _wt_eb_r(0)), "o" => _wt_stack_oracle(_wt_hb_o, _wt_hb_on, 1),
+                  "o_again" => _wt_stack_oracle(_wt_hb_og, _wt_hb_ogn, 1), "h6" => _wt_hb_o6(1), "h7_then_r" => (try; _wt_hb_o7(1); catch; end; _wt_eb_r(0)))
     @test native == Dict("a_then_r" => 2, "o" => 1, "o_again" => 1, "h6" => 1, "h7_then_r" => 2)
     mod = WasmTarget.WasmModule()
     v = (WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[])
