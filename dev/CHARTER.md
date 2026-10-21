@@ -166,7 +166,8 @@ with the per-clause status. A clause is never closed by argument.
   a row) `L205` (a number in a check states its intent and band, and the check fails only outside
   the band) `L206` (AGENTS.md carries every live requirement, generated from the ledger) `L207`
   (every lock's negative runs in every gate, inside the ratchet stage) `R45` (the locks that owe
-  theirs).
+  theirs) `L208` (after every landing `land` prints the rebuild's src progress; landings that change
+  nothing under src/ draw a note from the fifth in a row, never a failure).
   Planned: dev/MARCH.md 1.R, 1.S — the ledger's planned checks; each of these checks a
   construction, or Dale's ruling that a prose clause is checked by behavior.
 

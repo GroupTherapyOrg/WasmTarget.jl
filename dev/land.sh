@@ -558,6 +558,8 @@ land)
     else
         echo "land: timing judged"
     fi
+    # the rebuild's src progress, after every landing (L208, dev/LEDGER.md D40)
+    bash "$W/dev/src_progress.sh"
     exit 0
     ;;
 *) echo "unknown command $cmd"; exit 1 ;;

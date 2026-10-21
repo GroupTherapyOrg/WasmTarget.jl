@@ -44,6 +44,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D32** WT compiles the strict subset Julia's verifier defines; outside it, a located rejection.
 - **D38** Each lock calls its own <name>_negatives_missed(), run by the ratchet stage in every gate.
 - **D39** Start a lane with bash dev/lane.sh start <name>; develop in its live Kaimon session.
+- **D40** The rebuild always has a lane porting compiler src; a status leads with src progress.
 <!-- ledger:end -->
 
 ## How to work

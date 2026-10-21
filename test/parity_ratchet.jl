@@ -246,6 +246,7 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L154" => (:stopgap, ""), "L201" => (:stopgap, ""), "L202" => (:stopgap, ""), "L203" => (:stopgap, ""),
     # the ledger's (L204 to L207): each reads the ledger, the charter, the plan, AGENTS.md or this file
     "L204" => (:stopgap, ""), "L205" => (:stopgap, ""), "L206" => (:stopgap, ""), "L207" => (:stopgap, ""),
+    "L208" => (:stopgap, ""),
     # the rebuild's first constructions (dev/MARCH.md 1.A2c): the rejections a closed sum (C6), and
     # no open abstract type passing for a closed one (C5, A33S1); C4, C7 and C8's arrive with theirs
     "L218" => (:construction, "Rejection"), "L219" => (:construction, "check_no_open_abstract"),
@@ -660,6 +661,19 @@ function findings_negatives_missed()::Vector{String}
     for (what, r, fx, want) in cases
         length(findings_off_row(open_findings(entry), r, fx)) == want || push!(out, "negative missed: $what")
     end
+    return out
+end
+
+# ---- L208: the rebuild's src progress, printed after every landing (dev/LEDGER.md D40) ---------------
+# dev/src_progress.sh's output for planted numbers, or for this tree with none
+src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) $args`, String)
+
+# L208's negative test: four src-less landings print no note, five print it, the line keeps its form
+function src_progress_negatives_missed()::Vector{String}
+    local out = String[]
+    occursin("note:", src_progress("10", "4")) && push!(out, "negative missed: four src-less landings printed the note")
+    occursin("note:", src_progress("10", "5")) || push!(out, "negative missed: five src-less landings printed no note")
+    startswith(src_progress("10", "0"), "src: 10 parity( anchors under src/") || push!(out, "negative missed: the line's form")
     return out
 end
 
@@ -2286,6 +2300,17 @@ const LOCKS = [
             local locks = String[_short_id(first(p)) for p in LOCKS]
             local v = vcat(negative_faults(locks, id -> reaches_negative(get(thunks, id, ""), defs, calls), NEGATIVE_OWED),
                            negative_rule_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/land.sh land` runs dev/src_progress.sh after every landing, which prints the parity( anchors under src/ (1.A3 defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
+        () -> begin
+            local v = src_progress_negatives_missed()
+            local o = src_progress()
+            foreach(l -> println("    · ", l), split(rstrip(o), '\n'))
+            startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
+            occursin("    bash \"\$W/dev/src_progress.sh\"\n    exit 0\n", read(joinpath(ROOT, "dev", "land.sh"), String)) ||
+                push!(v, "dev/land.sh land does not run dev/src_progress.sh after its landing")
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
