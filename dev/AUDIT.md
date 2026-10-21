@@ -2439,3 +2439,39 @@ Resolution: this entry lands alone, as one commit, prose and one excuse file (de
 cause, A25E4), and fixes nothing. A25E1-A25E4 are open on MARCH 13.18. A24E1's rule, one commit per landing, is the
 loop lane's next commit. The charter commit audited ahead of its landing (wt-strict-adt) is entry 26's, under the
 red-flag class.
+
+## 2026-10-21 — audited through a3c27bab (ea417dd0..a3c27bab: entry 25, A22E3, the workflows at closure)
+
+The twenty-sixth audit covers 31d6ca4b (entry 25, prose and an excuse; its author's), 3cec876a (a changed entry of a
+lowering table that no generator cases fails, naming the table, A22E3), 29bc7e61 (CI, Formal models and Downstream
+trigger only at clause closure, as gate.yml does, A23E4, A23E6), 61333d25 (AGENTS.md back to 90 lines, the workflows'
+row its own) and a3c27bab (b85da40f's 318 s excused: 145 s behind march/phase-14's hold, which the orchestrator
+approved as measured). 29bc7e61, 61333d25 and a3c27bab landed as one landing. No wrong answer. Each landed head's
+record is green. A22E3, A23E4 and A23E6 are fixed as their commits state: the shared closure predicate checks for a
+line `Closes: C<digit>` in all four workflows. No red flag: no commit in the range claims strictness, closure or a
+guarantee. A22E5 is still not verifiable, because compile3's first commit is not on origin. The timing is unjudged on
+every landing since d41b08ab (A23E1). Five findings: A26E1-A26E4 and A26N1.
+
+Area: builder — empty by diff: `git diff ea417dd0..a3c27bab --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/block.jl, test/parity_ratchet.jl, the four workflows, AGENTS.md,
+dev/MARCH.md, dev/.loop/landings.log and the excuse file. (A26E1, medium) A24E1 is still open. `land` has no
+one-commit refusal, and loop2 landed three commits in one landing. 29bc7e61's first tree, gated as 761f5cfa (record
+b6c22df5-1), was red on L128. The rebased 29bc7e61 in history still has AGENTS.md at 91 lines, and its fix 61333d25
+rides on top of it. (A26E2, medium) A full L148 window turns a landing's gate red. 3cec876a's first tree fb74dc1f
+(record 0484d432-1, 19:31:25Z) was red on L148 alone while entry 25 was being written. It waited for entry 25 and then
+behind its hold, 332 s in all, where its own landing took 55.7 s. This is A23E2's cause, the audit entry on the landing
+path, at a smaller scale. (A26E3, medium) 3cec876a's new L194 cases and its rule that every multi-line const of `key =>
+value` entries is a lowering table landed with no negative. The rule is decided by syntax, so a changed entry of a
+non-lowering table of that shape would fail as uncased. (A26E4, low) PR #122 now carries no check run. The pull
+request triggers nothing, and its final gate is a gate/** push that the pull request does not show. (A26N1, low)
+29bc7e61 keeps formal.yml's nightly schedule "beside" the march's triggers. A schedule runs on the default branch, so
+the nightly checks main's models, not the march's.
+
+Resolution: this entry lands alone, as one commit, prose and one excuse file (dev/.loop/excuse/3cec876a, its measured
+cause, A26E2), and fixes nothing. A26E1-A26E4 and A26N1 are open on MARCH 13.18. A24E1's refusal is the loop lane's
+next commit. The charter commit is entry 27's, under the red-flag class.
