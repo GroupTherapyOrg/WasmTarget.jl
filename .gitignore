@@ -29,3 +29,5 @@ Manifest-v*.toml
 dev/formal/states/
 # the blocking gate's evidence records and logs (dev/block.jl), one per tree, never committed
 dev/.block/
+# the landing log (dev/land.sh, L197), the main tree's, never committed
+dev/.loop/

@@ -857,6 +857,96 @@ end
 
 _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === nothing ? String(id) : String(m.captures[1]))
 
+# ---- the landing log (L197): `dev/land.sh merge` appends a line per landing to the main tree's
+# dev/.loop/landings.tsv; these decide over its text and the march branch's history ----------------
+const L197_START = "36e3966ebd22fce82f2688f039e236287bebdc00"   # the last landing before the log
+const L197_TARGET_SRC = 180     # seconds from edit to landed: a landing changing src/, ext/ or Project.toml
+const L197_TARGET_OTHER = 90    # any other landing
+const L197_COLUMNS = "landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming"
+
+# the seconds since 1970 of a `YYYY-MM-DDTHH:MM:SSZ` time (days from the civil date)
+function _l197_epoch(s::AbstractString)::Int
+    m = match(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$", s)
+    m === nothing && error("$(repr(s)) is not a UTC time YYYY-MM-DDTHH:MM:SSZ")
+    y, mo, d, h, mi, se = parse.(Int, m.captures)
+    y -= mo <= 2
+    era = fld(y, 400); yoe = y - era * 400
+    doe = yoe * 365 + yoe ÷ 4 - yoe ÷ 100 + (153 * (mo + (mo > 2 ? -3 : 9)) + 2) ÷ 5 + d - 1
+    return (era * 146097 + doe - 719468) * 86400 + h * 3600 + mi * 60 + se
+end
+
+# the commits after L197_START up to the march tip, oldest first, each (sha, author time, paths, lines
+# added), from `git log --reverse --no-merges --numstat --format='C %H %at'`, what dev/land.sh reads
+function _l197_history(text::AbstractString)
+    out = Tuple{String,Int,Vector{String},Int}[]
+    for l in split(text, '\n')
+        if startswith(l, "C ")
+            f = split(l)
+            push!(out, (String(f[2]), parse(Int, f[3]), String[], 0))
+        elseif count(==('\t'), l) >= 2 && !isempty(out)
+            a, _, p = split(l, '\t'; limit = 3)
+            c = out[end]
+            out[end] = (c[1], c[2], push!(c[3], String(p)), c[4] + (a == "-" ? 0 : parse(Int, a)))
+        end
+    end
+    return out
+end
+
+# what the log gets wrong against the history (a sentence each), and the median's window: every
+# landing has its line (the lines' commits in history order, the last the tip, and each line's files
+# and insertions git's over its range, so a landing that wrote no line changes the next line's
+# numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
+# that; and over the last 5 lines no MARCH row names (by the commit's first 8 hex digits, the row
+# stating a slower landing's cause), the upper median of edit_to_landed_s over its target at most 1
+function l197_check(log::AbstractString, hist, march::AbstractString)
+    bad = String[]
+    rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
+    if !isempty(rows)
+        join(rows[1], '\t') == L197_COLUMNS || push!(bad, "the log's first line is not its header")
+        rows = rows[2:end]
+    end
+    idx = Dict(h[1] => i for (i, h) in enumerate(hist))
+    ratios = Tuple{String,Float64}[]
+    k = 0
+    for r in rows
+        length(r) == 11 || (push!(bad, "a line of $(length(r)) fields, not 11: $(join(r, ' '))"); continue)
+        c = String(r[2]); i = get(idx, c, 0)
+        i == 0 && (push!(bad, "the line of $(first(c, 8)): no commit the march branch brought after $(first(L197_START, 8))"); continue)
+        i > k || (push!(bad, "the line of $(first(c, 8)): out of the history's order"); continue)
+        span = hist[k+1:i]
+        paths = unique(reduce(vcat, (h[3] for h in span); init = String[]))
+        ins = sum(h[4] for h in span); author = minimum(h[2] for h in span)
+        from = first(k == 0 ? L197_START : hist[k][1], 8)
+        (parse(Int, r[9]) == length(paths) && parse(Int, r[10]) == ins) ||
+            push!(bad, "the line of $(first(c, 8)): $(r[9]) files and $(r[10]) insertions, where git's range from $from holds $(length(paths)) and $ins: a landing in it wrote no line")
+        _l197_epoch(r[3]) == author || push!(bad, "the line of $(first(c, 8)): author_at $(r[3]) is not its range's earliest author time")
+        e2l = parse(Float64, r[8])
+        abs(e2l - (_l197_epoch(r[1]) - author)) <= 1 || push!(bad, "the line of $(first(c, 8)): edit_to_landed_s $(r[8]) is not landed_at less author_at")
+        target = any(p -> startswith(p, "src/") || startswith(p, "ext/") || p == "Project.toml", paths) ? L197_TARGET_SRC : L197_TARGET_OTHER
+        push!(ratios, (c, e2l / target))
+        k = i
+    end
+    k == length(hist) || push!(bad, "$(length(hist) - k) commit(s) up to the march tip $(first(hist[end][1], 8)) landed with no line (dev/land.sh merge writes one per landing)")
+    named(c) = any(l -> startswith(l, "| ") && occursin(first(c, 8), l), split(march, '\n'))
+    window = last(filter(x -> !named(x[1]), ratios), 5)
+    if !isempty(window)
+        s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
+        med <= 1 || push!(bad, "the median edit to landed of the last $(length(window)) landings no dev/MARCH.md row names is $(round(med; digits = 2)) times its target ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): name each slower landing's cause in a row, by its commit's first 8 hex digits")
+    end
+    return bad, window
+end
+
+# L198: every line of the landing log says whether its landing's timing was judged (what the log
+# gets wrong, a sentence each)
+function l198_check(log::AbstractString)
+    bad = String[]
+    for r in [split(l, '\t') for l in split(log, '\n') if !isempty(l)][2:end]
+        t = length(r) >= 11 ? r[11] : ""
+        t in ("judged", "unjudged") || push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), neither judged nor unjudged")
+    end
+    return bad
+end
+
 # The one function in src/codegen/ir.jl that may read a raw CodeInfo / CodeInstance source:
 # the NIR boundary's input (the typed-IR JSON transport is deleted).
 const IR_RAW_READERS = Set([
@@ -3737,7 +3827,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
             v
         end),
-    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names (the cover of the file's pieces by the QA families the locks cite as behavior, test/block_impact.jl), so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a hard limit of wall, never scaled (a machine more than 1.5 times slower than its best gives no verdict, L195); a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate, and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types, as the export namer src/codegen/trimcollect.jl does, names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree test/block_impact.jl measured, and the gate notes how many pieces of src changed since; a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family or phase`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) or the warm runner was cold (its first request, or the first after a revise: red then only for a failing check), green otherwise (exit 0, 1, 3). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the full matrix on the last landed head is not red: it reads that head's newest gate.yml run (`gh run list --commit`, a march/** or gate/** push), refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check (dev/CHARTER.md C10)",
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names (the cover of the file's pieces by the QA families the locks cite as behavior, test/block_impact.jl), so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a hard limit of wall, never scaled (a machine more than 1.5 times slower than its best leaves the timing ratchet unjudged, never the checks or the budgets, L195); a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate, and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types, as the export namer src/codegen/trimcollect.jl does, names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree test/block_impact.jl measured, and the gate notes how many pieces of src changed since; a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family or phase`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) or the warm runner was cold (its first request, or the first after a revise: red then only for a failing check), green otherwise (exit 0, 1, 3). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the full matrix on the last landed head is not red: it reads that head's newest gate.yml run (`gh run list --commit`, a march/** or gate/** push), refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check (dev/CHARTER.md C10)",
         () -> begin
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
@@ -3854,7 +3944,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             # the record, on a clean tree only, and the landing on it alone
             v += occursin("    if clean && unchanged\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
             for line in [raw"    path = joinpath(RECORD_DIR, \"$tree-$n.toml\")",
-                         raw"    verdict = run_verdict(fails, tfails, efails, cold, busy)",
+                         raw"    verdict = run_verdict(fails, timing_failures(tfails, sfails, capped), efails, cold, busy)",
                          raw"    return verdict == \"green\" ? 0 : verdict == \"red\" ? 1 : 3"]
                 v += occursin(line, blk) ? 0 : 1
             end
@@ -3951,7 +4041,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api|gh pr checks"i, land) ? 1 : 0
             v
         end),
-    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under the warm runner (`--warm`) every stage holds a best of its own, `<stage>@warm`, smoke-core and probes included: the compiler's speed is held warm, against a best recorded from a warm run, never a cold one (A19P4); a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row the change itself adds to dev/MARCH.md (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`; an existing row exempts nothing) that names the stages it leaves slower, which alone are exempt, and whose bests that run's update raises in the same diff (A19P7); the budgets are literal walls: a machine more than 1.5 times slower than its best while the stages ran (FACTOR_CAP) gives no verdict, rerun on a quieter one, never a scaled pass, and under that cap a budget or best exceeded is red, unless the machine was busy (its 1-minute load above Julia's CPU threads at the run's start or end, the rule a best is recorded under): a load reason is no verdict, and a red run stands only for a reason of the change's (A19P2, A19P5). `WT_TIMING_UPDATE=1` lowers a best only from a green run on a clean tree on a quiet machine (load average at most Julia's CPU threads) and never raises one, and lowering the calibration lowers every best in proportion in the same write. A change is judged by its own dev/timing_best.toml held to its base's (`git show <base>:dev/timing_best.toml`, A19P6): a budget or best of the base's removed, or raised (a best compared at one calibration, as best / calibration), fails the gate. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
+    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under the warm runner (`--warm`) every stage holds a best of its own, `<stage>@warm`, smoke-core and probes included: the compiler's speed is held warm, against a best recorded from a warm run, never a cold one (A19P4); a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row the change itself adds to dev/MARCH.md (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`; an existing row exempts nothing) that names the stages it leaves slower, which alone are exempt, and whose bests that run's update raises in the same diff (A19P7); the budgets are literal walls: a machine more than 1.5 times slower than its best while the stages ran (FACTOR_CAP, `capped`) leaves the run's timing ratchet unjudged, never a scaled pass: no stage is compared with its best (a slower stage a note, `timing_failures`), no best is recorded from it, the literal budgets and every check still judged, so a run whose checks pass and whose budgets hold is green with `timing = \"unjudged\"` in its record (`dev/land.sh land` printing the unjudged streak, L198), a failing check or a missed budget red, a cold run none; CI judges no timing, so the ratchet is judged here whenever the machine is quiet enough, recorded as unjudged otherwise; and under that cap a budget or best exceeded is red, unless the machine was busy (its 1-minute load above Julia's CPU threads at the run's start or end, the rule a best is recorded under): a load reason is no verdict, and a red run stands only for a reason of the change's (A19P2, A19P5). `WT_TIMING_UPDATE=1` lowers a best only from a green run on a clean tree on a quiet machine (load average at most Julia's CPU threads) and never raises one, and lowering the calibration lowers every best in proportion in the same write. A change is judged by its own dev/timing_best.toml held to its base's (`git show <base>:dev/timing_best.toml`, A19P6): a budget or best of the base's removed, or raised (a best compared at one calibration, as best / calibration), fails the gate. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
         () -> begin
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
             local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
@@ -3963,11 +4053,15 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                  occursin("    isempty(exempt_problem) || push!(fails, exempt_problem)", blk) &&
                  occursin("            if name in exempt_stages\n", blk) ? 0 : 1
             v += occursin("        scaled = wall / factor\n", blk) ? 0 : 1
-            v += occursin("const FACTOR_CAP = 1.5\n", blk) && occursin("    factor > FACTOR_CAP && push!(efails, ", blk) ? 0 : 1
+            v += occursin("const FACTOR_CAP = 1.5\n", blk) && occursin("    capped = factor > FACTOR_CAP\n", blk) ? 0 : 1
+            # past the cap a stage slower than its best is a note, never a failure, and no best is recorded; a budget still fails
+            v += occursin("    capped && append!(notes, \"timing unjudged: \" .* sfails)\n    verdict = run_verdict(fails, timing_failures(tfails, sfails, capped), efails, cold, busy)\n", blk) &&
+                 occursin("                push!(sfails, \"\$name: more than 15% and 0.3 s slower than its best: \$why\"); v = capped ? \"UNJUDGED\" : \"SLOWER\"", blk) &&
+                 occursin("\"timing\" => timing,", blk) ? 0 : 1
             v += occursin("    busy = max(loadavg[1], loadavg_end[1]) > Sys.CPU_THREADS\n", blk) ? 0 : 1
             v += occursin("    bestkey(name) = !isempty(runner) ? name * \"@warm\" : name", blk) && !occursin("warm_stage", blk) ? 0 : 1
             v += occursin("                (!haskey(best, bk) || w < best[bk]) && (best[bk] = w; push!(lowered, \"\$bk \$w\"))", blk) ? 0 : 1
-            v += occursin("        if !green\n            push!(notes, \"WT_TIMING_UPDATE: refused, the run is not green (\$verdict)\")\n        elseif !clean", blk) ? 0 : 1
+            v += occursin("        if !green || capped\n            push!(notes, \"WT_TIMING_UPDATE: refused, the run is not green (\$verdict) or its timing is unjudged (\$timing)\")\n        elseif !clean", blk) ? 0 : 1
             v += occursin("    quiet = loadavg[1] <= Sys.CPU_THREADS\n    updating && !quiet && (updating = false;", blk) ? 0 : 1
             # a best not recorded fails the gate outside the update, which records it
             v += occursin(raw"                push!(fails, \"$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\")", blk) ? 0 : 1
@@ -3994,6 +4088,9 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                f(:run_verdict, String[], ["over"], ["busy"], false, false) == "none", f(:run_verdict, String[], ["over"], String[], true, false) == "none",
                                f(:run_verdict, String[], ["over"], String[], false, false) == "red", f(:run_verdict, String[], ["over"], String[], false, true) == "none",
                                f(:run_verdict, String[], String[], String[], false, true) == "green",
+                               # past the cap a stage slower than its best is unjudged, a budget missed still fails
+                               f(:timing_failures, ["budget"], ["slower"], false) == ["budget", "slower"], f(:timing_failures, ["budget"], ["slower"], true) == ["budget"],
+                               f(:timing_failures, String[], ["slower"], true) == String[], f(:timing_failures, String[], ["slower"], false) == ["slower"],
                                # held to the base: a raised budget, a raised best, a removed one, a best raised by a lowered calibration fail; a lowered one passes
                                let tb(bu, be) = Dict("budget" => bu, "best" => be), base = tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.0))
                                    isempty(f(:timing_against_base, base, base)) &&
@@ -4006,6 +4103,127 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                end])
             catch e
                 println("    ✗ dev/block.jl does not load for its decisions: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid: one landing at a time, and the agents' Julia scheduler starts no other job while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md without a `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation (CHARTER_AUTHORISED) whose clause holds every changed line (an edit changing only MARCH row numbers, L154's citations, exempt and named), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, the one landing path, which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: a log whose lines cover the history passes; a landing with no line, a slower median, a line out of order and an uncovered tip each fail; a slower landing a MARCH row names leaves the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
+        () -> begin
+            local v = 0
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local rx = read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)
+            for line in [raw"        set +e; bash dev/gate.sh --block --warm 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
+                         raw"    LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash \"$W/dev/land.sh\" merge \"$br\"",
+                         raw"    [ -z \"$(git status --porcelain)\" ] || { echo \"land: $W has uncommitted or untracked files — refusing\"; git status --short | awk 'NR <= 10'; exit 1; }",
+                         raw"    until ( set -o noclobber; echo \"$$ $(iso \"$(now)\") $br\" > \"$HOLD\" ) 2>/dev/null; do",
+                         raw"LOG=\"$MAIN/dev/.loop/landings.tsv\"",
+                         raw"HOLD=\"$MAIN/dev/.block/HOLD\"",
+                         raw"CHARTER_AUTHORISED=\"C10:2026-10-21\"",
+                         raw"    git push -q origin \"$MARCH\"" * "\n" * raw"    landed=$(now)"]
+                v += occursin(line, land) ? 0 : 1
+            end
+            # the runner it starts builds the tree's package image first, in a process of its own (A20P23)
+            v += occursin(raw"    built.exitcode == 0 || (println(stderr, \"block_runner: this tree's package does not load",
+                          read(joinpath(ROOT, "dev", "block_runner.jl"), String)) ? 0 : 1
+            # the targets are literals, never raised
+            v += occursin("const L197_TARGET_SRC = 180 ", rx) && occursin("const L197_TARGET_OTHER = 90 ", rx) ? 0 : 1
+            v += occursin("\ndev/.loop/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
+            try
+                # behavior on fixed text: three commits, the second landing two
+                local t0 = _l197_epoch("2026-10-21T14:00:00Z")
+                local hist = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n")
+                local ln = (c, landed, author, f, i) -> join([landed, c, author, landed, "2", "40.0", "60.0",
+                                                              string(_l197_epoch(landed) - _l197_epoch(author)) * ".0", f, i, "judged"], '\t')
+                local good = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                             ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
+                # 340 s for a 90 s landing: the upper median of 0.83 and 3.78
+                local slow = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                             ln("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
+                local gap = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "1", "1") * "\n"
+                local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6") * "\n" *
+                              ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
+                local partial = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
+                v += count(!, [isempty(first(l197_check(good, hist, ""))),
+                               length(last(l197_check(good, hist, ""))) == 2,
+                               !isempty(first(l197_check(slow, hist, ""))),
+                               # a slower landing a MARCH row names leaves the window: the other is the median
+                               isempty(first(l197_check(slow, hist, "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |"))),
+                               !isempty(first(l197_check(gap, hist, ""))),
+                               !isempty(first(l197_check(order, hist, ""))),
+                               !isempty(first(l197_check(partial, hist, ""))),
+                               isempty(first(l197_check("", hist[1:0], ""))),
+                               !isempty(first(l197_check("", hist, ""))),
+                               _l197_epoch("1970-01-01T00:00:00Z") == 0, _l197_epoch("2026-10-21T14:00:00Z") == 1792591200])
+                if get(ENV, "GITHUB_ACTIONS", "") == "true"
+                    println("    · L197: a CI checkout: the landing log is the landing machine's; nothing counted here")
+                else
+                    local mt = nothing; local cur = ""
+                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
+                        startswith(l, "worktree ") && (cur = l[10:end])
+                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                    end
+                    if mt === nothing
+                        println("    ✗ L197: no worktree holds wt-p0-strict-hygiene, so there is no landing log to read")
+                        v += 1
+                    else
+                        local tip = readchomp(`git -C $ROOT rev-parse wt-p0-strict-hygiene`)
+                        local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
+                        local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
+                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, read(joinpath(ROOT, "dev", "MARCH.md"), String))
+                        foreach(b -> println("    ✗ L197: ", b), bad)
+                        println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
+                                isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))
+                        v += length(bad)
+                    end
+                end
+            catch e
+                println("    ✗ L197: ", sprint(showerror, e))
+                v += 1
+            end
+            v
+        end),
+    "L198_timing_is_recorded" => ("a landing whose timing the gate could not judge says so, and the streak of such landings is shown at every landing until a judged run ends it, never forgotten (Dale 2026-10-21; the machine's working floor is other work, so a cap that refused would stall the loop): the blocking gate leaves a run's timing ratchet unjudged on a machine more than FACTOR_CAP times slower than its best (L195: `timing = \"unjudged\"` in its record, `judged` otherwise), `dev/land.sh merge` writes the record's timing into the landing log's `timing` column (a record from before the rule judged), and `dev/land.sh land` prints the unjudged streak, `timing unjudged for N landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm`: the log's last lines in a row whose timing is unjudged, counted newest first until one whose commit's tree has a green run with its timing judged recorded in any worktree. Here: those steps in dev/land.sh and dev/block.jl, every line of the main tree's landing log with a timing, and land.sh's own streak program run on fixed text: three unjudged lines after a judged one give those three newest first, a judged last line none, an empty log none. Negative-tested: the record's field and the streak's count each broken fire it (dev/CHARTER.md C10)",
+        () -> begin
+            local v = 0
+            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
+            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
+            v += occursin("    timing = capped ? \"unjudged\" : \"judged\"\n", blk) && occursin("\"timing\" => timing,", blk) ? 0 : 1
+            for line in [raw"    timing=$(sed -n 's/^timing = \"\(.*\)\"$/\1/p' \"$rec\"); timing=${timing:-judged}",
+                         raw"\"$files\" \"$ins\" \"$timing\" >> \"$LOG\"",
+                         raw"                [ -f \"$f\" ] && grep -qx 'verdict = \"green\"' \"$f\" && grep -qx 'timing = \"judged\"' \"$f\" && judged=1",
+                         raw"        [ $judged -eq 0 ] || break",
+                         raw"        echo \"land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm\""]
+                v += occursin(line, land) ? 0 : 1
+            end
+            try
+                # land.sh's streak program, run on fixed logs
+                local m = match(r"for c in \$\(awk -F'\\t' '([^']+)' \"\$LOG\"\)", land)
+                m === nothing && error("dev/land.sh has no streak program")
+                local streak = log -> mktemp() do path, io
+                    write(io, log); close(io)
+                    split(readchomp(`awk -F'\t' $(m[1]) $path`))
+                end
+                local hd = L197_COLUMNS * "\n"
+                local ln = (c, t) -> join(["2026-10-21T14:02:30Z", c, "2026-10-21T14:00:00Z", "2026-10-21T14:01:00Z", "1", "30.0", "90.0", "150.0", "1", "1", t], '\t') * "\n"
+                local three = hd * ln("aaaaaaaa", "judged") * ln("bbbbbbbb", "unjudged") * ln("cccccccc", "unjudged") * ln("dddddddd", "unjudged")
+                v += count(!, [streak(three) == ["dddddddd", "cccccccc", "bbbbbbbb"],
+                               isempty(streak(three * ln("eeeeeeee", "judged"))),
+                               streak(three * ln("eeeeeeee", "judged") * ln("ffffffff", "unjudged")) == ["ffffffff"],
+                               isempty(streak(hd)),
+                               isempty(l198_check(three)), !isempty(l198_check(hd * ln("aaaaaaaa", "")))])
+                if get(ENV, "GITHUB_ACTIONS", "") != "true"
+                    local mt = nothing; local cur = ""
+                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
+                        startswith(l, "worktree ") && (cur = l[10:end])
+                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                    end
+                    local logp = mt === nothing ? "" : joinpath(mt, "dev", ".loop", "landings.tsv")
+                    local bad = isfile(logp) ? l198_check(read(logp, String)) : String[]
+                    foreach(b -> println("    ✗ L198: ", b), bad)
+                    v += length(bad)
+                end
+            catch e
+                println("    ✗ L198: ", sprint(showerror, e))
                 v += 1
             end
             v

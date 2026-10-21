@@ -55,8 +55,12 @@
 # the factor by which a fixed piece of work, timed throughout the run, was slower than its best.
 # A stage that does more work or waits longer is slower; a busier machine is not. The budgets and
 # the total are literal walls, never scaled: a machine more than FACTOR_CAP times slower than its
-# best while the stages ran gives no verdict at all (rerun on a quieter one), and under the cap a
-# stage or the run over its budget is red (A19P5). A
+# best while the stages ran leaves the run's timing ratchet unjudged: no stage is compared with its
+# best, a run whose checks pass and whose literal budgets hold is green with `timing = "unjudged"` in
+# its record (`dev/land.sh land` prints the unjudged streak, L198), and the budgets still hold at any
+# factor (a stage or the run over its budget is red, A19P5). CI judges no timing (gate.yml has no
+# timing stage): the ratchet is judged here whenever the machine is quiet enough, recorded as
+# unjudged otherwise, never silently skipped. A
 # change is judged by its own dev/timing_best.toml, held to the base's: no budget or best of the
 # base's removed or raised (a best compared at one calibration), and an update that lowers the
 # calibration lowers every best with it (A19P6). A
@@ -437,13 +441,17 @@ median(v) = (c = sort(v); isempty(c) ? NaN : c[(length(c) + 1) ÷ 2])
 # the machine's slowdown factor: the calibration's median over its best, 1 at best, never below
 machine_factor(calib, best_calib) = isnan(best_calib) || isnan(calib) || best_calib <= 0 ? 1.0 : max(1.0, calib / best_calib)
 # the run's verdict: red when a check fails; no verdict when the machine cannot judge (its tools,
-# a tree changed during the run, a machine over FACTOR_CAP) or the run was cold; a budget or a best
+# a tree changed during the run) or the run was cold; a budget or a best
 # exceeded on a busy machine (its 1-minute load above Julia's CPU threads at the run's start or end,
 # the rule a best is recorded under) is no verdict either, a load reason, which the calibration
 # measured in this process understates (a red run stands only for a reason of the change's, A19P2);
 # red when a budget or a best is exceeded on a machine that was not busy; green otherwise
 run_verdict(fails, tfails, efails, cold, busy) =
     !isempty(fails) ? "red" : !isempty(efails) ? "none" : cold ? "none" : !isempty(tfails) ? (busy ? "none" : "red") : "green"
+# the timing failures a run is judged on: the budgets missed (literal walls, at any factor) and, on a
+# machine at most FACTOR_CAP times slower than its best, the stages slower than their bests; past the
+# cap (`capped`) the slower ones are unjudged, never failures and never passes
+timing_failures(tfails, sfails, capped) = capped ? tfails : vcat(tfails, sfails)
 # a stage's scaled time slower than its best by more than 15% and more than 0.3 s
 slower(scaled, best) = !isnan(best) && scaled > best * (1 + SLOWER_FRACTION) && scaled - best > SLOWER_SECONDS
 # the timing a change is judged by, against its base's (L195 runs it): every budget and best the base
@@ -537,7 +545,8 @@ function main(args)
 
     notes = String[]
     fails = String[]    # the change fails: red
-    tfails = String[]   # over a budget or slower than a best: red, unless the runner was cold
+    tfails = String[]   # over a budget: red, unless the runner was cold
+    sfails = String[]   # slower than a best: red, unless the runner was cold or the timing is unjudged
     efails = String[]   # the machine cannot judge: no verdict
     moved = pieces_moved(measured)
     push!(notes, moved === nothing ? "test/block_groups.tsv: measured on src tree $(first(measured, 8)), which this repository does not hold" :
@@ -649,7 +658,10 @@ function main(args)
         end
     end
     factor = machine_factor(calib, bcal)
-    factor > FACTOR_CAP && push!(efails, "the machine was $(round(factor; digits = 2)) times slower than its best while the stages ran, past the cap of $FACTOR_CAP: no verdict, rerun on a quieter machine")
+    # past the cap the machine's scaled times say nothing of the change's: the stages are not compared
+    # with their bests (the timing is unjudged), the budgets and the checks still are
+    capped = factor > FACTOR_CAP
+    capped && push!(notes, "timing unjudged: the machine was $(round(factor; digits = 2)) times slower than its best while the stages ran, past the cap of $FACTOR_CAP: no stage is compared with its best on this run")
     # a best not recorded bounds nothing: outside WT_TIMING_UPDATE it fails, as a ratchet with no
     # baseline line does (test/parity_ratchet.jl); the update records it
     isnan(bcal) && (updating ? push!(notes, "calibration: no best, recorded by this update") :
@@ -683,7 +695,7 @@ function main(args)
             if name in exempt_stages
                 push!(notes, "$name: slower, $why: declared a $exempt")
             else
-                push!(tfails, "$name: more than 15% and 0.3 s slower than its best: $why"); v = "SLOWER"
+                push!(sfails, "$name: more than 15% and 0.3 s slower than its best: $why"); v = capped ? "UNJUDGED" : "SLOWER"
             end
         end
         res[name] = Dict{String,Any}("command" => command, "env" => get(own_of, name, String[]), "exit" => exitcode, "wall" => round(wall; digits = 2),
@@ -772,8 +784,10 @@ function main(args)
     occursin("Precompiling", read(ld.log, String)) && pushfirst!(rstates, "cold (the load stage built the package image)")
     cold = any(startswith("cold"), rstates)
     runner_state = cold ? first(filter(startswith("cold"), rstates)) : isempty(runner) ? "fresh" : "warm"
-    verdict = run_verdict(fails, tfails, efails, cold, busy)
-    why = verdict == "green" ? "" : verdict == "red" ? (isempty(fails) ? "over a budget or slower than a best" : "a check fails") :
+    capped && append!(notes, "timing unjudged: " .* sfails)
+    verdict = run_verdict(fails, timing_failures(tfails, sfails, capped), efails, cold, busy)
+    timing = capped ? "unjudged" : "judged"
+    why = verdict == "green" ? (capped ? "timing unjudged: machine factor $(round(factor; digits = 2)) past the cap of $FACTOR_CAP" : "") : verdict == "red" ? (isempty(fails) ? "over a budget or slower than a best" : "a check fails") :
           !isempty(efails) ? "the machine cannot judge" : cold ? "the run was $runner_state: rerun" :
           "over a budget or slower than a best on a busy machine (load $(loadavg[1]), then $(loadavg_end[1]), on $(Sys.CPU_THREADS) CPU threads): rerun on a quieter one"
     green = verdict == "green"
@@ -784,8 +798,8 @@ function main(args)
 
     # ---- WT_TIMING_UPDATE=1: a green run on a clean tree lowers each best it beat ----
     if updating
-        if !green
-            push!(notes, "WT_TIMING_UPDATE: refused, the run is not green ($verdict)")
+        if !green || capped
+            push!(notes, "WT_TIMING_UPDATE: refused, the run is not green ($verdict) or its timing is unjudged ($timing)")
         elseif !clean
             push!(notes, "WT_TIMING_UPDATE: refused, uncommitted changes (a best is measured on a committed tree)")
         else
@@ -809,7 +823,7 @@ function main(args)
     path = joinpath(RECORD_DIR, "$tree-$n.toml")
     record = Dict{String,Any}(
         "tree" => tree, "head" => head, "base" => base, "clean" => clean, "env_removed" => removed,
-        "verdict" => verdict, "verdict_why" => why, "failures" => vcat(fails, tfails, efails), "notes" => notes,
+        "verdict" => verdict, "verdict_why" => why, "timing" => timing, "failures" => vcat(fails, timing_failures(tfails, sfails, capped), efails), "notes" => notes,
         "run" => n, "finished" => round(time(); digits = 3), "runner_state" => runner_state,
         "total_wall" => round(total; digits = 2), "total_budget" => tb,
         "machine_factor" => round(factor; digits = 3), "calibration" => isnan(calib) ? 0.0 : round(calib; digits = 6),
@@ -842,8 +856,8 @@ function main(args)
     println("  total $(fmt(total)) s of $tb s; machine factor $(round(factor; digits = 2)) (load $(join(round.(loadavg; digits = 2), ' ')), ",
             "$(Sys.CPU_THREADS) CPU threads); julia $jver, +1.13 $j113, node $node")
     for n in notes; println("  note: ", n); end
-    for f in vcat(fails, tfails, efails); println("  FAIL ", f); end
-    println(verdict == "green" ? "BLOCK green" : verdict == "red" ? "BLOCK red ($why)" : "BLOCK no verdict ($why)",
+    for f in vcat(fails, timing_failures(tfails, sfails, capped), efails); println("  FAIL ", f); end
+    println(verdict == "green" ? (capped ? "BLOCK green ($why)" : "BLOCK green") : verdict == "red" ? "BLOCK red ($why)" : "BLOCK no verdict ($why)",
             clean && unchanged ? "  → $(relpath(path, ROOT))" : "  (not recorded)")
     return verdict == "green" ? 0 : verdict == "red" ? 1 : 3
 end

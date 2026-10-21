@@ -91,16 +91,33 @@ function start(launcher::Vector{String})
     serve = `$(Base.julia_cmd()) --startup-file=no --project=$ROOT -e $("Base.include(Module(:BlockRunner), $(repr(@__FILE__)))") serve`
     log = joinpath(DIR, "server.log")
     open(io -> println(io, "\n=== start $(Libc.strftime("%F %T", time())) ==="), log, "a")
+    # this tree's package image, built first in a process of its own: the server loads Revise's
+    # environment before WasmTarget, and a package compiled there sees other versions of its
+    # dependencies already loaded (a fresh worktree's first start failed so: "Missing source file for
+    # ... WasmTargetRandomExt", A20P23)
+    image = `$(Base.julia_cmd()) --startup-file=no --project=$ROOT -e 'using WasmTarget'`
+    built = run(pipeline(ignorestatus(Cmd(Cmd(vcat(launcher, image.exec)); dir = ROOT)); stdin = devnull, stdout = log, stderr = log, append = true))
+    built.exitcode == 0 || (println(stderr, "block_runner: this tree's package does not load (exit $(built.exitcode); log $log):\n", error_lines(log)); return 1)
     p = run(pipeline(detach(Cmd(Cmd(vcat(launcher, serve.exec)); dir = ROOT)); stdin = devnull, stdout = log, stderr = log, append = true); wait = false)
     t0 = time()
     while !ready()
         process_exited(p) && (println(stderr, "block_runner: the server exited before it was ready (exit $(p.exitcode); log $log):\n",
-                                      join(last(readlines(log), 6), '\n')); return 1)
+                                      error_lines(log)); return 1)
         time() - t0 > 900 && (println(stderr, "block_runner: no server after 15 min (log $log)"); return 1)
         sleep(0.5)
     end
     println("block_runner: ready in $(round(time() - t0; digits = 1)) s (pid $(pidof(joinpath(DIR, "ready"))), log $log)")
     return 0
+end
+
+# the first error since this start's marker in the log, with the lines that say what it is (the
+# stack trace's frames left out): the cause, not what failed after it
+function error_lines(log)::String
+    all_ = readlines(log)
+    ls = all_[something(findlast(l -> startswith(l, "=== start "), all_), 0)+1:end]
+    k = findfirst(l -> startswith(l, "ERROR"), ls)
+    k === nothing && return join(last(ls, 6), '\n')
+    return join(first(filter(l -> !occursin(r"^\s*(\[\d+\]|@ )", l), ls[k:end]), 8), '\n')
 end
 
 function connect_server()

@@ -15,17 +15,54 @@
 #       gate.yml run) is red, its red being the next item, and lands with a WARNING, written into
 #       the record, while that run has not finished or there is none; then fast-forwards the march
 #       branch to it from the main tree, pushes it, and pushes the head to march/<branch-leaf>,
-#       where gate.yml runs the full matrix on it, non-blocking.
+#       where gate.yml runs the full matrix on it, non-blocking; appends the landing's line to the
+#       landing log (below).
+#   dev/land.sh land
+#       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
+#       a dirty tree; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
+#       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
+#       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
+#       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
+#       commit with no `Charter:` line, or one that changes dev/CHARTER.md without a
+#       `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation
+#       (CHARTER_AUTHORISED) whose clause holds every changed line (an edit that changes only MARCH
+#       row numbers, the citations L154 forces, is exempt and named); starts this tree's warm
+#       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a cold run is
+#       followed by one more, a run with no verdict for another reason by one more after 20 s, a red
+#       stops the landing with its record); then lands through `dev/land.sh merge`, the one landing
+#       path, releases the hold and prints each step's wall and `LOOP <edit_to_landed_s> s`.
+#
+# The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
+# per landing, written by `merge` right after its push:
+#   landed_at  commit  author_at  land_start  gate_runs  gate_wall_s  land_wall_s  edit_to_landed_s  files  insertions  timing
+# author_at the earliest author time of the commits the landing brings (the edit), commit the landed
+# head, files the paths those commits change and insertions the lines they add (git log --numstat
+# over the range), gate_runs and gate_wall_s the gate runs `land` made (0 for a bare `merge`), timing
+# the record's (judged, or unjudged when the machine was past the gate's factor cap).
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
 # holds a landing: the matrix's verdict on the last landed head is read, never waited for. The one
 # final full gate before PR #122 merges is `bash dev/gate.sh` on the exact merge head.
 set -euo pipefail
 MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
-MAIN=$(git rev-parse --show-toplevel)
+# the main tree: the worktree holding the march branch (the one `merge` fast-forwards), whichever
+# worktree this runs in
+MAIN=$(git worktree list --porcelain | awk -v b="branch refs/heads/$MARCH" '/^worktree / { w = substr($0, 10) } $0 == b && m == "" { m = w } END { print m }')
+[ -n "$MAIN" ] || MAIN=$(git rev-parse --show-toplevel)
 WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
-cmd=${1:?usage: dev/land.sh prepare|merge <branch> [old-base]}
-br=${2:?branch}
+# the standing authorisations of a dev/CHARTER.md change, `<clause>:<date>` (dev/CHARTER.md
+# changes only at Dale's direction: Dale authorised C10's speed checks on 2026-10-21)
+CHARTER_AUTHORISED="C10:2026-10-21"
+LOG="$MAIN/dev/.loop/landings.tsv"
+HOLD="$MAIN/dev/.block/HOLD"
+now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
+iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
+cmd=${1:?usage: dev/land.sh prepare|merge <branch> [old-base] | land}
+if [ "$cmd" = land ]; then
+    br=$(git symbolic-ref --short -q HEAD) || { echo "land: HEAD is detached: run it on the batch's branch — refusing"; exit 1; }
+else
+    br=${2:?branch}
+fi
 leaf=${br##*/}
 W="$WT_WORKTREES/wt-$leaf"
 
@@ -70,6 +107,7 @@ prepare)
     echo "prepared $br @ $(git rev-parse --short HEAD): dev/land.sh merge $br lands it"
     ;;
 merge)
+    m_start=$(now)
     head=$(git -C "$MAIN" rev-parse --verify -q "$br^{commit}") || { echo "no branch $br — refusing"; exit 1; }
     tree=$(git -C "$MAIN" rev-parse "$head^{tree}")
     # the blocking gate's records of this tree (dev/block.jl writes one per run, in the worktree it
@@ -97,6 +135,9 @@ merge)
         { echo "$rec ran through \"$runner\", not fresh processes or this commit's dev/block_runner.jl — refusing"; exit 1; }
     grep -qx 'verdict = "green"' "$rec" || { echo "$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' "$rec")) — refusing"; exit 1; }
     echo "the blocking gate's record of $br @ ${head:0:8}: green ($rec)"
+    # its timing (L198): judged, or unjudged when the machine was past the gate's factor cap (a record
+    # from before the rule is judged), written into the landing log
+    timing=$(sed -n 's/^timing = "\(.*\)"$/\1/p' "$rec"); timing=${timing:-judged}
     # the full matrix on the last landed head: gate.yml's newest run of it on a march/** or gate/** push
     # (by name, not --workflow, which finds only a workflow on the default branch; a gate.yml not yet
     # parsed is named by its path), read three times at most, never waited for
@@ -130,9 +171,160 @@ merge)
     [ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "main tree has uncommitted changes — refusing"; exit 1; }
     git merge --ff-only "$head"
     git push -q origin "$MARCH"
+    landed=$(now)
+    # the landing log's line (L197), written as soon as the march branch holding it is pushed
+    read -r author files ins < <(git log --no-merges --numstat --format='C %at' "$prev..$head" |
+        awk -F'\t' '/^C / { split($0, a, " "); if (min == "" || a[2] + 0 < min + 0) min = a[2]; next }
+                    NF >= 3 { if (!($3 in seen)) { seen[$3] = 1; n++ } if ($1 != "-") ins += $1 }
+                    END { print min, n + 0, ins + 0 }')
+    start=${LAND_START:-$m_start}
+    mkdir -p "$(dirname "$LOG")"
+    [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\n' > "$LOG"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
+        "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
+        "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")" "$files" "$ins" "$timing" >> "$LOG"
     # the full matrix on the landed head, non-blocking (gate.yml runs on march/**)
     git push -q --force origin "$head:refs/heads/march/$leaf"
     echo "landed $br @ ${head:0:8} on $MARCH; the full matrix: gh run list --branch march/$leaf"
+    ;;
+land)
+    # bash reads this whole case statement before it runs any of it, and every way out of this arm
+    # is an exit: the rebase below rewrites this file under the running shell, which reads no more
+    l_start=$(now); s0=$l_start; steps=""
+    step() { local t d; t=$(now); d=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$t" "$s0")
+             steps="$steps$1"$'\t'"$d"$'\n'; s0=$t; echo "land: step $1 $d s"; }
+    W=$(git rev-parse --show-toplevel)
+    [ "$W" != "$MAIN" ] || { echo "land: run it in the batch's worktree, not the main tree — refusing"; exit 1; }
+    [ "$br" != "$MARCH" ] || { echo "land: $br is the march branch — refusing"; exit 1; }
+    cd "$W"
+    [ -z "$(git status --porcelain)" ] || { echo "land: $W has uncommitted or untracked files — refusing"; git status --short | awk 'NR <= 10'; exit 1; }
+    step preflight
+    # the hold: one landing at a time, and while it exists no other agent's Julia job starts (bin/jlrun
+    # reads it); created only if absent, with this shell's pid, removed only by it
+    mkdir -p "$(dirname "$HOLD")"
+    release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"; return 0; }
+    trap release EXIT
+    waited=0
+    until ( set -o noclobber; echo "$$ $(iso "$(now)") $br" > "$HOLD" ) 2>/dev/null; do
+        owner=$(cut -d' ' -f1 "$HOLD" 2>/dev/null || true)
+        if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
+            echo "land: $HOLD was left by pid $owner, which has exited: removed"; rm -f "$HOLD"; continue
+        fi
+        [ $waited -eq 1 ] || echo "land: waiting for the landing that holds the machine ($(cat "$HOLD" 2>/dev/null))"
+        waited=1; sleep 2
+    done
+    step hold
+    git fetch -q origin
+    tip=$(git rev-parse "$MARCH")
+    git merge-base --is-ancestor "origin/$MARCH" "$tip" ||
+        { echo "land: origin/$MARCH holds commits the main tree's $MARCH lacks — refusing"; exit 1; }
+    if ! git merge-base --is-ancestor "$tip" HEAD && ! git rebase -q "$tip"; then
+        # a stop whose only conflict is the ratchet baseline resolves through dev/merge_baseline.py
+        while [ "$(git diff --name-only --diff-filter=U)" = "dev/parity_baseline.toml" ]; do
+            python3 dev/merge_baseline.py dev/parity_baseline.toml || break
+            git add dev/parity_baseline.toml
+            GIT_EDITOR=true git rebase --continue && break
+        done
+        if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
+            echo "land: the rebase onto $MARCH ${tip:0:8} stopped on a conflict in:"
+            git diff --name-only --diff-filter=U | sed 's/^/  /'
+            git rebase --abort
+            echo "land: $br is as it was: rebase it onto $MARCH, resolve, and land again"; exit 1
+        fi
+    fi
+    step rebase
+    [ -n "$(git rev-list "$tip..HEAD")" ] || { echo "land: $br holds nothing $MARCH lacks — refusing"; exit 1; }
+    # the clause each line of dev/CHARTER.md at a revision sits in: `- **C<n> ` opens clause n, a
+    # line that does not start with a space closes it ("-": no clause)
+    clauses_at() { git show "$1:dev/CHARTER.md" 2>/dev/null |
+        awk '/^- \*\*C[0-9]+ / { c = $2; sub(/^\*\*/, "", c); print c; next } /^ / && c != "" { print c; next } { c = ""; print "-" }'; }
+    for h in $(git rev-list --reverse --no-merges "$tip..HEAD"); do
+        msg=$(git log -1 --format=%B "$h"); what=$(git log -1 --format='%h %s' "$h")
+        printf '%s\n' "$msg" | grep -qE '^Charter: C[0-9]+' || { echo "land: $what has no 'Charter: C<n>' line — refusing"; exit 1; }
+        git diff --quiet "$h^" "$h" -- dev/CHARTER.md && continue
+        # an edit changing only MARCH row numbers (13.<n>), the Planned citations L154 forces, is exempt
+        other=$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' "$h^" "$h" -- dev/CHARTER.md |
+                grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | cut -c2- | tr -s ' \t' '\n\n' | grep -v '^$' |
+                grep -cvE '^(13\.[0-9]+[,;.]?|and)$' || true)
+        if [ "$other" = 0 ]; then echo "land: $what changes only dev/CHARTER.md's MARCH row numbers (L154's citations): exempt"; continue; fi
+        allowed=""
+        for a in $(printf '%s\n' "$msg" | sed -n 's/^Charter-change: \(C[0-9][0-9]*\) authorised by Dale \([0-9-]*\)$/\1:\2/p'); do
+            case " $CHARTER_AUTHORISED " in
+            *" $a "*) allowed="$allowed ${a%%:*}" ;;
+            *) echo "land: $what: 'Charter-change: ${a%%:*} authorised by Dale ${a#*:}' is no standing authorisation ($CHARTER_AUTHORISED) — refusing"; exit 1 ;;
+            esac
+        done
+        [ -n "$allowed" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: <clause> authorised by Dale <date>' line — refusing"; exit 1; }
+        old=$(mktemp); new=$(mktemp); clauses_at "$h^" > "$old"; clauses_at "$h" > "$new"
+        # the clauses the diff's lines sit in: a hunk's removed lines in the parent, its added lines in the commit
+        for c in $(git diff -U0 "$h^" "$h" -- dev/CHARTER.md | awk -v O="$old" -v N="$new" '
+                BEGIN { while ((getline l < O) > 0) o[++i] = l; while ((getline l < N) > 0) n[++j] = l }
+                /^@@ / { split(substr($2, 2), a, ","); split(substr($3, 2), b, ",")
+                         oc = (2 in a) ? a[2] : 1; nc = (2 in b) ? b[2] : 1
+                         for (k = a[1]; k < a[1] + oc; k++) print ((k in o) ? o[k] : "-")
+                         for (k = b[1]; k < b[1] + nc; k++) print ((k in n) ? n[k] : "-") }' | sort -u); do
+            case " $allowed " in
+            *" $c "*) ;;
+            *) echo "land: $what changes dev/CHARTER.md $([ "$c" = - ] && echo "outside any clause" || echo "in $c"), which its Charter-change line (${allowed# }) does not authorise — refusing"; exit 1 ;;
+            esac
+        done
+        rm -f "$old" "$new"
+        echo "land: $what changes dev/CHARTER.md inside$allowed, a standing authorisation"
+    done
+    step checks
+    out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
+    echo "$out" | tail -1
+    step runner
+    # the gate to a verdict: a cold run once more, another no-verdict once more after 20 s, a red stops
+    runs=0; gwall=0; cold_again=0; busy_again=0; glog=$(mktemp)
+    while :; do
+        runs=$((runs + 1)); g0=$(now)
+        set +e; bash dev/gate.sh --block --warm 2>&1 | tee "$glog"; st=${PIPESTATUS[0]}; set -e
+        gwall=$(perl -e 'printf "%.1f", $ARGV[0] + $ARGV[1] - $ARGV[2]' "$gwall" "$(now)" "$g0")
+        step "gate-$runs"
+        case $st in
+        0) break ;;
+        1) echo "land: the gate is red and its record stands: fix it in a new commit, then land again"; exit 1 ;;
+        3) if grep -q '^BLOCK no verdict (the run was cold' "$glog" && [ $cold_again -eq 0 ]; then
+               cold_again=1; echo "land: the runner was cold: the gate once more"
+           elif [ $busy_again -eq 0 ]; then
+               busy_again=1; echo "land: no verdict: the gate once more after 20 s"; sleep 20
+           else
+               echo "land: no verdict after its retries — not landed"; exit 3
+           fi ;;
+        *) echo "land: the gate exited $st with no verdict — not landed"; exit "$st" ;;
+        esac
+    done
+    rm -f "$glog"
+    LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    step land
+    release
+    head=$(git rev-parse HEAD)
+    line=$(tail -1 "$LOG")
+    [ "$(printf '%s' "$line" | cut -f2)" = "$head" ] || { echo "land: the landing log's last line is not ${head:0:8}'s"; exit 1; }
+    printf '%s' "$steps" | awk -v h="$head" -F'\t' '{ print h "\t" $1 "\t" $2 }' >> "$(dirname "$LOG")/steps.tsv"
+    echo "land: steps $(printf '%s' "$steps" | awk -F'\t' '{ printf "%s%s %s s", (NR > 1 ? ", " : ""), $1, $2 }')"
+    # the unjudged streak (L198): the log's last lines in a row whose timing is unjudged, newest first,
+    # counted until one whose commit's tree has a green run with its timing judged recorded in any
+    # worktree (`bash dev/gate.sh --block --warm` on a quiet machine judges it)
+    unjudged=0
+    for c in $(awk -F'\t' 'NR > 1 { s = ($11 == "unjudged") ? $2 " " s : "" } END { print s }' "$LOG"); do
+        t=$(git rev-parse "$c^{tree}"); judged=0
+        for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
+            for f in "$w/dev/.block/$t"-*.toml; do
+                [ -f "$f" ] && grep -qx 'verdict = "green"' "$f" && grep -qx 'timing = "judged"' "$f" && judged=1
+            done
+        done
+        [ $judged -eq 0 ] || break
+        unjudged=$((unjudged + 1))
+    done
+    if [ "$unjudged" -gt 0 ]; then
+        echo "land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm"
+    else
+        echo "land: timing judged"
+    fi
+    echo "LOOP $(printf '%s' "$line" | cut -f8) s"
+    exit 0
     ;;
 *) echo "unknown command $cmd"; exit 1 ;;
 esac
