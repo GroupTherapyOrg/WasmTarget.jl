@@ -1053,9 +1053,8 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
 
     function dfs!(node::DataType)
         low = counter[]
-        kids = get(children, node, DataType[])
-        # Sort children deterministically by type name for reproducible IDs
-        sort!(kids, by=T -> string(T))
+        # children in type_order_key's order (name, then module), each key printed once
+        kids = ordered_by(get(children, node, DataType[]), type_order_key)
 
         if isempty(kids) && (isconcretetype(node) || is_runtime_vararg_tuple_type(node) ||
                              (node <: Tuple && Base.isdispatchtuple(node)))

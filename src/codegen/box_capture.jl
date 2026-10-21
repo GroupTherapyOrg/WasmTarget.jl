@@ -198,7 +198,7 @@ function _f3_collect_capturing_bodies!(out::Vector{Tuple{Vector{NirStmt}, Any}},
     field_captors = _f3_box_captor_fields(nir, box_id)
     isempty(field_captors) && return nothing
     # the captor types in one order (the join is order-independent; the walk's order is fixed)
-    captor_types = sort!(unique!(Type[ty for (ty, _) in field_captors]); by=string)
+    captor_types = ordered_by(unique!(Type[ty for (ty, _) in field_captors]), type_order_key)
     # The walk is complete only when the bodies it reads are every body of each captor type
     # (BoxJoin.tla EveryCaptorBody): a captor body the scanned code invokes that the closed
     # world does not hold is one whose writes no one can see, which is loud, never a narrowing
