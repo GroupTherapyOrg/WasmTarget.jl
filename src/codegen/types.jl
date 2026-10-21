@@ -3109,39 +3109,18 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
     # Exclude Unions (Union{Vector{Int32},Vector{Int64}} <: AbstractArray) —
     # they must reach the Union branch below, not register as one member's wrapper
     # (gap 5ae13ccb033a).
-    elseif !(T isa Union) && T <: AbstractArray  # Handles Vector, Matrix, and higher-dim arrays
-        # Both Vector and Matrix are stored as structs with (ref, size) fields
-        # This allows setfield!(v, :size, ...) for push!/resize! operations
-        if T <: Vector
-            # Julia Vector (Array{T,1}) gets (ref, size) layout.
-            # P3 gap 3aaa51b9a688: `T <: Array` also caught Matrix — it got
-            # the 1-D vector layout (Tuple{Int64} size field) while the
-            # constructor built the real NTuple{N,Int64} dims tuple, so every
-            # Matrix struct.new failed validation. Matrices route below.
-            if haskey(registry.structs, T)
-                info = registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            else
-                info = register_vector_type!(mod, registry, T)
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
-        else
-            # A Matrix or higher-dim Array: the matrix wrapper. Every other concrete array
-            # (SubArray, UnitRange, Diagonal, …) is a struct of its fields, taken by the
-            # is_struct_type arm above. An abstract or UnionAll array type (AbstractVector,
-            # DenseVector{UInt8}, AbstractMatrix{Float64}, …) has no struct of its own: at
-            # run time it holds a Vector struct, a raw Memory array or another array's
-            # struct, so it is the join, anyref (dart's top type for an unresolved class),
-            # narrowed at use by the cast machinery.
-            (T isa DataType && T <: Array && isconcretetype(T)) || return AnyRef
-            if haskey(registry.structs, T)
-                info = registry.structs[T]
-                return ConcreteRef(info.wasm_type_idx, true)
-            else
-                info = register_matrix_type!(mod, registry, T)
-                return ConcreteRef(info.wasm_type_idx, true)
-            end
-        end
+    elseif !(T isa Union) && T <: AbstractArray
+        # A concrete Array is its Vector or Matrix wrapper struct, registered through the one route
+        # per Array (register_array_wrapper!: a rank-1 Array the Vector layout, any other the
+        # Matrix layout). Every other concrete array (SubArray, UnitRange, Diagonal, a String's
+        # CodeUnits, …) is a struct of its fields, taken by the is_struct_type arm above. An
+        # abstract or UnionAll array type (AbstractVector, Vector{<:Real}, DenseVector{UInt8},
+        # AbstractMatrix{Float64}, …) has no layout of its own: at run time it holds a Vector
+        # struct, a raw Memory array or another array's struct, so it is the join, anyref (dart's
+        # top type for an unresolved class), narrowed at use by the cast machinery.
+        (T isa DataType && T <: Array && isconcretetype(T)) || return AnyRef
+        haskey(registry.structs, T) && return ConcreteRef(registry.structs[T].wasm_type_idx, true)
+        return ConcreteRef(register_array_wrapper!(mod, registry, T).wasm_type_idx, true)
     elseif _julia_int_width(T) == 128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
         if haskey(registry.structs, T)

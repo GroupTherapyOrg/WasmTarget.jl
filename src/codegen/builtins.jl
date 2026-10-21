@@ -1746,7 +1746,7 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)::InstrBuilder
 
     # Ensure Vector{Any} is registered (for the args field)
     if !haskey(ctx.type_registry.structs, Vector{Any})
-        register_vector_type!(ctx.mod, ctx.type_registry, Vector{Any})
+        register_array_wrapper!(ctx.mod, ctx.type_registry, Vector{Any})
     end
     vec_any_info = ctx.type_registry.structs[Vector{Any}]
 

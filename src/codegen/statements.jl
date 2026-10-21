@@ -1652,7 +1652,7 @@ function _fc_jl_ptr_to_array_1d!(b::InstrBuilder, node::NirForeignCall, idx::Int
                 data_source = _trace_ptr_to_data(ptr_arg, ctx)
                 if data_source !== nothing
                     # Get or register Vector type
-                    vec_info = register_vector_type!(ctx.mod, ctx.type_registry, ret_type)
+                    vec_info = register_array_wrapper!(ctx.mod, ctx.type_registry, ret_type)
                     vec_type_idx = vec_info.wasm_type_idx
                     # Get size tuple type
                     size_tuple_type = Tuple{Int64}

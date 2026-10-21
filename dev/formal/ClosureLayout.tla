@@ -26,21 +26,27 @@
 (* layout facts -- a context struct's OWN field order, and the vtable's      *)
 (* per-arity/per-closure-body shape consistency, neither of which touches    *)
 (* classId at all (they live in the WASM TYPE SECTION index space that       *)
-(* add_struct_type! hands out, a distinct id space from ensure_type_id!'s    *)
-(* Julia-level classIds).                                                    *)
+(* add_type! hands out, a distinct id space from ensure_type_id!'s           *)
+(* Julia-level classIds). One fact joins the two: add_type! merges a struct  *)
+(* type equal to one already defined (outside a recursion group), so two     *)
+(* closure types whose captured fields translate alike share ONE context     *)
+(* struct type, and a context's class is read from its classId field         *)
+(* (field 0, ensure_type_id!'s distinct id), never from its struct type.     *)
 (*                                                                           *)
 (* WHAT THE REAL ALGORITHM DOES (the part this model checks).                *)
 (*                                                                           *)
-(* (A) CONTEXT STRUCT (register_closure_type!, structs.jl:85-136). On the    *)
+(* (A) CONTEXT STRUCT (register_closure_type!, structs.jl). On the          *)
 (*     FIRST sight of T: `field_names/field_types` are read via              *)
 (*     `[fieldname(T,i) for i in 1:fieldcount(T)]` -- a plain Julia FIELD-    *)
 (*     INDEX range, never a Dict/Set walk -- then each field's Julia type    *)
-(*     maps through a PURE function to a wasm field type (Vector/Abstract-   *)
-(*     Vector/MemoryRef/Memory/String/Symbol get a dedicated wasm shape;     *)
-(*     everything else -- numerics, Core.Box, other structs, Any -- goes      *)
-(*     through `julia_to_wasm_type`), and a FRESH struct-type index is       *)
-(*     allocated (`add_struct_type!`, types.jl's monotonic type-section       *)
-(*     counter). `registry.structs[T] = info` then caches it. On EVERY later *)
+(*     translates through the ONE struct-field rule, translate_storage_type  *)
+(*     (class_info.dart:539 _generateFields → translateStorageType), the     *)
+(*     rule a struct's and a tuple's fields take too: a captured struct is   *)
+(*     its struct's reference, never erased to structref by a rule of the    *)
+(*     closure registrar's own -- and a struct-type index is allocated       *)
+(*     (`finish_pending!`, the type section's monotonic counter; a field     *)
+(*     reaching T again refers to its pending entry). `registry.structs[T]`  *)
+(*     caches it. On EVERY later                                             *)
 (*     sight of the SAME T, `haskey(registry.structs,T) && return` fires     *)
 (*     FIRST (structs.jl:87) -- the cached info is returned UNCHANGED; the   *)
 (*     new call's arguments are never even inspected. This model erases the  *)
@@ -98,14 +104,13 @@
 (*                                                                           *)
 (* WHAT THIS MODEL ABSTRACTS, AND WHY THAT IS SUFFICIENT.                    *)
 (*  - Julia types collapse to opaque ids (`Types`); a captured field's       *)
-(*    Julia type collapses to an opaque wasm-shape CLASS (`FieldClasses`).   *)
-(*    The per-field Julia-type -> wasm-type mapping in register_closure_     *)
-(*    type! (the Vector/AbstractVector/MemoryRef/Memory/String/Symbol special*)
-(*    cases plus the `julia_to_wasm_type` fallback) is a PURE function of    *)
-(*    one field's type with NO Dict/registry lookup at all -- it cannot      *)
-(*    introduce order- or run-dependent behavior, so it is erased and only   *)
-(*    its declared SEQUENCE (`DeclaredFields[T]`, a CONSTANT -- Julia fixes  *)
-(*    a closure struct's field order before WT ever sees T) is modeled.      *)
+(*    Julia type collapses to an opaque CLASS (`FieldClasses`), whose        *)
+(*    storage the one struct-field rule gives (`FieldStorage`, a CONSTANT:   *)
+(*    the rule is a pure function of one field's type). The context records  *)
+(*    each field's class and the storage the registrar gave it, so the       *)
+(*    model checks both the order (`DeclaredFields[T]`, a CONSTANT -- Julia  *)
+(*    fixes a closure struct's field order before WT ever sees T) and that   *)
+(*    the storage is the struct field's.                                     *)
 (*    Likewise the box-capture JOIN (box_capture.jl, F3) that would refine a *)
 (*    `Core.Box` field to a concrete cell type is NOT wired into register_   *)
 (*    closure_type! as of this snapshot (its only consumer is the value-     *)
@@ -132,7 +137,18 @@
 (*    sequence (out of scope here, exactly as ClosedWorld.tla takes the call *)
 (*    graph as CONSTANT input rather than re-deriving it).                   *)
 (*                                                                           *)
-(* THE TWO BROKEN VARIANTS.                                                  *)
+(* THE FOUR BROKEN VARIANTS.                                                 *)
+(*  - `TellApartByStruct = TRUE`: a context's class is read from its struct  *)
+(*    type -- the claim that distinct closure types have distinct structs,  *)
+(*    which add_type!'s merge of equal structs makes false. TLC must find two *)
+(*    closure types with alike fields read as one class                      *)
+(*    (`ContextsToldApart` violated).                                        *)
+(*  - `OwnFieldRule = TRUE`: register_closure_type! translates a captured    *)
+(*    field by a rule of its own (`OwnStorage`: a struct field erased to     *)
+(*    structref by julia_to_wasm_type, where the struct registrar gives its  *)
+(*    struct's reference) -- the three-translator disagreement 13.4 named.   *)
+(*    TLC must find a context whose field storage is not the struct field's *)
+(*    (`OneFieldTranslation` violated).                                      *)
 (*  - `HashOrderCapture = TRUE`: register_closure_type!'s field-class        *)
 (*    sequence for a NEWLY-seen T may come out as ANY permutation of its     *)
 (*    declared multiset, mirroring what would happen if a future refactor    *)
@@ -154,8 +170,11 @@
 (* formal(src/codegen/structs.jl register_closure_type!, src/codegen/       *)
 (* closures.jl build_closure_vtable!): a closure type's context struct      *)
 (* lists its captured fields in exactly the program's declared order, never *)
-(* a hash-dependent one; two distinct closure types never share a context   *)
-(* struct or vtable-global id; one struct type is shared by every closure    *)
+(* a hash-dependent one, each in the storage the one struct-field rule      *)
+(* gives its type; two closure types share a context struct type only when  *)
+(* their fields translate alike, and are told apart by their classId field;  *)
+(* two distinct closure types never share a vtable-global id; one struct     *)
+(* type is shared by every closure                                           *)
 (* body of the same arity (dart2wasm's per-shape ClosureRepresentation); and *)
 (* the vt_struct annotation returned for a closure type's vtable global      *)
 (* always matches the shape that global was actually populated with, so no  *)
@@ -166,12 +185,16 @@ EXTENDS Naturals, Sequences, FiniteSets
 CONSTANTS
     Types,             \* finite universe of closure-type ids
     Arities,           \* finite set of Nat: supported positional arities
-    FieldClasses,      \* finite universe of captured-field wasm-shape classes
+    FieldClasses,      \* finite universe of captured-field Julia type classes
+    FieldStorage,      \* [FieldClasses -> STRING]: the one struct-field rule's storage of a class
+    OwnStorage,        \* [FieldClasses -> STRING]: a registrar's own rule (the Broken variant's)
     DeclaredFields,    \* [Types -> Seq(FieldClasses)]: T's real declared capture order
     DeclaredArity,     \* [Types -> Arities]: T's real positional call arity
     MaxArrivals,       \* Nat: bounds how many times each step may revisit one T
+    TellApartByStruct, \* BOOLEAN: TRUE = a context's class read from its struct type, not its classId
     HashOrderCapture,  \* BOOLEAN: TRUE = the retired/counterfactual hash-order field variant
-    AllowArityDrift    \* BOOLEAN: TRUE = a revisit of T may request a different arity
+    AllowArityDrift,   \* BOOLEAN: TRUE = a revisit of T may request a different arity
+    OwnFieldRule       \* BOOLEAN: TRUE = the closure registrar translates a field by its own rule
 
 ASSUME IsFiniteSet(Types)
 ASSUME Arities \subseteq Nat /\ IsFiniteSet(Arities)
@@ -180,12 +203,18 @@ ASSUME DeclaredFields \in [Types -> Seq(FieldClasses)]
 ASSUME DeclaredArity \in [Types -> Arities]
 ASSUME MaxArrivals \in Nat /\ MaxArrivals >= 1
 ASSUME HashOrderCapture \in BOOLEAN
+ASSUME TellApartByStruct \in BOOLEAN
 ASSUME AllowArityDrift \in BOOLEAN
+ASSUME OwnFieldRule \in BOOLEAN
+ASSUME FieldStorage \in [FieldClasses -> STRING] /\ OwnStorage \in [FieldClasses -> STRING]
+
+Storages == {FieldStorage[c] : c \in FieldClasses} \cup {OwnStorage[c] : c \in FieldClasses}
 
 VARIABLES
     ctxArrivals,      \* [Types -> 0..MaxArrivals] -- register_closure_type! calls so far
     seenCtx,           \* SUBSET Types -- T's whose context struct is registered
-    fieldSeq,          \* [Types -> Seq(FieldClasses)] -- the RECORDED field order (meaningful once seenCtx)
+    fieldSeq,          \* [Types -> Seq(FieldClasses \X Storages)] -- the RECORDED fields, each its class and
+                       \* the storage the registrar gave it (meaningful once seenCtx)
     structId,          \* [Types -> Nat] -- register_closure_type!'s struct-type index (0 = unassigned)
     nextStructId,      \* Nat -- add_struct_type!'s monotonic type-section counter
     vtArrivals,        \* [Types -> 0..MaxArrivals] -- vtable arrivals (build_closure_vtable! / closure_vtable) so far
@@ -219,6 +248,10 @@ FieldOrderChoices(T) ==
     THEN {PermuteSeq(DeclaredFields[T], p) : p \in Perms(Len(DeclaredFields[T]))}
     ELSE {DeclaredFields[T]}
 
+\* The registrar's field rule over a class sequence: the one struct-field rule, or (Broken) its own.
+Translate(cs) == [i \in 1..Len(cs) |->
+    <<cs[i], IF OwnFieldRule THEN OwnStorage[cs[i]] ELSE FieldStorage[cs[i]]>>]
+
 ----------------------------------------------------------------------------
 (* Init: nothing registered yet; every monotonic counter starts at 1 (0 is  *)
 (* reserved as the "unassigned" sentinel for structId/globalId/vtStructOf,  *)
@@ -248,15 +281,23 @@ Init ==
 (* unchanged -- the new call's (absent, in this model) arguments are never  *)
 (* even inspected on a hit, exactly like the source.                        *)
 
+\* a context struct's wasm fields: the storages, in order (add_type! compares these, not classes)
+StorageOf(sq) == [i \in 1..Len(sq) |-> sq[i][2]]
+
 RegisterContext(T) ==
     /\ ctxArrivals[T] < MaxArrivals
     /\ ctxArrivals' = [ctxArrivals EXCEPT ![T] = @ + 1]
     /\ IF T \in seenCtx
        THEN UNCHANGED <<seenCtx, fieldSeq, structId, nextStructId>>
        ELSE /\ seenCtx' = seenCtx \cup {T}
-            /\ structId' = [structId EXCEPT ![T] = nextStructId]
-            /\ nextStructId' = nextStructId + 1
-            /\ \E fs \in FieldOrderChoices(T) : fieldSeq' = [fieldSeq EXCEPT ![T] = fs]
+            /\ \E fs \in FieldOrderChoices(T) :
+                 LET tr == Translate(fs)
+                     same == {U \in seenCtx : StorageOf(fieldSeq[U]) = StorageOf(tr)}
+                     \* add_type!: an equal struct already defined is that struct, else a fresh index
+                     id == IF same = {} THEN nextStructId ELSE structId[CHOOSE U \in same : TRUE]
+                 IN /\ fieldSeq' = [fieldSeq EXCEPT ![T] = tr]
+                    /\ structId' = [structId EXCEPT ![T] = id]
+                    /\ nextStructId' = IF same = {} THEN nextStructId + 1 ELSE nextStructId
     /\ UNCHANGED <<vtArrivals, seenVt, globalId, nextGlobalId, shapeAtCreation,
                    lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId>>
 
@@ -319,7 +360,7 @@ Spec == Init /\ [][Next]_vars
 TypeOK ==
     /\ ctxArrivals \in [Types -> 0..MaxArrivals]
     /\ seenCtx \subseteq Types
-    /\ fieldSeq \in [Types -> Seq(FieldClasses)]
+    /\ fieldSeq \in [Types -> Seq(FieldClasses \X Storages)]
     /\ structId \in [Types -> Nat]
     /\ nextStructId \in Nat
     /\ vtArrivals \in [Types -> 0..MaxArrivals]
@@ -335,13 +376,23 @@ TypeOK ==
 
 \* (1) The context struct lists exactly the captured variables in the
 \* program's declared order -- never a hash-dependent one.
-CapturedFieldsAreDeclaredOrder == \A T \in seenCtx : fieldSeq[T] = DeclaredFields[T]
+CapturedFieldsAreDeclaredOrder ==
+    \A T \in seenCtx : [i \in 1..Len(fieldSeq[T]) |-> fieldSeq[T][i][1]] = DeclaredFields[T]
 
-\* (3a) Two distinct closure types never share a context struct (each is its
-\* own class at the struct-index level -- the id space add_struct_type!
-\* hands out).
-NoStructIdCollision ==
-    \A T1, T2 \in seenCtx : T1 # T2 => structId[T1] # structId[T2]
+\* (1b) Each captured field's storage is the one struct-field rule's answer for its type
+\* (translate_storage_type, as a struct's and a tuple's fields take it): one translation.
+OneFieldTranslation ==
+    \A T \in seenCtx : \A i \in 1..Len(fieldSeq[T]) : fieldSeq[T][i][2] = FieldStorage[fieldSeq[T][i][1]]
+
+\* (3a) Two closure types share a context struct type only when their fields translate alike
+\* (add_type! merges equal structs), and two distinct closure types are always told apart: a
+\* context's class is its classId field, ensure_type_id!'s distinct id (ClassIdDispatch.tla), never
+\* its struct type, which two classes may share.
+ReadClass(T) == IF TellApartByStruct THEN structId[T] ELSE T
+SharedOnlyIfAlike ==
+    \A T1, T2 \in seenCtx : structId[T1] = structId[T2] => StorageOf(fieldSeq[T1]) = StorageOf(fieldSeq[T2])
+ContextsToldApart ==
+    \A T1, T2 \in seenCtx : T1 # T2 => ReadClass(T1) # ReadClass(T2)
 
 \* (3b) Two distinct closure types never share a vtable GLOBAL.
 NoGlobalIdCollision ==

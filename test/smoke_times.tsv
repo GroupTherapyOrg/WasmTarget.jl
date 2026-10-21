@@ -74,6 +74,7 @@
 2.2	2.0	nested_captor
 5.2	6.6	numerics
 7.2	7.4	one_consult
+5.9	6.0	one_field_translation
 11.5	12.0	one_nothing
 12.0	8.7	one_type_reader
 50.5	44.0	overlays
@@ -143,4 +144,5 @@
 0.6	0.7	xfail type_isa_equality
 1.1	1.1	xfail undef_host_reference
 3.0	4.6	xfail union_nothing_containers
+1.6	2.0	xfail unionall_array_values
 0.3	0.4	xfail wide_primitive

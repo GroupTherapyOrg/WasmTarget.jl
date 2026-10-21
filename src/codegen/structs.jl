@@ -21,9 +21,10 @@ end
     has_dedicated_representation(T::DataType) -> Bool
 
 The concrete struct types WT does not lay out by their fields: a Tuple (register_tuple_type!),
-an Array (the Vector and Matrix wrappers, register_vector_type! / register_matrix_type!), a
-Memory and a MemoryRef (a raw wasm array, and its single-value ref struct), and `nothing` (the
-null, `ref null none`).
+an Array (the Vector and Matrix wrappers, register_array_wrapper!), a Memory and a MemoryRef (a
+raw wasm array, and its single-value ref struct), and `nothing` (the null, `ref null none`).
+The one decision: is_struct_type reads it, and the field rule (translate_storage_type) takes
+every other concrete struct type by its fields; no registrar decides by an order of its own.
 
 parity(quarantine: Julia's Array, Memory and MemoryRef are structs over runtime-managed
 storage; dart's List classes are dart classes whose storage its runtime supplies.)
@@ -52,6 +53,39 @@ function register_array_wrapper!(mod::WasmModule, registry::TypeRegistry, A::Dat
 end
 
 """
+    translate_storage_type(mod, registry, ft) -> WasmValType
+
+The one struct-field rule: the storage a field of the Julia type `ft` takes, alike in a struct, a
+tuple and a closure's captured fields, as dart translates every class's fields by
+translateStorageType. It is the value translation, get_concrete_wasm_type, which decides each
+layout (a struct's, an Array's wrapper, a Union's, `nothing`'s null), but for a MemoryRef: a
+field holds the ref's single-value struct, which keeps its element offset (memoryref_field_type!),
+where a value is carried as its Memory with the offset in a local beside it, and for a field of
+type Union{}, which no value ever sets and which a nullable reference holds unset, as every
+registrar held it.
+parity(translator.dart:1067 translateStorageType)
+"""
+function translate_storage_type(mod::WasmModule, registry::TypeRegistry, @nospecialize(ft))::WasmValType
+    ft === Union{} && return StructRef
+    memoryref_eltype(ft) === nothing || return memoryref_field_type!(mod, registry, ft)
+    return get_concrete_wasm_type(ft, mod, registry)
+end
+
+"""
+    field_storage_type(mod, registry, T, i) -> WasmValType
+
+The storage of field `i` of the struct, tuple or closure type `T`: its type's (translate_storage_type),
+held in the any hierarchy where `new` may leave it unset and its type admits `nothing`, beside
+`#undef` (field_may_be_undef, undef_slot_storage). Every registrar's field rule.
+parity(class_info.dart:539 _generateFields)
+"""
+function field_storage_type(mod::WasmModule, registry::TypeRegistry, T::DataType, i::Int)::WasmValType
+    local ft = fieldtype(T, i)
+    local w = translate_storage_type(mod, registry, ft)
+    return field_may_be_undef(T, i) ? undef_slot_storage(ft, w) : w
+end
+
+"""
 Check if type is a closure (subtype of Function with captured fields).
 
 parity(quarantine: a Julia closure is an ordinary concrete struct subtyping Function whose
@@ -75,57 +109,34 @@ is_closure_type(::Any)::Bool = false
 
 """
 Register a closure type as a WasmGC struct.
-formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), two distinct closure types never share a struct or vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
+formal(dev/formal/ClosureLayout.tla): a closure's context struct lists its captured fields in exactly the program's declared order (never hash-dependent), each in the storage the one field rule gives its type (OneFieldTranslation), two closure types share a context struct type only when their fields translate alike and are told apart by their classId field (SharedOnlyIfAlike, ContextsToldApart), two distinct closure types never share a vtable-global id, one vtable struct is shared per arity, and the vt_struct annotation used to read a closure's vtable global always matches the shape that global was actually created with
 parity(closures.dart:1533 _buildContexts): the context struct of a closure's captured variables.
 """
 function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::DataType)::StructInfo
-    # Already registered?
+    # Already registered, or being registered (its entry holds a pending id)
     haskey(registry.structs, T) && return registry.structs[T]
 
-    # Get field information
-    field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
-    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
+    # The closure type is recorded, then its fields translate: a field reaching it again (a
+    # callable struct holding one of its own type) refers to it, pending until its recursion group
+    # is added (finish_pending!), as a struct's does. Its class prefix comes first (field_offset 1).
+    local id = begin_pending!(registry, :structs, T)
+    registry.structs[T] = StructInfo(T, id, Symbol[fieldname(T, i) for i in 1:fieldcount(T)],
+                                     Type[fieldtype(T, i) for i in 1:fieldcount(T)], UInt32(1))
 
-    # Create WasmGC field types (same logic as register_struct_type)
-    # Prepend typeId:i32 as field 0 (universal object layout)
+    # its class prefix, then each captured field by the one field rule (field_storage_type), as a
+    # struct's fields: a captured struct, union, Int128 or tuple was erased to structref
     wasm_fields = FieldType[FieldType(I32, false)]  # typeId, immutable
-    for ft in field_types
-        if ft <: Array && ft isa DataType && isconcretetype(ft)
-            # an Array is its Vector or Matrix wrapper struct
-            vec_info = register_array_wrapper!(mod, registry, ft)
-            wasm_vt = ConcreteRef(vec_info.wasm_type_idx, true)
-        elseif ft <: Vector
-            vec_info = register_vector_type!(mod, registry, ft)
-            wasm_vt = ConcreteRef(vec_info.wasm_type_idx, true)
-        elseif ft isa DataType && ft <: Core.GenericMemoryRef
-            # a MemoryRef field holds the ref's single-value struct (mem, off0)
-            wasm_vt = memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && ft <: Core.GenericMemory
-            # Memory{T} / GenericMemory maps to array type for element T
-            elem_type = eltype(ft)
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)
-        elseif ft === String || ft === Symbol
-            str_type_idx = get_string_struct_type!(mod, registry)
-            wasm_vt = ConcreteRef(str_type_idx, true)
-        else
-            wasm_vt = julia_to_wasm_type(ft)
-        end
+    for i in 1:fieldcount(T)
         # a closure's captures are immutable; a mutable callable struct's fields are its own
         # (A11C5: a field it sets was immutable, and the module did not validate)
-        push!(wasm_fields, FieldType(wasm_vt, ismutabletype(T)))
+        push!(wasm_fields, FieldType(field_storage_type(mod, registry, T, i), ismutabletype(T)))
     end
 
     # This is the captured-fields CONTEXT, not the user-visible closure object.
     # Dart contexts are internal structs and do not participate in the Object /
     # Function class hierarchy; the separately allocated closure object does.
-    type_idx = add_struct_type!(mod, wasm_fields)
-
-    # Record mapping (field_offset=1 for typeId prefix)
-    info = StructInfo(T, type_idx, field_names, field_types, UInt32(1))
-    registry.structs[T] = info
-
-    return info
+    finish_pending!(mod, registry, id, StructType(wasm_fields))
+    return registry.structs[T]
 end
 
 
@@ -299,173 +310,12 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
     return registry.structs[T]
 end
 
-"""
-    _nullable_field_storage_type!(mod, registry, ft, inner_type) -> WasmValType
-
-The storage type of a struct field typed `ft = Union{Nothing, inner_type}`: the nullable ref
-of `inner_type`'s representation — a registered struct/vector/array ref (a struct being
-registered right now contributes its pending index, finish_pending!), else the one
-translator's answer (for a numeric `inner_type`, its nullable box).
-
-parity(class_info.dart:539 _generateFields): a field's wasm type is `translateTypeOfField`,
-i.e. translateStorageType with the field type's nullability (translator.dart:1141).
-"""
-function _nullable_field_storage_type!(mod::WasmModule, registry::TypeRegistry,
-                                       ft::Union, inner_type::Type)::WasmValType
-    if inner_type <: Array && inner_type isa DataType
-        # Union{Nothing, Vector{T}} - use Vector struct type
-        elem_type = eltype(inner_type)
-        # the element's struct first (one being registered already holds its pending entry)
-        if !haskey(registry.structs, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-            register_struct_type!(mod, registry, elem_type)
-        end
-        info = register_vector_type!(mod, registry, inner_type)
-        return ConcreteRef(info.wasm_type_idx, true)  # nullable
-    elseif inner_type <: AbstractVector && inner_type isa DataType
-        # Non-Array AbstractVector (BitVector, etc.) — register as struct
-        info_av = register_struct_type!(mod, registry, inner_type)
-        return info_av !== nothing ? ConcreteRef(info_av.wasm_type_idx, true) : ExternRef
-    elseif inner_type <: AbstractVector
-        # Union{Nothing, generic AbstractVector} - use raw array
-        elem_type = eltype(inner_type)
-        # the element's struct first (one being registered already holds its pending entry)
-        if !haskey(registry.structs, elem_type) && isconcretetype(elem_type) && isstructtype(elem_type)
-            register_struct_type!(mod, registry, elem_type)
-        end
-        return ConcreteRef(get_array_type!(mod, registry, elem_type), true)  # nullable
-    elseif inner_type === String || inner_type === Symbol
-        # Union{Nothing, String/Symbol} — nullable string ref
-        return ConcreteRef(get_string_struct_type!(mod, registry), true)
-    elseif isconcretetype(inner_type) && isstructtype(inner_type)
-        # Union{Nothing, SomeStruct} - nullable struct ref
-        register_struct_type!(mod, registry, inner_type)
-        return ConcreteRef(registry.structs[inner_type].wasm_type_idx, true)  # nullable
-    end
-    return get_concrete_wasm_type(ft, mod, registry)
-end
-
 # parity(class_info.dart:539 _generateFields): the class's field list after the inherited prefix.
 function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Vector{FieldType}
-    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
-
-    # Create WasmGC field types
-    # Prepend the inherited Object prefix.
+    # the inherited Object prefix, then each field by the one field rule (field_storage_type)
     wasm_fields = object_prefix_fields()
-    for (fi, ft) in enumerate(field_types)
-        # For array fields, use concrete reference to registered array type
-        # But for Vector{T}, use the Vector struct type (with ref and size fields)
-        # since Vector in Julia 1.11+ is a struct, not a raw array
-        #
-        # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
-        # Memory <: AbstractVector but should map to raw array, not Vector struct
-        if ft isa DataType && ft <: Core.GenericMemoryRef
-            # a MemoryRef field holds the ref's single-value struct (mem, off0)
-            wasm_vt = memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && ft <: Core.GenericMemory
-            # Memory{T} / GenericMemory maps to array type for element T
-            elem_type = eltype(ft)
-            array_type_idx = get_array_type!(mod, registry, elem_type)
-            wasm_vt = ConcreteRef(array_type_idx, true)  # nullable reference
-        elseif ft === Vector{String}
-            # Special case: Vector{String} is a struct with array-of-string-refs + size tuple
-            # Register as Vector struct type
-            info = register_vector_type!(mod, registry, ft)
-            wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: Array && ft isa DataType && isconcretetype(ft)
-            # an Array is its Vector or Matrix wrapper struct, not a raw array
-            info = register_array_wrapper!(mod, registry, ft)
-            wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: Array && ft isa DataType
-            info = register_vector_type!(mod, registry, ft)
-            wasm_vt = ConcreteRef(info.wasm_type_idx, true)
-        elseif ft <: AbstractArray && is_struct_type(ft)
-            # an array other than Array is a struct of its fields (BitVector, UnitRange, Diagonal, …)
-            info_av = register_struct_type!(mod, registry, ft)
-            info_av === nothing && error("struct field of type $ft has no struct representation")
-            wasm_vt = ConcreteRef(info_av.wasm_type_idx, true)
-        elseif ft <: AbstractVector && !(ft isa Union)
-            # Abstract/UnionAll vector FIELD (e.g. `content::Vector` in
-            # Markdown.Admonition). The concrete runtime value is some Vector{T},
-            # which WT represents as a vector-STRUCT (register_vector_type! → a
-            # {typeId, data-array, size} struct), NOT a raw array. Vector-structs
-            # for different element types are independent struct types with no
-            # shared supertype and incompatible (invariant) data-array fields, so
-            # the field cannot be any one concrete vector-struct nor a raw array —
-            # storing a Vector{MD} struct into a raw-array field mismatches at
-            # struct.new. Type it as the universal ref instead (same treatment as
-            # an `Any` field): every vector-struct is a subtype, so stores need no
-            # cast and reads downcast off the inferred SSA type.
-            # (Surfaced by Basic-mathematics Admonition content: `expected (ref
-            # null $rawarray), found (ref null $Vector{MD}-struct)` at func 9.)
-            # Check !(ft isa Union) because Union{Memory{UInt8}, Memory{UInt16}, ...}
-            # would match ft <: AbstractVector but should be handled as a tagged union instead.
-            wasm_vt = AnyRef
-        elseif ft === String || ft === Symbol
-            # Strings and Symbols are WasmGC byte arrays
-            str_type_idx = get_string_struct_type!(mod, registry)
-            wasm_vt = ConcreteRef(str_type_idx, true)
-        elseif ft === Any
-            wasm_vt = AnyRef
-        elseif ft === Int32 || ft === UInt32 || ft === Bool || ft === Char ||
-               ft === Int8 || ft === UInt8 || ft === Int16 || ft === UInt16
-            # Standard 32-bit or smaller types
-            wasm_vt = I32
-        elseif ft === Int64 || ft === UInt64 || ft === Int
-            # Standard 64-bit integer types
-            wasm_vt = I64
-        elseif ft === Float32
-            wasm_vt = F32
-        elseif ft === Float64
-            wasm_vt = F64
-        elseif ft === Nothing
-            # `nothing`'s one form, the null (julia_to_wasm_type)
-            wasm_vt = NoneRef
-        elseif _julia_int_width(ft) == 128
-            # 128-bit integers are WasmGC {lo,hi} structs, not wasm
-            # primitives. register_tuple_type! already maps Int128/UInt128 tuple
-            # ELEMENTS to the int128 struct ref; struct FIELDS must do the same, or
-            # a struct holding an Int128 field hits the isprimitivetype size check
-            # below and errors ("Primitive type too large for Wasm field: Int128").
-            # Surfaced by WasmMakie canvas render structs (turtles/conv1d/conv2d/
-            # newton figures), which carry a 128-bit field.
-            int128_info = register_int128_type!(mod, registry, ft)
-            wasm_vt = ConcreteRef(int128_info.wasm_type_idx, true)
-        elseif isprimitivetype(ft)
-            # Custom primitive types (e.g., JuliaSyntax.Kind) - map by size
-            sz = sizeof(ft)
-            if sz <= 4
-                wasm_vt = I32
-            elseif sz <= 8
-                wasm_vt = I64
-            else
-                error("Primitive type too large for Wasm field: $ft ($sz bytes)")
-            end
-        elseif ft isa Union
-            # Handle Union types for struct fields
-            inner_type = get_nullable_inner_type(ft)
-            if inner_type !== nothing
-                wasm_vt = _nullable_field_storage_type!(mod, registry, ft, inner_type)
-            else
-                # B4/U2: a union-typed field is a boxed AnyRef discriminated by classId
-                # (julia_to_wasm_type(Union)→AnyRef) — the {typeId,tag,value} wrapper is retired.
-                wasm_vt = julia_to_wasm_type(ft)
-            end
-        elseif isconcretetype(ft) && isstructtype(ft)
-            # Nested struct type: registered (or pending, when it reaches back here)
-            nested_info = register_struct_type!(mod, registry, ft)
-            nested_info === nothing && error("struct field of type $ft has no struct representation")
-            wasm_vt = ConcreteRef(nested_info.wasm_type_idx, true)
-        elseif ft isa UnionAll && isstructtype(ft)
-            # Parametric struct type without concrete parameters (e.g., SyntaxGraph)
-            # Use AnyRef since we can't know the specific type parameter at compile time
-            wasm_vt = AnyRef
-        else
-            wasm_vt = julia_to_wasm_type(ft)
-        end
-        # a field `new` may leave unset that admits `nothing` is held in the any hierarchy,
-        # beside `#undef` (undef_slot_storage)
-        field_may_be_undef(T, fi) && (wasm_vt = undef_slot_storage(ft, wasm_vt))
-        push!(wasm_fields, FieldType(wasm_vt, true))  # mutable by default
+    for fi in 1:fieldcount(T)
+        push!(wasm_fields, FieldType(field_storage_type(mod, registry, T, fi), true))  # mutable by default
     end
     return wasm_fields
 end
@@ -619,67 +469,10 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, @nospecia
     registry.structs[T] = StructInfo(T, id, Symbol[Symbol(i) for (i, _) in fixed],
                                      Type[ft isa DataType ? ft : Any for (_, ft) in fixed], UInt32(2))
 
-    # Create WasmGC field types
-    # Prepend typeId:i32 as field 0
+    # the Object prefix, then each element by the one field rule (field_storage_type), immutable
     wasm_fields = object_prefix_fields()
-
-    for (i, ft) in enumerate(elem_types)
-        # Skip Vararg types (used in variadic tuples like Tuple{Int, Vararg{Any}})
-        # Note: Vararg is NOT a Type, so we check typeof instead of isa
-        if typeof(ft) == Core.TypeofVararg
-            # Vararg can't be represented as a fixed struct field - skip
-            continue
-        end
-
-        # Use concrete types for fields that need specific WASM types
-        # This ensures consistency between struct field types and local variable types
-        wasm_vt = if ft === String || ft === Symbol
-            # String/Symbol fields need concrete string array type (array<i32>)
-            type_idx = get_string_struct_type!(mod, registry)
-            ConcreteRef(type_idx, true)
-        elseif ft isa DataType && ft <: Array && isconcretetype(ft)
-            # an Array is its Vector or Matrix wrapper struct, as get_concrete_wasm_type maps it
-            info = register_array_wrapper!(mod, registry, ft)
-            ConcreteRef(info.wasm_type_idx, true)
-        elseif ft isa Type && ft <: Array
-            info = register_vector_type!(mod, registry, ft)
-            ConcreteRef(info.wasm_type_idx, true)
-        elseif ft isa DataType && ft <: Core.GenericMemoryRef
-            # a MemoryRef field holds the ref's single-value struct (mem, off0)
-            memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && ft <: Core.GenericMemory
-            # Memory{T} / GenericMemory maps to array type for element T
-            elem_type = eltype(ft)
-            type_idx = get_array_type!(mod, registry, elem_type)
-            ConcreteRef(type_idx, true)
-        elseif ft <: Tuple && isconcretetype(ft)
-            # Nested tuple - register and use concrete ref
-            nested_info = register_tuple_type!(mod, registry, ft)
-            if nested_info !== nothing
-                ConcreteRef(nested_info.wasm_type_idx, true)
-            else
-                julia_to_wasm_type(ft)
-            end
-        elseif _julia_int_width(ft) == 128
-            # 128-bit integers are WasmGC structs — use concrete ref
-            int128_info = register_int128_type!(mod, registry, ft)
-            ConcreteRef(int128_info.wasm_type_idx, true)
-        elseif ft === Nothing
-            # `nothing`'s one form, the null (julia_to_wasm_type)
-            NoneRef
-        elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
-            # Nested struct - register and use concrete ref
-            nested_info = register_struct_type!(mod, registry, ft)
-            if nested_info !== nothing
-                ConcreteRef(nested_info.wasm_type_idx, true)
-            else
-                julia_to_wasm_type(ft)
-            end
-        else
-            # For primitives and other types, use generic mapping
-            julia_to_wasm_type(ft)
-        end
-        push!(wasm_fields, FieldType(wasm_vt, false))  # Tuples are immutable
+    for i in 1:length(elem_types)
+        push!(wasm_fields, FieldType(field_storage_type(mod, registry, T, i), false))
     end
 
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's
@@ -774,8 +567,6 @@ function register_reachable_type!(mod::WasmModule, registry::TypeRegistry, @nosp
         register_struct_type!(mod, registry, T)
     elseif T isa DataType && T <: Array && isconcretetype(T)
         register_array_wrapper!(mod, registry, T)
-    elseif T <: Vector
-        register_vector_type!(mod, registry, T)
     end
     return nothing
 end
@@ -798,11 +589,10 @@ register_matrix_type!.)
 function register_vector_type!(mod::WasmModule, registry::TypeRegistry, T::Type)::StructInfo
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
-
-    # Guard against Union{} (bottom type) - can't create a vector of it
-    if T === Union{}
-        error("Cannot register vector type for Union{} (bottom type)")
-    end
+    # only a concrete rank-1 Array has this layout: a UnionAll Vector or a Matrix has none here
+    # (a Matrix is register_matrix_type!'s, an abstract array type the join, get_concrete_wasm_type)
+    (T isa DataType && T <: Vector && isconcretetype(T)) ||
+        error("register_vector_type!: $T is not a concrete Vector type")
 
 
     # Get element type

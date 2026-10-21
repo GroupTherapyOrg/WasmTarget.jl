@@ -1703,7 +1703,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
 
         # Register the Vector struct type
         if !haskey(ctx.type_registry.structs, T)
-            register_vector_type!(ctx.mod, ctx.type_registry, T)
+            register_array_wrapper!(ctx.mod, ctx.type_registry, T)
         end
         vec_info = ctx.type_registry.structs[T]
 

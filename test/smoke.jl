@@ -2685,6 +2685,40 @@ _g("one_nothing", Any[
     ("switch_row_nothing_untaken", (n::Int64) -> (k = n; fs = Any[x -> x * k]; _on_xr(fs[1], n)::Int64), Int64(3)),
     ("switch_row_nothing_taken", (n::Int64) -> (v = Any[nothing, 1]; _on_sw(v[n - 2], n)::Int64), Int64(3)),
 ])
+# ---- one struct-field translation (C1, 13.4): a struct field, a tuple field and a closure's
+# captured field of one Julia type have one layout (class_info.dart:539 _generateFields →
+# translateStorageType): a closure's non-Array array, union, Int128, tuple or struct field was erased
+# to structref; a Union{Nothing,Matrix} field took the Vector layout (dev/AUDIT.md E3); a UnionAll
+# Vector registered a layout of its own
+struct _FtRange; r::UnitRange{Int64}; end
+struct _FtUVec; v::Vector{<:Real}; end
+struct _FtMat; m::Union{Nothing,Matrix{Float64}}; end
+struct _FtCall <: Function; u::Union{Nothing,Int64}; end
+(c::_FtCall)() = c.u === nothing ? -1 : c.u + 1
+@noinline _ft_uvec(x::Int64) = _FtUVec(x > 0 ? Float64[1.5, 2.5] : Int64[3])
+@noinline _ft_call(x::Int64) = _FtCall(x > 0 ? x : nothing)
+@noinline _ft_mat(x::Int64) = _FtMat(x > 0 ? fill(1.5, 2, 2) : nothing)
+_g("one_field_translation", Any[
+    ("range_struct", (x::Int64) -> sum(_FtRange(1:x).r), Int64(4)),
+    ("range_tuple", (x::Int64) -> (t = (1:x, x); sum(t[1]) + t[2]), Int64(4)),
+    ("range_capture", (x::Int64) -> (r = 1:x; g = () -> sum(r); g()), Int64(4)),
+    ("subarray_capture", (x::Int64) -> (v = collect(1:5); s = view(v, 1:x); g = () -> sum(s); g()), Int64(3)),
+    ("memory_capture", (x::Int64) -> (m = Memory{Int64}(undef, 2); m[1] = x; m[2] = 2x; g = () -> m[1] + m[2]; g()), Int64(3)),
+    ("int128_capture", (x::Int64) -> (w = Int128(x) << 70; g = () -> Int64(w >> 70); g()), Int64(5)),
+    ("tuple_capture", (x::Int64) -> (t = (x, 2x); g = () -> t[1] + t[2]; g()), Int64(3)),
+    ("struct_capture", (x::Int64) -> (p = _PU(x); g = () -> p.v * 2; g()), Int64(3)),
+    ("union_callable_field", (x::Int64) -> _ft_call(x)(), Int64(3)),
+    ("union_callable_field_nothing", (x::Int64) -> _ft_call(x)(), Int64(-3)),
+    ("union_matrix_field", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(1)),
+    ("union_matrix_field_nothing", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(-1)),
+])
+# a value of a non-concrete Array type (Vector{<:Real}) is the join, anyref: its class is known only
+# at run time, so a field read or a call over it rejects at its statement (MARCH 13.10; a UnionAll
+# Vector once registered a layout of its own, and the read trapped at its cast, E3)
+_xf("unionall_array_values", Any[
+    ("vector_unionall_field", (x::Int64) -> length(_ft_uvec(x).v), Int64(1)),
+    ("vector_unionall_field_sum", (x::Int64) -> Float64(sum(_ft_uvec(x).v)), Int64(1)),
+])
 
 # Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
 # (keys spread) and its radix sort (two passes over keys 4000 ulps apart), and the errors a zero-textwidth pad and

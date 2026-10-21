@@ -60,7 +60,7 @@ with the per-clause status. A clause is never closed by argument.
   target and static type) `L184` (one export namer; a compiled function named by its Julia
   identity, never a counter) `L185` (one query for the import at a function index) `L186`
   (`nothing` has one form, the null, and one rule says when a null denotes it).
-  Planned: dev/MARCH.md 13.4, 13.17 — one path for each fact the audits found computed twice,
+  Planned: dev/MARCH.md 13.17 — one path for each fact the audits found computed twice,
   and codegen's remaining inference questions answered by the plan.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
   `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
