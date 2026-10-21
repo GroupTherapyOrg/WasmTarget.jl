@@ -52,6 +52,7 @@ core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke un
 matrix-only	registry_binops registry_unops registry_conversions registry_checked registry_shift registry_fma registry_misc registry_operators registry_operators_rejected entered_paths
 src/WasmTarget.jl	-	host_imports.jl	-
 src/bridge.jl	-	-	-
+src/builder/exhaustive.jl	-	-	-
 src/builder/instr_builder.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
 src/builder/instr_ir.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
 src/builder/instructions.jl	isomorphic_recursive_classes captured_variables abstract_receivers recursive_types	host_imports.jl	-

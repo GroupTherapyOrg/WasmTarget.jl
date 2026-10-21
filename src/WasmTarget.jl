@@ -7,6 +7,9 @@ using PrecompileTools: @setup_workload, @compile_workload
 # whose definitions name CompilerOptions (the Translator holds the compile's).
 include("codegen/options.jl")
 
+# The exhaustive match over a closed classification (L199), before every file that matches one
+include("builder/exhaustive.jl")
+
 # Builder - Low-level Wasm binary emitter
 include("builder/types.jl")
 include("builder/writer.jl")

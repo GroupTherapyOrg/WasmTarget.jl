@@ -108,7 +108,8 @@ with the per-clause status. A clause is never closed by argument.
   its exact allowlist or counted by R43; the guarantee against a wrong default is L190 and L191)
   `R42` (the numeric types the generated cases hold out) `R43` (the wrong defaults L192's scan
   finds) `R44` (the sites of WT's own Symbol classifications: a stopgap, retired at 0 when L199
-  covers every classification).
+  covers every classification) `L199` (a match over a classification is `@exhaustive`, which
+  refuses a missing member or a catch-all arm when it expands, so its function does not load).
   Planned: dev/MARCH.md 13.1, 13.3, 13.4, 13.14, 13.17, 13.20 — the checks the audits found
   pinning text, the numeric types the generated cases hold out, the wrong defaults, and each
   stopgap (C0) made a construction: WT's own classifications closed sums, a match over one

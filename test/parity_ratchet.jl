@@ -879,6 +879,45 @@ function wt_symbol_classification_sites()::Int
     return n
 end
 
+# ---- L199: the exhaustive match refuses an incomplete one when it expands (dev/CHARTER.md C5) ----
+const EXHAUSTIVE_PATH = joinpath(SRC, "builder", "exhaustive.jl")
+
+# what L199's plants find wrong: @exhaustive, loaded alone into a fresh module beside a planted
+# enum, must refuse five incomplete or ill-formed matches when they expand, and expand a complete
+# one that answers each member
+function exhaustive_negatives_missed()::Vector{String}
+    isfile(EXHAUSTIVE_PATH) || return ["src/builder/exhaustive.jl is missing"]
+    local out = String[]
+    local m = Module(:L199Plant)
+    Base.include(m, EXHAUSTIVE_PATH)
+    Core.eval(m, :(@enum PlantKind PK_A PK_B PK_C))
+    Core.eval(m, :(const PK_OTHER = 3))
+    expands(ex) = try
+        macroexpand(m, ex); true
+    catch
+        false
+    end
+    for (what, ex) in (
+            ("a missing member", :(@exhaustive k begin PK_A => 1; PK_B => 2 end)),
+            ("a catch-all arm", :(@exhaustive k begin PK_A => 1; PK_B => 2; PK_C => 3; _ => 4 end)),
+            ("a member named twice", :(@exhaustive k begin PK_A => 1; (PK_B, PK_A) => 2; PK_C => 3 end)),
+            ("a name that is no member", :(@exhaustive k begin PK_A => 1; PK_B => 2; PK_C => 3; PK_OTHER => 4 end)),
+            ("an undefined name", :(@exhaustive k begin PK_A => 1; PK_B => 2; PK_C => 3; PK_D => 4 end)))
+        expands(ex) && push!(out, "@exhaustive expands $what")
+    end
+    local f = try
+        Core.eval(m, :(k -> @exhaustive k begin PK_A => 1; (PK_B, PK_C) => 2 end))
+    catch err
+        push!(out, "a complete match does not expand: " * sprint(showerror, err))
+        nothing
+    end
+    if f !== nothing
+        local got = [Base.invokelatest(f, getfield(m, s)) for s in (:PK_A, :PK_B, :PK_C)]
+        got == [1, 2, 2] || push!(out, "a complete match answers $got, not [1, 2, 2]")
+    end
+    return out
+end
+
 # ---- strict means by construction (dev/CHARTER.md C0, L201) --------------------------------------
 # The clauses on the compiler's code and its models, whose checks the standard classifies.
 const STRICT_SCOPE = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
@@ -902,6 +941,7 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     # C5: wrong choices cannot land (L16, L155: an absent switch or opcode names no construction)
     "L16" => (:stopgap, ""), "L94" => (:stopgap, ""), "L134" => (:stopgap, ""), "L155" => (:stopgap, ""),
     "L190" => (:behavior, ""), "L191" => (:behavior, ""), "L192" => (:stopgap, ""),
+    "L199" => (:construction, "exhaustive"),
     # C6: correct or loud, and located
     "L8" => (:stopgap, ""), "L15" => (:stopgap, ""), "L18" => (:stopgap, ""), "L19" => (:stopgap, ""),
     "L37" => (:stopgap, ""), "L38" => (:stopgap, ""), "L39" => (:stopgap, ""), "L48" => (:stopgap, ""),
@@ -944,7 +984,10 @@ end
 # <anchor>]`: Rust's sealed enums and exhaustive match, dart's sealed classes and switches, wasm's
 # types), and how Julia's differs; L201 refuses a construction without both, and a precedent for any
 # other entry. A construction with no precedent anywhere is an invention and waits for Dale.
-const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}()
+const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
+    "L199" => ("rust: exhaustive match over a sealed enum, E0004; dart: switch over a sealed class, functions.dart:836 over CallShape at :949",
+               "Julia checks no match at compile time: @exhaustive checks each match when it expands, which is when the package loads, as dart's analyzer checks a switch before compile"),
+)
 
 # whether a precedent reads `<ecosystem>: <mechanism>`, the ecosystem lowercase
 strict_precedent_ok(p::AbstractString)::Bool = occursin(r"^[a-z][a-z0-9+_-]*: \S", p)
@@ -6113,6 +6156,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
+    "L199_exhaustive_match_at_load" => ("a match over one of WT's own classifications is `@exhaustive` (src/builder/exhaustive.jl), which refuses when it expands, so the function holding it does not load, a match that misses a member, names one twice, names a non-member or an undefined name, or has a catch-all arm `_` (dart's switch over a sealed class or an enum, exhaustive by its compiler). Each commit that makes a classification a closed sum deletes the Symbol or ladder path and every catch-all arm for it in the same commit: no `else` that keeps the old meaning, no flag, no allowlist of sites not yet converted (R44 counts them, it never excuses them), no quarantine without a real Julia necessity; a red from a deletion is a missing arm to add, never a reason to restore the catch-all. Behavior, run here: the macro loaded alone beside a planted enum refuses five planted matches and expands a complete one that answers each member (dev/CHARTER.md C5)",
+        () -> (v = exhaustive_negatives_missed(); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L201_closed_cites_no_stopgap" => ("strict means by construction (Dale, 2026-10-21): a clause of C1 to C8 with no Planned text (one the charter block reads CLOSED) cites only constructions: no ratchet, no lock STRICT_KINDS classifies :stopgap (a scan of WT's source, an allowlist or a count, finding the wrong choice at gate time) or :behavior (a run that must reach it), and no lock it does not classify; every lock C4 to C8 cite is classified, every entry names a lock one of them cites, and every :construction names the definition in src that is the construction, which a definition of exactly that name must exist for (a hand label naming nothing is a stopgap), and asserts only facts about it by reflection or a load-time check: its lock's source (the thunk and every function of this file it calls) reads no src text (STRICT_SRC_READERS), else it is a stopgap, A29S1; and every :construction has its precedent in STRICT_PRECEDENTS, `<ecosystem>: <mechanism>`, with how Julia's differs, and no other entry has one (Dale 2026-10-21: a construction with no precedent anywhere is an invention). Behavior, run here: planted clauses (a stopgap, a behavior check, a ratchet or an unclassified lock with no Planned text fires; Planned text, constructions alone, or a clause outside the scope do not), a planted table's fourteen faults (a construction with no precedent or no Julia difference, a precedent for a stopgap among them), the name resolution of a real and a missing definition, and the lock-source test on L168's lock (which pins src text) (dev/CHARTER.md C0)",
         () -> begin
             local cl = charter_clauses()
