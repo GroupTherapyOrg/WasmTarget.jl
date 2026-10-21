@@ -1695,7 +1695,7 @@ Resolve the `MethodInstance` for `f(::arg_types...)` in the consult of `interp`,
 one WasmInterpreter — the entry handle `collect_closed_world` consumes.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
-function entry_method_instance(interp::WasmInterpreter, f, arg_types::Tuple)::Core.MethodInstance
+function entry_method_instance(interp::WasmInterpreter, @nospecialize(f), arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
     local m = wt_method_which(interp, tt)
     # no method: `which`'s error, the MethodError a call would throw
@@ -1991,7 +1991,9 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
         # occurrence wins: entries are processed first)
         ((mi.def, mi.specTypes) in seen_mis) && continue
         push!(seen_mis, (mi.def, mi.specTypes))
-        push!(get!(() -> Any[], mis_by_sig, (f, arg_types)), mi)
+        # the key typed Any at the call (Base.inferencebarrier): get! compiles once, not once
+        # per function type the program has
+        push!(get!(() -> Any[], mis_by_sig, Base.inferencebarrier((f, arg_types))), mi)
         # named once every function is planned (plan_function_names!); until then, by its signature
         name = get(() -> get!(() -> julia_function_name(mi), signatures, mi), entry_keys, mi)
         push!(functions, (f, arg_types, name, mi))

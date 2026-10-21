@@ -829,9 +829,12 @@ function _compile_module_trim(functions::Vector; kwargs...)::Union{WasmModule, T
     for entry in functions
         length(entry) >= 3 || continue
         local f, arg_types, name = entry[1], entry[2], entry[3]
-        local key = (f, Tuple(arg_types))
+        # the key typed Any at every container call (Base.inferencebarrier), so each call
+        # compiles once, not once per entry's function type; a key is isequal to itself, so
+        # the new key's own default is accepted without asking
+        local key = Base.inferencebarrier((f, Tuple(arg_types)))
         local prior = get(requested, name, key)
-        isequal(prior, key) || throw(ArgumentError(
+        (prior === key || isequal(prior, key)) || throw(ArgumentError(
             "two entries request the export name \"$name\": $(prior[1])$(prior[2]) and $(f)$(Tuple(arg_types))"))
         local other = get(entry_name, key, name)
         other == name || throw(ArgumentError(

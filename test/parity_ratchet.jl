@@ -5619,13 +5619,14 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 """, hi) ? 0 : 1
             v
         end),
-    "L196_type_taking_methods_compile_once" => ("a compile of a program the process has not seen compiles WT's methods that take the program's types or functions once, not once per type or function a program has (dev/AUDIT.md A19X4): its behavior, test/ir_one_inference_path.jl's 'a program's own types compile WT's type-taking methods once (A19X4)': after two programs that differ only in their struct types, no specialization of convert_type!, _narrow_ref!, coerce_stack_top!, emit_value_as!, _emit_value_wrap!, register_tuple_type!, registry_order_key or CompilationContext, nor of their keyword calls (a keyword call's NamedTuple is typed by its values, A19X2), names the second program's type or function; and reading the one class list (closed_world_class_list, class_candidates) prints no type's order key, the list being sorted once when the set is built (A18C2) (dev/CHARTER.md C10)",
+    "L196_type_taking_methods_compile_once" => ("a compile of a program the process has not seen compiles WT's methods that take the program's types or functions once, not once per type or function a program has (dev/AUDIT.md A19X4): its behavior, test/ir_one_inference_path.jl's 'a program's own types compile WT's type-taking methods once (A19X4)': after two programs that differ only in their struct types, no specialization of convert_type!, _narrow_ref!, coerce_stack_top!, emit_value_as!, _emit_value_wrap!, register_tuple_type!, registry_order_key, CompilationContext or entry_method_instance, nor of their keyword calls (a keyword call's NamedTuple is typed by its values, A19X2), names the second program's type or function; and reading the one class list (closed_world_class_list, class_candidates) prints no type's order key, the list being sorted once when the set is built (A18C2) (dev/CHARTER.md C10)",
         () -> begin
             local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
             local v = 0
             for needle in ("@testset \"a program's own types compile WT's type-taking methods once (A19X4)\" begin",
                            "WasmTarget.emit_value_as!, WasmTarget._emit_value_wrap!, WasmTarget.register_tuple_type!,",
-                           "WasmTarget.registry_order_key, WasmTarget.CompilationContext]",
+                           "WasmTarget.registry_order_key, WasmTarget.CompilationContext,",
+                           "WasmTarget.entry_method_instance]",
                            "@test isempty(mentions(\"_WtPinB\"))",
                            "@test isempty(mentions(\"_wt_pin_b\"))",
                            "@test keys[] == 0")

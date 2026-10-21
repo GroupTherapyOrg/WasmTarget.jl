@@ -90,7 +90,8 @@ end
 @testset "a program's own types compile WT's type-taking methods once (A19X4)" begin
     local pinned = Any[WasmTarget.convert_type!, WasmTarget._narrow_ref!, WasmTarget.coerce_stack_top!,
                        WasmTarget.emit_value_as!, WasmTarget._emit_value_wrap!, WasmTarget.register_tuple_type!,
-                       WasmTarget.registry_order_key, WasmTarget.CompilationContext]
+                       WasmTarget.registry_order_key, WasmTarget.CompilationContext,
+                       WasmTarget.entry_method_instance]
     # their keyword calls too: a keyword call's NamedTuple is typed by its values (A19X2)
     local names = String[string(nameof(f)) for f in pinned]
     local kwcalls = [m for m in methods(Core.kwcall) if any(n -> occursin("WasmTarget." * n * ")", string(m.sig)) ||
