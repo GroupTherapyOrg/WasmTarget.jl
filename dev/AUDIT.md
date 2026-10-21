@@ -2402,3 +2402,40 @@ A19C1 (a)-(c) and (f) stay open.
 
 Resolution: this entry lands alone, prose only, and fixes nothing. A24E1-A24E3 and A24S1 are open on MARCH 13.18. A24S1's
 reopening of A19C1 (a)-(c) and (f) is the orchestrator's to rule, and A24E2's re-record has no owner yet.
+
+## 2026-10-21 — audited through ea417dd0 (96d0a472..ea417dd0: entry 24, the one 300-s target, the stack oracle)
+
+The twenty-fifth audit covers 0b236537 and b85da40f (entry 24 and its excuse row, prose; their author's), 246c7762 (one
+300-s loop target; an excuse is exactly its tracked file dev/.loop/excuse/<sha8>, A22E1, A22N2), d2d1f7bc (a stack
+exhaustion's oracle is Julia's own answer wherever Julia detects it, the stand-in only on Windows, A22E9) and ea417dd0
+(246c7762's 765 s excused). No wrong answer. Each landed head's record is green. A22E1, A22N2 and A22E9 are fixed as
+their commits state. On A22E9: `_wt_stack_oracle` takes the stand-in only when `Sys.iswindows()`. The orchestrator's
+ruling on A24S1 is recorded: A19C1 (a)-(c) and (f) reopen, and 13.17 says so. Their construction is the gate running
+every case whose plan compiles a changed body, read from the plan's own record. A22E5 is still not verifiable, because
+compile3's first commit is not on origin. The timing is unjudged on every landing since d41b08ab (A23E1). Four
+findings: A25E1-A25E4.
+
+Area: builder — empty by diff: `git diff 96d0a472..ea417dd0 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/land.sh, test/parity_ratchet.jl, test/real_bottom_exceptions.jl,
+.gitignore, dev/MARCH.md, dev/.loop/landings.log and the nine excuse files. (A25E1, medium) The excuse files still leave
+each landing hostage to the slow one before it. The median of the last five unexcused landings holds a slow landing
+until a later commit excuses it. ea417dd0 was red until it excused 246c7762. This entry, on ea417dd0's tree, reads
+d41b08ab 0.17, b31a7671 0.31, 96d0a472 3.26, b85da40f 1.06 and ea417dd0 5.26, a median of 1.06, and carries
+ea417dd0's excuse to land. A24E3 is not retired. (A25E2, medium) An excuse is checked for its form alone: one line
+headed machine, lock or crossing. Its cause is not held against the landing log or steps.tsv, such as a "lock" excuse
+against the measured hold wait. An author can still excuse any landing with one line, now in git where it can be
+reviewed. (A25E3, medium) d2d1f7bc changed R36's rule and landed with "the lock's negatives owed to a run outside the
+landing". A lock rule counts only once it has fired when broken (AGENTS.md), and no run is assigned to these
+negatives. (A25E4, low) ea417dd0 landed d2d1f7bc with it, two commits in one landing, before the one-commit rule.
+d2d1f7bc's tree 4a9455ca is red on L197 and stands in history (A24E1). ea417dd0 took 1577 s from d2d1f7bc's commit:
+the L148 slot order the orchestrator set (entry 24, then 246c7762), the hold, and a first gate red on L197.
+
+Resolution: this entry lands alone, as one commit, prose and one excuse file (dev/.loop/excuse/ea417dd0, its measured
+cause, A25E4), and fixes nothing. A25E1-A25E4 are open on MARCH 13.18. A24E1's rule, one commit per landing, is the
+loop lane's next commit. The charter commit audited ahead of its landing (wt-strict-adt) is entry 26's, under the
+red-flag class.
