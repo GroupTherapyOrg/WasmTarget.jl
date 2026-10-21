@@ -329,9 +329,13 @@ function defname(ex)
     return nothing
 end
 
-# line => piece key, for every line of every top-level definition of a src file's text (`rel` its
-# path): `<rel>:<name>#<k>`, the k-th BLOCK_LINES-line piece from the definition's first line (inside a
-# module, its definitions) — test/block_impact.jl's unit of measure, and the gate's of src's movement
+# line => piece key, for every line of every top-level form of a src file's text (`rel` its path),
+# each form running to the line before the next (inside a module, its forms): a definition's
+# `<rel>:<name>@<line>#<k>`, the k-th BLOCK_LINES-line piece from its first line, by its line so
+# two methods of one name are two pieces (A19C1 (c)); a `const` over more than
+# one line (a lowering table) each line its own key, `<rel>:<line>`, so an entry's coverage is its
+# own; any other form (a struct, a macro call, a `using`) `<rel>:L<first line>#<k>` — so no line of
+# code is outside a piece (A20C12). test/block_impact.jl's unit of measure, and the gate's
 function line_keys(text::AbstractString, rel::AbstractString)::Dict{Int,String}
     out = Dict{Int,String}()
     function walk(args, stop)
@@ -342,10 +346,16 @@ function line_keys(text::AbstractString, rel::AbstractString)::Dict{Int,String}
                 walk(ex.args[3].args, last)
                 continue
             end
+            if ex isa Expr && ex.head === :const && last > l
+                for x in l:last
+                    out[x] = "$rel:$x"
+                end
+                continue
+            end
             n = defname(ex)
-            n === nothing && continue
+            label = n === nothing ? "L$l" : "$n@$l"
             for x in l:last
-                out[x] = "$rel:$n#$((x - l) ÷ BLOCK_LINES)"
+                out[x] = "$rel:$label#$((x - l) ÷ BLOCK_LINES)"
             end
         end
     end

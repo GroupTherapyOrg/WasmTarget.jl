@@ -31,9 +31,11 @@
 #            the full matrix runs it; then the file's 1.13 groups, set by hand and carried over
 # With a path, the measured lines are also written there (a line per probe or group: its name, then
 # the lines of src/ it ran), so `--from` recomputes the selections without measuring again.
-# A changed piece of src/ is then run by a probe and, where any group reaches it, a group the gate
-# runs, as of this recording; the full lanes run everything on every landed head. Without
-# --code-coverage the script refuses: no line would count.
+# A piece is a definition's BLOCK_LINES lines, each line of a `const` table its own, any other
+# top-level form's lines (dev/block.jl line_keys): every line of code is in one. A body no native run
+# executes, an overlay or a bespoke body WT compiles in Julia's place, counts as run by a probe or a
+# case whose plan compiles it (its definition's pieces, from the plan's functions). Without
+# --code-coverage the measuring run refuses: no line would count.
 
 const FROM = length(ARGS) == 2 && ARGS[1] == "--from" ? ARGS[2] : ""
 const SETS_OUT = isempty(FROM) && length(ARGS) == 1 ? ARGS[1] : ""
@@ -63,11 +65,21 @@ _build!(collect(keys(LAZY_FILE)))   # every lazy group's cases (test/registry_ca
 # a file's pieces, as the gate cuts them (dev/block.jl's line_keys)
 line_keys(path::String) = Base.invokelatest(BLOCK.line_keys, read(path, String), relpath(path, dirname(SRC)))
 
+# the files holding a lowering table (L194's rule: a `const` INTRINSIC_*, CHECKED_OPS, SHIFT_OPS,
+# FMA_OPS, MISC_OPS, INT128_OPS or BUILTIN_LOWERINGS) and the two holding their lowering
+const LOWERING_FILES = union(Set(["src/codegen/calls.jl", "src/codegen/int128.jl"]),
+    Set("src/" * relpath(joinpath(d, f), joinpath(@__DIR__, "..", "src")) for (d, _, fs) in walkdir(joinpath(@__DIR__, "..", "src"))
+        for f in fs if endswith(f, ".jl") &&
+        occursin(r"^const (?:INTRINSIC_\w+|CHECKED_OPS|SHIFT_OPS|FMA_OPS|MISC_OPS|INT128_OPS|BUILTIN_LOWERINGS)\b"m, read(joinpath(d, f), String))))
 const KEYS = Dict{String,Dict{Int,String}}()
 for (d, _, fs) in walkdir(SRC), f in fs
     endswith(f, ".jl") && (KEYS[relpath(joinpath(d, f), dirname(SRC))] = line_keys(joinpath(d, f)))
 end
 const INFO = tempname() * ".info"
+# the src tree a measurement is of: HEAD's, when src/ holds no uncommitted change (else of no tree);
+# a recomputation from saved sets prints the tree the sets name
+measured_tree() = success(`git -C $(dirname(SRC)) diff --quiet HEAD -- src`) ? readchomp(`git -C $(dirname(SRC)) rev-parse HEAD:src`) : "unknown"
+const MEASURED = Ref("unknown")
 
 # the lines of src/ (`<file>` => lines) `f()` runs
 function covered(f)::Dict{String,Set{Int}}
@@ -86,6 +98,31 @@ function covered(f)::Dict{String,Set{Int}}
     return out
 end
 merge_lines!(a, b) = (for (f, ls) in b; union!(get!(a, f, Set{Int}()), ls); end; a)
+
+# the lines of src/ a plan compiles from bodies no native run executes: each planned function whose
+# method src/ defines (an overlay, a bespoke body), every piece of its definition (A20C13)
+function planned_lines(entries::Vector{Any})::Dict{String,Set{Int}}
+    out = Dict{String,Set{Int}}()
+    local plan = try
+        WasmTarget.trim_compile_plan(entries)
+    catch e
+        e isa WasmTarget.WasmCompileError || rethrow()   # a case refused at its plan compiles no body
+        return out
+    end
+    for fn in plan.functions
+        local m = fn[4].def
+        m isa Method || continue
+        local file = relpath(normpath(string(m.file)), dirname(SRC))
+        haskey(KEYS, file) && haskey(KEYS[file], m.line) || continue
+        local def = first(split(KEYS[file][m.line], '#'))
+        union!(get!(out, file, Set{Int}()), (l for (l, k) in KEYS[file] if first(split(k, '#')) == def))
+    end
+    return out
+end
+# a smoke case's entry and its run: a generated case over its inputs, any other over its arguments
+case_types(g, c) = haskey(CASE_INPUTS, "$g/$(c[1])") ? Tuple(map(typeof, first(CASE_INPUTS["$g/$(c[1])"]))) : Tuple(map(typeof, c[3:end]))
+run_case(g, c) = haskey(CASE_INPUTS, "$g/$(c[1])") ? compare_julia_wasm_inputs(c[2], CASE_INPUTS["$g/$(c[1])"]; admit=_rc_admit) :
+                 length(c) > 2 ? compare_julia_wasm(c[2], c[3:end]...) : compare_julia_wasm(c[2])
 pieces(lines) = Set{String}(KEYS[f][l] for (f, ls) in lines for l in ls if haskey(KEYS[f], l))
 
 # greedy: the entry gaining the most of `left` per unit of cost, ties to the earlier, while the
@@ -160,19 +197,22 @@ end
 
 function measure()
     tests = [name => covered(() -> run_qa(name)) for name in cited_qa_families()]
-    probes = [name => covered(() -> WasmTarget.to_bytes(WasmTarget.compile_module([(f, argtypes, name)]; options = WasmTarget.options_from_env())))
+    probes = [name => merge_lines!(covered(() -> WasmTarget.to_bytes(WasmTarget.compile_module([(f, argtypes, name)]; options = WasmTarget.options_from_env()))),
+                                   planned_lines(Any[(f, argtypes, name)]))
               for (name, (f, argtypes)) in CASES]
     groups = Pair{String,Dict{String,Set{Int}}}[]
     for (g, cases) in GROUPS
         lines = Dict{String,Set{Int}}()
         for c in cases
-            merge_lines!(lines, covered(() -> (length(c) > 2 ? compare_julia_wasm(c[2], c[3:end]...) : compare_julia_wasm(c[2]))))
+            merge_lines!(lines, covered(() -> run_case(g, c)))
+            merge_lines!(lines, planned_lines(Any[(c[2], case_types(g, c), string(c[1]))]))
         end
         push!(groups, g => lines)
     end
     rm(INFO; force = true)
     if !isempty(SETS_OUT)
         open(SETS_OUT, "w") do io
+            println(io, "measured\t", measured_tree())
             for (kind, sets) in (("probe", probes), ("group", groups), ("test", tests)), (n, lines) in sets
                 println(io, kind, '\t', n, '\t', join([f * ":" * join(sort(collect(ls)), ',') for (f, ls) in sort(collect(lines); by = first)], ' '))
             end
@@ -185,6 +225,7 @@ function load_sets(path)
     sets = Dict(k => Pair{String,Dict{String,Set{Int}}}[] for k in ("probe", "group", "test"))
     for l in eachline(path)
         f = split(l, '\t')
+        f[1] == "measured" && (MEASURED[] = String(f[2]); continue)   # the src tree the sets measured
         lines = Dict{String,Set{Int}}()
         for part in split(f[3])
             file, ls = split(part, ':')
@@ -223,8 +264,7 @@ function main()
             "($(sum(length(GROUPS[pick(c)][2]) for c in core; init = 0)) cases, $(round(sum(secs[pick(c)] for c in core; init = 0.0); digits = 1)) s recorded) run $(length(su) - length(uncovered))")
     # the src tree measured, so the gate can say how far src/ has moved since (a measurement of a
     # src/ with uncommitted changes is of no tree)
-    println("measured\t", success(`git -C $(dirname(SRC)) diff --quiet HEAD -- src`) && isempty(FROM) ?
-            readchomp(`git -C $(dirname(SRC)) rev-parse HEAD:src`) : "unknown")
+    println("measured\t", isempty(FROM) ? measured_tree() : MEASURED[])
     println("probes\t", join(pcore, ' '))
     println("core\t", join(core, ' '))
     println("matrix-only\t", join(matrix, ' '))
@@ -260,6 +300,9 @@ function main()
         tleft = Set(k for i in mine for k in last(tests[i]) if startswith(k, file * ":"))
         ts, trest = cover(tests[mine], tsecs[mine], tleft, TESTS_SECONDS)
         isempty(trest) || push!(past, "$file: $(length(trest)) of its pieces its locks' QA families run past $TESTS_SECONDS s")
+        # a file holding a numeric lowering table, and calls.jl and int128.jl, which hold their lowering,
+        # run the sample of the generated cases and the narrow integers whatever the cover (A20P12)
+        file in LOWERING_FILES && foreach(g -> g in gs || push!(gs, g), ("registry_sample", "narrow_primitive"))
         println(file, "\t", isempty(gs) ? "-" : join(gs, ' '), "\t", isempty(ts) ? "-" : join(ts, ' '), "\t", get(v113, file, "-"))
     end
     foreach(l -> println("# ", l), past)

@@ -37,8 +37,8 @@ src/builder/types.jl	-	host_imports.jl	-
 src/builder/validator.jl	-	host_imports.jl	-
 src/builder/writer.jl	-	host_imports.jl	-
 src/codegen/box_capture.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
-src/codegen/builtins.jl	long_constants varargs memoryref_field simplevector_values closed_world_reflection recursive_types	m11_intrinsics_table.jl	-
-src/codegen/calls.jl	varargs reduce_intrinsic_arity immutable_objectid unionall_constructor	f3_box_capture_l2b_propagate.jl	-
+src/codegen/builtins.jl	long_constants varargs memoryref_field simplevector_values closed_world_reflection recursive_types registry_sample narrow_primitive	m11_intrinsics_table.jl	-
+src/codegen/calls.jl	varargs reduce_intrinsic_arity immutable_objectid unionall_constructor registry_sample narrow_primitive	f3_box_capture_l2b_propagate.jl	-
 src/codegen/closures.jl	closed_world_edges	host_imports.jl	-
 src/codegen/compile.jl	exception_stack	diagnostics_sink.jl host_imports.jl	-
 src/codegen/context.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
@@ -47,13 +47,13 @@ src/codegen/dispatch.jl	-	-	-
 src/codegen/flow.jl	closed_world_reflection filtered_fold	wrong_value_locator.jl	-
 src/codegen/generate.jl	-	host_imports.jl nir_use_index.jl	-
 src/codegen/helpers.jl	-	-	-
-src/codegen/int128.jl	show_type seeded_random	-	-
+src/codegen/int128.jl	show_type seeded_random registry_sample narrow_primitive	-	-
 src/codegen/int_key_map.jl	invoke_in_world	-	-
 src/codegen/interpreter.jl	immutable_objectid show_type	reinterpret_array_semantics.jl	-
-src/codegen/intrinsics_table.jl	-	-	-
+src/codegen/intrinsics_table.jl	registry_sample narrow_primitive	-	-
 src/codegen/invoke.jl	-	ir_one_inference_path.jl	-
 src/codegen/ir.jl	-	-	-
-src/codegen/julia_numeric_tier.jl	constant_callees seeded_random	-	-
+src/codegen/julia_numeric_tier.jl	constant_callees seeded_random registry_sample narrow_primitive	-	-
 src/codegen/options.jl	-	-	-
 src/codegen/selector_table.jl	-	-	-
 src/codegen/stackified.jl	-	reinterpret_array_semantics.jl	-
