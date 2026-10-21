@@ -6,8 +6,9 @@
 # landed head (its march/** push) and on a `bash dev/gate.sh` run, never in a landing's gate. The
 # base's side is computed once per landed head: gate.yml's run of a commit publishes its own smoke
 # rows as that commit's base file, a long-retention artifact named by the key below; a run whose
-# base no run published fails, naming the key, until `bootstrap` publishes it. Only when src, ext
-# or Project.toml differ from the base is there a base side at all (otherwise no body can differ).
+# base no run published fails, naming the key, until `bootstrap <base>` publishes it. Only when
+# src, ext or Project.toml differ from the base is there a base side at all (otherwise no body can
+# differ).
 #
 #   bash dev/emission_diff.sh plan <dir>        # the plan (<dir>/plan.txt), and when the tree differs from the
 #                                               # base: its cached base file (<dir>/base.tsv, fetched) and
@@ -15,8 +16,11 @@
 #   bash dev/emission_diff.sh merge <dir>       # the verdict over <dir>: smoke's parts and the plan's files
 #   bash dev/emission_diff.sh publish <dir> <out>   # HEAD's base file from smoke's parts in <dir> (the full
 #                                               # gate, after a green verdict); prints name=<artifact name>
-#   bash dev/emission_diff.sh bootstrap [<rev>] # push <rev> to emission-base/<base>, where emission-base.yml
-#                                               # publishes the base file of <rev>'s merge base
+#   bash dev/emission_diff.sh bootstrap <base>  # push an unattached commit, this checkout's tree with <base>
+#                                               # as its parent, to emission-base/<base>-<commit>, where
+#                                               # emission-base.yml publishes <base>'s file under this
+#                                               # checkout's tests (so its key): run it from the head whose
+#                                               # matrix needs the file
 #   bash dev/emission_diff.sh bootstrap-part i/K <dir>   # (emission-base.yml) part i of K of every case on the base
 #   bash dev/emission_diff.sh bootstrap-publish <dir> <out>   # (emission-base.yml) the base file from those parts
 #
@@ -46,9 +50,6 @@ base_tree() {
   ( cd "$tree" && JULIA_PKG_PRECOMPILE_AUTO=0 julia --project=. -e 'using Pkg; Pkg.instantiate()' >&2 )
   echo "$tree"
 }
-run_in() {  # run_in <tree> <julia expression after `include("test/smoke.jl")`>
-  ( cd "$1" && julia --project=. -e "include(\"test/smoke.jl\"); _build!(collect(keys(LAZY_FILE))); $2" )
-}
 compile='(f, ts) -> _emission_compile(f, ts; optimize=false)'
 case "${1:-}" in
 plan)
@@ -62,7 +63,7 @@ plan)
     for c in $(git rev-list --first-parent --max-count=50 HEAD^); do
       [ -n "$(artifact "$(key "$c" "$ver")")" ] && { base=$c; break; }
     done
-    [ -n "$base" ] || { echo "emission_diff: no base file for the landed head's 50 first-parent ancestors: no artifact $(key "$(git rev-parse HEAD^)" "$ver"). gate.yml's green run of a landed head publishes it; for one no run published, run \`bash dev/emission_diff.sh bootstrap $(git rev-parse HEAD^)\`" >&2; exit 1; }
+    [ -n "$base" ] || { echo "emission_diff: no base file for the landed head's 50 first-parent ancestors: no artifact $(key "$(git rev-parse HEAD^)" "$ver"). gate.yml's green run of a landed head publishes it; for one no run published, run \`bash dev/emission_diff.sh bootstrap $(git rev-parse HEAD^)\` from a checkout of $(git rev-parse HEAD)" >&2; exit 1; }
   fi
   if differs "$base"; then changed=true; else changed=false; fi
   printf 'base=%s\nchanged=%s\n' "$base" "$changed" | tee "$dir/plan.txt"
@@ -70,7 +71,7 @@ plan)
   name=$(key "$base" "$ver")
   echo "key=$name" | tee -a "$dir/plan.txt"
   id=$(artifact "$name")
-  [ -n "$id" ] || { echo "emission_diff: no base file for the base $base: no artifact $name. gate.yml's green run of $base publishes it; for a base no run published, run \`bash dev/emission_diff.sh bootstrap\`" >&2; exit 1; }
+  [ -n "$id" ] || { echo "emission_diff: no base file for the base $base: no artifact $name. gate.yml's green run of $base publishes it; for a base no run published, run \`bash dev/emission_diff.sh bootstrap $base\` from a checkout of $(git rev-parse HEAD)" >&2; exit 1; }
   gh api "repos/{owner}/{repo}/actions/artifacts/$id/zip" > "$dir/base.zip"
   ( cd "$dir" && unzip -o -q base.zip && rm base.zip )
   [ -f "$dir/base.tsv" ] || { echo "emission_diff: artifact $name holds no base.tsv" >&2; exit 1; }
@@ -103,18 +104,39 @@ publish)
   echo "name=$(key "$sha" "$(head -1 "$out/base.tsv" | cut -f3)")"
   ;;
 bootstrap)
-  rev=$(git rev-parse --verify "${2:-HEAD}^{commit}")
+  base=$(git rev-parse --verify "${2:?usage: dev/emission_diff.sh bootstrap <base>}^{commit}")
   git fetch -q origin "$march"
-  base=$(merge_base "$rev")
-  branch="emission-base/${base:0:12}-${rev:0:8}"
-  git push -q --force origin "$rev:refs/heads/$branch"
+  git merge-base --is-ancestor "$base" "origin/$march" || { echo "emission_diff: $base is not on origin/$march" >&2; exit 2; }
+  # the commit emission-base.yml runs: this checkout's tree (its workflow, its tests and its
+  # fingerprinting, which make the key) with <base> as its one parent, so its merge base with the
+  # march branch is <base>; it is on no branch but its own emission-base/ one
+  shim=$(git commit-tree "HEAD^{tree}" -p "$base" -m "emission base bootstrap: the base file of $base under the tests of $(git rev-parse HEAD)")
+  [ "$(merge_base "$shim")" = "$base" ] || { echo "emission_diff: the bootstrap commit's merge base is not $base" >&2; exit 2; }
+  branch="emission-base/${base:0:12}-${shim:0:8}"
+  git push -q --force origin "$shim:refs/heads/$branch"
   echo "emission_diff: emission-base.yml publishes the base file of $base on $branch: gh run list --branch $branch"
   ;;
 bootstrap-part)
   part=${2:?part i/K}; dir=${3:?dir}; mkdir -p "$dir"; dir=$(cd "$dir" && pwd)
   base=$(merge_base)
   tree=$(base_tree "$base")
-  run_in "$tree" "EmissionFingerprint.bootstrap_main(\"$part\", \"$dir\", \"$base\"; groups=GROUPS, compile=$compile)"
+  # The plan's rule: the head's tests may not load over the base's src, or not build their lazy
+  # groups (a generator asking a definition the head adds); those cases are then left out of the
+  # part, an F line naming why, and the rest compiled. A head body the base file lacks must have
+  # been entered by a passing case, so a base file with fewer cases is stricter, never weaker, and
+  # one is always published
+  ( cd "$tree" && julia --project=. -e "
+    m = match(r\"^([0-9]+)/([0-9]+)\$\", \"$part\")
+    why(e) = replace(first(sprint(showerror, e), 300), r\"\\s+\" => \" \")
+    err = try; include(\"test/smoke.jl\"); nothing; catch e; e; end
+    lazy = err === nothing ? (try; _build!(collect(keys(LAZY_FILE))); nothing; catch e; e; end) : nothing
+    if err === nothing
+        EmissionFingerprint.bootstrap_main(\"$part\", \"$dir\", \"$base\"; groups=GROUPS, compile=$compile)
+        lazy === nothing || open(io -> println(io, \"F\\t(the head's lazy groups over the base's src)\\t\", why(lazy)),
+                                 \"$dir/base-\$(m[1])-of-\$(m[2]).tsv\", \"a\")
+    else
+        write(\"$dir/base-\$(m[1])-of-\$(m[2]).tsv\", \"bpart\\t$base\\t\$(m[1])\\t\$(m[2])\\t\$VERSION\\nF\\t(the head's tests over the base's src)\\t\$(why(err))\\n\")
+    end" )
   ;;
 bootstrap-publish)
   dir=${2:?dir}; out=${3:?out}; mkdir -p "$out"
@@ -123,5 +145,5 @@ bootstrap-publish)
   echo "name=$(key "$base" "$(head -1 "$out/base.tsv" | cut -f3)")"
   ;;
 *)
-  echo "usage: dev/emission_diff.sh plan <dir> | merge <dir> | publish <dir> <out> | bootstrap [<rev>] | bootstrap-part i/K <dir> | bootstrap-publish <dir> <out>" >&2; exit 2 ;;
+  echo "usage: dev/emission_diff.sh plan <dir> | merge <dir> | publish <dir> <out> | bootstrap <base> | bootstrap-part i/K <dir> | bootstrap-publish <dir> <out>" >&2; exit 2 ;;
 esac
