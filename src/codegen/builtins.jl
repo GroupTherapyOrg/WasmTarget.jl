@@ -2553,7 +2553,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         i64_const!(_htb, 1)
                         num!(_htb, Opcode.I64_SUB)
                         # Wrap to i32 for array index
-                        num!(_htb, Opcode.I32_WRAP_I64)
+                        narrow_length_to_i32!(_htb)
 
                         # Store index in local
                         idx_local = allocate_local!(ctx, I32)
@@ -2621,7 +2621,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             emit_value!(_hetb, field_ref, ctx, I64)
                             i64_const!(_hetb, 1)
                             num!(_hetb, Opcode.I64_SUB)
-                            num!(_hetb, Opcode.I32_WRAP_I64)
+                            narrow_length_to_i32!(_hetb)
                             idx_local = allocate_local!(ctx, I32)
                             local_set!(_hetb, idx_local)
 

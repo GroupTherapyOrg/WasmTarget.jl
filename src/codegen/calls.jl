@@ -306,7 +306,7 @@ function _emit_storage_pointer_offset!(b::InstrBuilder, ctx::AbstractCompilation
         end
         num!(b, Opcode.I64_ADD)
     end
-    num!(b, Opcode.I32_WRAP_I64)
+    narrow_length_to_i32!(b)   # the byte offset indexes the storage array
     return nothing
 end
 
@@ -3748,8 +3748,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 i64_const!(fb, Int64(length(_svl)))
         else
                 array_len!(fb)
-                # array.len returns i32 but Julia expects Int64
-                num!(fb, Opcode.I64_EXTEND_I32_U)
+                widen_length_to_i64!(fb)   # array.len's i32, Julia's Int64
         end
 
     # Core._svec_ref(sv, i) — get element from a SimpleVector (\$JlSVec, an anyref array).
@@ -3763,7 +3762,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         svec_arr_idx = svec_type_info.wasm_type_idx
         local _svrb = _sub_builder(fb, ctx, "compile_call", 2)   # [svec, i64 idx] on fb
         # Convert i64 Julia index to i32 Wasm index and subtract 1 for 0-indexing
-        num!(_svrb, Opcode.I32_WRAP_I64)
+        narrow_length_to_i32!(_svrb)
         i32_const!(_svrb, 1)  # 1
         num!(_svrb, Opcode.I32_SUB)
         array_get!(_svrb, svec_arr_idx)
@@ -4818,7 +4817,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         local_get!(bld, vec_local)
         struct_get!(bld, vec_idx, wasm_field_idx(vec_info, 2))
         struct_get!(bld, size_type_idx, wasm_field_idx(size_info, 1))
-        num!(bld, Opcode.I32_WRAP_I64)
+        narrow_length_to_i32!(bld)
         local_set!(bld, len_local)
         i32_const!(bld, 0)
         local_set!(bld, i_local)
@@ -4951,7 +4950,7 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     local_get!(bld, vec_ref_local)
     struct_get!(bld, vec_type_idx, field_offset + 1)
     struct_get!(bld, size_type_idx, size_field_offset)
-    num!(bld, Opcode.I32_WRAP_I64)
+    narrow_length_to_i32!(bld)
     local_set!(bld, len_local)
 
     # each copied slot is read as Julia's iteration reads it: an `#undef` one throws UndefRefError

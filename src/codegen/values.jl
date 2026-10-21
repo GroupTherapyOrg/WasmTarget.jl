@@ -1075,8 +1075,10 @@ extend_identity_hash_to_u64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64
 # representation conversions beside the central value/conversion machinery so
 # collection lowerers do not grow independent coercion ladders.
 # parity(intrinsics.dart:1223 wasmArrayIndex): an i64 index/length wraps to i32 before the array op (:1232).
+# precedent(dart: wasmArrayIndex's i32_wrap_i64, intrinsics.dart:1232): the one narrowing of an index or a length.
 narrow_length_to_i32!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I32_WRAP_I64)
 # parity(intrinsics.dart:626 WasmArrayRef.length): array.len; i64.extend_i32_u (:631).
+# precedent(dart: WasmArrayRef.length's i64_extend_i32_u, intrinsics.dart:631): the one widening of a length.
 widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
 
 """
