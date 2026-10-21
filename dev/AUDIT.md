@@ -2364,3 +2364,41 @@ carry; the carried log freezes the lines from 0459332a on, not before.
 Resolution: this entry lands alone, prose only, and fixes nothing. A23E1-A23E7 and A23N1 are open on MARCH 13.18;
 A23E1's charter text and A23E5's closure runs are for Dale through the orchestrator; A22E5 is verified in entry 24 on the
 record of compile3's first commit.
+
+## 2026-10-21 — audited through 96d0a472 (0459332a..96d0a472: entry 23 and the stale map)
+
+The twenty-fourth audit covers cb9666bb and be2416a2 (entry 23 and its correction, prose; their author's), fc9db3b8 (a
+stale map fails a src change; the map's header states what the selection cannot see, A20C13, A20C14) and 96d0a472
+(L194's stale-map cases read the budget as a value; 13.18 names be2416a2). From this entry each one carries the
+red-flag class of Dale's order of 18:50Z: a claim of strictness, closure or a guarantee resting on a scan, an
+allowlist or a ratchet. No wrong answer. Each landed head's record is green, but two landed commits have red trees
+(A24E1). A22E5 is still not verifiable: compile3's first commit is not on origin at 96d0a472. The timing is unjudged
+on all three landings, eight in a row (A23E1, not filed again). Four findings: A24E1-A24E3 and A24S1.
+
+Area: builder — empty by diff: `git diff 0459332a..96d0a472 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/block.jl, test/block_groups.tsv, test/parity_ratchet.jl, dev/MARCH.md
+and dev/.loop/landings.log. (A24E1, medium) A multi-commit landing puts a commit with a red tree into the march
+branch's history, because `merge` judges the head's tree alone. fc9db3b8's tree e70d776e is red on L194: its new case
+threw, so at that commit L194 checked nothing past it. cb9666bb's tree d009e529 is red on L148 and L197: this auditor's
+own entry 23, landed with its correction on top. Neither head landed red, and history carries both. (A24E2, high) Every
+src landing is now refused until the map is re-recorded. fc9db3b8 counts 17 pieces moved against a budget of 8 and
+says so. The re-record is about 34 minutes of one Julia process at JLRUN_PRIO=5, and longer at the machine's present
+factor of about 3. No one is assigned to run it and nothing starts it. Once it lands, every 8 pieces of src movement
+puts the next src landing behind another re-record. (A24E3, medium) 96d0a472 took 977 s edit to landed, over the
+300-s reading. Its first gate was red on L194's throw and on L197, which read be2416a2's 436 s with no named cause. Each
+landing is again hostage to a row naming the one before it, the pattern 2da1eab3 meant to end; loop2's excuse files
+and its one 300-s target retire it. (A24S1, red flag) fc9db3b8's header for test/block_groups.tsv calls A19C1's (f),
+"the universe", closed because "a stale map and ext/ fail the gate", and calls (a)-(c) closed in the code. The
+stopgaps are a gate-time staleness count over a measured coverage map and a gate-time refusal of ext/. The map is a
+measurement of which cases ran which lines, and a selection read from it is a heuristic however fresh it is. The
+construction that would retire it: the gate runs every case whose plan compiles a changed body, read from the plan's
+own record of what it compiled. dart2wasm's whole-program compile has no selection to go stale. Until that exists,
+A19C1 (a)-(c) and (f) stay open.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A24E1-A24E3 and A24S1 are open on MARCH 13.18. A24S1's
+reopening of A19C1 (a)-(c) and (f) is the orchestrator's to rule, and A24E2's re-record has no owner yet.
