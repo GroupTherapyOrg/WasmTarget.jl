@@ -1,81 +1,128 @@
-# The blocking gate's selections (dev/block.jl, `bash dev/gate.sh --block`; L194), measured by
-# test/block_impact.jl from the lines of src/ each probe, each smoke group and each QA family a lock
-# cites as behavior runs, cut into 40-line pieces of each top-level definition (225 probes run 955
-# pieces of src/, 21 cover them; 104 smoke groups run 1196, the core's 12 groups (84 cases, 29.2 s
-# recorded) run 1062; the 17 cited QA families run 1193). `probes`: the probe core, a cover of every
-# piece any probe runs; the gate adds the probes a change touches in test/probe_corpus.jl or
-# test/probe_baseline.txt. `core`: the smoke core every landing runs, the cover by pieces per
-# recorded second (test/smoke_times.tsv) up to 30 s; the first group pays for compiling the
-# compiler. `<file><TAB><groups><TAB><QA families><TAB><1.13 groups>`: a changed file's groups
-# beyond the core, the cover (up to 25 s) of its pieces some group runs and the core does not, then
-# the QA families the gate's tests stage runs for it, the cover (up to 20 s of
-# test/phase_times.tsv's seconds) of its pieces run by the QA families its locks cite as behavior
-# (the locks reading it by path; a family past 20 s on its own runs on the full matrix only), then
-# the smoke groups the gate runs on Julia 1.13 when the file changes (set by hand for a file whose
-# output prints Julia's own signatures or types, which differ between versions: the export namer,
-# trimcollect.jl's show_spec_sig); `-` for none (a directory row, ending in /, covers its files; the
-# longest match wins). A changed file under src/ or ext/, or a changed test file no stage runs and
-# no QA family is, with no row fails the gate: a batch that adds a file adds its row, re-recorded
-# or, when unsure, naming more. `matrix-only`: groups no stage here runs, even when the change
-# touches them or a row names them: test/registry_cases.jl's generated groups (712 cases, ~300 s a
-# version on CI), whose blocking sample is its registry_sample group (Amendment 117-14: split, never
-# exempt), and entered_paths, which exists for a matrix-only check (the emission-diff check's Base
-# paths, L190). Every probe, group and QA family still runs on every landed head (non-blocking:
-# gate.yml on march/**). `measured`: the src tree measured; a change to src/ fails the gate when more
-# than 8 pieces of src (dev/block.jl STALE_PIECES) changed between it and the change's base, when this
-# repository does not hold it, or when a changed line of code lies in no piece, and a change to ext/,
-# which no map measures, fails (A20C13): the re-record runs off the landing path and lands as its own
-# commit of this file. What the selection cannot see, A19C1's (a)-(g) (A20C14): (a) overlay and bespoke
-# bodies, closed in test/block_impact.jl since da8d5b69 (a plan that compiles one counts as running
-# it), in the rows below from their next re-record; (b) a top-level form other than a definition and
-# (c) two methods of one name sharing a key, closed in dev/block.jl's line_keys since da8d5b69 (every
-# form has pieces, a table's every line its own, a definition keyed by its line), in the rows below
-# from their next re-record; (d) a changed branch inside a 40-line piece some case runs, open; (e) a
-# 1-cover, one runner per piece, open; (f) the universe: the QA families a lock cites run (d5b96e97), a
-# stale map and ext/ fail the gate, closed; the stdlib and fuzz lanes run on the matrix alone, open;
-# (g) the 1.13 core on every src change, open (MARCH 13.17).
-measured	d77ad3e1f74898d0833914cc5360bb11e3a2291d
-probes	string_lpad fc_task_rand muladd_f64 string_findfirst throw_inexacterror string_uppercase fc_object_id fc_string_to_symbol fc_hrtime_elapsed checked_add_i8 string_startswith fc_memset_dict_ctor int128_mul checked_add string_occursin fc_types_equal_pow fc_symbol_to_string fc_pchar_to_string_ptrlen fc_memchr_findfirst_char union_field const_dict
-core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs builtins_invoked memoryref_offset kind_isa isomorphic_recursive_classes exceptions
+# The blocking gate's selections (dev/block.jl, `bash dev/gate.sh --block`; L194), measured in full
+# on b85da40f by test/block_impact.jl from the lines of src/ each probe, each smoke group and each
+# QA family a lock cites as behavior runs, cut into 40-line pieces of each top-level definition,
+# each line of a `const` table its own (225 probes run 1195 pieces of src/, 41 cover them; 106 smoke
+# groups run 1536, the core's 11 groups (86 cases, 29.4 s recorded) run 1274; the 17 cited QA
+# families run 1465). `probes`: the probe core, a cover of every piece any probe runs; the gate adds
+# the probes a change touches in test/probe_corpus.jl or test/probe_baseline.txt. `core`: the smoke
+# core every landing runs, the cover by pieces per recorded second (test/smoke_times.tsv) up to 30
+# s; the first group pays for compiling the compiler. `<file><TAB><groups><TAB><QA
+# families><TAB><1.13 groups>`: a changed file's groups beyond the core, the cover (up to 25 s) of
+# its pieces some group runs and the core does not, then the QA families the gate's tests stage runs
+# for it, the cover (up to 20 s of test/phase_times.tsv's seconds) of its pieces run by the QA
+# families its locks cite as behavior (the locks reading it by path; a family past 20 s on its own
+# runs on the full matrix only), then the smoke groups the gate runs on Julia 1.13 when the file
+# changes (set by hand for a file whose output prints Julia's own signatures or types, which differ
+# between versions: the export namer, trimcollect.jl's show_spec_sig); `-` for none (a directory
+# row, ending in /, covers its files; the longest match wins). A changed file under src/ or ext/, or
+# a changed test file no stage runs and no QA family is, with no row fails the gate: a batch that
+# adds a file adds its row, re-recorded or, when unsure, naming more. `matrix-only`: groups no stage
+# here runs, even when the change touches them or a row names them: test/registry_cases.jl's
+# generated groups, whose blocking sample is its registry_sample group (Amendment 117-14: split,
+# never exempt), and entered_paths, which exists for a matrix-only check (the emission-diff check's
+# Base paths, L190). Every probe, group and QA family still runs on every landed head (non-blocking:
+# gate.yml on march/**). `measured`: the src tree measured; a change to src/ fails the gate when
+# more than 8 pieces of src (dev/block.jl STALE_PIECES) changed between it and the change's base,
+# when this repository does not hold it, or when a changed line of code lies in no piece, and a
+# change to ext/, which no map measures, fails (A20C13): the re-record runs off the landing path and
+# lands as its own commit of this file. What the selection cannot see, A19C1's (a)-(g) (A20C14),
+# each OPEN: (a) overlay and bespoke bodies, (b) a top-level form other than a definition, (c) two
+# methods of one name and (f) the universe are open until the gate runs every case whose plan
+# compiles a changed body, read from the plan's record (dev/AUDIT.md A24S1: a staleness count closes
+# none of them); meanwhile the rows below count a body a plan compiles as run by its case
+# (test/block_impact.jl planned_lines) and key every form, a table's every line and each definition
+# by its line (dev/block.jl line_keys), the QA families a lock cites run (d5b96e97) and a stale map
+# and ext/ fail the gate, while the stdlib and fuzz lanes run on the matrix alone; (d) a changed
+# branch inside a 40-line piece some case runs, open; (e) a 1-cover, one runner per piece, open; (g)
+# the 1.13 core on every src change, open (MARCH 13.17). The measurement ran each cited QA family in
+# a module of its own, BlockImpactQA (test/block_impact.jl run_qa), and three failed tests there
+# that read names as Main's, none with an error: generated_names.jl (8 of 19),
+# dispatch_method_error.jl (1 of 93), real_bottom_exceptions.jl (1 of 22); the src lines they ran
+# count, since a failed assertion stops no testset. overlay_reasons.jl runs no line of src/ (it
+# reads ext/ and Julia's own typed IR) and covers no piece. A family failing under the harness is
+# open: the measurement should run each family as its shard runs it.
+measured	4d1b79e71333b92ee9d17decb7c10e7ea818f842
+probes	string_lpad fc_types_equal_pow fc_hrtime_elapsed fc_memhash_dict_string throw_inexacterror string_findfirst string_uppercase fc_object_id fc_task_rand fc_string_to_symbol checked_add_i8 string_startswith fc_memchr_findfirst_char i32_div i32_rem i32_lt i32_le f32_add f32_sub f32_div f32_le f64_min f32_min f64_max f32_max not_int count_ones sqrt_f64 ceil_f64 sitofp_i16_f64 uitofp_u32_f64 fptosi_f32_i32_unsafe fptoui_f64_u64_unsafe int128_mul checked_add muladd_f64 string_occursin fc_symbol_to_string fc_pchar_to_string_ptrlen union_field const_dict
+core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs registry_foreign exceptions float32_fastmath constant_callees
 matrix-only	registry_binops registry_unops registry_conversions registry_checked registry_shift registry_fma registry_misc registry_operators registry_operators_rejected entered_paths
 src/WasmTarget.jl	-	host_imports.jl	-
 src/bridge.jl	-	-	-
-src/builder/instr_builder.jl	constant_memory_elements float32_fastmath simplevector_values captured_variables closed_world_edges	generated_names.jl	-
-src/builder/instr_ir.jl	-	host_imports.jl	-
-src/builder/instructions.jl	recursive_types captured_variables	host_imports.jl	-
+src/builder/instr_builder.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
+src/builder/instr_ir.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
+src/builder/instructions.jl	isomorphic_recursive_classes captured_variables abstract_receivers recursive_types	host_imports.jl	-
 src/builder/source_map.jl	-	-	-
-src/builder/types.jl	-	host_imports.jl	-
+src/builder/types.jl	memoryref_offset	host_imports.jl	-
 src/builder/validator.jl	-	host_imports.jl	-
 src/builder/writer.jl	-	host_imports.jl	-
 src/codegen/box_capture.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
-src/codegen/builtins.jl	long_constants varargs memoryref_field simplevector_values closed_world_reflection recursive_types registry_sample narrow_primitive	m11_intrinsics_table.jl	-
-src/codegen/calls.jl	varargs reduce_intrinsic_arity immutable_objectid unionall_constructor registry_sample narrow_primitive	f3_box_capture_l2b_propagate.jl	-
+src/codegen/builtins.jl	builtins_invoked long_constants varargs memoryref_field memoryref_offset simplevector_values closed_world_reflection registry_sample narrow_primitive	m11_intrinsics_table.jl	-
+src/codegen/calls.jl	builtins_invoked kind_isa reduce_intrinsic_arity varargs inlined_captor unionall_constructor registry_sample narrow_primitive	m11_intrinsics_table.jl f3_box_capture_l2b_propagate.jl	-
 src/codegen/closures.jl	closed_world_edges	host_imports.jl	-
 src/codegen/compile.jl	exception_stack	diagnostics_sink.jl host_imports.jl	-
 src/codegen/context.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
 src/codegen/diagnostics.jl	-	-	-
-src/codegen/dispatch.jl	-	-	-
+src/codegen/dispatch.jl	sizeof_values	-	-
 src/codegen/flow.jl	closed_world_reflection filtered_fold	wrong_value_locator.jl	-
 src/codegen/generate.jl	-	host_imports.jl nir_use_index.jl	-
 src/codegen/helpers.jl	-	-	-
 src/codegen/int128.jl	show_type seeded_random registry_sample narrow_primitive	-	-
 src/codegen/int_key_map.jl	invoke_in_world	-	-
-src/codegen/interpreter.jl	immutable_objectid show_type	reinterpret_array_semantics.jl	-
-src/codegen/intrinsics_table.jl	registry_sample narrow_primitive	-	-
+src/codegen/interpreter.jl	dicts builtins_invoked immutable_objectid show_type	reinterpret_array_semantics.jl	-
+src/codegen/intrinsics_table.jl	intrinsics_int immutable_objectid foreign_calls conversions registry_sample narrow_primitive	-	-
 src/codegen/invoke.jl	-	ir_one_inference_path.jl	-
 src/codegen/ir.jl	-	-	-
-src/codegen/julia_numeric_tier.jl	constant_callees seeded_random registry_sample narrow_primitive	-	-
+src/codegen/julia_numeric_tier.jl	conversions show_type seeded_random registry_sample narrow_primitive	-	-
 src/codegen/options.jl	-	-	-
-src/codegen/selector_table.jl	-	-	-
+src/codegen/selector_table.jl	memoryref_offset	-	-
 src/codegen/stackified.jl	-	reinterpret_array_semantics.jl	-
-src/codegen/statements.jl	foreign_calls loop_backward_branch closed_world_reflection immutable_objectid	wrong_value_locator.jl	-
+src/codegen/statements.jl	foreign_calls loop_backward_branch show_type	wrong_value_locator.jl	-
 src/codegen/strings.jl	-	-	-
-src/codegen/structs.jl	vector_growth_offsets	-	-
-src/codegen/trimcollect.jl	constant_callees type_object_rows one_consult	ir_one_inference_path.jl generated_names.jl	exceptions constant_callees
-src/codegen/types.jl	foreign_calls invoke_in_world	f3_box_capture_l2b_propagate.jl	-
+src/codegen/structs.jl	isomorphic_recursive_classes memoryref_offset vector_growth_offsets	-	-
+src/codegen/trimcollect.jl	type_object_rows one_consult	ir_one_inference_path.jl generated_names.jl	exceptions constant_callees
+src/codegen/types.jl	kind_isa foreign_calls invoke_in_world	f3_box_capture_l2b_propagate.jl	-
 src/codegen/undef.jl	-	-	-
 src/codegen/unions.jl	-	-	-
-src/codegen/values.jl	closed_world_edges	-	-
-src/frontend/nir.jl	invoke_in_world	nir_use_index.jl host_imports.jl	-
+src/codegen/values.jl	memoryref_offset closed_world_edges	-	-
+src/frontend/nir.jl	method_error_value invoke_in_world	nir_use_index.jl host_imports.jl	-
 ext/	struct_by_structure	-	-
 test/block_impact.jl	-	-	-
+# module_builder_validation.jl: 29.333 s recorded, past 20.0 s on its own: the full matrix runs it
+# diagnostic_attribution.jl: 24.231 s recorded, past 20.0 s on its own: the full matrix runs it
+# source_maps.jl: 39.348 s recorded, past 20.0 s on its own: the full matrix runs it
+# dispatch_method_error.jl: 57.098 s recorded, past 20.0 s on its own: the full matrix runs it
+# real_bottom_exceptions.jl: 33.49 s recorded, past 20.0 s on its own: the full matrix runs it
+# no_fabricated_values.jl: 23.811 s recorded, past 20.0 s on its own: the full matrix runs it
+# src/WasmTarget.jl: 6 of its pieces its locks' QA families run past 20.0 s
+# src/builder/instr_builder.jl: 2 of its pieces the groups run past 25.0 s
+# src/builder/instr_builder.jl: 25 of its pieces its locks' QA families run past 20.0 s
+# src/builder/instr_ir.jl: 4 of its pieces the groups run past 25.0 s
+# src/builder/instr_ir.jl: 23 of its pieces its locks' QA families run past 20.0 s
+# src/builder/instructions.jl: 13 of its pieces its locks' QA families run past 20.0 s
+# src/builder/source_map.jl: 19 of its pieces its locks' QA families run past 20.0 s
+# src/builder/types.jl: 1 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/builtins.jl: 10 of its pieces the groups run past 25.0 s
+# src/codegen/builtins.jl: 81 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/calls.jl: 19 of its pieces the groups run past 25.0 s
+# src/codegen/calls.jl: 52 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/closures.jl: 3 of its pieces the groups run past 25.0 s
+# src/codegen/closures.jl: 8 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/compile.jl: 5 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/diagnostics.jl: 31 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/generate.jl: 5 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/int128.jl: 2 of its pieces the groups run past 25.0 s
+# src/codegen/interpreter.jl: 10 of its pieces the groups run past 25.0 s
+# src/codegen/interpreter.jl: 2 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/intrinsics_table.jl: 17 of its pieces the groups run past 25.0 s
+# src/codegen/invoke.jl: 1 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/ir.jl: 4 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/julia_numeric_tier.jl: 8 of its pieces the groups run past 25.0 s
+# src/codegen/statements.jl: 23 of its pieces the groups run past 25.0 s
+# src/codegen/statements.jl: 20 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/strings.jl: 3 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/structs.jl: 37 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/trimcollect.jl: 6 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/types.jl: 4 of its pieces the groups run past 25.0 s
+# src/codegen/types.jl: 18 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/undef.jl: 13 of its pieces its locks' QA families run past 20.0 s
+# src/codegen/values.jl: 56 of its pieces its locks' QA families run past 20.0 s
+# src/frontend/nir.jl: 5 of its pieces its locks' QA families run past 20.0 s
