@@ -21,3 +21,4 @@ landed_at	commit	author_at	land_start	gate_runs	gate_wall_s	land_wall_s	edit_to_
 2026-10-21T19:34:05Z	31d6ca4b3bcbd6bf4a09136a4b7cec190f46c985	2026-10-21T19:32:44Z	2026-10-21T19:32:44Z	1	52.2	81.4	81.0	4	41	unjudged (budget ratchet 34.0 past cap, factor 3.27)
 2026-10-21T19:35:41Z	3cec876a7b0be23a84bb8ec22ee7b2ecf0c94524	2026-10-21T19:30:09Z	2026-10-21T19:34:45Z	1	47.2	55.7	332.0	4	40	unjudged (past cap, factor 1.81)
 2026-10-21T19:38:28Z	a3c27bab52a08bf0a2bd332ef005987601daedd0	2026-10-21T19:30:34Z	2026-10-21T19:37:37Z	1	42.4	50.6	474.0	9	75	unjudged (past cap, factor 1.98)
+2026-10-21T19:41:44Z	ae556c797629698562ac78264ca28ffb7c0e1b6d	2026-10-21T19:40:57Z	2026-10-21T19:40:58Z	1	37.7	46.2	47.0	4	39	unjudged (past cap, factor 1.86)

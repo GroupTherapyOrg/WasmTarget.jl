@@ -25,10 +25,11 @@
 #       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
 #       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
+#       branch more than one commit ahead of the tip (one landing is one commit, A24E1); refuses a
 #       commit with no `Charter:` line, or one that changes dev/CHARTER.md other than exactly as
-#       the maintainer authorised it (its `Charter-change: <clause> authorised by Dale <date>` line,
-#       the change's parent and new blobs listed with that clause and date in the main tree's
-#       charter_authorised, every changed line in that clause; an edit only adding MARCH row numbers
+#       the maintainer authorised it (its `Charter-change: C<a> C<b> … authorised by Dale <date>` line,
+#       the change's parent and new blobs listed with those clauses and date in the main tree's
+#       charter_authorised, every changed line in one of them; an edit only adding MARCH row numbers
 #       to a Planned citation, as L154 forces, is exempt and named); starts this tree's warm
 #       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a run with no verdict
 #       once more after 20 s, a red stops the landing with its record standing); lands through
@@ -64,6 +65,24 @@ WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
 # tree's git-ignored charter_authorised, written after review and never by a landing commit, one line
 # per change, "<parent blob> <new blob> <clause> <date>"
 AUTHORISED="$MAIN/dev/.block/charter_authorised"
+# a `Charter-change: C<a> C<b> … authorised by Dale <date>` line's clauses and date, "C<a> C<b> … <date>":
+# a change to several clauses lands as one commit (L148 counts commits)
+CHANGE_SED='s/^Charter-change: \(C[0-9][0-9]*\( C[0-9][0-9]*\)*\) authorised by Dale \([0-9][0-9-]*\)$/\1 \3/p'
+# whether the authorisation file $1 lists the change $2 → $3 with exactly the clauses and date of $4
+# ("C<a> C<b> … <date>", its lines "<parent blob> <new blob> C<a> C<b> … <date>"), the clauses as a set
+authorised() {
+    local want o n rest
+    want="$(printf '%s\n' ${4% *} | sort -u | tr '\n' ' ')${4##* }"
+    [ -f "$1" ] || return 1
+    while read -r o n rest; do
+        [ "$o" = "$2" ] && [ "$n" = "$3" ] && [ "$(printf '%s\n' ${rest% *} | sort -u | tr '\n' ' ')${rest##* }" = "$want" ] && return 0
+    done < "$1"
+    return 1
+}
+# whether clause $1 is one of the clauses $2 ("C<a> C<b> …"); "-", outside any clause, never is
+clause_in() {
+    case " $2 " in *" $1 "*) [ "$1" != - ] ;; *) return 1 ;; esac
+}
 # the clause each line of a dev/CHARTER.md text sits in: `- **C<n> ` opens clause n, a line that does
 # not start with a space closes it ("-": no clause)
 CLAUSE_AWK='/^- \*\*C[0-9]+ / { c = $2; sub(/^\*\*/, "", c); print c; next } /^ / && c != "" { print c; next } { c = ""; print "-" }'
@@ -308,6 +327,11 @@ land)
     fi
     step rebase
     [ -n "$(git rev-list "$tip..HEAD")" ] || { echo "land: $br holds nothing $MARCH lacks — refusing"; exit 1; }
+    # one landing is one commit (A24E1): `merge` judges the head's tree alone, so a commit under it
+    # would enter history ungated; a series lands as a sequence of landings
+    ahead=$(git rev-list --count "$tip..HEAD")
+    [ "$ahead" -eq 1 ] ||
+        { echo "land: $br is $ahead commits ahead of $MARCH ${tip:0:8}: one landing is one commit, its own tree gated (A24E1) — land them one at a time — refusing"; exit 1; }
     for h in $(git rev-list --reverse --no-merges "$tip..HEAD"); do
         msg=$(git log -1 --format=%B "$h"); what=$(git log -1 --format='%h %s' "$h")
         printf '%s\n' "$msg" | grep -qE '^Charter: C[0-9]+' || { echo "land: $what has no 'Charter: C<n>' line — refusing"; exit 1; }
@@ -320,19 +344,19 @@ land)
         # clause and the authorisation, and the main tree's charter_authorised lists the change's parent
         # and new dev/CHARTER.md blobs with that clause and date (written there after review, never by a
         # landing commit), and every changed line lies in that clause
-        a=$(printf '%s\n' "$msg" | sed -n 's/^Charter-change: \(C[0-9][0-9]*\) authorised by Dale \([0-9-]*\)$/\1 \2/p' | head -1)
-        [ -n "$a" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: <clause> authorised by Dale <date>' line — refusing"; exit 1; }
+        a=$(printf '%s\n' "$msg" | sed -n "$CHANGE_SED" | head -1)
+        [ -n "$a" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: C<n> … authorised by Dale <date>' line — refusing"; exit 1; }
         ob=$(git rev-parse "$h^:dev/CHARTER.md"); nb=$(git rev-parse "$h:dev/CHARTER.md")
-        grep -qx "$ob $nb $a" "$AUTHORISED" 2>/dev/null ||
+        authorised "$AUTHORISED" "$ob" "$nb" "$a" ||
             { echo "land: $what's dev/CHARTER.md change ($ob → $nb) is not one the maintainer authorised: after review, in the main tree: echo '$ob $nb $a' >> dev/.block/charter_authorised — refusing"; exit 1; }
         old=$(mktemp); new=$(mktemp)
         git show "$h^:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$old"; git show "$h:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$new"
         for c in $(git diff -U0 "$h^" "$h" -- dev/CHARTER.md | awk -v O="$old" -v N="$new" "$HUNK_AWK" | sort -u); do
-            [ "$c" = "${a%% *}" ] ||
-                { echo "land: $what changes dev/CHARTER.md $([ "$c" = - ] && echo "outside any clause" || echo "in $c"), outside ${a%% *}, the clause authorised — refusing"; exit 1; }
+            clause_in "$c" "${a% *}" ||
+                { echo "land: $what changes dev/CHARTER.md $([ "$c" = - ] && echo "outside any clause" || echo "in $c"), outside ${a% *}, the clauses authorised — refusing"; exit 1; }
         done
         rm -f "$old" "$new"
-        echo "land: $what changes dev/CHARTER.md inside ${a%% *} exactly as authorised ($ob → $nb)"
+        echo "land: $what changes dev/CHARTER.md inside ${a% *} exactly as authorised ($ob → $nb)"
     done
     step checks
     # the landing log through the previous landing, carried in this landing's own tree (A21E4): the
