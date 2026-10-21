@@ -84,9 +84,14 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
     # Already registered?
     haskey(registry.structs, T) && return registry.structs[T]
 
-    # Get field information
-    field_names = [fieldname(T, i) for i in 1:fieldcount(T)]
-    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
+    # Get field information, by a loop, not comprehensions: their closures would capture T, a
+    # new closure type per closure type
+    field_names = Vector{Symbol}(undef, fieldcount(T))
+    field_types = Vector{Type}(undef, fieldcount(T))
+    for i in 1:fieldcount(T)
+        field_names[i] = fieldname(T, i)
+        field_types[i] = fieldtype(T, i)
+    end
 
     # Create WasmGC field types (same logic as register_struct_type)
     # Prepend typeId:i32 as field 0 (universal object layout)
@@ -291,8 +296,15 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
     # recorded, then its fields translate — a field reaching it again refers to it (pending
     # until its recursion group is added, finish_pending!).
     local id = begin_pending!(registry, :structs, T)
-    registry.structs[T] = StructInfo(T, id, Symbol[fieldname(T, i) for i in 1:fieldcount(T)],
-                                     Type[fieldtype(T, i) for i in 1:fieldcount(T)], UInt32(2))
+    # the field lists by a loop, not comprehensions: their closures would capture T, a new
+    # closure type per class
+    local names = Vector{Symbol}(undef, fieldcount(T))
+    local types = Vector{Type}(undef, fieldcount(T))
+    for i in 1:fieldcount(T)
+        names[i] = fieldname(T, i)
+        types[i] = fieldtype(T, i)
+    end
+    registry.structs[T] = StructInfo(T, id, names, types, UInt32(2))
     local wasm_fields = _struct_fields!(mod, registry, T)
     # step5 THE CLASS-DAG: the struct subtypes its nearest abstract parent's synthetic
     # (dart class_info.dart:420 _createStructForClass), created parent-first at registration.
@@ -348,7 +360,11 @@ end
 
 # parity(class_info.dart:539 _generateFields): the class's field list after the inherited prefix.
 function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::Vector{FieldType}
-    field_types = [fieldtype(T, i) for i in 1:fieldcount(T)]
+    # by a loop, not a comprehension: its closure would capture T, a new closure type per class
+    field_types = Vector{Type}(undef, fieldcount(T))
+    for i in 1:fieldcount(T)
+        field_types[i] = fieldtype(T, i)
+    end
 
     # Create WasmGC field types
     # Prepend the inherited Object prefix.

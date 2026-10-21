@@ -560,9 +560,12 @@ function _missing_explicit_invoke_mis(interp::WasmInterpreter, codeinfos::Vector
                             msig = Base.unwrap_unionall(match.method.sig)
                             if msig isa DataType && msig <: Tuple &&
                                length(msig.parameters) == length(arg_types) + 1
-                                canonical_args = Any[
-                                    _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
-                                    for j in eachindex(arg_types)]
+                                # by a loop, not a comprehension: its closure would capture
+                                # msig, a new closure type per method signature
+                                canonical_args = Vector{Any}(undef, length(arg_types))
+                                for j in eachindex(arg_types)
+                                    canonical_args[j] = _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
+                                end
                                 canonical_ftype = Tuple{Core.Typeof(f), canonical_args...}
                                 if canonical_ftype != ftype
                                     canonical_matches = wt_method_matches(interp, canonical_ftype)
@@ -1944,9 +1947,13 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             local msig = Base.unwrap_unionall(mi.def.sig)
             if msig isa DataType && msig <: Tuple &&
                length(msig.parameters) == length(arg_types) + 1
-                local canonical_args = Tuple(
-                    _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
-                    for j in eachindex(arg_types))
+                # by a loop, not a generator: its closure would capture msig, a new closure type
+                # per method signature
+                local canonical_vec = Vector{Any}(undef, length(arg_types))
+                for j in eachindex(arg_types)
+                    canonical_vec[j] = _canonical_type_object_arg(arg_types[j], msig.parameters[j + 1])
+                end
+                local canonical_args = Tuple(canonical_vec)
                 local canonical_sig = Tuple{sig.parameters[1], canonical_args...}
                 if canonical_args != arg_types &&
                    (mi.def, canonical_sig) in collected_method_specs
@@ -2117,9 +2124,13 @@ function _julia_signature_text(m::Method, @nospecialize(sig::Type))::String
             "its name, the signature Julia prints, would be that code's text", nothing,
             "method $(m.name) in $(m.module), $(m.file):$(m.line)")))
     end
-    return sprint(io -> Base.show_tuple_as_call(
+    # sprint's own steps (an IOBuffer, then its text), with no closure over `sig`: a closure
+    # capturing a signature type is a new closure type, compiled again, for every signature
+    local io = IOBuffer()
+    Base.show_tuple_as_call(
         IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m.name, sig;
-        qualified=true))
+        qualified=true)
+    return String(take!(io))
 end
 
 """
@@ -2585,7 +2596,12 @@ function _collect_reachable_ir_types(function_data, bespoke::IdDict{Core.MethodI
     # the one class set's (closed_world_classes; a tuple class added here is no value's class)
     for (p, S, rt) in error_args, C in closed_world_class_list(classes)
         (C <: S && !(C <: Type)) || continue
-        push!(out, Tuple{(j == p ? C : rt[j] for j in eachindex(rt))...})
+        # by a loop, not a generator: its closure would capture C, a new type per class
+        local tuple_args = Vector{Any}(undef, length(rt))
+        for j in eachindex(rt)
+            tuple_args[j] = j == p ? C : rt[j]
+        end
+        push!(out, Tuple{tuple_args...})
     end
     return out
 end

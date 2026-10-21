@@ -625,11 +625,14 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             # reason, AllTypesAmbig). An overlap WT does not enumerate rejects too, ambiguous or
             # not, naming why: the open over-rejection A8C8, BoundIsLoud)
             local _bs = _cv_bodies[_T]
-            local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
+            # each body's argument types past its context (no closure over _T: it would be a new
+            # closure type per callable type)
+            local _skip = _cv_ctx[_T] ? 1 : 0
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
                 local _ma, _mb = _bs[_a].method, _bs[_b].method
                 (_ma !== _mb && wt_methods_ambiguous(plan.interp, _ma, _mb)) || continue
-                local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
+                local _ov = typeintersect(Tuple{_bs[_a].julia_params[1+_skip:end]...},
+                                          Tuple{_bs[_b].julia_params[1+_skip:end]...})
                 _ov === Union{} && continue
                 local _amb = ambiguous_class_tuple(plan.interp, _T, _ov, plan.classes)
                 _amb === false && continue
