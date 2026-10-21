@@ -353,7 +353,7 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
     # Create WasmGC field types
     # Prepend the inherited Object prefix.
     wasm_fields = object_prefix_fields()
-    for ft in field_types
+    for (fi, ft) in enumerate(field_types)
         # For array fields, use concrete reference to registered array type
         # But for Vector{T}, use the Vector struct type (with ref and size fields)
         # since Vector in Julia 1.11+ is a struct, not a raw array
@@ -464,6 +464,9 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
         else
             wasm_vt = julia_to_wasm_type(ft)
         end
+        # a field `new` may leave unset that admits `nothing` is held in the any hierarchy,
+        # beside `#undef` (undef_slot_storage)
+        field_may_be_undef(T, fi) && (wasm_vt = undef_slot_storage(ft, wasm_vt))
         push!(wasm_fields, FieldType(wasm_vt, true))  # mutable by default
     end
     return wasm_fields

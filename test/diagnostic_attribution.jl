@@ -151,9 +151,10 @@ end
                c.current_stmt_idx = 1; c)
     local ctx = mkctx()
     local b = WasmTarget._ctx_builder(ctx, "stated_class")
-    # the argument is a Float64: Int64 is no class of it, a literal 1.5 no Int64
-    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.AnyRef, Int64)
-    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.AnyRef, Int64)
+    # the argument is a Float64: Int64 is no class of it, a literal 1.5 no Int64; the check's own
+    # error, not a later one the conversion raises
+    @test_throws r"the class Int64 stated for .* disagrees with its own type Float64" WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.AnyRef, Int64)
+    @test_throws r"the class Int64 stated for .* disagrees with its own type Float64" WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.AnyRef, Int64)
     # its own class, and a literal's, are admitted
     ctx = mkctx(); b = WasmTarget._ctx_builder(ctx, "stated_class")
     @test WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.F64, Float64) === WasmTarget.F64
@@ -378,6 +379,26 @@ end
         err = try WasmTarget.compile(f, (Int64,)); nothing catch e; e end
         @test err isa WasmTarget.WasmCompileError
         @test occursin(why, sprint(showerror, err))
+    end
+end
+
+# memoryrefget, memoryrefset! and isassigned read their element type from the reference's own
+# type (memoryref_eltype): an operand whose type is no MemoryRef DataType has none to decide its
+# slot's storage and `#undef` by, so each rejects at its statement (memoryrefget and memoryrefset!
+# guessed an Int32 element, then the statement's type, compiling where they could not know it)
+module DiagErasedRef
+er_get(r) = Core.memoryrefget(r, :not_atomic, true) === 1 ? 1 : 2
+er_set(r) = (Core.memoryrefset!(r, 1, :not_atomic, true); 1)
+er_isa(r) = Core.memoryref_isassigned(r, :not_atomic, true) ? 1 : 2
+end
+@testset "diagnostics: a memory reference whose type is no MemoryRef rejects at its statement" begin
+    for (f, what) in ((DiagErasedRef.er_get, "memoryrefget of a Any"),
+                      (DiagErasedRef.er_set, "memoryrefset! of a Any"),
+                      (DiagErasedRef.er_isa, "isassigned of a Any"))
+        err = try WasmTarget.compile(f, (Any,)); nothing catch e; e end
+        @test err isa WasmTarget.WasmCompileError
+        msg = sprint(showerror, err)
+        @test occursin(what, msg) && occursin("known only at run time", msg) && occursin("statement %1", msg)
     end
 end
 

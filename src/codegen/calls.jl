@@ -216,6 +216,7 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
         local wfi = wasm_field_idx(info, i)
         emit_value!(ib, obj, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
         struct_get!(ib, info.wasm_type_idx, wfi)
+        _emit_field_undef_check!(ib, ctx, T, i, i, info)   # an unset field throws UndefRefError
         out === AnyRef && coerce_stack_top!(ib, AnyRef, ctx; from_julia=fieldtype(T, i))
         else_!(ib)
     end
@@ -3978,7 +3979,8 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
         end
         # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
-        # defined-check = a null test on the anyref contents.
+        # defined-check: a test of its contents for `#undef` (the undefined value, or a typed
+        # reference box's null).
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) === :contents &&
            value_type(ctx, args[1]) === Core.Box
@@ -3990,7 +3992,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _bxd_ft = ctx.mod.types[_bxd_idx + 1].fields[2].valtype
             if _wt_is_ref(_bxd_ft)
                 struct_get!(_bxd_ib, _bxd_idx, UInt32(1))
-                ref_is_null!(_bxd_ib)
+                emit_is_unset!(_bxd_ib, ctx, Any, _bxd_ft)   # its `#undef`: the undefined value
                 num!(_bxd_ib, Opcode.I32_EQZ)
             else
                 # a TYPED box (i64 contents etc.) is always defined
@@ -4000,9 +4002,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             append_builder!(fb, _bxd_ib)
             _gfc_done = true
         end
-        # General concrete-struct field definedness. Reference fields use null
-        # as Julia's undefined-field state; physical numeric fields are always
-        # initialized in Wasm and therefore defined.
+        # General concrete-struct field definedness. A reference field `new` may leave unset
+        # (field_may_be_undef) is `#undef` when it holds the undefined value, where it holds
+        # `nothing` too (undef_slot), else its null; any other field is always defined.
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) isa Symbol
             local _isd_T = value_type(ctx, args[1])
@@ -4027,10 +4029,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     local _isd_b = _ctx_builder(ctx, "compile_call.isdefined_field")
                     emit_value!(_isd_b, args[1], ctx,
                                 ConcreteRef(UInt32(_isd_info.wasm_type_idx), true))
-                    if _wt_is_ref(_isd_ft)
+                    if _wt_is_ref(_isd_ft) && field_may_be_undef(_isd_T, Base.fieldindex(_isd_T, _isd_f))
                         struct_get!(_isd_b, _isd_info.wasm_type_idx, _isd_wfi)
-                        ref_is_null!(_isd_b); num!(_isd_b, Opcode.I32_EQZ)
+                        # its `#undef`: the undefined value or the null
+                        emit_is_unset!(_isd_b, ctx, fieldtype(_isd_T, _isd_f), _isd_ft)
+                        num!(_isd_b, Opcode.I32_EQZ)
                     else
+                        # a field `new` always sets is defined (isdefined_tfunc, jl_f_isdefined):
+                        # its null, if any, is `nothing`
                         drop!(_isd_b); i32_const!(_isd_b, 1)
                     end
                     append_builder!(fb, _isd_b)
@@ -4067,6 +4073,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                         emit_value!(_gfb_ib, args[1], ctx,
                                     ConcreteRef(UInt32(_gfb_info.wasm_type_idx), true))
                         struct_get!(_gfb_ib, _gfb_info.wasm_type_idx, UInt32(_gfb_wfi))
+                        _emit_field_undef_check!(_gfb_ib, ctx, _gfb_T, _gfb_fld, _gfb_fi, _gfb_info)
                         append_builder!(fb, _gfb_ib)
                         _gfc_done = true
                     end
@@ -4560,6 +4567,9 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     array_new_default!(bld, arr_type_idx)
     local_set!(bld, dst_local)
 
+    # each copied tail slot is read as Julia's iteration reads it: an `#undef` one throws UndefRefError
+    emit_slots_undef_check!(bld, ctx, arr_type_idx, elem_type, src_local, src_off_local, tail_len)
+
     elem_wasm = unpacked(ctx.mod.types[arr_type_idx + 1].elem.valtype)
     for (i, arg) in enumerate(prefix_args)
         local_get!(bld, dst_local)
@@ -4922,6 +4932,9 @@ function _emit_apply_iterate_vect!(fb::InstrBuilder, container_arg, container_ty
     struct_get!(bld, size_type_idx, size_field_offset)
     num!(bld, Opcode.I32_WRAP_I64)
     local_set!(bld, len_local)
+
+    # each copied slot is read as Julia's iteration reads it: an `#undef` one throws UndefRefError
+    emit_slots_undef_check!(bld, ctx, arr_type_idx, elem_type, src_arr_local, src_off_local, len_local)
 
     # new_arr = array.new_default(arr_type, len)
     local_get!(bld, len_local)

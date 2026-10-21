@@ -1203,13 +1203,13 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
             _partial_new_is_definitely_initialized(idx, struct_type, missing_julia, ctx)
         for fi in (n_wasm_provided + 1):n_required
             missing_type = struct_type_def.fields[fi].valtype
-            if missing_type isa ConcreteRef
-                ref_null!(b, Int64(missing_type.type_idx))
-            elseif missing_type === StructRef || missing_type === ArrayRef ||
-                   missing_type === ExternRef || missing_type === AnyRef || missing_type === EqRef
-                # Null is the explicit Wasm representation of Julia's undefined
-                # reference slot; isdefined/getfield already interpret that sentinel.
-                ref_null!(b, missing_type)
+            if _wt_is_ref(missing_type)
+                # Julia's undefined reference field: the undefined value where the field holds
+                # `nothing` too (undef_slot), else its null; isdefined and getfield read it so
+                local _mjfi = fi - Int(info.field_offset)
+                1 <= _mjfi <= fieldcount(struct_type) ||
+                    error("wasm field $(fi) of $(struct_type) is no Julia field")
+                emit_undef!(b, ctx, fieldtype(struct_type, _mjfi), missing_type)
             elseif primitive_init_proven && missing_type === I32
                 i32_const!(b, 0)
             elseif primitive_init_proven && missing_type === I64
@@ -1304,8 +1304,8 @@ function _fc_jl_alloc_genericmemory!(b::InstrBuilder, node::NirForeignCall, idx:
             # Julia's length check, then exactly that many elements
             emit_memory_length!(b, ctx, len_arg, mem_type)
 
-            # array.new_default creates array filled with default value (0 for primitives, null for refs)
-            array_new_default!(b, arr_type_idx)
+            # the slots as Julia's allocator leaves them (an `Any` slot `#undef`, emit_new_slots!)
+            emit_new_slots!(b, ctx, arr_type_idx, elem_type)
 
             return b
 end

@@ -48,6 +48,7 @@ include("codegen/flow.jl")
 include("codegen/stackified.jl")
 include("codegen/statements.jl")
 include("codegen/values.jl")
+include("codegen/undef.jl")  # parity(quarantine: Julia's `#undef` beside `nothing`, dev/formal/Undef.tla)
 include("codegen/builtins.jl")  # parity(intrinsics.dart:401 KernelNodes._lookup): identity-keyed Core/Base builtin registry
 include("codegen/calls.jl")
 include("codegen/invoke.jl")

@@ -679,8 +679,9 @@ end
 end
 
 # Base._unsetindex!(::MemoryRef{T}) clears a freed slot: a bits element keeps its bits, an
-# isbits-union slot keeps its value, and any other slot is nulled (`atomic_pointerset(p,
-# C_NULL)`, which WT lowers to storing null, so `isassigned` then reads it unset). Base
+# isbits-union slot keeps its value, and any other slot is made `#undef` (`atomic_pointerset(p,
+# C_NULL)`, which WT lowers to storing the slot's `#undef`: its null, or the undefined value
+# where it holds `nothing` too, emit_undef!), so `isassigned` then reads it unset. Base
 # decides which by reading the Memory's host layout (datatype_arrayelem, datatype_layoutsize),
 # which WT does not fold, so the decision is made here from T itself; the clearing store is
 # Julia's own.
