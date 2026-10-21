@@ -863,6 +863,7 @@ emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-gues
 Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
 validator's stack type is now the truth instead of a re-derivation).
 parity(code_generator.dart:676 accept1): the emission whose result type is its byproduct.
+precedent(dart: w.ValueType carried with the value, code_generator.dart:665 translateExpression): a consumer reads the type the emission returns, never a second translation.
 """
 function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
     # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
@@ -992,6 +993,7 @@ A `nothing` actual type means the emit produced no single result (dead/unreachab
 path — the `unreachable` is already emitted); `expected` is returned so the declared stack
 shape stays consistent, matching dart's posture that unreachable code still validates.
 parity(code_generator.dart:665 translateExpression)
+precedent(dart: w.ValueType carried with the value, code_generator.dart:665 translateExpression): the type returned is the type on the stack.
 """
 emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
             expected::WasmValType)::WasmValType =
@@ -1230,38 +1232,17 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
-                    emit_value!(b, def.value, ctx, static_wasm_type(def.value, ctx))
+                    # The type it pushed is the emission's own answer (the typed channel),
+                    # never a second translation of its Julia type.
+                    local _pi_src_wasm = emit_value!(b, def.value, ctx, static_wasm_type(def.value, ctx))
                     # Unbox from anyref to numeric type when PiNode narrows
                     # a Union-typed anyref value to a concrete numeric type.
                     # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
                     local _pi_target_wasm = julia_to_wasm_type(pi_type)
                     if (_pi_target_wasm === I32 || _pi_target_wasm === I64 || _pi_target_wasm === F32 || _pi_target_wasm === F64)
-                        # Check if the underlying value is anyref (boxed).
-                        # P4-stdlib (Random hash_seed): read the ACTUAL local type
-                        # when one exists — get_concrete_wasm_type guesses I64 for
-                        # Union{Nothing, UInt64}, but such unions are allocated as
-                        # AnyRef locals (an i64 cannot encode `nothing`), so the
-                        # guess skipped the unbox and raw anyref reached i64.sub.
-                        local _pi_src_wasm = nothing
-                        if def.value isa NirSSA
-                            local _pi_li = get(ctx.ssa_locals, def.value.id, nothing)
-                            _pi_li === nothing && (_pi_li = get(ctx.phi_locals, def.value.id, nothing))
-                            if _pi_li !== nothing
-                                local _pi_off = _pi_li - ctx.n_params
-                                if _pi_off >= 0 && _pi_off < length(ctx.locals)
-                                    _pi_src_wasm = ctx.locals[_pi_off + 1]
-                                end
-                            end
-                            if _pi_src_wasm === nothing
-                                local _pi_src_type = value_type(ctx, def.value)
-                                _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
-                            end
-                        elseif def.value isa NirArgument
-                            local _pi_arg_idx = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
-                            if _pi_arg_idx >= 1 && _pi_arg_idx <= length(ctx.arg_types)
-                                _pi_src_wasm = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx], ctx.mod, ctx.type_registry)
-                            end
-                        end
+                        # The underlying value is boxed when it was pushed as a reference (a
+                        # Union{Nothing, UInt64} SSA is held in an AnyRef local: an i64 cannot
+                        # encode `nothing`).
                         if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
                             # Value is boxed in anyref — unbox via THE single consumer (non-null: isa-guarded).
                             emit_classid_unbox!(b, ctx, _pi_target_wasm)
@@ -1272,19 +1253,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                         # Add ref.cast_null to narrow to the concrete type so struct.get works.
                         local _pi_concrete = get_concrete_wasm_type(pi_type, ctx.mod, ctx.type_registry; for_local=true)
                         if _pi_concrete isa ConcreteRef
-                            # Check if the source is a generic ref type that needs casting
-                            local _pi_src_wasm2 = nothing
-                            if def.value isa NirSSA
-                                local _pi_src_type2 = value_type(ctx, def.value)
-                                _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
-                            elseif def.value isa NirArgument
-                                local _pi_arg_idx2 = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
-                                if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
-                                    _pi_src_wasm2 = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx2], ctx.mod, ctx.type_registry; for_local=true)
-                                end
-                            end
-                            if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef
-                                _pi_src_wasm2 === ExternRef && any_convert_extern!(b)
+                            # a source pushed as a generic reference is cast to the narrowed type
+                            if _pi_src_wasm === EqRef || _pi_src_wasm === StructRef || _pi_src_wasm === AnyRef || _pi_src_wasm === ExternRef
+                                _pi_src_wasm === ExternRef && any_convert_extern!(b)
                                 ref_cast!(b, Int64(_pi_concrete.type_idx), true)
                             end
                         end
