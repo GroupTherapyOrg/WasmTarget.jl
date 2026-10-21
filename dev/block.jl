@@ -74,8 +74,11 @@
 # calibration lowers every best with it (A19P6). A
 # commit whose message carries `Timing: correctness fix (MARCH 13.<n>)`, a row the change itself adds
 # to dev/MARCH.md naming the stages it leaves slower, records those stages slower without failing,
-# and its update raises their bests to what it measured, in the same reviewed diff (A19P7). WT_TIMING_UPDATE=1 lowers each best a green run on a clean
-# tree on a quiet machine beat, the calibration's too, never raises one; a stage with no best fails.
+# and its update raises their bests to what it measured, in the same reviewed diff (A19P7). WT_TIMING_UPDATE=1 runs the gate three
+# times (update_main) and, when all three are green with their timing judged on a clean tree on a quiet
+# machine, sets each best to the median of the three (updated_bests), lowered only but for an exempt
+# stage, the calibration's too, each written with its source in [best_from] (A20P20); a stage with no
+# best fails.
 #
 # The verdict: red when the change fails (a stage's check, a file with no row, a budget or the
 # timing ratchet), no verdict when the machine cannot give one (its Julia, Node or Java is not the
@@ -606,6 +609,44 @@ median(v) = (c = sort(v); isempty(c) ? NaN : c[(length(c) + 1) ÷ 2])
 # ---- the decisions (L195 runs them) -------------------------------------------------------------
 # the machine's slowdown factor: the calibration's median over its best, 1 at best, never below
 machine_factor(calib, best_calib) = isnan(best_calib) || isnan(calib) || best_calib <= 0 ? 1.0 : max(1.0, calib / best_calib)
+# the bests an update's runs set (L195 runs it): a calibration lower than the best (the runs' median
+# lower quartile) rescales every best first, as a best is held at the calibration it was recorded
+# under (A19P6); then each ratcheted stage's best is the median of its runs' times at that calibration
+# (`times[key]` the runs' walls, `calibs` their calibration medians), lowered only, or raised for a
+# stage the commit's own exemption names (its best is what it now takes, in the same diff): one fast
+# run sets no best (A20P19, A20P20). The new bests, what changed, and how each written best was set
+# (`:median` of these runs, or `:rescaled` from its own source, A20P20).
+function updated_bests(best::AbstractDict, fastest::Vector{Float64}, calibs::Vector{Float64},
+                       times::AbstractDict, exempt::Vector{String})
+    out = Dict{String,Any}(best); changes = String[]; how = Dict{String,Symbol}()
+    bcal = get(out, "calibration", NaN); cal = median(fastest)
+    if isnan(bcal) || cal < bcal
+        isnan(bcal) || for k in collect(keys(out))
+            k == "calibration" || (out[k] = round(out[k] * cal / bcal; digits = 2); how[k] = :rescaled)
+        end
+        out["calibration"] = round(cal; digits = 6); push!(changes, "calibration $(out["calibration"])"); how["calibration"] = :median
+    end
+    for (k, walls) in times
+        length(walls) == length(calibs) || continue
+        w = round(median([walls[i] / machine_factor(calibs[i], out["calibration"]) for i in eachindex(walls)]); digits = 2)
+        stage = first(split(k, '@'))
+        if !haskey(out, k) || w < out[k]
+            out[k] = w; push!(changes, "$k $w"); how[k] = :median
+        elseif stage in exempt && w > out[k]
+            out[k] = w; push!(changes, "$k $w (raised: the exemption's stage)"); how[k] = :median
+        end
+    end
+    return out, changes, how
+end
+# where a best came from, as dev/timing_best.toml's [best_from] states it: the median of the update's
+# records on the commit they ran, at the machine factors they ran at; a rescaled best keeps its own
+# source and names the update whose calibration rescaled it (A20P20)
+function best_source(how::Symbol, old::AbstractString, records::Vector{String}, head::AbstractString, factors::Vector{Float64})
+    src = "records $(join(records, ' ')) on $(first(head, 8)) at machine factor $(join(round.(factors; digits = 2), ' '))"
+    how === :median && return "the median of $src"
+    isempty(old) && error("a best rescaled by $src has no source of its own in [best_from]")
+    return "$(first(split(old, "; rescaled by "))); rescaled by $src"
+end
 # the run's verdict: red when a check fails; no verdict only when the machine cannot judge for a
 # reason of its tools or the tree (a tool missing, the tree changed during the run), never for load;
 # green when the run was cold or past the factor cap and its checks pass, its timing unjudged (a cold
@@ -833,16 +874,6 @@ function main(args)
     cpus = length(Sys.cpu_info())
     quiet = loadavg[1] <= cpus
     updating && !quiet && (updating = false; push!(notes, "WT_TIMING_UPDATE: refused, the machine is busy (load $(loadavg[1]) on $cpus CPUs): a best is measured on a quiet one"))
-    if updating && !isnan(fastest) && (isnan(bcal) || fastest < bcal)
-        old = bcal
-        best["calibration"] = round(fastest; digits = 6)
-        bcal = best["calibration"]
-        # a best is held at the calibration it was recorded under: lowering the calibration lowers
-        # every best in proportion in the same write, so no later factor loosens one (A19P6)
-        isnan(old) || for k in collect(keys(best))
-            k == "calibration" || (best[k] = round(best[k] * bcal / old; digits = 2))
-        end
-    end
     factor = machine_factor(calib, bcal)
     # past the cap the machine's scaled times say nothing of the change's: the stages are not compared
     # with their bests (the timing is unjudged), the budgets and the checks still are
@@ -998,31 +1029,15 @@ function main(args)
     isempty(intersect(touched, matrix)) ||
         push!(notes, "smoke: matrix-only $(join(intersect(touched, matrix), ' ')) run in the non-blocking matrix (test/block_groups.tsv)")
 
-    # ---- WT_TIMING_UPDATE=1: a green run on a clean tree lowers each best it beat ----
-    if updating
-        if !green || timing != "judged"
-            push!(notes, "WT_TIMING_UPDATE: refused, the run is not green ($verdict) or its timing is unjudged ($timing)")
-        elseif !clean
-            push!(notes, "WT_TIMING_UPDATE: refused, uncommitted changes (a best is measured on a committed tree)")
-        else
-            lowered = String[]
-            push!(lowered, "calibration $(best["calibration"])")
-            for k in RATCHETED
-                haskey(res, k) && res[k]["ratcheted"] || continue
-                w = res[k]["scaled"]; c = res[k]["cpu"]; bk = bestkey(k)
-                (!haskey(best, bk) || w < best[bk]) && (best[bk] = w; push!(lowered, "$bk $w"))
-                # a declared correctness fix's stage: its best is what it now takes, raised in this diff
-                k in exempt_stages && w > best[bk] && (best[bk] = w; push!(lowered, "$bk $w (raised: $exempt)"))
-                !isnan(c) && (!haskey(best_cpu, bk) || c < best_cpu[bk]) && (best_cpu[bk] = c)
-            end
-            write_best(budget, best, best_cpu)
-            push!(notes, "WT_TIMING_UPDATE: " * (isempty(lowered) ? "no best beaten" : "lowered " * join(lowered, ", ")))
-        end
-    end
-
     # one record per run: the next n for this tree, never overwriting an earlier run's (A19P2)
     n = 1 + maximum((m = match(Regex("^" * tree * "-([0-9]+)\\.toml\$"), f); m === nothing ? 0 : parse(Int, m[1])) for f in readdir(RECORD_DIR); init = 0)
     path = joinpath(RECORD_DIR, "$tree-$n.toml")
+
+    # what an update reads of this run (update_main): its record names the best it sets
+    RUN_RESULT[] = (verdict = verdict, timing = timing, clean = clean && unchanged, quiet = quiet, fastest = fastest, calib = calib,
+                    walls = Dict{String,Float64}(bestkey(k) => res[k]["wall"] for k in RATCHETED if haskey(res, k) && res[k]["ratcheted"]),
+                    cpus = Dict{String,Float64}(bestkey(k) => res[k]["cpu"] for k in RATCHETED if haskey(res, k) && res[k]["ratcheted"]),
+                    exempt_stages = exempt_stages, record = "$(tree[1:8])-$n", head = head, factor = factor)
     record = Dict{String,Any}(
         "tree" => tree, "head" => head, "base" => base, "clean" => clean, "env_removed" => removed,
         "verdict" => verdict, "verdict_why" => why, "timing" => timing, "timing_failed" => timing_failed, "checks_failed" => checks_failed,
@@ -1065,17 +1080,53 @@ function main(args)
     return verdict == "green" ? 0 : verdict == "red" ? 1 : 3
 end
 
-function write_best(budget, best, best_cpu)
+function write_best(budget, best, best_cpu, best_from)
     head = filter(l -> startswith(l, '#'), readlines(BEST_PATH))   # the header stays as written
     open(BEST_PATH, "w") do io
         foreach(l -> println(io, l), head)
-        for (name, d) in (("budget", budget), ("best", best), ("best_cpu", best_cpu))
+        for (name, d) in (("budget", budget), ("best", best), ("best_cpu", best_cpu), ("best_from", best_from))
             println(io, "\n[", name, "]")
             for k in sort(collect(keys(d)))
-                println(io, "\"", k, "\" = ", d[k])
+                x = d[k]
+                x isa AbstractString && any(in(('"', '\\')), x) && error("[$name] $k: a quote or backslash in $(repr(x))")
+                println(io, "\"", k, "\" = ", x isa AbstractString ? "\"" * x * "\"" : x)
             end
         end
     end
 end
 
-abspath(PROGRAM_FILE) == (@__FILE__) && exit(main(ARGS))
+const RUN_RESULT = Ref{Any}(nothing)
+# WT_TIMING_UPDATE=1: UPDATE_RUNS consecutive runs of the gate in one session; only when every one is
+# green with its timing judged, on a clean tree, on a quiet machine, the bests become what
+# updated_bests makes of them, each naming its source (A20P20)
+const UPDATE_RUNS = 3
+function update_main(args)
+    runs = Any[]
+    for i in 1:UPDATE_RUNS
+        println("WT_TIMING_UPDATE: run $i of $UPDATE_RUNS")
+        code = main(args)
+        r = RUN_RESULT[]
+        if r === nothing || !(r.verdict == "green" && r.timing == "judged" && r.clean && r.quiet)
+            println("WT_TIMING_UPDATE: refused, run $i of $UPDATE_RUNS is not a green run with its timing judged on a clean tree on a quiet machine",
+                    r === nothing ? "" : " ($(r.verdict), timing $(r.timing)$(r.clean ? "" : ", not clean")$(r.quiet ? "" : ", busy"))")
+            return code == 0 ? 1 : code
+        end
+        push!(runs, r)
+    end
+    TOML = Base.require(TOML_ID)
+    timing = Base.invokelatest(TOML.parsefile, BEST_PATH)
+    keys_ = intersect((keys(r.walls) for r in runs)...)
+    best, changes, how = updated_bests(timing["best"], [r.fastest for r in runs], [r.calib for r in runs],
+                                       Dict(k => [r.walls[k] for r in runs] for k in keys_), runs[end].exempt_stages)
+    # each best set or rescaled names its source; the CPU seconds are the median run's only where its best is
+    best_cpu = timing["best_cpu"]; best_from = get(timing, "best_from", Dict{String,Any}())
+    for (k, h) in how
+        best_from[k] = best_source(h, get(best_from, k, ""), [r.record for r in runs], runs[end].head, [r.factor for r in runs])
+        h === :median && k in keys_ && (best_cpu[k] = round(median([r.cpus[k] for r in runs]); digits = 2))
+    end
+    write_best(timing["budget"], best, best_cpu, best_from)
+    println("WT_TIMING_UPDATE: the median of $UPDATE_RUNS runs: ", isempty(changes) ? "no best changed" : join(changes, ", "))
+    return 0
+end
+
+abspath(PROGRAM_FILE) == (@__FILE__) && exit(get(ENV, "WT_TIMING_UPDATE", "") == "1" ? update_main(ARGS) : main(ARGS))

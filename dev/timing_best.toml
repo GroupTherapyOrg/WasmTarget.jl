@@ -6,8 +6,11 @@
 # the warm runner (`--warm`), where it has one. [best]: each ratcheted stage's best wall
 # seconds at the machine's best speed, and `calibration`, the best seconds of dev/block.jl's fixed
 # piece of work (a run's lower quartile); a stage more than 15% AND more than 0.3 s slower than its
-# best fails. [best_cpu]: the CPU seconds of the run that set each best, for the record.
-# `WT_TIMING_UPDATE=1 bash dev/gate.sh --block` lowers each best a green run beat.
+# best fails. [best_cpu]: the CPU seconds of the runs that set each best, for the record.
+# [best_from]: where each best came from, its records (dev/.block/<tree>-<n>.toml), the commit they
+# ran on and their machine factors (A20P20). `WT_TIMING_UPDATE=1 bash dev/gate.sh --block` runs the
+# gate three times and lowers each best to the median of the three (raising only a stage the
+# commit's own exemption names), writing each best's source.
 
 [budget]
 "case-median" = 1.0
@@ -42,3 +45,14 @@
 "ratchet@warm" = 11.94
 "smoke-core" = 66.83
 "smoke-core@warm" = 1.25
+
+[best_from]
+"calibration" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"
+"load" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
+"load@warm" = "set in 22f9cea4, no record named"
+"probes" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
+"probes@warm" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"
+"ratchet" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
+"ratchet@warm" = "set by hand in 36e3966e from one run, record 3ee4c795-6 on 72dc53fb at machine factor 1.0"
+"smoke-core" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
+"smoke-core@warm" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"

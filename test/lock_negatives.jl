@@ -12,6 +12,14 @@ const LOCK_NEGATIVE_CASES = [
      "    occursin(Regex(\"^\\\\| \" * replace(m[1], \".\" => \"\\\\.\") * \" \\\\|\", \"m\"), base_march) &&",
      "    false &&",
      "a Timing line citing a row the base already has exempts again (A20P26)"),
+    ("L195", "dev/timing_best.toml",
+     "\"probes@warm\" = \"one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14\"\n",
+     "",
+     "a best with no [best_from] entry (A20P20)"),
+    ("L195", "dev/block.jl",
+     "how === :median && return \"the median of \$src\"",
+     "how === :median && return \"median of \$src\"",
+     "a best's source loses its form (A20P20)"),
 ]
 
 @testset "lock negatives: each planted mutation fires its lock" begin
