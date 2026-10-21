@@ -2729,6 +2729,7 @@ _xf("unionall_array_values", Any[
 _g("closure_called_elsewhere", Any[
     ("closure_built_here_called_there", (n::Int64) -> (k = n; c = x -> x + k; _ft_run_any(Base.inferencebarrier(c), n)::Int64), Int64(3)),
     ("inner_closure_returned", (n::Int64) -> (mk = () -> (y -> y + n); g = Base.inferencebarrier(mk); h = g(); (h(n))::Int64), Int64(3)),
+    ("inner_closure_returned_vec", (n::Int64) -> (mk = () -> (y -> y + n); fs = Any[mk]; h = fs[1](); (h(n))::Int64), Int64(3)),
 ])
 
 # Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
