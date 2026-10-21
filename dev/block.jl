@@ -629,13 +629,16 @@ machine_factor(calib, best_calib) = isnan(best_calib) || isnan(calib) || best_ca
 # under (A19P6); then each ratcheted stage's best is the median of its runs' times at that calibration
 # (`times[key]` the runs' walls, `calibs` their calibration medians), lowered only, or raised for a
 # stage the commit's own exemption names (its best is what it now takes, in the same diff): one fast
-# run sets no best (A20P19, A20P20). The new bests, what changed, and how each written best was set
-# (`:median` of these runs, or `:rescaled` from its own source, A20P20).
+# run sets no best (A20P19, A20P20). A best with no source (`rerecord`, source_problem) is set to the
+# median whichever way it moves: it was never a best, and a rise is still held to the base's
+# (timing_against_base) unless the change's own new row exempts its stage (A20P25). The new bests,
+# what changed, and how each written best was set (`:median` of these runs, or `:rescaled` from its
+# own source, A20P20).
 function updated_bests(best::AbstractDict, fastest::Vector{Float64}, calibs::Vector{Float64},
-                       times::AbstractDict, exempt::Vector{String})
+                       times::AbstractDict, exempt::Vector{String}, rerecord::Vector{String} = String[])
     out = Dict{String,Any}(best); changes = String[]; how = Dict{String,Symbol}()
     bcal = get(out, "calibration", NaN); cal = median(fastest)
-    if isnan(bcal) || cal < bcal
+    if isnan(bcal) || cal < bcal || "calibration" in rerecord
         isnan(bcal) || for k in collect(keys(out))
             k == "calibration" || (out[k] = round(out[k] * cal / bcal; digits = 2); how[k] = :rescaled)
         end
@@ -645,8 +648,8 @@ function updated_bests(best::AbstractDict, fastest::Vector{Float64}, calibs::Vec
         length(walls) == length(calibs) || continue
         w = round(median([walls[i] / machine_factor(calibs[i], out["calibration"]) for i in eachindex(walls)]); digits = 2)
         stage = first(split(k, '@'))
-        if !haskey(out, k) || w < out[k]
-            out[k] = w; push!(changes, "$k $w"); how[k] = :median
+        if !haskey(out, k) || w < out[k] || k in rerecord
+            out[k] = w; push!(changes, "$k $w$(k in rerecord ? " (re-recorded: it had no source)" : "")"); how[k] = :median
         elseif stage in exempt && w > out[k]
             out[k] = w; push!(changes, "$k $w (raised: the exemption's stage)"); how[k] = :median
         end
@@ -661,6 +664,18 @@ function best_source(how::Symbol, old::AbstractString, records::Vector{String}, 
     how === :median && return "the median of $src"
     isempty(old) && error("a best rescaled by $src has no source of its own in [best_from]")
     return "$(first(split(old, "; rescaled by "))); rescaled by $src"
+end
+# why a best's [best_from] entry is no source, or "": a best is set only by an update, the median of
+# its UPDATE_RUNS records on one commit at machine factors within FACTOR_CAP, rescaled or not, never
+# by hand (A20P20, A20P25)
+function source_problem(src)::String
+    src === nothing && return "has no [best_from] entry"
+    m = match(r"^the median of records ((?:[0-9a-f]{8}-[0-9]+ )+)on [0-9a-f]{8} at machine factor ([0-9.]+(?: [0-9.]+)*)(?:; rescaled by .*)?$", src)
+    m === nothing && return "is not the median of an update's records (`$src`)"
+    n = length(split(m[1]))
+    n == UPDATE_RUNS || return "is the median of $n records, not of an update's $UPDATE_RUNS"
+    any(x -> parse(Float64, x) > FACTOR_CAP, split(m[2])) && return "was recorded past FACTOR_CAP ($FACTOR_CAP)"
+    return ""
 end
 # the run's verdict: red when a check fails; no verdict only when the machine cannot judge for a
 # reason of its tools or the tree (a tool missing, the tree changed during the run), never for load;
@@ -759,7 +774,14 @@ function main(args)
     probes = unique(vcat(probe_core, touched_probes(base)))
     tlc, tlc_deep = tlc_instances(changed)
     timing = Base.invokelatest(TOML.parsefile, BEST_PATH)
-    budget = timing["budget"]; best = timing["best"]; best_cpu = timing["best_cpu"]
+    budget = timing["budget"]; best_cpu = timing["best_cpu"]
+    # a best with no source bounds nothing (A20P25): a stage's is not compared with, and its want of a
+    # source is a timing failure (judged on a warm run under the cap, as a slower stage is), which the
+    # update re-records; the calibration's stays the factor's scale, flagged alike; the file itself is
+    # still held to the base's (timing_against_base)
+    unsourced = Dict{String,String}(k => p for k in keys(timing["best"])
+                                    for p in (source_problem(get(get(timing, "best_from", Dict{String,Any}()), k, nothing)),) if !isempty(p))
+    best = Dict{String,Any}(k => v for (k, v) in timing["best"] if k == "calibration" || !haskey(unsourced, k))
     msg = git("log", "-1", "--format=%B", "HEAD")
     # a Timing line the change does not back with its own MARCH row is a failure of the change
     exempt_problem = ""
@@ -898,6 +920,9 @@ function main(args)
     # baseline line does (test/parity_ratchet.jl); the update records it
     isnan(bcal) && (updating ? push!(notes, "calibration: no best, recorded by this update") :
                     push!(fails, "calibration: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)"))
+    haskey(unsourced, "calibration") &&
+        (updating ? push!(notes, "calibration: its best $(unsourced["calibration"]), re-recorded by this update") :
+                    push!(sfails, "calibration: its best $(unsourced["calibration"]) (WT_TIMING_UPDATE=1 re-records it)"))
 
     # ---- verdicts ----
     res = Dict{String,Any}()   # stage => fields for the record
@@ -918,7 +943,10 @@ function main(args)
         end
         bkey = bestkey(name)
         bw = get(best, bkey, NaN)
-        if name in RATCHETED && fixed && isnan(bw)
+        if name in RATCHETED && fixed && haskey(unsourced, bkey)
+            updating ? push!(notes, "$bkey: its best $(unsourced[bkey]), re-recorded by this update") :
+                push!(sfails, "$bkey: its best $(unsourced[bkey]) (WT_TIMING_UPDATE=1 re-records it)")
+        elseif name in RATCHETED && fixed && isnan(bw)
             updating ? push!(notes, "$bkey: no best, recorded by this update") :
                 push!(fails, "$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)")
         end
@@ -1131,16 +1159,20 @@ function update_main(args)
     TOML = Base.require(TOML_ID)
     timing = Base.invokelatest(TOML.parsefile, BEST_PATH)
     keys_ = intersect((keys(r.walls) for r in runs)...)
+    best_from = get(timing, "best_from", Dict{String,Any}())
+    rerecord = String[k for k in keys(timing["best"]) if !isempty(source_problem(get(best_from, k, nothing)))]
     best, changes, how = updated_bests(timing["best"], [r.fastest for r in runs], [r.calib for r in runs],
-                                       Dict(k => [r.walls[k] for r in runs] for k in keys_), runs[end].exempt_stages)
+                                       Dict(k => [r.walls[k] for r in runs] for k in keys_), runs[end].exempt_stages, rerecord)
     # each best set or rescaled names its source; the CPU seconds are the median run's only where its best is
-    best_cpu = timing["best_cpu"]; best_from = get(timing, "best_from", Dict{String,Any}())
+    best_cpu = timing["best_cpu"]
     for (k, h) in how
         best_from[k] = best_source(h, get(best_from, k, ""), [r.record for r in runs], runs[end].head, [r.factor for r in runs])
         h === :median && k in keys_ && (best_cpu[k] = round(median([r.cpus[k] for r in runs]); digits = 2))
     end
     write_best(timing["budget"], best, best_cpu, best_from)
     println("WT_TIMING_UPDATE: the median of $UPDATE_RUNS runs: ", isempty(changes) ? "no best changed" : join(changes, ", "))
+    left = sort([k for k in keys(best) if !isempty(source_problem(get(best_from, k, nothing)))])
+    isempty(left) || println("WT_TIMING_UPDATE: still with no source (a run of the other mode measures them: fresh, or --warm): ", join(left, ", "))
     return 0
 end
 

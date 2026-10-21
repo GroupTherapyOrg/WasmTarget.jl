@@ -10,7 +10,8 @@
 # [best_from]: where each best came from, its records (dev/.block/<tree>-<n>.toml), the commit they
 # ran on and their machine factors (A20P20). `WT_TIMING_UPDATE=1 bash dev/gate.sh --block` runs the
 # gate three times and lowers each best to the median of the three (raising only a stage the
-# commit's own exemption names), writing each best's source.
+# commit's own exemption names), writing each best's source. A best is set only so, never by hand:
+# one whose source is not an update's median bounds nothing until the update re-records it (A20P25).
 
 [budget]
 "case-median" = 1.0
