@@ -181,9 +181,9 @@ with the per-clause status. A clause is never closed by argument.
   side, each stage and the whole run on a budget, an evidence record per tree, the landing on
   that record alone, never while the last landed head's matrix is red)
   `L195` (its timing ratchet: a stage more than 15% and 0.3 s slower than its best fails, unless
-  the commit declares a correctness fix with its MARCH row; the budgets are literal walls, and a
-  machine more than 1.5 times slower than its best leaves the timing unjudged, never a scaled
-  pass, its checks and budgets still judged)
+  the commit declares a correctness fix in its own `Timing:` line, naming the stage and its
+  record; the budgets are literal walls, and a machine more than 1.5 times slower than its best
+  leaves the timing unjudged, never a scaled pass, its checks and budgets still judged)
   `L197` (the full loop: `dev/land.sh land` rebases, holds the machine, gates and lands a change
   in one command, logging each landing's seconds from edit to landed; the median of the last five
   at most its target, 180 s when it changes src, 90 s otherwise) `L198` (each landing records

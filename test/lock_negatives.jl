@@ -9,9 +9,13 @@ const _LN_ROOT = normpath(joinpath(@__DIR__, ".."))
 # (lock, path, planted text, its replacement, what the plant breaks)
 const LOCK_NEGATIVE_CASES = [
     ("L195", "dev/block.jl",
-     "    occursin(Regex(\"^\\\\| \" * replace(m[1], \".\" => \"\\\\.\") * \" \\\\|\", \"m\"), base_march) &&",
-     "    false &&",
-     "a Timing line citing a row the base already has exempts again (A20P26)"),
+     "    occursin(r\"\\b[0-9a-f]{8}-[0-9]+\\b\", f[2]) || error(",
+     "    true || error(",
+     "a Timing line whose cause names no record exempts (A28N1)"),
+    ("L195", "dev/block.jl",
+     "        s in STAGE_NAMES || error(",
+     "        true || error(",
+     "a Timing line naming a word that is no stage exempts (A28N1)"),
     ("L195", "dev/block.jl",
      "    all(r -> r.factor <= CALIBRATION_FACTOR, runs) ||\n",
      "    true ||\n",

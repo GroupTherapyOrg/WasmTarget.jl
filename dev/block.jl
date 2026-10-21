@@ -72,8 +72,8 @@
 # change is judged by its own dev/timing_best.toml, held to the base's: no budget or best of the
 # base's removed or raised (a best compared at one calibration), and an update that lowers the
 # calibration lowers every best with it (A19P6). A
-# commit whose message carries `Timing: correctness fix (MARCH 13.<n>)`, a row the change itself adds
-# to dev/MARCH.md naming the stages it leaves slower, records those stages slower without failing,
+# commit whose message carries its own `Timing: correctness fix (<stage> …): <cause naming a record>`
+# line naming the stages it leaves slower, records those stages slower without failing,
 # and its update raises their bests to what it measured, in the same reviewed diff (A19P7). WT_TIMING_UPDATE=1 runs the gate three
 # times (update_main) and, when all three are green with their timing judged on a clean tree on a quiet
 # machine, sets each best to the median of the three (updated_bests), lowered only but for an exempt
@@ -728,20 +728,24 @@ function timing_against_base(timing, base_timing, exempt_stages = String[])::Vec
     return out
 end
 const STAGE_NAMES = ("load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tlc")
-# the commit's declared correctness fix: the MARCH row its `Timing:` line cites, which the change
-# adds (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`) under a number the base's MARCH does not
-# have (an existing row, edited, exempts nothing, A20P26) and which names the stages the fix leaves
-# slower; the exemption's text and those stages (A19P7)
-function timing_exemption(msg::AbstractString, march_diff::AbstractString, base_march::AbstractString)::Tuple{String,Vector{String}}
-    m = match(r"^Timing: correctness fix \(MARCH (13\.[0-9]+)\)"m, msg)
+# the commit's declared correctness fix: its own `Timing: correctness fix (<stage> …): <cause>` line, the
+# stages it leaves slower in the parentheses (each a gate stage, or its `@warm` key) and the measured
+# cause naming a record (<tree8>-<n>); an exemption is one commit's, as its message is, never a plan row
+# (A28N1); the exemption's text and those stages (A19P7)
+function timing_exemption(msg::AbstractString)::Tuple{String,Vector{String}}
+    m = match(r"^Timing: correctness fix(.*)$"m, msg)
     m === nothing && return ("", String[])
-    occursin(Regex("^\\| " * replace(m[1], "." => "\\.") * " \\|", "m"), base_march) &&
-        error("block: the commit's Timing line cites MARCH $(m[1]), a row the base already has: an edited row exempts nothing; the exemption is a new row")
-    row = match(Regex("^\\+\\| " * replace(m[1], "." => "\\.") * " \\|(.*)\$", "m"), march_diff)
-    row === nothing && error("block: the commit's Timing line cites MARCH $(m[1]), a row this change does not add to dev/MARCH.md")
-    stages = [s for s in STAGE_NAMES if occursin(Regex("(?<![a-z0-9.-])" * replace(s, "." => "\\.") * "(?![a-z0-9.-])"), row[1])]
-    isempty(stages) && error("block: MARCH $(m[1]), the row the Timing line cites, names no stage of the gate ($(join(STAGE_NAMES, ", ")))")
-    return ("correctness fix, MARCH $(m[1]) ($(join(stages, ", ")))", stages)
+    f = match(r"^ \(([^()]*)\): (.+)$", m[1])
+    f === nothing && error("block: the commit's Timing line is not `Timing: correctness fix (<stage> …): <the measured cause, naming a record>`")
+    stages = String[]
+    for t in split(f[1], r"[ ,]+"; keepempty = false)
+        s = replace(t, r"@warm$" => "")
+        s in STAGE_NAMES || error("block: the commit's Timing line names $(repr(t)), no stage of the gate ($(join(STAGE_NAMES, ", ")))")
+        s in stages || push!(stages, s)
+    end
+    isempty(stages) && error("block: the commit's Timing line names no stage of the gate ($(join(STAGE_NAMES, ", ")))")
+    occursin(r"\b[0-9a-f]{8}-[0-9]+\b", f[2]) || error("block: the commit's Timing line names no record (<tree8>-<n>) its cause was measured on")
+    return ("correctness fix ($(join(stages, ", "))): $(f[2])", stages)
 end
 
 function main(args)
@@ -803,8 +807,7 @@ function main(args)
     # a Timing line the change does not back with its own MARCH row is a failure of the change
     exempt_problem = ""
     exempt, exempt_stages = try
-        timing_exemption(msg, git("diff", "$base..HEAD", "--", "dev/MARCH.md"),
-                         gitok("cat-file", "-e", "$base:dev/MARCH.md") ? git("show", "$base:dev/MARCH.md") : "")
+        timing_exemption(msg)
     catch err
         exempt_problem = sprint(showerror, err)
         ("", String[])

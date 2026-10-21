@@ -107,7 +107,7 @@ HOLD="$MAIN/dev/.block/HOLD"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
 # a red timing's debt (SLOWER, OVER) is lifted by the red landing's excuse file in the landing's own tree,
-# it by its first 8 hex digits (a Timing exemption row, or the fix's row): <commit> <owed>; a failed
+# it by its first 8 hex digits (a Timing exemption line, or the fix's): <commit> <owed>; a failed
 # check's (FAILED) never is: only a fix lands it, green on a warm run (A21E1)
 owed_lifted() { case "${2#* }" in FAILED*) return 1 ;; esac
                 git cat-file -e "$1:dev/.loop/excuse/${2:0:8}" 2>/dev/null; }
@@ -212,7 +212,7 @@ merge)
         if owed_lifted "$head" "$owed"; then
             echo "the last landing's timing is red ($owed); this landing carries its excuse file: lifted"
         else
-            echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing carrying dev/.loop/excuse/${owed%% *} (a cause outside its change, or a Timing: correctness fix row) — refusing"; exit 1
+            echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing carrying dev/.loop/excuse/${owed%% *} (a cause outside its change, or the commit's own Timing: correctness fix line) — refusing"; exit 1
         fi
     fi
     # the last closure matrix (the full matrix runs only at clause closure, Dale 2026-10-21): gate.yml's
@@ -371,7 +371,7 @@ land)
     echo "$out" | tail -1
     step runner
     # a landing whose timing was judged red (its line SLOWER or FAILED, L198) is owed a judged green
-    # run: the next landing lands only on one (a fix, or a `Timing: correctness fix` row)
+    # run: the next landing lands only on one (a fix, or its own `Timing: correctness fix` line)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
     if [ -n "$owed" ] && owed_lifted HEAD "$owed"; then
         echo "land: the last landing's timing is red ($owed); this branch carries its excuse file: lifted"; owed=""
@@ -455,7 +455,7 @@ land)
         mv "$LOG.new" "$LOG"
         echo "land: the timing of ${head:0:8}: $verdict_t"
         case $verdict_t in SLOWER* | OVER* | FAILED*)
-            echo "land: its record is red and stands: the next landing lands on a judged green run, or carries dev/.loop/excuse/${head:0:8} (a cause outside the change, or a Timing: correctness fix row; L198); a FAILED check only as a fix green on a warm run" ;;
+            echo "land: its record is red and stands: the next landing lands on a judged green run, or carries dev/.loop/excuse/${head:0:8} (a cause outside the change, or the commit's own Timing: correctness fix line; L198); a FAILED check only as a fix green on a warm run" ;;
         esac
     fi
     rm -f "$glog"
