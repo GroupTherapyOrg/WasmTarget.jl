@@ -45,19 +45,21 @@
 #       timing's state (L198). After a line judged red, a landing lands on a judged green run or
 #       carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (`merge` refuses any other). A
 #       worktree whose Manifest.toml names other WasmTarget extensions than Project.toml is refused.
-#       Before the gate, `land` writes the previous landing's excuse itself, into the landing's own tree,
-#       when that landing took longer than L197's target and the causes outside its change, measured
-#       from its steps, its gate runs' records and an earlier tree of it refused on L148 or L197 alone,
-#       bring it within the target (dev/loop_excuse.sh write, A25E1); a cause they cannot measure still
-#       needs its hand line, which L197 holds to the steps (dev/loop_excuse.sh check, A25E2).
+#       L197 judges a landing's own mechanics, own_s, never its waits (A30E1): from its change's first
+#       red gate run, or its land's start, to its push, less its wait for another landing's hold; the
+#       waits are queue_wait_s, reported beside it, and need no excuse.
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
-#   landed_at  commit  author_at  land_start  gate_runs  gate_wall_s  land_wall_s  edit_to_landed_s  files  insertions  timing
+#   landed_at  commit  author_at  land_start  gate_runs  gate_wall_s  land_wall_s  edit_to_landed_s  files  insertions  timing  own_s  queue_wait_s
 # author_at the earliest author time of the commits the landing brings (the edit), commit the landed
 # head, files the paths those commits change and insertions the lines they add (git log --numstat
 # over the range), gate_runs and gate_wall_s the gate runs `land` made (0 for a bare `merge`), timing
-# the record's (judged, or unjudged when the machine was past the gate's factor cap).
+# the record's (judged, or unjudged when the machine was past the gate's factor cap), own_s the
+# landing's own mechanics (from its change's first red blocking-gate run, or its land's start, to its
+# push, less its wait for another landing's hold, A30E1) and queue_wait_s the rest of edit_to_landed_s
+# (the holds of others, an audit window, a stack's author time before its land began). A line before
+# A30E1 has the first eleven fields.
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
 # holds a landing: the last closure matrix's verdict is read, never waited for. The one
@@ -274,10 +276,15 @@ merge)
                     END { print min, n + 0, ins + 0 }')
     start=${LAND_START:-$m_start}
     mkdir -p "$(dirname "$LOG")"
-    [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\n' > "$LOG"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
+    [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\town_s\tqueue_wait_s\n' > "$LOG"
+    # own_s, the landing's own mechanics (A30E1): from its change's first red gate run, or its land's
+    # start, to its push, less its wait for another landing's hold; queue_wait_s the rest of its edit to
+    # landed (the holds of others, an audit window, a stack's author time before its land began)
+    e2l=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")
+    own=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1] - $ARGV[2]' "$landed" "${LAND_FIRST:-$start}" "${LAND_HOLD_WAIT:-0}")
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
         "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
-        "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")" "$files" "$ins" "$timing" >> "$LOG"
+        "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$e2l" "$own")" >> "$LOG"
     # the landing's one push is the march branch's, above: gate.yml runs the full matrix on it when its
     # head carries `Closes: C<n>` (no other ref is pushed, L153)
     echo "landed $br @ ${head:0:8} on $MARCH"
@@ -287,7 +294,7 @@ land)
     # is an exit: the rebase below rewrites this file under the running shell, which reads no more
     l_start=$(now); s0=$l_start; steps=""
     step() { local t d; t=$(now); d=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$t" "$s0")
-             steps="$steps$1"$'\t'"$d"$'\n'; s0=$t; echo "land: step $1 $d s"; }
+             steps="$steps$1"$'\t'"$d"$'\n'; s0=$t; last_step=$d; echo "land: step $1 $d s"; }
     W=$(git rev-parse --show-toplevel)
     [ "$W" != "$MAIN" ] || { echo "land: run it in the batch's worktree, not the main tree — refusing"; exit 1; }
     [ "$br" != "$MARCH" ] || { echo "land: $br is the march branch — refusing"; exit 1; }
@@ -327,15 +334,25 @@ land)
         waited=1; sleep 2
     done
     step hold
+    # the wait for another landing's hold: a queue wait, never the landing's own time (A30E1)
+    hold_wait=$last_step
     git fetch -q origin
     tip=$(git rev-parse "$MARCH")
     git merge-base --is-ancestor "origin/$MARCH" "$tip" ||
         { echo "land: origin/$MARCH holds commits the main tree's $MARCH lacks — refusing"; exit 1; }
     if ! git merge-base --is-ancestor "$tip" HEAD && ! git rebase -q "$tip"; then
-        # a stop whose only conflict is the ratchet baseline resolves through dev/merge_baseline.py
-        while [ "$(git diff --name-only --diff-filter=U)" = "dev/parity_baseline.toml" ]; do
-            python3 dev/merge_baseline.py dev/parity_baseline.toml || break
-            git add dev/parity_baseline.toml
+        # a stop whose only conflicts are the ratchet baseline, resolved through dev/merge_baseline.py, and
+        # the carried landing log, which an earlier attempt left in the commit and which takes the tip's
+        # (it is carried again below)
+        while u=$(git diff --name-only --diff-filter=U) && [ -n "$u" ] &&
+              [ -z "$(printf '%s\n' "$u" | grep -vx -e dev/parity_baseline.toml -e dev/.loop/landings.log || true)" ]; do
+            if printf '%s\n' "$u" | grep -qx dev/parity_baseline.toml; then
+                python3 dev/merge_baseline.py dev/parity_baseline.toml || break
+                git add dev/parity_baseline.toml
+            fi
+            if printf '%s\n' "$u" | grep -qx dev/.loop/landings.log; then
+                git checkout --ours -- dev/.loop/landings.log && git add dev/.loop/landings.log
+            fi
             GIT_EDITOR=true git rebase --continue && break
         done
         if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
@@ -352,6 +369,12 @@ land)
     ahead=$(git rev-list --count "$tip..HEAD")
     [ "$ahead" -eq 1 ] ||
         { echo "land: $br is $ahead commits ahead of $MARCH ${tip:0:8}: one landing is one commit, its own tree gated (A24E1) — land them one at a time — refusing"; exit 1; }
+    # L148's window again on the rebased head: a landing that took the hold while this one waited may
+    # have filled it since the preflight; the same program on this tree, before the gate
+    if ! win=$(bash dev/audit_window.sh "$W"); then
+        read -r wsha wcount wcap wentries <<<"$win"
+        echo "land: the audit window is full on the rebased head ($wcount commits past ${wsha:0:8}, at most $wcap: L148; $win): wait for audit #$((wentries + 1)) — refusing"; exit 1
+    fi
     for h in $(git rev-list --reverse --no-merges "$tip..HEAD"); do
         msg=$(git log -1 --format=%B "$h"); what=$(git log -1 --format='%h %s' "$h")
         printf '%s\n' "$msg" | grep -qE '^Charter: C[0-9]+' || { echo "land: $what has no 'Charter: C<n>' line — refusing"; exit 1; }
@@ -387,23 +410,6 @@ land)
         git commit -q --amend --no-edit
         echo "land: the landing log through $(tail -n 1 "$LOG" | cut -c22-29) carried in ${br}'s head, now $(git rev-parse --short HEAD)"
     fi
-    # the previous landing's excuse, written by land itself into the same head before the gate (A25E1):
-    # when it took longer than L197's target and its causes outside its change, measured from its steps,
-    # its gate runs' records and an earlier tree of it refused on L148 or L197 alone, bring it within the
-    # target (dev/loop_excuse.sh); a hand line stays for a cause they cannot measure
-    prev=$(tail -n 1 "$LOG" 2>/dev/null | cut -f2)
-    if [ ${#prev} -eq 40 ] && [ ! -e "dev/.loop/excuse/${prev:0:8}" ]; then
-        recs=()
-        for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
-            for f in "$w"/dev/.block/*-*.toml; do [ -f "$f" ] && recs+=("$f"); done
-        done
-        ex=$(bash dev/loop_excuse.sh write "$LOG" "$STEPS" "$prev" dev/.loop/excuse ${recs[@]+"${recs[@]}"})
-        if [ -n "$ex" ]; then
-            git add "dev/.loop/excuse/${prev:0:8}" && git commit -q --amend --no-edit
-            echo "land: ${prev:0:8}'s excuse, measured, carried in ${br}'s head, now $(git rev-parse --short HEAD): $ex"
-        fi
-    fi
-    step excuse
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
     echo "$out" | tail -1
     step runner
@@ -454,13 +460,25 @@ land)
         done
         echo "land: Closes: $(echo $closes): the ratchet reads each CLOSED; the full matrix runs on this landing's push"
     fi
-    LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    # the landing's own time starts at its change's first red gate run, when one ran (A30E1): the earliest
+    # start of a red blocking-gate record, in any worktree, of a commit of the same change (its author
+    # time, author and subject, as a rebase or an amend keeps them) after its author time; else this land
+    want=$(git log -1 --format='%at %ae %s' HEAD); au=${want%% *}; first=$l_start
+    for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
+        for f in "$w"/dev/.block/*-*.toml; do
+            [ -f "$f" ] && grep -qx 'verdict = "red"' "$f" || continue
+            rs=$(awk -F' = ' '$1 == "finished" { f = $2 } $1 == "total_wall" { w = $2 } END { if (f != "" && w != "") printf "%.1f", f - w }' "$f")
+            [ -n "$rs" ] && perl -e 'exit !($ARGV[0] >= $ARGV[1] && $ARGV[0] < $ARGV[2])' "$rs" "$au" "$first" || continue
+            [ "$(git log -1 --format='%at %ae %s' "$(sed -n 's/^head = "\(.*\)"$/\1/p' "$f")" 2>/dev/null)" = "$want" ] && first=$rs
+        done
+    done
+    LAND_HOLDER=$$ LAND_START=$l_start LAND_FIRST=$first LAND_HOLD_WAIT=$hold_wait LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")
     [ "$(printf '%s' "$line" | cut -f2)" = "$head" ] || { echo "land: the landing log's last line is not ${head:0:8}'s"; exit 1; }
     # the push is the landing
-    echo "LOOP $(printf '%s' "$line" | cut -f8) of 300 s"
+    echo "LOOP $(printf '%s' "$line" | cut -f12) of 300 s (own; queue wait $(printf '%s' "$line" | cut -f13) s)"
     # a cold landing's timing, judged now by a warm run of the landed tree (the change taken from the
     # march tip it landed on), the machine still held: judged, unjudged (the run could not judge), or
     # SLOWER <stages> / FAILED <stages> (its record red, standing), written into the landing's line
@@ -496,7 +514,7 @@ land)
         esac
     fi
     rm -f "$glog"
-    # the steps before the hold is released: the next landing measures this one's excuse from them
+    # the steps, each landing's walls, before the hold is released
     printf '%s' "$steps" | awk -v h="$head" -F'\t' '{ print h "\t" $1 "\t" $2 }' >> "$STEPS"
     release
     echo "land: steps $(printf '%s' "$steps" | awk -F'\t' '{ printf "%s%s %s s", (NR > 1 ? ", " : ""), $1, $2 }')"

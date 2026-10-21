@@ -766,11 +766,12 @@ end
 # ---- the landing log (L197): `dev/land.sh merge` appends a line per landing to the main tree's
 # dev/.loop/landings.tsv; these decide over its text and the march branch's history ----------------
 const L197_START = "36e3966ebd22fce82f2688f039e236287bebdc00"   # the last landing before the log
-const L197_TARGET = 300         # seconds from edit to landed, every change alike (Dale 2026-10-21: "a few
-                                # minutes"; "wicked fast, not tens of minutes to hours")
+const L197_TARGET = 300         # seconds of a landing's own mechanics, every change alike (Dale 2026-10-21: "a
+                                # few minutes"; "wicked fast, not tens of minutes to hours"; A30E1)
 const L197_BAND = 600           # the band's edge: a median past it is red, one between the target and it a
                                 # landing in minutes still, never a failure (L205: a target is not a tripwire)
-const L197_COLUMNS = "landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming"
+const L197_COLUMNS_V1 = "landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming"
+const L197_COLUMNS = L197_COLUMNS_V1 * "\town_s\tqueue_wait_s"   # A30E1: a landing's own time and its waits
 
 # the seconds since 1970 of a `YYYY-MM-DDTHH:MM:SSZ` time (days from the civil date)
 function _l197_epoch(s::AbstractString)::Int
@@ -804,21 +805,23 @@ end
 # landing has its line (the lines' commits in history order, the last the tip, and each line's files
 # and insertions git's over its range, so a landing that wrote no line changes the next line's
 # numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
-# that; and over the last 5 lines no excuse names (`excused`: the names of the tree's excuse files,
-# l197_excuses, nothing else), the upper median of edit_to_landed_s over L197_TARGET at most 1
+# that, its own_s and queue_wait_s (A30E1) at least 0 and summing to edit_to_landed_s; and over the
+# last 5 lines the upper median of each landing's own mechanics over L197_TARGET at most 1: own_s, its
+# land's work less its wait for another landing's hold, never its waits (a line before A30E1, eleven
+# fields, judged by land_wall_s, its land's start to its push); no excuse takes a landing out of it
 const L197_JUDGED_FROM = 3     # the fewest lines in the window its median is judged over
-function l197_check(log::AbstractString, hist, excused::AbstractSet; head::AbstractString = "")
+function l197_check(log::AbstractString, hist; head::AbstractString = "")
     bad = String[]
     rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
     if !isempty(rows)
-        join(rows[1], '\t') == L197_COLUMNS || push!(bad, "the log's first line is not its header")
+        join(rows[1], '\t') in (L197_COLUMNS, L197_COLUMNS_V1) || push!(bad, "the log's first line is not its header")
         rows = rows[2:end]
     end
     idx = Dict(h[1] => i for (i, h) in enumerate(hist))
     ratios = Tuple{String,Float64}[]
     k = 0
     for r in rows
-        length(r) == 11 || (push!(bad, "a line of $(length(r)) fields, not 11: $(join(r, ' '))"); continue)
+        length(r) in (11, 13) || (push!(bad, "a line of $(length(r)) fields, not 13 (11 before A30E1): $(join(r, ' '))"); continue)
         c = String(r[2]); i = get(idx, c, 0)
         i == 0 && (push!(bad, "the line of $(first(c, 8)): no commit the march branch brought after $(first(L197_START, 8))"); continue)
         i > k || (push!(bad, "the line of $(first(c, 8)): out of the history's order"); continue)
@@ -831,18 +834,23 @@ function l197_check(log::AbstractString, hist, excused::AbstractSet; head::Abstr
         _l197_epoch(r[3]) == author || push!(bad, "the line of $(first(c, 8)): author_at $(r[3]) is not its range's earliest author time")
         e2l = parse(Float64, r[8])
         abs(e2l - (_l197_epoch(r[1]) - author)) <= 1 || push!(bad, "the line of $(first(c, 8)): edit_to_landed_s $(r[8]) is not landed_at less author_at")
-        push!(ratios, (c, e2l / L197_TARGET))
+        own = parse(Float64, length(r) == 13 ? r[12] : r[7])
+        if length(r) == 13
+            q = parse(Float64, r[13])
+            (own >= 0 && q >= -1 && abs(own + q - e2l) <= 1) ||
+                push!(bad, "the line of $(first(c, 8)): own_s $(r[12]) and queue_wait_s $(r[13]) do not split its edit_to_landed_s $(r[8])")
+        end
+        push!(ratios, (c, own / L197_TARGET))
         k = i
     end
     k == length(hist) || push!(bad, "$(length(hist) - k) commit(s) up to the march tip $(first(hist[end][1], 8)) landed with no line (dev/land.sh merge writes one per landing)")
-    named(c) = first(c, 8) in excused
     # the line of the commit being gated is never judged by its own gate: a landing's judgement after
     # its push runs on the landed head, whose line is already written
-    window = last(filter(x -> !named(x[1]) && x[1] != head, ratios), 5)
+    window = last(filter(x -> x[1] != head, ratios), 5)
     # judged once the window holds at least 3 lines: a median of fewer is one landing's own number
     if length(window) >= L197_JUDGED_FROM
         s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
-        med <= L197_BAND / L197_TARGET || push!(bad, "the median edit to landed of the last $(length(window)) landings no excuse file names is $(round(med; digits = 2)) times its $L197_TARGET s target, past its band of $L197_BAND s ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): fix the loop, or excuse a slower landing whose cause lay outside its change in dev/.loop/excuse/<sha8>")
+        med <= L197_BAND / L197_TARGET || push!(bad, "the median own time of the last $(length(window)) landings, land start to push less the wait for others' holds, is $(round(med; digits = 2)) times its $L197_TARGET s target, past its band of $L197_BAND s ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): fix the loop's own mechanics")
     end
     return bad, window
 end
@@ -1597,13 +1605,20 @@ const LOCKS = [
             end
             v
         end),
-    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a branch more than one commit ahead of the march tip (one landing is one commit, its own tree gated: `merge` judges the head alone, A24E1), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: C<a> C<b> … authorised by Dale <date>` line (CHANGE_SED; several clauses in one commit, since L148 counts commits), the change's parent and new dev/CHARTER.md blobs listed with those clauses, as a set, and that date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit; `authorised`), and every changed line in one of those clauses (CLAUSE_AWK, HUNK_AWK, `clause_in`); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> of 300 s`. Here: the landing log each landing carries in its own tree (dev/.loop/landings.log, written by `land` into the branch's head before the gate, A21E4) is a line-by-line prefix of the main tree's git-ignored log, missing at most one landing this tree holds (the tip's own); every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no excuse names (an excuse being the tracked file dev/.loop/excuse/<sha8> alone, one line `machine|lock|crossing: <the measured cause>`, written for a landing whose cause lay outside its change, never a MARCH row or any text search, A22E1, and only one its landing's steps bear out, A25E2), once at least 3 such lines exist (L197_JUDGED_FROM: fewer are printed with the target and pass), the median of edit_to_landed_s inside its band (intent: a landing takes minutes, never tens of minutes, Dale 2026-10-21, \"wicked fast, not tens of minutes to hours\"; band: one 300-s target for every change, L197_TARGET, red only past 600 s, L197_BAND, both this lock's literals, never raised); every excuse file is named for a landed commit and holds that one line. An excuse is measured, never asserted (A25E1, A25E2): `land` writes the previous landing's excuse itself into its own tree before the gate (dev/loop_excuse.sh write) when that landing took longer than the target and its causes outside its change leave at most the target of its own, measured from the main tree's dev/.loop/steps.tsv (the hold, a runner started, the gate runs made again and the last run's wall past the gate's total budget, which a green run has only cold or past the factor cap), its gate runs' records and an earlier tree of the change (its author time, author and subject) refused by the gate on L148 or L197 alone, and never for a landing whose timing was judged red (an excuse file lifts that debt too, L198); a cause these cannot measure still needs its hand line; every excuse file is held to its landing's steps by the same program (dev/loop_excuse.sh check): a measured line's every step and its refusal as measured and its own time within the target, a hand line's numbers that steps.tsv also measures (`waited N s`: the hold and the commit-to-start time; `N s waiting on the hold`; a step and its seconds) within 10 per cent, and a hand line refused where steps.tsv alone measures the landing within the target. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's charter programs, a two-clause Charter-change line read and matched to an authorisation listing its clauses in another order, a clause missing, added or a date changed refused, and a change in C0 refused under a line listing C4; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; an excused landing and the gated commit's own line leave the window, and a scratch tree whose dev/MARCH.md names a slower landing excuses nothing where its excuse file does; the carried copy and the excuse files' form each checked; dev/loop_excuse.sh on a scratch log and steps: a hold-bound landing's excuse written and passing, a wait with no refusal and a red timing never written, an earlier tree refused on L148 alone measured and one also broken on L194 not, a hand line with a wrong number and a hand line steps.tsv measures each refused, a measured line edited, or its refusal moved before its commit, refused; `land` prints `LOOP <s> of` the same target; .gitignore tracks the carried log and the excuse directory alone of dev/.loop. Negative-tested: a planted slow line, the excuses read from dev/MARCH.md's text, a malformed excuse file name and a raised target each fire it, and in test/lock_negatives.jl the check's tolerance dropped, the writer never writing, the writer writing for an unmeasured wait and land's call to it removed each fire it, and a planted median over the target inside the band passes (dev/CHARTER.md C10)",
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a branch more than one commit ahead of the march tip (one landing is one commit, its own tree gated: `merge` judges the head alone, A24E1), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: C<a> C<b> … authorised by Dale <date>` line (CHANGE_SED; several clauses in one commit, since L148 counts commits), the change's parent and new dev/CHARTER.md blobs listed with those clauses, as a set, and that date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit; `authorised`), and every changed line in one of those clauses (CLAUSE_AWK, HUNK_AWK, `clause_in`); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing, own_s, queue_wait_s), and prints each step's wall and `LOOP <own_s> of 300 s (own; queue wait <queue_wait_s> s)`. Here: the landing log each landing carries in its own tree (dev/.loop/landings.log, written by `land` into the branch's head before the gate, A21E4) is a line-by-line prefix of the main tree's git-ignored log, missing at most one landing this tree holds (the tip's own); every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at, split into own_s and queue_wait_s (A30E1): own_s a landing's own mechanics, from its change's first red blocking-gate run (the earliest red record, in any worktree, of a commit with its author time, author and subject, after that author time) or its land's start to its push, less its wait for another landing's hold, so its gate and its own reds count and the waits for other landings' holds, an audit window or a cancelled stack's author time do not; queue_wait_s the rest, reported as its own metric for the orchestrator; and over the last 5 lines, once at least 3 exist (L197_JUDGED_FROM: fewer are printed with the target and pass), the median of own_s inside its band (a line from before A30E1, eleven fields, judged by land_wall_s, its land's start to its push), no excuse taking a landing out of the window (intent: a landing takes minutes, never tens of minutes, Dale 2026-10-21, \"wicked fast, not tens of minutes to hours\"; band: one 300-s target for every change, L197_TARGET, red only past 600 s, L197_BAND, both this lock's literals, never raised); every excuse file (dev/.loop/excuse/<sha8>, one line `machine|lock|crossing: <the measured cause>`, which lifts a red timing's debt, L198, never a wait's, A30E1) is named for a landed commit, holds that one line, and is held to its landing's steps by dev/loop_excuse.sh check (A25E2): a line measured by `land` (written until A30E1, when the writer went) with its every step and refusal as measured and its own time within the target, a hand line's numbers that steps.tsv also measures (`waited N s`: the hold and the commit-to-start time; `N s waiting on the hold`; a step and its seconds) within 10 per cent. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's charter programs, a two-clause Charter-change line read and matched to an authorisation listing its clauses in another order, a clause missing, added or a date changed refused, and a change in C0 refused under a line listing C4; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; landings slower only by their queue waits pass on their own time, two of three past the band in their own time fail (a median landing of 700 s own fires it), two of three over the target inside the band pass, and the gated commit's own line leaves the window; a line before A30E1 judged by its land's wall; own_s and queue_wait_s that do not split the edit to landed, or a line of twelve fields, fail; the carried copy and the excuse files' form each checked; dev/loop_excuse.sh check on a scratch log and steps: a measured line passing, edited or for a red timing refused, a hand line with a wrong wait or a wrong hold refused and one with the right wait passing; land.sh holds no excuse writer; `land` prints `LOOP <s> of` the same target; .gitignore tracks the carried log and the excuse directory alone of dev/.loop. Negative-tested: a planted slow line, a malformed excuse file name and a raised target each fire it, and in test/lock_negatives.jl the check's tolerance dropped, and own_s computed with the hold's wait in it each fire it, and a planted median over the target inside the band passes (dev/CHARTER.md C10)",
         () -> begin
             local v = 0
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
             local rx = read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)
             for line in [raw"        set +e; bash dev/gate.sh --block --warm 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
-                         raw"    LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash \"$W/dev/land.sh\" merge \"$br\"",
+                         raw"    LAND_HOLDER=$$ LAND_START=$l_start LAND_FIRST=$first LAND_HOLD_WAIT=$hold_wait LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash \"$W/dev/land.sh\" merge \"$br\"",
+                         # a landing's own mechanics, never its waits (A30E1): from its change's first red gate run or its
+                         # land's start, less its wait for another landing's hold; the waits written beside it
+                         raw"    hold_wait=$last_step",
+                         # a red attempt's carried landing log takes the tip's on the next rebase, carried again
+                         raw"                git checkout --ours -- dev/.loop/landings.log && git add dev/.loop/landings.log",
+                         raw"    want=$(git log -1 --format='%at %ae %s' HEAD); au=${want%% *}; first=$l_start",
+                         raw"    own=$(perl -e 'printf \"%.1f\", $ARGV[0] - $ARGV[1] - $ARGV[2]' \"$landed\" \"${LAND_FIRST:-$start}\" \"${LAND_HOLD_WAIT:-0}\")",
                          # merge is land's internal step alone: it runs only inside the landing holding the hold (A21E5)
                          raw"    [ -n \"${LAND_HOLDER:-}\" ] && [ \"$holder\" = \"$LAND_HOLDER\" ] && kill -0 \"$holder\" 2>/dev/null ||",
                          raw"    [ -z \"$(git status --porcelain)\" ] || { echo \"land: $W has uncommitted or untracked files — refusing\"; git status --short | awk 'NR <= 10'; exit 1; }",
@@ -1619,9 +1634,7 @@ const LOCKS = [
                          # one landing is one commit, its own tree gated (A24E1)
                          raw"    ahead=$(git rev-list --count \"$tip..HEAD\")" * "\n" * raw"    [ \"$ahead\" -eq 1 ] ||",
                          raw"        if [ \"$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' \"$h^\" \"$h\" -- dev/CHARTER.md | awk \"$EXEMPT_AWK\")\" = yes ]; then",
-                         # the previous landing's measured excuse, written by land into its own tree (A25E1)
                          raw"STEPS=\"$MAIN/dev/.loop/steps.tsv\"",
-                         raw"        ex=$(bash dev/loop_excuse.sh write \"$LOG\" \"$STEPS\" \"$prev\" dev/.loop/excuse ${recs[@]+\"${recs[@]}\"})",
                          raw"    git push -q origin \"$MARCH\"" * "\n" * raw"    landed=$(now)"]
                 v += occursin(line, land) ? 0 : 1
             end
@@ -1632,7 +1645,9 @@ const LOCKS = [
             v += occursin("const L197_TARGET = 300 ", rx) && occursin("const L197_JUDGED_FROM = 3 ", rx) &&
                  occursin("const L197_BAND = 600 ", rx) ? 0 : 1
             # `land` prints the loop against the same target
-            v += occursin(raw"    echo \"LOOP $(printf '%s' \"$line\" | cut -f8) of " * string(L197_TARGET) * raw" s\"", land) ? 0 : 1
+            v += occursin(raw"    echo \"LOOP $(printf '%s' \"$line\" | cut -f12) of " * string(L197_TARGET) * raw" s (own; queue wait", land) ? 0 : 1
+            # no excuse writer: a wait needs no excuse (A30E1)
+            v += occursin("loop_excuse.sh write", land) ? 1 : 0
             v += occursin("\ndev/.loop/*\n!dev/.loop/landings.log\n!dev/.loop/excuse/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
             try
                 # land.sh's charter programs, run on fixed text (A21E6)
@@ -1671,46 +1686,57 @@ const LOCKS = [
                                !shok("clause_in", "C0", "C4"), shok("clause_in", "C4", "C0 C4"), shok("clause_in", "C10", "C1 C10"),
                                !shok("clause_in", "C1", "C10"), !shok("clause_in", "-", "C4")])
                 rm(af; force = true)
-                # behavior on fixed text: three commits, the second landing two
+                # behavior on fixed text: three commits, the second landing two; each line's own time (own_s)
+                # beside its waits (queue_wait_s), the two splitting its edit to landed (A30E1)
                 local t0 = _l197_epoch("2026-10-21T14:00:00Z")
                 local hist = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n")
-                local ln = (c, landed, author, f, i) -> join([landed, c, author, landed, "2", "40.0", "60.0",
-                                                              string(_l197_epoch(landed) - _l197_epoch(author)) * ".0", f, i, "judged"], '\t')
-                local good = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
-                             ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
-                # 340 s for a 90 s landing: the upper median of 0.83 and 3.78
-                local slow = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
-                             ln("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1") * "\n"
-                local gap = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "1", "1") * "\n"
-                local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6") * "\n" *
-                              ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
-                local partial = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
-                # four commits: the median judged over three lines (0.83 for b, c and d at 40 s, 340 s or 640 s)
+                local e2l_of = (landed, author) -> _l197_epoch(landed) - _l197_epoch(author)
+                local ln = (c, landed, author, f, i, own) -> join([landed, c, author, landed, "2", "40.0", "60.0",
+                                                                   string(e2l_of(landed, author)) * ".0", f, i, "judged",
+                                                                   string(own) * ".0", string(e2l_of(landed, author) - own) * ".0"], '\t')
+                local ln1 = (c, landed, author, f, i, lw) -> join([landed, c, author, landed, "2", "40.0", lw,
+                                                                   string(e2l_of(landed, author)) * ".0", f, i, "judged"], '\t')
+                local B2 = ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5", 60)
+                local good = L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1", 40) * "\n"
+                local slow = L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1", 340) * "\n"
+                local gap = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "1", "1", 40) * "\n"
+                local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6", 40) * "\n" *
+                              ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5", 40) * "\n"
+                local partial = L197_COLUMNS * "\n" * B2 * "\n"
+                # four commits: the median judged over three lines; c and d land 340 s after their edits
                 local hist4 = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n\nC dddddddd44 $(t0 + 600)\n1\t0\tdev/x.md\n")
-                local three = (lc, ld) -> L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
-                                          ln("cccccccc33", lc, "2026-10-21T14:06:40Z", "1", "1") * "\n" * ln("dddddddd44", ld, "2026-10-21T14:10:00Z", "1", "1") * "\n"
-                local good3 = three("2026-10-21T14:07:20Z", "2026-10-21T14:10:40Z")
-                local slow3 = three("2026-10-21T14:17:20Z", "2026-10-21T14:20:40Z")
-                local oneslow3 = three("2026-10-21T14:17:20Z", "2026-10-21T14:10:40Z")
-                # two of three over the 300-s target and inside the 600-s band: minutes still, passed
-                local inband3 = three("2026-10-21T14:12:20Z", "2026-10-21T14:15:40Z")
-                v += count(!, [isempty(first(l197_check(good, hist, Set{String}()))),
-                               length(last(l197_check(good, hist, Set{String}()))) == 2,
+                local three_at = (lc, ld, oc, od) -> L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", lc, "2026-10-21T14:06:40Z", "1", "1", oc) * "\n" *
+                                                     ln("dddddddd44", ld, "2026-10-21T14:10:00Z", "1", "1", od) * "\n"
+                # c and d land 340 s after their edits (three), or 640 s (three_late), past the 600-s band
+                local three = (oc, od) -> three_at("2026-10-21T14:12:20Z", "2026-10-21T14:15:40Z", oc, od)
+                local three_late = (oc, od) -> three_at("2026-10-21T14:17:20Z", "2026-10-21T14:20:40Z", oc, od)
+                local v1three = lw -> L197_COLUMNS_V1 * "\n" * ln1("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5", lw) * "\n" *
+                                      ln1("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1", lw) * "\n" *
+                                      ln1("dddddddd44", "2026-10-21T14:15:40Z", "2026-10-21T14:10:00Z", "1", "1", lw) * "\n"
+                v += count(!, [isempty(first(l197_check(good, hist))), length(last(l197_check(good, hist))) == 2,
                                # fewer than 3 lines in the window: not judged, a slower one included
-                               isempty(first(l197_check(slow, hist, Set{String}()))),
-                               isempty(first(l197_check(good3, hist4, Set{String}()))), length(last(l197_check(good3, hist4, Set{String}()))) == 3,
-                               # two of three slower: the median slower, failed; one of three: passed
-                               !isempty(first(l197_check(slow3, hist4, Set{String}()))), isempty(first(l197_check(oneslow3, hist4, Set{String}()))),
-                               isempty(first(l197_check(inband3, hist4, Set{String}()))),
-                               # an excused slower landing leaves the window (then two lines: not judged)
-                               isempty(first(l197_check(slow3, hist4, Set(["cccccccc"])))),
+                               isempty(first(l197_check(slow, hist))),
+                               # two of three past the band in their own time: failed; one of three: passed; two of three
+                               # over the 300-s target inside the 600-s band: minutes still, passed
+                               !isempty(first(l197_check(three_late(640, 640), hist4))), isempty(first(l197_check(three_late(640, 40), hist4))),
+                               isempty(first(l197_check(three(340, 340), hist4))),
+                               length(last(l197_check(three(40, 40), hist4))) == 3,
+                               # the median landing's own steps take 700 s, past the 600-s band: fired
+                               !isempty(first(l197_check(three_at("2026-10-21T14:18:20Z", "2026-10-21T14:21:40Z", 700, 700), hist4))),
+                               # past the band only by their waits (600 s each in queue_wait_s): judged by their own 40 s, passed
+                               isempty(first(l197_check(three_late(40, 40), hist4))),
                                # the gated commit's own line is out of its own window
-                               isempty(first(l197_check(slow3, hist4, Set{String}(); head = "dddddddd44"))),
-                               !isempty(first(l197_check(gap, hist, Set{String}()))),
-                               !isempty(first(l197_check(order, hist, Set{String}()))),
-                               !isempty(first(l197_check(partial, hist, Set{String}()))),
-                               isempty(first(l197_check("", hist[1:0], Set{String}()))),
-                               !isempty(first(l197_check("", hist, Set{String}()))),
+                               isempty(first(l197_check(three_late(640, 640), hist4; head = "dddddddd44"))),
+                               # a line before A30E1 (eleven fields) judged by its land's wall
+                               isempty(first(l197_check(v1three("60.0"), hist4))), !isempty(first(l197_check(v1three("700.0"), hist4))),
+                               # own_s and queue_wait_s that do not split the edit to landed, and a line of twelve fields, fail
+                               !isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\t90.0\n"), hist))),
+                               !isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\n"), hist))),
+                               !isempty(first(l197_check(gap, hist))),
+                               !isempty(first(l197_check(order, hist))),
+                               !isempty(first(l197_check(partial, hist))),
+                               isempty(first(l197_check("", hist[1:0]))),
+                               !isempty(first(l197_check("", hist))),
                                _l197_epoch("1970-01-01T00:00:00Z") == 0, _l197_epoch("2026-10-21T14:00:00Z") == 1792591200])
                 # the carried copy (A21E4): a prefix missing only the tip's own line passes; an edited earlier
                 # line, or two of this tree's landings missing, fail
@@ -1720,18 +1746,6 @@ const LOCKS = [
                 v += count(!, [isempty(l197_carried(U, U, c -> true)), isempty(l197_carried(U[1:3], U, c -> true)),
                                !isempty(l197_carried(U[1:2], U, c -> true)), isempty(l197_carried(U[1:2], U, c -> c == B)),
                                !isempty(l197_carried([U[1], cl(A) * "y", U[3]], U, c -> true)), !isempty(l197_carried(String[], U, c -> true))])
-                # an excuse is its file alone (A22E1): a tree whose MARCH names the slower landing excuses
-                # nothing, the file takes it out of the window
-                mktempdir() do t
-                    mkpath(joinpath(t, "dev", ".loop"))
-                    write(joinpath(t, "dev", "MARCH.md"), "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |\n")
-                    local e0 = l197_excuses(t)
-                    mkpath(joinpath(t, "dev", ".loop", "excuse"))
-                    write(joinpath(t, "dev", ".loop", "excuse", "cccccccc"), "lock: waited 600 s behind two landings, then landed in 70 s\n")
-                    local e1 = l197_excuses(t)
-                    v += count(!, [isempty(e0), !isempty(first(l197_check(slow3, hist4, Set(keys(e0))))),
-                                   collect(keys(e1)) == ["cccccccc"], isempty(first(l197_check(slow3, hist4, Set(keys(e1)))))])
-                end
                 # the excuse files: one line of a kind outside the change, for a landed commit
                 local ok_ex = "lock: waited 600 s behind two landings, then landed in 70 s"
                 v += count(!, [isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n"), [A])),
@@ -1740,62 +1754,30 @@ const LOCKS = [
                                !isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n" * ok_ex), [A])),
                                !isempty(l197_excuse_problems(Dict("aaaaaaaa" => "change: the commit was large and compiled for long"), [A])),
                                !isempty(l197_excuse_problems(Dict("aaaa" => ok_ex), [A]))])
-                # an excuse measured, never asserted (A25E1, A25E2): dev/loop_excuse.sh, the one program `land`
-                # writes the previous landing's excuse with and every excuse is checked by, on a scratch landing
-                # log and steps (a hold-bound landing, an unmeasured wait, a red timing, an earlier tree refused)
+                # an excuse file (it lifts a red timing's debt, L198) held to its landing's steps by
+                # dev/loop_excuse.sh check (A25E2), on a scratch landing log and steps: a hand line's numbers
+                # within 10 per cent, a line measured by land (until A30E1) as measured, never for a red timing
                 mktempdir() do t
-                    local hsha = readchomp(`git -C $ROOT rev-parse HEAD`)
                     local E = repeat("e", 40); local F = repeat("f", 40); local D = repeat("d", 40)
                     local lx = (c, landed, start, e2l, timing) -> join([landed, c, "2026-10-21T14:00:00Z", start, "1", "40.0", "60.0", e2l, "1", "1", timing], '\t')
                     local logp = joinpath(t, "landings.tsv"); local stepsp = joinpath(t, "steps.tsv")
-                    write(logp, join([L197_COLUMNS, lx(E, "2026-10-21T14:12:00Z", "2026-10-21T14:10:00Z", "720.0", "judged"),
+                    write(logp, join([L197_COLUMNS_V1, lx(E, "2026-10-21T14:12:00Z", "2026-10-21T14:10:00Z", "720.0", "judged"),
                                       lx(F, "2026-10-21T14:10:00Z", "2026-10-21T14:00:05Z", "600.0", "judged"),
-                                      lx(D, "2026-10-21T14:10:00Z", "2026-10-21T14:00:05Z", "600.0", "SLOWER ratchet@warm"),
-                                      lx(hsha, "2026-10-21T14:12:00Z", "2026-10-21T14:10:00Z", "720.0", "judged")], '\n') * "\n")
+                                      lx(D, "2026-10-21T14:10:00Z", "2026-10-21T14:00:05Z", "600.0", "SLOWER ratchet@warm")], '\n') * "\n")
                     local st = (c, h) -> join(["$c\thold\t$h", "$c\trunner\t0.5", "$c\tgate-1\t40.0", "$c\tland\t8.0"], '\n')
-                    write(stepsp, join([st(E, "0.1"), st(F, "500.0"), st(D, "500.0"), st(hsha, "0.1")], '\n') * "\n")
-                    # a red record of an earlier tree of the change (its head this commit), its gate run from
-                    # 14:01:00Z, its ratchet broken on the locks named
-                    local rec = (dir, locks) -> begin
-                        local lg = joinpath(t, dir, "dev", ".block", "logs", "x")
-                        mkpath(lg)
-                        write(joinpath(lg, "ratchet.log"), join(["$(l)_x   1  ❌ LOCK BROKEN (want 0)" for l in locks], '\n') * "\n")
-                        local p = joinpath(t, dir, "dev", ".block", repeat("a", 40) * "-1.toml")
-                        write(p, "checks_failed = [\"ratchet\"]\nfinished = 1792591290.5\nhead = \"$hsha\"\nlogs = \"dev/.block/logs/x\"\n" *
-                                 "timing_failed = []\ntotal_wall = 30.5\nverdict = \"red\"\n\n[stage.ratchet]\nverdict = \"FAIL\"\n")
-                        p
-                    end
+                    write(stepsp, join([st(E, "0.1"), st(F, "500.0"), st(D, "500.0")], '\n') * "\n")
                     local sh = joinpath(ROOT, "dev", "loop_excuse.sh")
-                    local wr = (c, out, recs...) -> readchomp(Cmd(Cmd(vcat(["bash", sh, "write", logp, stepsp, c, out], String[recs...])); dir = ROOT))
                     local ck = (name, text) -> mktemp() do path, io
                         write(io, text * "\n"); close(io)
                         readchomp(Cmd(Cmd(["bash", sh, "check", logp, stepsp, name, path]); dir = ROOT))
                     end
-                    local o = joinpath(t, "out")
-                    local r1 = rec("wt1", ["L148"]); local r2 = rec("wt2", ["L148", "L194"])
-                    local lF = wr(F, o); local lE = wr(E, o); local lD = wr(D, o)
-                    local lH2 = wr(hsha, o, r2); local hasH2 = isfile(joinpath(o, hsha[1:8]))
-                    local lH1 = wr(hsha, o, r1)
-                    v += count(!, [startswith(lF, "lock: measured by dev/land.sh land: edit to landed 600.0 s; hold 500.0 s;"),
-                                   isfile(joinpath(o, "ffffffff")) && readchomp(joinpath(o, "ffffffff")) == lF,
-                                   isempty(ck("ffffffff", lF)),
-                                   # a cause steps.tsv cannot measure (600 s from the commit to the land start, no
-                                   # refusal) is never written: its hand line is still needed
-                                   isempty(lE), !isfile(joinpath(o, "eeeeeeee")),
-                                   # nor a landing whose timing was judged red (an excuse file lifts that debt too)
-                                   isempty(lD), !isfile(joinpath(o, "dddddddd")),
-                                   # an earlier tree refused on L148 alone is measured; one also broken on L194 is the change's own
-                                   isempty(lH2), !hasH2,
-                                   occursin("; before land 540.0 s since record aaaaaaaa-1 refused it on L148 at 2026-10-21T14:01:00Z;", lH1),
-                                   isempty(ck(hsha[1:8], lH1)),
-                                   # a hand line: its numbers held to the steps, refused where steps.tsv measures the landing
+                    local lF = "lock: measured by dev/land.sh land: edit to landed 600.0 s; hold 500.0 s; runner 0.5 s; gate-1 40.0 s; its own 100.0 s of the 300 s target"
+                    v += count(!, [isempty(ck("ffffffff", lF)),
+                                   !isempty(ck("ffffffff", replace(lF, "hold 500.0 s" => "hold 50.0 s"))),
+                                   !isempty(ck("dddddddd", lF)),
                                    !isempty(ck("eeeeeeee", "lock: waited 900 s behind the slot order before its land began")),
                                    isempty(ck("eeeeeeee", "lock: waited 600 s behind the slot order before its land began")),
-                                   !isempty(ck("ffffffff", "lock: 500 s of its 600 s waiting on the one hold behind another landing")),
-                                   # a measured line edited, its refusal moved before its commit, or for a red timing
-                                   !isempty(ck("ffffffff", replace(lF, "hold 500.0 s" => "hold 50.0 s"))),
-                                   !isempty(ck(hsha[1:8], replace(lH1, "at 2026-10-21T14:01:00Z" => "at 2026-10-21T13:59:00Z"))),
-                                   !isempty(ck("dddddddd", lF))])
+                                   !isempty(ck("ffffffff", "lock: 50 s of its 600 s waiting on the one hold behind another landing"))])
                 end
                 if get(ENV, "GITHUB_ACTIONS", "") == "true"
                     println("    · L197: a CI checkout: the landing log is the landing machine's; nothing counted here")
@@ -1813,9 +1795,9 @@ const LOCKS = [
                         local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
                         local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
                         local exfiles = l197_excuses(ROOT)
-                        # only an excuse its landing's steps bear out leaves the window (A25E2)
-                        local mbad, mok = l197_excuse_measured(ROOT, logp, joinpath(mt, "dev", ".loop", "steps.tsv"), exfiles)
-                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, mok;
+                        # every excuse file held to its landing's steps (A25E2); none takes a landing out of the window (A30E1)
+                        local mbad, _ = l197_excuse_measured(ROOT, logp, joinpath(mt, "dev", ".loop", "steps.tsv"), exfiles)
+                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real;
                                                        head = readchomp(`git -C $ROOT rev-parse HEAD`))
                         append!(bad, l197_excuse_problems(exfiles, first.(real)))
                         append!(bad, mbad)
@@ -1828,7 +1810,7 @@ const LOCKS = [
                         foreach(b -> println("    ✗ L197: ", b), bad)
                         println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
                                 isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "),
-                                length(window) < L197_JUDGED_FROM ? " (edit to landed over its target, $L197_TARGET s: fewer than $L197_JUDGED_FROM lines, not judged)" : "")
+                                length(window) < L197_JUDGED_FROM ? " (own time over its target, $L197_TARGET s: fewer than $L197_JUDGED_FROM lines, not judged)" : "")
                         v += length(bad)
                     end
                 end
@@ -1845,7 +1827,7 @@ const LOCKS = [
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
             v += occursin("    timing = cold ? \"unjudged (cold)\" :\n", blk) && occursin("\"timing\" => timing, \"timing_failed\" => timing_failed,", blk) ? 0 : 1
             for line in [raw"    timing=$(sed -n 's/^timing = \"\(.*\)\"$/\1/p' \"$rec\"); timing=${timing:-judged}",
-                         raw"\"$files\" \"$ins\" \"$timing\" >> \"$LOG\"",
+                         raw"\"$e2l\" \"$files\" \"$ins\" \"$timing\" \"$own\"",
                          raw"                [ -f \"$f\" ] && grep -qx 'verdict = \"green\"' \"$f\" && grep -qx 'timing = \"judged\"' \"$f\" && judged=1",
                          raw"        [ $judged -eq 0 ] || break",
                          raw"        echo \"land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm\"",
@@ -2007,6 +1989,7 @@ const LOCKS = [
             v += length(w) == 4 && w[1] == sha && w[3] == "5" && parse(Int, w[2]) <= 5 ? 0 : 1
             # land refuses a full window in its preflight, before the hold, by the same program
             local landsh = read(joinpath(ROOT, "dev", "land.sh"), String)
+            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\"); then", landsh) ? 0 : 1   # again after the rebase
             v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\" \"origin/$MARCH\" \"$(git rev-list --count --no-merges \"origin/$MARCH..HEAD\")\" HEAD); then", landsh) &&
                  occursin(raw"wait for audit #$((wentries + 1)) — refusing\"; exit 1", landsh) ? 0 : 1
             # behavior on a scratch repository: an entry audited through its first commit, then commits;
