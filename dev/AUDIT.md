@@ -2315,3 +2315,52 @@ cannot detect the exhaustion, or the native oracle in a process whose death is r
 Resolution: this entry lands alone, prose only, and fixes nothing. A22E1-A22E8, A22N1 and A22N2 are open on MARCH 13.18,
 A22E9 on 13.17; A22E4's re-record and A22E7's charter text are for Dale under the order of 17:05Z; A22E5 closes when
 compile3's first commit lands and the case passes under the runner.
+
+## 2026-10-21 — audited through 0459332a (b31a7671..0459332a: entry 22, the charter pin, a red lock owes a fix, the closure matrix, the carried log)
+
+The twenty-third audit covers b31a7671 (entry 22, prose; its author's, nothing to add), d9d5a2db (a dev/CHARTER.md
+change lands only as the exact change authorised, A21E6; a budget missed past the factor cap lands as unjudged),
+41d48aef (any check failing after a cold landing is FAILED and owes a warm green fix, never a row, A21E1), 90a6984d
+(the full matrix runs only at clause closure, a `Closes: C<n>` line its trigger) and 0459332a (each landing carries the
+landing log in its own tree, A21E4). It reads the loop by one 300-s target, a landing over it a finding about what
+blocked it. No wrong answer; no landing landed on a red record. A21E1, A21E4 and A21E6 are fixed as their commits
+state (FAILED owed by `merge` until a warm green record; the carried copy a line-by-line prefix of the ignored log;
+the blob pair listed in the main tree's dev/.block/charter_authorised). A22E5 is not verifiable yet: compile3's first
+commit is not on origin at 0459332a. Eight findings: A23E1-A23E7, A23N1.
+
+Area: builder — empty by diff: `git diff b31a7671..0459332a --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/land.sh, dev/block.jl, dev/gate.sh, dev/hooks/commit-msg,
+.github/workflows/gate.yml, test/parity_ratchet.jl, .gitignore, AGENTS.md, dev/MARCH.md and dev/.loop/landings.log,
+against the landing log and gh's runs of the march branch. (A23E1, high) The timing has gone unjudged on five
+landings in a row, b31a7671 to 0459332a, each past the cap (factor 1.75 to 3.47) with the ratchet's budget missed
+(36.4 to 44.5 s of 30) and two totals over 60 s; since d9d5a2db such a run lands, so no budget binds a landing on this
+machine as it now runs, and nothing ends the streak (A21E8). C10's "at most 60 s" and L195's "its checks and budgets
+still judged" are untrue (A21N1), d9d5a2db carrying no Charter-change line. (A23E2, high) Four landings took past 300
+s, each blocked by the same two causes: d9d5a2db 3346 s, 41d48aef 2675 s, 90a6984d 1424 s and 0459332a 1020 s waited
+for entry 22 (L148 refused the sixth commit after entry 21 until it landed, 17:51Z, twenty minutes after its fourth
+commit) and then for one another through the one hold, on a machine at load 12 to 14 whose cold gate took 180.9 and
+212.7 s. The audit lane is on the landing path at every fifth commit; its trigger must leave the entry landed before
+the fifth. (A23E3, medium) Each of the four is excused from L197 by the next commit's 13.18 text naming it (d9d5a2db
+named in 41d48aef, 41d48aef in 90a6984d, 90a6984d in 0459332a): every landing over target in the range is out of the
+window by a mention, A22E1 unchanged until the excuse files land. (A23E4, medium) Against Dale's order a full CI run
+still starts on every landing: PR #122's ci.yml, formal.yml and downstream.yml run on each push of the march branch
+(gh lists them for d9d5a2db, 41d48aef, 90a6984d and 0459332a), each cancelled only by the next landing; 90a6984d moved
+gate.yml alone. (A23E5, medium) Four clauses read CLOSED, C0, C4, C7 and C8, and no closure matrix has run for any:
+no commit carries `Closes:`, and CLOSED is the ratchet's reading alone; nothing ties a CLOSED clause to a green
+closure matrix of its closing commit. (A23E6, low) gate.yml names its run "Gate closure" when the pushed message
+contains "Closes: C" anywhere (90a6984d's own prose does) while its decision step runs the matrix only on a line
+`^Closes: C<n>`: a run named for a closure ran none. `land` reads the commit from git and is not misled. (A23E7, low)
+The authorisation of a charter change, the exact blob pair, lives in the main tree's git-ignored
+dev/.block/charter_authorised: the landed commit carries its Charter-change line, but who listed the pair and when
+leaves no trace in git; and `land` amends the branch head to carry the log, so the landed tree is never the tree its
+author's evidence names. (A23N1, low) dev/.loop/landings.log carries ba4aea80's line as rewritten by hand before the
+carry; the carried log freezes the lines from 0459332a on, not before.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. A23E1-A23E7 and A23N1 are open on MARCH 13.18;
+A23E1's charter text and A23E5's closure runs are for Dale through the orchestrator; A22E5 is verified in entry 24 on the
+record of compile3's first commit.
