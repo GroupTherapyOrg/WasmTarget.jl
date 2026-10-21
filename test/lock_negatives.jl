@@ -6,7 +6,7 @@ using Test
 
 const _LN_ROOT = normpath(joinpath(@__DIR__, ".."))
 
-# (lock, path, planted text, its replacement, what the plant breaks)
+# (lock, path, planted text or a Regex matching it, its replacement, what the plant breaks)
 const LOCK_NEGATIVE_CASES = [
     ("L195", "dev/block.jl",
      "    occursin(Regex(\"^\\\\| \" * replace(m[1], \".\" => \"\\\\.\") * \" \\\\|\", \"m\"), base_march) &&",
@@ -20,8 +20,10 @@ const LOCK_NEGATIVE_CASES = [
      "        if !haskey(out, k) || w < out[k] || k in rerecord\n",
      "        if !haskey(out, k) || w < out[k]\n",
      "a best with no source is re-recorded only when lower (A20P25)"),
+    # the [best_from] line by its best's name, whatever source an update last wrote into it (21e36053's
+    # re-record replaced the literal this plant named, and nothing ran the plant until this file changed)
     ("L195", "dev/timing_best.toml",
-     "\"probes@warm\" = \"one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14\"\n",
+     r"^\"probes@warm\" = \"[^\"\n]*\"\n"m,
      "",
      "a best with no [best_from] entry (A20P20)"),
     ("L195", "dev/block.jl",
