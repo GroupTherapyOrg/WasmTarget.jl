@@ -27,33 +27,33 @@
 "total" = 60
 
 [best]
-"calibration" = 0.003477
-"load" = 0.21
-"load@warm" = 0.25
-"probes" = 24.28
-"probes@warm" = 5.57
-"ratchet" = 8.25
-"ratchet@warm" = 14.1
-"smoke-core" = 44.49
-"smoke-core@warm" = 19.75
+"calibration" = 0.004047
+"load" = 0.24
+"load@warm" = 0.28
+"probes" = 28.26
+"probes@warm" = 9.92
+"ratchet" = 9.6
+"ratchet@warm" = 20.45
+"smoke-core" = 51.79
+"smoke-core@warm" = 24.2
 
 [best_cpu]
 "load" = 0.51
-"load@warm" = 0.56
+"load@warm" = 0.59
 "probes" = 37.55
-"probes@warm" = 1.25
+"probes@warm" = 1.34
 "ratchet" = 12.89
-"ratchet@warm" = 11.94
+"ratchet@warm" = 22.73
 "smoke-core" = 66.83
-"smoke-core@warm" = 1.25
+"smoke-core@warm" = 1.28
 
 [best_from]
-"calibration" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"
-"load" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
-"load@warm" = "set in 22f9cea4, no record named"
-"probes" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
-"probes@warm" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"
-"ratchet" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
-"ratchet@warm" = "set by hand in 36e3966e from one run, record 3ee4c795-6 on 72dc53fb at machine factor 1.0"
-"smoke-core" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54"
-"smoke-core@warm" = "one run, record 850ac1fb-3 on 963425c6 at machine factor 1.14"
+"calibration" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"load" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"load@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"probes" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"probes@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"ratchet" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"ratchet@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"smoke-core" = "one run, record 26a30593-1 on 68a40294 at machine factor 1.54; rescaled by records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"
+"smoke-core@warm" = "the median of records d683bcbf-1 d683bcbf-2 d683bcbf-3 on cca6cfef at machine factor 1.24 1.25 1.44"

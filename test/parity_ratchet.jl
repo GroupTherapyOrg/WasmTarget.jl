@@ -983,7 +983,7 @@ function l198_check(log::AbstractString)
     bad = String[]
     for r in [split(l, '\t') for l in split(log, '\n') if !isempty(l)][2:end]
         t = length(r) >= 11 ? r[11] : ""
-        t == "judged" || occursin(r"^unjudged( \([^()]*\))?$", t) || occursin(r"^(FAILED( [a-z0-9.-]+)+|SLOWER( [a-z0-9.-]+)+( OVER( [a-z0-9.-]+)+)?|OVER( [a-z0-9.-]+)+)$", t) ||
+        t == "judged" || occursin(r"^unjudged( \([^()]*\))?$", t) || occursin(r"^(FAILED( [a-z0-9.@-]+)+|SLOWER( [a-z0-9.@-]+)+( OVER( [a-z0-9.@-]+)+)?|OVER( [a-z0-9.@-]+)+)$", t) ||
             push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), not judged, unjudged, FAILED <stages>, SLOWER <stages> or OVER <stages>")
     end
     return bad

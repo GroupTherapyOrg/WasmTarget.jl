@@ -171,7 +171,7 @@ with the per-clause status. A clause is never closed by argument.
   in one command, logging each landing's seconds from edit to landed; the median of the last five
   at most its target, 180 s when it changes src, 90 s otherwise) `L198` (each landing records
   whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
-  Planned: dev/MARCH.md 13.18 and 13.24 and 13.25 and 13.26 — the ratchet stage's time to win back (L195).
+  Planned: dev/MARCH.md 13.18 and 13.24 and 13.25 and 13.26 and 13.27 — the ratchet stage's time to win back (L195).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this

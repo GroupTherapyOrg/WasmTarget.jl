@@ -1,0 +1,1 @@
+lock: committed 18:55:27Z in the 120x-2 queue, it waited the orchestrator's slot order (audit entries 24-26, loop2, Phase 14, P26) and one refused try (record 1b8401a6-1: the head's ratchet slower than its stale best, filed as 13.24 in the same commit); it landed in 47.0 s on a judged gate of 39.0 s
