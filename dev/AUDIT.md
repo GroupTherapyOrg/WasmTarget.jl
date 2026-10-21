@@ -2067,3 +2067,118 @@ tree before it first (native, f1c16321, and this commit):
   a host's setup of the module it prepares, before any compile, names its one export through its own (L184).
 - Each new or tightened lock (L65, L118, L150, L158, L166's row x, L171, L184, L185) was planted, fired and restored on
   this commit, and the QA files ran through runtests.jl's shards.
+
+## 2026-10-21 — audited through 36e3966e (f1c16321..36e3966e: 119x, 117a, the blocking gate hardened and its best re-recorded)
+
+The twentieth audit covers:
+- a0cbd7cb, batch 119x, the nineteenth audit's fixes (its entry);
+- cfaacbb4, batch 117a, the numeric tables' generated cases and the emission-diff check (an addendum, all four areas);
+- d5b96e97, batch 119g, the blocking gate hardened (an addendum, all four areas);
+- 36e3966e, timing-1318, ratchet@warm's best re-recorded and cfaacbb4's red matrix filed (an addendum, enforcement).
+
+It made 62 findings in the four areas: 44 on a0cbd7cb and cfaacbb4 (builder A20B1-A20B8, emission A20E1-A20E10,
+collection A20C1-A20C11, enforcement A20P1-A20P16), 13 on d5b96e97 (A20B9, A20E11, A20E12, A20C12-A20C14,
+A20P17-A20P22) and 5 on 36e3966e (A20P24-A20P28); beside them A20P23 (the orchestrator's, on 13.18), A20P29 (the
+orchestrator's, on L154), A20X1-A20X4 (117a's own two, the gate's busy threshold, Windows CI's crash) and three found while the fixes were made (A20N1-A20N3). Several
+were seen from two areas (A20B1 = A20E1 = A20E8 = A20P9, A20B7 = A20E10, A20E4 = A20C2 = A20P1, A20E6 = A20P3, A20C7 =
+A20P10, A20C8 = A20P2, A20E11 = A20C12 = A20P17 with A19C1 = A19E2, A20P21 = A20P27). No silent wrong answer is in the range. A valid program refused, in the
+range: A20E4 = A20C2 = A20P1, two distinct functions that print alike (a module and the module that replaced it,
+`Val{1}` and `Val{Int32(1)}`) raised a WasmInternalError, a planner defect by its kind, where Julia answers. Two silent
+losses of what was asked: A20C5, an entry the planner skipped (an unpackable Vararg, a metadata operation) left out of
+the module with no error (on d5b96e97 `compile(_va, (Vararg{Any},))` returns a module with no export for it); A20C10, a
+generator type dropped by any exception its sample call raised. A20E9's suspect wrong answer, a narrow shift amount on a
+128-bit value, was run and raised (every 128-bit shift by a narrow amount, 252 inputs, at 8170df59): loud, not wrong.
+
+Area: builder — (A20B1 = A20E1 = A20E8) the shipped runtime ran in no lane: every harness read it back from the bytes,
+and one testset compared the two, for two compiles. (A20B2) a name not UTF-8 was refused in to_bytes, not where it
+entered the module, naming neither its kind nor its index. (A20B3) the reader took a negative heap type code in more
+than one byte, and host_imports.jl asserted extern in five bytes accepted. (A20B4) L185 read no src file outside
+codegen, frontend and ext, and no spelling but `.imports`. (A20B5) "one namer per compile" counted one spelling,
+`ExportNamer(mod)`. (A20B6 = A20E2) compile_with_base's module had no runtime, and 13.16 pointed at a non-public
+function. Addendum cfaacbb4 — (A20B7 = A20E10) a second test-side decoder in emission_fingerprint.jl, with none of the
+reader's bounds. (A20B8) 117a's "the 5 probes differ only by the saturation" named no sha, measured before its rebase.
+Addendum d5b96e97 — (A20B9) the warm runner's reset_main! stores Main's binding table and key set without Main's lock
+and checks no task a request left running; its start check writes before it verifies the offsets.
+
+Area: emission and diagnostics — (A20E1) = A20B1. (A20E2) no public entry but the two `_with_runtime` ones handed back a
+runtime. (A20E3) under optimize the runtime is the module's before wasm-opt, and no row checked declared ⊆ given.
+(A20E4) = A20C2. (A20E5) the alike-names diagnostic carried no location, its test one line of two. (A20E6) = A20P3.
+(A20E7) the fingerprint logs named no tree. Addendum cfaacbb4 — (A20E8) = A20B1. (A20E9) above. (A20E10) = A20B7.
+Addendum d5b96e97 — (A20E11) = A20C12. (A20E12) emission code no blocking runner for its file runs (481 lines of
+calls.jl, 206 of builtins.jl, int128.jl's sub, ctlz and neg emitters whole, measured on d77ad3e1).
+
+Area: collection and planning — (A20C1) a value parameter's type was not asked (`show(io, typeof(x))` is the generic
+show's first call), and "its type is theirs" read the outer type alone (`Complex{UserReal}`'s Base show runs the
+user's `signbit`). (A20C2) two distinct modules print alike by their path of names, so "alike only when unqualified"
+was false and the check fell to a WasmInternalError. (A20C3) the refusal always said `show`, named no printer method,
+and was false for a Base show calling a value's own methods. (A20C4) `Val{myf}` refused though show_function prints its
+name alone. (A20C5) above, and plan.roots the requested entries, not the planned ones. (A20C6) no case tells the one
+consult from `morespecific`. (A20C7 = A20P10) an invoke-only function's signature printed twice, an unnamed entry's
+outside the memo. (A20C8 = A20P2) the docstring's example unqualified. Addendum cfaacbb4 — (A20C9) smoke's main ran a
+selected lazy group never built as 0 cases, green. (A20C10) above. (A20C11) the eager-equals-lazy hash and the load
+times named no sha (measured on a1b4a7cd). Addendum d5b96e97 — (A20C12 = A20E11 = A20P17) A19C1 = A19E2 did not land in
+119g: the const tables' entry lines unkeyed, so the copysign plant still selects no stage, the 1.13 core not run on
+every src change, no copysign plant run through the gate; entry 19 says it did. (A20C13) a stale map only notes,
+`pieces_moved` counts keyed lines alone, and no overlay body is in any set. (A20C14) the map's header and L194 do not
+state what the selection cannot see.
+
+Area: enforcement and prose — (A20P1) = A20C2, with `_v(Val(1)) + _v(Val(Int32(1)))` its witness. (A20P4) two of entry
+19's negatives tested a string, not the rule. (A20P5) L150 and L65 pinned the deleted reader's names, not the absence of
+a reader. (A20P6) no test called compile_multi_with_runtime or passed a runtime entry a diagnostics sink. (A20P7)
+resolution claims with no evidence file or none naming a tree (the QA files ran through a script of their own, not the
+shards; the negatives ran on baf17fca; MARCH's byte counts dated, not shas). (A20P8) open findings with no MARCH row.
+(A20P11) L166 and L185's prose. Addendum cfaacbb4 — (A20P12) no row of the gate's map named registry_sample or
+narrow_primitive, so a W revert in calls.jl selected neither. (A20P13) the sample dropped Amendment 117-14's "plus every
+case that found a wrong answer". (A20P14) cfaacbb4's tree 5d8555b7 gated three times (4.05 green, 1.79 red at 60.5 s,
+3.04 green, the red overwritten in place), a live A19P2/A19P5 witness; a0cbd7cb and cfaacbb4 landed on scaled greens
+with every stage inside its unscaled budget. (A20P15) smoke_times.tsv's twelve new lines named no run, registry_sample's
+an unmarked estimate. (A20P16) the landed message's numbers measured on other trees: load 4.7 → 1.2-1.4 s on a1b4a7cd,
+17,074 bodies on 19328551, 317/277 s whole stages of 817/740 cases. Addendum d5b96e97 — (A20P17) = A20C12. (A20P18) d5b96e97
+landed under cfaacbb4's land.sh, the record copied by hand to the old name, after 119g's own land.sh refused on
+cfaacbb4's red matrix (gate.yml run 39569266159, the emission check); the matrix rule reads the last landed head's red
+alone. (A20P19) the exemption landed without
+its best raised (ratchet@warm 10.69, measured 15.6). (A20P20) the new bests name no sha (warm 963425c6, fresh 68a40294
+at factor 1.54). (A20P21) a red binds one tree. (A20P22) AGENTS.md lost "only" and "every" and names `--block` without
+`--warm`.
+Addendum 36e3966e — (A20P24) 13.18's check, "ratchet@warm at or under its recorded best", is met by the re-record itself.
+(A20P25) the best 14.1 was set by hand, the loosest quiet figure from one record of another tree. (A20P26) an existing
+row's exemption is re-armed by editing its text, which timing_exemption counts as an added row. (A20P27) = A20P21,
+witnessed: record 8c31a1f7-1's red escaped by amending the commit's prose. (A20P28) the 35-body row omits that its base
+file came from unlanded bootstrap code and states "each real" as fact. (A20P29) L154 refuses with a count alone, naming
+neither the ID or row nor the rule's form it breaks, and a group label may start at a finding ID, so a finding ahead of
+it is read as part of the label's name.
+Outside the areas — (A20X4) Windows shard 0 died with 0xC0000005 in real_bottom_exceptions.jl (gate.yml runs 39569271775
+and 39588838768, Julia 1.12 and 1.13): the test's native oracle exhausts the native stack on a task, which Julia on
+Windows does not reliably detect (no guard page reset on a task switch), flaky and not a0cbd7cb's.
+
+Resolution: entry 19 corrected first. A19C1 = A19E2 was not fixed by 119g: d5b96e97's message claims A19P1-A19P11
+alone, and at d5b96e97 the copysign plant still selected no stage (A20E11 = A20C12 = A20P17). Entry 19's "planted, fired
+and restored on this commit" ran on baf17fca, whose src and test equal a0cbd7cb's; its "the QA files ran through
+runtests.jl's shards" ran through a script of their own. A20B8: the landed message's probe claim was measured on
+66c4238e against 52c0a9bd; on the landed pair, a0cbd7cb against cfaacbb4, the 5 probes differ by additions alone, 1
+saturation per shift probe and 5 in fc_types_equal_pow. A20C11: the eager-equals-lazy hash (dc88165b) and the load
+times were measured on a1b4a7cd; on cfaacbb4 the hash over every case, every lazy group built, is c7ff0b96 (1,781
+cases). A20P14 and A20P16 are recorded above; the landed messages cannot change. A20P18, as the orchestrator states it:
+d5b96e97 landed under cfaacbb4's land.sh with the per-run record copied to the single-file name because 119g's land.sh
+refused on cfaacbb4's red matrix. A20P26 and A20P27, as the orchestrator states them: 36e3966e raised a best by editing
+the existing 13.18 row, which the gate counted as an added row, and escaped a red record by amending prose. A20E9's
+128-bit narrow shift raised where Julia answers, never a wrong value: the builder's typed-stack check
+(instr_builder.jl:239) refused the module, correct by construction doing its job.
+
+This entry lands alone, prose only: the fixes for the range are not in it. They are on march/120x (7d395ea0: A19E8,
+A20E9 with A20P13, A20C12 = A20E11 = A20P17 = A19C1 (a)-(c) = A19E2 with A20C13 and A20C14, A20B1 = A20E1 = A20E2 = A20E8 =
+A20P9, A20B2-A20B7, A20E3, A20E7, A20C1-A20C10, A20P2-A20P8, A20P11, A20P12, A20P15, A20X4's stand-in oracles), on
+march/120x-2 (A20B9, A20P19-A20P29, A20X1, A20X3) and with eff-compile3 (A20N3), none landed; each lands as its own
+commit through `dev/land.sh land` with its case, and until then every one of them is open on MARCH 13.17 (C10's on
+13.18). Open besides, on 13.17: A19C1's remainder (d) a piece is 40 lines, (e) the cover is a 1-cover, (g) the 1.13 core
+does not run on every src change; A20X2, the 35 bodies the registry cases emit that no case enters (120x-3); A19X2,
+A19X4, A19X5, A19X6 (eff-compile3); A20N1, an entry over a packed runtime Vararg raising an internal stack underflow (on
+cfaacbb4 too); A20N2, planning running a value parameter's own `hash` and, in the IR's text, its `show`; A20E12, the
+emission code no blocking runner for its file runs.
+
+Addendum 268c4d9b (the self-serve landing, L197, L198, the factor cap voiding timing only): the author's statement, not
+an independent audit; the enforcement lane audits it in entry 21. `dev/land.sh land` lands from any worktree through
+`merge`, the one landing path, which logs each landing to the main tree's git-ignored dev/.loop/landings.tsv; L197 holds
+every landing to a line and the median of the last five to 180 s (src) or 90 s, L198 records whether each landing's
+timing was judged; past the gate's factor cap the timing ratchet is unjudged while the checks and literal budgets are
+still judged. Its own landing took 153 s edit to landed against its 90 s target (MARCH 13.18 names the cause).
