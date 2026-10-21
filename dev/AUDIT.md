@@ -2773,3 +2773,82 @@ Landing times: 3c2e735c 135 s, judged; 0d2ab5b5, 6e061943 and 9eb30016 as the la
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A31E1-A31E4 are open on MARCH 13.18.
 A31E1 is the loop lane's next fix: until it lands, every audit entry must land as the fifth commit at the latest.
+
+## 2026-10-21 — audited through 20f41493 (9eb30016..20f41493: the precedent locks, entry 31, the requirements ledger, WT1's checks retired; and the preflight's own-tree count)
+
+The thirty-second audit covers c77c0ba4 (precedent is a gate rule: a construction's lock is ConstructionLock, calling
+the check src registers beside its definition; L202 asks a precedent of each @enum, `@closed` sum and named
+construction; L203; C0 inside the standard; `Charter-change: C0 authorised by Dale 2026-10-21`; carried from
+59695ef5), ded191a0 (entry 31; its author's), bb2c2fee (dev/LEDGER.md, Dale's requirements as 39 rows tied to their
+checks; L204 to L207 and R45; every budget a target with a band, BUDGET_BAND 2 and L197_BAND 600; AGENTS.md's ledger
+block; `Charter-change: C0 C10 authorised by Dale 2026-10-21`) and 20f41493 (1.A2a: the 202 locks and ratchets that
+measured WT1's source leave the ratchet, each clause listing them on a plain Legacy line; Planned text cites Phase 1's
+rows; Phase 13 archived; R45 14; `Charter-change: C0 C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 authorised by Dale 2026-10-21`).
+This commit also fixes A31E1 (below). loop4's (6) went red and is not in the range. No wrong answer. Each landed head's
+record is green but ded191a0's judgement (SLOWER load ratchet, A32E2). Fixed as their commits state: A29S2 (C0 reads
+OPEN), A30E2 (L207: a lock's negative runs in every gate) and the three red flags the audit lane raised on 360cb793
+before it landed. Verified in this lane's Kaimon session (e1d51284) on bb2c2fee's tree: the status block reads C0 OPEN
+on L125 L126 L128 L148 L154 L201 to L207 and R45 = 208, every lock C4 to C8 cite a stopgap or behavior, no clause
+closed. One ruling recorded; six findings: A32S1, A32S2 and A32E1-A32E4.
+
+Area: builder — c77c0ba4's three docstring lines in src/builder/types.jl, `precedent(...)` on NumType, RefType and
+PackedType, no code. The open hierarchies (WasmInstr, AbstractCompilationContext, NirNode) carry parity alone, as
+L202's planted "open abstract type, asked nothing" case requires.
+
+Area: collection and planning — empty by diff: no file under src/ outside src/builder/ changes in the range.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+stopgap in disguise: c77c0ba4 deletes the deny-list reader (STRICT_SRC_READERS, strict_lock_source, the regex name
+resolution) and holds a construction's lock to one type, ConstructionLock, checked by reflection: that part is a
+construction of the lock table. (A32S1, low) The construction's own assertion, construction_check(::Val{definition}),
+runs when the ratchet calls it at gate time, and nothing yet requires its body to be reflection or a load-time fact
+rather than a scan; the src macro that would hold that, @construction_check, lands with the first construction (1.S,
+1.A3, 1.A8). No construction exists, so nothing rests on it today. L201 to L207 are classified stopgaps; none is
+claimed otherwise. (A32S2, medium, red flag in waiting) After 20f41493 every clause C1 to C8 cites no check, only Planned
+text, and the status block reads a clause CLOSED when no cited check is open and it has no Planned text
+(parity_ratchet.jl's verdict loop): a clause whose Planned text is dropped reads CLOSED on nothing, vacuously, and L201
+allows it (its "cites only constructions" holds of an empty list). 20f41493's message says none is vacuously CLOSED; that
+holds today and nothing keeps it. The construction is the verdict requiring at least one cited construction.
+precedent: NumType and PackedType, dart's enums (type.dart:82 NumTypeKind, :1367 PackedTypeKind), Rust's closed enum;
+RefType, wasm's fixed abstract heap types. ConstructionLock: Rust's `const _: () = assert!(..)` beside its item and
+dart's exhaustive switch over a sealed class where it is declared (functions.dart:836); Julia has no compile time but
+load, so the check must run at load to be their equal (A32S1). The ledger: Rust's RFCs and tracking issues.
+
+Area: enforcement and prose — every hunk of c77c0ba4 (dev/CHARTER.md, test/parity_ratchet.jl, dev/MARCH.md), bb2c2fee
+(AGENTS.md, dev/CHARTER.md, dev/LEDGER.md, dev/MARCH.md, dev/block.jl, dev/parity_baseline.toml, dev/timing_best.toml,
+test/parity_ratchet.jl), 20f41493 (AGENTS.md, dev/AUDIT.md's preamble, dev/CHARTER.md, dev/LEDGER.md, dev/MARCH.md,
+dev/parity_baseline.toml, test/parity_ratchet.jl), the landing log, steps.tsv and the gate records. Ruling recorded:
+the bands are Dale's words read as lock mechanics, the gate's twice its budget (red past 120 s) and the loop's 600 s,
+chosen by the orchestrator from "like blocking a run for being 61s when I said under a minute goal" and "idc at all if
+a thing takes 3 mins or 40s — as long as it's wicked fast and not tens of mins to hours" (Dale, 2026-10-21), authorised
+with bb2c2fee's Charter-change. (A32E1, low) bb2c2fee's message carries a second, indented Co-Authored-By trailer.
+(A32E2, medium) The ratchet's best no longer measures the ratchet. c77c0ba4 and bb2c2fee grew the stage past its
+20.45-s best (22.61 s scaled on c77c0ba4's judged run, record f55ec47e-2; 23.7 s at factor 1.0 on ded191a0's, record
+a7d986ba-2, SLOWER by 0.2 s on a prose change), and 20f41493 cut 4,531 lines of locks, so the best now bounds a stage a
+fraction of its size. ded191a0's debt could carry no excuse (the writer writes none for a red timing, the check
+refuses a measurable hand line); loop4's (6), not landed, deletes the writer. (A32E3, medium) Findings sit on no row.
+20f41493 archives Phase 13 with "each stays in its audit entry below", and L154 no longer checks that a finding sits on a
+row, while C0's text still says L154 holds "every finding sits on a row". The process findings were never WT1's: the
+gate's, the loop's and the audit window's (A28E1, A30E1, A31E2, A32E2) apply to the rebuild's tooling unchanged.
+(A32E4, medium, nuke order) The checks retire before the code they guard. WT1 stays the root compiler until 1.A2c, but
+202 of its locks are gone from the gate now, and nothing refuses an edit to WT1's src in the interval; the ledger's D9
+(correct or loud), D10 (valid by construction) and D12 now cite planned rows only. The Legacy lines say WT1 is kept
+"only as the agreement oracle" in legacy/, which is true only after 1.A2c. Kaimon and requirements: c77c0ba4 and
+bb2c2fee measured by Python mirrors without Julia, before the Kaimon rule (22:40Z); 20f41493 cites a fresh
+`julia --project=. test/parity_ratchet.jl` run where the warm session answers the same; from this entry each landing
+is asked whether its lane developed in a live Kaimon session. bb2c2fee's L204 makes a requirement with no check red.
+No lock fired inside its band in the range.
+
+The preflight's own-tree count (A31E1), in this commit: dev/audit_window.sh takes the landing's head as an optional
+fourth argument and reads that head's dev/AUDIT.md when it holds more entries than origin's, the tree L148 judges once
+rebased; land.sh's preflight passes HEAD. L148's scratch case adds two outcomes in a full window: a landing adding the
+next entry fits, one adding none is refused; test/lock_negatives.jl plants the own-tree read dropped. Measured in the
+Kaimon session on this change's tree before its rebase: the ratchet exit 0, L148 locked (run-2); planted, exit 1, "L148
+1 ❌ LOCK BROKEN" (run-3); restored from a copy, cmp-identical.
+
+Landing times (edit to landed): c77c0ba4 3032 s, ded191a0 364 s (SLOWER), bb2c2fee 2347 s, 20f41493 as the landing log
+records: 20f41493 446 s, judged, its gate 90.3 s and its ratchet stage 7.5 s. This entry's first tree, d2f0a99e (record d2f0a99e-1), was red on no check of its own: its runner's 20-minute idle stop fired (server.log, "idle 20 min, stopping") after `land` had found it alive and before the smoke stage reached it, so smoke-core, probes and tests read "no server" as failed checks, and the tree's red record stands for a machine fault (a finding for the next entry). On the rebased tree L197 read the median of c77c0ba4, ded191a0, bb2c2fee, 20f41493 and e1b70c75 at 921 s, past its 600-s band, refusing every landing; this commit carries dev/.loop/excuse/c77c0ba4, a hand line loop_excuse.sh check passes: carried from 59695ef5 of the lane the rebuild cancelled, its author time kept, refused once by the stale-map budget alone (record ab57e81e-1, A30E5), its own rework for audit 30's red flags named as its own. The median is then 446 s. Its second tree, fee8b6a4 (record fee8b6a4-1), was red on its own fault: the new lock-negative plant wrote `$otext` in an interpolating string (UndefVarError); a raw string now, lock_negatives.jl 33 of 33 in the Kaimon session.
+
+Resolution: this entry and A31E1's fix land as one commit. A32S1, A32S2 and A32E3 are open on MARCH 1.S; A32E1 and A32E2
+on 1.L, with the live process findings A28E1, A30E1 and A31E2; A32E4 on 1.A2c.

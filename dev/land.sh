@@ -22,7 +22,8 @@
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
 #       a dirty tree; refuses, before the hold, when L148's audit window is full (the march tip's last
-#       audit entry, the commits past it and this landing's, at most 5: dev/audit_window.sh, the
+#       audit entry, or this landing's own when it adds the next one, the commits past it and this
+#       landing's, at most 5: dev/audit_window.sh, the
 #       ratchet's own program), naming the audit to wait for; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
 #       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
@@ -302,7 +303,7 @@ land)
     # march tip's last audit entry, the commits past its audited-through commit and this landing's,
     # at most 5; a full window refuses here, in a second, never after a gate run its ratchet refuses
     git fetch -q origin
-    if ! win=$(bash dev/audit_window.sh "$W" "origin/$MARCH" "$(git rev-list --count --no-merges "origin/$MARCH..HEAD")"); then
+    if ! win=$(bash dev/audit_window.sh "$W" "origin/$MARCH" "$(git rev-list --count --no-merges "origin/$MARCH..HEAD")" HEAD); then
         read -r wsha wcount wcap wentries <<<"$win"
         if [ "$wsha" = - ] || [ "$wcount" -le "$wcap" ]; then
             echo "land: origin/$MARCH's dev/AUDIT.md names no audited-through commit its head holds ($win) — refusing"; exit 1

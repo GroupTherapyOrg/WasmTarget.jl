@@ -1966,7 +1966,7 @@ const LOCKS = [
             end
             v
         end),
-    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted, as dev/audit_window.sh counts it, the one program `dev/land.sh land` runs before its hold too (the march tip's last entry, the commits past it and the landing's own), so a landing into a full window refuses in its preflight, naming the audit to wait for, never after a gate run (run here on a scratch repository: five commits past the entry fit, a sixth or the landing's own beyond five fills it); and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips; intent: every change is read against the charter soon after it lands (Dale 2026-09-30); band: at most 5 commits behind the head, its edge (dev/CHARTER.md C0)",
+    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted, as dev/audit_window.sh counts it, the one program `dev/land.sh land` runs before its hold too (the march tip's last entry, or the landing's own when it adds the next one, as this lock judges the landing's rebased tree, the commits past it and the landing's own), so a landing into a full window refuses in its preflight, naming the audit to wait for, never after a gate run, and the entry that empties a full window lands (A31E1) (run here on a scratch repository: five commits past the entry fit, a sixth or the landing's own beyond five fills it, and in a full window a landing adding the next entry fits where one adding none is refused); and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips; intent: every change is read against the charter soon after it lands (Dale 2026-09-30); band: at most 5 commits behind the head, its edge (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")
             isfile(audit) || return 1
@@ -2007,10 +2007,12 @@ const LOCKS = [
             v += length(w) == 4 && w[1] == sha && w[3] == "5" && parse(Int, w[2]) <= 5 ? 0 : 1
             # land refuses a full window in its preflight, before the hold, by the same program
             local landsh = read(joinpath(ROOT, "dev", "land.sh"), String)
-            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\" \"origin/$MARCH\" \"$(git rev-list --count --no-merges \"origin/$MARCH..HEAD\")\"); then", landsh) &&
+            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\" \"origin/$MARCH\" \"$(git rev-list --count --no-merges \"origin/$MARCH..HEAD\")\" HEAD); then", landsh) &&
                  occursin(raw"wait for audit #$((wentries + 1)) — refusing\"; exit 1", landsh) ? 0 : 1
             # behavior on a scratch repository: an entry audited through its first commit, then commits;
-            # five past it fit, a sixth fills the window, and the landing's own commit counts
+            # five past it fit, a sixth fills the window, and the landing's own commit counts; in a full
+            # window a landing adding the next entry is counted from its own dev/AUDIT.md and fits, a
+            # landing adding none is refused (A31E1)
             v += mktempdir() do t
                 local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
                 g("init", "-q"); mkpath(joinpath(t, "dev"))
@@ -2023,8 +2025,15 @@ const LOCKS = [
                 end
                 local st = (args...) -> Base.run(pipeline(ignorestatus(`bash $wsh $t $args`); stdout = devnull)).exitcode
                 local five = st(); local five_own = st("HEAD", "1")
+                local c5 = readchomp(`git -C $t rev-parse HEAD`)
+                write(joinpath(t, "dev", "AUDIT.md"), "# Audit\n\n## entry — audited through $(c0[1:8])\n\n## entry — audited through $(c5[1:8])\n")
+                g("commit", "-qam", "audit"); local ca = readchomp(`git -C $t rev-parse HEAD`)
+                g("reset", "-q", "--hard", c5)
+                write(joinpath(t, "f"), "p"); g("commit", "-qam", "plain"); local cp = readchomp(`git -C $t rev-parse HEAD`)
+                g("reset", "-q", "--hard", c5)
+                local own_entry = st(c5, "1", ca); local own_plain = st(c5, "1", cp)
                 write(joinpath(t, "f"), "6"); g("commit", "-qam", "c6")
-                count(!, [five == 0, five_own == 1, st() == 1, st("HEAD", "0") == 1])
+                count(!, [five == 0, five_own == 1, own_entry == 0, own_plain == 1, st() == 1, st("HEAD", "0") == 1])
             end
             return v
         end),
