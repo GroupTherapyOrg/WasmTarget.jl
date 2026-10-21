@@ -5450,7 +5450,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 """, hi) ? 0 : 1
             v
         end),
-    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
+    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label; a label opens a sentence or a clause, its name holding no period and no finding, and each refusal names its ID or row (A20P29). Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",
         () -> begin
             local rx = r"\b(A\d+[A-Z]\d+|[BEHMPS]\d+)\b"
             local charter = read(joinpath(ROOT, "dev", "CHARTER.md"), String)
@@ -5473,22 +5473,38 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 local seg = blk[first(i):end]
                 local j = findfirst("\n## ", seg)
                 j === nothing || (seg = seg[1:first(j)])
-                v += length(collect(eachmatch(rx, seg)))
+                # each refusal named: the ID or row and the rule's form (A20P29)
+                for m in eachmatch(rx, seg)
+                    println("    ✗ L154: $(m.match) in $(h.captures[1])'s Planned text: Planned cites dev/MARCH.md rows (13.<n>), never a finding")
+                    v += 1
+                end
                 for r in eachmatch(r"13\.\d+", seg)
-                    haskey(rows, r.match) || (v += 1)
+                    haskey(rows, r.match) || (println("    ✗ L154: $(h.captures[1])'s Planned cites $(r.match), a row dev/MARCH.md does not have"); v += 1)
                     push!(get!(cites, r.match, Set{String}()), h.captures[1])
                 end
             end
             for (r, cs) in rows
                 r == "13.17" && continue
-                cs == get(cites, r, Set{String}()) || (v += 1)
+                cs == get(cites, r, Set{String}()) ||
+                    (println("    ✗ L154: row $r names $(join(sort(collect(cs)), ' ')) in its Clause column; the clauses whose Planned cites it are $(join(sort(collect(get(cites, r, Set{String}()))), ' '))"); v += 1)
             end
             # 13.17: each ID after a label, and labels' clauses == the clauses citing 13.17
-            local labels = collect(eachmatch(r"[A-Za-z][^:;()]{1,60} \((C\d+(?: C\d+)*)[^()]*\):", row1317))
+            # a label opens a sentence or a clause (after `. ` or `; `), its name holds no period and no
+            # finding, so a finding ahead of it is never read as part of its name (A20P29)
+            local labels = collect(eachmatch(r"(?<=[.;] )[A-Za-z][^:;().]{1,60} \((C\d+(?: C\d+)*)[^()]*\):", row1317))
             local first_label = isempty(labels) ? lastindex(row1317) + 1 : labels[1].offset
-            v += length(collect(m for m in eachmatch(rx, row1317) if m.offset < first_label))
+            for l in labels, m in eachmatch(rx, l.match)
+                println("    ✗ L154: $(m.match) on 13.17 stands inside the group label `$(l.match)`: a label is `<name> (C<n> …):`, its findings after it")
+                v += 1
+            end
+            for m in eachmatch(rx, row1317)
+                m.offset < first_label || continue
+                println("    ✗ L154: $(m.match) on 13.17 stands before any group label: a finding sits under a label `<name> (C<n> …):`")
+                v += 1
+            end
             local label_clauses = Set(String[c.match for l in labels for c in eachmatch(r"C\d+", l.captures[1])])
-            label_clauses == get(cites, "13.17", Set{String}()) || (v += 1)
+            label_clauses == get(cites, "13.17", Set{String}()) ||
+                (println("    ✗ L154: 13.17's group labels name $(join(sort(collect(label_clauses)), ' ')); the clauses whose Planned cites 13.17 are $(join(sort(collect(get(cites, "13.17", Set{String}()))), ' '))"); v += 1)
             v
         end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted; and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips (dev/CHARTER.md C0)",
