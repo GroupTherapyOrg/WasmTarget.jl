@@ -740,8 +740,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                     for (site, target) in bindings.invoke_roots)
             local _bound_invokes = bindings === nothing ? Dict{Int,UInt32}() :
                 merge(bindings.invoke_imports, _root_invokes)
-            ctx = CompilationContext(fn_nir, arg_types, return_type, mod, type_registry;
-                                    translator=translator, func_registry=func_registry, func_idx=func_idx, func_ref=f,
+            ctx = CompilationContext(fn_nir, arg_types, return_type, mod, type_registry, f;
+                                    translator=translator, func_registry=func_registry, func_idx=func_idx,
                                     global_args=global_args,
                                     is_compiled_closure=is_closure &&
                                         !(bindings !== nothing && bindings.elide_closure_context),

@@ -103,10 +103,13 @@ mutable struct CompilationContext <: AbstractCompilationContext
 end
 
 # parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
-function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
+# (the function compiled, `func_ref`, is positional: as a keyword it typed the keyword call's
+# NamedTuple, which Julia then compiled again for every function a program has)
+function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry,
+                           @nospecialize(func_ref=nothing);
                            translator::Translator,
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
-                           func_idx::UInt32=UInt32(0), @nospecialize(func_ref=nothing),
+                           func_idx::UInt32=UInt32(0),
                            global_args::Set{Int}=Set{Int}(),
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
@@ -119,6 +122,9 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
     # Calculate n_params excluding WasmGlobal arguments (they're phantom)
     n_real_params = count(i -> !(i in global_args), 1:length(arg_types))
     n_stmts = length(body.stmts)
+    # the signature by name, not splatted into the call: a splat makes the call a run-time
+    # dispatch on its arguments' types, the function compiled (`func_ref`) among them
+    local wasm_params, wasm_results = function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)
     ctx = CompilationContext(
         arg_types,
         return_type,
@@ -160,7 +166,8 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
         Dict{Int,Union{Nothing,SourceInfo}}(),
         body.slot_types,
         body.debuginfo,
-        function_wasm_signature(arg_types, return_type, global_args, mod, type_registry)...,
+        wasm_params,
+        wasm_results,
         mi
     )
     # Each SSA's type is the NIR boundary's (Julia inference's own answer, widened), with the
