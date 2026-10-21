@@ -1076,6 +1076,8 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
     callable_invocations = Set{Tuple{DataType,Tuple}}()
     invocation_site = Dict{Tuple{DataType,Tuple},Tuple}()   # each pair's first statement (a rejection's site)
     _fn_callables = Set{DataType}()   # per-function staging (folded on co-occurrence)
+    built_callables = Set{DataType}()   # every closure type (captures) the program builds, world-wide
+    call_sigs = Dict{Tuple,Tuple}()     # every dynamic call's signature, world-wide, with its first site
     _fn_dyn_sigs = Set{Tuple}()
     _fn_dyn_site = Dict{Tuple,Tuple}()   # each signature's first statement in the function
     function observe_callable!(@nospecialize(T))
@@ -1101,6 +1103,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             push!(callable_invocations, (T, sig))
             haskey(invocation_site, (T, sig)) || (invocation_site[(T, sig)] = _fn_dyn_site[sig])
         end
+        for sig in _fn_dyn_sigs
+            haskey(call_sigs, sig) || (call_sigs[sig] = _fn_dyn_site[sig])
+        end
+        foreach(T -> is_closure_type(T) && push!(built_callables, T), _fn_callables)
         empty!(_fn_callables)
         empty!(_fn_dyn_sigs)
         empty!(_fn_dyn_site)
@@ -1171,7 +1177,10 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
                     t isa Type || (_dok = false; break)
                     push!(_dargs, t)
                 end
-                if _dok && !isempty(_dargs)
+                # a call with no argument has its signature too, `()`: a closure called so has its
+                # arity-0 body enrolled, as any arity's (a zero-argument call recorded none, so the
+                # closure's object held no entry for it and the call trapped at the entry's cast)
+                if _dok
                     push!(_fn_dyn_sigs, Tuple(_dargs))
                     haskey(_fn_dyn_site, Tuple(_dargs)) || (_fn_dyn_site[Tuple(_dargs)] = (ci, src, sidx, s))
                 end
@@ -1257,6 +1266,28 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
     end
 
     flush_callable_invocations!()
+    # A closure's vtable has an entry for every call it can meet (dart: ClosureLayouter builds a
+    # closure's vtable from its own signature, never from where it is called): every closure type the
+    # program builds is paired with every dynamic call's signature made anywhere at an arity it has a
+    # method at, not only with the calls of the function that builds it; the loop below enrolls each
+    # pair as the fold's (the call's own argument types, the classes reaching them). The fold
+    # alone lost the row of a closure built in one function and called dynamically in another
+    # (dev/AUDIT.md A11E1: its object held a null entry and the call trapped).
+    # formal(dev/formal/EnrollmentArity.tla): every built closure has a row at every dynamic call it accepts
+    local accepts = Dict{Tuple{DataType,Int},Bool}()   # whether a closure has a method at an arity
+    for T in sort!(collect(built_callables); by=type_order_key)
+        for (sig, site) in sort!(collect(call_sigs); by=p -> map(type_order_key, collect(p[1])))
+            (T, sig) in callable_invocations && continue
+            local n = length(sig)
+            local ok = get!(accepts, (T, n)) do
+                local _ams = wt_method_matches(Tuple{T, ntuple(_ -> Any, n)...})
+                _ams !== nothing && !isempty(_ams)
+            end
+            ok || continue   # no method at this arity, no row: a call there traps at the entry's cast where Julia throws MethodError (A3S1)
+            push!(callable_invocations, (T, sig))
+            invocation_site[(T, sig)] = site
+        end
+    end
     # Each function-local callable/signature pair becomes one typed body
     # specialization. Never form a component-wide Cartesian product: dart's
     # selector rows are call-site scoped, and unrelated same-arity signatures

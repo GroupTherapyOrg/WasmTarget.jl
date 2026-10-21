@@ -2702,6 +2702,7 @@ _g("one_field_translation", Any[
     ("range_struct", (x::Int64) -> sum(_FtRange(1:x).r), Int64(4)),
     ("range_tuple", (x::Int64) -> (t = (1:x, x); sum(t[1]) + t[2]), Int64(4)),
     ("range_capture", (x::Int64) -> (r = 1:x; g = () -> sum(r); g()), Int64(4)),
+    ("range_capture_erased", (x::Int64) -> (r = 1:x; fs = Any[() -> sum(r)]; fs[1]()::Int64), Int64(4)),
     ("subarray_capture", (x::Int64) -> (v = collect(1:5); s = view(v, 1:x); g = () -> sum(s); g()), Int64(3)),
     ("memory_capture", (x::Int64) -> (m = Memory{Int64}(undef, 2); m[1] = x; m[2] = 2x; g = () -> m[1] + m[2]; g()), Int64(3)),
     ("int128_capture", (x::Int64) -> (w = Int128(x) << 70; g = () -> Int64(w >> 70); g()), Int64(5)),
@@ -2709,6 +2710,7 @@ _g("one_field_translation", Any[
     ("struct_capture", (x::Int64) -> (p = _PU(x); g = () -> p.v * 2; g()), Int64(3)),
     ("union_callable_field", (x::Int64) -> _ft_call(x)(), Int64(3)),
     ("union_callable_field_nothing", (x::Int64) -> _ft_call(x)(), Int64(-3)),
+    ("union_callable_erased", (x::Int64) -> (fs = Any[_ft_call(x)]; fs[1]()::Int64), Int64(3)),
     ("union_matrix_field", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(1)),
     ("union_matrix_field_nothing", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(-1)),
 ])
@@ -2718,6 +2720,13 @@ _g("one_field_translation", Any[
 _xf("unionall_array_values", Any[
     ("vector_unionall_field", (x::Int64) -> length(_ft_uvec(x).v), Int64(1)),
     ("vector_unionall_field_sum", (x::Int64) -> Float64(sum(_ft_uvec(x).v)), Int64(1)),
+])
+# a closure called dynamically in another function than the one that builds it: every closure the
+# program builds is enrolled at every arity a dynamic call makes, so its object has the entry
+# (dev/AUDIT.md A11E1: its object held a null entry and the call trapped at the entry's cast, native 6)
+@noinline _ft_run_any(f, y) = f(y)
+_g("closure_called_elsewhere", Any[
+    ("closure_built_here_called_there", (n::Int64) -> (k = n; c = x -> x + k; _ft_run_any(Base.inferencebarrier(c), n)::Int64), Int64(3)),
 ])
 
 # Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort

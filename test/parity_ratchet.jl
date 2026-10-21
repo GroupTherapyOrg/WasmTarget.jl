@@ -2773,14 +2773,19 @@ const LOCKS = [
             all_src = interp_src * call_src * compile_src * trim_src
             count(p -> !occursin(p, all_src), required) + count(p -> occursin(p, all_src), forbidden)
         end),
-    "L24_unified_static_tearoffs" => ("named-function tear-offs enroll in the closed world and use the same closure Object/context/vtable/RTI representation as capturing closures",
+    "L24_unified_static_tearoffs" => ("named-function tear-offs enroll in the closed world and use the same closure Object/context/vtable/RTI representation as capturing closures; a dynamic call with no argument enrolls its callable's arity-0 body as any arity's (a zero-argument call recorded no signature and its closure's object held a null entry: smoke one_field_translation's range_capture_erased and union_callable_erased trapped, native 10 and 4), and every closure the program builds is enrolled at every dynamic call made anywhere at an arity it has a method at, with that call's own argument types, as dart's closure vtable has an entry for every arity the closure accepts (the function-local fold alone left a closure built in one function and called dynamically in another with a null entry: smoke closure_called_elsewhere's closure_built_here_called_there trapped, native 6, dev/AUDIT.md A11E1; dev/formal/EnrollmentArity.tla; dev/CHARTER.md C1)",
         () -> begin
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
             required = ["callable_types::Set{DataType}", "isdefined(T, :instance)",
                         "typeof(f) in plan.callable_types", "takes_context ? 1 : 0",
-                        "global_get!(b, dummy_struct_global!(ctx.mod, ctx.type_registry))"]
+                        "global_get!(b, dummy_struct_global!(ctx.mod, ctx.type_registry))",
+                        # a zero-argument dynamic call records its signature, and every closure the
+                        # program builds is enrolled at every arity a dynamic call makes anywhere at which
+                        # it has a method (never only where it is built: A11E1)
+                        "                if _dok\n                    push!(_fn_dyn_sigs, Tuple(_dargs))",
+                        "        for (sig, site) in sort!(collect(call_sigs); by=p -> map(type_order_key, collect(p[1])))\n            (T, sig) in callable_invocations && continue"]
             forbidden = ["static_tearoff_struct", "tearoff_base_idx", "tearoff_callsite"]
             all_src = trim_src * compile_src * closure_src
             count(p -> !occursin(p, all_src), required) +
