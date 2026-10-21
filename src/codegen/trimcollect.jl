@@ -1672,8 +1672,8 @@ end
 """
 The compile inputs one closed world yields (trim_compile_plan), every per-function fact keyed by
 its MethodInstance, as dart's TFA metadata is keyed by its tree node: every function to compile
-as (f, arg_types, name, MethodInstance) — entries keep their given names, the rest get deduped
-names; each MethodInstance's (CodeInfo, rettype), so every function compiles from the
+as (f, arg_types, name, MethodInstance) — each named once, by plan_function_names!; the entries
+(the requested roots) with their names; each MethodInstance's (CodeInfo, rettype), so every function compiles from the
 collection's consistent-world IR (plan_ir); the MethodInstances discovered as dynamic-dispatch
 candidates; the MethodInstances reached only through an `invoke` of a method dispatch would not
 select for their argument types; the callable types the candidate fixpoint enrolled; why each
@@ -1701,6 +1701,7 @@ struct ClosedWorldPlan
     lowering_callees::Dict{Type,Core.MethodInstance}
     external_leaves::Vector{Any}   # (callable, argument types, MethodInstance) of each declared import
     joins::IdDict{Core.MethodInstance,Dict{Int,Type}}   # each planned body's joins (numeric, capture reads)
+    roots::IdDict{Core.MethodInstance,String}           # each entry (a requested root) and its name
 end
 
 """
@@ -1762,8 +1763,12 @@ plan_lowering_callee(plan::ClosedWorldPlan, @nospecialize(sig::Type))::Union{Not
 """
     trim_compile_plan(entries_named) -> ClosedWorldPlan
 
-Run `collect_closed_world` over the named entry points and derive the compile inputs
-(ClosedWorldPlan).
+Run `collect_closed_world` over the entry points, each `(f, arg_types, name)`, and derive the
+compile inputs (ClosedWorldPlan). An entry's name is the one requested; an entry given with
+`name === nothing` takes its function's name (`nameof(f)`), unless another entry requests that
+name or takes it too, when it takes its signature, as every other function does
+(plan_function_names!): one generic function's specializations given as entries without names are
+told apart by Julia's own identity, never by the order they are listed in.
 
 Skipped (with a debug note): non-singleton callables (stateful closures —
 their call sites inline or carry the closure value; no module-level
@@ -1775,11 +1780,18 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     entry_values = Dict{Any,Any}()     # explicit capturing-closure instances
+    local requested = Set{String}(e[3] for e in entries_named if e[3] !== nothing)
+    local unnamed = Tuple{Any,String}[]                 # (mi, its function's name)
     for (f, arg_types, name) in entries_named
         mi = entry_method_instance(f, arg_types)
         push!(entry_mis, mi)
-        entry_keys[mi] = name
+        name === nothing ? push!(unnamed, (mi, string(nameof(f)))) : (entry_keys[mi] = name)
         entry_values[mi] = f
+    end
+    for (mi, fname) in unnamed
+        haskey(entry_keys, mi) && continue   # the same entry, given with its name too
+        local takers = Set{Any}(m for (m, n) in unnamed if n == fname)
+        entry_keys[mi] = (fname in requested || length(takers) > 1) ? julia_function_name(mi) : fname
     end
     external_mis = Set{Any}()
     local external_leaves = Any[]   # (callable, argument types, MethodInstance) of each declared import
@@ -1832,10 +1844,6 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     # the callable types a vtable is built for (a closure type planned as its body's function, or a
     # singleton callable the candidate fixpoint enrolled), each with a no-method record
     planned_callables = Set{DataType}()
-    # Pre-seed with entry names: a discovered function processed before its
-    # same-named entry must not claim the entry's export name (duplicate-export
-    # validation failure in multi-function modules).
-    used_names = Set{String}(values(entry_keys))
     # One function per MethodInstance (dart keys a function by its member's Reference). Two
     # methods can share one specialization's argument types — Base calls a less specific
     # method with `invoke(f, Tuple{Super}, x)` — so (f, arg_types) does not name a function.
@@ -1933,18 +1941,8 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
         ((mi.def, mi.specTypes) in seen_mis) && continue
         push!(seen_mis, (mi.def, mi.specTypes))
         push!(get!(() -> Any[], mis_by_sig, (f, arg_types)), mi)
-        # name: requested for entries, deduped method name otherwise
-        name = get(entry_keys, mi, nothing)
-        if name === nothing
-            base = mi.def isa Method ? string(mi.def.name) : string(nameof(f))
-            name = base
-            n = 1
-            while name in used_names
-                name = string(base, "_", n)
-                n += 1
-            end
-        end
-        push!(used_names, name)
+        # named once every function is planned (plan_function_names!); until then, by its signature
+        name = get(() -> julia_function_name(mi), entry_keys, mi)
         push!(functions, (f, arg_types, name, mi))
         (f isa DataType && is_closure_type(f)) && push!(planned_callables, f)
         (f isa Function && typeof(f) in world.callable_types) && push!(planned_callables, typeof(f))
@@ -1979,6 +1977,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             m === winner || push!(invoke_only, m)
         end
     end
+    plan_function_names!(functions, entry_keys)
     # every planned function says why it is in the closed world; one that cannot is a
     # collector defect, raised here rather than guessed at when a later failure names it
     for fn in functions
@@ -2003,7 +2002,182 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     return ClosedWorldPlan(functions, ir_cache, candidate_mis, invoke_only,
                            world.callable_types, enrolled_as, world.classes,
                            bespoke, no_method, copy(world.lowering_callees), external_leaves,
-                           joins)
+                           joins, IdDict{Core.MethodInstance,String}(entry_keys))
+end
+
+"""
+The module a compiled function's name is printed from: empty, so a type is qualified by its own
+module unless Core or Base exports it, whatever Main holds in this session (Julia's type printer
+qualifies a type not visible from the IOContext's `:module`, Main by default, base/show.jl).
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): its name is the text Julia prints for that pair, printed from a fixed module so the session's `using`s do not change it.)
+"""
+module JuliaNameContext end
+
+"""
+    julia_function_name(mi) -> String
+
+A compiled function's name: its specialization as Julia prints it in a stack trace,
+`Base.StackTraces.show_spec_sig` of its method and its specTypes (`throw_boundserror(A::Vector{Int64},
+I::Tuple{Int64})`, `(::Main.var"#h#2"{Int64})(x::Int64)`), independent of what else the plan holds
+(_julia_signature_text). A closure type's gensym counter (`#h#2`) and a redefined type's
+`@world(...)` are Julia's own identity of the type, stable for a fixed load order.
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): dart's Namer
+suffixes a repeated name with a counter (namer.dart:45) because Dart has no overloading, where one
+Julia generic function has many specializations, each with the identity Julia prints.)
+"""
+julia_function_name(mi::Core.MethodInstance)::String = _julia_signature_text(mi.def::Method, mi.specTypes)
+
+"""
+    _julia_signature_text(m, sig) -> String
+
+`Base.StackTraces.show_spec_sig(io, m, sig)` printed from JuliaNameContext, uncompacted and
+unlimited, without color, so the text depends only on the method, the signature and the modules
+that define their types. Every value it prints that is not a type is printed by Base's or Core's
+own `show`: a type or a type parameter shown by a method defined elsewhere (user code) is
+rejected, never let decide a name (_user_shown_in_signature).
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): its name is the text Julia prints for that pair; a user-defined show of a type or a type parameter would make that text user code's.)
+"""
+function _julia_signature_text(m::Method, @nospecialize(sig::Type))::String
+    local shown = _user_shown_in_signature(sig)
+    if shown !== nothing
+        # named without calling the user's show
+        local x = something(shown)
+        local named = Base.unwrap_unionall(x)
+        local what = named isa DataType ? "the type $(named.name.module).$(named.name.name)" :
+                     named isa Union ? "a union of types" :
+                     "a type parameter of type $(parentmodule(typeof(x))).$(nameof(typeof(x)))"
+        throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(m.name),
+            "a function whose signature holds $(what), which a `show` defined outside Base and Core prints: " *
+            "its name, the signature Julia prints, would be that code's text", nothing,
+            "method $(m.name) in $(m.module), $(m.file):$(m.line)")))
+    end
+    return sprint(io -> Base.StackTraces.show_spec_sig(
+        IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m, sig))
+end
+
+"""
+    _user_shown_in_signature(T) -> Union{Nothing,Some}
+
+The first type, or value parameter of a type, in `T` that Julia's type printer would print through
+a `show` method defined outside Base and Core, wrapped in `Some`, or `nothing`: a type's own
+`show(io, ::Type{T})` (a union's and a UnionAll's too: the printer calls `show(io, p)` on every
+type parameter), or a parameter's `show(io, x)`, recursing through a union, a UnionAll's
+body and bounds, a Vararg, each type's parameters, a tuple value's elements and the fields of a
+value Base's default show prints field by field.
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): the printed signature is a name only while Base and Core print it.)
+"""
+function _user_shown_in_signature(@nospecialize(T))::Union{Nothing,Some}
+    local base_shown(@nospecialize(x)) =
+        Base.moduleroot(parentmodule(which(show, Tuple{IO,Core.Typeof(x)}))) in (Base, Core)
+    # Some{Any}: a type under a UnionAll holds free type variables, which Some(T) cannot bind
+    if T isa Union
+        # Base._show_type prints each member through show
+        base_shown(T) || return Some{Any}(T)
+        for u in Base.uniontypes(T)
+            local r = _user_shown_in_signature(u)
+            r === nothing || return r
+        end
+        return nothing
+    elseif T isa UnionAll
+        # Base._show_type unwraps every UnionAll, prints each variable's bounds through show and a
+        # DataType body itself (show_datatype: its parameters through show), any other body through show
+        base_shown(T) || return Some{Any}(T)
+        local body = T
+        while body isa UnionAll
+            local r = _user_shown_in_signature(body.var.ub)
+            r === nothing || return r
+            r = _user_shown_in_signature(body.var.lb)
+            r === nothing || return r
+            body = body.body
+        end
+        body isa DataType || return _user_shown_in_signature(body)
+        for p in body.parameters
+            local r = _user_shown_in_signature(p)
+            r === nothing || return r
+        end
+        return nothing
+    elseif T isa Core.TypeofVararg
+        isdefined(T, :T) || return nothing
+        local r = _user_shown_in_signature(T.T)
+        (r === nothing && isdefined(T, :N)) && (r = _user_shown_in_signature(T.N))
+        return r
+    elseif T isa DataType
+        base_shown(T) || return Some{Any}(T)
+        for p in T.parameters
+            local r = _user_shown_in_signature(p)
+            r === nothing || return r
+        end
+        return nothing
+    elseif T isa TypeVar || T isa Core.TypeofBottom
+        return nothing
+    end
+    # a value parameter
+    base_shown(T) || return Some{Any}(T)
+    if T isa Tuple
+        for x in T
+            local r = _user_shown_in_signature(x)
+            r === nothing || return r
+        end
+    elseif !(T isa Symbol) && isstructtype(typeof(T))
+        for i in 1:nfields(T)
+            isdefined(T, i) || continue
+            local r = _user_shown_in_signature(getfield(T, i))
+            r === nothing || return r
+        end
+    end
+    return nothing
+end
+
+"""
+    plan_function_names!(functions, entry_keys)
+
+Name every planned function once, in place: an entry its requested name (entry_keys), any other
+function its signature (julia_function_name). Two methods can cover one specialization's
+specTypes, the one Julia's dispatch selects for them and one reached only by its explicit
+`invoke`: where unrequested functions print alike, the one whose method is more specific than
+every other's (Julia's `morespecific`, the order its dispatch reads) keeps the signature, and each
+other takes ` [<its method's declared signature>]` after it (`show_spec_sig` of the method over
+its own `sig`: `_sm_oc(x::Int64) [_sm_oc(x::Integer)]`), so the choice reads Julia's method order,
+never the order the plan lists them in. A name still held twice is refused where it is decided,
+never suffixed with a counter: a requested name another function prints as (ArgumentError), or two
+functions that print alike after the suffix (WasmInternalError naming both methods: two generic
+functions of one name in two modules, with one signature).
+parity(quarantine: multiple dispatch — a specialization is (method, specTypes): dart names a
+function by its member (functions.dart:171 getFunctionName) and an export through its Namer's
+counter (namer.dart:45), which Julia's identity of a specialization replaces.)
+"""
+function plan_function_names!(functions::Vector{Any}, entry_keys::Dict{Any,String})::Nothing
+    # the unrequested functions by the signature each prints
+    local printed = Dict{String,Vector{Core.MethodInstance}}()
+    for fn in functions
+        haskey(entry_keys, fn[4]) && continue
+        push!(get!(() -> Core.MethodInstance[], printed, julia_function_name(fn[4])), fn[4])
+    end
+    local owner = Dict{String,Core.MethodInstance}()
+    for (i, fn) in enumerate(functions)
+        local mi = fn[4]::Core.MethodInstance
+        local name = get(entry_keys, mi) do
+            local s = julia_function_name(mi)
+            local alike = printed[s]
+            (length(alike) == 1 ||
+             all(o -> o === mi || Base.morespecific(mi.def::Method, o.def::Method), alike)) ? s :
+                string(s, " [", _julia_signature_text(mi.def::Method, (mi.def::Method).sig), "]")
+        end
+        local prior = get(owner, name, nothing)
+        if prior !== nothing
+            (haskey(entry_keys, mi) || haskey(entry_keys, prior)) && throw(ArgumentError(
+                "the export name \"$name\" is requested for one function and is another's signature: " *
+                "$(haskey(entry_keys, mi) ? prior : mi); request another name"))
+            throw(WasmInternalError(name, 0, "",
+                String["naming the planned functions: two specializations print alike, \"$name\"",
+                       "$(prior.def)", "$(mi.def)"],
+                ErrorException("two functions of the plan print alike: $(prior.def) and $(mi.def)"),
+                Base.StackTraces.StackFrame[]))
+        end
+        owner[name] = mi
+        functions[i] = (fn[1], fn[2], name, mi)
+    end
+    return nothing
 end
 
 # ============================================================================

@@ -280,22 +280,24 @@ function _smt_coverage(mod, codes::Dict{UInt32,Core.CodeInfo})
         end
         ci = get(codes, UInt32(nimp + k - 1), nothing)
         noloc = ci === nothing ? 0 : count(i -> _smt_noloc(ci.debuginfo, i), eachindex(ci.code))
-        push!(rows, (name=fn.name, julia=julia, unmapped=unmapped, borrowed=borrowed, noloc=noloc))
+        push!(rows, (name=fn.name, idx=UInt32(nimp + k - 1), julia=julia, unmapped=unmapped, borrowed=borrowed, noloc=noloc))
     end
     return rows
 end
 
 # measured on Julia 1.12.7: each Julia-compiled function's unmapped bytes, all of them inside a
-# statement whose line-info nodes are empty
+# statement whose line-info nodes are empty, by its method's name (each specialization's count, sorted)
 const _SMT_UNMAPPED_112 = Dict(
-    "straight-line" => Dict("_smt_line" => 3),
-    "loop with phis" => Dict("_smt_loop" => 10),
-    "try/catch" => Dict("_smt_try" => 7),
-    "closure" => Dict("_smt_clo" => 3, "_smt_apply" => 3),
-    # (convert_1 is the dynamic convert's row for Bool, a class of the program's one class set)
-    "selector caller" => Dict(n => 3 for n in ("mkA", "mkB", "mkC", "mkD", "f2", "f2_1", "f2_2", "f2_3", "convert", "convert_1")),
-    "standalone rethrow body" => Dict("_smt_fin" => 3),
-    "code after a statement in its block" => Dict("_smt_counter" => 24, "_smt_cap" => 3, "+" => 3))
+    "straight-line" => Dict("_smt_line" => [3]),
+    "loop with phis" => Dict("_smt_loop" => [10]),
+    "try/catch" => Dict("_smt_try" => [7]),
+    "closure" => Dict("_smt_clo" => [3], "_smt_apply" => [3]),
+    # (convert's second specialization is the dynamic convert's row for Bool, a class of the
+    # program's one class set)
+    "selector caller" => Dict("mkA" => [3], "mkB" => [3], "mkC" => [3], "mkD" => [3], "f2" => [3, 3, 3, 3],
+                              "convert" => [3, 3]),
+    "standalone rethrow body" => Dict("_smt_fin" => [3]),
+    "code after a statement in its block" => Dict("_smt_counter" => [24], "_smt_cap" => [3], "+" => [3]))
 
 @testset "source maps: every byte of a function compiled from Julia IR is mapped" begin
     for (label, fns, entry) in (("straight-line", [(_smt_line, (Int64,))], "_smt_line"),
@@ -320,7 +322,14 @@ const _SMT_UNMAPPED_112 = Dict(
         # the measured ones: each the code of a statement Julia gives no location (an implicit
         # `return`'s local.get and return, a `goto` whose inlined frame has no line)
         if VERSION < v"1.13-"
-            @test Dict(r.name => r.unmapped for r in rows if r.julia && r.unmapped > 0) == _SMT_UNMAPPED_112[label]
+            local measured = Dict{String,Vector{Int}}()
+            for r in rows
+                (r.julia && r.unmapped > 0) || continue
+                local def = haskey(trace.ids, r.idx) ? String(trace.mis[trace.ids[r.idx]].def.name) : r.name
+                push!(get!(measured, def, Int[]), r.unmapped)
+            end
+            foreach(sort!, values(measured))
+            @test measured == _SMT_UNMAPPED_112[label]
         end
     end
     # the whole-body arms are present in the programs above

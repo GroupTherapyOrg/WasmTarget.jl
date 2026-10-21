@@ -138,7 +138,7 @@ return [{ trace, outcome }];
 # the wasm run's events, and how the call ended
 function wasm_trace(bytes::Vector{UInt8}, fname::String, js_args::String)
     local src = replace(_TRACE_JS, "FNAME" => repr(fname), "ARGS" => js_args,
-                        "HOST_MERGE" => WasmRunner.HOST_RUNTIME_MERGE_JS, "HOST_ESCAPE" => WasmTarget.host_escape_js())
+                        "HOST_MERGE" => WasmRunner.host_runtime_merge_js(bytes), "HOST_ESCAPE" => WasmTarget.host_escape_js())
     local status, results = WasmRunner.run_driver_batch(bytes, src; ninputs=1)
     status === :error && error("the traced module did not run: $(results)")
     local r = results[1]

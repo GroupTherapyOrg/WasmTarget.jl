@@ -118,7 +118,7 @@ end
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js());
+    const importObject = $(WasmTarget.host_runtime_js(bytes));
     importObject.host = { late: (x) => x * 2n };
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     return [{ ok: String(instance.exports.late_entry(3n)) }];
@@ -168,4 +168,89 @@ _hi_import_no_method(n::Int64) = (y = n > 0 ? n : _hi_int32_stub();
     bytes = WasmTarget.to_bytes(m)
     imports = Dict{String,Any}("host" => Dict{String,Any}("int32_stub" => "() => 5"))
     @test run_wasm_with_imports(bytes, "_hi_import_no_method", imports, Int64(-1)) == -1
+end
+
+# The host runtime is generated per module (A2E4, dart's RuntimeFinalizer.generate,
+# runtime_generator.dart:128): exactly the WT imports the module declares, answered. A module that
+# reads the clock gets env.perf_now and no env.random_i64, one that draws random words the reverse;
+# each instantiates with its own runtime, and not with one field taken out of it
+_hi_runtime_fields(bytes) = WasmRunner.run_driver_batch(bytes, """
+    const rt = $(WasmTarget.host_runtime_js(bytes));
+    const given = Object.entries(rt).flatMap(([m, fs]) => Object.keys(fs).map(f => m + '.' + f)).sort();
+    const declared = WebAssembly.Module.imports(await WebAssembly.compile(bytes, { builtins: ['js-string'] }))
+        .filter(i => i.kind === 'function').map(i => i.module + '.' + i.name).sort();
+    await WebAssembly.instantiate(bytes, rt, { builtins: ['js-string'] });
+    const missing = [];
+    for (const f of given) {
+        const [m, n] = f.split('.');
+        const cut = Object.fromEntries(Object.entries(rt).map(([k, fs]) => [k, Object.assign({}, fs)]));
+        delete cut[m][n];
+        try { await WebAssembly.instantiate(bytes, cut, { builtins: ['js-string'] }); missing.push(f + ' instantiated'); }
+        catch (e) { missing.push(f + ' ' + e.constructor.name); }
+    }
+    return [{ ok: JSON.stringify({ given, declared, missing }) }];
+    """; ninputs=1)
+@testset "the host runtime is the module's own imports" begin
+    for (f, has, lacks) in ((_hi_clock, "env.perf_now", "env.random_i64"), (_hi_rand, "env.random_i64", "env.perf_now"))
+        local bytes = WasmTarget.compile(f, f === _hi_clock ? (Int64,) : (); validate=true)
+        local status, results = _hi_runtime_fields(bytes)
+        @test status === :ok
+        local r = WasmRunner.JSON.parse(results[1]["ok"])
+        @test r["given"] == r["declared"] == sort(["wasmtarget.stack_trace", has])   # exactly its imports
+        @test !(lacks in r["given"])
+        @test r["missing"] == [x * " LinkError" for x in r["given"]]   # each field it needs
+    end
+    # one method, over the bytes a host instantiates: no runtime without its module
+    @test only(methods(WasmTarget.host_runtime_js)).sig == Tuple{typeof(WasmTarget.host_runtime_js),Vector{UInt8}}
+end
+
+# One query reads an import by its function index (imported_function, wasm_builder's
+# FunctionsBuilder._importedFunctions): the k-th function import, or nothing at a defined function's
+# index; the import's call is a host-declared import's (saved and restored) by that answer alone
+@testset "one query for the import at a function index" begin
+    mod = WasmTarget.WasmModule()
+    WasmTarget.ensure_provenance_imports!(mod)
+    h = WasmTarget.add_import!(mod, "host", "late", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
+    n = WasmTarget.num_imported_funcs(mod)
+    @test [(i.module_name, i.field_name) for i in (WasmTarget.imported_function(mod, k) for k in 0:n - 1)] ==
+          [("wasmtarget", "stack_trace"), ("host", "late")]
+    @test WasmTarget.imported_function(mod, n) === nothing
+    @test WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, h))
+    @test !WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, 0))
+    m = WasmTarget.compile_module(Any[(_hi_late_entry, (Int64,), "late_entry")]; existing_module=mod,
+        import_stubs=Any[(_hi_late_import, "late", (Int64,), h, Int64)], options=WasmTarget.options_from_env())
+    @test unsaved_host_import_calls(m) == 0
+    # the import section the bytes declare reads back as the module's imports
+    @test WasmTarget.module_function_imports(WasmTarget.to_bytes(m)) == [("wasmtarget", "stack_trace"), ("host", "late")]
+end
+
+# The module reader is wasm_builder's Deserializer: it checks the 8-byte preamble, reads each
+# section within its size, reads the one import section to its exact end and refuses invalid
+# UTF-8, every malformed module refused by name, never read past or answered with a default
+@testset "the module reader refuses a malformed module" begin
+    pre = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
+    imp(contents...) = UInt8[0x02, length(contents), contents...]
+    # one import "a"."b" of a function of type 0: count 1, name a, name b, kind 0, type 0
+    one = (0x01, 0x01, UInt8('a'), 0x01, UInt8('b'), 0x00, 0x00)
+    @test WasmTarget.module_function_imports(vcat(pre, imp(one...))) == [("a", "b")]
+    @test WasmTarget.module_function_imports(pre) == Tuple{String,String}[]
+    refused(bytes, needle) = (e = try; WasmTarget.module_function_imports(bytes); nothing; catch x; x; end;
+                              e isa ArgumentError && occursin(needle, e.msg))
+    @test refused(pre[1:7], "invalid Wasm preamble")                                      # too short
+    @test refused(vcat(pre[1:4], UInt8[0x02, 0x00, 0x00, 0x00]), "invalid Wasm preamble") # version 2
+    @test refused(vcat(UInt8[0x00, 0x61, 0x73, 0x6e], pre[5:8]), "invalid Wasm preamble") # magic
+    @test refused(vcat(pre, UInt8[0x01, 0x10, 0x00]), "where 16 are read")                # a section past the end
+    @test refused(vcat(pre, imp(one..., 0x00)), "1 byte(s) after its last import")         # a byte left over
+    @test refused(vcat(pre, imp(one[1:end-1]...)), "where a byte is read")                 # the section ends inside an import
+    @test refused(vcat(pre, imp(0x00), imp(0x00)), "2 import sections")                    # a second import section
+    @test refused(vcat(pre, imp(0x01, 0x01, 0xff, 0x01, UInt8('b'), 0x00, 0x00)), "not valid UTF-8")
+    @test refused(vcat(pre, imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('b'), 0x01, 0x70, 0x00, 0x00)), "of kind 1")
+    @test refused(vcat(pre, UInt8[0x00, 0x02, 0x01, 0xff]), "not valid UTF-8")             # a custom section's name
+    @test refused(vcat(pre, UInt8[0x02, 0x0b], fill(0xff, 10), [0x01]), "longer than 64 bits")
+    # a tenth byte with bits past bit 63: the count 1 with bit 64 set, never read as 1
+    @test refused(vcat(pre, imp(0x81, fill(0x80, 8)..., 0x02, one[2:end]...)), "longer than 64 bits")
+    # a global's reference heap type, a signed LEB128 whose tenth byte is neither sign extension
+    gref(last) = imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('g'), 0x03, 0x64, fill(0x80, 9)..., last, 0x00)
+    @test refused(vcat(pre, gref(0x01)), "longer than 64 bits")
+    @test WasmTarget.module_function_imports(vcat(pre, gref(0x7f))) == Tuple{String,String}[]
 end

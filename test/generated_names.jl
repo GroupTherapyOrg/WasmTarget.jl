@@ -13,7 +13,7 @@ const _GN = WasmTarget
 const _GN_SUBJECTS = Dict{Symbol,String}(
     :closure_trampoline => "var\"#gn##0#gn##1\"",
     :closure_dispatching_trampoline => "typeof(string)",
-    :dispatch_wrapper => "f2_1",
+    :dispatch_wrapper => "f2(::A, ::A)",
     :polymorphic_dispatcher => "f3, axis 2",
     :lazy_initializer => _GN.constant_name("a string constant\nsecond line"),
     :field_initializer => "Main.COUNTER",
@@ -69,7 +69,8 @@ end
     # the most specific format wins; a function compiled from Julia IR is no construct
     @test _GN.generated_function_construct("C trampoline (dispatching)") ==
           _GN.GENERATED_CONSTRUCTS.closure_dispatching_trampoline.construct
-    for ordinary in ("f", "f2_1", "gf2", "trampoline", "#init_1", "_smt_boom")
+    for ordinary in ("f", "f2(x::Int64)", "_gn_oc(x::Int64) [_gn_oc(x::Integer)]", "(::var\"#h#2\"{Int64})(x::Int64)",
+                     "gf2", "trampoline", "#init_1", "_smt_boom")
         @test _GN.generated_function_construct(ordinary) === nothing
     end
     # every construct in the vocabulary is one a site in src names a function by, and every
@@ -176,4 +177,95 @@ end
     tramps = [f.name for f in mod.functions if endswith(f.name, " trampoline")]
     @test !isempty(tramps)
     @test all(n -> length(n) <= 64 && !occursin("_GNWide", n), tramps)
+end
+
+# A compiled function is named by its Julia identity, the specialization as Julia prints it in a
+# stack trace (Base.StackTraces.show_spec_sig), not a counter: two specializations of one generic
+# function each carry their own signature, and the names do not depend on the order the plan
+# lists them in (a counter named the second one `_gn_two_1` or `_gn_two` by order). A requested
+# entry keeps its requested name. Where two methods cover one specialization, the more specific
+# (Julia's `morespecific`, the method its dispatch selects) keeps the signature and the other adds
+# its method's own declared signature: smoke's invoke_names_its_method and
+# closure_invoke_only_body, the two such pairs over smoke's 917 plans, pinned here as smoke
+# defines them. Two functions that still print alike are refused at the plan, naming both methods.
+@noinline _gn_two(x::Int64) = x + 1
+@noinline _gn_two(x::Float64) = x * 2.0
+_gn_both(n::Int64) = _gn_two(n) + Int64(round(_gn_two(Float64(n))))
+_gn_both_rev(n::Int64) = Int64(round(_gn_two(Float64(n)))) + _gn_two(n)
+module _GNA; @noinline f(x::Int64) = x + 1; end
+module _GNB; @noinline f(x::Int64) = x + 2; end
+_gn_alike(n::Int64) = _GNA.f(n) + _GNB.f(n)
+# smoke's programs, as smoke.jl defines them (its main() runs only when it is the program)
+module _GNSmoke; include(joinpath(@__DIR__, "smoke.jl")); end
+_gn_smoke_case(name) = only(c for (_, cs) in _GNSmoke.GROUPS for c in cs if c[1] == name)
+@testset "a compiled function is named by its signature" begin
+    names(m) = Set(f.name for f in m.functions)
+    run_i64(m, f) = (r = WasmRunner.run_wasm_single(_GN.to_bytes(m), f, "3n"); r[1] === :ok ? parse(Int, r[2]["__bigint__"]) : r)
+    m1 = _GN.compile_module(Any[(_gn_both, (Int64,), "both")]; options=_GN.options_from_env())
+    m2 = _GN.compile_module(Any[(_gn_both_rev, (Int64,), "both_rev")]; options=_GN.options_from_env())
+    for (m, entry) in ((m1, "both"), (m2, "both_rev"))
+        @test "_gn_two(x::Int64)" in names(m)
+        @test "_gn_two(x::Float64)" in names(m)
+        @test entry in names(m)   # a requested entry keeps its name
+        @test any(e -> e.name == "_gn_two(x::Int64)", m.exports)
+    end
+    # two methods over one specialization: the more specific bare, the other suffixed
+    local (_, inv, inv_arg) = _gn_smoke_case("invoke_names_its_method")
+    mi = _GN.compile_module(Any[(inv, (Int64,), "inv")]; options=_GN.options_from_env())
+    @test "_sm_oc(x::Int64)" in names(mi)
+    @test "_sm_oc(x::Int64) [_sm_oc(x::Integer)]" in names(mi)
+    @test run_i64(mi, "inv") == inv(inv_arg) == 103004
+    # a closure's two methods over Int64, one reached by `invoke`: Julia prints the closure type as
+    # its stack trace does
+    local (_, rows, rows_arg) = _gn_smoke_case("closure_invoke_only_body")
+    mr = _GN.compile_module(Any[(rows, (Int64,), "rows")]; options=_GN.options_from_env())
+    # (the closure type prints with its module where it is not Main's, as here: `_GNSmoke.var"#h#…"`)
+    local hnames = sort!([f.name for f in mr.functions if occursin(r"^\(::(?:\w+\.)*var\"#h#", f.name) &&
+                          occursin("(x::Int64)", f.name) && !endswith(f.name, " (export)")])
+    local T = only(unique(match(r"^\(::((?:\w+\.)*var\"[^\"]*\")", n).captures[1] for n in hnames))
+    @test hnames == sort!(["(::$(T){Int64})(x::Int64)", "(::$(T){Int64})(x::Int64) [(::$(T))(x::Integer)]"])
+    @test run_i64(mr, "rows") == rows(rows_arg) == 12
+    # two generic functions of one name in two modules print alike, the suffix too: refused at the
+    # plan, naming both methods
+    err = try; _GN.compile_module(Any[(_gn_alike, (Int64,), "alike")]; options=_GN.options_from_env()); nothing; catch e; e; end
+    @test err isa _GN.WasmInternalError
+    local msg = sprint(showerror, err)
+    @test occursin("print alike", msg) && occursin("f(x::Int64)", msg) && occursin("_GNA", msg) && occursin("_GNB", msg)
+end
+
+# A name does not depend on the session: Julia's type printer qualifies a type unless it is
+# visible from the printing module, Main by default, so a `using` in Main once renamed every
+# function whose signature names that module's type. The name is printed from a fixed module
+# (JuliaNameContext): the same compile before and after `using` answers the same names.
+Core.eval(Main, :(module _GNSession; struct GNPoint; x::Int64; end; export GNPoint; end))
+@noinline _gn_session_x(p) = p.x + 1
+_gn_session(n::Int64) = _gn_session_x(Main._GNSession.GNPoint(n))
+# a type parameter Julia prints through a show defined outside Base and Core: refused, naming the
+# type, never left to that code to decide a name
+struct _GNShown; v::Int64; end
+Base.show(io::IO, x::_GNShown) = print(io, "shown#", x.v)
+@noinline _gn_shown_x(::Val{V}, n::Int64) where {V} = V.v + n
+_gn_shown(n::Int64) = _gn_shown_x(Val(_GNShown(2)), n)
+# a UnionAll parameter with its own show: the printer calls show(io, p) on it as on any parameter
+struct _GNParamS{T}; x::T; end
+const _GNParam = _GNParamS
+Base.show(io::IO, ::Type{_GNParam}) = print(io, "param#")
+@noinline _gn_param_x(::Type{_GNParam}, n::Int64) = n + 1
+_gn_param(n::Int64) = _gn_param_x(_GNParam, n)
+@testset "a compiled function's name does not depend on the session" begin
+    fnames(m) = sort!([f.name for f in m.functions])
+    before = fnames(_GN.compile_module(Any[(_gn_session, (Int64,), "session")]; options=_GN.options_from_env()))
+    @test "_gn_session_x(p::Main._GNSession.GNPoint)" in before
+    Core.eval(Main, :(using ._GNSession))
+    @test isdefined(Main, :GNPoint)   # the type is now visible from Main
+    after = fnames(_GN.compile_module(Any[(_gn_session, (Int64,), "session")]; options=_GN.options_from_env()))
+    @test after == before
+    err = try; _GN.compile_module(Any[(_gn_shown, (Int64,), "shown")]; options=_GN.options_from_env()); nothing; catch e; e; end
+    @test err isa _GN.WasmCompileError
+    local msg = sprint(showerror, err)
+    @test occursin("which a `show` defined outside Base and Core prints", msg) && occursin("_GNShown", msg) && !occursin("shown#", msg)
+    err = try; _GN.compile_module(Any[(_gn_param, (Int64,), "param")]; options=_GN.options_from_env()); nothing; catch e; e; end
+    @test err isa _GN.WasmCompileError
+    msg = sprint(showerror, err)
+    @test occursin("which a `show` defined outside Base and Core prints", msg) && occursin("_GNParamS", msg) && !occursin("param#", msg)
 end

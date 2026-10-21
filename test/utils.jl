@@ -299,7 +299,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = $(WasmTarget.host_runtime_js());
+        const importObject = $(WasmTarget.host_runtime_js(wasm_bytes));
         const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
@@ -781,17 +781,18 @@ function _returns_vector(f, arg_types)
 end
 
 """
-    _generate_bridge_loader(func_name, args, arg_types, return_vec_eltype) -> String
+    _generate_bridge_driver(bytes, func_name, args, arg_types, return_vec_eltype) -> String
 
-Generate JavaScript loader code that uses bridge functions to marshal Vector args.
+Generate JavaScript loader code that uses bridge functions to marshal Vector args, for the module
+`bytes` (its host runtime is generated from its imports).
 """
-function _generate_bridge_driver(func_name, args, arg_types, return_vec_eltype)
+function _generate_bridge_driver(bytes::Vector{UInt8}, func_name, args, arg_types, return_vec_eltype)
     # Driver body for the persistent runner pool: `bytes` is injected, and we
     # RETURN a 1-element results array ([{ok:…}] | [{trap:"msg"}]) instead of
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
+    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js(bytes));")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
@@ -919,7 +920,7 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
 
     # 5. Generate bridge-aware driver and run via the persistent pool
     func_name = string(nameof(f))
-    driver = _generate_bridge_driver(func_name, args_for_wasm, arg_types, return_vec_eltype)
+    driver = _generate_bridge_driver(bytes, func_name, args_for_wasm, arg_types, return_vec_eltype)
 
     # 6. Execute
     let
@@ -963,7 +964,7 @@ end
 # ============================================================================
 
 """
-    _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types) -> String
+    _generate_sidecar_bridge_driver(bytes, sidecar_bytes, sidecar_module_name, func_name, args, arg_types) -> String
 
 Driver body for the persistent runner pool, sidecar-aware: embeds
 `sidecar_bytes` as a hex literal directly in the generated JS (the pool's
@@ -980,14 +981,14 @@ Only scalar Float64 args and Vector{Float64} args are supported (daxpy's
 signature); Vector{Float64} args/results marshal through the `_bv_f64_*`
 bridge, which must already be compiled into the main module.
 """
-function _generate_sidecar_bridge_driver(sidecar_bytes::Vector{UInt8}, sidecar_module_name::AbstractString,
+function _generate_sidecar_bridge_driver(bytes::Vector{UInt8}, sidecar_bytes::Vector{UInt8}, sidecar_module_name::AbstractString,
                                           func_name::AbstractString, args, arg_types)
     lines = String[]
     push!(lines, "  try {")
     push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
     push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
-    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js());")
+    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js(bytes));")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
@@ -1049,7 +1050,7 @@ function compare_sidecar_wasm_vec(main_bytes::Vector{UInt8}, sidecar_bytes::Vect
                                    sidecar_module_name::AbstractString, func_name::AbstractString,
                                    expected::Vector{Float64}, args...)
     arg_types = map(typeof, args)
-    driver = _generate_sidecar_bridge_driver(sidecar_bytes, sidecar_module_name, func_name, args, arg_types)
+    driver = _generate_sidecar_bridge_driver(main_bytes, sidecar_bytes, sidecar_module_name, func_name, args, arg_types)
     status, results = WasmRunner.run_driver_batch(main_bytes, driver; ninputs=1)
     if status === :error
         return (pass=false, expected=expected, actual="WASM_ERROR", wasm_size=length(main_bytes))
@@ -1099,7 +1100,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
-    const importObject = $(WasmTarget.host_runtime_js());
+    const importObject = $(WasmTarget.host_runtime_js(bytes));
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -1166,7 +1167,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js());
+    const importObject = $(WasmTarget.host_runtime_js(bytes));
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

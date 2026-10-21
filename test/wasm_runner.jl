@@ -21,14 +21,15 @@ module WasmRunner
 using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
 import WasmTarget
 
-# Every import WT's code generator creates, answered by the module's runtime
-# (WasmTarget.host_runtime_js), beside what a test's own importObject answers — its answers win —
-# then the glue (WasmTarget.host_glue_js): the count of open host-declared import calls, imported
-# by a module that has one, and each host-declared import wrapped to keep it.
-const HOST_RUNTIME_MERGE_JS = "for (const [m, fs] of Object.entries($(WasmTarget.host_runtime_js()))) " *
-                              "importObject[m] = Object.assign({}, fs, importObject[m] || {}); " *
-                              "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
-                              "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"
+# The WT imports module `bytes` holds, answered by its runtime (WasmTarget.host_runtime_js, generated
+# from the module), beside what a test's own importObject answers — its answers win — then the glue
+# (WasmTarget.host_glue_js): the count of open host-declared import calls, imported by a module that
+# has one, and each host-declared import wrapped to keep it.
+host_runtime_merge_js(bytes::Vector{UInt8})::String =
+    "for (const [m, fs] of Object.entries($(WasmTarget.host_runtime_js(bytes)))) " *
+    "importObject[m] = Object.assign({}, fs, importObject[m] || {}); " *
+    "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
+    "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"
 
 export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE, escaped_class_name
 
@@ -232,7 +233,7 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     $_ENC_JS
     $import_js
     Error.stackTraceLimit = 64;   // a trap's frames, beyond V8's default 10 (located_frames)
-    $HOST_RUNTIME_MERGE_JS
+    $(host_runtime_merge_js(bytes))
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const f = instance.exports['$fname'];
     if (typeof f !== 'function') return [{ trap: 'export not a function: $fname' }];
