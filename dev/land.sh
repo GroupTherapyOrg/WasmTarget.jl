@@ -47,9 +47,10 @@
 #       timing's state (L198). After a line judged red, a landing lands on a judged green run or
 #       carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (`merge` refuses any other). A
 #       worktree whose Manifest.toml names other WasmTarget extensions than Project.toml is refused.
-#       L197 judges a landing's own mechanics, own_s, never its waits (A30E1): from its change's first
-#       red gate run, or its land's start, to its push, less its wait for another landing's hold; the
-#       waits are queue_wait_s, reported beside it, and need no excuse.
+#       L197 judges a landing's own mechanics, own_s, never its waits (A30E1, A33E4): its land's start
+#       to its push, less its wait for another landing's hold, plus each red of its own checks to its
+#       next attempt (the red history, dev/.loop/reds.tsv); the waits, other landings' reds among them,
+#       are queue_wait_s, reported beside it, and need no excuse.
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
@@ -58,9 +59,10 @@
 # head, files the paths those commits change and insertions the lines they add (git log --numstat
 # over the range), gate_runs and gate_wall_s the gate runs `land` made (0 for a bare `merge`), timing
 # the record's (judged, or unjudged when the machine was past the gate's factor cap), own_s the
-# landing's own mechanics (from its change's first red blocking-gate run, or its land's start, to its
-# push, less its wait for another landing's hold, A30E1) and queue_wait_s the rest of edit_to_landed_s
-# (the holds of others, an audit window, a stack's author time before its land began). A line before
+# landing's own mechanics (its land's start to its push, less its wait for another landing's hold,
+# A30E1, plus each red of its own checks from its start to the next attempt's, A33E4: a red on timing
+# alone or on the ratchet's L148 or L197 alone is not its own) and queue_wait_s the rest of
+# edit_to_landed_s (the holds of others, an audit window, other landings' reds, a stack's author time). A line before
 # A30E1 has the first eleven fields.
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
@@ -117,6 +119,13 @@ END { for (t in rem) if (rem[t] > add[t]) bad = 1; print (bad ? "no" : "yes") }'
 LOG="$MAIN/dev/.loop/landings.tsv"
 STEPS="$MAIN/dev/.loop/steps.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
+# the red history (dev/block.jl writes a line per red run; git-ignored, kept when a worktree goes) and
+# the change's own red seconds over it (A33E4): over the history's lines sorted by start, those of the
+# change (field 3, its author time, author and subject) from its author time to this land's start, each
+# `own` line (field 4) its span to the next such line's start or the land's
+REDS="$MAIN/dev/.loop/reds.tsv"
+OWN_RED_AWK='$3 == w && $1 + 0 >= au + 0 && $1 + 0 < ls + 0 { n++; s[n] = $1 + 0; k[n] = $4 }
+END { t = 0; for (i = 1; i <= n; i++) if (k[i] == "own") t += (i < n ? s[i + 1] : ls) - s[i]; printf "%.1f\n", t }'
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
 # a red timing's debt (SLOWER, OVER) is lifted by the red landing's excuse file in the landing's own tree,
@@ -279,11 +288,11 @@ merge)
     start=${LAND_START:-$m_start}
     mkdir -p "$(dirname "$LOG")"
     [ -s "$LOG" ] || printf 'landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming\town_s\tqueue_wait_s\n' > "$LOG"
-    # own_s, the landing's own mechanics (A30E1): from its change's first red gate run, or its land's
-    # start, to its push, less its wait for another landing's hold; queue_wait_s the rest of its edit to
-    # landed (the holds of others, an audit window, a stack's author time before its land began)
+    # own_s, the landing's own mechanics (A30E1, A33E4): its land's start to its push, less its wait for
+    # another landing's hold, plus its own reds (LAND_OWN_RED); queue_wait_s the rest of its edit to
+    # landed (the holds of others, an audit window, other landings' reds, a stack's author time)
     e2l=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")
-    own=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1] - $ARGV[2]' "$landed" "${LAND_FIRST:-$start}" "${LAND_HOLD_WAIT:-0}")
+    own=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1] - $ARGV[2] + $ARGV[3]' "$landed" "$start" "${LAND_HOLD_WAIT:-0}" "${LAND_OWN_RED:-0}")
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
         "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
         "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$e2l" "$own")" >> "$LOG"
@@ -466,19 +475,14 @@ land)
         done
         echo "land: Closes: $(echo $closes): the ratchet reads each CLOSED; the full matrix runs on this landing's push"
     fi
-    # the landing's own time starts at its change's first red gate run, when one ran (A30E1): the earliest
-    # start of a red blocking-gate record, in any worktree, of a commit of the same change (its author
-    # time, author and subject, as a rebase or an amend keeps them) after its author time; else this land
-    want=$(git log -1 --format='%at %ae %s' HEAD); au=${want%% *}; first=$l_start
-    for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
-        for f in "$w"/dev/.block/*-*.toml; do
-            [ -f "$f" ] && grep -qx 'verdict = "red"' "$f" || continue
-            rs=$(awk -F' = ' '$1 == "finished" { f = $2 } $1 == "total_wall" { w = $2 } END { if (f != "" && w != "") printf "%.1f", f - w }' "$f")
-            [ -n "$rs" ] && perl -e 'exit !($ARGV[0] >= $ARGV[1] && $ARGV[0] < $ARGV[2])' "$rs" "$au" "$first" || continue
-            [ "$(git log -1 --format='%at %ae %s' "$(sed -n 's/^head = "\(.*\)"$/\1/p' "$f")" 2>/dev/null)" = "$want" ] && first=$rs
-        done
-    done
-    LAND_HOLDER=$$ LAND_START=$l_start LAND_FIRST=$first LAND_HOLD_WAIT=$hold_wait LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    # the change's own reds (A33E4): from the red history (the main tree's dev/.loop/reds.tsv, which
+    # dev/block.jl writes and a worktree's removal leaves, A33E5), each red run of a commit of the same
+    # change (its author time, author and subject, as a rebase or an amend keeps them) after its author
+    # time, before this land: an `own` red counts from its start to the next attempt's (the fix), a
+    # `queue` red (timing alone; the ratchet on L148 or L197 alone) counts as queue time
+    want=$(git log -1 --format='%at %ae %s' HEAD)
+    own_red=$( { sort -t "$(printf '\t')" -k1,1n "$REDS" 2>/dev/null || true; } | awk -F'\t' -v w="$want" -v au="${want%% *}" -v ls="$l_start" "$OWN_RED_AWK")
+    LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")

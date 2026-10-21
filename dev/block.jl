@@ -578,6 +578,20 @@ end
 # files that moved, minutes), or in full (about 34 minutes), which saves the sets there
 const STALE_PIECES = 8
 const SETS_PATH = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".block", "impact_sets.tsv")
+# every red run's line, in the main tree's git-ignored dev/.loop, which a worktree's removal does not
+# delete (A33E5): `dev/land.sh land` counts a change's own reds from it (A33E4)
+const RED_HISTORY = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".loop", "reds.tsv")
+
+# whether a red run is the change's own (A33E4): `queue` when no check failed (timing alone) or the
+# ratchet alone failed on L148 or L197 alone (the audit window, the loop's median: other landings'
+# doing), `own` otherwise; with what failed (a decision over text, L194 runs it on fixed inputs)
+function red_kind(checks_failed::AbstractVector, ratchet_log::AbstractString)::Tuple{String,String}
+    isempty(checks_failed) && return ("queue", "timing alone")
+    locks = sort(unique(String[first(split(first(split(strip(l))), '_')) for l in split(ratchet_log, '\n') if occursin("❌", l)]))
+    checks_failed == ["ratchet"] && !isempty(locks) && all(in(("L148", "L197")), locks) &&
+        return ("queue", "ratchet on " * join(locks, " ") * " alone")
+    return ("own", join(checks_failed, " ") * (isempty(locks) ? "" : " (" * join(locks, " ") * ")"))
+end
 const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH " *
                  "(off the landing path, at JLRUN_PRIO=5; test/block_groups.tsv lands as its own commit; with no sets saved there, the full " *
                  "measurement: the same command with $SETS_PATH alone in place of --pieces and its path)"
@@ -1177,6 +1191,17 @@ function main(args)
         "logs" => relpath(logdir, ROOT), "stage" => res)
     if clean && unchanged
         open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, "w")
+        # a red run's line in the red history: its start, the change it judged (author time, author and
+        # subject, as a rebase or an amend keeps them), whether it is the change's own, what failed
+        if verdict == "red"
+            local rl = joinpath(logdir, "ratchet.log")
+            local kind, what = red_kind(checks_failed, isfile(rl) ? read(rl, String) : "")
+            mkpath(dirname(RED_HISTORY))
+            open(RED_HISTORY, "a") do io
+                println(io, join([string(round(record["finished"] - total; digits = 1)), head, git("log", "-1", "--format=%at %ae %s", head),
+                                  kind, what, "$(tree[1:8])-$n"], '\t'))
+            end
+        end
     elseif !unchanged
         push!(notes, "not recorded: the tree changed while the stages ran")
     else
