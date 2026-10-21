@@ -482,6 +482,7 @@ numeric_local_joins(ctx::AbstractCompilationContext)::Dict{Int,Type} =
 """
 Analyze control flow to find loops and handle phi nodes.
 parity(quarantine: Julia's IR is a CFG of gotos; WT recovers its loops and phis, where dart's kernel tree carries its structure (dev/formal/Stackifier.tla).)
+precedent(dart: translateTypeOfLocalVariable, translator.dart:2100): a phi's local type is translated once, then declared.
 """
 function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     nir = ctx.nir
@@ -506,28 +507,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
             # maps to a reference, not I64: inference's own type is the fallback.
             phi_julia_type = get(ctx.ssa_types, i, rec.julia_type)
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
+            # the phi's one translation (an all-numeric Union included: the resolver boxes it,
+            # _resolve_multivariant_union)
             phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
-
-            # For phi nodes with all-numeric Union types (e.g., Union{Int64, UInt32}),
-            # use the widest numeric type instead of tagged union. Tagged union (ConcreteRef)
-            # can't store/load raw numeric values — the phi edges emit numeric constants
-            # but the ConcreteRef local expects a struct reference, causing ref.null defaults.
-            if phi_wasm_type isa ConcreteRef && phi_julia_type isa Union
-                types_u = Base.uniontypes(phi_julia_type)
-                non_nothing = filter(t -> t !== Nothing, types_u)
-                all_numeric = all(non_nothing) do t
-                    wt = julia_to_wasm_type(t)
-                    wt === I32 || wt === I64 || wt === F32 || wt === F64
-                end
-                if all_numeric && !isempty(non_nothing)
-                    # Route through THE single resolver (get_concrete_wasm_type →
-                    # _resolve_multivariant_union) instead of the old lossy resolve_union_type,
-                    # which collapsed mixed int/float (Union{Int64,Float64}) to F64 — losing the
-                    # tag (Int 1 / Float 1.0 indistinguishable). The principled path boxes it (AnyRef),
-                    # matching the value-type resolver + dart's top type. Same-category → widest (same).
-                    phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
-                end
-            end
 
             # Phi locals always use the type derived from the phi's Julia type.
             # Edge type incompatibility is handled downstream by
@@ -562,9 +544,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
                 end
             end
 
-            # If phi type is a ref type but used in boolean context (i32_eqz,
-            # not_int, eq_int, etc), override to I32. This handles dead code paths where
-            # ref-typed phi values are tested with boolean operations.
+            # If phi type is a ref type but used as a branch condition or an operand of
+            # not_int/and_int/or_int/xor_int, override to I32. This handles dead code paths
+            # where ref-typed phi values are tested with boolean operations.
             # Skip this override for Int128/UInt128 phi types.
             # These are primitive in Julia but map to struct{i64,i64} in Wasm.
             # They're used in comparison ops (sle_int, eq_int) but the phi local must
@@ -582,35 +564,15 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
                         phi_wasm_type = I32
                         break
                     end
-                    # Check if used as argument to boolean/comparison/arithmetic intrinsics
-                    if use_rec.slot == 0 && use_node isa NirCall && !isempty(use_node.operands)
-                        func = use_node.callee
-                        if func isa Core.IntrinsicFunction
-                            fname = nameof(func)
-                            is_bool_op = fname in _BOOL_OP_INTRINSICS
-                            is_cmp_op = fname in _CMP_OP_INTRINSICS
-                            # Arithmetic intrinsics that require numeric operands
-                            is_arith_op = fname in _NUMERIC_OP_INTRINSICS
-                            if is_bool_op || is_cmp_op || is_arith_op
-                                for arg in use_node.operands
-                                    if arg isa NirSSA && arg.id == i
-                                        if is_arith_op || is_cmp_op
-                                            # Arithmetic/comparison ops need I64 (Julia's default int width)
-                                            inferred = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
-                                            if inferred === I64
-                                                phi_wasm_type = I64
-                                            elseif inferred === I32
-                                                phi_wasm_type = I32
-                                            end
-                                        else
-                                            phi_wasm_type = I32  # Boolean ops
-                                        end
-                                        break
-                                    end
-                                end
-                                (phi_wasm_type === I32 || phi_wasm_type === I64) && break
-                            end
-                        end
+                    # An operand of a boolean intrinsic is an i32. An arithmetic or comparison
+                    # operand keeps the phi's own type: it was translated once, above, and is a
+                    # reference here, so no second translation of the same type can answer a
+                    # register.
+                    if use_rec.slot == 0 && use_node isa NirCall && use_node.callee isa Core.IntrinsicFunction &&
+                       nameof(use_node.callee) in _BOOL_OP_INTRINSICS &&
+                       any(arg -> arg isa NirSSA && arg.id == i, use_node.operands)
+                        phi_wasm_type = I32
+                        break
                     end
                 end
             end
@@ -645,6 +607,7 @@ We need locals when:
 3. An SSA value is used in a multi-arg call where a sibling arg has a local
 4. An SSA value is defined inside a loop but used outside (e.g., in return)
 parity(quarantine: Julia's IR is SSA; each value a statement reads from elsewhere gets a local, where dart's variables are declared locals.)
+precedent(dart: translateTypeOfLocalVariable, translator.dart:2100): a local's storage type is translated once, then declared.
 """
 function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                              _numeric_joins::Dict{Int,Type})::Nothing
@@ -1072,44 +1035,17 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                         wasm_type = I32
                         break
                     end
-                    # Check if used as argument to comparison/boolean intrinsics
-                    if use_rec.slot == 0 && use_node isa NirCall && !isempty(use_node.operands)
-                        func = use_node.callee
-                        if func isa Core.IntrinsicFunction
-                            fname = nameof(func)
-                            # Boolean ops that take boolean/i32 operands
-                            is_bool_op = fname in _BOOL_OP_INTRINSICS
-                            # Comparison ops that can take i32 or i64 operands
-                            is_cmp_op = fname in _CMP_OP_INTRINSICS
-                            # Arithmetic and other numeric intrinsics that require
-                            # numeric operands — fixes externref/i64 mismatch in builtin_effects
-                            is_arith_op = fname in _NUMERIC_OP_INTRINSICS
-                            if is_bool_op || is_cmp_op || is_arith_op
-                                for arg in use_node.operands
-                                    if arg isa NirSSA && arg.id == ssa_id
-                                        # Use Julia type to determine correct Wasm operand type
-                                        # Compute what Wasm type the Julia type would normally map to
-                                        inferred_wasm = get_concrete_wasm_type(effective_type, ctx.mod, ctx.type_registry; for_local=true)
-                                        if inferred_wasm === I64
-                                            wasm_type = I64
-                                        elseif inferred_wasm === I32 || is_bool_op
-                                            wasm_type = I32
-                                        elseif inferred_wasm isa ConcreteRef || inferred_wasm === ExternRef
-                                            # For arithmetic ops with Any/Union type, the value must be
-                                            # numeric — default to I64 (Julia's default integer width)
-                                            if is_arith_op || is_cmp_op
-                                                wasm_type = I64
-                                            end
-                                            # Boolean ops keep ExternRef (Int128/UInt128 handled differently)
-                                        else
-                                            # Default to I32 for other cases (F32/F64 shouldn't reach here)
-                                            wasm_type = I32
-                                        end
-                                        break
-                                    end
-                                end
-                                (wasm_type === I32 || wasm_type === I64) && break
-                            end
+                    # An operand of an intrinsic: the local's own translation, above, is the
+                    # externref here (no override assigns one), so a boolean operand is an i32
+                    # and an arithmetic or comparison operand an i64, without translating the
+                    # same type a second time.
+                    if use_rec.slot == 0 && use_node isa NirCall && use_node.callee isa Core.IntrinsicFunction
+                        fname = nameof(use_node.callee)
+                        if (fname in _BOOL_OP_INTRINSICS || fname in _CMP_OP_INTRINSICS ||
+                            fname in _NUMERIC_OP_INTRINSICS) &&
+                           any(arg -> arg isa NirSSA && arg.id == ssa_id, use_node.operands)
+                            wasm_type = fname in _BOOL_OP_INTRINSICS ? I32 : I64
+                            break
                         end
                     end
                 end
