@@ -86,9 +86,11 @@ LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
-# a red landing's debt is lifted by a dev/MARCH.md row in the landing's own tree naming it by its
-# first 8 hex digits (a Timing exemption row, or the fix's row): <commit> <owed>
-owed_lifted() { git show "$1:dev/MARCH.md" 2>/dev/null | grep '^| 13\.' | grep -q "${2:0:8}"; }
+# a red timing's debt (SLOWER, OVER) is lifted by a dev/MARCH.md row in the landing's own tree naming
+# it by its first 8 hex digits (a Timing exemption row, or the fix's row): <commit> <owed>; a failed
+# check's (FAILED) never is: only a fix lands it, green on a warm run (A21E1)
+owed_lifted() { case "${2#* }" in FAILED*) return 1 ;; esac
+                git show "$1:dev/MARCH.md" 2>/dev/null | grep '^| 13\.' | grep -q "${2:0:8}"; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
 cmd=${1:?usage: dev/land.sh land (in the worktree of the branch) | prepare <branch> [old-base]}
@@ -177,9 +179,15 @@ merge)
     # its timing (L198): judged, or unjudged when the machine was past the gate's factor cap (a record
     # from before the rule is judged), written into the landing log
     timing=$(sed -n 's/^timing = "\(.*\)"$/\1/p' "$rec"); timing=${timing:-judged}
-    # a landing whose timing was judged red is owed a judged green run: until one lands, a landing
-    # whose timing is unjudged is refused (L198)
+    # a landing whose judgement after its push failed a check is owed a fix: the next landing lands
+    # only on a green warm run, its checks passing where the failure was seen (A21E1); one whose timing
+    # was judged red is owed a judged green run or a naming row (L198)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
+    case "${owed#* }" in FAILED*)
+        grep -qx 'runner_state = "warm"' "$rec" ||
+            { echo "the last landing's judgement failed a check ($owed) and $rec is not of a warm run: a fix lands next, green on a warm run (no dev/MARCH.md row lifts a failed check) — refusing"; exit 1; }
+        echo "the last landing's judgement failed a check ($owed); this landing's checks pass on a warm run"; owed="" ;;
+    esac
     if [ -n "$owed" ] && [ "$timing" != judged ]; then
         if owed_lifted "$head" "$owed"; then
             echo "the last landing's timing is red ($owed); this landing's dev/MARCH.md names it: lifted"
@@ -326,7 +334,10 @@ land)
     if [ -n "$owed" ] && owed_lifted HEAD "$owed"; then
         echo "land: the last landing's timing is red ($owed); this branch's dev/MARCH.md names it: lifted"; owed=""
     fi
-    [ -z "$owed" ] || echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run, or with a dev/MARCH.md row naming ${owed%% *}"
+    case "${owed#* }" in
+    FAILED*) echo "land: the last landing's judgement failed a check ($owed): this landing lands only as a fix, green on a warm run" ;;
+    ?*) echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run, or with a dev/MARCH.md row naming ${owed%% *}" ;;
+    esac
     # the gate to a verdict: a green run lands, a cold one whose checks pass included (its timing judged
     # by a warm run after the push, below) unless a judged run is owed; a no-verdict run once more after
     # 20 s; a red stops
@@ -375,9 +386,10 @@ land)
             0) if [ -f "$rec" ] && grep -qx 'timing = "judged"' "$rec"; then verdict_t=judged; break; fi
                verdict_t=$(sed -n 's/^timing = "\(.*\)"$/\1/p' "$rec"); verdict_t=${verdict_t:-unjudged}
                grep -q '^BLOCK green (timing unjudged: the run was cold' "$glog" || break ;;
-            1) # FAILED for a check other than the ratchet's (the cold run judged the same tree's checks);
-               # otherwise the timing missed under the cap, SLOWER (a best) and OVER (a budget)
-               chk=$(field checks_failed | tr ' ' '\n' | grep -vx ratchet | tr '\n' ' ' | sed 's/ *$//' || true)
+            1) # FAILED for any check that failed, the ratchet's included (a lock red on the landed head,
+               # though the cold run passed it, owes a fix, A21E1); otherwise the timing missed under the
+               # cap, SLOWER (a best) and OVER (a budget)
+               chk=$(field checks_failed)
                slow=$(field timing_slower); over=$(field timing_over)
                if [ -n "$chk" ]; then verdict_t="FAILED $chk"
                else verdict_t="${slow:+SLOWER $slow}${slow:+${over:+ }}${over:+OVER $over}"; verdict_t=${verdict_t:-unjudged}; fi
@@ -390,7 +402,7 @@ land)
         mv "$LOG.new" "$LOG"
         echo "land: the timing of ${head:0:8}: $verdict_t"
         case $verdict_t in SLOWER* | OVER* | FAILED*)
-            echo "land: its record is red and stands: the next landing lands on a judged green run, or names ${head:0:8} in a dev/MARCH.md row (a fix, or a Timing: correctness fix row; L198)" ;;
+            echo "land: its record is red and stands: the next landing lands on a judged green run, or names ${head:0:8} in a dev/MARCH.md row (a fix, or a Timing: correctness fix row; L198); a FAILED check only as a fix green on a warm run" ;;
         esac
     fi
     rm -f "$glog"
