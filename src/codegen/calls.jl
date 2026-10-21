@@ -3450,13 +3450,14 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         _is_type_operand(arg) && continue
         local _ia_ty = emit_call_operand!(fb, ctx, arg)
         # Fix i32/i64 mismatch for numeric intrinsics — driven by the
-        # emission's OWN type now (was the get_phi_edge_wasm_type re-guess).
+        # emission's OWN type now (was the get_phi_edge_wasm_type re-guess), through the one
+        # conversion funnel's register arms.
         if is_numeric_intrinsic && !_is_externref_value(arg, ctx)
             _actual_wasm = _ia_ty
             if is_32bit && _actual_wasm === I64
-                num!(fb, Opcode.I32_WRAP_I64)
+                convert_type!(fb, I64, I32, ctx; from_julia=value_type(ctx, arg))
             elseif !is_32bit && !is_128bit && _actual_wasm === I32
-                num!(fb, Opcode.I64_EXTEND_I32_S)
+                convert_type!(fb, I32, I64, ctx; from_julia=value_type(ctx, arg))
             end
         end
         # an operand held as any value (an anyref local, _is_boxed_numeric_operand: its SSA's

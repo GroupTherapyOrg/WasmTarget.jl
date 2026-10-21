@@ -4,10 +4,10 @@
 
 [metrics]
 R14_fresh_constant_structs = 10
-R27_coercion_bypass = 11
+R27_coercion_bypass = 9
 R33_unexercised_registry_entries = 5
 R42_held_numeric_types = 2
 R43_wrong_default_sites = 65
 R44_wt_symbol_classifications = 225
 R5_julia_type_reguess = 33
-R7_raw_coercion_ops = 14
+R7_raw_coercion_ops = 12

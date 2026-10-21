@@ -202,6 +202,7 @@ check.
 Returns `b`.
 formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at every nullable reference of the any hierarchy is its null, never boxed (NothingIsNull), and a nothing held in a reference is never unboxed or cast, its placeholder (boxed for a non-null reference) taken instead (NothingNeverCast); upcasts emit nothing but a nothing's null; only inexpressible pairs reject
 parity(translator.dart:1597 convertType)
+precedent(dart: convertType, translator.dart:1597): the one conversion every value meets a sink through.
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
