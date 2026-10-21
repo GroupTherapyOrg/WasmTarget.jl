@@ -151,9 +151,10 @@ end
                c.current_stmt_idx = 1; c)
     local ctx = mkctx()
     local b = WasmTarget._ctx_builder(ctx, "stated_class")
-    # the argument is a Float64: Int64 is no class of it, a literal 1.5 no Int64
-    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.AnyRef, Int64)
-    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.AnyRef, Int64)
+    # the argument is a Float64: Int64 is no class of it, a literal 1.5 no Int64; the check's own
+    # error, not a later one the conversion raises
+    @test_throws r"the class Int64 stated for .* disagrees with its own type Float64" WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.AnyRef, Int64)
+    @test_throws r"the class Int64 stated for .* disagrees with its own type Float64" WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.AnyRef, Int64)
     # its own class, and a literal's, are admitted
     ctx = mkctx(); b = WasmTarget._ctx_builder(ctx, "stated_class")
     @test WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.F64, Float64) === WasmTarget.F64
