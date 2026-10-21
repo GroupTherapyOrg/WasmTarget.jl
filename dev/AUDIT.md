@@ -2511,3 +2511,48 @@ Resolution: this entry lands alone, as one commit, prose only, and fixes nothing
 A27E2 closes when the median-of-three update lands its re-recorded bests under a new row. This entry's own gate read the ratchet SLOWER (record a74e721a-1, 21.2 s at factor 1.13, the red standing),
 so by the orchestrator's ruling it carries the exemption row 13.25, backed by the three records, and C10's Planned
 text cites it.
+
+## 2026-10-21 — audited through 21e36053 (2d0227c1..21e36053: entry 27, the map re-recorded, incremental re-records, sourced bests)
+
+The twenty-eighth audit covers 13e3b925 (entry 27 with its exemption row 13.25; its author's), d7419914 (the map
+re-recorded in full on b85da40f, 31 minutes at JLRUN_PRIO=1; its header states A19C1 (a)-(c) and (f) OPEN as A24S1
+ruled), 3ab2fb81 (`test/block_impact.jl --pieces` re-records incrementally; a lowering table is one by its
+registration, LOWERING_TABLES, A26E3), 733f4785 (a best is set only by the update; an unsourced one bounds nothing,
+A20P25) and 21e36053 (the warm bests and the calibration re-recorded by the update's median of three, 13.27; a timing
+line may name a best's key). C10's Planned text gains 13.26 and 13.27, added row numbers alone. No wrong answer. Each
+landed head's record is green. A20C13, A26E3, A20P20, A20P25 and A27E2 are fixed as their commits state. No red flag:
+no commit claims strictness or closure. A22E5 is still not verifiable, because compile3's first commit is not on
+origin. Four findings: A28E1-A28E3 and A28N1.
+
+Area: builder — empty by diff: `git diff 2d0227c1..21e36053 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/block.jl, test/block_impact.jl, test/block_groups.tsv,
+test/parity_ratchet.jl, test/lock_negatives.jl, dev/timing_best.toml, dev/CHARTER.md, dev/MARCH.md, dev/HISTORY.md and
+the excuse files. (A28E1, high) The re-record loosened the scale every timing judgement reads. Its three runs read
+machine factors 1.24, 1.25 and 1.44 against the old calibration, and it re-recorded the calibration itself from them,
+0.003477 to 0.004047, 16 per cent slower. A machine 16 per cent slower than before now reads as factor 1.0, and the
+1.5 cap now admits one about 1.75 times slower than the old best. The raised bests were measured on that machine and
+scaled by that calibration: ratchet@warm 14.1 to 20.45 s, smoke-core@warm 19.75 to 24.2 s, probes@warm 5.57 to 9.92
+s. Some of that rise is real: the locks' growth (A27E1) and the probe core's 21 to 41. Their [best_from] entries name
+commit cca6cfef, which no branch on origin holds, so the source cannot be checked from the repository. A calibration
+should be recorded only at factor 1.0 by its own measure. A best's source should be the landed commit. (A28E2,
+medium) 733f4785 left every best unsourced, and its judgement after the push wrote "SLOWER calibration load@warm …".
+L198 read a stage name without `@`, so that true line failed L198. Every gate after it was red on the ratchet (record
+f91082b4-3) until 21e36053. The rule change had no case that ran its own output through L198, and it stopped every
+lane. Its message says "a cold landing of anyone's change still lands". (A28E3, low) d7419914 measured the map with
+three cited QA families failing under the measuring harness, their src lines counted. 3ab2fb81 retires A26E3 by a
+hand-kept registration of ten consts, held by a scan of their declarations: a stopgap, not claimed strict. A lowering
+table that is a type of its own, found by type, would be the construction. (A28N1, low) MARCH is 58 lines of L129's 60,
+four of them timing rows (13.24 to 13.27) that each record one exemption already used. Each further exemption is a
+line, and the cap is two lines away.
+
+Over 300 s, each blocked by causes outside its change: d7419914 632 s, 3ab2fb81 1450 s, 733f4785 1031 s and 21e36053
+603 s. The causes were the hold's queue, the map's 31-minute run on the slot order, and A28E2's red on every gate
+between 733f4785 and 21e36053. Excuse files name the first three causes.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A28E1-A28E3 and A28N1 are open on
+MARCH 13.18. A28E1's calibration is for the orchestrator to rule, since it sets what every later timing verdict means.
