@@ -12,6 +12,8 @@
 # gate three times and lowers each best to the median of the three (raising only a stage the
 # commit's own exemption names), writing each best's source. A best is set only so, never by hand:
 # one whose source is not an update's median bounds nothing until the update re-records it (A20P25).
+# The update measures a landed commit, its records cite a landed tree, and it records nothing unless
+# the calibration in force reads every run at machine factor 1.05 or less (A28E1).
 
 [budget]
 "case-median" = 1.0

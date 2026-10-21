@@ -112,6 +112,10 @@ const SLOWER_SECONDS = 0.3
 # a machine more than this many times slower than its best, measured while the stages ran, gives
 # no verdict: its times say nothing of the change's, and no budget is scaled to pass it (A19P5)
 const FACTOR_CAP = 1.5
+# the calibration is recorded only from runs the calibration it replaces reads at this factor or less,
+# a quiet machine by its own measure: runs read slower would record a slower calibration, under which
+# the cap admits more than FACTOR_CAP times the machine's best (A28E1)
+const CALIBRATION_FACTOR = 1.05
 # the stages whose work is fixed from run to run, so their time has a best to hold
 const RATCHETED = ("load", "ratchet", "smoke-core", "probes")
 # each stage's own code: a change to one of these paths runs that stage's code anew
@@ -677,6 +681,19 @@ function source_problem(src)::String
     any(x -> parse(Float64, x) > FACTOR_CAP, split(m[2])) && return "was recorded past FACTOR_CAP ($FACTOR_CAP)"
     return ""
 end
+# the march branch as origin holds it: a best's source is a landed commit, on it (A28E1)
+landed_ref() = "origin/" * get(ENV, "WT_MARCH_BRANCH", "wt-p0-strict-hygiene")
+# why a best's entry is no source, or "": source_problem's form, and every commit it names on origin's
+# march branch, so the records cite a landed tree (A28E1)
+function best_problem(src)::String
+    p = source_problem(src)
+    isempty(p) || return p
+    for m in eachmatch(r" on ([0-9a-f]{8}) at machine factor", src)
+        gitok("merge-base", "--is-ancestor", m[1], landed_ref()) ||
+            return "names commit $(m[1]), which $(landed_ref()) does not hold (a best's source is a landed commit)"
+    end
+    return ""
+end
 # the run's verdict: red when a check fails; no verdict only when the machine cannot judge for a
 # reason of its tools or the tree (a tool missing, the tree changed during the run), never for load;
 # green when the run was cold or past the factor cap and its checks pass, its timing unjudged (a cold
@@ -780,7 +797,7 @@ function main(args)
     # update re-records; the calibration's stays the factor's scale, flagged alike; the file itself is
     # still held to the base's (timing_against_base)
     unsourced = Dict{String,String}(k => p for k in keys(timing["best"])
-                                    for p in (source_problem(get(get(timing, "best_from", Dict{String,Any}()), k, nothing)),) if !isempty(p))
+                                    for p in (best_problem(get(get(timing, "best_from", Dict{String,Any}()), k, nothing)),) if !isempty(p))
     best = Dict{String,Any}(k => v for (k, v) in timing["best"] if k == "calibration" || !haskey(unsourced, k))
     msg = git("log", "-1", "--format=%B", "HEAD")
     # a Timing line the change does not back with its own MARCH row is a failure of the change
@@ -1144,6 +1161,9 @@ const RUN_RESULT = Ref{Any}(nothing)
 # updated_bests makes of them, each naming its source (A20P20)
 const UPDATE_RUNS = 3
 function update_main(args)
+    # an update measures a landed commit, so the records it cites are of a landed tree (A28E1)
+    gitok("merge-base", "--is-ancestor", "HEAD", landed_ref()) ||
+        (println("WT_TIMING_UPDATE: refused, HEAD is not on $(landed_ref()): an update measures a landed commit"); return 1)
     runs = Any[]
     for i in 1:UPDATE_RUNS
         println("WT_TIMING_UPDATE: run $i of $UPDATE_RUNS")
@@ -1156,11 +1176,15 @@ function update_main(args)
         end
         push!(runs, r)
     end
+    # every run read quiet by the calibration it may replace, or nothing is recorded (A28E1)
+    all(r -> r.factor <= CALIBRATION_FACTOR, runs) ||
+        (println("WT_TIMING_UPDATE: refused, the calibration in force read these runs at machine factor $(join([round(r.factor; digits = 2) for r in runs], ' ')): ",
+                 "a best and the calibration are recorded only from runs at factor $CALIBRATION_FACTOR or less, a quiet machine by its own measure"); return 1)
     TOML = Base.require(TOML_ID)
     timing = Base.invokelatest(TOML.parsefile, BEST_PATH)
     keys_ = intersect((keys(r.walls) for r in runs)...)
     best_from = get(timing, "best_from", Dict{String,Any}())
-    rerecord = String[k for k in keys(timing["best"]) if !isempty(source_problem(get(best_from, k, nothing)))]
+    rerecord = String[k for k in keys(timing["best"]) if !isempty(best_problem(get(best_from, k, nothing)))]
     best, changes, how = updated_bests(timing["best"], [r.fastest for r in runs], [r.calib for r in runs],
                                        Dict(k => [r.walls[k] for r in runs] for k in keys_), runs[end].exempt_stages, rerecord)
     # each best set or rescaled names its source; the CPU seconds are the median run's only where its best is
@@ -1171,7 +1195,7 @@ function update_main(args)
     end
     write_best(timing["budget"], best, best_cpu, best_from)
     println("WT_TIMING_UPDATE: the median of $UPDATE_RUNS runs: ", isempty(changes) ? "no best changed" : join(changes, ", "))
-    left = sort([k for k in keys(best) if !isempty(source_problem(get(best_from, k, nothing)))])
+    left = sort([k for k in keys(best) if !isempty(best_problem(get(best_from, k, nothing)))])
     isempty(left) || println("WT_TIMING_UPDATE: still with no source (a run of the other mode measures them: fresh, or --warm): ", join(left, ", "))
     return 0
 end
