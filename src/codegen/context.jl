@@ -1056,17 +1056,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 if sfunc === Core.memoryrefget
                     ref_arg = call.operands[1]
                     ref_type = value_type(ctx, ref_arg)
-                    if ref_type isa DataType
-                        elt = nothing
-                        if ref_type.name.name === :MemoryRef && length(ref_type.parameters) >= 1
-                            elt = ref_type.parameters[1]
-                        elseif ref_type.name.name === :GenericMemoryRef && length(ref_type.parameters) >= 2
-                            elt = ref_type.parameters[2]
-                        end
-                        if elt === Any
-                            wasm_type = AnyRef
-                        end
-                    end
+                    memoryref_eltype(ref_type) === Any && (wasm_type = AnyRef)
                 end
             end
 
@@ -1540,7 +1530,7 @@ function _narrow_generic_local!(b::InstrBuilder, local_idx::Integer, ssa_id::Int
         # parity(translator.dart:1597 Translator.convertType): a join-typed NUMERIC riding a ref local UNBOXES through the ONE
         # funnel (dart convertType) — symmetric to the store-side box. Without this,
         # consumers read a raw box ref where the numeric is expected.
-        coerce_stack_top!(b, narrowed, ctx; from_julia=get(ctx.ssa_types, ssa_id, Any))
+        coerce_stack_top!(b, narrowed, ctx; from_julia=ctx.ssa_types[ssa_id])
     end
     return true
 end

@@ -6,8 +6,9 @@
 # threaded through the translator (`printKernel`, `printWasm`, `verbose`,
 # `verifyTypeChecks`, `watchPoints: List<int>`). WasmTarget instead had 17
 # scattered `ENV["WT_..."]` reads across src/. This file is the single typed
-# replacement: one struct, one env-parsing function, read once by the compile's entry
-# into its Translator — read from there, ENV read from nowhere else in src (L158).
+# replacement: one struct, one env-parsing function, read once by the compile's one entry
+# (_compile, src/WasmTarget.jl) alone into its Translator — read from there, ENV read from
+# nowhere else in src (L158).
 # ============================================================================
 
 """
@@ -38,7 +39,7 @@ comma-separated list of trace points (`mm`, `strarg`, `closure`, `cc`,
 `stubargs`, `condstub`, `deadval`, `locals`) replacing the ad-hoc
 `WT_TRACE_*`/`WT_DBG_*`/`WASMTARGET_DEBUG_LOCALS` variables it consolidates. `WT_VALIDATE=1`
 turns on the wasm-tools cross-check of every finished module (an entry's `validate` keyword, when
-given, decides instead).
+given, decides instead). In src the compile's one entry alone calls it (L158).
 
 parity(dart2wasm.dart:251 parseArguments): the options object is built once from the
 invocation (dart's command line, WasmTarget's environment).

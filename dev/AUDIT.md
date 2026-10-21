@@ -1786,3 +1786,156 @@ null_pointer_check does, which closes A12E1 (13.17) too (smoke undef_slots; L63)
   the rule).
 - Everything else is on MARCH 13.17 under its row: A17C3's Enrollment remainder, and A17E2's
   checked product wider than its register, which rejects at its statement.
+
+## 2026-10-21 — audited through 25e6a5b7 (52c0a9bd..25e6a5b7: 4363ec4e, batches 116ex and 118a)
+
+The eighteenth audit covers:
+- 4363ec4e, a type's order key printed once per registry; the dispatch wrappers read one class map;
+- 0ebf6352 and 0bc84e05, batch 116ex, the seventeenth audit's fixes and `#undef` in a pointer slot;
+- 25e6a5b7, batch 118a, this audit's first fix (A18B1), in the range by the order of work.
+
+It made 30 findings on 52c0a9bd..0bc84e05, three seen from two or three areas (A18B1 = A18C1 =
+A18E1, A18B3 = A18E3, A18B2 = A18E2 (a)(b)). Each program was run native and on the tree before
+its fix (Julia 1.12.7, Node 26.11.0). Silent wrong answers at 0bc84e05, introduced in the range:
+- A18B1. pointer_slot answered by allocatedinline alone, so an inline struct with a pointer field
+  was never `#undef`: isassigned of an unset `Vector{Some{String}}` slot answered 11 (native 21),
+  isdefined of such a field `new` leaves unset 1 (native 2), a splat's length 5 (native -1), and
+  each read of an unset slot trapped on the null (native UndefRefError).
+- A18B3 = A18E3. A constant Dict's unoccupied reference slot was the null, `nothing` where the slot
+  holds `nothing` too: `isassigned(D.vals, i)` of a `Dict{Int,Any}` constant answered 1 (native 2),
+  its read `nothing` (native UndefRefError), `count(i -> isassigned(D.vals, i), eachindex(D.vals))`
+  16 (native 1); a Vector constant with an unset slot raised an internal error and a Memory one
+  rejected: three rules for one fact.
+Older than the range:
+- A18B2 = A18E2 (a)(b). The narrow ctlz/cttz/ctpop and flipsign_int read the register's full width
+  (by reading: `leading_zeros(0x01)` 31, native 7; `Int(abs(Int8(100) + Int8(100)))` -56, native 56).
+- A18E2 (c). The 128-bit sext and zext normalised only a source held in an i32: measured on
+  25e6a5b7, `slt_int(sext_int(Int128, trunc_int(P40, 2^40 - 2)), Int128(0))` answered 2 (native 1)
+  and the zext of a dirty 40-bit value 1099511627778 (native 2).
+Traps where Julia answers:
+- A18C3. A closure held in a constant global, its call inlined, wrote through the constant, which
+  the capture record did not key: a read of the same closure type through an argument took the
+  world's Int64 join and trapped, illegal cast, on 0bc84e05 (native 14).
+Loud, not located: A18E4's `Vector{Union{Nothing,Function}}(undef, n)` raised an internal error at
+type registration on 0bc84e05 and 25e6a5b7, where 52c0a9bd compiled it with one null for `#undef`
+and `nothing`. A18E6's numeric-element read raised an unlocated error; no program reaches it
+(measured: `Union{Int32,Int64}`, `Union{Int8,UInt8}`, `Union{Float32,Float64}` and
+`Union{Int64,UInt64}` elements are held in anyref, get_concrete_wasm_type), so it has no case.
+A18C4 changes no answer (the class set numbers the class `self` carries), measured by its unit
+testset, which fails on 0bc84e05 (2 of 3).
+
+Area: builder — (A18B1) above. (A18B2) above. (A18B3) above. (A18B4) The quarantine named a Memory
+slot's missing companion field as the necessity, which covers Memory elements only, where fields
+and Core.Box contents take the sentinel too, and cited computeIsSetEncoding at its :570 case.
+(A18B5) 4363ec4e's class map read `get(_type_of_id, tid, nothing)`, a default, typed
+`Dict{Int32,Any}`. (A18B6) calls.jl's isdefined of a Box named a typed reference box no code makes,
+its TYPED arm and builtins.jl's ConcreteRef branch dead; emit_extend_from_width!'s anchor claimed
+dart's narrowing arms "at every width"; undef_slot_storage's text said a funcref representation
+raises on that line.
+
+Area: collection and planning — (A18C1) = A18B1. (A18C2) 4363ec4e's "printed once" was false:
+closed_world_class_list is re-sorted per MethodError args tuple and class_candidates per ambiguous
+pair and per round. (A18C3) above; CaptureType.tla's Carriers, record_capture_contents' docstring,
+the README row and entry 17's A17C1 resolution omitted the constant carrier. (A18C4) The numbering
+walk read `node.operands`, a third reader of a statement's values beside the one operand table,
+omitting `self`, and L176 pinned A17C2 by text. (A18C5) A compile infers in two cache partitions:
+the collection's fresh `WasmInterpreter(Base.RefValue(0))` per pass and get_wasm_interpreter()'s
+shared `:wasm_target`, which infer_return_type and the method consult ask (measured:
+compiling a captured `c = _c5g(c)` leaves `_c5g(::Int64)` one CodeInstance in each). (A18C6)
+LOWERING_INSTANTIATED_CLASSES' docstring omitted the `#undef` read check's UndefRefError.
+
+Area: emission and diagnostics — (A18E1) = A18B1. (A18E2) above. (A18E3) = A18B3. (A18E4)
+undef_slot_storage error()ed at type registration for a Nothing-admitting slot held in a host
+reference. (A18E5) Four readers of a MemoryRef's element type kept their own rule with a dead
+`:MemoryRef` arm (builtins.jl's ptr_or_offset, statements.jl's two, context.jl's), a fifth in
+types.jl's value translation, found while fixing it, and `Memory{T}.instance` kept an `Int32  #
+default` element type. (A18E6) above.
+
+Area: enforcement and prose — (A18P1) C10's "alone reads the options" was softened by entry 17's
+A17P5 resolution: compile_module's keyword default and optimize's validate default read the
+options too, and L158's text said both. (A18P2) Two from_julia defaults remained, `get(ctx.ssa_types,
+…, Any)` and `get(…, typeof(val))`, and calls.jl's `from_julia=fieldtype(T, i)` was neither counted
+nor allowlisted. (A18P3) Entry 17's "negative-tested on the exact commit" ran on 6a5490ae, not on
+0ebf6352. (A18P4) Undef.tla's Representable and two UndefNotNothing Broken instances were violated
+at Init by the constant Enc alone, checking no rule. (A18P5) smoke.jl cited b6597d80, a draft
+commit, and 0bc84e05's message narrated "as the previous commit states". (A18P6) "a Union{Nothing,S}
+or abstract slot" (undef.jl, Undef.tla, entry 17, L63): an abstract type that excludes Nothing,
+Number's, is a reference slot whose null is `#undef`. (A18P7) calls.jl's shift comments and two
+quarantine texts named 8- and 16-bit widths only. (A18P8) Entry 17's "the cases failed at the
+start" was false for its regression cases. (A18P9) MARCH's A12E7 sequenced on A12E1, closed.
+(A18P10) HISTORY's audit #17 line omitted the closing of A17E1 and A12E1. (A18P11) "late_lowering.dart"
+named no path and ":570 computeIsSetEncoding" its case, not its declaration (:560). (A18P12) The
+README's Undef row omitted pointer_slot and field_may_be_undef, and L143's text and A17P1's
+resolution said "any String-or-Symbol subtraction" where it counts two spellings.
+
+Resolution: A18B1 = A18C1 = A18E1 fixed in 118a (25e6a5b7): pointer_slot is Julia's rule, boxed or
+inline with a pointer (`!allocatedinline(T) || !datatype_pointerfree(T)`), smoke undef_slots
+inline_ptr_*. A18B2 = A18E2 (a)(b) fixed by 117a (its W2 and W7: smoke registry_unops'
+ctlz_int/cttz_int/ctpop_int and registry_misc's flipsign_int cases), which lands after this commit,
+as does A18E5's `Int32  # default` (it raises in 117a).
+A18C2 is pending on wip/eff-compile2 9d59c973 (one sorted class list, built when the class set is
+final; dev/MARCH.md 13.17); the registry_order_key docstring states its scope truly here. Everything else in batch 118x (the
+commit carrying this entry), each case added and run on the tree before it first (native,
+0bc84e05 or 25e6a5b7, and this commit), model first:
+- A18P4 + A18B3 + A18B4 + A18P6 + A18P11: Undef.tla derives a slot's kind and storage from the
+  attributes the code reads (pointer_slot, pointer_slot_admits_nothing, undef_slot_storage,
+  undef_slot), every slot unmade at the start, so each of its eight Broken instances reaches its
+  violation by a step (MCUndefConstAsNullBroken, a constant's unset slot emitted as the null,
+  violates UndefNotNothing; 118a's MCUndefInlinePointerBroken is one rule of it); its quarantine and
+  undef.jl's state the necessity for fields and the Box, one `#undef` read by one rule (C1), and
+  cite pkg/front_end/lib/src/kernel/late_lowering.dart's computeIsSetEncoding :560, its case :570.
+  A18B3: one constant-slot emission, emit_constant_slots! (values.jl), reads isassigned and emits an
+  unset slot through emit_undef!, for a Dict's keys and vals, a Vector and a Memory (a Dict's
+  unoccupied isbits slot, uninitialized memory, takes its storage's zero as before) (smoke
+  undef_slots' const_ cases; L38, L63). A18P6: smoke undef_slots number_unset_read_throws and
+  number_isassigned (answering as native on 0bc84e05; on 0ebf6352 the read answered 2, native -1).
+- A18C3: model first, CaptureType.tla's Carriers gain "constant" and
+  MCCaptureTypeConstantCarrierBroken (the key without it) violates Covered; _captured_box_field keys
+  any operand by value_type (smoke inlined_captor write_through_constant).
+- A18C4: the numbering walk reads nir_expr_operands, `self` included, for every statement
+  (test/lazy_classid_isa.jl's 'the numbering walk reads a call's operands through the one table, its
+  self included', failing on 0bc84e05; L176).
+- A18E2 (c): the 128-bit sext and zext normalise through normalise_narrow! whatever the source's
+  register (smoke narrow_primitive sext128_p40, zext128_dirty_p40; L180 counts a normalisation
+  gated on an i32-held operand).
+- A18E4: a Nothing-admitting slot held in a host reference keeps its representation, and every
+  allocation, unset, test and read of its `#undef` rejects at its statement
+  (_undef_unrepresentable!; smoke xfail undef_host_reference, an unlocated internal error on
+  25e6a5b7); holding it in anyref with the extern bridges is on 13.17 (the anyref storage alone
+  failed the builder's check at a store of `nothing`, measured). A18E5: the five readers read
+  memoryref_eltype (L63); the remaining name tests' dead arm is on 13.17. A18E6: the read rejects
+  through emit_unsupported_stub! at its statement.
+- A18B5: `_type_of_id[tid]`, a `Dict{Int32,Type}`. A18B6: the dead arms deleted (a Core.Box
+  reference of another type raises); the anchor cites :2037-2061 for the 8- and 16-bit arms and a
+  quarantine for the 24-, 40-, 48- and 56-bit ones (intrinsics.dart:2037 is the case label of
+  wasmI32Int8FromInt at 898a1e4b, not :2036 as the report read); undef_slot_storage's text is true.
+  A18C6: the docstring names the read check.
+- A18P1: compile_module's `options` is required (each test passes options_from_env()), optimize
+  takes `validate` required from its caller and reads no options (no default stands in for
+  WT_VALIDATE); compile_with_base is one call of the entry, as its siblings are, and passes its
+  post-pass the options that compile used (CompileResult.options) unless its own `validate`
+  decides (L158 counts it among the entries); options_from_env has one caller in src,
+  the entry (L158 counts it); entry 17's A17P5 sentence "compile_module's options default, by the
+  orchestrator's ruling, and `optimize` … are the other readers of the options" is withdrawn: C10's
+  "alone" holds. A18P2: both read ctx.ssa_types[i], which raises on a missing entry; L178 counts
+  `from_julia=get(` and `from_julia=fieldtype(`, the run-time-name field read on its allowlist as
+  the read's own type; 39 other reads of a statement's type with a default are on 13.17.
+- A18P3: probe_bytes on 0ebf6352 and on 0bc84e05 gave 225 probes, 0 changed; entry 17's
+  "each tightened lock … was negative-tested on the exact commit" reads: the negatives ran on
+  6a5490ae, whose tree differs from 0ebf6352 by 4363ec4e's byte-identical change. A18P5: the smoke
+  comment cites 0ebf6352 (measured there: the prefixed splat answered isassigned 2 and length 3);
+  0bc84e05's message cannot change. A18P8: entry 17's "The cases failed at the start and pass"
+  reads: each case's start answer as recorded; its regression cases answered as native. A18P12 and
+  entry 17's A17P1 sentence: L143 counts a String-or-Symbol test spelled `=== String || … ===
+  Symbol` or `in (String, Symbol)` followed within three lines by a constant 1 and a subtraction.
+  A18P7, A18P9, A18P10: the texts are true. Entry 17's A17C1 "any carrier operand" and A17C2 "one
+  operand table" hold since this commit (A18C3, A18C4).
+- Each new or tightened lock (L38, L63, L158, L176, L178, L180) was planted, fired and restored on
+  tree 80a5aa27 (2c18700e), which this commit amends only by optimize's required `validate`,
+  compile_with_base through the entry (L158's added check planted and fired on this commit), the
+  Memory constant's dead-code guard, R5's baseline (59 to 58, measured) and prose. L180's needle counting a narrow ctlz/cttz/ctpop or flipsign that reads the full register
+  outside the width rule arrives with 117a, whose W2 and W7 fix both sites: at this commit they read
+  the register (the unary table's I32_CLZ, I32_CTZ and I32_POPCNT rows, intrinsics_table.jl, and
+  _compile_call_flipsign, calls.jl), so the needle would count them and break L180, a lock at 0.
+  Everything else is on MARCH 13.17 under its row: A18C5 (one WasmInterpreter per compile, more
+  than ~150 lines), A18C2, A18P2's remainder, A18E4's representation, A18E5's remainder.

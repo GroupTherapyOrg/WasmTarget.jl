@@ -135,7 +135,7 @@ end
            (M.gf2, (Any, Any)), (M.gf3, (Any, Any)),
            (M.mkA, (Int32,)), (M.mkB, (Int32,)), (M.mkC, (Int32,)), (M.mkD, (Int32,)), (M.mkH, (Int32,))]
     # every function the module defines is named
-    mod = _GN.compile_module(fns)
+    mod = _GN.compile_module(fns; options=_GN.options_from_env())
     @test all(f -> !isempty(f.name), mod.functions)
     @test any(f -> endswith(f.name, " (dispatch wrapper)"), mod.functions)
     @test any(f -> endswith(f.name, " (polymorphic dispatcher)"), mod.functions)
@@ -172,7 +172,7 @@ function _gn_wide(x::Int64)::Int64
 end
 
 @testset "generated names: a closure trampoline is named by the closure's short name" begin
-    mod = _GN.compile_module([(_gn_wide, (Int64,))])
+    mod = _GN.compile_module([(_gn_wide, (Int64,))]; options=_GN.options_from_env())
     tramps = [f.name for f in mod.functions if endswith(f.name, " trampoline")]
     @test !isempty(tramps)
     @test all(n -> length(n) <= 64 && !occursin("_GNWide", n), tramps)

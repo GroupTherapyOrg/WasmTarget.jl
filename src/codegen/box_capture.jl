@@ -517,8 +517,9 @@ field): the join of every write into the variable's `Core.Box` anywhere in `bodi
 `(nir, spectypes)`, its body and its slot types) — its creator's writes into the box it makes (an
 argument typed by the creator's signature), and every write through the field, whatever operand
 carries the closure (_captured_box_field): in a body of the closure itself (`#self#`), through a
-closure value (a closure a callee returned, its body inlined) or through an argument (a function
-taking the closure, the closure's body inlined into it). A write
+closure value (a closure a callee returned, its body inlined), through an argument (a function
+taking the closure, the closure's body inlined into it) or through a constant (a closure held in a
+constant global, its call inlined). A write
 that reads the variable (`c = c + 1`) is typed with the current record, so the join iterates
 to a fixpoint. Several closures can capture one box (a writer and a reader returned
 together), each through its own field: every field that holds one box shares one join, so a
@@ -644,7 +645,8 @@ _capture_finalize(seen::Dict{Tuple{Type,Symbol},Set{Any}})::Dict{Tuple{Type,Symb
 # carrier's captured `Core.Box` field — or nothing. The carrier is any operand, typed by the one
 # reader of an operand's type (value_type over the body's slot types `spec`): `#self#` in a
 # closure's own body, an argument where a function taking the closure inlined its body, an SSA
-# value (a closure a callee returned).
+# value (a closure a callee returned), a constant (a closure held in a constant global, its
+# call inlined: a literal typed by Core.Typeof, a global by its binding's type).
 # parity(quarantine: a Julia closure reaches its captured `Core.Box` through a field of its own
 # struct; dart's captured variable is a field of the closure's context, closures.dart:1411 Capture)
 function _captured_box_field(x, nir::Vector{NirStmt}, spec)::Union{Nothing,Tuple{Type,Symbol}}
@@ -655,7 +657,6 @@ function _captured_box_field(x, nir::Vector{NirStmt}, spec)::Union{Nothing,Tuple
         return nothing
     local base, fld = node.operands[1], node.operands[2]
     (fld isa NirLiteral && fld.value isa Symbol) || return nothing
-    (base isa NirSSA || base isa NirArgument || base isa NirSlot) || return nothing
     local T = value_type(base, spec, nothing)
     (T isa DataType && isstructtype(T) && hasfield(T, fld.value) &&
      fieldtype(T, fld.value) === Core.Box) || return nothing
@@ -667,7 +668,7 @@ end
 
 The types of the captured-box reads in `nir`, and of the values computed from them: a box read
 `getfield(carrier, f)`, whatever operand carries the closure (_captured_box_field: `#self#`, an
-argument, a closure value a callee returned), is seeded with the
+argument, a closure value a callee returned, a constant), is seeded with the
 type recorded for that captured field (record_capture_contents), a box this body creates and a
 closure captures is typed by the record too, and
 f3_box_value_types propagates it to the `:contents` reads and what they feed. The box reads

@@ -3438,7 +3438,7 @@ begin
             @testset "optimize() reduces size" begin
                 test_add(a::Int32, b::Int32)::Int32 = a + b
                 bytes = compile(test_add, (Int32, Int32))
-                opt_bytes = WasmTarget.optimize(bytes)
+                opt_bytes = WasmTarget.optimize(bytes; validate=WasmTarget.options_from_env().validate)
                 @test length(opt_bytes) > 0
                 @test length(opt_bytes) <= length(bytes)
             end
@@ -3446,7 +3446,7 @@ begin
             @testset "optimize() preserves correctness" begin
                 test_mul(a::Int32, b::Int32)::Int32 = a * b
                 bytes = compile(test_mul, (Int32, Int32))
-                opt_bytes = WasmTarget.optimize(bytes)
+                opt_bytes = WasmTarget.optimize(bytes; validate=WasmTarget.options_from_env().validate)
                 result = run_wasm(opt_bytes, "test_mul", Int32(6), Int32(7))
                 @test result == 42
             end
@@ -3462,9 +3462,9 @@ begin
             @testset "optimization levels" begin
                 test_inc(x::Int32)::Int32 = x + Int32(1)
                 bytes = compile(test_inc, (Int32,))
-                size_bytes = WasmTarget.optimize(bytes; level=:size)
-                speed_bytes = WasmTarget.optimize(bytes; level=:speed)
-                debug_bytes = WasmTarget.optimize(bytes; level=:debug)
+                size_bytes = WasmTarget.optimize(bytes; level=:size, validate=WasmTarget.options_from_env().validate)
+                speed_bytes = WasmTarget.optimize(bytes; level=:speed, validate=WasmTarget.options_from_env().validate)
+                debug_bytes = WasmTarget.optimize(bytes; level=:debug, validate=WasmTarget.options_from_env().validate)
                 @test length(size_bytes) > 0
                 @test length(speed_bytes) > 0
                 @test length(debug_bytes) > 0
@@ -4319,7 +4319,7 @@ begin
                 (disp_val, (DispS7,)),  (disp_val, (DispS8,)),
                 (disp_val, (DispS9,)),  (disp_val, (DispS10,)),
             ]
-            mod, type_registry, func_registry, dt_registry = compile_module(functions; return_registries=true)
+            mod, type_registry, func_registry, dt_registry = compile_module(functions; return_registries=true, options=WasmTarget.options_from_env())
             @test length(dt_registry.tables) == 1  # one selector for disp_val
             dt = first(values(dt_registry.tables))
             @test length(dt.entries) == 10
@@ -4412,7 +4412,7 @@ begin
             all_functions = [base_functions..., overlay_functions...]
 
             mod, type_registry, func_registry, dt_registry = compile_module(
-                all_functions; return_registries=true)
+                all_functions; return_registries=true, options=WasmTarget.options_from_env())
 
             # parity(M8.4): overlays are ROWS in the one selector table, not a parallel
             # apparatus — disp_val stays in the dispatch registry with 12 targets
@@ -4442,7 +4442,7 @@ begin
                 (make_disp_overlay2, (Int32,)),
             ]
 
-            bytes = to_bytes(compile_module(functions))
+            bytes = to_bytes(compile_module(functions; options=WasmTarget.options_from_env()))
 
             wasm_path = joinpath(mktempdir(), "overlay_dispatch.wasm")
             write(wasm_path, bytes)
@@ -4502,7 +4502,7 @@ begin
         @testset "Type lookup table is created with all DFS types" begin
             mod, type_registry, func_registry, _ = compile_module(
                 [(make_th_s1, (Int32,)), (make_th_s2, (Int32,))];
-                return_registries=true)
+                return_registries=true, options=WasmTarget.options_from_env())
 
             # Type lookup table should be created
             @test type_registry.type_lookup_array_idx !== nothing
@@ -4534,7 +4534,7 @@ begin
                 (make_th_s1, (Int32,)),
                 (make_th_s2, (Int32,)),
             ]
-            mod = compile_module(funcs)
+            mod = compile_module(funcs; options=WasmTarget.options_from_env())
             bytes = to_bytes(mod)
             wasm_path = joinpath(tempdir(), "test_jltype_typeof.wasm")
             write(wasm_path, bytes)
@@ -4567,7 +4567,7 @@ begin
         @testset "Type hierarchy: super chain matches Julia's" begin
             mod, type_registry, _, _ = compile_module(
                 [(make_th_s1, (Int32,))];
-                return_registries=true)
+                return_registries=true, options=WasmTarget.options_from_env())
 
             # Verify concrete type hierarchy
             for T in [Int32, Float64, Bool, TypeHierS1]

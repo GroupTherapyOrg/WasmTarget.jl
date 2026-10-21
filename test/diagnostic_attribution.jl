@@ -470,6 +470,6 @@ end
 @noinline _da_ac_g(x::Int64) = _da_ac_cell(x)[]::Int64
 _da_ac_f(x::Int64) = (_da_ac_cell(x)[]::Int64) + (_da_ac_cell(-x)[]::Int64) + _da_ac_g(x)
 @testset "one as-checker per (target, static type)" begin
-    m = WasmTarget.compile_module([(_da_ac_f, (Int64,), "f")])
+    m = WasmTarget.compile_module([(_da_ac_f, (Int64,), "f")]; options=WasmTarget.options_from_env())
     @test count(fn -> fn.name == "<obj> as Int64", m.functions) == 1
 end

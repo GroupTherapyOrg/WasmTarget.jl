@@ -898,14 +898,15 @@ _module_entries_label(entries::Vector)::String =
     "module of " * join((string(e[3], "(", join(("::" * string(T) for T in e[2]), ", "), ")") for e in entries), ", ")
 
 """
-    compile_module(functions::Vector) -> WasmModule
+    compile_module(functions::Vector; options) -> WasmModule
 
 Compile multiple Julia functions into a single WebAssembly module, unserialized: the closed-world
 compile the one compile entry (`_compile`, src/WasmTarget.jl) calls. It is internal to that
-entry, which passes the options it read and the caller's diagnostics ledger; called directly (tests
-inspect the module it returns), it reads the environment's options itself and routes no ledger. A compile a caller runs goes through an exported entry
+entry, which passes the options it read and the caller's diagnostics ledger; it reads no options
+itself (`options` is required: a test inspecting the module it returns passes them) and, called
+directly, routes no ledger. A compile a caller runs goes through an exported entry
 (compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap,
-compile_with_statement_trace), each one call of `_compile`.
+compile_with_statement_trace, compile_with_base), each one call of `_compile`.
 
 Each element of `functions` should be a tuple of (function, arg_types) or
 (function, arg_types, name). If name is omitted, the function's name is used. Functions can call
@@ -922,7 +923,7 @@ function compile_module(functions::Vector;
                         register_ir_types::Bool=false,
                         source_map_url::Union{Nothing,String}=nothing,
                         trace::Union{Nothing,StatementTrace}=nothing,
-                        options::CompilerOptions=options_from_env(),
+                        options::CompilerOptions,
                         diagnostics::Union{Nothing,Vector{WasmDiagnostic}}=nothing)::Union{WasmModule, Tuple{WasmModule, TypeRegistry, FunctionRegistry, DispatchTableRegistry}}
     return _compile_module_trim(functions;
         existing_module, import_stubs, return_registries,

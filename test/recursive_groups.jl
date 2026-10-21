@@ -61,7 +61,7 @@ end
     mod, reg, _, _ = WasmTarget.compile_module(
         Any[(_wt_make_vector_recursive, (Int64,), "_wt_make_vector_recursive"),
             (_wt_mutual_recursive, (Int64,), "_wt_mutual_recursive")];
-        return_registries=true)
+        return_registries=true, options=WasmTarget.options_from_env())
     groups = WasmTarget.recursion_groups(mod)
     @test all(g -> !isempty(g), groups) && sum(length, groups) == length(mod.types)
     idx(T) = Int(reg.structs[T].wasm_type_idx)

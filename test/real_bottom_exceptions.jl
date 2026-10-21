@@ -157,7 +157,7 @@ _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_
         existing_module=mod,
         import_stubs=Any[(_wt_eb_cb, "cb", (Int64,), ids[1], Nothing), (_wt_eb_cbd, "cbd", (Int64,), ids[2], Nothing),
                          (_wt_eb_cbt, "cbt", (Int64,), ids[3], Nothing), (_wt_eb_cb2, "cb2", (Int64,), ids[4], Nothing),
-                         (_wt_eb_cbr, "cbr", (Int64,), ids[5], Int64)])
+                         (_wt_eb_cbr, "cbr", (Int64,), ids[5], Int64)], options=WasmTarget.options_from_env())
     # every call of a host-declared import saves the top at its slot before and restores it after
     # a normal return (L156; dev/formal/ExceptionStack.tla ImportCall and ImportReturn), and the
     # boundary is the host's: no wasm code writes the count, and no entry holds a try or a local
@@ -235,7 +235,7 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
         existing_module=mod,
         import_stubs=Any[(_wt_hb_cbo, "cbo", (Int64,), ids["cbo"], Nothing), (_wt_hb_cb, "cb", (Int64,), ids["cb"], Nothing),
                          (_wt_hb_cbg, "cbg", (Int64,), ids["cbg"], Int64), (_wt_hb_cb6, "cb6", (Int64,), ids["cb6"], Nothing),
-                         (_wt_hb_cb7, "cb7", (Int64,), ids["cb7"], Nothing)])
+                         (_wt_hb_cb7, "cb7", (Int64,), ids["cb7"], Nothing)], options=WasmTarget.options_from_env())
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     host = """
@@ -311,7 +311,7 @@ _wt_cc_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_cc_cbq(x); end
     mod = WasmTarget.WasmModule()
     idx = WasmTarget.add_import!(mod, "host", "cbq", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
     m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_b, (Int64,), "b"), (_wt_cc_o, (Int64,), "o")];
-                                  existing_module=mod, import_stubs=Any[(_wt_cc_cbq, "cbq", (Int64,), idx, Int64)])
+                                  existing_module=mod, import_stubs=Any[(_wt_cc_cbq, "cbq", (Int64,), idx, Int64)], options=WasmTarget.options_from_env())
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     status, results = WasmRunner.run_driver_batch(bytes, """
@@ -352,7 +352,7 @@ _wt_gl_p(x::Int64) = x + 100
     mod = WasmTarget.WasmModule()
     idx = WasmTarget.add_import!(mod, "host", "cbr", WasmTarget.WasmValType[WasmTarget.I64], WasmTarget.WasmValType[WasmTarget.I64])
     m = WasmTarget.compile_module(Any[(_wt_eb_r, (Int64,), "r"), (_wt_eb_o, (Int64,), "o"), (_wt_gl_p, (Int64,), "p")];
-                                  existing_module=mod, import_stubs=Any[(_wt_eb_cbr, "cbr", (Int64,), idx, Int64)])
+                                  existing_module=mod, import_stubs=Any[(_wt_eb_cbr, "cbr", (Int64,), idx, Int64)], options=WasmTarget.options_from_env())
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     glue = WasmTarget.host_glue_js()
@@ -385,7 +385,7 @@ end
     m1 = WasmTarget.WasmModule()
     WasmTarget.add_import!(m1, "host", "cb", sig...)
     WasmTarget.add_global!(m1, WasmTarget.I64, true, 0; name="\$mine")
-    e1 = _wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=m1))
+    e1 = _wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=m1, options=WasmTarget.options_from_env()))
     @test e1 isa ArgumentError && occursin("host.cb", e1.msg) && occursin("\$mine", e1.msg) &&
           occursin("ensure_host_imports_open!", e1.msg)
     # the framework's path: the count imported after its host imports, before its own global
@@ -394,7 +394,7 @@ end
     WasmTarget.ensure_host_imports_open!(m2)
     mine = WasmTarget.add_global!(m2, WasmTarget.I64, true, 0; name="\$mine")
     @test m2.globals[1].name == "\$host_imports_open" && mine == 1
-    compiled = WasmTarget.compile_module(roots; existing_module=m2)
+    compiled = WasmTarget.compile_module(roots; existing_module=m2, options=WasmTarget.options_from_env())
     @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(WasmTarget.to_bytes(compiled))))
     # a host-declared import with no count (added after setup) is refused where the count is read
     m3 = WasmTarget.WasmModule()
@@ -407,20 +407,20 @@ end
     names_both(e, what) = e isa ArgumentError && occursin(what, e.msg) && occursin(" 0 ", e.msg) &&
                           occursin("wasmtarget.host_imports_open", e.msg)
     @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")];
-                                                                 existing_module=counted())), "WasmGlobal index")
+                                                                 existing_module=counted(), options=WasmTarget.options_from_env())), "WasmGlobal index")
     @test names_both(_wt_hb_err(() -> WasmTarget.add_root_global_initializer!(counted(), WasmTarget.TypeRegistry(), 0, 0)),
                      "framework global index")
     @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=counted(),
-                         root_bindings=Dict("r" => WasmTarget.RootBindings(captured_globals=Dict(:x => (true, UInt32(0))))))),
+                         root_bindings=Dict("r" => WasmTarget.RootBindings(captured_globals=Dict(:x => (true, UInt32(0))))), options=WasmTarget.options_from_env())),
                      "captured global index")
     @test names_both(_wt_hb_err(() -> WasmTarget.compile_module(roots; existing_module=counted(),
-                         root_bindings=Dict("r" => WasmTarget.RootBindings(dom_bindings=Dict(UInt32(0) => [(UInt32(0), Int32[])]))))),
+                         root_bindings=Dict("r" => WasmTarget.RootBindings(dom_bindings=Dict(UInt32(0) => [(UInt32(0), Int32[])]))), options=WasmTarget.options_from_env())),
                      "DOM binding global index")
     # a global the host imports for itself is not the count: a WasmGlobal names it, and the
     # program reads and writes the host's global
     hg = WasmTarget.WasmModule()
     @test WasmTarget.add_global_import!(hg, "host", "g", WasmTarget.I32, true) == 0
-    hbytes = WasmTarget.to_bytes(WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")]; existing_module=hg))
+    hbytes = WasmTarget.to_bytes(WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")]; existing_module=hg, options=WasmTarget.options_from_env()))
     status, results = WasmRunner.run_driver_batch(hbytes, """
     const importObject = $(WasmTarget.host_runtime_js());
     const g = new WebAssembly.Global({ value: 'i32', mutable: true }, 5);
@@ -450,7 +450,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     pre = _wt_empty_function!(mod, "pre")
     WasmTarget.add_export!(mod, "pre", 0, pre)
     m = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod,
-        link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "esc_hook", 0, roots["esc"]))
+        link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "esc_hook", 0, roots["esc"]), options=WasmTarget.options_from_env())
     exported(n) = only(e for e in m.exports if e.name == n).idx
     fname(i) = m.functions[Int(i) - WasmTarget.num_imported_funcs(m) + 1].name
     @test exported("pre") == pre && fname(pre) == "pre"
@@ -469,16 +469,16 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     WasmTarget.add_export!(mod2, "x", 0, pre2)
     @test _wt_c1_x_d2(2) == 20
     err = try
-        WasmTarget.compile_module(Any[(_wt_c1_x_d2, (Int64,), "x_d2"), (_wt_c1_x, (Int64,), "x")]; existing_module=mod2)
+        WasmTarget.compile_module(Any[(_wt_c1_x_d2, (Int64,), "x_d2"), (_wt_c1_x, (Int64,), "x")]; existing_module=mod2, options=WasmTarget.options_from_env())
         nothing
     catch e
         e
     end
     @test err isa ArgumentError && occursin("already exports \"x\"", err.msg)
     # two entries asking for one name, and one entry asked under two names, are refused
-    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x_d2, (Int64,), "f")]); nothing; catch e; e; end
+    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x_d2, (Int64,), "f")]; options=WasmTarget.options_from_env()); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("two entries request the export name \"f\"", err.msg)
-    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x, (Int64,), "g")]); nothing; catch e; e; end
+    err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "f"), (_wt_c1_x, (Int64,), "g")]; options=WasmTarget.options_from_env()); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("requested under two names", err.msg)
     # a name nobody requested that the module exports is still disambiguated: the module's
     # "_wt_c1_inner" export stays, the compile's discovered callee takes the next free name
@@ -486,7 +486,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     WasmTarget.ensure_provenance_imports!(mod4)
     pre4 = _wt_empty_function!(mod4, "pre")
     WasmTarget.add_export!(mod4, "_wt_c1_inner", 0, pre4)
-    m4 = WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4)
+    m4 = WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4, options=WasmTarget.options_from_env())
     @test count(e -> e.name == "_wt_c1_inner", m4.exports) == 1
     @test any(e -> e.name == "_wt_c1_inner_d2", m4.exports)
 
@@ -501,7 +501,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     WasmTarget.i64_const!(mkb, 0); WasmTarget.struct_new!(mkb, t3); WasmTarget.finish_function!(mkb)
     mk = WasmTarget.add_function!(mod3, mkb; name="mk")
     m3 = WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")]; existing_module=mod3,
-        link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk))
+        link_roots=(lm, roots, _) -> WasmTarget.add_export!(lm, "mk", 0, mk), options=WasmTarget.options_from_env())
     fname3(i) = m3.functions[Int(i) - WasmTarget.num_imported_funcs(m3) + 1].name
     @test fname3(only(e for e in m3.exports if e.name == "mk").idx) == "mk (export)"
     bytes3 = WasmTarget.to_bytes(m3)

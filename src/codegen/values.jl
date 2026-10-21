@@ -1104,6 +1104,51 @@ _ctx_function_builder(ctx::AbstractCompilationContext, func_idx::Integer)::Instr
 parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
 _is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
 
+"""
+    emit_constant_slots!(b, ctx, mem, arr_type_idx, elem_type; contents) -> b
+
+`[] -> [slot...]`: each slot of the constant Memory or Vector `mem`, of the Julia element type
+`elem_type`, as its array type `arr_type_idx` stores it, for an `array.new_fixed`: an assigned
+slot its value, typed by its own class (emit_value!); an unset one (`!isassigned`, which Julia's
+allocator and _unsetindex! leave) `#undef` (emit_undef!: the undefined value where the slot holds
+`nothing` too, else the null), so isassigned answers false and a read throws UndefRefError, as
+for a slot the program allocates. `contents(i)` false marks a slot whose bits hold no value of
+the program (a Dict's unoccupied isbits slot is uninitialized memory, process-varying and never
+read): it takes its storage type's zero. A slot after a rejected one is not emitted.
+parity(constants.dart:1128 visitListConstant): a list constant's elements, each instantiated.
+"""
+function emit_constant_slots!(b::InstrBuilder, ctx::AbstractCompilationContext, mem,
+                              arr_type_idx::Integer, @nospecialize(elem_type);
+                              contents::Function)::InstrBuilder
+    local def = ctx.mod.types[Int(arr_type_idx) + 1]
+    # an invariant, not a gap: every caller passes the array type get_array_type! registered
+    def isa ArrayType || error("a constant $(typeof(mem)) has no Wasm array layout")
+    local w = unpacked(def.elem.valtype)
+    for i in 1:length(mem)
+        ctx.last_stmt_was_stub && break
+        if !isassigned(mem, i)
+            emit_undef!(b, ctx, elem_type, w)
+        elseif contents(i)
+            emit_value!(b, NirLiteral(mem[i]), ctx, w)   # typed by the element's own type
+        elseif w isa RefType
+            ref_null!(b, w)
+        elseif w isa ConcreteRef && w.nullable
+            ref_null!(b, Int64(w.type_idx))
+        elseif w === I32
+            i32_const!(b, 0)
+        elseif w === I64
+            i64_const!(b, 0)
+        elseif w === F32
+            f32_const!(b, 0.0f0)
+        elseif w === F64
+            f64_const!(b, 0.0)
+        else
+            record_unsupported!(ctx, :unsupported_type, "slot $i of a constant $(typeof(mem)), which holds no value, has no zero of its storage type $w"; detail=string(typeof(mem)), soundness_fatal=true)
+        end
+    end
+    return b
+end
+
 # parity(constants.dart:552 ConstantInstantiator): a literal operand is instantiated per
 # constant kind as dart instantiates a Constant; an SSA value, argument or slot reads its local
 # as code_generator.dart:2127 visitVariableGet does.
@@ -1643,42 +1688,10 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         dict_keys = getfield(val, :keys)
         dict_vals = getfield(val, :vals)
 
-        # Only OCCUPIED hash-table slots carry values (Base.isslotfilled: the slot
-        # byte's high bit). An unoccupied isbits slot is uninitialized host memory —
-        # emitting it would bake heap addresses into the binary (a process-varying
-        # leak, never read by Dict); it takes zero. An unoccupied reference slot is
-        # a physical null. Every occupied element goes through the typed wrap
-        # funnel used by ordinary array stores, including boxing Union keys.
-        compile_memory_elements! = function(mem, arr_type_idx, elem_type)
-            arr_type_def = ctx.mod.types[arr_type_idx + 1]
-            arr_type_def isa ArrayType || error("Dict backing storage has no Wasm array layout")
-            expected = unpacked(arr_type_def.elem.valtype)
-            for i in 1:length(mem)
-                # Stop emitting elements after stub/unreachable
-                if ctx.last_stmt_was_stub
-                    break
-                end
-                if (dict_slots[i] & 0x80) != 0
-                    v = mem[i]
-                    emit_value_as!(b, NirLiteral(v), ctx, expected, typeof(v))
-                elseif expected isa RefType
-                    ref_null!(b, expected)
-                elseif expected isa ConcreteRef && expected.nullable
-                    ref_null!(b, Int64(expected.type_idx))
-                elseif expected === I32
-                    i32_const!(b, 0)
-                elseif expected === I64
-                    i64_const!(b, 0)
-                elseif expected === F32
-                    f32_const!(b, 0.0f0)
-                elseif expected === F64
-                    f64_const!(b, 0.0)
-                else
-                    record_unsupported!(ctx, :unsupported_type, "unoccupied Dict backing slot $i has non-nullable physical type $expected"; detail=string(typeof(mem)), soundness_fatal=true)
-                end
-            end
-            return expected
-        end
+        # Only an occupied hash-table slot holds a key and a value (Base.isslotfilled: the slot
+        # byte's high bit); an unoccupied isbits slot is uninitialized memory, and an unoccupied
+        # reference slot is `#undef` (emit_constant_slots!)
+        local occupied = i -> (dict_slots[i] & 0x80) != 0
 
         # Push typeId (field 0) with DFS-assigned ID
         _emit_tid!(T)
@@ -1689,12 +1702,12 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         end
         array_new_fixed!(b, slots_arr_type, length(dict_slots))
 
-        # field 2: keys — array of K (may have undef for ref-typed keys)
-        compile_memory_elements!(dict_keys, keys_arr_type, K)
+        # field 2: keys — array of K
+        emit_constant_slots!(b, ctx, dict_keys, keys_arr_type, K; contents=occupied)
         array_new_fixed!(b, keys_arr_type, length(dict_keys))
 
-        # field 3: vals — array of V (may have undef for ref-typed vals)
-        compile_memory_elements!(dict_vals, vals_arr_type, V)
+        # field 3: vals — array of V
+        emit_constant_slots!(b, ctx, dict_vals, vals_arr_type, V; contents=occupied)
         array_new_fixed!(b, vals_arr_type, length(dict_vals))
 
         # fields 4-8: ndel, count, age, idxfloor, maxprobe (i64)
@@ -1732,21 +1745,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # Push typeId (field 0) with DFS-assigned ID for Vector struct
         _emit_tid!(T)
 
-        # Field 1: data array — emit array.new_fixed with actual element values
-        wasm_elem_type = get_concrete_wasm_type(elem_type, ctx.mod, ctx.type_registry)
-        for i in 1:length(val)
-            # Stop emitting array elements after unreachable (stub).
-            # Dead code after unreachable contains raw data bytes that decode as
-            # invalid WASM instructions (e.g., block with invalid type byte).
-            if ctx.last_stmt_was_stub
-                break
-            end
-            emit_value_as!(b, NirLiteral(val[i]), ctx, wasm_elem_type, typeof(val[i]))
-            # Check after each element in case compile_value hit a stub
-            if ctx.last_stmt_was_stub
-                break
-            end
-        end
+        # Field 1: data array — array.new_fixed of its slots (emit_constant_slots!)
+        emit_constant_slots!(b, ctx, val, array_type_idx, elem_type; contents=_ -> true)
         # Skip array_new_fixed if we're in dead code (stub was hit)
         if !ctx.last_stmt_was_stub
             array_new_fixed!(b, array_type_idx, length(val))
@@ -1768,8 +1768,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
 
     elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
         # MemoryRef/Memory constants map to array types, not struct types.
-        # Materialize the exact contents.  Size is never a license to replace a
-        # real Memory constant with null, and undefined slots are not values.
+        # Materialize the exact contents, an unset slot as `#undef` (emit_constant_slots!).
+        # Size is never a license to replace a real Memory constant with null.
         T = typeof(val)
         elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
@@ -1786,20 +1786,10 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 "Memory constant of type $T has $n_mem elements; exact materialization is not implemented";
                 detail=val, soundness_fatal=true)
         else
-            arr_type_def = ctx.mod.types[array_type_idx + 1]
-            for i in 1:n_mem
-                defined = isassigned(mem, i)
-                defined || record_unsupported!(ctx, :value_stub,
-                    "Memory constant of type $T has an undefined slot at index $i";
-                    detail=val, soundness_fatal=true)
-                evt = arr_type_def isa ArrayType ? unpacked(arr_type_def.elem.valtype) : nothing
-                evt isa WasmValType || record_unsupported!(ctx, :value_stub,
-                    "Memory constant of type $T has no physical element type";
-                    detail=val, soundness_fatal=true)
-                emit_value!(b, NirLiteral(mem[i]), ctx, evt)   # typed by the element's own type
-            end
-            # `array.new_fixed 0` is the real non-null empty array representation.
-            array_new_fixed!(b, array_type_idx, n_mem)
+            emit_constant_slots!(b, ctx, mem, array_type_idx, elem_type; contents=_ -> true)
+            # `array.new_fixed 0` is the real non-null empty array representation; skipped in dead
+            # code (a slot's emission hit a stub), as the Vector branch skips it
+            ctx.last_stmt_was_stub || array_new_fixed!(b, array_type_idx, n_mem)
         end
 
     elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)

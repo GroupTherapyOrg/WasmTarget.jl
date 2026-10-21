@@ -112,7 +112,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
     return b
 end
 
-# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+# parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilationContext,
                                       signed::Bool, @nospecialize(T))::InstrBuilder
     local reg = numeric_register(T)
@@ -319,7 +319,7 @@ end
 # rem_s(typemin, -1) is defined as 0 in wasm — matches Julia — so `check_overflow`
 # is only set for signed div. Stack: [a, b] → [a, b] (operands re-pushed; values
 # must already be narrow-normalised).
-# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+# parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool;
                           check_overflow::Bool=false, julia_width::Int)::InstrBuilder
     lt     = is32 ? I32 : I64
@@ -368,10 +368,10 @@ end
 
 The bit width of a value of the primitive type `T`, Julia's own (its intrinsics read
 jl_datatype_size): `8 * sizeof(T)` for every primitive WT represents, one held in a register
-(an 8- or 16-bit one rides in an i32 with junk above its width, whatever its type) and a 128-bit
+(one narrower than its register rides in it with junk above its width, whatever its type) and a 128-bit
 integer held as two limbs; `nothing` for any other type, which has no width (no register-width
 stand-in: a width decision over it rejects).
-parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 """
 function _julia_int_width(@nospecialize(T))::Union{Nothing,Int64}
     (T isa DataType && isprimitivetype(T)) || return nothing
@@ -393,21 +393,23 @@ function _operand_width(@nospecialize(T))::Int64
     return w
 end
 
-# `julia_width` is the Julia operand's bit width (8/16/32/64). It can be NARROWER
-# than the wasm representation width (UInt8/UInt16/Int8/Int16 all live in an i32).
-# Two corrections are needed when julia_width < wasm width, both for `<<`:
+# `julia_width` is the Julia operand's bit width (_operand_width: 8*sizeof, any width up to 64).
+# It can be NARROWER than its register: any width below 32 lives in an i32 (an 8-, 16- or 24-bit
+# integer), any width from 33 to 63 in an i64 (a 40-, 48- or 56-bit primitive).
+# Two corrections are needed when julia_width < register width, both for `<<`:
 #   * over-shift threshold must be julia_width, not the wasm width — Julia yields 0
 #     once shift ≥ julia_width (wasm's i32.shl also masks the *amount* mod 32, so a
 #     shift of exactly 32/64 would otherwise wrap to a no-op and leak the value); and
 #   * the shl result must be truncated to julia_width bits (e.g. `UInt8(1) << 8` is
 #     0 in Julia but 256 in a raw i32), since high bits spill into the wide register.
 # Right shifts (lshr/ashr) OBSERVE the high bits of the register, so a narrow
-# operand must be normalised first: arithmetic on Int8/16/UInt8/16 leaves junk
+# operand must be normalised first: arithmetic on a narrow integer leaves junk
 # above julia_width (e.g. `x+x` for UInt8 0x80 is 0x100 in the i32 register), and
 # that junk would shift down into the result. We zero-mask before lshr and
-# sign-extend from julia_width before ashr; lshr also honours the julia_width
-# over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
-# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+# sign-extend from julia_width before ashr (emit_extend_from_width!, the one width rule);
+# lshr also honours the julia_width over-shift threshold (shr_u of a width-bit value by
+# ≥ width = 0).
+# parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
                               julia_width::Int, signed_narrow::Bool = false)::InstrBuilder
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
@@ -469,7 +471,7 @@ end
 # guard maps it to 0. A plain I32_WRAP_I64 drops the amount's high bits, so a huge
 # shift like `x << typemin(Int64)` (low 32 bits = 0) would wrap to a no-op and leak
 # the unshifted value. Stack: [.., amount_i64] → [.., amount_i32].
-# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+# parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_wrap_shift_amount_saturating!(fb::InstrBuilder, ctx::AbstractCompilationContext, julia_width::Int)::InstrBuilder
     amt = UInt32(allocate_local!(ctx, I64))
     bld = _sub_builder(fb, ctx, "_emit_wrap_shift_amount_saturating!", 1)
@@ -980,7 +982,7 @@ the value to share a type): shl/lshr saturate an oversized i64 amount down to
 i32 (a plain wrap would let e.g. `x << typemin(Int64)` alias 0 and leak the
 unshifted value); ashr just wraps (its guard clamps the amount anyway). Then
 `_emit_shift_guarded!` applies Julia's over-shift/sign-fill semantics.
-parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+parity(quarantine: Julia's integer intrinsics: an integer narrower than its register (any width below 32 in an i32, from 33 to 63 in an i64) rides in it with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 """
 function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext, args, arg_type,
                               is_32bit::Bool, kind::Symbol)::WasmValType
@@ -3979,26 +3981,19 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
         end
         # parity(closures.dart:1365 Context): isdefined(%box::Core.Box, :contents) — the shared cell's
-        # defined-check: a test of its contents for `#undef` (the undefined value, or a typed
-        # reference box's null).
+        # defined-check: a test of its contents, an anyref, for `#undef` (the undefined value).
         if !_gfc_done && func === Core.isdefined && length(args) == 2 &&
            args[1] isa NirSSA && nir_const(args[2]) === :contents &&
            value_type(ctx, args[1]) === Core.Box
             local _bxd_ib = _ctx_builder(ctx, "compile_call")
             local _bxd_ty = emit_value!(_bxd_ib, args[1], ctx, static_wasm_type(args[1], ctx))  # box intrinsic branches on the operand's type
-            local _bxd_idx = _bxd_ty isa ConcreteRef ? _bxd_ty.type_idx :
-                             UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            local _bxd_idx = UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            _bxd_ty isa ConcreteRef && _bxd_ty.type_idx != _bxd_idx &&
+                error("a Core.Box held in $(_bxd_ty), which is no Box's reference")
             !(_bxd_ty isa ConcreteRef) && ref_cast!(_bxd_ib, Int64(_bxd_idx), false)
-            local _bxd_ft = ctx.mod.types[_bxd_idx + 1].fields[2].valtype
-            if _wt_is_ref(_bxd_ft)
-                struct_get!(_bxd_ib, _bxd_idx, UInt32(1))
-                emit_is_unset!(_bxd_ib, ctx, Any, _bxd_ft)   # its `#undef`: the undefined value
-                num!(_bxd_ib, Opcode.I32_EQZ)
-            else
-                # a TYPED box (i64 contents etc.) is always defined
-                drop!(_bxd_ib)
-                i32_const!(_bxd_ib, 1)
-            end
+            struct_get!(_bxd_ib, _bxd_idx, UInt32(1))
+            emit_is_unset!(_bxd_ib, ctx, Any, AnyRef)   # its `#undef`: the undefined value
+            num!(_bxd_ib, Opcode.I32_EQZ)
             append_builder!(fb, _bxd_ib)
             _gfc_done = true
         end

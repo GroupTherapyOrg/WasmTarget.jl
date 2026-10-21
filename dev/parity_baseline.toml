@@ -6,5 +6,5 @@
 R14_fresh_constant_structs = 10
 R27_coercion_bypass = 18
 R33_unexercised_registry_entries = 5
-R5_julia_type_reguess = 59
+R5_julia_type_reguess = 58
 R7_raw_coercion_ops = 21

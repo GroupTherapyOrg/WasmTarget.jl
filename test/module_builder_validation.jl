@@ -253,7 +253,7 @@ _mbv_empty_function!(m, params; name) =
                                    MBV.WasmValType[MBV.F64])
         bytes_mod = MBV.compile_module(Any[(_mbv_import_caller, (), "caller")];
             existing_module=host,
-            import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)])
+            import_stubs=Any[(_mbv_imported_measure, "measure", (), host_idx, Float64)], options=MBV.options_from_env())
         @test unsaved_host_import_calls(bytes_mod) == 0   # every call of the import saved and restored (L156)
         bytes = MBV.to_bytes(bytes_mod)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -264,7 +264,7 @@ _mbv_empty_function!(m, params; name) =
         mixed_bytes_mod = MBV.compile_module(Any[(_mbv_import_mix_caller, (), "mix_caller")];
             existing_module=mixed,
             import_stubs=Any[(_mbv_imported_mix, "mix", (Float64, Int64),
-                              mixed_idx, Float64)])
+                              mixed_idx, Float64)], options=MBV.options_from_env())
         @test unsaved_host_import_calls(mixed_bytes_mod) == 0   # every call of the import saved and restored (L156)
         mixed_bytes = MBV.to_bytes(mixed_bytes_mod)
         @test mixed_bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -276,7 +276,7 @@ _mbv_empty_function!(m, params; name) =
             Any[(_mbv_external_leaf_caller, (Int64,), "leaf_caller")];
             existing_module=leafmod,
             import_stubs=Any[(_mbv_external_leaf, "external_leaf", (Int64,),
-                              leafidx, Int64)])
+                              leafidx, Int64)], options=MBV.options_from_env())
         @test unsaved_host_import_calls(leafbytes_mod) == 0   # every call of the import saved and restored (L156)
         leafbytes = MBV.to_bytes(leafbytes_mod)
         @test leafbytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -328,7 +328,7 @@ _mbv_empty_function!(m, params; name) =
         # `print(io, ...)` is an ordinary compiled formatting call: Julia's own body
         # compiles and the module declares no host-console import — only the runtime import
         # every module has
-        compiled = MBV.compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), "p")])
+        compiled = MBV.compile_module(Any[(_mbv_io_receiver_print, (IOBuffer, Char), "p")]; options=MBV.options_from_env())
         @test [(i.module_name, i.field_name) for i in compiled.imports] == [("wasmtarget", "stack_trace")]
     end
 
@@ -349,7 +349,7 @@ _mbv_empty_function!(m, params; name) =
                                     elide_closure_context=true,
                                     void_return=true)
         compiled = MBV.compile_module(Any[(handler, (), "handler")];
-            existing_module=m, root_bindings=Dict("handler" => bindings))
+            existing_module=m, root_bindings=Dict("handler" => bindings), options=MBV.options_from_env())
         exported = only(e for e in compiled.exports if e.name == "handler")
         nimports = MBV.num_imported_funcs(compiled)
         fn = compiled.functions[Int(exported.idx) - nimports + 1]
@@ -357,7 +357,7 @@ _mbv_empty_function!(m, params; name) =
         @test isempty(ft.params)
         @test isempty(ft.results)
         void_module = MBV.compile_module(Any[(_mbv_void_numeric_root, (Int64,), "void_numeric")];
-            root_bindings=Dict("void_numeric" => MBV.RootBindings(void_return=true)))
+            root_bindings=Dict("void_numeric" => MBV.RootBindings(void_return=true)), options=MBV.options_from_env())
         mktempdir() do dir
             wasm = joinpath(dir, "void-root.wasm")
             write(wasm, MBV.to_bytes(void_module))
@@ -369,14 +369,14 @@ _mbv_empty_function!(m, params; name) =
         partial = MBV.RootBindings(captured_globals=Dict([first(captured)]),
                                    elide_closure_context=true)
         @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "bad")];
-            root_bindings=Dict("bad" => partial))
+            root_bindings=Dict("bad" => partial), options=MBV.options_from_env())
         missing_global = MBV.RootBindings(
             captured_globals=Dict(k => (v[1], UInt32(99)) for (k, v) in captured),
             elide_closure_context=true)
         @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "bad_global")];
-            root_bindings=Dict("bad_global" => missing_global))
+            root_bindings=Dict("bad_global" => missing_global), options=MBV.options_from_env())
         @test_throws ArgumentError MBV.compile_module(Any[(handler, (), "known")];
-            root_bindings=Dict("unknown" => bindings))
+            root_bindings=Dict("unknown" => bindings), options=MBV.options_from_env())
 
         constant_root = _mbv_constant_closure()
         constant_bindings = MBV.RootBindings(
@@ -393,7 +393,7 @@ _mbv_empty_function!(m, params; name) =
             elide_closure_context=true)
         @test_throws ArgumentError MBV.compile_module(
             Any[(constant_root, (Int64,), "duplicate")];
-            existing_module=m, root_bindings=Dict("duplicate" => duplicate))
+            existing_module=m, root_bindings=Dict("duplicate" => duplicate), options=MBV.options_from_env())
 
         leaf, caller = _mbv_root_link_leaf, _mbv_root_link_caller
         ci = only(Base.code_typed(caller, (Int64,)))[1]
@@ -459,7 +459,7 @@ _mbv_empty_function!(m, params; name) =
                 local e = try; MBV.add_root_global_initializer!(linked_mod, registry, g, 0); nothing; catch err; err; end
                 @test e isa ArgumentError && occursin("is an imported function, not a compiled root", e.msg)
                 MBV.add_root_global_initializer!(linked_mod, registry, g, roots["string_init"])
-            end)
+            end, options=MBV.options_from_env())
         @test count(f -> f.name == "string_init field initializer", init_mod.functions) == 1
         # an import from the linker would renumber the defined functions: the builder refuses it
         @test_throws MBV.ModuleValidationError MBV.compile_multi(
@@ -470,11 +470,11 @@ _mbv_empty_function!(m, params; name) =
         unknown_link = MBV.RootBindings(invoke_roots=Dict(invoke_site => "missing"))
         @test_throws ArgumentError MBV.compile_module(
             Any[(caller, (Int64,), "caller")];
-            root_bindings=Dict("caller" => unknown_link))
+            root_bindings=Dict("caller" => unknown_link), options=MBV.options_from_env())
         bad_entry = MBV.RootBindings(entry_calls=UInt32[99])
         @test_throws ArgumentError MBV.compile_module(
             Any[(_mbv_unsigned_i128, (Int128,), "bad_entry")];
-            root_bindings=Dict("bad_entry" => bad_entry))
+            root_bindings=Dict("bad_entry" => bad_entry), options=MBV.options_from_env())
     end
 
     @testset "symbolic control labels" begin

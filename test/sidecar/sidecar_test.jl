@@ -175,7 +175,7 @@ function _build_sidecar_wt_module()
     ]
     append!(func_list, BRIDGE_SPECS_F64)   # _bv_f64_new/set!/get/len — Vector{Float64} marshalling
 
-    m = WT.compile_module(func_list; existing_module=mod, import_stubs=import_stubs)
+    m = WT.compile_module(func_list; existing_module=mod, import_stubs=import_stubs, options=WT.options_from_env())
     return WT.to_bytes(m), (; alloc_idx, reset_idx, store_idx, load_idx, daxpy_idx), m
 end
 

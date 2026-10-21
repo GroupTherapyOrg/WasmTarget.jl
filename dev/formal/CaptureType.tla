@@ -43,20 +43,27 @@
 (* `getfield(carrier, f)` of a captor's box field, and the record joins    *)
 (* the write only if it keys that read (_captured_box_field). The carrier  *)
 (* is `#self#` in the captor's own body, an SSA value (a closure a callee  *)
-(* returned, its body inlined), or an argument: a function taking the      *)
+(* returned, its body inlined), an argument (a function taking the         *)
 (* closure inlines the closure's body, and writes through its own          *)
-(* parameter. The nested captor's link is keyed the same way, from the     *)
-(* operand its `%new` reads the field through. The record keys every       *)
-(* carrier by the operand's own type (value_type), so every write joins    *)
-(* (Recorded = AllWrites, by the relation). Keyed only through `#self#`    *)
-(* and an SSA value, a write through an argument was dropped: the          *)
-(* creator's read kept its own Int64 while the inlined captor stored 2.5   *)
-(* (illegal cast; Julia answers 1).                                        *)
+(* parameter), or a constant: a closure held in a constant global, whose   *)
+(* inlined call writes through `getfield(Main.g, :x)` (a mutable Box is no *)
+(* inlineable constant, so Julia keeps the getfield). The nested captor's  *)
+(* link is keyed the same way, from the operand its `%new` reads the field *)
+(* through. The record keys every carrier by the operand's own type        *)
+(* (value_type: a literal's Core.Typeof, a global's binding type), so      *)
+(* every write joins (Recorded = AllWrites, by the relation). Keyed only   *)
+(* through `#self#` and an SSA value, a write through an argument was      *)
+(* dropped: the creator's read kept its own Int64 while the inlined captor *)
+(* stored 2.5 (illegal cast; Julia answers 1). Keyed without the constant, *)
+(* a constant closure's inlined write of 2.5 joined nothing while a read   *)
+(* through an argument took the world's Int64 join (illegal cast; Julia    *)
+(* answers 14).                                                            *)
 (*                                                                         *)
 (* THE CLAIM. The type a read carries covers every value the box can hold  *)
 (* at run time (Covered), through every captor and in the creator. The     *)
 (* Broken variants are the body-local guess, the per-field record, the     *)
-(* nested captor left out of the join and a carrier the key does not read. *)
+(* nested captor left out of the join and a carrier the key does not read  *)
+(* (an argument, a constant).                                              *)
 (*                                                                         *)
 (* WHAT THIS MODEL ABSTRACTS. Two numeric types with Julia's promotion. A  *)
 (* box has one creator write (its initial value, of a fixed type) and      *)
@@ -84,7 +91,7 @@ CONSTANTS BodyLocalGuess,  \* TRUE = the broken typing (the closure guesses alon
           Keyed            \* the carriers the record's key reads (Carriers: every operand)
 
 \* the operand a write's `getfield(carrier, f)` reads the box field through
-Carriers == {"self", "ssa", "argument"}
+Carriers == {"self", "ssa", "argument", "constant"}
 ASSUME Keyed \subseteq Carriers
 
 Captors == {"W", "R", "N"}   \* W and R capture the box directly; N is built inside W's body

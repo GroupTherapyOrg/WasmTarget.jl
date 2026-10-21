@@ -256,7 +256,10 @@ bits above `width` cleared; a no-op at the register's own width. The 8- and 16-b
 i32 are dart's narrowing shapes (`extend8_s`, `extend16_s`, `and 0xFF`, `and 0xFFFF`); any
 other width (a 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64) shifts its sign
 bit to the register's top and back (`shl`, `shr_s`) or masks.
-parity(intrinsics.dart:2037 wasmI32Int8FromInt): the narrowing arms, at every width.
+parity(intrinsics.dart:2037 wasmI32Int8FromInt): the 8- and 16-bit arms in an i32, dart's
+narrowing shapes (wasmI32Int8FromInt and its three siblings, :2037-2061). The other widths:
+parity(quarantine: a Julia primitive type may be 24, 40, 48 or 56 bits wide, held in an i32 or
+an i64 register with junk above its width; dart's integer widths are 8, 16, 32 and 64.)
 """
 function emit_extend_from_width!(b::InstrBuilder, reg::Union{Nothing,NumType}, width::Integer, signed::Bool)::InstrBuilder
     local bits = reg === I32 ? 32 : reg === I64 ? 64 :
@@ -373,12 +376,11 @@ end
 # translator.dart:346; Julia's sext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_sext!(b::InstrBuilder, ctx,
                        source_type::Type, target_type::Type)::ConcreteRef
-    if julia_to_wasm_type(source_type) === I32
-        # a narrow source's register may hold junk above its width, or its unsigned bits: its
-        # sign is the bit at its own width (sext_int(Int128, 0x80) is -128)
-        normalise_narrow!(b, ctx, source_type, true)
-        num!(b, Opcode.I64_EXTEND_I32_S)
-    end
+    # a narrow source's register (an i32, or an i64 holding a 40-, 48- or 56-bit primitive) may
+    # hold junk above its width, or its unsigned bits: its sign is the bit at its own width
+    # (sext_int(Int128, 0x80) is -128), by the one width rule
+    normalise_narrow!(b, ctx, source_type, true)
+    julia_to_wasm_type(source_type) === I32 && num!(b, Opcode.I64_EXTEND_I32_S)
     scratch_idx = allocate_local!(ctx, I64)
     local_tee!(b, scratch_idx)
     i64_const!(b, 63)
@@ -397,10 +399,8 @@ end
 # translator.dart:346; Julia's zext_int into a 128-bit target builds the two-i64 limb struct.)
 function _int128_zext!(b::InstrBuilder, ctx,
                        source_type::Type, target_type::Type)::ConcreteRef
-    if julia_to_wasm_type(source_type) === I32
-        normalise_narrow!(b, ctx, source_type, false)   # a narrow source's dirty high bits masked
-        num!(b, Opcode.I64_EXTEND_I32_U)
-    end
+    normalise_narrow!(b, ctx, source_type, false)   # a narrow source's dirty high bits masked, in an i32 or an i64
+    julia_to_wasm_type(source_type) === I32 && num!(b, Opcode.I64_EXTEND_I32_U)
     zext_scratch = allocate_local!(ctx, I64)
     local_set!(b, zext_scratch)
     i32_const!(b, Int64(ensure_type_id!(ctx.type_registry, target_type)))

@@ -3,11 +3,11 @@
 # ============================================================================
 # Julia's `nothing` is an object (jl_nothing) and `#undef` is NULL. WT's `nothing` is the wasm
 # null at every nullable reference (dev/formal/Coercion.tla NothingIsNull), dart's null. So a
-# pointer slot whose type admits no `nothing` keeps its null as `#undef`, and one whose type
-# admits `nothing` too (a Union{Nothing,S} or abstract slot) is held in a reference of the any
-# hierarchy and marks `#undef` with the module's one undefined value: an allocation and an unset
-# store `#undef`, a read tests it and throws UndefRefError, and isassigned and isdefined compare
-# against it (dev/formal/Undef.tla).
+# pointer slot whose type admits no `nothing` (a String's, a Number's) keeps its null as `#undef`,
+# and one whose type admits `nothing` too (Any, a Union with Nothing, any other supertype of
+# Nothing) is held in a reference of the any hierarchy and marks `#undef` with the module's one
+# undefined value: an allocation and an unset store `#undef`, a read tests it and throws
+# UndefRefError, and isassigned and isdefined compare against it (dev/formal/Undef.tla).
 
 """
     undef_slot(julia_type, wasm_type) -> Bool
@@ -24,11 +24,15 @@ formal(dev/formal/Undef.tla): after every sequence of stores, unsets, isassigned
 answers Julia's; in a slot that holds `nothing` too `#undef` is not the null, and the undefined
 value sits only in a slot of the any hierarchy.
 parity(quarantine: dart marks an unset late variable by null where its type is non-nullable and,
-where it is potentially nullable, by a sentinel (late_lowering.dart:522 useSentinel, the
-useSentinelOrNull strategy, :549, computeIsSetEncoding :570) or a companion isSet field
-(useIsSetFieldOrNull, which dart2wasm selects: target.dart:565 supportsLateLoweringSentinel =>
-false). A Julia Memory slot has no companion field for an isSet bit to live in, so a slot whose
-type admits `nothing` marks `#undef` by a value of its own, the sentinel.)
+where it is potentially nullable, by a sentinel (pkg/front_end/lib/src/kernel/late_lowering.dart:522
+useSentinel, the useSentinelOrNull strategy, :549; computeIsSetEncoding :560, its
+useSentinelOrNull case :570) or a companion isSet field (useIsSetFieldOrNull, which dart2wasm
+selects: target.dart:565 supportsLateLoweringSentinel => false). Julia's `#undef` is one fact read
+by one rule (C1) wherever a pointer slot holds it: a Memory element, which has no companion field
+for an isSet bit to live in, a field `new` may leave unset and a Core.Box's contents. A companion
+isSet field per field and per Box beside the elements' mark would be a second encoding of that one
+fact, so every slot whose type admits `nothing` marks `#undef` by one value of its own, the
+sentinel.)
 """
 function undef_slot(@nospecialize(julia_type), @nospecialize(wasm_type))::Bool
     (wasm_type === AnyRef || wasm_type === EqRef || wasm_type === StructRef) || return false
@@ -70,15 +74,38 @@ The storage type of a slot (a Memory element, a field `new` may leave unset) of 
 `T`, whose own representation is `w`: a pointer slot whose type admits `nothing` is held in the
 any hierarchy, eqref for a concrete, array or i31 reference (S's own nullable reference holds the
 null and S's objects, never the undefined value), so `#undef` and `nothing` are two values
-(undef_slot); any other slot is `w`. A Nothing-admitting pointer slot whose representation is outside the any
-hierarchy (an externref, a funcref) has no place for the undefined value and raises.
+(undef_slot); any other slot is `w`. A Nothing-admitting pointer slot whose representation is an
+abstract reference outside the any hierarchy (an externref, a funcref: a Union{Nothing,Function})
+has no place for the undefined value: it keeps `w`, and every allocation, unset, test and read of
+its `#undef` rejects at its statement (_undef_unrepresentable!; dev/MARCH.md 13.17, A18E4). A
+concrete reference is taken for a struct or array type's (WT holds no Julia value in a typed
+function reference: a closure is its context struct), and a function type's would be refused
+where the slot's eqref is stored into (the builder's subtype check).
 parity(quarantine: as undef_slot.)
 """
 function undef_slot_storage(@nospecialize(T), w::Union{WasmValType,PackedType})::Union{WasmValType,PackedType}
     pointer_slot_admits_nothing(T) || return w
     (w === AnyRef || w === EqRef || w === StructRef) && return w
     (w isa ConcreteRef || w === ArrayRef || w === I31Ref) && return EqRef
-    error("a slot of $(T) holds `nothing` and `#undef`, but its representation $(w) is outside the any hierarchy, which alone holds the undefined value")
+    (w === ExternRef || w === FuncRef) && return w   # its `#undef` rejects where it is used
+    error("a pointer slot of $(T) is held in $(w), which is no reference")
+end
+
+"""
+    _undef_unrepresentable!(b, ctx, julia_type, w) -> Bool
+
+Whether a slot of `julia_type` held in `w` holds `nothing` and `#undef` where `w`, outside the any
+hierarchy (an externref, a funcref), has no undefined value to tell them apart
+(undef_slot_storage): the use of its `#undef` then rejects at its statement, a validating trap
+after it, and answers true.
+parity(quarantine: as undef_slot.)
+"""
+function _undef_unrepresentable!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(julia_type),
+                                 w::Union{WasmValType,PackedType})::Bool
+    (pointer_slot_admits_nothing(julia_type) && (w === ExternRef || w === FuncRef)) || return false
+    emit_unsupported_stub!(ctx, b, :unsupported_type,
+        "a slot of $(julia_type) holds `nothing` and `#undef`, but its representation $(w), a host reference, has no undefined value to tell them apart")
+    return true
 end
 
 """
@@ -107,6 +134,7 @@ parity(quarantine: as undef_slot.)
 function emit_undef!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(julia_type),
                      w::WasmValType)::InstrBuilder
     _wt_is_ref(w) || error("a slot of $(julia_type) held in $(w) is no reference and has no `#undef`")
+    _undef_unrepresentable!(b, ctx, julia_type, w) && return b
     undef_slot(julia_type, w) && return global_get!(b, undef_value_global!(ctx.mod, ctx.type_registry))
     w isa ConcreteRef ? ref_null!(b, Int64(w.type_idx)) : ref_null!(b, w)
     return b
@@ -148,6 +176,7 @@ parity(quarantine: as undef_slot.)
 function emit_is_unset!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(julia_type),
                         w::WasmValType)::InstrBuilder
     _wt_is_ref(w) || error("a slot of $(julia_type) held in $(w) is no reference and has no `#undef`")
+    _undef_unrepresentable!(b, ctx, julia_type, w) && return b
     if !pointer_slot(julia_type)
         drop!(b); i32_const!(b, 0)   # a pointer-free inline slot is always assigned
     elseif undef_slot(julia_type, w)
@@ -170,6 +199,7 @@ parity(quarantine: as undef_slot.)
 function emit_undef_read_check!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(julia_type),
                                 w::WasmValType)::InstrBuilder
     pointer_slot(julia_type) || return b
+    _undef_unrepresentable!(b, ctx, julia_type, w) && return b
     local v = UInt32(allocate_local!(ctx, w))
     local_tee!(b, v)
     emit_is_unset!(b, ctx, julia_type, w)
@@ -193,6 +223,7 @@ function emit_new_slots!(b::InstrBuilder, ctx::AbstractCompilationContext, arr_t
                          @nospecialize(elem_type))::InstrBuilder
     local def = ctx.mod.types[Int(arr_type_idx) + 1]
     def isa ArrayType || error("array type $arr_type_idx is no array")
+    _undef_unrepresentable!(b, ctx, elem_type, def.elem.valtype) && return b
     if !undef_slot(elem_type, def.elem.valtype)
         array_new_default!(b, arr_type_idx)
         return b
@@ -226,6 +257,7 @@ function emit_slots_undef_check!(b::InstrBuilder, ctx::AbstractCompilationContex
     def isa ArrayType || error("array type $arr_type_idx is no array")
     local w = def.elem.valtype
     (_wt_is_ref(w) && pointer_slot(elem_type)) || return b
+    _undef_unrepresentable!(b, ctx, elem_type, w) && return b
     local i = UInt32(allocate_local!(ctx, I32))
     i32_const!(b, 0); local_set!(b, i)
     local done = block!(b)

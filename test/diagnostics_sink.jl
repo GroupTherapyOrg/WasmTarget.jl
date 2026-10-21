@@ -48,7 +48,7 @@ _ds_bad3(x::Any) = Int64(x) + 3
 @testset "a compile inside another's hook, and after another's options, shares no state (R40)" begin
     local inner_bytes = UInt8[]
     m = WasmTarget.compile_module(Any[(_ds3_outer, (Int64,), "outer")];
-        link_roots=(lm, roots, _) -> (inner_bytes = WasmTarget.compile(_ds3_inner, (Int64,)); nothing))
+        link_roots=(lm, roots, _) -> (inner_bytes = WasmTarget.compile(_ds3_inner, (Int64,)); nothing), options=WasmTarget.options_from_env())
     @test !isempty(inner_bytes)
     # the outer ledger receives none of a rejected inner compile's diagnostics
     outer_sink = WasmTarget.WasmDiagnostic[]
@@ -71,7 +71,7 @@ _ds_bad3(x::Any) = Int64(x) + 3
                 WasmTarget.compile(_ds3_plain, (Int64,))
             end
             println(stderr, "--- the second compile")
-            WasmTarget.compile_module(Any[(_ds3_plain, (Int64,), "plain")])
+            WasmTarget.compile_module(Any[(_ds3_plain, (Int64,), "plain")]; options=WasmTarget.options_from_env())
         end
     end
     local log = read(log_path, String)

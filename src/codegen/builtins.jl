@@ -1019,8 +1019,14 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
     local _mrg_li = get(ctx.ssa_locals, idx, nothing)
     if !_wt_is_ref(_mrg_def.elem.valtype) && _mrg_li !== nothing &&
        _mrg_li - ctx.n_params + 1 in eachindex(ctx.locals) && _wt_is_ref(ctx.locals[_mrg_li - ctx.n_params + 1])
-        (elem_type isa DataType && isprimitivetype(elem_type)) ||
-            error("a numeric element of $(elem_type), which is no primitive class")
+        if !(elem_type isa DataType && isprimitivetype(elem_type))
+            # an element type held in a numeric register that is no primitive (an isbits union,
+            # find_common_wasm_type's register) names no class to box the value by
+            emit_unsupported_stub!(ctx, _mrgb, :unsupported_type,
+                "a Memory element of $(elem_type), held in a numeric register, read into a reference: no primitive class to box it by"; idx=idx)
+            append_builder!(fb, _mrgb)
+            return append_builder!(b, fb)
+        end
         coerce_stack_top!(_mrgb, ctx.locals[_mrg_li - ctx.n_params + 1], ctx; from_julia=elem_type)
     end
     append_builder!(fb, _mrgb)
@@ -2134,13 +2140,14 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         if obj_type === Core.Box && _mb_fld === :contents
             local _mb_ib = _ctx_builder(ctx, "compile_call")
             local _mb_ty = emit_value!(_mb_ib, obj_arg, ctx, static_wasm_type(obj_arg, ctx))  # the box family selects the projection
-            local _mb_idx = _mb_ty isa ConcreteRef ? _mb_ty.type_idx :
-                            UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            local _mb_idx = UInt32(get_box_type!(ctx.mod, ctx.type_registry, AnyRef))
+            _mb_ty isa ConcreteRef && _mb_ty.type_idx != _mb_idx &&
+                error("a Core.Box held in $(_mb_ty), which is no Box's reference")
             !(_mb_ty isa ConcreteRef) && ref_cast!(_mb_ib, Int64(_mb_idx), false)
-            local _mb_ft = ctx.mod.types[_mb_idx + 1].fields[2].valtype
+            local _mb_ft = AnyRef   # the one Box's contents (get_box_type!)
             struct_get!(_mb_ib, _mb_idx, UInt32(1))
             # a read of unset contents throws UndefRefError (Julia's null_pointer_check)
-            _wt_is_ref(_mb_ft) && emit_undef_read_check!(_mb_ib, ctx, Any, _mb_ft)
+            emit_undef_read_check!(_mb_ib, ctx, Any, _mb_ft)
             # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
             # unbox through the ONE funnel so declared and actual agree at the store.
             local _mb_jt = get(ctx.ssa_types, idx, Any)
@@ -2336,9 +2343,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 # P4-stdlib (SHA update!): the target pointer value is a
                 # storage-relative byte offset from the start of the ref's Memory:
                 # off0 * elsize, off0 read from the pair channel.
-                local _poo_el = obj_type isa DataType && length(obj_type.parameters) >= 1 ?
-                    (obj_type.name.name === :GenericMemoryRef && length(obj_type.parameters) >= 2 ?
-                     obj_type.parameters[2] : obj_type.parameters[1]) : nothing
+                local _poo_el = memoryref_eltype(obj_type)
                 local _poob = _ctx_builder(ctx, "compile_call")
                 if first(_memoryref_source(ctx, obj_arg)) !== :zero
                     _poo_el isa Type || error("a MemoryRef's ptr_or_offset needs the ref's element type; $obj_type has none")

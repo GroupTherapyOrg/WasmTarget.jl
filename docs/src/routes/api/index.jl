@@ -49,7 +49,7 @@
              unrelated functions in the same process and the per-call `Base` walk dominates."
         ),
         api_entry(
-            "optimize(bytes::Vector{UInt8}) -> Vector{UInt8}",
+            "optimize(bytes::Vector{UInt8}; level=:size, validate::Bool) -> Vector{UInt8}",
             "Run Binaryen `wasm-opt` on a previously-compiled module. Same effect as passing `optimize=true` to `compile`."
         ),
 

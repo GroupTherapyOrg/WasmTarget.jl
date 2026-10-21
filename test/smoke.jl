@@ -1956,9 +1956,26 @@ _g("nested_captor", Any[
 # (box_value_literal_phi: _sm_bump! inlines its argument's `s += 1` and returns its Int64 sum
 # under its `Any` result, boxed by the value's own class; it rejected located at that write until
 # the write through the argument joined the box)
+# A closure held in a constant global, its call inlined, writes through the constant
+# (`getfield(Main._SmCC, :s)`): the write joins the box of its closure type, so a read of that type
+# through an argument is not the world's Int64 join alone (dev/AUDIT.md A18C3: an illegal cast on
+# 0bc84e05, native 14)
+_sm_mkc(v) = (s = v; (y...) -> (isempty(y) || (s = y[1]); s))
+const _SmCC = _sm_mkc(1)
+@noinline _sm_mkn(n::Int64) = _sm_mkc(n)
+@noinline _sm_crd(c) = c()
+@noinline _sm_cwr(c, y) = c(y)
+function _sm_constcarrier(n::Int64)
+    h = _sm_mkn(n)
+    _sm_cwr(h, n + 1)
+    a = _sm_crd(h)::Int64
+    _SmCC(2.5)
+    return _sm_crd(_SmCC) isa Float64 ? a + 10 : a + 20
+end
 _g("inlined_captor", Any[
     ("write_through_argument", (n::Int64) -> (c = n; w = () -> (c = 2.5; nothing); _sm_callit(w); c isa Float64 ? 1 : 2), Int64(1)),
     ("box_value_literal_phi", _sm_boxlit, Int64(0)),
+    ("write_through_constant", _sm_constcarrier, Int64(3)),
 ])
 # A user primitive narrower than its i32 register keeps junk above its width until it is read:
 # its width is its own bits, 8*sizeof, for every primitive (dev/AUDIT.md A17E2: zext of an 8-bit
@@ -1985,6 +2002,11 @@ _g("narrow_primitive", Any[
     ("ashr_dirty_p40", (n::Int64) -> Core.Intrinsics.sext_int(Int64, Core.Intrinsics.ashr_int(Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0x000000fffffffff0), 1)), Int64(2)),
     ("ult_dirty_p40", (n::Int64) -> Core.Intrinsics.ult_int(Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0xffffff0000000000), Core.Intrinsics.trunc_int(_SmP40, UInt64(3))) ? 1 : 2, Int64(2)),
     ("egal_dirty_p40", (n::Int64) -> Core.Intrinsics.trunc_int(_SmP40, (n % UInt64) + 0x0000010000000000) === Core.Intrinsics.trunc_int(_SmP40, n % UInt64) ? 1 : 2, Int64(2)),
+    # into a 128-bit integer from a 40-bit one in an i64, by the one width rule (dev/AUDIT.md
+    # A18E2 (c), measured on 25e6a5b7: the sext answered 2, native 1; the zext of a dirty value
+    # 1099511627778, native 2)
+    ("sext128_p40", (n::Int64) -> Core.Intrinsics.slt_int(Core.Intrinsics.sext_int(Int128, Core.Intrinsics.trunc_int(_SmP40, n)), Int128(0)) ? 1 : 2, Int64(2)^40 - 2),
+    ("zext128_dirty_p40", (n::Int64) -> (p = Core.Intrinsics.trunc_int(_SmP40, n); Core.Intrinsics.trunc_int(Int64, Core.Intrinsics.zext_int(Int128, Core.Intrinsics.add_int(p, p)))), Int64(2)^39 + 1),
 ])
 # An erased nothing reaching a selector-dispatched `::Nothing` method, through the selector
 # caller's class read and the dispatch wrapper's argument (dev/AUDIT.md A17E3: the base trapped
@@ -2020,6 +2042,13 @@ mutable struct _SmUD; x::Union{Nothing,String}; _SmUD(x) = new(x); end
 # `#undef`
 struct _SmUP; s::String; end
 mutable struct _SmUF; a::Int64; p::Some{String}; _SmUF() = new(1); end
+# constants holding unset slots: a Dict's unoccupied reference slot, a Vector's and a Memory's
+# unset element are `#undef`, emitted by one rule (emit_constant_slots!)
+const _SmUDict = Dict{Int,Any}(1 => 2)
+const _SmUDictU = Dict{Int,Union{Nothing,String}}(1 => nothing)
+const _SmUVecA = let v = Vector{Any}(undef, 3); v[1] = 7; v[3] = nothing; v; end
+const _SmUVecS = let v = Vector{String}(undef, 2); v[2] = "ab"; v; end
+const _SmUMemA = let m = Memory{Any}(undef, 2); m[2] = 5; m; end
 _g("undef_slots", Any[
     ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
     ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
@@ -2054,7 +2083,7 @@ _g("undef_slots", Any[
     ("splat_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; length([v...]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("splat_assigned", (n::Int64) -> (v = Any[nothing, n]; w = [v...]; (isassigned(w, 1) ? 10 : 20) + (w[2] === n ? 1 : 2)), Int64(3)),
     # a splat behind a prefix, `[x, v...]`, and `Core.tuple(v...)` read each copied slot alike (on
-    # b6597d80 the prefixed splat of an unset slot answered isassigned 2 and length 3, native UndefRefError)
+    # 0ebf6352 the prefixed splat of an unset slot answered isassigned 2 and length 3, native UndefRefError)
     ("splat_prefix_any_unset_throws", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; try; isassigned([nothing, v...], 2) ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("splat_prefix_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; length(["x", v...]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("splat_prefix_assigned", (n::Int64) -> (v = ["ab", "c"]; w = ["x", v...]; ncodeunits(w[n - 1]) + length(w)), Int64(3)),
@@ -2083,6 +2112,23 @@ _g("undef_slots", Any[
     ("inline_ptr_field_set", (n::Int64) -> (m = _SmUF(); m.p = Some("abc"); (isdefined(m, :p) ? 10 : 20) + _sm_ulen(m.p.value)), Int64(3)),
     ("inline_ptr_grown_unset", (n::Int64) -> (v = [Some("a"), Some("b")]; resize!(v, 1); resize!(v, 2); (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
     ("inline_ptr_splat_unset_throws", (n::Int64) -> (v = Vector{Some{String}}(undef, 2); v[2] = Some("a"); try; length([v...]) + n; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    # a slot whose abstract type admits no `nothing` (Number) keeps its null as `#undef`
+    ("number_unset_read_throws", (n::Int64) -> (v = Vector{Number}(undef, 2); v[2] = n; try; _sm_ua_h(v[n - 2]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("number_isassigned", (n::Int64) -> (v = Vector{Number}(undef, 2); v[2] = n; (isassigned(v, 1) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    # a constant's unset slot (dev/AUDIT.md A18B3, measured on 0bc84e05: a Dict{Int,Any}'s unoccupied
+    # vals slot answered isassigned 1 and read `nothing`, native 2 and UndefRefError; a Vector
+    # constant with an unset slot raised an internal error and a Memory one rejected)
+    ("const_dict_vals_isassigned", (n::Int64) -> (isassigned(_SmUDict.vals, n) ? 1 : 2), Int64(findfirst(==(0x00), _SmUDict.slots))),
+    ("const_dict_vals_read_throws", (n::Int64) -> (try; _sm_ua_h(_SmUDict.vals[n]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(findfirst(==(0x00), _SmUDict.slots))),
+    ("const_dict_union_vals_isassigned", (n::Int64) -> (isassigned(_SmUDictU.vals, n) ? 1 : 2), Int64(findfirst(==(0x00), _SmUDictU.slots))),
+    ("const_dict_get", (n::Int64) -> (get(_SmUDict, n - 2, 0)::Int64), Int64(3)),
+    # (dev/AUDIT.md A18E3: 16 on 0bc84e05, native 1)
+    ("const_dict_vals_count_assigned", (n::Int64) -> count(i -> isassigned(_SmUDict.vals, i), eachindex(_SmUDict.vals)) + 0n, Int64(3)),
+    ("const_vector_isassigned", (n::Int64) -> ((isassigned(_SmUVecA, n - 1) ? 10 : 20) + (isassigned(_SmUVecA, n) ? 1 : 2)), Int64(3)),
+    ("const_vector_read_throws", (n::Int64) -> (try; _sm_ua_h(_SmUVecA[n - 1]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("const_vector_values", (n::Int64) -> ((_SmUVecA[n - 2]::Int64) + (_SmUVecA[n] === nothing ? 100 : 0)), Int64(3)),
+    ("const_vector_ref_read_throws", (n::Int64) -> (try; ncodeunits(_SmUVecS[n - 2]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("const_memory_unset", (n::Int64) -> ((isassigned(_SmUMemA, n - 2) ? 10 : 20) + (_SmUMemA[n - 1]::Int64)), Int64(3)),
 ])
 # A MemoryRef passed through `inferencebarrier`: memoryrefget and memoryrefset! read the element
 # type from the reference's own type (memoryref_eltype, never a guessed Int32 element, A17E1), and
@@ -2092,6 +2138,15 @@ _g("memoryref_barrier", Any[
     ("memoryrefget_erased_any", (n::Int64) -> (v = Any[n, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefget(r, :not_atomic, true) === n ? 1 : 2), Int64(3)),
     ("memoryrefget_erased_int", (n::Int64) -> (v = [n, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefget(r, :not_atomic, true) === n ? 1 : 2), Int64(3)),
     ("memoryrefset_erased_any", (n::Int64) -> (v = Any[1, 2]; r = Base.inferencebarrier(Core.memoryrefnew(v.ref.mem)); Core.memoryrefset!(r, n, :not_atomic, true); v[1] === n ? 1 : 2), Int64(3)),
+])
+# A pointer slot whose type admits `nothing` held in a host reference (a Union{Nothing,Function},
+# an externref) has no undefined value to tell `#undef` from `nothing`: its allocation rejects at
+# its statement (dev/AUDIT.md A18E4: an unlocated internal error at type registration on 0bc84e05;
+# the representation, anyref with the extern bridges, is on dev/MARCH.md 13.17)
+@noinline _sm_uh(x) = x === nothing ? 1 : 2
+_xf("undef_host_reference", Any[
+    ("function_union_isassigned", (n::Int64) -> (v = Vector{Union{Nothing,Function}}(undef, 2); v[1] = nothing; (isassigned(v, 1) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("function_union_unset_read_throws", (n::Int64) -> (v = Vector{Union{Nothing,Function}}(undef, 2); v[1] = nothing; try; _sm_uh(v[n - 1]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
 ])
 # A primitive type wider than any register (a 128-bit one that is no Int128) has no
 # representation: it rejects at its statement (dev/AUDIT.md A16B5: an unlocated error)

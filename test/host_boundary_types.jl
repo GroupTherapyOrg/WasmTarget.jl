@@ -68,7 +68,7 @@ _hbt_struct_caller(p::_HBTPoint) = _hbt_struct_stub(p)
             Any[(_hbt_caller, (Int64, Float64, WasmTarget.JSValue), "caller")];
             existing_module=mod,
             import_stubs=Any[(_hbt_stub, "stub", (Int64, Float64, WasmTarget.JSValue),
-                              idx, Nothing)])
+                              idx, Nothing)], options=HBT.options_from_env())
         @test unsaved_host_import_calls(m) == 0   # every call of the import saved and restored (L156)
         bytes = HBT.to_bytes(m)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
@@ -79,7 +79,7 @@ _hbt_struct_caller(p::_HBTPoint) = _hbt_struct_stub(p)
         idx = HBT.add_import!(mod, "host", "void_stub", HBT.WasmValType[], HBT.WasmValType[])
         m = HBT.compile_module(Any[(_hbt_void_caller, (), "void_caller")];
             existing_module=mod,
-            import_stubs=Any[(_hbt_void_stub, "void_stub", (), idx, Nothing)])
+            import_stubs=Any[(_hbt_void_stub, "void_stub", (), idx, Nothing)], options=HBT.options_from_env())
         @test unsaved_host_import_calls(m) == 0
         bytes = HBT.to_bytes(m)
         @test bytes[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]

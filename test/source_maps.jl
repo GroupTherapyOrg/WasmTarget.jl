@@ -59,7 +59,7 @@ end
 end
 
 @testset "source maps: a body's mappings are where its bytes are in the module" begin
-    mod = _SMT.compile_module([(_smt_entry, (Int64,), "_smt_entry")]; source_map_url="m.map")
+    mod = _SMT.compile_module([(_smt_entry, (Int64,), "_smt_entry")]; source_map_url="m.map", options=_SMT.options_from_env())
     bytes, json = _SMT.to_bytes_with_source_map(mod)
     segs = WasmRunner._source_map_segments(WasmRunner.JSON.parse(json)["mappings"])
     offsets = Set(s[1] for s in segs)
@@ -307,7 +307,7 @@ const _SMT_UNMAPPED_112 = Dict(
                                 ("code after a statement in its block", [(_smt_counter, (Int64,))], "_smt_counter"))
         # compiled with its source map and traced, so each function's CodeInfo is known
         trace = _SMT.StatementTrace(entry)
-        mod = _SMT.compile_module(fns; source_map_url="m.map", trace)
+        mod = _SMT.compile_module(fns; source_map_url="m.map", trace, options=_SMT.options_from_env())
         codes = Dict{UInt32,Core.CodeInfo}(idx => trace.codes[id] for (idx, id) in trace.ids)
         rows = _smt_coverage(mod, codes)
         @test count(r -> r.julia, rows) >= 1
@@ -324,17 +324,17 @@ const _SMT_UNMAPPED_112 = Dict(
         end
     end
     # the whole-body arms are present in the programs above
-    sel = _SMT.compile_module(_SMT_SEL; source_map_url="m.map")
+    sel = _SMT.compile_module(_SMT_SEL; source_map_url="m.map", options=_SMT.options_from_env())
     whole(f, needle) = length(f.mappings) == 2 && f.mappings[1].offset == 0 &&
                        occursin(needle, something(f.mappings[1].info).name) &&
                        f.mappings[2] == _SMT.SourceMapping(length(f.body), nothing)
     @test any(f -> f.name == "gf2" && whole(f, "gf2 @ "), sel.functions)
-    fin = _SMT.compile_module([(_smt_fin, (Int64,))]; source_map_url="m.map")
+    fin = _SMT.compile_module([(_smt_fin, (Int64,))]; source_map_url="m.map", options=_SMT.options_from_env())
     @test any(f -> startswith(f.name, "rethrow") && whole(f, "rethrow @ "), fin.functions)
 end
 
 @testset "source maps: a frame outside every statement names the function's definition" begin
-    mod = _SMT.compile_module([(_smt_tu, (Int64,))]; source_map_url="m.map")
+    mod = _SMT.compile_module([(_smt_tu, (Int64,))]; source_map_url="m.map", options=_SMT.options_from_env())
     bytes, mms, funcs = _smt_layout(mod)
     k = findfirst(f -> f.name == "_smt_tu", funcs)
     fn = mod.functions[k]
@@ -360,7 +360,7 @@ end
     ci, _ = _SMT.get_typed_ir(_smt_line, (Int64,))
     @test _smt_noloc(ci.debuginfo, length(ci.code)) && ci.code[end] isa Core.ReturnNode
     @test _SMT.stmt_source_info((; debuginfo=ci.debuginfo), length(ci.code)) === nothing
-    mod = _SMT.compile_module([(_smt_line, (Int64,))]; source_map_url="m.map")
+    mod = _SMT.compile_module([(_smt_line, (Int64,))]; source_map_url="m.map", options=_SMT.options_from_env())
     bytes, mms, funcs = _smt_layout(mod)
     k = findfirst(f -> f.name == "_smt_line", funcs)
     offs = [m.offset for m in mms]

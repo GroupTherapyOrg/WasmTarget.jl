@@ -7,11 +7,16 @@
 (* only the creator's Int64 while the writer captor stores a Float64; and  *)
 (* the key that reads `#self#` and an SSA carrier only                     *)
 (* (MCCaptureTypeArgumentCarrierBroken.cfg): a captor inlined into a       *)
-(* function taking it writes 2.5 through an argument, which joins nothing. *)
+(* function taking it writes 2.5 through an argument, which joins nothing; *)
+(* and the key that leaves out a constant carrier                          *)
+(* (MCCaptureTypeConstantCarrierBroken.cfg): a closure held in a constant  *)
+(* writes 2.5 through the constant, which joins nothing.                   *)
 EXTENDS CaptureType
 
 \* every operand kind keyed (the code: value_type over any carrier)
-MCKeyedAll == {"self", "ssa", "argument"}
+MCKeyedAll == {"self", "ssa", "argument", "constant"}
 \* the key before: `#self#` and an SSA value only
 MCKeyedSelfAndValue == {"self", "ssa"}
+\* the key before a constant carrier: every operand but a literal or a global
+MCKeyedNoConstant == {"self", "ssa", "argument"}
 =============================================================================

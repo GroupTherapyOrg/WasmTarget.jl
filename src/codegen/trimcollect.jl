@@ -736,8 +736,9 @@ _body_joins(numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}}, capture::_Captu
 
 """
 The classes WT's lowering instantiates with no `%new` in Julia's IR: the exceptions a lowered
-intrinsic (a DivideError, an InexactError), a MethodError arm, a bounds or type check and a
-rethrow at depth 0 throw (calls.jl, int128.jl, generate.jl), and the String a lowered
+intrinsic (a DivideError, an InexactError), a MethodError arm, a bounds or type check, a
+rethrow at depth 0 (calls.jl, int128.jl, generate.jl) and the `#undef` read check of a pointer
+slot (an UndefRefError, emit_undef_read_check!, undef.jl) throw, and the String a lowered
 ErrorException carries. A program holds one only through a `catch` (`the_exception`, typed `Any`,
 so no statement's type names it) or the exception stack (jl_current_exception, jl_get_excstack).
 The one list: compile.jl registers its exception structs before the numbering, and the one class
@@ -2262,20 +2263,12 @@ function _collect_reachable_ir_types(function_data, bespoke::IdDict{Core.MethodI
                     # then reports
                     reg!(Tuple{})
                 end
-                foreach(value!, node.operands)
-            elseif node isa NirInvoke || node isa NirForeignCall || node isa NirNoOp ||
-                   node isa NirUnsupported
-                foreach(value!, node.operands)
-            elseif node isa NirNew
-                value!(node.type_operand)
-                foreach(value!, node.operands)
-            elseif node isa NirLeave
-                foreach(value!, node.enters)
-            elseif node isa NirPopException
-                value!(node.enter)
-            elseif node isa NirLiteral || node isa NirGlobalRef
-                value!(node)                    # a statement that IS a value
             end
+            # the values a statement carries, read through the one operand table
+            # (nir_expr_operands: a call's `self` included, a %new's type operand), and a
+            # statement that IS a value
+            foreach(value!, nir_expr_operands(node))
+            (node isa NirLiteral || node isa NirGlobalRef) && value!(node)
         end
     end
     # every class of the one set is numbered, with its field types (reg!): a class a value may

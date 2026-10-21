@@ -111,7 +111,7 @@ end
     idx = WasmTarget.add_import!(mod, "host", "late", WasmTarget.WasmValType[WasmTarget.I64],
                                  WasmTarget.WasmValType[WasmTarget.I64])
     m = WasmTarget.compile_module(Any[(_hi_late_entry, (Int64,), "late_entry")];
-        existing_module=mod, import_stubs=Any[(_hi_late_import, "late", (Int64,), idx, Int64)])
+        existing_module=mod, import_stubs=Any[(_hi_late_import, "late", (Int64,), idx, Int64)], options=WasmTarget.options_from_env())
     # the import is called from a dispatch candidate's body, enrolled in a later round: every
     # call of it saves the top at its slot and restores it, as the export boundary's claim needs
     # (L156)
@@ -163,7 +163,7 @@ _hi_import_no_method(n::Int64) = (y = n > 0 ? n : _hi_int32_stub();
     idx = WasmTarget.add_import!(mod, "host", "int32_stub", WasmTarget.WasmValType[], WasmTarget.WasmValType[WasmTarget.I32])
     m = WasmTarget.compile_module(Any[(_hi_import_no_method, (Int64,), "_hi_import_no_method")];
                                   existing_module=mod,
-                                  import_stubs=Any[(_hi_int32_stub, "int32_stub", (), idx, Int32)])
+                                  import_stubs=Any[(_hi_int32_stub, "int32_stub", (), idx, Int32)], options=WasmTarget.options_from_env())
     @test unsaved_host_import_calls(m) == 0   # every call of the import saved and restored (L156)
     bytes = WasmTarget.to_bytes(m)
     imports = Dict{String,Any}("host" => Dict{String,Any}("int32_stub" => "() => 5"))

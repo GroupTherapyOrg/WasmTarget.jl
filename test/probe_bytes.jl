@@ -47,7 +47,7 @@ function main()
     non_dart_eh = String[]
     unnamed = String[]
     for (name, (f, argtypes)) in CASES
-        m = WasmTarget.compile_module([(f, argtypes, name)])
+        m = WasmTarget.compile_module([(f, argtypes, name)]; options=WasmTarget.options_from_env())
         bytes = WasmTarget.to_bytes(m)
         hashes[name] = bytes2hex(SHA.sha256(bytes))
         printed = read(pipeline(`wasm-tools print`; stdin=IOBuffer(bytes)), String)

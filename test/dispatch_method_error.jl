@@ -333,7 +333,7 @@ end
 # beside the declaration (a `-1` absent, `1 + arity`) could name another local (dev/AUDIT.md A17B1)
 _dme_box(n::Int64) = n + 1
 @testset "a box's scratch is the local declared for it (L173)" begin
-    local mod, reg, _, _ = WasmTarget.compile_module(Any[(_dme_box, (Int64,), "b")]; return_registries=true)
+    local mod, reg, _, _ = WasmTarget.compile_module(Any[(_dme_box, (Int64,), "b")]; return_registries=true, options=WasmTarget.options_from_env())
     local mk() = WasmTarget.InstrBuilder(WasmTarget.WasmValType[WasmTarget.AnyRef, WasmTarget.AnyRef],
                                          WasmTarget.WasmValType[WasmTarget.AnyRef]; func_name="box_scratch", mod=mod)
     local b = mk()

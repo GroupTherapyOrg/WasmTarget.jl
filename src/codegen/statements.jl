@@ -324,9 +324,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                 # different allocations; following into one constructor arm would
                 # invent a single backing identity.
                 local _mr_t = value_type(ctx, cur)
-                local _mr_el = _mr_t isa DataType && _mr_t.name.name === :GenericMemoryRef &&
-                               length(_mr_t.parameters) >= 2 ? _mr_t.parameters[2] :
-                               (_mr_t isa DataType && !isempty(_mr_t.parameters) ? _mr_t.parameters[1] : nothing)
+                local _mr_el = memoryref_eltype(_mr_t)
                 _mr_el in eltypes || return _fail("memoryrefnew-elty: $_mr_t", st)
                 return cur
             elseif call_fn === Core.getfield && length(st.operands) >= 2
@@ -334,9 +332,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                 if fld === :ptr_or_offset || fld === :ptr
                     owner = st.operands[1]
                     owner_type = value_type(ctx, owner)
-                    if owner_type isa DataType &&
-                       owner_type.name.name in (:MemoryRef, :GenericMemoryRef) &&
-                       owner isa NirSSA
+                    if memoryref_eltype(owner_type) !== nothing && owner isa NirSSA
                         # Normalize a MemoryRef pointer projection to its sibling
                         # `.mem` projection when present. Julia's layout branch forms
                         # both `mem.ptr + offset` and `ref.ptr_or_offset`; they denote
@@ -623,7 +619,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             1 <= local_array_idx <= length(ctx.locals) || error(
                 "GlobalRef SSA local has no declared Wasm type")
             coerce_stack_top!(b, ctx.locals[local_array_idx], ctx;
-                              from_julia=get(ctx.ssa_types, idx, typeof(val)))
+                              from_julia=ctx.ssa_types[idx])
             local_set!(b, local_idx)
         end
 
@@ -1052,13 +1048,13 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
     # MemoryRef/Memory construction — in WasmGC these are array refs, not structs.
     # :new(MemoryRef{T}, mem, ptr_or_offset) → just pass through the mem (array ref).
     # :new(Memory{T}, ...) → emit ref.null of the array type (Memory is backing storage).
-    if struct_type isa DataType && struct_type.name.name in (:MemoryRef, :GenericMemoryRef)
+    if memoryref_eltype(struct_type) !== nothing
         # MemoryRef{T} — field_values[1] is the Memory (= our array ref), field_values[2] is offset
         if length(field_values) >= 1
             emit_value!(b, field_values[1], ctx,
                         static_wasm_type(field_values[1], ctx))
         else
-            elem_type = struct_type.name.name === :GenericMemoryRef ? struct_type.parameters[2] : struct_type.parameters[1]
+            elem_type = memoryref_eltype(struct_type)
             array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
             ref_null!(b, Int64(array_type_idx))
         end

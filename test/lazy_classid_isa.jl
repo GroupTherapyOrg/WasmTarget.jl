@@ -75,3 +75,20 @@ end
     @test_throws ErrorException WasmTarget.ensure_type_id!(fresh, LazyClassIdIsa.L1)
     @test WasmTarget.get_type_id(fresh, LazyClassIdIsa.L1) == 0   # confirms no id was allocated
 end
+
+# A capturing closure held in a constant and called as an :invoke's callee is a value the call
+# carries, its `self` (nir_expr_operands): the numbering walk reads the one operand table, so the
+# closure's class is numbered from the statement alone, with no class set behind it (dev/AUDIT.md
+# A18C4: the walk read `node.operands`, which omit `self`)
+const _LCI_SELF = let x = Ref(3); @noinline (y::Int64) -> x[] + y; end
+_lci_self_call(n::Int64) = _LCI_SELF(n)
+@testset "the numbering walk reads a call's operands through the one table, its self included" begin
+    local ci, rt = WasmTarget.get_typed_ir(_lci_self_call, (Int64,))
+    local body = WasmTarget.nir_body(ci)
+    @test any(s -> s.node isa WasmTarget.NirInvoke, body.stmts)   # the callee is a constant self
+    local fd = Any[(_lci_self_call, (Int64,), "self_call", ci, rt, Set{Int}(), false, body, nothing)]
+    local out = WasmTarget._collect_reachable_ir_types(fd, IdDict{Core.MethodInstance,Function}(),
+        WasmTarget.ClosedWorldClasses(Set{DataType}(), Set{DataType}()))
+    @test typeof(_LCI_SELF) in out
+    @test Base.RefValue{Int64} in out   # its captured field's class, walked with it
+end

@@ -1187,8 +1187,10 @@ ordered_type_constants(registry::TypeRegistry)::Vector{<:Pair} =
 """
     registry_order_key(registry) -> (T -> type_order_key(T))
 
-The type order key of this compile, each type printed once: every ordered walk of a registry map
-reads it, so a compile prints a type at most once instead of once per walk.
+The type order key of this compile's registry walks, each type printed once per registry: every
+ordered walk of a registry map reads it instead of printing the key once per walk. The
+collector's class list and candidates (closed_world_class_list, class_candidates, trimcollect.jl)
+print their own keys, once per call (dev/MARCH.md 13.17, A18C2).
 parity(quarantine: the program-derived order key for identity-hashed keys, see type_order_key.)
 """
 registry_order_key(registry::TypeRegistry)::Function =
@@ -3069,10 +3071,10 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         # P6-trim: CodeUnits{UInt8,String} ≡ the byte array (identity wrapper).
         type_idx = get_string_array_type!(mod, registry)
         return ConcreteRef(type_idx, true)
-    elseif T isa DataType && (T.name.name === :MemoryRef || T.name.name === :GenericMemoryRef)
+    elseif memoryref_eltype(T) !== nothing
         # MemoryRef{T} / GenericMemoryRef maps to array type for element T
         # IMPORTANT: Check BEFORE AbstractArray since MemoryRef <: AbstractArray
-        elem_type = T.name.name === :GenericMemoryRef ? T.parameters[2] : T.parameters[1]
+        elem_type = memoryref_eltype(T)
         type_idx = get_array_type!(mod, registry, elem_type)
         return ConcreteRef(type_idx, true)
     elseif for_local && T isa UnionAll && T <: Base.GenericMemoryRef

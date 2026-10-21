@@ -148,7 +148,8 @@ end
 
 What the one compile entry (`_compile`) returns: the module's bytes; its source map, for a
 compile with a `source_map_url`, else `nothing`; the registries a framework reads back
-(`return_registries`), else `nothing`; and a traced compile's record (`trace`), else `nothing`.
+(`return_registries`), else `nothing`; a traced compile's record (`trace`), else `nothing`; and
+the options the compile read and used (`options`), which a post-pass over its bytes reads.
 Each exported entry projects the part its callers take.
 parity(pkg/dart2wasm/lib/compile.dart:88 CodegenResult)
 """
@@ -157,13 +158,14 @@ struct CompileResult
     source_map::Union{Nothing,String}
     registries::Union{Nothing,Tuple{TypeRegistry,FunctionRegistry,DispatchTableRegistry}}
     trace::Union{Nothing,StatementTrace}
+    options::CompilerOptions
 end
 
 """
     _compile(functions; keywords...) -> CompileResult
 
 The one compile entry: every exported entry (compile, compile_multi, compile_with_sourcemap,
-compile_multi_with_sourcemap, compile_with_statement_trace) is one call of it, projecting its
+compile_multi_with_sourcemap, compile_with_statement_trace, compile_with_base) is one call of it, projecting its
 result. It reads the environment's options once and hands them, with the caller's diagnostics
 ledger (`diagnostics_sink`, as dart's diagnostics handler is a parameter of its one entry), to the
 compile's Translator, collects and compiles the closed world
@@ -194,7 +196,8 @@ function _compile(functions::Vector; optimize::Union{Bool,Symbol}=false, validat
     # the wasm-tools cross-check: the caller's `validate`, else the options' (WT_VALIDATE)
     local bytes, source_map = _emit_module(result[1]; optimize, validate=something(validate, options.validate),
                                            class_names=_class_names(result[2]))
-    return CompileResult(bytes, source_map, return_registries ? (result[2], result[3], result[4]) : nothing, trace)
+    return CompileResult(bytes, source_map, return_registries ? (result[2], result[3], result[4]) : nothing, trace,
+                         options)
 end
 
 """
@@ -334,7 +337,7 @@ const WASM_MERGE_GC_FLAGS = [
 ]
 
 """
-    compile_with_base(functions; base_wasm_path, optimize=false) -> Vector{UInt8}
+    compile_with_base(functions; base_wasm_path, optimize=false, validate) -> Vector{UInt8}
 
 Compile user functions and merge with a pre-compiled base.wasm module.
 User functions that would normally be compiled standalone are instead compiled
@@ -347,6 +350,8 @@ can call base functions directly.
 - `functions`: Same format as `compile_multi` — `[(f, arg_types, name), ...]`
 - `base_wasm_path`: Path to pre-compiled base.wasm (default: base.wasm in project root)
 - `optimize`: Same as compile() — false, true, :speed, or :debug
+- `validate`: the wasm-tools cross-check of the user module and, after `optimize`, of the merged
+  module: given, it decides; unset, the options the compile read (`CompileResult.options`)
 
 # Returns
 Merged `Vector{UInt8}` containing both base and user functions.
@@ -354,7 +359,7 @@ parity(quarantine: WT links a prebuilt base module into a host framework's modul
 """
 function compile_with_base(functions::Vector;
                            base_wasm_path::String=joinpath(@__DIR__, "..", "base.wasm"),
-                           optimize=false)::Vector{UInt8}
+                           optimize=false, validate::Union{Nothing,Bool}=nothing)::Vector{UInt8}
     # Check tools
     wasm_merge = Sys.which("wasm-merge")
     if wasm_merge === nothing
@@ -365,8 +370,9 @@ function compile_with_base(functions::Vector;
         error("base.wasm not found at $base_wasm_path; pass `base_wasm_path` to an existing module")
     end
 
-    # Compile user functions
-    user_bytes = compile_multi(functions)
+    # Compile user functions: one call of the one entry, whose options the post-pass reads
+    local r = _compile(functions; validate)
+    local user_bytes = r.bytes
 
     # Merge with base.wasm
     mktempdir() do dir
@@ -385,7 +391,7 @@ function compile_with_base(functions::Vector;
 
         if optimize !== false
             level = optimize === true ? :size : optimize
-            return WasmTarget.optimize(merged_bytes; level=level)
+            return WasmTarget.optimize(merged_bytes; level=level, validate=something(validate, r.options.validate))
         end
         return merged_bytes
     end
@@ -424,15 +430,16 @@ const WASM_OPT_PRODUCTION_FLAGS = [
 _binaryen_worker_count(is_windows::Bool=Sys.iswindows()) = is_windows ? "1" : nothing
 
 """
-    optimize(bytes::Vector{UInt8}; level=:size, validate) -> Vector{UInt8}
+    optimize(bytes::Vector{UInt8}; level=:size, validate::Bool) -> Vector{UInt8}
 
 Run Binaryen `wasm-opt` on compiled WebAssembly bytes for size and performance optimization.
 Uses dart2wasm's production WasmGC flags by default.
 
 # Keywords
 - `level`: Optimization level — `:size` (default, `-Os` like dart2wasm), `:speed` (`-O3`), or `:debug` (`-O1`, no `--traps-never-happen`)
-- `validate`: Run `wasm-tools validate` after optimization (default: the options' `validate`,
-  `WT_VALIDATE=1`, options_from_env)
+- `validate`: Run `wasm-tools validate` after optimization, required: `optimize` reads no options,
+  so its caller states it (a compile entry passes its options' `validate`, a test
+  the `validate` of its options_from_env)
 
 # Returns
 Optimized `Vector{UInt8}`.
@@ -442,9 +449,8 @@ Optimized `Vector{UInt8}`.
 
 parity(compile.dart:711 _runOptPhase)
 """
-function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Union{Nothing,Bool}=nothing)::Vector{UInt8}
-    return first(_run_wasm_opt(bytes, nothing, nothing; level=level,
-                               validate=something(validate, options_from_env().validate)))
+function optimize(bytes::Vector{UInt8}; level::Symbol=:size, validate::Bool)::Vector{UInt8}
+    return first(_run_wasm_opt(bytes, nothing, nothing; level=level, validate=validate))
 end
 
 """
