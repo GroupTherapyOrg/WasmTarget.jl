@@ -24,10 +24,11 @@
 #       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
 #       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
-#       commit with no `Charter:` line, or one that changes dev/CHARTER.md without a
-#       `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation
-#       (CHARTER_AUTHORISED) whose clause holds every changed line (an edit that changes only MARCH
-#       row numbers, the citations L154 forces, is exempt and named); starts this tree's warm
+#       commit with no `Charter:` line, or one that changes dev/CHARTER.md other than exactly as
+#       the maintainer authorised it (its `Charter-change: <clause> authorised by Dale <date>` line,
+#       the change's parent and new blobs listed with that clause and date in the main tree's
+#       charter_authorised, every changed line in that clause; an edit only adding MARCH row numbers
+#       to a Planned citation, as L154 forces, is exempt and named); starts this tree's warm
 #       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a run with no verdict
 #       once more after 20 s, a red stops the landing with its record standing); lands through
 #       `dev/land.sh merge`, the one landing path, on a green run, a cold one included (its checks
@@ -58,9 +59,29 @@ MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
 MAIN=$(git worktree list --porcelain | awk -v b="branch refs/heads/$MARCH" '/^worktree / { w = substr($0, 10) } $0 == b && m == "" { m = w } END { print m }')
 [ -n "$MAIN" ] || MAIN=$(git rev-parse --show-toplevel)
 WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
-# the standing authorisations of a dev/CHARTER.md change, `<clause>:<date>` (dev/CHARTER.md
-# changes only at Dale's direction: Dale authorised C10's speed checks on 2026-10-21)
-CHARTER_AUTHORISED="C10:2026-10-21"
+# a dev/CHARTER.md change lands only as an exact change the maintainer authorised (A21E6): the main
+# tree's git-ignored charter_authorised, written after review and never by a landing commit, one line
+# per change, "<parent blob> <new blob> <clause> <date>"
+AUTHORISED="$MAIN/dev/.block/charter_authorised"
+# the clause each line of a dev/CHARTER.md text sits in: `- **C<n> ` opens clause n, a line that does
+# not start with a space closes it ("-": no clause)
+CLAUSE_AWK='/^- \*\*C[0-9]+ / { c = $2; sub(/^\*\*/, "", c); print c; next } /^ / && c != "" { print c; next } { c = ""; print "-" }'
+# the clauses a `git diff -U0` touches: a hunk's removed lines in the parent's clause map (O), its
+# added lines in the commit's (N)
+HUNK_AWK='BEGIN { while ((getline l < O) > 0) o[++i] = l; while ((getline l < N) > 0) n[++j] = l }
+/^@@ / { split(substr($2, 2), a, ","); split(substr($3, 2), b, ",")
+         oc = (2 in a) ? a[2] : 1; nc = (2 in b) ? b[2] : 1
+         for (k = a[1]; k < a[1] + oc; k++) print ((k in o) ? o[k] : "-")
+         for (k = b[1]; k < b[1] + nc; k++) print ((k in n) ? n[k] : "-") }'
+# over a word diff (--word-diff=porcelain): "yes" when it only adds MARCH row numbers (13.<n>, an
+# added "and"): every changed word a row number, none removed that is not added back
+EXEMPT_AWK='/^(\+\+\+|---) / { next }
+/^[-+]/ { sign = substr($0, 1, 1); n = split(substr($0, 2), w, /[ \t]+/)
+          for (x = 1; x <= n; x++) { t = w[x]; if (t == "") continue
+              if (t == "and" && sign == "+") continue
+              if (t !~ /^13\.[0-9]+[,;.]?$/) { bad = 1; continue }
+              sub(/[,;.]$/, "", t); if (sign == "-") rem[t]++; else add[t]++ } }
+END { for (t in rem) if (rem[t] > add[t]) bad = 1; print (bad ? "no" : "yes") }'
 LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
@@ -269,42 +290,31 @@ land)
     fi
     step rebase
     [ -n "$(git rev-list "$tip..HEAD")" ] || { echo "land: $br holds nothing $MARCH lacks — refusing"; exit 1; }
-    # the clause each line of dev/CHARTER.md at a revision sits in: `- **C<n> ` opens clause n, a
-    # line that does not start with a space closes it ("-": no clause)
-    clauses_at() { git show "$1:dev/CHARTER.md" 2>/dev/null |
-        awk '/^- \*\*C[0-9]+ / { c = $2; sub(/^\*\*/, "", c); print c; next } /^ / && c != "" { print c; next } { c = ""; print "-" }'; }
     for h in $(git rev-list --reverse --no-merges "$tip..HEAD"); do
         msg=$(git log -1 --format=%B "$h"); what=$(git log -1 --format='%h %s' "$h")
         printf '%s\n' "$msg" | grep -qE '^Charter: C[0-9]+' || { echo "land: $what has no 'Charter: C<n>' line — refusing"; exit 1; }
         git diff --quiet "$h^" "$h" -- dev/CHARTER.md && continue
-        # an edit changing only MARCH row numbers (13.<n>), the Planned citations L154 forces, is exempt
-        other=$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' "$h^" "$h" -- dev/CHARTER.md |
-                grep -E '^[-+]' | grep -vE '^(\+\+\+|---) ' | cut -c2- | tr -s ' \t' '\n\n' | grep -v '^$' |
-                grep -cvE '^(13\.[0-9]+[,;.]?|and)$' || true)
-        if [ "$other" = 0 ]; then echo "land: $what changes only dev/CHARTER.md's MARCH row numbers (L154's citations): exempt"; continue; fi
-        allowed=""
-        for a in $(printf '%s\n' "$msg" | sed -n 's/^Charter-change: \(C[0-9][0-9]*\) authorised by Dale \([0-9-]*\)$/\1:\2/p'); do
-            case " $CHARTER_AUTHORISED " in
-            *" $a "*) allowed="$allowed ${a%%:*}" ;;
-            *) echo "land: $what: 'Charter-change: ${a%%:*} authorised by Dale ${a#*:}' is no standing authorisation ($CHARTER_AUTHORISED) — refusing"; exit 1 ;;
-            esac
-        done
-        [ -n "$allowed" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: <clause> authorised by Dale <date>' line — refusing"; exit 1; }
-        old=$(mktemp); new=$(mktemp); clauses_at "$h^" > "$old"; clauses_at "$h" > "$new"
-        # the clauses the diff's lines sit in: a hunk's removed lines in the parent, its added lines in the commit
-        for c in $(git diff -U0 "$h^" "$h" -- dev/CHARTER.md | awk -v O="$old" -v N="$new" '
-                BEGIN { while ((getline l < O) > 0) o[++i] = l; while ((getline l < N) > 0) n[++j] = l }
-                /^@@ / { split(substr($2, 2), a, ","); split(substr($3, 2), b, ",")
-                         oc = (2 in a) ? a[2] : 1; nc = (2 in b) ? b[2] : 1
-                         for (k = a[1]; k < a[1] + oc; k++) print ((k in o) ? o[k] : "-")
-                         for (k = b[1]; k < b[1] + nc; k++) print ((k in n) ? n[k] : "-") }' | sort -u); do
-            case " $allowed " in
-            *" $c "*) ;;
-            *) echo "land: $what changes dev/CHARTER.md $([ "$c" = - ] && echo "outside any clause" || echo "in $c"), which its Charter-change line (${allowed# }) does not authorise — refusing"; exit 1 ;;
-            esac
+        # an edit only adding MARCH row numbers (13.<n>) to a Planned citation, as L154 forces, is exempt
+        if [ "$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' "$h^" "$h" -- dev/CHARTER.md | awk "$EXEMPT_AWK")" = yes ]; then
+            echo "land: $what only adds MARCH row numbers to dev/CHARTER.md's Planned citations (L154): exempt"; continue
+        fi
+        # any other change lands only as the exact change the maintainer authorised: its message names the
+        # clause and the authorisation, and the main tree's charter_authorised lists the change's parent
+        # and new dev/CHARTER.md blobs with that clause and date (written there after review, never by a
+        # landing commit), and every changed line lies in that clause
+        a=$(printf '%s\n' "$msg" | sed -n 's/^Charter-change: \(C[0-9][0-9]*\) authorised by Dale \([0-9-]*\)$/\1 \2/p' | head -1)
+        [ -n "$a" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: <clause> authorised by Dale <date>' line — refusing"; exit 1; }
+        ob=$(git rev-parse "$h^:dev/CHARTER.md"); nb=$(git rev-parse "$h:dev/CHARTER.md")
+        grep -qx "$ob $nb $a" "$AUTHORISED" 2>/dev/null ||
+            { echo "land: $what's dev/CHARTER.md change ($ob → $nb) is not one the maintainer authorised: after review, in the main tree: echo '$ob $nb $a' >> dev/.block/charter_authorised — refusing"; exit 1; }
+        old=$(mktemp); new=$(mktemp)
+        git show "$h^:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$old"; git show "$h:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$new"
+        for c in $(git diff -U0 "$h^" "$h" -- dev/CHARTER.md | awk -v O="$old" -v N="$new" "$HUNK_AWK" | sort -u); do
+            [ "$c" = "${a%% *}" ] ||
+                { echo "land: $what changes dev/CHARTER.md $([ "$c" = - ] && echo "outside any clause" || echo "in $c"), outside ${a%% *}, the clause authorised — refusing"; exit 1; }
         done
         rm -f "$old" "$new"
-        echo "land: $what changes dev/CHARTER.md inside$allowed, a standing authorisation"
+        echo "land: $what changes dev/CHARTER.md inside ${a%% *} exactly as authorised ($ob → $nb)"
     done
     step checks
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
@@ -363,6 +373,7 @@ land)
             field() { [ -f "$rec" ] && sed -n "s/^$1 = \[\(.*\)\]\$/\1/p" "$rec" | tr -d '",' || true; }
             case $st in
             0) if [ -f "$rec" ] && grep -qx 'timing = "judged"' "$rec"; then verdict_t=judged; break; fi
+               verdict_t=$(sed -n 's/^timing = "\(.*\)"$/\1/p' "$rec"); verdict_t=${verdict_t:-unjudged}
                grep -q '^BLOCK green (timing unjudged: the run was cold' "$glog" || break ;;
             1) # FAILED for a check other than the ratchet's (the cold run judged the same tree's checks);
                # otherwise the timing missed under the cap, SLOWER (a best) and OVER (a budget)
@@ -390,7 +401,7 @@ land)
     # counted until one whose commit's tree has a green run with its timing judged recorded in any
     # worktree (`bash dev/gate.sh --block --warm` on a quiet machine judges it)
     unjudged=0
-    for c in $(awk -F'\t' 'NR > 1 { s = ($11 == "unjudged") ? $2 " " s : "" } END { print s }' "$LOG"); do
+    for c in $(awk -F'\t' 'NR > 1 { s = ($11 ~ /^unjudged/) ? $2 " " s : "" } END { print s }' "$LOG"); do
         t=$(git rev-parse "$c^{tree}"); judged=0
         for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
             for f in "$w/dev/.block/$t"-*.toml; do

@@ -541,21 +541,18 @@ median(v) = (c = sort(v); isempty(c) ? NaN : c[(length(c) + 1) ÷ 2])
 # ---- the decisions (L195 runs them) -------------------------------------------------------------
 # the machine's slowdown factor: the calibration's median over its best, 1 at best, never below
 machine_factor(calib, best_calib) = isnan(best_calib) || isnan(calib) || best_calib <= 0 ? 1.0 : max(1.0, calib / best_calib)
-# the run's verdict: red when a check fails; no verdict when the machine cannot judge (its tools,
-# a tree changed during the run); green when the run was cold and its checks pass, its timing
-# unjudged (a cold run measures compiling the change, so neither its budgets nor its bests are
-# judged: `dev/land.sh land` lands on it and judges the timing by a warm run of the landed tree right
-# after, under its hold); a budget or a best
-# exceeded on a busy machine (its 1-minute load above the machine's CPUs at the run's start or end,
-# the rule a best is recorded under) is no verdict either, a load reason, which the calibration
-# measured in this process understates (a red run stands only for a reason of the change's, A19P2);
-# red when a budget or a best is exceeded on a machine that was not busy; green otherwise
-run_verdict(fails, tfails, efails, cold, busy) =
-    !isempty(fails) ? "red" : !isempty(efails) ? "none" : cold ? "green" : !isempty(tfails) ? (busy ? "none" : "red") : "green"
-# the timing failures a run is judged on: the budgets missed (literal walls, at any factor) and, on a
-# machine at most FACTOR_CAP times slower than its best, the stages slower than their bests; past the
-# cap (`capped`) the slower ones are unjudged, never failures and never passes; a cold run's none
-timing_failures(tfails, sfails, capped, cold) = cold ? String[] : capped ? tfails : vcat(tfails, sfails)
+# the run's verdict: red when a check fails; no verdict only when the machine cannot judge for a
+# reason of its tools or the tree (a tool missing, the tree changed during the run), never for load;
+# green when the run was cold or past the factor cap and its checks pass, its timing unjudged (a cold
+# run measures compiling the change; past the cap the machine's times say nothing of the change's,
+# its missed budgets included: `dev/land.sh land` lands on it, judges a cold landing's timing by a
+# warm run right after, and prints the unjudged streak, L198); red when a budget or a best is missed
+# on a run neither cold nor past the cap; green otherwise
+run_verdict(fails, tfails, efails, cold) =
+    !isempty(fails) ? "red" : !isempty(efails) ? "none" : cold ? "green" : !isempty(tfails) ? "red" : "green"
+# the timing failures a run is judged on: every budget and best missed, none on a cold run or one past
+# the cap (its timing unjudged, the budgets it missed named in its timing)
+timing_failures(tfails, sfails, capped, cold) = cold || capped ? String[] : vcat(tfails, sfails)
 # a stage's scaled time slower than its best by more than 15% and more than 0.3 s
 slower(scaled, best) = !isnan(best) && scaled > best * (1 + SLOWER_FRACTION) && scaled - best > SLOWER_SECONDS
 # the timing a change is judged by, against its base's (L195 runs it): every budget and best the base
@@ -770,7 +767,6 @@ function main(args)
     # the machine's CPUs, every core the load average counts (Sys.CPU_THREADS is Julia's own count, 4 inside
     # the runner on this 10-core machine, so the machine's working floor read as busy)
     cpus = length(Sys.cpu_info())
-    busy = max(loadavg[1], loadavg_end[1]) > cpus
     quiet = loadavg[1] <= cpus
     updating && !quiet && (updating = false; push!(notes, "WT_TIMING_UPDATE: refused, the machine is busy (load $(loadavg[1]) on $cpus CPUs): a best is measured on a quiet one"))
     if updating && !isnan(fastest) && (isnan(bcal) || fastest < bcal)
@@ -910,13 +906,16 @@ function main(args)
     occursin("Precompiling", read(ld.log, String)) && pushfirst!(rstates, "cold (the load stage built the package image)")
     cold = any(startswith("cold"), rstates)
     runner_state = cold ? first(filter(startswith("cold"), rstates)) : isempty(runner) ? "fresh" : "warm"
-    capped && !cold && append!(notes, "timing unjudged: " .* sfails)
+    capped && !cold && append!(notes, "timing unjudged, past the cap: " .* vcat(tfails, sfails))
     cold && append!(notes, "timing unjudged, the run was cold: " .* vcat(tfails, sfails))
     judged_tfails = timing_failures(tfails, sfails, capped, cold)
-    # a budget missed past the cap is the machine's reason, never the change's (a red stands only for the
-    # change's, A19P2): no verdict, as on a busy machine; under the cap it is red
-    verdict = run_verdict(fails, judged_tfails, efails, cold, busy || capped)
-    timing = capped || cold ? "unjudged" : "judged"
+    verdict = run_verdict(fails, judged_tfails, efails, cold)
+    # the timing and why it is unjudged: a cold run, or a run past the cap with the budgets it missed
+    # (each stage and its wall), a missed budget there the machine's by the cap's definition
+    budget_missed = [string(m[1], " ", m[2]) for m in (match(r"^([a-z0-9.-]+): ([0-9.]+) s of wall", f) for f in tfails) if m !== nothing]
+    timing = cold ? "unjudged (cold)" :
+             capped ? "unjudged ($(isempty(budget_missed) ? "" : "budget " * join(budget_missed, " ") * " ")past cap, factor $(round(factor; digits = 2)))" :
+             "judged"
     # the stages whose timing failed (over a budget or slower than a best), by name: `dev/land.sh land`
     # writes them into the landing log when its warm run after a cold landing is red
     timing_failed = sort(unique(String[first(split(f, ':')) for f in judged_tfails]))
@@ -927,9 +926,8 @@ function main(args)
     timing_over = capped || cold ? String[] : sort(unique(stagename.(tfails)))
     timing_slower = capped || cold ? String[] : sort(unique(stagename.(sfails)))
     why = verdict == "green" ? (cold ? "timing unjudged: the run was $runner_state" :
-                                capped ? "timing unjudged: machine factor $(round(factor; digits = 2)) past the cap of $FACTOR_CAP" : "") : verdict == "red" ? (isempty(fails) ? "over a budget or slower than a best" : "a check fails") :
-          !isempty(efails) ? "the machine cannot judge" : cold ? "the run was $runner_state: rerun" :
-          "over a budget on a machine $(capped ? "$(round(factor; digits = 2)) times slower than its best, past the cap of $FACTOR_CAP" : "busy") (load $(loadavg[1]), then $(loadavg_end[1]), on $cpus CPUs): rerun on a quieter one"
+                                capped ? "timing $timing" : "") : verdict == "red" ? (isempty(fails) ? "over a budget or slower than a best" : "a check fails") :
+          "the machine cannot judge"
     green = verdict == "green"
     j113 = try readchomp(`julia +1.13 --startup-file=no -e 'print(VERSION)'`) catch; "" end
     isempty(smoke113) && push!(notes, "smoke-1.13: the change adds no smoke case and changes no file with 1.13 groups, so no 1.13 stage (the full run's smoke-1.13 is non-blocking)")
