@@ -862,7 +862,14 @@ function _nir_any_operand(p, node::NirNode)::Bool
     node isa NirPopException && return _r(node.enter)
     node isa NirNoOp && return any(_r, node.operands)
     node isa NirUnsupported && return any(_r, node.operands)
-    return false
+    # the kinds that read no operand: a value or a reference to one, a jump, a region's entry,
+    # the exception, a bounds-check flag and a newvar
+    (node isa NirSSA || node isa NirArgument || node isa NirSlot || node isa NirGlobalRef ||
+     node isa NirLiteral || node isa NirGoto || node isa NirEnter || node isa NirTheException ||
+     node isa NirBoundscheck || node isa NirNewvar) && return false
+    # a kind this table does not name has operands it cannot see: loud, never "reads nothing",
+    # which would hide a use from the use index (MARCH 13.20)
+    throw(ArgumentError("_nir_any_operand: the node kind $(typeof(node)) has no entry in the operand table"))
 end
 
 # every SSA id `node` uses, transitively (the ids nir_uses answers true for), duplicates kept
