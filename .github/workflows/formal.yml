@@ -1,9 +1,13 @@
 name: Formal models
 on:
   push:
-    # not march/**: a landed head runs gate.yml's every TLC instance (dev/CHARTER.md C10)
-    branches: [main]
-  pull_request:
+    # the full matrix's triggers (gate.yml; Dale 2026-10-21: large-scale runs only when a full clause is
+    # closed out): a march/** head whose commit carries a `Closes: C<n>` line, a gate/** push (PR #122's
+    # merge head, `bash dev/gate.sh`) and a dispatch; a plain march/** push, a landing, runs nothing.
+    # Every job with no `needs:` runs only under the closure predicate, gate.yml's run-name's and closure
+    # job's text (L153); the pull request, whose branch every landing pushes, triggers nothing (A23E4)
+    branches: ['gate/**', 'march/**']
+  workflow_dispatch:
   schedule:
     - cron: '17 3 * * *'   # nightly: the same harness plus dev/formal/nightly (instances too large for a 20-minute gate)
 # Only the newest push per branch runs; a superseded run is cancelled.
@@ -13,6 +17,8 @@ concurrency:
 
 jobs:
   tlc:
+    if: >-
+      ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ github.event_name == 'schedule' && 300 || 20 }}
     # A push checks every instance, split over three runners (run_tlc.sh TLC_SHARD); the

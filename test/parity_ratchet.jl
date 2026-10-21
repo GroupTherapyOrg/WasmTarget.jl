@@ -3458,7 +3458,7 @@ const LOCKS = [
                  occursin("@test calls[] == 0", oip) && occursin("@test queries[] == 0", oip) ? 0 : 1
             n
         end),
-    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a march/** push whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** or march/** push or workflow_dispatch: `dev/land.sh merge` pushes the head it lands to march/<branch> (so a landed head whose commit carries `Closes: C<n>` gets the run), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #122 merges); ci.yml and formal.yml never run on a march/** or gate/** push (their push triggers are exactly `branches: [main]`, no branches-ignore; the pull request runs them), so a march/** push runs the full matrix alone; AGENTS.md says so. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), CI's fuzz pass (WT_FUZZ=1), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a march/** push whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), then the fuzz pass, and smoke on Julia 1.13. No lane of that run is skipped green: it runs the probes and registry coverage only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those five skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N (registry coverage, when split, given its verdict by a job over every part's hits, `--lane coverage --merge`), `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** or march/** push or workflow_dispatch: `dev/land.sh merge` pushes the head it lands to march/<branch> (so a landed head whose commit carries `Closes: C<n>` gets the run), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #122 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or march/** push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
@@ -3480,11 +3480,20 @@ const LOCKS = [
                 length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
                 sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
             local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
-            local pinned_push = map(("ci.yml", "formal.yml")) do f
+            # the closure predicate (A23E4, A23E6): a dispatch or schedule, a gate/** push, or a pushed head
+            # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
+            # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
+            # run-name, its closure job and every job with no `needs:` of ci.yml, formal.yml and downstream.yml
+            local P = "github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || " *
+                join(("contains(format('{0}{1}', fromJSON('\"\\n\"'), github.event.head_commit.message), format('{0}Closes: C$d', fromJSON('\"\\n\"')))" for d in 0:9), " || ")
+            local pinned_push = map(("ci.yml", "formal.yml", "downstream.yml")) do f
                 local c = _code(joinpath(wf, f))
-                occursin("\non:\n  push:\n    branches: [main]\n", c) && !occursin("march/", c) && !occursin("gate/", c) &&
-                    count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) &&
-                    !occursin(r"^on:[ \t]*\S"m, c)
+                local js = split(last(split(c, "\njobs:\n"; limit = 2)), r"(?m)^(?=  [A-Za-z0-9_-]+:\s*$)"; keepempty = false)
+                local roots = filter(j -> occursin(r"^  [A-Za-z0-9_-]+:\s*$"m, j) && !occursin(r"^    needs:"m, j), js)
+                occursin("\non:\n  push:\n    branches: ['gate/**', 'march/**']\n  workflow_dispatch:\n", c) &&
+                    !occursin(r"^\s*(pull_request|pull_request_target|workflow_run|workflow_call):"m, c) &&
+                    count(r"^\s*push:"m, c) == 1 && !occursin("branches-ignore", c) && !occursin(r"^on:[ \t]*\S"m, c) &&
+                    !isempty(roots) && all(j -> occursin(r"^  [A-Za-z0-9_-]+:\n    if: >-\n      \$\{\{ "m * P * " }}\n", j), roots)
             end
             count(!, [occursin("lane suite suite", gated),
                       occursin(raw"shards=\"0,2 1,2\"; [ \"$only\" = suite ] && [ -n \"$part\" ] && shards=\"$pi,$pn\"", lanes),
@@ -3494,7 +3503,9 @@ const LOCKS = [
                       occursin("runs at clause closure (a `march/**` head with `Closes: C<n>`) and on PR #122's merge head", replace(agents, r"\s+" => " ")),
                       # the full matrix only at clause closure (Dale 2026-10-21): the closure job decides, every other job waits on it,
                       # a `Closes: C<n>` line only on a tree whose ratchet reads C<n> CLOSED (the commit hook and the landing)
-                      occursin("\n  closure:\n", gate) && occursin("printf '%s\\n' \"\$MSG\" | grep -qE '^Closes: C[0-9]+'", gate) &&
+                      occursin("\n  closure:\n", gate) &&
+                          occursin("          RUN: >-\n            \${{ " * P * " }}\n        run: |\n          if [ \"\$RUN\" = true ]; then\n", gate) &&
+                          occursin("\nrun-name: >-\n  \${{ (" * P * ") && 'Gate closure' || 'Gate (no closure)' }}\n", gate) &&
                           count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 2,
                       occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", read(joinpath(ROOT, "dev", "hooks", "commit-msg"), String)),
                       occursin(raw"            grep -qE \"^$c +.* CLOSED( |$)\" \"$rlog\" 2>/dev/null ||", read(joinpath(ROOT, "dev", "land.sh"), String)),
@@ -3572,9 +3583,11 @@ const LOCKS = [
                       # ... and on gate/** and march/**, where ci.yml and formal.yml never run
                       occursin("\non:\n  push:\n    branches: ['gate/**', 'march/**']\n  workflow_dispatch:\n\n", gate) &&
                           !occursin(r"^\s*(pull_request|schedule|workflow_run|workflow_call):"m, gate),
-                      # ci.yml's and formal.yml's push triggers are exactly main (no march/** or
-                      # gate/**, no branches-ignore, no unfiltered or inline push)
-                      pinned_push...])
+                      # ci.yml's, formal.yml's and downstream.yml's triggers are gate.yml's (gate/** and
+                      # march/** pushes, a dispatch; no pull request, no branches-ignore, no inline push),
+                      # each job with no `needs:` under the closure predicate
+                      pinned_push...,
+                      occursin("CI, Formal models and Downstream trigger the same way, never on a plain landing", replace(agents, r"\s+" => " "))])
         end),
     "L155_exception_handling_is_dart_legacy" => ("Exception handling is dart's legacy form: no try_table, throw_ref, catch_all, catch_ref or delegate, as a constructor or opcode in src. Every region opens with try_legacy!, whose outputs are the tag's payload, and closes with catch_legacy! on the exception tag, held by handle. Every printed probe module holds no `try_table`, `throw_ref`, `delegate` or `catch_all`. dart2wasm emits only legacy exception handling (code_generator.dart:945 try_legacy, :999 catch_legacy; try_table exists only in wasm_builder), and its try runs with a concrete-reference result on CI's engine, V8 12.4 in Node 22, where a try_table with one traps (batch 108). The source half counts each such name outside a comment in src, a try_legacy! or catch_legacy! call in codegen beyond the region's one each, and the region's opener, its catch and the tag's payload as written (stackified.jl, generate.jl ensure_exception_tag!); the behavior half is test/probe_bytes.jl, which prints every probe's module with wasm-tools and fails on any of the four, required here as written (dev/MARCH.md 13.17 A13E7; dev/CHARTER.md C5)",
         () -> begin
@@ -3856,7 +3869,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                       length(merge_t) == 1 && merge_t[1] <= 10,
                       plan_t == [20] && length(em_t) == 1 && em_t[1] <= 10,
                       length(collect(eachmatch(r"timeout-minutes:", gate))) == 4,
-                      occursin("| full matrix at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |", agents),
+                      occursin("| full matrix, and CI, Formal models and Downstream, at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |", agents),
                       occursin(raw"budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }", sh) &&
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])

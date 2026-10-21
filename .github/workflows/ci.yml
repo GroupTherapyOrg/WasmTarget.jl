@@ -2,12 +2,13 @@ name: CI
 
 on:
   push:
-    # not march/**: a landed head's push runs gate.yml's full matrix alone, non-blocking
-    # (dev/CHARTER.md C10; the landing's gate is `bash dev/gate.sh --block`, L163); the pull
-    # request runs this matrix on its branch's newest head (a landing pushed before the run ends
-    # cancels it, below), so the matrix on every landed head is gate.yml's
-    branches: [main]
-  pull_request:
+    # the full matrix's triggers (gate.yml; Dale 2026-10-21: large-scale runs only when a full clause is
+    # closed out): a march/** head whose commit carries a `Closes: C<n>` line, a gate/** push (PR #122's
+    # merge head, `bash dev/gate.sh`) and a dispatch; a plain march/** push, a landing, runs nothing.
+    # Every job with no `needs:` runs only under the closure predicate, gate.yml's run-name's and closure
+    # job's text (L153); the pull request, whose branch every landing pushes, triggers nothing (A23E4)
+    branches: ['gate/**', 'march/**']
+  workflow_dispatch:
 
 # Only the newest push per branch runs; a superseded run is cancelled.
 concurrency:
@@ -19,6 +20,8 @@ jobs:
   # transcript links, tool footers and agent-directed text never land
   # (dev/hooks/commit-msg strips them locally; this is the gate).
   message-hygiene:
+    if: >-
+      ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -46,6 +49,8 @@ jobs:
           echo "clean: $(git rev-list --count origin/main..HEAD) commits"
 
   test:
+    if: >-
+      ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
     # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
     # Every slice is an independently bounded job. The single serial `all` slice (lanes +
     # every shard + fuzz on one runner) ran 94 min on macOS at 3d67b2aa and passed the
