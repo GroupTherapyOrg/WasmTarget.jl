@@ -1531,6 +1531,74 @@ dead_rows_failing()::Int = in_builder_sandbox() do W
     count(c -> !builder_case_holds(W, c), dead_cases(W))
 end
 
+# R36's stack-exhaustion sites in the lines of test files (`texts`, a file's lines each): a line
+# hosting a task other than the oracle's one definition, a use of the oracle with no definition, a
+# stand-in reaching a deep recursion, and a deep call in a statement a test runs (the lock's text)
+const R36_ORACLE = "_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))"
+function r36_stack_sites(texts::Vector{Vector{String}})::Int
+    local n = 0
+    # the oracle's one definition, the one line that hosts a task (A22E9); a use without it counts
+    local oracle_def = R36_ORACLE
+    local oracle_used = false; local oracle_defined = false
+    for ls in texts, l in ls
+        _iscomment(l) && continue
+        strip(l) == oracle_def && (oracle_defined = true; continue)
+        occursin(r"schedule\(Task\(|fetch\(schedule\(|_wt_own_task", l) && (n += 1)
+        occursin("_wt_stack_oracle(", l) && (oracle_used = true)
+    end
+    n += oracle_used && !oracle_defined ? 1 : 0
+    local recs = Set{String}()
+    for ls in texts, l in ls
+        local m = match(r"(\w+)\(n(?:::Int64)?\) = n == 0 \? 0 : 1 \+ (\w+)\(n - 1\)", l)
+        (m !== nothing && m[1] == m[2]) && push!(recs, m[1])
+    end
+    # the one-line definitions that reach a deep recursion: by their argument (a call of a
+    # recursion or of one of these, `deep`), or whatever their argument (a body holding a call
+    # of one with 10^6 or more, or a call of one of these, `exhausting`), to a fixpoint
+    local defrx = r"^\s*(?:@noinline\s+)?([\w.]+)\([^)]*\)(?:::\w+)?\s*=[^=](.*)$"
+    local defs = Tuple{String,String}[]
+    for ls in texts, l in ls
+        local m = match(defrx, l)
+        (m === nothing || _iscomment(l)) || push!(defs, (String(m[1]), String(m[2])))
+    end
+    local calls(body, fs, big) = any(f -> occursin(Regex("\\b" * f * "\\(" * big * "|invokelatest\\(" * f * ", " * big), body), fs)
+    local deep = copy(recs); local exhausting = Set{String}()
+    while true
+        local before = length(deep) + length(exhausting)
+        for (f, body) in defs
+            f in recs && continue
+            calls(body, deep, "") && push!(deep, f)
+            (calls(body, deep, "10\\^[6-9]") || calls(body, exhausting, "")) && push!(exhausting, f)
+        end
+        length(deep) + length(exhausting) == before && break
+    end
+    for ls in texts, l in ls
+        _iscomment(l) && continue
+        occursin(defrx, l) && continue   # a definition's body: a body WT compiles
+        n += count(f -> calls(l, Set([f]), "10\\^[6-9]"), deep) + count(f -> calls(l, Set([f]), ""), exhausting)
+        # the oracle's Windows arm, its stand-in, reaches no deep recursion (A22E9)
+        for m in eachmatch(r"_wt_stack_oracle\(([\w.]+), ([\w.]+)", l)
+            (m[2] in recs || m[2] in deep || m[2] in exhausting) && (n += 1)
+        end
+    end
+    return n
+end
+# R36's negatives (dev/AUDIT.md A25E3): a fixed program that holds, and each way of breaking the rule
+# planted into it; true where the count is as the rule says (0 for the program, at least 1 for each plant)
+function r36_plants_fire()::Vector{Bool}
+    local held = [R36_ORACLE, "@noinline _p_rec(n::Int64) = n == 0 ? 0 : 1 + _p_rec(n - 1)", "_p_nat() = _p_rec(10^8)",
+                  "_p_sn() = throw(StackOverflowError())", "x = _wt_stack_oracle(_p_nat, _p_sn)"]
+    local sites(ls) = r36_stack_sites([String.(ls)])
+    return [sites(held) == 0,
+            sites(held[2:end]) >= 1,                                                   # a use with no definition
+            sites(vcat(replace(R36_ORACLE, "Sys.iswindows()" => "false"), held[2:end])) >= 1,   # the definition altered
+            sites(vcat(held, "y = fetch(schedule(Task(() -> 1)))")) >= 1,                # another line hosting a task
+            sites(vcat(held, "z = _wt_stack_oracle(_p_nat, _p_rec)")) >= 1,              # a stand-in that is the recursion
+            sites(vcat(held, "z = _wt_stack_oracle(_p_nat, _p_nat)")) >= 1,              # a stand-in reaching it
+            sites(vcat(held, "w = _p_rec(10^8)")) >= 1,                                  # a deep call in a statement
+            sites(vcat(held, "v = _p_nat()")) >= 1]                                      # a call of an exhausting body
+end
+
 # ---- LOCKS (completed dimensions; exact match required) ---------------------
 const LOCKS = [
     "R40_process_global_state" => ("module-level mutable state one compilation reads or writes — a Ref, RefValue or TaskLocalRef, or a container constructed empty and filled at run time — outside R40_ALLOWED_PROCESS_STATE's exact entries (load-time tables and the host bridge's memos of pure functions, each with its reason; a stale entry counts). dart keeps one compilation's state on its Translator (translator.dart:96), which WT's Translator (context.jl) ports; a process-wide side channel leaks between compilations and tasks. Reached 0 on 2026-10-12 (batch 116e-1: the options, the diagnostics ledger and the constants in progress on the Translator, the perf_now import and the RNG globals on the module's registry, the layout-read memo on the interpreter, the selector table's base index read from the registry) and locked; test/diagnostics_sink.jl's 'a compile inside another's hook, and after another's options, shares no state (R40)' (a compile inside another's link_roots hook leaves the outer module's RNG globals and perf_now import alone, and compile_module after a logging compile does not log, both of which the process-wide design failed; its ledger check, the outer ledger receiving none of the inner compile's diagnostics, is a regression check the process-wide design passed too, its sink set and restored around each compile, dev/AUDIT.md A17P6) (dev/CHARTER.md C2)",
@@ -1617,54 +1685,13 @@ const LOCKS = [
         () -> count_unanchored_definitions()),
     "R35_detached_docstrings" => ("bare string literals among top-level statements in src: docstrings a comment line cut off from their definition (Julia then attaches them to nothing — a `# formal(…)` line between docstring and function did this repeatedly) or prose with no definition under it (dev/CHARTER.md C9). Terminal state 0: a docstring sits directly on its definition, with any anchor inside it",
         () -> count_detached_docstrings()),
-    "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently); and a native stack exhaustion a test runs where Julia cannot detect it: Julia on Windows does not reliably detect one on a task's stack, so the process dies and the shard's failures go unreported (dev/AUDIT.md A20X4). The one oracle of a native stack exhaustion is `_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))`, exactly that line wherever a test uses it: Julia's own answer, on a task of its own, wherever Julia detects the exhaustion, and on Windows alone a stand-in raising StackOverflowError where the wasm body exhausts its stack (dev/AUDIT.md A22E9: Julia stays the oracle). Both arms counted: no other line hosts a task (`schedule(Task(`, `fetch(schedule(`); a stand-in that reaches a deep recursion, by its argument or at all, counts; and a deep self-recursion `f(n) = n == 0 ? 0 : 1 + f(n - 1)`, or a one-line definition reaching it, called with 10^6 or more, and a definition whose body makes such a call, or any definition reaching that one, called at all, only inside a definition (a body WT compiles, or the oracle's native arm, named by its function), never in a statement a test runs. Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
+    "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently); and a native stack exhaustion a test runs where Julia cannot detect it: Julia on Windows does not reliably detect one on a task's stack, so the process dies and the shard's failures go unreported (dev/AUDIT.md A20X4). The one oracle of a native stack exhaustion is `_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))`, exactly that line wherever a test uses it: Julia's own answer, on a task of its own, wherever Julia detects the exhaustion, and on Windows alone a stand-in raising StackOverflowError where the wasm body exhausts its stack (dev/AUDIT.md A22E9: Julia stays the oracle). Both arms counted: no other line hosts a task (`schedule(Task(`, `fetch(schedule(`); a stand-in that reaches a deep recursion, by its argument or at all, counts; and a deep self-recursion `f(n) = n == 0 ? 0 : 1 + f(n - 1)`, or a one-line definition reaching it, called with 10^6 or more, and a definition whose body makes such a call, or any definition reaching that one, called at all, only inside a definition (a body WT compiles, or the oracle's native arm, named by its function), never in a statement a test runs. Its negatives run with it on fixed texts every run (dev/AUDIT.md A25E3, r36_plants_fire): a program that holds counts 0, and a use of the oracle with no definition, the definition altered, another line hosting a task, a stand-in that is or reaches the recursion, a deep call in a statement and a call of an exhausting body each count. Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
         () -> begin
             local n = count_sites(r"@test_skip\b|@test_broken\b"; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
             local files = [joinpath(d, f) for (d, _, fs) in walkdir(joinpath(ROOT, "test")) for f in fs if endswith(f, ".jl") && f != "parity_ratchet.jl"]
-            # the oracle's one definition, the one line that hosts a task (A22E9); a use without it counts
-            local oracle_def = "_wt_stack_oracle(native, standin, x...) = Sys.iswindows() ? standin(x...) : fetch(schedule(Task(() -> native(x...))))"
-            local oracle_used = false; local oracle_defined = false
-            for p in files, l in _file_lines(p)
-                _iscomment(l) && continue
-                strip(l) == oracle_def && (oracle_defined = true; continue)
-                occursin(r"schedule\(Task\(|fetch\(schedule\(|_wt_own_task", l) && (n += 1)
-                occursin("_wt_stack_oracle(", l) && (oracle_used = true)
-            end
-            n += oracle_used && !oracle_defined ? 1 : 0
-            local recs = Set{String}()
-            for p in files, l in _file_lines(p)
-                local m = match(r"(\w+)\(n(?:::Int64)?\) = n == 0 \? 0 : 1 \+ (\w+)\(n - 1\)", l)
-                (m !== nothing && m[1] == m[2]) && push!(recs, m[1])
-            end
-            # the one-line definitions that reach a deep recursion: by their argument (a call of a
-            # recursion or of one of these, `deep`), or whatever their argument (a body holding a call
-            # of one with 10^6 or more, or a call of one of these, `exhausting`), to a fixpoint
-            local defrx = r"^\s*(?:@noinline\s+)?([\w.]+)\([^)]*\)(?:::\w+)?\s*=[^=](.*)$"
-            local defs = Tuple{String,String}[]
-            for p in files, l in _file_lines(p)
-                local m = match(defrx, l)
-                (m === nothing || _iscomment(l)) || push!(defs, (String(m[1]), String(m[2])))
-            end
-            local calls(body, fs, big) = any(f -> occursin(Regex("\\b" * f * "\\(" * big * "|invokelatest\\(" * f * ", " * big), body), fs)
-            local deep = copy(recs); local exhausting = Set{String}()
-            while true
-                local before = length(deep) + length(exhausting)
-                for (f, body) in defs
-                    f in recs && continue
-                    calls(body, deep, "") && push!(deep, f)
-                    (calls(body, deep, "10\\^[6-9]") || calls(body, exhausting, "")) && push!(exhausting, f)
-                end
-                length(deep) + length(exhausting) == before && break
-            end
-            for p in files, l in _file_lines(p)
-                _iscomment(l) && continue
-                occursin(defrx, l) && continue   # a definition's body: a body WT compiles
-                n += count(f -> calls(l, Set([f]), "10\\^[6-9]"), deep) + count(f -> calls(l, Set([f]), ""), exhausting)
-                # the oracle's Windows arm, its stand-in, reaches no deep recursion (A22E9)
-                for m in eachmatch(r"_wt_stack_oracle\(([\w.]+), ([\w.]+)", l)
-                    (m[2] in recs || m[2] in deep || m[2] in exhausting) && (n += 1)
-                end
-            end
+            n += r36_stack_sites([_file_lines(p) for p in files])
+            # the rule's negatives, on fixed texts, every run (dev/AUDIT.md A25E3): each plant fires
+            n += count(!, r36_plants_fire())
             n
         end),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
