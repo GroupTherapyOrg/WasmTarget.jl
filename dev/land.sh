@@ -33,13 +33,13 @@
 #       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a run with no verdict
 #       once more after 20 s, a red stops the landing with its record standing); lands through
 #       `dev/land.sh merge`, the one landing path, on a green run, a cold one included (its checks
-#       pass, its timing unjudged), and prints `LOOP <edit_to_landed_s> s`, the push being the
+#       pass, its timing unjudged), and prints `LOOP <edit_to_landed_s> of 300 s`, the push being the
 #       landing; after a cold landing, still holding the machine, judges its timing by a warm run of
 #       the landed tree and writes it into the landing's line (judged; unjudged; SLOWER / OVER
 #       <stages>, bests / budgets missed under the cap; FAILED <stages>, a check other than the
 #       ratchet's; a red record standing); then releases the hold, prints each step's wall and the
 #       timing's state (L198). After a line judged red, a landing lands on a judged green run or
-#       names the red landing in a dev/MARCH.md row of its own tree (`merge` refuses any other). A
+#       carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (`merge` refuses any other). A
 #       worktree whose Manifest.toml names other WasmTarget extensions than Project.toml is refused.
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
@@ -87,11 +87,11 @@ LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
-# a red timing's debt (SLOWER, OVER) is lifted by a dev/MARCH.md row in the landing's own tree naming
+# a red timing's debt (SLOWER, OVER) is lifted by the red landing's excuse file in the landing's own tree,
 # it by its first 8 hex digits (a Timing exemption row, or the fix's row): <commit> <owed>; a failed
 # check's (FAILED) never is: only a fix lands it, green on a warm run (A21E1)
 owed_lifted() { case "${2#* }" in FAILED*) return 1 ;; esac
-                git show "$1:dev/MARCH.md" 2>/dev/null | grep '^| 13\.' | grep -q "${2:0:8}"; }
+                git cat-file -e "$1:dev/.loop/excuse/${2:0:8}" 2>/dev/null; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
 cmd=${1:?usage: dev/land.sh land (in the worktree of the branch) | prepare <branch> [old-base]}
@@ -141,7 +141,7 @@ prepare)
     done
     git log --oneline "$tip..$br" | cat
     bash dev/gate.sh --block
-    echo "prepared $br @ $(git rev-parse --short HEAD): dev/land.sh merge $br lands it"
+    echo "prepared $br @ $(git rev-parse --short HEAD): bash dev/land.sh land, in $W, lands it"
     ;;
 merge)
     # land's internal step (A21E5): the one landing path is `land`, which holds the hold and passes its
@@ -186,14 +186,14 @@ merge)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
     case "${owed#* }" in FAILED*)
         grep -qx 'runner_state = "warm"' "$rec" ||
-            { echo "the last landing's judgement failed a check ($owed) and $rec is not of a warm run: a fix lands next, green on a warm run (no dev/MARCH.md row lifts a failed check) — refusing"; exit 1; }
+            { echo "the last landing's judgement failed a check ($owed) and $rec is not of a warm run: a fix lands next, green on a warm run (no excuse file lifts a failed check) — refusing"; exit 1; }
         echo "the last landing's judgement failed a check ($owed); this landing's checks pass on a warm run"; owed="" ;;
     esac
     if [ -n "$owed" ] && [ "$timing" != judged ]; then
         if owed_lifted "$head" "$owed"; then
-            echo "the last landing's timing is red ($owed); this landing's dev/MARCH.md names it: lifted"
+            echo "the last landing's timing is red ($owed); this landing carries its excuse file: lifted"
         else
-            echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing whose dev/MARCH.md names ${owed%% *} (a fix, or a Timing: correctness fix row) — refusing"; exit 1
+            echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing carrying dev/.loop/excuse/${owed%% *} (a cause outside its change, or a Timing: correctness fix row) — refusing"; exit 1
         fi
     fi
     # the last closure matrix (the full matrix runs only at clause closure, Dale 2026-10-21): gate.yml's
@@ -350,11 +350,11 @@ land)
     # run: the next landing lands only on one (a fix, or a `Timing: correctness fix` row)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
     if [ -n "$owed" ] && owed_lifted HEAD "$owed"; then
-        echo "land: the last landing's timing is red ($owed); this branch's dev/MARCH.md names it: lifted"; owed=""
+        echo "land: the last landing's timing is red ($owed); this branch carries its excuse file: lifted"; owed=""
     fi
     case "${owed#* }" in
     FAILED*) echo "land: the last landing's judgement failed a check ($owed): this landing lands only as a fix, green on a warm run" ;;
-    ?*) echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run, or with a dev/MARCH.md row naming ${owed%% *}" ;;
+    ?*) echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run, or carrying dev/.loop/excuse/${owed%% *}" ;;
     esac
     # the gate to a verdict: a green run lands, a cold one whose checks pass included (its timing judged
     # by a warm run after the push, below) unless a judged run is owed; a no-verdict run once more after
@@ -399,7 +399,7 @@ land)
     line=$(tail -1 "$LOG")
     [ "$(printf '%s' "$line" | cut -f2)" = "$head" ] || { echo "land: the landing log's last line is not ${head:0:8}'s"; exit 1; }
     # the push is the landing
-    echo "LOOP $(printf '%s' "$line" | cut -f8) s"
+    echo "LOOP $(printf '%s' "$line" | cut -f8) of 300 s"
     # a cold landing's timing, judged now by a warm run of the landed tree (the change taken from the
     # march tip it landed on), the machine still held: judged, unjudged (the run could not judge), or
     # SLOWER <stages> / FAILED <stages> (its record red, standing), written into the landing's line
@@ -431,7 +431,7 @@ land)
         mv "$LOG.new" "$LOG"
         echo "land: the timing of ${head:0:8}: $verdict_t"
         case $verdict_t in SLOWER* | OVER* | FAILED*)
-            echo "land: its record is red and stands: the next landing lands on a judged green run, or names ${head:0:8} in a dev/MARCH.md row (a fix, or a Timing: correctness fix row; L198); a FAILED check only as a fix green on a warm run" ;;
+            echo "land: its record is red and stands: the next landing lands on a judged green run, or carries dev/.loop/excuse/${head:0:8} (a cause outside the change, or a Timing: correctness fix row; L198); a FAILED check only as a fix green on a warm run" ;;
         esac
     fi
     rm -f "$glog"
@@ -454,7 +454,7 @@ land)
     done
     owed=$(tail -n 1 "$LOG" | awk -F'\t' "$OWED_AWK" || true)
     if [ -n "$owed" ]; then
-        echo "land: timing red ($owed): owed by the next landing, a judged green run or a dev/MARCH.md row naming ${owed%% *}"
+        echo "land: timing red ($owed): owed by the next landing, a judged green run or dev/.loop/excuse/${owed%% *}"
     elif [ "$unjudged" -gt 0 ]; then
         echo "land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm"
     else
