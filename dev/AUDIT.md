@@ -2475,3 +2475,39 @@ the nightly checks main's models, not the march's.
 Resolution: this entry lands alone, as one commit, prose and one excuse file (dev/.loop/excuse/3cec876a, its measured
 cause, A26E2), and fixes nothing. A26E1-A26E4 and A26N1 are open on MARCH 13.18. A24E1's refusal is the loop lane's
 next commit. The charter commit is entry 27's, under the red-flag class.
+
+## 2026-10-21 — audited through 2d0227c1 (a3c27bab..2d0227c1: entry 26, one commit per landing, Phase 14, the timing exemption, the median best)
+
+The twenty-seventh audit covers ae556c79 (entry 26, prose and an excuse; its author's), b3d258fa (one landing is one
+commit, A24E1; a Charter-change line names several clauses; excuses corrected as measured), 360811dd (Phase 14 in
+MARCH), e6e00706 (a timing exemption is a new MARCH row, never an edited one, A20P26; test/lock_negatives.jl plants
+negatives in a scratch checkout) and 2d0227c1 (a best is the median of three judged runs and names its records; 13.24;
+C10's Planned text cites 13.24, an added row number the exemption admits). No wrong answer. Each landed head's record is
+green. A24E1 is fixed: `land` refuses a branch more than one commit ahead of the tip (land.sh:332). A20P26 is fixed, and
+A25E3's class now has a home in lock_negatives.jl. No red flag: Phase 14 plans strictness and claims none. A22E5 is still
+not verifiable, because compile3's first commit is not on origin. Three findings: A27E1-A27E3.
+
+Area: builder — empty by diff: `git diff a3c27bab..2d0227c1 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of dev/land.sh, dev/block.jl, test/parity_ratchet.jl, test/lock_negatives.jl,
+test/runtests.jl, dev/timing_best.toml, dev/CHARTER.md, dev/MARCH.md, dev/.loop/landings.log and the excuse files.
+(A27E1, medium, C10) The locks cost the gate its own speed. On a quiet machine the ratchet stage reads 19.7 s of wall,
+19.3 s scaled at factor 1.02 (record c96ec515-3, ae556c79's tree), and 20.1 s at factor 1.09 (record 6fc15995-2,
+e6e00706's tree), against its 14.1 s best. Today's additions (L197 to L201, the excuse checks, the STRICT table) grew
+it by about 40 per cent. Nothing measures the ratchet's time per lock, so a new lock's cost is seen only as a stage
+grown past its best. (A27E2, medium) The 13.24 exemption serves only the commit that added the row: e6e00706 refuses an
+existing row. Until the median-of-three update re-records ratchet@warm, every judged run after 2d0227c1 reads the
+ratchet SLOWER and owes a debt. 2d0227c1 documents its bests' sources and re-records none: ratchet@warm is still "set
+by hand in 36e3966e", and three bests come from one run at factor 1.54, past the cap. (A27E3, low) e6e00706 took 4652 s
+and 2d0227c1 3649 s, both past 300. Both were blocked by L148's full windows and the slot order behind entries 24 to 26
+and loop2's commits, and e6e00706 also by L197's hostage reading (its excuse states it, measured). The audit lane's
+cadence is still the landing path's throttle (A23E2, A26E2).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A27E1-A27E3 are open on MARCH 13.18.
+A27E2 closes when the median-of-three update lands its re-recorded bests under a new row. This entry's own gate read the ratchet SLOWER (record a74e721a-1, 21.2 s at factor 1.13, the red standing),
+so by the orchestrator's ruling it carries the exemption row 13.25, backed by the three records, and C10's Planned
+text cites it.
