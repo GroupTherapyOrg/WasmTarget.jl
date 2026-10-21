@@ -27,10 +27,15 @@
 #       `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation
 #       (CHARTER_AUTHORISED) whose clause holds every changed line (an edit that changes only MARCH
 #       row numbers, the citations L154 forces, is exempt and named); starts this tree's warm
-#       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a cold run is
-#       followed by one more, a run with no verdict for another reason by one more after 20 s, a red
-#       stops the landing with its record); then lands through `dev/land.sh merge`, the one landing
-#       path, releases the hold and prints each step's wall and `LOOP <edit_to_landed_s> s`.
+#       runner when absent; runs `bash dev/gate.sh --block --warm` to a verdict (a run with no verdict
+#       once more after 20 s, a red stops the landing with its record standing); lands through
+#       `dev/land.sh merge`, the one landing path, on a green run, a cold one included (its checks
+#       pass, its timing unjudged), and prints `LOOP <edit_to_landed_s> s`, the push being the
+#       landing; after a cold landing, still holding the machine, judges its timing by a warm run of
+#       the landed tree and writes it into the landing's line (judged, unjudged, or SLOWER / FAILED
+#       <stages>, its record red and standing); then releases the hold, prints each step's wall and
+#       the unjudged streak (L198). After a line judged red, a landing lands only on a judged green
+#       run (`merge` refuses any other).
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
@@ -55,6 +60,8 @@ WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
 CHARTER_AUTHORISED="C10:2026-10-21"
 LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
+# the landing log's last line, when its timing was judged red (SLOWER or FAILED, L198): its commit and timing
+OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
 cmd=${1:?usage: dev/land.sh prepare|merge <branch> [old-base] | land}
@@ -138,6 +145,11 @@ merge)
     # its timing (L198): judged, or unjudged when the machine was past the gate's factor cap (a record
     # from before the rule is judged), written into the landing log
     timing=$(sed -n 's/^timing = "\(.*\)"$/\1/p' "$rec"); timing=${timing:-judged}
+    # a landing whose timing was judged red is owed a judged green run: until one lands, a landing
+    # whose timing is unjudged is refused (L198)
+    owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
+    [ -z "$owed" ] || [ "$timing" = judged ] ||
+        { echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next (a fix, or a Timing: correctness fix row) — refusing"; exit 1; }
     # the full matrix on the last landed head: gate.yml's newest run of it on a march/** or gate/** push
     # (by name, not --workflow, which finds only a workflow on the default branch; a gate.yml not yet
     # parsed is named by its path), read three times at most, never waited for
@@ -275,19 +287,29 @@ land)
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
     echo "$out" | tail -1
     step runner
-    # the gate to a verdict: a cold run once more, another no-verdict once more after 20 s, a red stops
-    runs=0; gwall=0; cold_again=0; busy_again=0; glog=$(mktemp)
+    # a landing whose timing was judged red (its line SLOWER or FAILED, L198) is owed a judged green
+    # run: the next landing lands only on one (a fix, or a `Timing: correctness fix` row)
+    owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
+    [ -z "$owed" ] || echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run"
+    # the gate to a verdict: a green run lands, a cold one whose checks pass included (its timing judged
+    # by a warm run after the push, below) unless a judged run is owed; a no-verdict run once more after
+    # 20 s; a red stops
+    runs=0; gwall=0; cold_again=0; busy_again=0; cold_green=0; glog=$(mktemp)
     while :; do
         runs=$((runs + 1)); g0=$(now)
         set +e; bash dev/gate.sh --block --warm 2>&1 | tee "$glog"; st=${PIPESTATUS[0]}; set -e
         gwall=$(perl -e 'printf "%.1f", $ARGV[0] + $ARGV[1] - $ARGV[2]' "$gwall" "$(now)" "$g0")
         step "gate-$runs"
         case $st in
-        0) break ;;
+        0) if grep -q '^BLOCK green (timing unjudged: the run was cold' "$glog"; then
+               if [ -n "$owed" ] && [ $cold_again -eq 0 ]; then
+                   cold_again=1; echo "land: the run was cold and a judged run is owed: the gate once more"; continue
+               fi
+               cold_green=1
+           fi
+           break ;;
         1) echo "land: the gate is red and its record stands: fix it in a new commit, then land again"; exit 1 ;;
-        3) if grep -q '^BLOCK no verdict (the run was cold' "$glog" && [ $cold_again -eq 0 ]; then
-               cold_again=1; echo "land: the runner was cold: the gate once more"
-           elif [ $busy_again -eq 0 ]; then
+        3) if [ $busy_again -eq 0 ]; then
                busy_again=1; echo "land: no verdict: the gate once more after 20 s"; sleep 20
            else
                echo "land: no verdict after its retries — not landed"; exit 3
@@ -295,13 +317,42 @@ land)
         *) echo "land: the gate exited $st with no verdict — not landed"; exit "$st" ;;
         esac
     done
-    rm -f "$glog"
     LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
-    release
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")
     [ "$(printf '%s' "$line" | cut -f2)" = "$head" ] || { echo "land: the landing log's last line is not ${head:0:8}'s"; exit 1; }
+    # the push is the landing
+    echo "LOOP $(printf '%s' "$line" | cut -f8) s"
+    # a cold landing's timing, judged now by a warm run of the landed tree (the change taken from the
+    # march tip it landed on), the machine still held: judged, unjudged (the run could not judge), or
+    # SLOWER <stages> / FAILED <stages> (its record red, standing), written into the landing's line
+    if [ $cold_green -eq 1 ]; then
+        echo "land: the landing's gate was cold: its timing judged now by a warm run, the machine still held"
+        verdict_t=unjudged
+        for k in 1 2; do
+            set +e; bash dev/gate.sh --block --warm --base "$tip" 2>&1 | tee "$glog"; st=${PIPESTATUS[0]}; set -e
+            step "judge-$k"
+            rec=$(sed -n 's/^BLOCK .*→ \(dev\/\.block\/.*\.toml\)$/\1/p' "$glog")
+            failed=$([ -f "$rec" ] && sed -n 's/^timing_failed = \[\(.*\)\]$/\1/p' "$rec" | tr -d '",' || true)
+            case $st in
+            0) if [ -f "$rec" ] && grep -qx 'timing = "judged"' "$rec"; then verdict_t=judged; break; fi
+               grep -q '^BLOCK green (timing unjudged: the run was cold' "$glog" || break ;;
+            1) if grep -qx 'verdict_why = "a check fails"' "$rec"; then verdict_t="FAILED${failed:+ $failed}"; else verdict_t="SLOWER $failed"; fi
+               break ;;
+            *) break ;;
+            esac
+        done
+        n=$(wc -l < "$LOG" | tr -d ' ')
+        awk -F'\t' -v OFS='\t' -v n="$n" -v h="$head" -v t="$verdict_t" 'NR == n && $2 == h { $11 = t } { print }' "$LOG" > "$LOG.new"
+        mv "$LOG.new" "$LOG"
+        echo "land: the timing of ${head:0:8}: $verdict_t"
+        case $verdict_t in SLOWER* | FAILED*)
+            echo "land: its record is red and stands: the next landing lands only on a judged green run (a fix, or a Timing: correctness fix row; L198)" ;;
+        esac
+    fi
+    rm -f "$glog"
+    release
     printf '%s' "$steps" | awk -v h="$head" -F'\t' '{ print h "\t" $1 "\t" $2 }' >> "$(dirname "$LOG")/steps.tsv"
     echo "land: steps $(printf '%s' "$steps" | awk -F'\t' '{ printf "%s%s %s s", (NR > 1 ? ", " : ""), $1, $2 }')"
     # the unjudged streak (L198): the log's last lines in a row whose timing is unjudged, newest first,
@@ -323,7 +374,6 @@ land)
     else
         echo "land: timing judged"
     fi
-    echo "LOOP $(printf '%s' "$line" | cut -f8) s"
     exit 0
     ;;
 *) echo "unknown command $cmd"; exit 1 ;;
