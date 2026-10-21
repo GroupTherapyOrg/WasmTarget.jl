@@ -21,8 +21,19 @@
 # version on CI), whose blocking sample is its registry_sample group (Amendment 117-14: split, never
 # exempt), and entered_paths, which exists for a matrix-only check (the emission-diff check's Base
 # paths, L190). Every probe, group and QA family still runs on every landed head (non-blocking:
-# gate.yml on march/**). `measured`: the src tree measured (the gate notes how many pieces of src
-# changed since); re-record when src/ or the corpora move on.
+# gate.yml on march/**). `measured`: the src tree measured; a change to src/ fails the gate when more
+# than 8 pieces of src (dev/block.jl STALE_PIECES) changed between it and the change's base, when this
+# repository does not hold it, or when a changed line of code lies in no piece, and a change to ext/,
+# which no map measures, fails (A20C13): the re-record runs off the landing path and lands as its own
+# commit of this file. What the selection cannot see, A19C1's (a)-(g) (A20C14): (a) overlay and bespoke
+# bodies, closed in test/block_impact.jl since da8d5b69 (a plan that compiles one counts as running
+# it), in the rows below from their next re-record; (b) a top-level form other than a definition and
+# (c) two methods of one name sharing a key, closed in dev/block.jl's line_keys since da8d5b69 (every
+# form has pieces, a table's every line its own, a definition keyed by its line), in the rows below
+# from their next re-record; (d) a changed branch inside a 40-line piece some case runs, open; (e) a
+# 1-cover, one runner per piece, open; (f) the universe: the QA families a lock cites run (d5b96e97), a
+# stale map and ext/ fail the gate, closed; the stdlib and fuzz lanes run on the matrix alone, open;
+# (g) the 1.13 core on every src change, open (MARCH 13.17).
 measured	d77ad3e1f74898d0833914cc5360bb11e3a2291d
 probes	string_lpad fc_task_rand muladd_f64 string_findfirst throw_inexacterror string_uppercase fc_object_id fc_string_to_symbol fc_hrtime_elapsed checked_add_i8 string_startswith fc_memset_dict_ctor int128_mul checked_add string_occursin fc_types_equal_pow fc_symbol_to_string fc_pchar_to_string_ptrlen fc_memchr_findfirst_char union_field const_dict
 core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs builtins_invoked memoryref_offset kind_isa isomorphic_recursive_classes exceptions
