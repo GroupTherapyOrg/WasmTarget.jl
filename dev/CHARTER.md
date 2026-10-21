@@ -190,12 +190,14 @@ with the per-clause status. A clause is never closed by argument.
   at most its target, 180 s when it changes src, 90 s otherwise) `L198` (each landing records
   whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
   Planned: dev/MARCH.md 13.18 and 13.24 and 13.25 and 13.26 and 13.27 — the ratchet stage's time to win back (L195).
-- **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C1
+- **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C0
   to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
   method, field or switch for it; a closed sum matched exhaustively when the package loads; the
   builder refusing at the emitting line), each check naming the definition that is its
-  construction. A check that finds the wrong choice at gate time (a
+  construction, its assertion the check src registers beside that definition, the precedent it
+  follows (another language's mechanism: Rust, dart, wasm, …) and how Julia's differs; a
+  construction with no precedent anywhere is an invention, which waits for Dale. A check that finds the wrong choice at gate time (a
   scan of WT's source, an allowlist of exceptions, a ratchet at 0 or not, or a test that must
   reach it) is a stopgap, which keeps its clause OPEN with the Planned construction that
   retires it; the differential lanes stay the soundness gate and close no clause. Calling a check, a clause or a
@@ -203,9 +205,14 @@ with the per-clause status. A clause is never closed by argument.
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
   charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
-  rows, and every finding sits on a row) `L201` (no clause of C1 to C8 without Planned text cites
-  a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a construction naming a
-  definition src holds; every lock C4 to C8 cite is classified).
+  rows, and every finding sits on a row) `L201` (no clause of C0 to C8 without Planned text cites
+  a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a construction, with its
+  precedent, whose lock only calls the check src registers beside its definition; every lock C0 and
+  C4 to C8 cite is classified) `L202` (every closed sum or construction in src, an @enum, a `@closed` sum or a
+  definition a construction names, carries its `precedent(<ecosystem>: <mechanism>)`) `L203`
+  (each audit entry over src carries its `stopgap in disguise:` and `precedent:` lines).
+  Planned: dev/MARCH.md 13.20 — each of these checks a construction, or Dale's ruling that a prose
+  clause is checked by behavior.
 
 ## Rules that keep the goal from drifting
 

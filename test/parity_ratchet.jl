@@ -882,22 +882,27 @@ function wt_symbol_classification_sites()::Int
 end
 
 # ---- strict means by construction (dev/CHARTER.md C0, L201) --------------------------------------
-# The clauses on the compiler's code and its models, whose checks the standard classifies.
-const STRICT_SCOPE = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
+# The clauses whose checks the standard classifies: the compiler's code and its models, and the
+# charter's own clause, C0, which reads CLOSED only on constructions like the others (A29S2).
+const STRICT_SCOPE = ("C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
 # The clauses whose every cited lock is classified (2026-10-21); C1 to C3 classify theirs before
 # they close, since L201 reads an unclassified lock in a clause with no Planned text as a violation.
-const STRICT_CLASSIFIED = ("C4", "C5", "C6", "C7", "C8")
+const STRICT_CLASSIFIED = ("C0", "C4", "C5", "C6", "C7", "C8")
 # Every lock a classified clause cites, by what decides it, and for a construction the definition in
-# src that is the construction (L201 resolves it: a definition of exactly that name must exist).
-# :construction: that definition makes the wrong choice inexpressible through WT's interfaces (a
-# type that cannot hold the wrong value, the one path every emission takes, a relation computed
-# where it is written), the lock guarding that it stays; a write into another component's fields
-# stays possible in Julia, which the stopgaps that scan for it (L13) watch. :behavior: a run decides
+# src that is the construction. :construction: that definition makes the wrong choice inexpressible
+# through WT's interfaces, and its assertion lives in src beside it, the load-time check the definition
+# registers (`construction_check(::Val{<definition>})`); the lock is `ConstructionLock(:<definition>)`,
+# which only calls that check, so no lock of a construction reads any text (L201 checks the lock's type
+# and name in this table, by reflection). :behavior: a run decides
 # it (the differential lanes, a test of an algorithm). :stopgap: the lock finds the wrong choice by
 # reading WT's source, an allowlist or a count, so it can still be written and compiled, whatever
 # definition holds the rule. A ratchet (an R check, a lock or not) is a stopgap by its kind and has no
 # entry. Neither behavior nor a stopgap closes a clause.
 const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
+    # C0: the charter holds. Each check reads text: the charter, this file, AGENTS.md, the plan, the
+    # audit log or src (A29S2); none is a construction, so C0 reads OPEN with its Planned text
+    "L125" => (:stopgap, ""), "L126" => (:stopgap, ""), "L128" => (:stopgap, ""), "L148" => (:stopgap, ""),
+    "L154" => (:stopgap, ""), "L201" => (:stopgap, ""), "L202" => (:stopgap, ""), "L203" => (:stopgap, ""),
     # C4: typed internal APIs (L136: a constant pushed by i32_const! and its kind bypasses emit_value!'s check)
     "L9" => (:stopgap, ""), "L35" => (:stopgap, ""), "L49" => (:stopgap, ""), "L74" => (:stopgap, ""),
     "L136" => (:stopgap, ""),
@@ -915,30 +920,47 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L119" => (:stopgap, ""), "L127" => (:stopgap, ""), "L135" => (:stopgap, ""), "L139" => (:stopgap, ""),
     "L146" => (:stopgap, ""), "L147" => (:behavior, ""), "L156" => (:stopgap, ""),
     # C7: valid by construction
-    "L6" => (:construction, "_emit!"), "L7" => (:stopgap, ""), "L13" => (:stopgap, ""), "L14" => (:stopgap, ""),
-    "L22" => (:stopgap, ""), "L27" => (:stopgap, ""), "L29" => (:construction, "recursion_groups"),
+    # (L6, L29, L151, L165, L168, L172: each pins or scans src text beside its mechanism, A29S1)
+    "L6" => (:stopgap, ""), "L7" => (:stopgap, ""), "L13" => (:stopgap, ""), "L14" => (:stopgap, ""),
+    "L22" => (:stopgap, ""), "L27" => (:stopgap, ""), "L29" => (:stopgap, ""),
     "L65" => (:stopgap, ""), "L87" => (:stopgap, ""), "L99" => (:stopgap, ""),
-    "L151" => (:construction, "InstrBuilder"), "L164" => (:stopgap, ""),
-    "L165" => (:construction, "WasmValType"), "L166" => (:stopgap, ""), "L167" => (:stopgap, ""),
-    "L168" => (:construction, "_require_local!"), "L169" => (:stopgap, ""),
-    "L172" => (:construction, "_emit!"), "L173" => (:stopgap, ""),
+    "L151" => (:stopgap, ""), "L164" => (:stopgap, ""),
+    "L165" => (:stopgap, ""), "L166" => (:stopgap, ""), "L167" => (:stopgap, ""),
+    "L168" => (:stopgap, ""), "L169" => (:stopgap, ""),
+    "L172" => (:stopgap, ""), "L173" => (:stopgap, ""),
     # C8: formal methods (both read files: the models' pairing and the README table)
     "L111" => (:stopgap, ""), "L131" => (:stopgap, ""),
 )
 
-# whether src defines `name`: a function, macro, struct, @enum or const of exactly that name, long or
-# short form (a definition grep by name, the construction L201 resolves)
-function strict_construction_defined(name::AbstractString)::Bool
-    isempty(name) && return false
-    local q = "\\Q" * name * "\\E"
-    local rx = Regex("^\\s*(?:@inline\\s+|@noinline\\s+)*(?:function\\s+" * q * "\\(|macro\\s+" * q *
-                     "\\(|(?:mutable\\s+)?struct\\s+" * q * "\\b|@enum\\s+" * q * "\\b|const\\s+" * q *
-                     "\\s*=|" * q * "\\([^=]*\\)\\s*(?:::\\S+\\s*)?=(?!=))")
-    for (dir, _, files) in walkdir(SRC), f in files
-        endswith(f, ".jl") || continue
-        any(l -> occursin(rx, l), eachline(joinpath(dir, f))) && return true
+
+# Each :construction's precedent, the mechanism another language holds it by (`<ecosystem>: <mechanism>[,
+# <anchor>]`: Rust's sealed enums and exhaustive match, dart's sealed classes and switches, wasm's
+# types), and how Julia's differs; L201 refuses a construction without both, and a precedent for any
+# other entry. A construction with no precedent anywhere is an invention and waits for Dale.
+const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}()
+
+# whether a precedent reads `<ecosystem>: <mechanism>`, the ecosystem lowercase
+strict_precedent_ok(p::AbstractString)::Bool = occursin(r"^[a-z][a-z0-9+_-]*: \S", p)
+
+# a :construction's lock: it holds the definition's name and only calls the check src registers beside
+# that definition, construction_check(::Val{<definition>}) (the construction's macro defines it there;
+# loading WasmTarget is the price of the first construction). A missing check is a MethodError, loud.
+# precedent(rust: `const _: () = assert!(..)` and `#[derive]` checks live with the item; dart: the
+# analyzer checks a sealed class's switches where it is declared)
+struct ConstructionLock
+    definition::Symbol
+end
+function (c::ConstructionLock)()::Int
+    local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
+    return Base.invokelatest(getfield(wt, :construction_check), Val(c.definition))
+end
+
+# the thunk of lock `id` in LOCKS, or nothing
+function strict_lock_thunk(id::AbstractString)
+    for (k, (_, f)) in LOCKS
+        _short_id(k) == id && return f
     end
-    return false
+    return nothing
 end
 
 # what a check is under the standard: a ratchet is a stopgap; a lock is what STRICT_KINDS says, or
@@ -961,10 +983,12 @@ function strict_violations(clauses, kinds::Dict{String,Tuple{Symbol,String}})::V
 end
 
 # the table's own faults: a lock a classified clause cites with no entry, an entry no classified
-# clause cites, an entry for a ratchet, a kind other than the three, a construction naming no
-# definition src holds, and a stopgap or behavior naming one (a name is a construction's alone)
+# clause cites, an entry for a ratchet, a kind other than the three, a construction whose lock is not
+# ConstructionLock of the definition it names, and a stopgap or behavior naming one (a name is a
+# construction's alone)
 function strict_table_faults(clauses, kinds::Dict{String,Tuple{Symbol,String}};
-                             defined::Function=strict_construction_defined)::Vector{String}
+                             lock::Function=strict_lock_thunk,
+                             precedents::Dict{String,Tuple{String,String}}=STRICT_PRECEDENTS)::Vector{String}
     out = String[]
     local cited = Set{String}()
     for (cid, (_, ids)) in clauses
@@ -978,8 +1002,21 @@ function strict_table_faults(clauses, kinds::Dict{String,Tuple{Symbol,String}};
         k in cited || push!(out, "STRICT_KINDS classifies $k, which no clause of $(join(STRICT_CLASSIFIED, ' ')) cites")
         startswith(k, "R") && push!(out, "STRICT_KINDS classifies the ratchet $k, a stopgap by its kind")
         v in (:construction, :behavior, :stopgap) || push!(out, "STRICT_KINDS gives $k the kind $v")
-        v === :construction && !defined(name) && push!(out, "$k is a construction naming `$name`, which src does not define")
+        if v === :construction
+            local f = lock(k)
+            (f isa ConstructionLock && !isempty(name) && f.definition === Symbol(name)) ||
+                push!(out, "$k is a construction whose lock is not ConstructionLock(:$name): a construction's lock only calls its definition's check")
+        end
+        if v === :construction
+            local pr = get(precedents, k, ("", ""))
+            strict_precedent_ok(pr[1]) || push!(out, "$k is a construction with no precedent `<ecosystem>: <mechanism>`")
+            isempty(strip(pr[2])) && push!(out, "$k is a construction that does not say how Julia's differs from its precedent")
+        end
         v !== :construction && !isempty(name) && push!(out, "$k is $v and names `$name`: only a construction names one")
+    end
+    for k in keys(precedents)
+        (haskey(kinds, k) && first(kinds[k]) === :construction) ||
+            push!(out, "STRICT_PRECEDENTS gives $k a precedent, but it is no construction")
     end
     return out
 end
@@ -1004,17 +1041,149 @@ function strict_negatives_missed()::Vector{String}
         length(strict_violations(cl, k)) == want || push!(out, "negative missed: $what")
     end
     # L5 unclassified; L6, R2, L1x, L7 and L8 uncited; R2 a ratchet; L1x a kind other than the three;
-    # L7 a construction naming nothing src defines; L8 a stopgap that names one. L1 resolves.
+    # L7 a construction whose lock is a function that may read anything; L8 a stopgap that names one.
+    # L1's lock is ConstructionLock(:_emit!).
+    local planted_lock(id) = id == "L1" ? ConstructionLock(:_emit!) : () -> 0
+    # precedents: L1's is whole; L7 has none (two faults: no precedent, no Julia difference); L6, a
+    # stopgap, is given one (a fault)
+    local planted_precedents = Dict{String,Tuple{String,String}}(
+        "L1" => ("rust: sealed enum + exhaustive match", "Julia checks the match when the package loads"),
+        "L6" => ("rust: enum", "none"))
     local tf = strict_table_faults(plant("C4", " T.", ["L1", "L5"]),
                                    Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "_emit!"),
                                         "L6" => (:stopgap, ""), "R2" => (:stopgap, ""), "L1x" => (:strict, ""),
                                         "L7" => (:construction, "no_definition_has_this_name!"),
-                                        "L8" => (:stopgap, "_emit!")))
-    length(tf) == 10 || push!(out, "negative missed: the table's faults ($(length(tf)) of 10)")
-    # the resolution itself: a real definition resolves, a missing one does not
-    (strict_construction_defined("_emit!") && strict_construction_defined("WasmValType") &&
-     !strict_construction_defined("no_definition_has_this_name!")) ||
-        push!(out, "negative missed: the construction names do not resolve as stated")
+                                        "L8" => (:stopgap, "_emit!")); lock=planted_lock,
+                                   precedents=planted_precedents)
+    length(tf) == 13 || push!(out, "negative missed: the table's faults ($(length(tf)) of 13)")
+    (strict_precedent_ok("dart: sealed class + switch, constants.dart:30") && !strict_precedent_ok("Rust enum") &&
+     !strict_precedent_ok("")) || push!(out, "negative missed: a precedent's form")
+    # a construction's lock naming another definition is refused too
+    local other = strict_table_faults(plant("C4", " T.", ["L1"]), Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "WasmValType"));
+                                      lock=planted_lock, precedents=Dict("L1" => ("rust: newtype", "a struct")))
+    length(other) == 1 || push!(out, "negative missed: a ConstructionLock naming another definition")
+    return out
+end
+
+# ---- L202: every closed sum or construction in src carries its precedent (dev/CHARTER.md C0) -----
+const PRECEDENT_RX = r"precedent\([a-z][a-z0-9+_-]*: [^()]+\)"
+
+# the text that documents the definition at line `i`: the line itself, a docstring directly above it,
+# and the contiguous comment lines above that
+function precedent_block(lines::AbstractVector{<:AbstractString}, i::Int)::String
+    local block = String[lines[i]]
+    local j = i - 1
+    if j >= 1 && endswith(rstrip(lines[j]), "\"\"\"")
+        local k = strip(lines[j]) == "\"\"\"" ? j - 1 : j
+        while k >= 1 && !startswith(lstrip(lines[k]), "\"\"\"")
+            k -= 1
+        end
+        k >= 1 || return join(block, '\n')
+        append!(block, lines[k:j])
+        j = k - 1
+    end
+    while j >= 1 && startswith(lstrip(lines[j]), "#")
+        push!(block, lines[j])
+        j -= 1
+    end
+    return join(block, '\n')
+end
+
+# the definitions in one file L202 asks a precedent of, as "<file>:<line> <name>" with no precedent:
+# every closed sum (an @enum, a `@closed` sum) and every definition a construction names; an abstract
+# type is an open hierarchy, neither, and carries its parity(...) alone
+function precedent_missing(path::AbstractString, lines::AbstractVector{<:AbstractString},
+                           names::AbstractVector{<:AbstractString})::Vector{String}
+    local out = String[]
+    local named = [Regex("^\\s*(?:@inline\\s+)*(?:function|macro|struct|mutable struct|const)\\s+\\Q" * n * "\\E(?![\\w!])") for n in names]
+    for (i, l) in enumerate(lines)
+        local m = match(r"^\s*(?:@enum\s+(\w+)|@closed\s+(?:abstract type\s+|(?:mutable\s+)?struct\s+|const\s+)?(\w+))", l)
+        local name = m === nothing ? nothing : something(m[1], m[2])
+        if name === nothing
+            local hit = findfirst(rx -> occursin(rx, l), named)
+            hit === nothing || (name = names[hit])
+        end
+        name === nothing && continue
+        occursin(PRECEDENT_RX, precedent_block(lines, i)) || push!(out, "$path:$i $name")
+    end
+    return out
+end
+
+# every closed sum or construction in src without its precedent
+function precedent_missing_in_src()::Vector{String}
+    local names = String[d for (k, (v, d)) in STRICT_KINDS if v === :construction]
+    local out = String[]
+    for (dir, _, files) in walkdir(SRC), f in files
+        endswith(f, ".jl") || continue
+        local path = joinpath(dir, f)
+        append!(out, precedent_missing(relpath(path, ROOT), split(_text(path), '\n'), names))
+    end
+    return out
+end
+
+# L202's negative test: planted definitions each answer as stated
+function precedent_negatives_missed()::Vector{String}
+    local cases = [
+        ("an @enum with its precedent in its docstring", "\"\"\"\n    K\n\nprecedent(rust: enum)\n\"\"\"\n@enum K A B", 0),
+        ("an @enum without one", "\"\"\"\n    K\n\nparity(quarantine: x)\n\"\"\"\n@enum K A B", 1),
+        ("a @closed sum with a trailing precedent", "@closed abstract type T end  # precedent(dart: sealed class, misc.dart:57)", 0),
+        ("a @closed sum without one", "@closed abstract type T end", 1),
+        ("an open abstract type, asked nothing", "abstract type T end", 0),
+        ("a named construction with its precedent in a comment above", "# precedent(rust: typestate builder)\nfunction mk!(x)", 0),
+        ("a named construction without one", "function mk!(x)", 1),
+        ("a precedent with no ecosystem", "@enum K A B  # precedent(sealed classes)", 1),
+    ]
+    local out = String[]
+    for (what, text, want) in cases
+        length(precedent_missing("t.jl", split(text, '\n'), ["mk!"])) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
+# ---- L203: an audit entry over src asks "stopgap in disguise" and "precedent" (dev/CHARTER.md C0) -
+# the first dev/AUDIT.md entry the rule binds (the entries before it predate it)
+const L203_FIRST_ENTRY = 30
+
+# the entries from L203_FIRST_ENTRY on whose range changes src and that lack either line, by number
+function audit_lines_missing(entries::AbstractVector{<:AbstractString}; touches_src::Function)::Vector{String}
+    local out = String[]
+    for (n, e) in enumerate(entries)
+        n >= L203_FIRST_ENTRY || continue
+        local r = match(r"\(([0-9a-f]{7,40})(?:~1)?\.\.([0-9a-f]{7,40})", e)
+        r === nothing && (push!(out, "entry $n names no range"); continue)
+        touches_src(r.captures[1], r.captures[2]) || continue
+        occursin(r"(?m)^\s*(?:- )?stopgap in disguise:", e) || push!(out, "entry $n has no `stopgap in disguise:` line")
+        occursin(r"(?m)^\s*(?:- )?precedent:", e) || push!(out, "entry $n has no `precedent:` line")
+    end
+    return out
+end
+
+# whether git's range a..b changes src or ext (no git history fails, never skips: true)
+function audit_range_touches_src(a::AbstractString, b::AbstractString)::Bool
+    local cmd = `git -C $ROOT log --format=%H $a..$b -- src ext`
+    local o = try
+        readchomp(cmd)
+    catch
+        return true
+    end
+    return !isempty(o)
+end
+
+# L203's negative test: planted entries each answer as stated
+function audit_lines_negatives_missed()::Vector{String}
+    local pad = fill("## entry (aaaaaaa..bbbbbbb)", L203_FIRST_ENTRY - 1)
+    local good = "## e (aaaaaaa..bbbbbbb)\n- stopgap in disguise: none\n- precedent: rust: enum"
+    local cases = [
+        ("an entry over src with both lines", vcat(pad, good), true, 0),
+        ("an entry over src missing both", vcat(pad, "## e (aaaaaaa..bbbbbbb)\nResolution: x"), true, 2),
+        ("an entry over src missing the precedent line", vcat(pad, "## e (aaaaaaa..bbbbbbb)\nstopgap in disguise: none"), true, 1),
+        ("an entry that changes no src", vcat(pad, "## e (aaaaaaa..bbbbbbb)"), false, 0),
+        ("an entry before the rule", vcat(pad[1:end-1], "## e (aaaaaaa..bbbbbbb)"), true, 0),
+    ]
+    local out = String[]
+    for (what, entries, src, want) in cases
+        length(audit_lines_missing(entries; touches_src=(a, b) -> src)) == want || push!(out, "negative missed: $what")
+    end
     return out
 end
 
@@ -6046,7 +6215,21 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local found = type_default_parameters()
             count(k -> count(==(k), found) != 1, keys(L192_ALLOWED)) + _l192_spellings_missed()
         end),
-    "L201_closed_cites_no_stopgap" => ("strict means by construction (Dale, 2026-10-21): a clause of C1 to C8 with no Planned text (one the charter block reads CLOSED) cites only constructions: no ratchet, no lock STRICT_KINDS classifies :stopgap (a scan of WT's source, an allowlist or a count, finding the wrong choice at gate time) or :behavior (a run that must reach it), and no lock it does not classify; every lock C4 to C8 cite is classified, every entry names a lock one of them cites, and every :construction names the definition in src that is the construction, which a definition of exactly that name must exist for (a hand label naming nothing is a stopgap). Behavior, run here: planted clauses (a stopgap, a behavior check, a ratchet or an unclassified lock with no Planned text fires; Planned text, constructions alone, or a clause outside the scope do not), a planted table's ten faults, and the name resolution of a real and a missing definition (dev/CHARTER.md C0)",
+    "L202_constructions_have_precedents" => ("every closed sum or construction in src carries its precedent, as every definition carries its parity anchor (R32): each @enum, each `@closed` sum and each definition a STRICT_KINDS construction names has `precedent(<ecosystem>: <mechanism>[, <anchor>])` on its line, in the docstring directly above it or in the comment lines above that (Rust's sealed enums and exhaustive match, dart's enums and sealed classes, wasm's types); an abstract type is an open hierarchy, neither a closed sum nor a construction, and carries its parity(...) alone; one with no precedent anywhere is an invention and waits for Dale (2026-10-21). Behavior, run here: eight planted definitions answer as stated (dev/CHARTER.md C0)",
+        () -> begin
+            local v = vcat(precedent_missing_in_src(), precedent_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L203_audit_asks_disguise_and_precedent" => ("each dev/AUDIT.md entry from the L203_FIRST_ENTRY-th on whose range changes src or ext carries a `stopgap in disguise:` line (is a claimed construction a scan, an allowlist or a test?) and a `precedent:` line (which ecosystem holds each closed sum or construction it audits?); with no git history an entry counts as changing src (Dale 2026-10-21). Behavior, run here: five planted entries answer as stated (dev/CHARTER.md C0)",
+        () -> begin
+            local audit = joinpath(ROOT, "dev", "AUDIT.md")
+            local entries = isfile(audit) ? split(_text(audit), r"\n(?=## )")[2:end] : String[]
+            local v = vcat(audit_lines_missing(entries; touches_src=audit_range_touches_src), audit_lines_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L201_closed_cites_no_stopgap" => ("strict means by construction (Dale, 2026-10-21): a clause of C0 to C8 with no Planned text (one the charter block reads CLOSED) cites only constructions: no ratchet, no lock STRICT_KINDS classifies :stopgap (a scan of WT's source or the repository's text, an allowlist or a count, finding the wrong choice at gate time) or :behavior (a run that must reach it), and no lock it does not classify; C0 is inside the standard (A29S2), its eight checks stopgaps, so it reads OPEN with its Planned text; every lock C0 and C4 to C8 cite is classified, every entry names a lock one of them cites, and every :construction's lock is ConstructionLock of the definition it names, which only calls the check src registers beside that definition (construction_check), so a construction's lock reads no text: L201 checks the lock's type and name in this table by reflection, not its source (A29S1); and every :construction has its precedent in STRICT_PRECEDENTS, `<ecosystem>: <mechanism>`, with how Julia's differs, and no other entry has one (Dale 2026-10-21: a construction with no precedent anywhere is an invention). Behavior, run here: planted clauses (a stopgap, a behavior check, a ratchet or an unclassified lock with no Planned text fires; Planned text, constructions alone, or a clause outside the scope do not), a planted table's thirteen faults (a construction whose lock is a function, one with no precedent or no Julia difference, a precedent for a stopgap among them) and a ConstructionLock naming another definition (dev/CHARTER.md C0)",
         () -> begin
             local cl = charter_clauses()
             local v = vcat(strict_violations(cl, STRICT_KINDS), strict_table_faults(cl, STRICT_KINDS), strict_negatives_missed())
