@@ -2179,16 +2179,9 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
         end
 
         if field_sym === :instance && nir_const(obj_arg) isa DataType && nir_const(obj_arg) <: Memory
-            # Memory{T}.instance - create an empty array (length 0)
-            # Extract element type from Memory{T}
+            # Memory{T}.instance - create an empty array (length 0) of the Memory's element type
             local mem_T = nir_const(obj_arg)
-            elem_type = if mem_T.name.name === :Memory && length(mem_T.parameters) >= 1
-                mem_T.parameters[1]
-            elseif mem_T.name.name === :GenericMemory && length(mem_T.parameters) >= 2
-                mem_T.parameters[2]
-            else
-                error("$(mem_T).instance: a Memory type without its element type")
-            end
+            elem_type = eltype(mem_T)
 
             # Get or create array type for this element type
             arr_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)

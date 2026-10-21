@@ -22,7 +22,7 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
         # a ref's storage is its Memory; its offset rides the pointer (ptr_or_offset)
         emit_memoryref_mem!(b, ctx, vec)
         coerce_stack_top!(b, ConcreteRef(UInt32(arr_t), true), ctx; from_julia=memoryref_memory_type(vt))
-    elseif vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory)
+    elseif vt isa DataType && vt <: Core.GenericMemory
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
     else
         vinfo = ctx.type_registry.structs[vt]
@@ -346,8 +346,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                             return NirSSA(projection_idx, projection_rec.julia_type)
                         end
                         return owner
-                    elseif owner_type isa DataType &&
-                       owner_type.name.name in (:Memory, :GenericMemory)
+                    elseif owner_type isa DataType && owner_type <: Core.GenericMemory
                         if owner isa NirSSA
                             cur = owner
                         else
@@ -358,8 +357,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                     end
                 elseif fld === :mem
                     memory_type = value_type(ctx, cur)
-                    if memory_type isa DataType &&
-                       memory_type.name.name in (:Memory, :GenericMemory)
+                    if memory_type isa DataType && memory_type <: Core.GenericMemory
                         owner = st.operands[1]
                         if owner isa NirSSA
                             # Canonicalize repeated `.mem` projections of the same
@@ -390,8 +388,7 @@ function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
                     local _gf_vt = value_type(ctx, cur)
                     if _gf_vt isa DataType && _gf_vt <: Vector && eltype(_gf_vt) in eltypes
                         return cur
-                    elseif _gf_vt isa DataType &&
-                           _gf_vt.name.name in (:Memory, :GenericMemory) &&
+                    elseif _gf_vt isa DataType && _gf_vt <: Core.GenericMemory &&
                            eltype(_gf_vt) in eltypes
                         return cur
                     end
@@ -1060,7 +1057,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
         end
         return b
     end
-    if struct_type isa DataType && struct_type.name.name in (:Memory, :GenericMemory)
+    if struct_type isa DataType && struct_type <: Core.GenericMemory
         # Memory{T} — emit ref.null of the array type (we can't construct raw memory in Wasm)
         elem_type = eltype(struct_type)
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
@@ -1602,7 +1599,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
                 owner_arg = length(node.operands) >= 4 ? node.operands[end] : nothing
                 owner_type = owner_arg === nothing ? nothing : value_type(ctx, owner_arg)
                 owner_is_memory = owner_type isa DataType &&
-                    owner_type.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
+                    (owner_type <: Core.GenericMemory || owner_type <: Core.GenericMemoryRef)
                 data_owner = owner_is_memory ? owner_arg :
                     _trace_memmove_ptr(ptr_arg, ctx; eltypes = _BYTE_ELTYPES)
                 if data_owner !== nothing
@@ -1866,7 +1863,7 @@ function _fc_jl_symbol_n!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::
         source! = () -> emit_value!(b, source, ctx, arr_ref)
         offset! = offset === nothing ? () -> i32_const!(b, 0) :
                   () -> emit_value!(b, offset, ctx, I32)
-    elseif root_type isa DataType && root_type.name.name in (:Memory, :GenericMemory)
+    elseif root_type isa DataType && root_type <: Core.GenericMemory
         source! = () -> _emit_backing_array!(b, root, ctx, arr_idx)
         offset! = () -> _emit_storage_element_offset!(b, ptr_arg, root, ctx, 0)
     else

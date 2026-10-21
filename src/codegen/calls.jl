@@ -3238,7 +3238,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # Memory and was ORDER-DEPENDENT — KeyError when a perturbed compile
                 # order left _psg_vt unregistered. Register-or-guard fixes both.)
                 local _psg_is_mem = _psg_vt isa DataType &&
-                    _psg_vt.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
+                    (_psg_vt <: Core.GenericMemory || _psg_vt <: Core.GenericMemoryRef)
                 if _psg_is_mem
                     # a ref's storage is its Memory; its offset rides the pointer
                     emit_memoryref_mem!(_psgb, ctx, _psg_vec)

@@ -99,10 +99,10 @@ function register_closure_type!(mod::WasmModule, registry::TypeRegistry, T::Data
         elseif ft <: Vector
             vec_info = register_vector_type!(mod, registry, ft)
             wasm_vt = ConcreteRef(vec_info.wasm_type_idx, true)
-        elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
+        elseif ft isa DataType && ft <: Core.GenericMemoryRef
             # a MemoryRef field holds the ref's single-value struct (mem, off0)
             wasm_vt = memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
+        elseif ft isa DataType && ft <: Core.GenericMemory
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
@@ -253,7 +253,7 @@ function _register_struct_type_inner!(mod::WasmModule, registry::TypeRegistry, T
     # MemoryRef/Memory should NOT be registered as struct types.
     # They map to array types in WasmGC. Guard against callers that use
     # Julia's isstructtype() (true for MemoryRef) instead of our is_struct_type().
-    if T isa DataType && T.name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
+    if T <: Core.GenericMemoryRef || T <: Core.GenericMemory
         return nothing
     end
 
@@ -360,10 +360,10 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
         #
         # IMPORTANT: Check Memory/MemoryRef BEFORE AbstractVector because
         # Memory <: AbstractVector but should map to raw array, not Vector struct
-        if ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
+        if ft isa DataType && ft <: Core.GenericMemoryRef
             # a MemoryRef field holds the ref's single-value struct (mem, off0)
             wasm_vt = memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
+        elseif ft isa DataType && ft <: Core.GenericMemory
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
             array_type_idx = get_array_type!(mod, registry, elem_type)
@@ -646,10 +646,10 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, @nospecia
         elseif ft isa Type && ft <: Array
             info = register_vector_type!(mod, registry, ft)
             ConcreteRef(info.wasm_type_idx, true)
-        elseif ft isa DataType && (ft.name.name === :MemoryRef || ft.name.name === :GenericMemoryRef)
+        elseif ft isa DataType && ft <: Core.GenericMemoryRef
             # a MemoryRef field holds the ref's single-value struct (mem, off0)
             memoryref_field_type!(mod, registry, ft)
-        elseif ft isa DataType && (ft.name.name === :Memory || ft.name.name === :GenericMemory)
+        elseif ft isa DataType && ft <: Core.GenericMemory
             # Memory{T} / GenericMemory maps to array type for element T
             elem_type = eltype(ft)
             type_idx = get_array_type!(mod, registry, elem_type)

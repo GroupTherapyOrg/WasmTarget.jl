@@ -1734,14 +1734,14 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # struct.new for Vector{T}
         struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
 
-    elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
+    elseif val isa Core.GenericMemoryRef || val isa Core.GenericMemory
         # MemoryRef/Memory constants map to array types, not struct types.
         # Materialize the exact contents, an unset slot as `#undef` (emit_constant_slots!).
         # Size is never a license to replace a real Memory constant with null.
         T = typeof(val)
-        elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
+        elem_type = T <: Core.GenericMemoryRef ? memoryref_eltype(T) : eltype(T)
         array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
-        mem = T.name.name in (:MemoryRef, :GenericMemoryRef) ? getfield(val, :mem) : val
+        mem = T <: Core.GenericMemoryRef ? getfield(val, :mem) : val
         # A MemoryRef constant is its Memory only at offset 0 (the pair channel,
         # builtins.jl, reads a constant's offset itself).
         T <: Core.GenericMemoryRef && Base.memoryrefoffset(val) != 1 &&

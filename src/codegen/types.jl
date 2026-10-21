@@ -389,8 +389,7 @@ function find_common_wasm_type(types::Vector)::WasmValType
     # return site pushes a struct ref: the callee's value died to a ref.null
     # default and the caller failed validation (structref vs arrayref).
     _is_array_rep = t -> t === String || t === Symbol ||
-        (t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
-                            t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef))
+        (t isa DataType && (t <: Core.GenericMemory || t <: Core.GenericMemoryRef))
     if all(_is_array_rep, types)
         return ArrayRef
     end
@@ -2927,8 +2926,7 @@ function _resolve_multivariant_union(T::Union, non_nothing, mod::WasmModule, reg
     # WT reps Memory/MemoryRef as RAW WASM ARRAYS: isstructtype(Memory) is true in Julia,
     # but the union of array-repped variants joins to ArrayRef, never StructRef (1.13-rc1's
     # Memory-width unions — Union{Memory{UInt8},Memory{UInt16},...} — hit this).
-    _is_array_repped = t -> t isa DataType && (t.name.name === :Memory || t.name.name === :GenericMemory ||
-                                               t.name.name === :MemoryRef || t.name.name === :GenericMemoryRef)
+    _is_array_repped = t -> t isa DataType && (t <: Core.GenericMemory || t <: Core.GenericMemoryRef)
     all(_is_array_repped, non_nothing) && return ArrayRef
     # all-struct union → the common struct supertype.
     is_all_struct = all(non_nothing) do t
@@ -3106,7 +3104,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
         end
         type_idx = get_array_type!(mod, registry, memref_elem_type)
         return ConcreteRef(type_idx, true)
-    elseif T isa DataType && (T.name.name === :Memory || T.name.name === :GenericMemory)
+    elseif T isa DataType && T <: Core.GenericMemory
         # Memory{T} / GenericMemory maps to array type for element T
         # IMPORTANT: Check BEFORE AbstractArray since Memory <: AbstractArray
         elem_type = T.parameters[2]  # Element type is second parameter for GenericMemory
