@@ -1,0 +1,1 @@
+lock: committed 19:09:04Z, land started 19:19:00Z: 596 s waiting on the hold behind audit entry 24's two gate runs and the L148 slot order the orchestrator set (loop2 was told to land after entry 24); its own landing took 169 s
