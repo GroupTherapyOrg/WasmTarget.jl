@@ -27,6 +27,10 @@ include(joinpath(@__DIR__, "emission_fingerprint.jl"))   # the emission-diff che
 
 const FILTER = lowercase.(ARGS)
 const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
+# WT_SMOKE_CASES="<group>/<case> ...": a selected group one of them names runs those cases alone (the
+# blocking gate's cases for a changed lowering-table entry, dev/block.jl); a name no case has is refused
+const ONLY_CASES = Set{String}(split(get(ENV, "WT_SMOKE_CASES", "")))
+_only(group, name) = !any(c -> startswith(c, group * "/"), ONLY_CASES) || "$group/$name" in ONLY_CASES
 _want(group) = isempty(FILTER) || (EXACT ? lowercase(group) in FILTER : any(f -> occursin(f, lowercase(group)), FILTER))
 # the groups of `list` a run takes: in the file's order, or under WT_SMOKE_EXACT in the order named
 # (dev/block.jl names its fixed core first, so the core's times do not depend on what follows it)
@@ -2687,6 +2691,11 @@ function main()
         println("smoke: no group named ", join(unknown, ", "))
         exit(1)
     end
+    local nocase = [c for c in ONLY_CASES if !any(g -> any(k -> "$(first(g))/$(k[1])" == c, last(g)), _selected(_smoke_part(GROUPS)))]
+    if !isempty(nocase)
+        println("smoke: no selected case named ", join(sort(nocase), ", "))
+        exit(1)
+    end
     local case_secs = Float64[]
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
@@ -2701,6 +2710,7 @@ function main()
         local tg = time()
         for case in cases
             name = case[1]; f = case[2]; args = case[3:end]
+            _only(group, name) || continue
             tag = "$group/$name"
             local tc = time()
             rec === nothing || (EMITTED_MODULES[] = Any[])

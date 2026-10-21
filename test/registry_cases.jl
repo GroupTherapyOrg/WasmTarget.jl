@@ -43,6 +43,7 @@ const RC_HELD = Dict{DataType,String}(
 )
 const RC_REGISTERS = (WasmTarget.I32, WasmTarget.I64, WasmTarget.F32, WasmTarget.F64)
 const RC_CLASS = Dict{String,Tuple}()   # a generated case's class (_rc_class_key), by "group/case"
+const RC_ENTRY = Dict{String,Tuple{Symbol,Any}}()   # the lowering table and key a generated case cases, by "group/case"
 
 _rc_register(T) = WasmTarget.julia_to_wasm_type(T)
 _rc_carrier(T) = T <: AbstractFloat ? Base.uinttype(T) : T
@@ -137,11 +138,13 @@ _rc_admit(ok::Bool, v) = ok && !(v isa Bool && reinterpret(UInt8, v) > 0x01)
 # arity: a unary and a binary operation of one table, the operator fallback's call and reduce, are
 # two kinds) and the register classes of `types`, the values it operates on (a conversion's target
 # by its register alone)
-function _rc_case!(group::Vector{Any}, gname::String, name::String, f, inputs::Vector{Tuple}; types::Tuple)
+function _rc_case!(group::Vector{Any}, gname::String, name::String, f, inputs::Vector{Tuple}; types::Tuple,
+                   entry::Union{Nothing,Tuple{Symbol,Any}})
     isempty(inputs) && error("registry_cases: $gname/$name has no input")
     push!(group, (name, f, inputs[1]...))
     CASE_INPUTS["$gname/$name"] = inputs
     RC_CLASS["$gname/$name"] = (gname, length(inputs[1]), map(_rc_class, types)...)
+    entry === nothing || (RC_ENTRY["$gname/$name"] = entry)
     return nothing
 end
 # a type's register class: the register julia_to_wasm_type gives it, an integer narrower than its
@@ -205,7 +208,7 @@ function _rc_binops()
                 _rc_undefined(op, _rc_operand(_rc_in(T, inp[1]), _rc_in(T, inp[2])),
                               _rc_operand(_rc_in(T, inp[3]), _rc_in(T, inp[4]))) || push!(inputs, inp)
             end
-            _rc_case!(g, "registry_binops", "$(op)_$(T)", f, inputs; types=(T,))
+            _rc_case!(g, "registry_binops", "$(op)_$(T)", f, inputs; types=(T,), entry=(:INTRINSIC_BINOPS, key))
         end
     end
     return g
@@ -227,7 +230,7 @@ function _rc_unops()
             for inp in _rc_operands(T)
                 _rc_fast_undefined(op, _rc_operand(_rc_in(T, inp[1]), _rc_in(T, inp[2]))) || push!(inputs, inp)
             end
-            _rc_case!(g, "registry_unops", "$(op)_$(T)", f, inputs; types=(T,))
+            _rc_case!(g, "registry_unops", "$(op)_$(T)", f, inputs; types=(T,), entry=(:INTRINSIC_UNOPS, key))
         end
     end
     return g
@@ -268,7 +271,8 @@ function _rc_conversions()
                 (op in (:fptosi, :fptoui) && !_rc_in_range(op, D, _rc_operand(_rc_in(S, inp[1]), _rc_in(S, inp[2])))) ||
                     push!(inputs, inp)
             end
-            _rc_case!(g, "registry_conversions", "$(op)_$(S)_$(D)", f, inputs; types=(S, rd))
+            _rc_case!(g, "registry_conversions", "$(op)_$(S)_$(D)", f, inputs; types=(S, rd),
+                      entry=(rs, rd) in keyed ? (:INTRINSIC_CONVERSIONS, (rs, rd, op)) : nothing)
         end
     end
     for key in keys(WasmTarget.INTRINSIC_CONVERSIONS)
@@ -293,7 +297,7 @@ function _rc_checked()
             local ops = _rc_operands(T)
             local clean = [_rc_clean(x) for x in _rc_values(T)]
             local inputs = _rc_product(ops, clean)
-            _rc_case!(g, "registry_checked", "$(op)_$(T)", f, inputs; types=(T,))
+            _rc_case!(g, "registry_checked", "$(op)_$(T)", f, inputs; types=(T,), entry=(:CHECKED_OPS, op))
         end
     end
     return g
@@ -328,7 +332,7 @@ function _rc_shift()
             found = true
             local f = @eval (a::$T, b::$T, n::$U, m::$U) -> _rc_out(Core.Intrinsics.$op(_rc_operand(a, b), _rc_operand(n, m)))
             local inputs = _rc_product(_rc_operands(T), _rc_amounts(U, 8 * sizeof(T)))
-            _rc_case!(g, "registry_shift", "$(op)_$(T)_$(U)", f, inputs; types=(T, U))
+            _rc_case!(g, "registry_shift", "$(op)_$(T)_$(U)", f, inputs; types=(T, U), entry=(:SHIFT_OPS, op))
         end
         found || _rc_unreached(:SHIFT_OPS, op)
     end
@@ -343,7 +347,7 @@ function _rc_fma()
             isempty(ts) && _rc_unreached(:FMA_OPS, op)
             for T in ts
                 local f = @eval (a::Int64) -> Core.Intrinsics.have_fma($T)
-                _rc_case!(g, "registry_fma", "$(op)_$(T)", f, Tuple[(Int64(0),)]; types=())   # no value of T
+                _rc_case!(g, "registry_fma", "$(op)_$(T)", f, Tuple[(Int64(0),)]; types=(), entry=(:FMA_OPS, op))   # no value of T
             end
             continue
         end
@@ -358,7 +362,7 @@ function _rc_fma()
             local inputs = _rc_product(ops, ops[1:6], ops[1:6])
             # one rounding: x*y + z exact in no wider type than the product of two halves of 2^k
             push!(inputs, (_rc_clean(T(1) + eps(T))..., _rc_clean(T(1) - eps(T))..., _rc_clean(T(-1))...))
-            _rc_case!(g, "registry_fma", "$(op)_$(T)", f, inputs; types=(T,))
+            _rc_case!(g, "registry_fma", "$(op)_$(T)", f, inputs; types=(T,), entry=(:FMA_OPS, op))
         end
     end
     return g
@@ -377,10 +381,10 @@ function _rc_misc()
             if op === :flipsign_int
                 local f = @eval (a::$C, b::$C, c::$C, d::$C) -> _rc_out(Core.Intrinsics.$op(_rc_operand(a, b), _rc_operand(c, d)))
                 local inputs = _rc_product(_rc_operands(T), _rc_operands(T))
-                _rc_case!(g, "registry_misc", "$(op)_$(T)", f, inputs; types=(T,))
+                _rc_case!(g, "registry_misc", "$(op)_$(T)", f, inputs; types=(T,), entry=(:MISC_OPS, op))
             else
                 local f = @eval (a::$C, b::$C) -> _rc_out(Core.Intrinsics.$op(_rc_operand(a, b)))
-                _rc_case!(g, "registry_misc", "$(op)_$(T)", f, _rc_operands(T); types=(T,))
+                _rc_case!(g, "registry_misc", "$(op)_$(T)", f, _rc_operands(T); types=(T,), entry=(:MISC_OPS, op))
             end
         end
         found || _rc_unreached(:MISC_OPS, op)
@@ -432,7 +436,7 @@ function _rc_operators()
             local cs = Tuple[(_rc_c(a),) for a in _rc_values(T)]
             local inputs = _rc_product(Tuple[(Int64(1),), (Int64(2),)], cs, cs)
             if WasmTarget.operator_intrinsic(f, T) !== nothing
-                _rc_case!(g, "registry_operators", "call_$(_rc_fname(f))_$(T)", fc, inputs; types=(T,))
+                _rc_case!(g, "registry_operators", "call_$(_rc_fname(f))_$(T)", fc, inputs; types=(T,), entry=nothing)
             elseif !nothing_seen
                 nothing_seen = true
                 push!(RC_OPERATOR_REJECTS, ("call_$(_rc_fname(f))_$(T)", fc, inputs[end]...))
@@ -452,7 +456,7 @@ function _rc_operators()
             local inputs = _rc_product(cs, cs)
             _rc_accepts(f, _rc_in(T, inputs[end][1]), _rc_in(T, inputs[end][2])) || continue
             if WasmTarget.reduce_intrinsic(f, T) !== nothing
-                _rc_case!(g, "registry_operators", "splat2_$(_rc_fname(f))_$(T)", fr, inputs; types=(T,))
+                _rc_case!(g, "registry_operators", "splat2_$(_rc_fname(f))_$(T)", fr, inputs; types=(T,), entry=nothing)
             elseif !nothing_seen
                 nothing_seen = true
                 push!(RC_OPERATOR_REJECTS, ("splat2_$(_rc_fname(f))_$(T)", fr, inputs[end]...))

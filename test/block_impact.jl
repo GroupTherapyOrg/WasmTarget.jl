@@ -4,6 +4,7 @@
 #
 #   julia --code-coverage=@src --code-coverage="$TMPDIR/block_impact.info" --project=. test/block_impact.jl [<sets.tsv>]
 #   julia --project=. test/block_impact.jl --from <sets.tsv>   # the selections from sets measured before
+#   julia --project=. test/block_impact.jl --tables > test/block_tables.tsv   # each table entry's cases
 #
 # (the second flag sends the process's own coverage, written at exit, to a tracefile instead of a
 # .cov file beside every source file). Each probe of test/probe_corpus.jl is compiled as
@@ -34,15 +35,18 @@
 # A piece is a definition's BLOCK_LINES lines, each line of a `const` table its own, any other
 # top-level form's lines (dev/block.jl line_keys): every line of code is in one. A body no native run
 # executes, an overlay or a bespoke body WT compiles in Julia's place, counts as run by a probe or a
-# case whose plan compiles it (its definition's pieces, from the plan's functions). Without
-# --code-coverage the measuring run refuses: no line would count.
+# case whose plan compiles it (its definition's pieces, from the plan's functions). With --tables
+# it writes, for each entry of the numeric lowering tables (dev/block.jl table_entry_keys), the
+# generated cases that case it (test/registry_cases.jl's RC_ENTRY), which the gate runs when the
+# entry changes. Without --code-coverage the measuring run refuses: no line would count.
 
 const FROM = length(ARGS) == 2 && ARGS[1] == "--from" ? ARGS[2] : ""
-const SETS_OUT = isempty(FROM) && length(ARGS) == 1 ? ARGS[1] : ""
+const TABLES = ARGS == ["--tables"]
+const SETS_OUT = isempty(FROM) && !TABLES && length(ARGS) == 1 ? ARGS[1] : ""
 
 using WasmTarget
 
-isempty(FROM) && Base.JLOptions().code_coverage == 0 && (println("block_impact: run with --code-coverage=@src"); exit(2))
+isempty(FROM) && !TABLES && Base.JLOptions().code_coverage == 0 && (println("block_impact: run with --code-coverage=@src"); exit(2))
 # Coverage counts the lines WasmTarget's own code runs (codegen instruments them); Julia's optimizer
 # would also mark coverage in the IR WasmTarget compiles, wherever an overlay from src/ is inlined
 # into it, and that IR is the input the probes fingerprint and smoke runs (a `:code_coverage_effect`
@@ -236,7 +240,30 @@ function load_sets(path)
     return sets["probe"], sets["group"], sets["test"]
 end
 
+# each entry of the numeric lowering tables (dev/block.jl table_entry_keys), the generated cases that
+# case it (RC_ENTRY: the table and the key each case was generated for), one line each; an entry no
+# case cases raises (the generator raises for a key no type reaches first)
+function tables()
+    println("# each numeric lowering-table entry and the generated cases that case it (test/block_impact.jl --tables;")
+    println("# dev/block.jl runs them when the entry changes, A20C12): <file>\t<table>\t<entry key's text>\t<group/case ...>")
+    for (d, _, fs) in walkdir(SRC), f in sort(fs)
+        endswith(f, ".jl") || continue
+        local rel = relpath(joinpath(d, f), dirname(SRC))
+        local entries = Base.invokelatest(BLOCK.table_entry_keys, read(joinpath(d, f), String), rel)
+        for (table, keytext) in sort(unique(collect(values(entries))))
+            local tsym = Symbol(table)
+            any(e -> first(e) === tsym, values(RC_ENTRY)) || continue   # a table no generator cases
+            local key = Core.eval(WasmTarget, Meta.parse(keytext))
+            local cases = sort([c for (c, e) in RC_ENTRY if e[1] === tsym && isequal(e[2], key) && !startswith(c, "registry_sample/")])
+            isempty(cases) && error("block_impact: the entry $keytext of $table ($rel) has no generated case")
+            println(rel, '\t', table, '\t', keytext, '\t', join(cases, ' '))
+        end
+    end
+    return 0
+end
+
 function main()
+    TABLES && return tables()
     plines, glines, tlines = isempty(FROM) ? measure() : load_sets(FROM)
     probes = [n => pieces(l) for (n, l) in plines]
     # a matrix-only group (test/block_groups.tsv) is no stage's here: never a cover's candidate
