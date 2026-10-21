@@ -2316,13 +2316,13 @@ Resolution: this entry lands alone, prose only, and fixes nothing. A22E1-A22E8, 
 A22E9 on 13.17; A22E4's re-record and A22E7's charter text are for Dale under the order of 17:05Z; A22E5 closes when
 compile3's first commit lands and the case passes under the runner.
 
-## 2026-10-21 — audited through 0459332a (b31a7671..0459332a: entry 22, the charter pin, a red lock owes a fix, the closure matrix, the carried log)
+## 2026-10-21 — audited through 0459332a (d41b08ab..0459332a: entry 22, the charter pin, a red lock owes a fix, the closure matrix, the carried log)
 
 The twenty-third audit covers b31a7671 (entry 22, prose; its author's, nothing to add), d9d5a2db (a dev/CHARTER.md
 change lands only as the exact change authorised, A21E6; a budget missed past the factor cap lands as unjudged),
 41d48aef (any check failing after a cold landing is FAILED and owes a warm green fix, never a row, A21E1), 90a6984d
 (the full matrix runs only at clause closure, a `Closes: C<n>` line its trigger) and 0459332a (each landing carries the
-landing log in its own tree, A21E4). It reads the loop by one 300-s target, a landing over it a finding about what
+landing log in its own tree, A21E4). Its range starts at d41b08ab, where entry 22 was audited through. It reads the loop by one 300-s target, a landing over it a finding about what
 blocked it. No wrong answer; no landing landed on a red record. A21E1, A21E4 and A21E6 are fixed as their commits
 state (FAILED owed by `merge` until a warm green record; the carried copy a line-by-line prefix of the ignored log;
 the blob pair listed in the main tree's dev/.block/charter_authorised). A22E5 is not verifiable yet: compile3's first
