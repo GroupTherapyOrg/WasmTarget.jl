@@ -205,7 +205,7 @@ parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
-                       from_julia::Union{Type,Nothing})::Union{Nothing,InstrBuilder}
+                       @nospecialize(from_julia::Union{Type,Nothing}))::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
     # `nothing` meeting a nullable reference of the any hierarchy (a Union{T,Nothing}'s box or
     # struct, anyref, eqref, structref) is its null, whichever position's form it arrives in (a
@@ -461,7 +461,7 @@ parity(translator.dart:1597 convertType): the ref→ref arm — ref.as_non_null 
 nullability blocks the upcast (:1614-1616), else ref.cast (:1619).
 """
 function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
-                      to::WasmValType, from_julia::Union{Type,Nothing})::InstrBuilder
+                      to::WasmValType, @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder
     local _mod = ctx.mod
     if wasm_subtype(from, to, _mod.types)
         # Upcast is free — emit nothing.
@@ -527,7 +527,7 @@ the emitted result type.
 """
 function coerce_stack_top!(b::InstrBuilder, expected::WasmValType,
                            ctx::AbstractCompilationContext;
-                           from_julia::Union{Type,Nothing})::WasmValType
+                           @nospecialize(from_julia::Union{Type,Nothing}))::WasmValType
     isempty(b.v.stack) && throw(ArgumentError("cannot coerce an empty emitted-value stack"))
     actual = b.v.stack[end]
     actual === expected || convert_type!(b, actual, expected, ctx; from_julia=from_julia)
@@ -539,10 +539,10 @@ end
 # branch matches), so a no-op preserves byte-identity.
 # parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
 convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext;
-              from_julia::Union{Type,Nothing})::InstrBuilder = b
+              @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder = b
 # parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
 convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext;
-              from_julia::Union{Type,Nothing})::InstrBuilder = b
+              @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder = b
 
 # ============================================================================
 # Single-source classId box/unbox/discriminate (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
@@ -1006,7 +1006,7 @@ class), so the funnel stamps that class where it boxes.
 parity(code_generator.dart:665 translateExpression)
 """
 emit_value_as!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
-               expected::WasmValType, from_julia::Type)::WasmValType =
+               expected::WasmValType, @nospecialize(from_julia::Type))::WasmValType =
     _emit_value_wrap!(b, val, ctx, expected, from_julia)
 
 """
@@ -1026,7 +1026,7 @@ _emit_value_static!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationConte
 # narrower than it (a literal's value of it): a class that disagrees with the value's own type
 # raises at its statement, never converts the value as another class's.
 function _emit_value_wrap!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
-                           expected::WasmValType, from_julia::Union{Type,Nothing})::WasmValType
+                           expected::WasmValType, @nospecialize(from_julia::Union{Type,Nothing}))::WasmValType
     from_julia === nothing ||
         (val isa NirLiteral ? val.value isa from_julia : from_julia <: value_type(ctx, val)) ||
         error("the class $(from_julia) stated for $(val) disagrees with its own type " *

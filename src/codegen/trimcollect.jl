@@ -2393,8 +2393,9 @@ function _collect_reachable_ir_types(function_data, bespoke::IdDict{Core.MethodI
         (isconcretetype(T) || is_dispatch_tuple) || return
         if isstructtype(T)
             push!(out, T)
-            for ft in fieldtypes(T)
-                reg!(ft)
+            # by index, not fieldtypes(T): its closure captures T, a new type per class
+            for i in 1:fieldcount(T)
+                reg!(fieldtype(T, i))
             end
         elseif isprimitivetype(T)
             push!(out, T)

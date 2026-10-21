@@ -1193,8 +1193,20 @@ The collector runs before the registry exists and prints with type_order_key its
 class each round of its fixpoint, when it sorts that round's class set (ClosedWorldClasses).
 parity(quarantine: the program-derived order key for identity-hashed keys, see type_order_key.)
 """
-registry_order_key(registry::TypeRegistry)::Function =
-    T -> get!(() -> type_order_key(T), registry.order_keys, T)
+registry_order_key(registry::TypeRegistry)::Function = (@nospecialize(T),) -> registry_order_key(registry, T)
+
+"""
+    registry_order_key(registry, T) -> Tuple{String,String}
+
+T's type order key in this compile (type_order_key), printed on its first read and kept in the
+registry. Compiled once for every type: no closure captures T, whose type is new for each class.
+parity(quarantine: the program-derived order key for identity-hashed keys, see type_order_key.)
+"""
+function registry_order_key(registry::TypeRegistry, @nospecialize(T))::Tuple{String,String}
+    local key = get(registry.order_keys, T, nothing)
+    key === nothing || return key
+    return registry.order_keys[T] = type_order_key(T)
+end
 
 # parity(quarantine: the program-derived order key for a Core.TypeName, see type_order_key.)
 typename_order_key(tn::Core.TypeName)::Tuple{String,String} = (string(tn.module), string(tn.name))

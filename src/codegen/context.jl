@@ -106,7 +106,7 @@ end
 function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::WasmModule, type_registry::TypeRegistry;
                            translator::Translator,
                            func_registry::Union{FunctionRegistry, Nothing}=nothing,
-                           func_idx::UInt32=UInt32(0), func_ref=nothing,
+                           func_idx::UInt32=UInt32(0), @nospecialize(func_ref=nothing),
                            global_args::Set{Int}=Set{Int}(),
                            is_compiled_closure::Bool=false,
                            captured_signal_fields::Dict{Symbol, Tuple{Bool, UInt32}}=Dict{Symbol, Tuple{Bool, UInt32}}(),
