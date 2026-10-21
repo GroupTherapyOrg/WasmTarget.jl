@@ -84,7 +84,7 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
             return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
         end
-        return I32
+        error("$(val) is outside the function's $(length(ctx.arg_types)) arguments: invalid IR")
     elseif val isa NirLiteral
         # Literal value
         lit = val.value

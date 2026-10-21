@@ -754,7 +754,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                 # read_local is being set on this edge AND read by another phi → need temp
                 if !haskey(needs_temp, read_local)
                     phi_local_array_idx = read_local - ctx.n_params + 1
-                    local_type = phi_local_array_idx >= 1 && phi_local_array_idx <= length(ctx.locals) ? ctx.locals[phi_local_array_idx] : I64
+                    local_type = ctx.locals[phi_local_array_idx]   # a phi's own local, never a parameter
                     temp_local = allocate_local!(ctx, local_type)
                     needs_temp[read_local] = temp_local
                     # Save old value: local.get $orig → local.set $temp

@@ -9,10 +9,15 @@
 # (up to 25 s) of its pieces some group runs and the core does not; `-` when the core runs every
 # piece any group runs (a directory row, ending in /, covers its files; the longest match wins). A
 # changed file under src/ or ext/ with no row fails the gate: a batch that adds a file adds its row,
-# re-recorded or, when unsure, naming more groups. Every probe and group still runs on every landed
-# head (non-blocking: gate.yml on march/**). Re-record when src/ or the corpora move on.
+# re-recorded or, when unsure, naming more groups. `matrix-only`: groups no stage here runs, even
+# when the change touches them or a row names them: test/registry_cases.jl's generated groups (712
+# cases, ~300 s a version on CI), whose blocking sample is its registry_sample group (Amendment
+# 117-14: split, never exempt), and entered_paths, which exists for a matrix-only check (the
+# emission-diff check's Base paths, L190). Every probe and group still runs on every landed head
+# (non-blocking: gate.yml on march/**). Re-record when src/ or the corpora move on.
 probes	string_lpad fc_task_rand muladd_f64 throw_inexacterror string_occursin string_uppercase fc_object_id fc_string_to_symbol fc_hrtime_elapsed checked_add int128_mul checked_add_i8 string_findfirst string_startswith fc_memset_dict_ctor const_dict fc_types_equal_pow fc_symbol_to_string fc_pchar_to_string_ptrlen fc_memchr_findfirst_char union_field
 core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs builtins_invoked memoryref_offset kind_isa isomorphic_recursive_classes exceptions
+matrix-only	registry_binops registry_unops registry_conversions registry_checked registry_shift registry_fma registry_misc registry_operators registry_operators_rejected entered_paths
 src/WasmTarget.jl	-
 src/bridge.jl	-
 src/builder/instr_builder.jl	constant_memory_elements float32_fastmath simplevector_values captured_variables closed_world_edges

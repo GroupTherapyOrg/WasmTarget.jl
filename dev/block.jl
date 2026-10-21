@@ -13,7 +13,8 @@
 #               answer is compared, and LLVM's level changes no string it reads)
 #   smoke-core  test/smoke.jl on test/block_groups.tsv's fixed `core` groups
 #   smoke-batch test/smoke.jl on the groups the changed files map to there, then the groups whose
-#               lines the change touches in test/smoke.jl (the batch's own cases)
+#               lines the change touches in test/smoke.jl and the case files it includes (the
+#               batch's own cases)
 #   smoke-1.13  the batch's own groups on `julia +1.13`, when it has any
 #               (the smokes at Julia's default flags, so the native answer each case compares
 #               against is Julia's own; dev/block_jit.jl lowers LLVM's level for WasmTarget's and
@@ -72,7 +73,8 @@ const RATCHETED = ("load", "ratchet", "smoke-core", "probes")
 const STAGE_INPUTS = Dict(
     "load" => ["src/", "ext/", "Project.toml"],
     "ratchet" => ["src/", "ext/", "test/", "dev/", "docs/", "AGENTS.md", ".github/"],
-    "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl"],
+    "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl",
+                     "test/emission_fingerprint.jl", "test/registry_cases.jl"],
     "probes" => ["src/", "ext/", "test/probe_bytes.jl", "test/probe_corpus.jl"],
     "tlc" => ["dev/formal/"])
 for k in ("smoke-batch", "smoke-1.13")
@@ -97,20 +99,23 @@ end
 changed_files(base) = sort(unique(vcat(split(git("diff", "--name-only", base), '\n'; keepempty = false),
                                        split(git("ls-files", "--others", "--exclude-standard"), '\n'; keepempty = false))))
 
-# test/block_groups.tsv: the `core` row (smoke groups), the `probes` row (the probe core), then
-# `<path or dir/><TAB>groups` rows
+# test/block_groups.tsv: the `core` row (smoke groups), the `probes` row (the probe core), the
+# `matrix-only` row (smoke groups the blocking tier never runs: the non-blocking matrix runs them,
+# a sample of them runs here), then `<path or dir/><TAB>groups` rows
 function read_map()
-    core = String[]; probes = String[]; rows = Pair{String,Vector{String}}[]
+    core = String[]; probes = String[]; matrix = String[]; rows = Pair{String,Vector{String}}[]
     for (n, l) in enumerate(eachline(MAP_PATH))
         (isempty(strip(l)) || startswith(l, '#')) && continue
         f = split(l, '\t')
         length(f) == 2 || error("test/block_groups.tsv:$n: not \"<path><TAB><groups>\": $l")
         gs = filter(!=("-"), String.(split(f[2])))   # `-`: nothing beyond the core
-        f[1] == "core" ? append!(core, gs) : f[1] == "probes" ? append!(probes, gs) : push!(rows, String(f[1]) => gs)
+        f[1] == "core" ? append!(core, gs) : f[1] == "probes" ? append!(probes, gs) :
+            f[1] == "matrix-only" ? append!(matrix, gs) : push!(rows, String(f[1]) => gs)
     end
     isempty(core) && error("test/block_groups.tsv has no core row")
     isempty(probes) && error("test/block_groups.tsv has no probes row")
-    return core, probes, rows
+    isempty(intersect(core, matrix)) || error("test/block_groups.tsv: the core runs a matrix-only group, $(join(intersect(core, matrix), ", "))")
+    return core, probes, matrix, rows
 end
 
 # the new-side line numbers a change touches in one file (a deletion: the line after it)
@@ -148,28 +153,44 @@ end
 # the groups whose lines test/smoke.jl's change touches: a changed line inside a group's list
 # (from its `_g("name", Any[` / `_xf("name", Any[` line to the list's closing `])`) is that group's,
 # a changed line between groups (a helper or a struct a case uses) the next group's, and one before
-# the first group or after the last (the harness) none's
+# the first group or after the last (the harness) none's. A case file smoke.jl includes
+# (`include(joinpath(@__DIR__, "<file>"))` defining groups) has no harness: a changed line in no
+# group's list (its generators and helpers) is every group's the file defines; and a file that
+# builds lazy groups (`_lazy_g("<group>", "<file>")` in smoke.jl: registry_cases.jl's generated
+# groups) is every one of those groups' (the matrix-only ones then dropped by the caller)
 function touched_smoke_groups(base)::Vector{String}
     path = "test/smoke.jl"
     isfile(joinpath(ROOT, path)) || return String[]
-    lines = readlines(joinpath(ROOT, path))
-    starts = Tuple{Int,String}[]
-    for (i, l) in enumerate(lines)
-        m = match(r"^_(?:g|xf)\(\"([^\"]+)\"", l)
-        m === nothing || push!(starts, (i, String(m[1])))
-    end
-    spans = map(starts) do (i, g)
-        j = findnext(l -> rstrip(l) == "])", lines, i)
-        (i, j === nothing ? i : j, g)
-    end
-    hunks = touched_lines(base, path)
     out = String[]
-    for h in hunks
-        k = findfirst(s -> s[1] <= h <= s[2], spans)
-        # between two groups: the next group's (a helper or a struct its cases use); before the first
-        # group or after the last: the harness's, which the core runs
-        k === nothing && !isempty(spans) && h > spans[1][1] && (k = findfirst(s -> s[1] > h, spans))
-        k === nothing || push!(out, spans[k][3])   # past the last group: the harness, the core covers it
+    local smk = read(joinpath(ROOT, path), String)
+    files = [path; ["test/" * m[1] for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk)]]
+    for m in eachmatch(r"^_lazy_(?:g|xf)\(\"([^\"]+)\", \"([^\"]+)\"\)"m, smk)
+        isempty(touched_lines(base, "test/" * m[2])) || push!(out, String(m[1]))
+    end
+    for file in files
+        isfile(joinpath(ROOT, file)) || continue
+        lines = readlines(joinpath(ROOT, file))
+        starts = Tuple{Int,String}[]
+        for (i, l) in enumerate(lines)
+            m = match(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\"", l)
+            m === nothing || push!(starts, (i, String(m[1])))
+        end
+        (file == path || !isempty(starts)) || continue
+        spans = map(starts) do (i, g)
+            j = occursin(r"\)\s*$", lines[i]) ? i : findnext(l -> rstrip(l) == "])", lines, i)   # a one-line group: `_g("name", gen())`
+            (i, j === nothing ? i : j, g)
+        end
+        for h in touched_lines(base, file)
+            k = findfirst(s -> s[1] <= h <= s[2], spans)
+            if k === nothing && file != path
+                append!(out, last.(spans))   # an included case file's generators feed every group it defines
+                continue
+            end
+            # between two groups: the next group's (a helper or a struct its cases use); before the first
+            # group or after the last: the harness's, which the core runs
+            k === nothing && !isempty(spans) && h > spans[1][1] && (k = findfirst(s -> s[1] > h, spans))
+            k === nothing || push!(out, spans[k][3])   # past the last group: the harness, the core covers it
+        end
     end
     return unique(out)
 end
@@ -285,7 +306,7 @@ function main(args)
     clean = isempty(git("status", "--porcelain", "--untracked-files=normal"))
     base = change_base(args)
     changed = changed_files(base)
-    core, probe_core, rows = read_map()
+    core, probe_core, matrix, rows = read_map()
     unmapped = String[]
     mapped = String[]
     for f in changed
@@ -294,8 +315,10 @@ function main(args)
         isempty(hits) && (push!(unmapped, f); continue)
         append!(mapped, last(hits[argmax(map(r -> length(first(r)), hits))]))
     end
-    newgroups = touched_smoke_groups(base)
-    batch = setdiff(unique(vcat(mapped, newgroups)), core)
+    # a matrix-only group runs in the non-blocking matrix alone, never in a stage here
+    touched = touched_smoke_groups(base)
+    newgroups = setdiff(touched, matrix)
+    batch = setdiff(unique(vcat(mapped, newgroups)), core, matrix)
     probes = unique(vcat(probe_core, touched_probes(base)))
     tlc, tlc_deep = tlc_instances(changed)
     timing = Base.invokelatest(TOML.parsefile, BEST_PATH)
@@ -487,6 +510,8 @@ function main(args)
     green = isempty(fails)
     j113 = try readchomp(`julia +1.13 --startup-file=no -e 'print(VERSION)'`) catch; "" end
     isempty(newgroups) && push!(notes, "smoke-1.13: the change adds no smoke case, so no 1.13 stage (the full run's smoke-1.13 is non-blocking)")
+    isempty(intersect(touched, matrix)) ||
+        push!(notes, "smoke: matrix-only $(join(intersect(touched, matrix), ' ')) run in the non-blocking matrix (test/block_groups.tsv)")
 
     # ---- WT_TIMING_UPDATE=1: a green run on a clean tree lowers each best it beat ----
     if updating

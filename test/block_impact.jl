@@ -45,6 +45,7 @@ const SRC = normpath(joinpath(@__DIR__, "..", "src"))
 
 include(joinpath(@__DIR__, "probe_corpus.jl"))
 include(joinpath(@__DIR__, "smoke.jl"))   # GROUPS; its main() runs only when it is the program
+_build!(collect(keys(LAZY_FILE)))   # every lazy group's cases (test/registry_cases.jl's)
 
 # the name a top-level definition gives, or nothing (a struct, a const, a using)
 function defname(ex)
@@ -164,7 +165,12 @@ end
 function main()
     plines, glines = isempty(FROM) ? measure() : load_sets(FROM)
     probes = [n => pieces(l) for (n, l) in plines]
-    groups = [n => pieces(l) for (n, l) in glines]
+    # a matrix-only group (test/block_groups.tsv) is no stage's here: never a cover's candidate
+    local matrix = String[]
+    for l in eachline(joinpath(@__DIR__, "block_groups.tsv"))
+        startswith(l, "matrix-only\t") && append!(matrix, split(l, '\t')[2] |> split .|> String)
+    end
+    groups = [n => pieces(l) for (n, l) in glines if !(n in matrix)]
     pu = reduce(union, last.(probes); init = Set{String}())
     pcore, _ = cover(probes, ones(Int, length(probes)), pu, typemax(Int))
     # a group's cost: its recorded seconds (test/smoke_times.tsv, 1.12), the median for one it lacks
@@ -183,6 +189,7 @@ function main()
             "($(sum(length(GROUPS[pick(c)][2]) for c in core; init = 0)) cases, $(round(sum(secs[pick(c)] for c in core; init = 0.0); digits = 1)) s recorded) run $(length(su) - length(uncovered))")
     println("probes\t", join(pcore, ' '))
     println("core\t", join(core, ' '))
+    println("matrix-only\t", join(matrix, ' '))
     for file in sort(unique(first.(split.(collect(uncovered), ':'))))
         left = Set(k for k in uncovered if startswith(k, file * ":"))
         gs, rest = cover(groups, secs, left, FILE_SECONDS)
