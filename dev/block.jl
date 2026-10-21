@@ -513,17 +513,18 @@ function pieces_moved(measured, now)::Union{Nothing,Int}
     return length(moved)
 end
 
-# the staleness budget: a change to src/ is judged by a map that measured a tree at most this many
-# pieces of src away from the change's base; past it the map is re-recorded off the landing path, at
-# JLRUN_PRIO=5, landing as its own commit of test/block_groups.tsv, never by the landing (A20C13):
-# incrementally from the sets the last measurement saved in the main tree (test/block_impact.jl
-# --pieces, which measures again only what touches the src files that moved, minutes), or in full
-# (about 34 minutes), which saves the sets there
+# the staleness budget: a change to src/ is judged by a map that measured its own src tree, or one at
+# most this many pieces of src away from the change's base. dev/land.sh land re-records the map for
+# the landing's own src tree before its gate (test/block_impact.jl --pieces, from the sets the last
+# measurement saved in the main tree, the rows carried in the landing's commit), so every landed head's
+# map measured its src (A20C13); the budget judges a gate run before the landing, and a full
+# re-record (about 34 minutes, saving the sets there) measures a fresh map
 const STALE_PIECES = 8
 const SETS_PATH = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".block", "impact_sets.tsv")
-const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH " *
-                 "(off the landing path, at JLRUN_PRIO=5; test/block_groups.tsv lands as its own commit; with no sets saved there, the full " *
-                 "measurement: the same command with $SETS_PATH alone in place of --pieces and its path)"
+const RERECORD = "dev/land.sh land re-records it for the landing's own src tree (julia --code-coverage=@src " *
+                 "--code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH, " *
+                 "into the landing's commit); with no sets saved there, the full measurement first: the same command with " *
+                 "$SETS_PATH alone in place of --pieces and its path"
 
 # a stale map fails a change it cannot judge (a decision over text, L194 runs it on fixed inputs):
 # for a change to src/, `moved` (pieces_moved at the change's base) past STALE_PIECES or unknown,
@@ -802,7 +803,10 @@ function main(args)
     tfails = String[]   # over a budget: red, unless the runner was cold
     sfails = String[]   # slower than a best: red, unless the runner was cold or the timing is unjudged
     efails = String[]   # the machine cannot judge: no verdict
-    moved = pieces_moved(measured, gitok("rev-parse", "$base:src") ? git("rev-parse", "$base:src") : "")
+    # a map measured on the head's own src tree is fresh: dev/land.sh land re-records it into the
+    # landing's tree whenever it measured another (A20C13); otherwise how far src/ moved since it
+    moved = measured == git("rev-parse", "HEAD:src") ? 0 :
+            pieces_moved(measured, gitok("rev-parse", "$base:src") ? git("rev-parse", "$base:src") : "")
     push!(notes, moved === nothing ? "test/block_groups.tsv: measured on src tree $(first(measured, 8)), which this repository does not hold" :
                  "test/block_groups.tsv: measured on src tree $(measured[1:8]); $moved pieces of src changed since, at the change's base " *
                  "(a change to src/ fails past $STALE_PIECES)")

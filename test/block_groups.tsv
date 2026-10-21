@@ -24,8 +24,8 @@
 # gate.yml on march/**). `measured`: the src tree measured; a change to src/ fails the gate when
 # more than 8 pieces of src (dev/block.jl STALE_PIECES) changed between it and the change's base,
 # when this repository does not hold it, or when a changed line of code lies in no piece, and a
-# change to ext/, which no map measures, fails (A20C13): the re-record runs off the landing path and
-# lands as its own commit of this file. What the selection cannot see, A19C1's (a)-(g) (A20C14),
+# change to ext/, which no map measures, fails (A20C13); dev/land.sh land re-records this file for
+# the landing's own src tree. What the selection cannot see, A19C1's (a)-(g) (A20C14),
 # each OPEN: (a) overlay and bespoke bodies, (b) a top-level form other than a definition, (c) two
 # methods of one name and (f) the universe are open until the gate runs every case whose plan
 # compiles a changed body, read from the plan's record (dev/AUDIT.md A24S1: a staleness count closes
@@ -41,7 +41,9 @@
 # count, since a failed assertion stops no testset. overlay_reasons.jl runs no line of src/ (it
 # reads ext/ and Julia's own typed IR) and covers no piece. A family failing under the harness is
 # open: the measurement should run each family as its shard runs it.
-# An incremental re-record (test/block_impact.jl --pieces, from the sets the last measurement saved)
+# An incremental re-record (test/block_impact.jl --pieces, which dev/land.sh land runs into the
+# landing's commit whenever this map measured another src tree than the head's, from the sets the last
+# measurement saved)
 # measures again only the probes, groups and QA families whose saved lines touch a src file that
 # moved, keeps this header and moves the `measured` row; it cannot see an unchanged call that a new
 # method sends into a changed file, or an entry whose own test definition changed under the same

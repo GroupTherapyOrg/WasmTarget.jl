@@ -24,7 +24,10 @@
 #       a dirty tree; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
 #       one landing at a time, and no other agent's Julia job starts while it exists); fetches and
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
-#       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
+#       dev/merge_baseline.py, any other conflict stops the landing, naming the files); re-records the
+#       gate's map, test/block_groups.tsv, when it measured another src tree than the head's
+#       (test/block_impact.jl --pieces from a copy of the main tree's saved sets, the rows carried
+#       into the head commit as the landing log is, the sets the main tree's once it lands); refuses a
 #       branch more than one commit ahead of the tip (one landing is one commit, A24E1); refuses a
 #       commit with no `Charter:` line, or one that changes dev/CHARTER.md other than exactly as
 #       the maintainer authorised it (its `Charter-change: C<a> C<b> … authorised by Dale <date>` line,
@@ -104,6 +107,9 @@ EXEMPT_AWK='/^(\+\+\+|---) / { next }
 END { for (t in rem) if (rem[t] > add[t]) bad = 1; print (bad ? "no" : "yes") }'
 LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
+# the sets the gate's map was last measured from (test/block_impact.jl writes them; git-ignored), which
+# `land` re-records from for a landing whose src tree the map did not measure
+SETS="$MAIN/dev/.block/impact_sets.tsv"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
 # a red timing's debt (SLOWER, OVER) is lifted by the red landing's excuse file in the landing's own tree,
@@ -367,6 +373,26 @@ land)
         git commit -q --amend --no-edit
         echo "land: the landing log through $(tail -n 1 "$LOG" | cut -c22-29) carried in ${br}'s head, now $(git rev-parse --short HEAD)"
     fi
+    # the gate's map, test/block_groups.tsv, re-recorded for this landing's own src tree (A20C13: fresh
+    # by construction, never a landing of its own): when its `measured` row is not the head's src tree,
+    # test/block_impact.jl --pieces measures again the probes, groups and QA families whose saved lines
+    # touch a src file that moved since the sets the main tree saved, from a copy of them (the main
+    # tree's sets move to it only when this landing lands), and the rows go into the branch's head
+    # commit (its author time kept) before the gate, so the gated tree is the tree that lands; with no
+    # sets saved, the full measurement first (test/block_impact.jl <sets>), off the landing path
+    lsets=""
+    head_src=$(git rev-parse HEAD:src)
+    if [ "$(awk -F'\t' '$1 == "measured" { print $2 }' test/block_groups.tsv)" != "$head_src" ]; then
+        [ -s "$SETS" ] || { echo "land: test/block_groups.tsv measured another src tree and no sets are saved at $SETS: the full measurement first (julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl $SETS) — refusing"; exit 1; }
+        lsets="$W/dev/.block/impact_sets.landing.tsv"; mkdir -p "$W/dev/.block"; cp "$SETS" "$lsets"
+        julia --startup-file=no --code-coverage=@src --code-coverage="$W/dev/.block/block_impact.info" --project=. test/block_impact.jl --pieces "$lsets" ||
+            { echo "land: the map's re-record (test/block_impact.jl --pieces) failed — not landed"; exit 1; }
+        [ "$(awk -F'\t' '$1 == "measured" { print $2 }' test/block_groups.tsv)" = "$head_src" ] ||
+            { echo "land: the re-recorded map does not name the head's src tree ${head_src:0:8} — not landed"; exit 1; }
+        git add test/block_groups.tsv && git commit -q --amend --no-edit
+        echo "land: the map re-recorded for src tree ${head_src:0:8}, carried in ${br}'s head, now $(git rev-parse --short HEAD)"
+        step map
+    fi
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
     echo "$out" | tail -1
     step runner
@@ -419,6 +445,8 @@ land)
     fi
     LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
+    # the re-recorded sets are the main tree's once their map has landed
+    [ -z "$lsets" ] || mv "$lsets" "$SETS"
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")
     [ "$(printf '%s' "$line" | cut -f2)" = "$head" ] || { echo "land: the landing log's last line is not ${head:0:8}'s"; exit 1; }
