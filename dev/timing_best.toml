@@ -1,6 +1,7 @@
 # dev/timing_best.toml — the blocking gate's budgets and timing ratchet (dev/block.jl, `bash
 # dev/gate.sh --block`; dev/CHARTER.md C10, L194, L195). [budget]: wall seconds, the whole run
-# (`total`) and each stage, the core's median smoke case (`case-median`); a budget is lowered, never
+# (`total`) and each stage, the core's median smoke case (`case-median`), each a target whose band
+# is dev/block.jl's BUDGET_BAND times it (over the budget a note, past the band red); a budget is lowered, never
 # raised (dev/block.jl holds every budget and best to the change's base's): a stage past it is split
 # or made faster first; `<stage>@warm` is a stage's budget under
 # the warm runner (`--warm`), where it has one. [best]: each ratcheted stage's best wall

@@ -56,17 +56,19 @@
 # measures compiling the change, not running it: its time is judged by nothing, its checks are (a
 # cold run whose checks pass is green with `timing = "unjudged"`, A19P2, A19P4).
 #
-# Hard budgets and a timing ratchet (dev/timing_best.toml): the whole run at most `total` seconds
-# of wall and each stage at most its own budget; a stage whose work is fixed (load, ratchet,
+# Budgets and a timing ratchet (dev/timing_best.toml): the whole run's target `total` seconds of
+# wall and each stage's its own budget, each a target whose band is BUDGET_BAND times it (a wall
+# over the budget a note, past the band red); a stage whose work is fixed (load, ratchet,
 # smoke-core, the probe core) more than 15% AND more than 0.3 s slower than its best fails. Times
 # are scaled by the machine's speed while the stages ran (calibrate!, below): a stage's wall over
 # the factor by which a fixed piece of work, timed throughout the run, was slower than its best.
 # A stage that does more work or waits longer is slower; a busier machine is not. The budgets and
-# the total are literal walls, never scaled: a machine more than FACTOR_CAP times slower than its
-# best while the stages ran leaves the run's timing ratchet unjudged: no stage is compared with its
-# best, a run whose checks pass and whose literal budgets hold is green with `timing = "unjudged"` in
+# the total are wall targets with their bands, never scaled: a machine more than FACTOR_CAP
+# times slower than its best while the stages ran leaves the run's timing ratchet unjudged: no
+# stage is compared with its best, a run whose checks pass and whose budgets' bands hold is green
+# with `timing = "unjudged"` in
 # its record (`dev/land.sh land` prints the unjudged streak, L198), and the budgets still hold at any
-# factor (a stage or the run over its budget is red, A19P5). CI judges no timing (gate.yml has no
+# factor (a stage or the run past its band is red, A19P5). CI judges no timing (gate.yml has no
 # timing stage): the ratchet is judged here whenever the machine is quiet enough, recorded as
 # unjudged otherwise, never silently skipped. A
 # change is judged by its own dev/timing_best.toml, held to the base's: no budget or best of the
@@ -112,6 +114,9 @@ const SLOWER_SECONDS = 0.3
 # a machine more than this many times slower than its best, measured while the stages ran, gives
 # no verdict: its times say nothing of the change's, and no budget is scaled to pass it (A19P5)
 const FACTOR_CAP = 1.5
+# a budget is a target and its band BUDGET_BAND times it: a wall over the budget is a note, red only
+# past the band (Dale 2026-10-21: a 61-s run is no failure of an under-a-minute goal; L194, L205)
+const BUDGET_BAND = 2
 # the stages whose work is fixed from run to run, so their time has a best to hold
 const RATCHETED = ("load", "ratchet", "smoke-core", "probes")
 # each stage's own code: a change to one of these paths runs that stage's code anew
@@ -848,7 +853,7 @@ function main(args)
 
     notes = String[]
     fails = String[]    # the change fails: red
-    tfails = String[]   # over a budget: red, unless the runner was cold
+    tfails = String[]   # past a budget's band: red, unless the runner was cold
     sfails = String[]   # slower than a best: red, unless the runner was cold or the timing is unjudged
     efails = String[]   # the machine cannot judge: no verdict
     # the map against this change (A30E5): fresh when it measured the change's own src tree; otherwise
@@ -1002,8 +1007,10 @@ function main(args)
         v = ok ? "ok" : "FAIL"
         ok || push!(fails, "$name: $detail")
         scaled = wall / factor
-        if b !== nothing && wall > b
-            push!(tfails, "$name: $(fmt(wall)) s of wall, over its budget of $b s"); v = "OVER BUDGET"
+        if b !== nothing && wall > BUDGET_BAND * b
+            push!(tfails, "$name: $(fmt(wall)) s of wall, past its band of $(BUDGET_BAND * b) s (its budget $b s)"); v = "OVER BUDGET"
+        elseif b !== nothing && wall > b
+            push!(notes, "$name: $(fmt(wall)) s of wall, over its budget of $b s, inside its band"); v = "over budget, in band"
         end
         bkey = bestkey(name)
         bw = get(best, bkey, NaN)
@@ -1053,8 +1060,9 @@ function main(args)
     end
     if !isnan(median_case)
         b = budget["case-median"]
-        res["case-median"] = Dict{String,Any}("wall" => median_case, "budget" => b, "verdict" => median_case <= b ? "ok" : "OVER BUDGET")
-        median_case <= b || push!(tfails, "case-median: the core's median smoke case took $median_case s, over its budget of $b s")
+        res["case-median"] = Dict{String,Any}("wall" => median_case, "budget" => b,
+                                              "verdict" => median_case <= b ? "ok" : median_case <= BUDGET_BAND * b ? "over budget, in band" : "OVER BUDGET")
+        median_case <= BUDGET_BAND * b || push!(tfails, "case-median: the core's median smoke case took $median_case s, past its band of $(BUDGET_BAND * b) s (its budget $b s)")
     end
     pstages = filter(s -> startswith(s.name, "probes"), stages)
     if !isempty(pstages)
@@ -1089,7 +1097,8 @@ function main(args)
                join(filter(l -> occursin("FAIL", l), readlines(s.log)), " | "); command = "TLC_ONLY=\"$(join(tlc, ' '))\" " * cmdstr(s), exitcode = s.exit)
     end
     tb = budget["total"]
-    total > tb && push!(tfails, "total: $(fmt(total)) s of wall, over the budget of $tb s")
+    total > BUDGET_BAND * tb && push!(tfails, "total: $(fmt(total)) s of wall, past the band of $(BUDGET_BAND * tb) s (the budget $tb s)")
+    tb < total <= BUDGET_BAND * tb && push!(notes, "total: $(fmt(total)) s of wall, over the budget of $tb s, inside its band")
     # cold: a runner request was its server's first or the first after a revise (each request's first
     # line, `block_runner: warm|cold (why) <blob>`, the blob this tree's runner), or the load stage
     # built the package image; either way the run's time is compiling the change
