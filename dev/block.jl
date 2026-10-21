@@ -15,7 +15,8 @@
 #   smoke-batch test/smoke.jl on the groups the changed files map to there, then the groups whose
 #               lines the change touches in test/smoke.jl and the case files it includes (the
 #               batch's own cases), then the generated cases of each lowering-table entry the change
-#               touches (test/block_tables.tsv, WT_SMOKE_CASES; an entry with none fails) (A20C12).
+#               touches (test/block_tables.tsv, WT_SMOKE_CASES; an entry with none fails, and so
+#               does a changed entry of a table no generator cases, naming the table) (A20C12, A22E3).
 #               A change to src/ fails when the map is stale: more than STALE_PIECES pieces of src
 #               changed between the tree test/block_groups.tsv measured and the change's base (the
 #               count and the re-record command printed), a measured tree this repository does not
@@ -458,6 +459,29 @@ function touched_table_entries(base, changed)::Vector{Tuple{String,String,String
     return unique(out)
 end
 
+# the generated cases the changed table entries run, and the failures: an entry of a table
+# test/block_tables.tsv cases with no row of its own, and an entry of a table it cases nowhere (a
+# table whose entries table_entry_keys keys, `key => value` a line, is a lowering table: a change to
+# it that runs no case is a change no stage checks, A22E3), each naming its table (a decision over
+# text, L194 runs it on fixed inputs)
+function table_cases(entries, tables::AbstractDict)::Tuple{Vector{String},Vector{String}}
+    cases = String[]; fails = String[]
+    known = Set((f, t) for (f, t, _) in keys(tables))
+    for e in entries
+        c = get(tables, e, nothing)
+        if c !== nothing
+            append!(cases, c)
+        elseif (e[1], e[2]) in known
+            push!(fails, "the entry $(e[3]) of $(e[2]) ($(e[1])) has no generated case in test/block_tables.tsv: " *
+                         "re-record it with test/block_impact.jl --tables")
+        else
+            push!(fails, "the entry $(e[3]) of $(e[2]) ($(e[1])) changed, and no generator cases the table $(e[2]): the change runs " *
+                         "no case of it. Give $(e[2]) a generator in test/registry_cases.jl and its rows with test/block_impact.jl --tables (A22E3)")
+        end
+    end
+    return unique(cases), fails
+end
+
 # how far src/ had moved, under the change, since test/block_groups.tsv was measured (its `measured`
 # row, the src tree test/block_impact.jl ran): the pieces of src that differ between that tree and
 # `now` (the change's base's src tree), keyed on `now`'s text, a removed file one piece; nothing when
@@ -662,18 +686,9 @@ function main(args)
     end
     tests = unique(tests)
     # a changed lowering-table entry runs the generated cases that case it, whatever group holds
-    # them (test/block_tables.tsv, A20C12); an entry with none fails
-    tables = read_tables()
-    cases = String[]
-    tablefails = String[]
-    known = Set((f, t) for (f, t, _) in keys(tables))   # the tables a generator cases; any other const is no table here
-    for e in touched_table_entries(base, changed)
-        (e[1], e[2]) in known || continue
-        c = get(tables, e, nothing)
-        c === nothing ? push!(tablefails, "the entry $(e[3]) of $(e[2]) ($(e[1])) has no generated case in test/block_tables.tsv: " *
-                                          "re-record it with test/block_impact.jl --tables") : append!(cases, c)
-    end
-    cases = unique(cases)
+    # them (test/block_tables.tsv, A20C12); an entry with none fails, as does an entry of a table no
+    # generator cases (A22E3)
+    cases, tablefails = table_cases(touched_table_entries(base, changed), read_tables())
     case_groups = unique([String(first(split(c, '/'))) for c in cases])
     # a matrix-only group runs in the non-blocking matrix alone, never in a stage here, but for the
     # cases a changed table entry names
