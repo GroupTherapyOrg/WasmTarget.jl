@@ -5,6 +5,8 @@
 #   julia --code-coverage=@src --code-coverage="$TMPDIR/block_impact.info" --project=. test/block_impact.jl [<sets.tsv>]
 #   julia --project=. test/block_impact.jl --from <sets.tsv>   # the selections from sets measured before
 #   julia --project=. test/block_impact.jl --tables > test/block_tables.tsv   # each table entry's cases
+#   julia --code-coverage=@src --code-coverage="$TMPDIR/block_impact.info" --project=. test/block_impact.jl --pieces <sets.tsv>
+#                                    # the incremental re-record: only what moved since the sets
 #
 # (the second flag sends the process's own coverage, written at exit, to a tracefile instead of a
 # .cov file beside every source file). Each probe of test/probe_corpus.jl is compiled as
@@ -39,10 +41,22 @@
 # it writes, for each entry of the numeric lowering tables (dev/block.jl table_entry_keys), the
 # generated cases that case it (test/registry_cases.jl's RC_ENTRY), which the gate runs when the
 # entry changes. Without --code-coverage the measuring run refuses: no line would count.
+#
+# --pieces <sets.tsv> re-records incrementally (dev/block.jl's staleness budget prints it): from the
+# sets a measurement saved there (the full run's `<sets.tsv>`; dev/block.jl names the main tree's
+# dev/.block/impact_sets.tsv), it measures again only each probe, smoke group and QA family whose saved
+# lines touch a src file that changed between the saved src tree and HEAD's (and any the sets lack),
+# keeps every other one's lines (they lie in files that did not change), writes the sets back for HEAD's
+# src tree and test/block_groups.tsv's rows in place under its header, and prints its summary. What it
+# cannot see: an unchanged call that a new method makes select another (the entry ran no line of the
+# changed file), and a probe, group or QA family whose own definition in test/ changed under the same
+# name (it keeps its saved lines); a full re-record measures a fresh map.
 
 const FROM = length(ARGS) == 2 && ARGS[1] == "--from" ? ARGS[2] : ""
 const TABLES = ARGS == ["--tables"]
-const SETS_OUT = isempty(FROM) && !TABLES && length(ARGS) == 1 ? ARGS[1] : ""
+const PIECES = length(ARGS) == 2 && ARGS[1] == "--pieces" ? ARGS[2] : ""
+const SETS_OUT = isempty(FROM) && isempty(PIECES) && !TABLES && length(ARGS) == 1 ? ARGS[1] : PIECES
+isempty(FROM) && isempty(PIECES) && !TABLES && length(ARGS) > 1 && error("block_impact: unknown arguments $(join(ARGS, ' ')) (see the header)")
 
 using WasmTarget
 
@@ -199,13 +213,16 @@ function run_qa(name)
     end
 end
 
-function measure()
-    tests = [name => covered(() -> run_qa(name)) for name in cited_qa_families()]
+# measures every probe, group and QA family, or, given `redo`, only those its (kind, name) pairs name
+function measure(redo = nothing)
+    want(kind, n) = redo === nothing || (kind, n) in redo
+    tests = [name => covered(() -> run_qa(name)) for name in cited_qa_families() if want("test", name)]
     probes = [name => merge_lines!(covered(() -> WasmTarget.to_bytes(WasmTarget.compile_module([(f, argtypes, name)]; options = WasmTarget.options_from_env()))),
                                    planned_lines(Any[(f, argtypes, name)]))
-              for (name, (f, argtypes)) in CASES]
+              for (name, (f, argtypes)) in CASES if want("probe", name)]
     groups = Pair{String,Dict{String,Set{Int}}}[]
     for (g, cases) in GROUPS
+        want("group", g) || continue
         lines = Dict{String,Set{Int}}()
         for c in cases
             merge_lines!(lines, covered(() -> run_case(g, c)))
@@ -214,14 +231,43 @@ function measure()
         push!(groups, g => lines)
     end
     rm(INFO; force = true)
-    if !isempty(SETS_OUT)
-        open(SETS_OUT, "w") do io
-            println(io, "measured\t", measured_tree())
-            for (kind, sets) in (("probe", probes), ("group", groups), ("test", tests)), (n, lines) in sets
-                println(io, kind, '\t', n, '\t', join([f * ":" * join(sort(collect(ls)), ',') for (f, ls) in sort(collect(lines); by = first)], ' '))
-            end
+    redo === nothing && !isempty(SETS_OUT) && write_sets(SETS_OUT, measured_tree(), probes, groups, tests)
+    return probes, groups, tests
+end
+
+function write_sets(path, tree, probes, groups, tests)
+    open(path, "w") do io
+        println(io, "measured\t", tree)
+        for (kind, sets) in (("probe", probes), ("group", groups), ("test", tests)), (n, lines) in sets
+            println(io, kind, '\t', n, '\t', join([f * ":" * join(sort(collect(ls)), ',') for (f, ls) in sort(collect(lines); by = first)], ' '))
         end
     end
+end
+
+# the incremental re-record (--pieces, the header): the saved sets, measured again where src/ moved
+function incremental(path)
+    isfile(path) || error("block_impact --pieces: no saved sets at $path: run the full measurement with that path first")
+    p0, g0, t0 = load_sets(path)
+    old = MEASURED[]
+    now = measured_tree()
+    now == "unknown" && error("block_impact --pieces: src/ has uncommitted changes: commit them first (a measurement is of a src tree)")
+    occursin(r"^[0-9a-f]{40}$", old) && success(`git -C $(dirname(SRC)) cat-file -e $old`) ||
+        error("block_impact --pieces: the sets at $path measured src tree $old, which this repository does not hold: run the full measurement")
+    moved = Set("src/" * f for f in split(readchomp(`git -C $(dirname(SRC)) diff --name-only $old $now`), '\n'; keepempty = false))
+    names = Dict("probe" => first.(CASES), "group" => first.(GROUPS), "test" => cited_qa_families())
+    saved = Dict("probe" => Dict(p0), "group" => Dict(g0), "test" => Dict(t0))
+    redo = Set{Tuple{String,String}}()
+    for kind in ("probe", "group", "test"), n in names[kind]
+        lines = get(saved[kind], n, nothing)
+        (lines === nothing || any(f -> f in moved, keys(lines))) && push!(redo, (kind, n))
+    end
+    println(stderr, "block_impact --pieces: src moved in $(length(moved)) files since $(first(old, 8)); measuring $(length(redo)) of ",
+            sum(length, values(names)), " probes, groups and QA families again")
+    p1, g1, t1 = measure(redo)
+    fresh = Dict("probe" => Dict(p1), "group" => Dict(g1), "test" => Dict(t1))
+    pick(kind) = [n => (haskey(fresh[kind], n) ? fresh[kind][n] : saved[kind][n]) for n in names[kind]]
+    probes, groups, tests = pick("probe"), pick("group"), pick("test")
+    write_sets(path, now, probes, groups, tests)
     return probes, groups, tests
 end
 
@@ -264,7 +310,33 @@ end
 
 function main()
     TABLES && return tables()
+    if !isempty(PIECES)
+        # the map's rows written in place under its header; the summary printed
+        local p, g, t = incremental(PIECES)
+        local out = IOBuffer()
+        selections(out, p, g, t)
+        # the header kept; the rows no measurement writes (a directory row such as ext/, a test
+        # file's) carried over, after the measured rows and before their past-budget notes
+        local header = String[]; local hand = String[]; local inheader = true
+        for l in eachline(joinpath(@__DIR__, "block_groups.tsv"))
+            inheader &= startswith(l, '#')
+            inheader && (push!(header, l); continue)
+            local f = split(l, '\t')
+            (startswith(l, '#') || length(f) != 4 || startswith(f[1], "src/")) || push!(hand, l)
+        end
+        local rows = String[]; local notes = String[]
+        for l in split(String(take!(out)), '\n'; keepempty = false)
+            startswith(l, "block_impact: ") ? println(l) : startswith(l, "# ") ? push!(notes, l) : push!(rows, l)
+        end
+        write(joinpath(@__DIR__, "block_groups.tsv"), join(vcat(header, rows, hand, notes), '\n') * '\n')
+        return 0
+    end
     plines, glines, tlines = isempty(FROM) ? measure() : load_sets(FROM)
+    return selections(stdout, plines, glines, tlines)
+end
+
+# the selections from measured sets, printed to `io` as test/block_groups.tsv takes them
+function selections(io::IO, plines, glines, tlines)
     probes = [n => pieces(l) for (n, l) in plines]
     # a matrix-only group (test/block_groups.tsv) is no stage's here: never a cover's candidate
     local matrix = String[]
@@ -286,15 +358,15 @@ function main()
     su = reduce(union, last.(groups); init = Set{String}())
     core, uncovered = cover(groups, secs, su, CORE_SECONDS)
     pick(c) = findfirst(g -> first(g) == c, groups)
-    println("block_impact: $(length(probes)) probes run $(length(pu)) pieces of src/, $(length(pcore)) cover them; ",
+    println(io, "block_impact: $(length(probes)) probes run $(length(pu)) pieces of src/, $(length(pcore)) cover them; ",
             "$(length(groups)) smoke groups run $(length(su)), the core's $(length(core)) groups ",
             "($(sum(length(GROUPS[pick(c)][2]) for c in core; init = 0)) cases, $(round(sum(secs[pick(c)] for c in core; init = 0.0); digits = 1)) s recorded) run $(length(su) - length(uncovered))")
     # the src tree measured, so the gate can say how far src/ has moved since (a measurement of a
     # src/ with uncommitted changes is of no tree)
-    println("measured\t", isempty(FROM) ? measured_tree() : MEASURED[])
-    println("probes\t", join(pcore, ' '))
-    println("core\t", join(core, ' '))
-    println("matrix-only\t", join(matrix, ' '))
+    println(io, "measured\t", isempty(FROM) ? measured_tree() : MEASURED[])
+    println(io, "probes\t", join(pcore, ' '))
+    println(io, "core\t", join(core, ' '))
+    println(io, "matrix-only\t", join(matrix, ' '))
     # a QA family's cost: its recorded seconds (test/phase_times.tsv, `QA: <name>`), the median for
     # one it lacks
     qrec = Dict{String,Float64}()
@@ -306,7 +378,7 @@ function main()
     qmed = isempty(qrec) ? 1.0 : sort(collect(values(qrec)))[(length(qrec) + 1) ÷ 2]
     tsecs = [get(qrec, first(t), qmed) for t in tests]
     tu = reduce(union, last.(tests); init = Set{String}())
-    println("block_impact: the $(length(tests)) QA families the locks cite run $(length(tu)) pieces of src/")
+    println(io, "block_impact: the $(length(tests)) QA families the locks cite run $(length(tu)) pieces of src/")
     reads = lock_reads()
     # the 1.13 groups are set by hand (which file prints version-dependent text is not measured):
     # carried over from the map as it is
@@ -330,9 +402,9 @@ function main()
         # a file holding a numeric lowering table, and calls.jl and int128.jl, which hold their lowering,
         # run the sample of the generated cases and the narrow integers whatever the cover (A20P12)
         file in LOWERING_FILES && foreach(g -> g in gs || push!(gs, g), ("registry_sample", "narrow_primitive"))
-        println(file, "\t", isempty(gs) ? "-" : join(gs, ' '), "\t", isempty(ts) ? "-" : join(ts, ' '), "\t", get(v113, file, "-"))
+        println(io, file, "\t", isempty(gs) ? "-" : join(gs, ' '), "\t", isempty(ts) ? "-" : join(ts, ' '), "\t", get(v113, file, "-"))
     end
-    foreach(l -> println("# ", l), past)
+    foreach(l -> println(io, "# ", l), past)
     return 0
 end
 

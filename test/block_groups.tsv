@@ -41,6 +41,11 @@
 # count, since a failed assertion stops no testset. overlay_reasons.jl runs no line of src/ (it
 # reads ext/ and Julia's own typed IR) and covers no piece. A family failing under the harness is
 # open: the measurement should run each family as its shard runs it.
+# An incremental re-record (test/block_impact.jl --pieces, from the sets the last measurement saved)
+# measures again only the probes, groups and QA families whose saved lines touch a src file that
+# moved, keeps this header and moves the `measured` row; it cannot see an unchanged call that a new
+# method sends into a changed file, or an entry whose own test definition changed under the same
+# name: a full re-record measures a fresh map.
 measured	4d1b79e71333b92ee9d17decb7c10e7ea818f842
 probes	string_lpad fc_types_equal_pow fc_hrtime_elapsed fc_memhash_dict_string throw_inexacterror string_findfirst string_uppercase fc_object_id fc_task_rand fc_string_to_symbol checked_add_i8 string_startswith fc_memchr_findfirst_char i32_div i32_rem i32_lt i32_le f32_add f32_sub f32_div f32_le f64_min f32_min f64_max f32_max not_int count_ones sqrt_f64 ceil_f64 sitofp_i16_f64 uitofp_u32_f64 fptosi_f32_i32_unsafe fptoui_f64_u64_unsafe int128_mul checked_add muladd_f64 string_occursin fc_symbol_to_string fc_pchar_to_string_ptrlen union_field const_dict
 core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs registry_foreign exceptions float32_fastmath constant_callees

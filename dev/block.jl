@@ -374,9 +374,20 @@ function line_keys(text::AbstractString, rel::AbstractString)::Dict{Int,String}
     return out
 end
 
+# the lowering tables of src, registered by name: each `const` mapping what a lowering matches to its
+# emitter (a Dict or IdDict whose values are Function, BinOpEmit, UnOpEmit or ConvEmit: the numeric
+# tables test/registry_cases.jl generates cases for, INT128_OPS's 128-bit route, FOREIGN_LOWERINGS'
+# foreigncalls and STANDALONE_INTRINSIC_BODIES, whose entries a comprehension makes). A const is a
+# lowering table by this registration, never by its shape: another const of `key => value` lines,
+# bridge.jl's _INTS, holds no entry the gate cases (dev/AUDIT.md A26E3); L194 holds the registration
+# to exactly the consts of src declared with an emitter value type
+const LOWERING_TABLES = ("INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS", "CHECKED_OPS", "SHIFT_OPS",
+                         "FMA_OPS", "MISC_OPS", "INT128_OPS", "FOREIGN_LOWERINGS", "STANDALONE_INTRINSIC_BODIES")
+
 # line => (table, entry key's text) for each line of a lowering table's literal in a src file's text:
-# a `const NAME = Dict…(…)` over more than one line, each `key => value` entry's lines, over as many
-# lines as its parse needs (the key's text as Julia prints its parse) (A20C12)
+# a registered table's `const NAME = Dict…(…)` over more than one line (LOWERING_TABLES), each
+# `key => value` entry's lines, over as many lines as its parse needs (the key's text as Julia
+# prints its parse) (A20C12, A26E3)
 function table_entry_keys(text::AbstractString, rel::AbstractString)::Dict{Int,Tuple{String,String}}
     out = Dict{Int,Tuple{String,String}}()
     lines = split(text, '\n')
@@ -386,6 +397,7 @@ function table_entry_keys(text::AbstractString, rel::AbstractString)::Dict{Int,T
         last = k < length(items) ? items[k+1][1] - 1 : length(lines)
         (ex isa Expr && ex.head === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) && last > l) || continue
         name = string(ex.args[1].args[1])
+        name in LOWERING_TABLES || continue
         x = l + 1
         while x <= last
             t = strip(lines[x])
@@ -464,9 +476,8 @@ end
 
 # the generated cases the changed table entries run, and the failures: an entry of a table
 # test/block_tables.tsv cases with no row of its own, and an entry of a table it cases nowhere (a
-# table whose entries table_entry_keys keys, `key => value` a line, is a lowering table: a change to
-# it that runs no case is a change no stage checks, A22E3), each naming its table (a decision over
-# text, L194 runs it on fixed inputs)
+# registered lowering table, LOWERING_TABLES: a change to it that runs no case is a change no stage
+# checks, A22E3, A26E3), each naming its table (a decision over text, L194 runs it on fixed inputs)
 function table_cases(entries, tables::AbstractDict)::Tuple{Vector{String},Vector{String}}
     cases = String[]; fails = String[]
     known = Set((f, t) for (f, t, _) in keys(tables))
@@ -503,12 +514,16 @@ function pieces_moved(measured, now)::Union{Nothing,Int}
 end
 
 # the staleness budget: a change to src/ is judged by a map that measured a tree at most this many
-# pieces of src away from the change's base; past it the map is re-recorded, off the landing path
-# (a measurement of about 34 minutes, at JLRUN_PRIO=5, landing as its own commit of
-# test/block_groups.tsv), never by the landing (A20C13)
+# pieces of src away from the change's base; past it the map is re-recorded off the landing path, at
+# JLRUN_PRIO=5, landing as its own commit of test/block_groups.tsv, never by the landing (A20C13):
+# incrementally from the sets the last measurement saved in the main tree (test/block_impact.jl
+# --pieces, which measures again only what touches the src files that moved, minutes), or in full
+# (about 34 minutes), which saves the sets there
 const STALE_PIECES = 8
-const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl " *
-                 "(off the landing path, at JLRUN_PRIO=5; test/block_groups.tsv lands as its own commit)"
+const SETS_PATH = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".block", "impact_sets.tsv")
+const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH " *
+                 "(off the landing path, at JLRUN_PRIO=5; test/block_groups.tsv lands as its own commit; with no sets saved there, the full " *
+                 "measurement: the same command with $SETS_PATH alone in place of --pieces and its path)"
 
 # a stale map fails a change it cannot judge (a decision over text, L194 runs it on fixed inputs):
 # for a change to src/, `moved` (pieces_moved at the change's base) past STALE_PIECES or unknown,
