@@ -2182,3 +2182,81 @@ an independent audit; the enforcement lane audits it in entry 21. `dev/land.sh l
 every landing to a line and the median of the last five to 180 s (src) or 90 s, L198 records whether each landing's
 timing was judged; past the gate's factor cap the timing ratchet is unjudged while the checks and literal budgets are
 still judged. Its own landing took 153 s edit to landed against its 90 s target (MARCH 13.18 names the cause).
+
+## 2026-10-21 — audited through 2da1eab3 (36e3966e..2da1eab3: the self-serve landing and its four fixes)
+
+The twenty-first audit covers 268c4d9b (`dev/land.sh land`, the landing log, L197, L198, the factor cap voiding the
+timing ratchet only), e7da6e9c (entry 20, prose), ba4aea80 (a cold green run lands, its timing judged by a warm run
+after the push; busy read against the machine's CPUs), 69332381 (a landing's own line out of its gate's judgement;
+SLOWER and OVER only under the cap; a red timing's debt lifted by a MARCH row; a stale Manifest.toml refused) and
+2da1eab3 (L197 judges its median from three lines). Until this entry they were audited by their author alone (entry
+20's addendum is the author's statement); this is the second reader. No wrong answer: no landing in the range landed
+on a red record, each landed record's checks all ok (268c4d9b on 8fbe5fff-2, warm; ba4aea80 on c2c041e2-1, cold;
+69332381 on a7e7e415-1, cold; 2da1eab3 on d554ed33-1, warm). The nearest are A21E1, a correctness red found on a
+landed head after its push dismissed or dropped, and A21E2, ba4aea80's literal budgets never held. Fourteen findings:
+A21E1-A21E9, A21N1-A21N5.
+
+Verified as stated: ba4aea80's judgement after its push (record c2c041e2-2, red, "a check fails") ran L197 on that
+landing's own new line, and 69332381 leaves the gated commit's line out (l197_check's `head`); ba4aea80's line was
+written FAILED and rewritten to unjudged by hand, the correction stated in 13.18 alone; the code does what the
+orchestrator ruled (a cold run judges its checks only, timing_failures empty when cold; a budget missed past the cap
+is no verdict; the unjudged streak printed, never refused; a 13.x row in the landing's own tree naming the red
+landing lifts its debt), A21E1 aside.
+
+Area: builder — empty by diff: `git diff 36e3966e..2da1eab3 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — the whole audit: every hunk of dev/land.sh, dev/block.jl, dev/block_runner.jl,
+test/parity_ratchet.jl, dev/MARCH.md, dev/CHARTER.md, AGENTS.md and .gitignore, against the gate records in wt-loop.
+(A21E1, high) After a cold landing the warm run's correctness reds lose their force: a failed check other than the
+ratchet's is written FAILED and lifted by any 13.x row holding the landing's first 8 hex digits (owed_lifted reads a
+row, not a fix), where a red matrix refuses until fixed; a failed ratchet check is dropped (`grep -vx ratchet`), so a
+lock red on the landed head is written SLOWER, OVER or unjudged and owes nothing. With the own line left out, a lock
+that passes cold and fails warm on one tree is nondeterminism this hides. (A21E2, high) A literal budget is not held
+after a cold landing on a machine past the cap: the cold run judges no budget, and the warm run's missed budget past
+the cap is no verdict, written unjudged, owing nothing. Witness: ba4aea80 landed on c2c041e2-1 (cold, 253.2 s,
+factor 3.89, a stage over its budget); its judgement c2c041e2-2 missed the total (62.1 s of 60) and the ratchet's
+(34.8 s of 30) at factor 2.84; its line reads unjudged. (A21E3, medium) L197 is met without a fast loop: any MARCH
+table line holding a landing's 8 hex digits takes it out of the window, without bound and without stating a cause;
+the median is judged only over three unexcused lines, so excused slow landings leave it unjudged (today two lines,
+69332381 at 1.40 and 2da1eab3 at 0.54: it has never judged); the edit is the author time, which a re-commit resets
+(268c4d9b's line reads 153 s; its first attempt, 762cffbc, began at 14:04Z, 76 minutes before it landed). (A21E4,
+medium) L197's evidence is the main tree's git-ignored landings.tsv: landed_at and timing are checked against nothing
+git holds, so an edit leaves no trace (ba4aea80's FAILED rewritten by hand), CI counts nothing, and no lock reads
+steps.tsv. (A21E5, high) Two landing paths and two holds: `dev/land.sh merge <branch>` still lands alone, without the
+hold, the Charter: and Charter-change refusals or the Manifest refusal, which only the land arm has; the
+orchestrator's hold (locks/HOLD) and land's (dev/.block/HOLD) are separate files outside git, land reads only its
+own and runs julia outside the agents' scheduler, and that scheduler lets a job at priority 1 or below, and every job
+already running, through land's hold. (A21E6, high) The standing Charter-change authorisation is unbounded:
+`CHARTER_AUTHORISED="C10:2026-10-21"` admits any later edit inside C10, a raised budget or a deleted check, by any
+commit carrying the line, landed self-serve and reviewed only after (the orchestrator's charter-diff review before a
+landing no longer runs); the clause-scope program has no fixed-text case, L197 pinning the constant by needle alone;
+the row-number exemption also passes a deleted Planned citation and a deleted "and". (A21E7, medium) A change to the
+landing's own rules lands judged by itself: land runs the rebased branch's land.sh and block.jl, so each commit of
+the range landed under the rules it brought, and ba4aea80's judged its own line. (A21E8, medium) No timing judgement
+is ever forced: the unjudged streak is printed, never refused, and CI judges no timing, so on a machine past the cap
+L195 is never judged and nothing fails (the orchestrator's ruling, recorded for Dale). (A21E9, low) The negatives the
+four messages state have no evidence naming the command, the tree and its output (charter rule 6); the loop's
+measurements record the landings alone.
+(A21N1, high) dev/CHARTER.md C10 is untrue of the code: "a landing's gate ... at most 60 s of wall" and L195's "its
+checks and budgets still judged", where since ba4aea80 a cold run lands with no budget judged (ba4aea80 on 253.2 s,
+69332381 on 87.2 s), and ba4aea80 carried no Charter-change line; L197's text names neither the MARCH exclusion nor
+the three-line threshold, and its "changes src" is src/, ext/ or Project.toml in the lock. (A21N2, medium)
+268c4d9b's diff to dev/CHARTER.md lies inside C10, adds L197 and L198 with the contract's 180 s and 90 s targets, and
+also relaxes L195 past the cap from no verdict to green with timing unjudged; whether "C10's speed checks" covers a
+relaxation is Dale's to confirm. (A21N3, low) AGENTS.md's table names the landing gate `bash dev/gate.sh --block`, at
+most 60 s, where a landing is `dev/land.sh land`, its gate `--block --warm`, a cold run unbounded; "a new lock fires
+when broken before it counts" drops the restore. (A21N4, low) dev/land.sh's comments: "no other agent's Julia job
+starts" (A21E5); the log's timing "judged, or unjudged when past the cap" (also cold, SLOWER, OVER, FAILED); the owed
+comments name SLOWER or FAILED without OVER or the row's lift. dev/block.jl's header calls a budget missed past the
+cap red; since ba4aea80 it is no verdict. (A21N5, low) MARCH 13.18: "defect (1)" names an item of an agent's report;
+"the cold run leaves the critical path in the next commit" records finished work; 268c4d9b's 153 s omits its three
+refused attempts; the row's check, ratchet@warm at or under its best, checks none of the landing items it now holds.
+
+Resolution: this entry lands alone, prose only, and fixes nothing. Every finding is open on MARCH 13.18. A21E1, A21E2
+and A21E5 come first, one commit each through `dev/land.sh land` with its case and its negative's evidence. A21N1,
+A21N2 and the charter halves of A21E6 and A21E8 are proposals to Dale through the orchestrator; dev/CHARTER.md is not
+edited here. A21E9 stands recorded: the next negatives carry their evidence.
