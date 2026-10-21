@@ -4567,6 +4567,9 @@ function _emit_apply_iterate_vect_prefix!(fb::InstrBuilder, prefix_args,
     array_new_default!(bld, arr_type_idx)
     local_set!(bld, dst_local)
 
+    # each copied tail slot is read as Julia's iteration reads it: an `#undef` one throws UndefRefError
+    emit_slots_undef_check!(bld, ctx, arr_type_idx, elem_type, src_local, src_off_local, tail_len)
+
     elem_wasm = unpacked(ctx.mod.types[arr_type_idx + 1].elem.valtype)
     for (i, arg) in enumerate(prefix_args)
         local_get!(bld, dst_local)

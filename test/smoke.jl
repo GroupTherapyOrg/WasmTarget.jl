@@ -2011,6 +2011,9 @@ mutable struct _SmUU; a::Int64; x::Union{Nothing,String}; _SmUU() = new(1); end
 mutable struct _SmUR; a::Int64; b; _SmUR() = new(1); end
 mutable struct _SmUD; x::Union{Nothing,String}; _SmUD(x) = new(x); end
 @noinline _sm_ua_h(x) = x === nothing ? 1 : 2
+# `Core.tuple(v...)` out of line, a throw beside it: Julia infers the splat nothrow, so a try around a
+# call of a callee doing only that is dropped and the native UndefRefError escapes it
+@noinline _sm_utup(v::Vector{String}, n::Int64) = (n > 100 && throw(ArgumentError("n")); ncodeunits(Core.tuple(v...)[n - 2]))
 _g("undef_slots", Any[
     ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
     ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
@@ -2044,6 +2047,13 @@ _g("undef_slots", Any[
     ("splat_union_unset_throws", (n::Int64) -> (v = Vector{Union{Nothing,String}}(undef, 2); v[2] = "a"; try; isassigned([v...], 1) ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("splat_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; length([v...]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
     ("splat_assigned", (n::Int64) -> (v = Any[nothing, n]; w = [v...]; (isassigned(w, 1) ? 10 : 20) + (w[2] === n ? 1 : 2)), Int64(3)),
+    # a splat behind a prefix, `[x, v...]`, and `Core.tuple(v...)` read each copied slot alike (on
+    # b6597d80 the prefixed splat of an unset slot answered isassigned 2 and length 3, native UndefRefError)
+    ("splat_prefix_any_unset_throws", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; try; isassigned([nothing, v...], 2) ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("splat_prefix_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; length(["x", v...]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("splat_prefix_assigned", (n::Int64) -> (v = ["ab", "c"]; w = ["x", v...]; ncodeunits(w[n - 1]) + length(w)), Int64(3)),
+    ("tuple_splat_ref_unset_throws", (n::Int64) -> (v = Vector{String}(undef, 2); v[2] = "a"; try; _sm_utup(v, n); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("tuple_splat_ref_assigned", (n::Int64) -> (v = ["ab", "c"]; _sm_utup(v, n)), Int64(3)),
     # a field `new` always sets is defined, its null `nothing` (isdefined_tfunc, jl_f_isdefined)
     ("union_field_set_isdefined", (n::Int64) -> (m = _SmUD(n > 0 ? nothing : "a"); isdefined(m, :x) ? 1 : 2), Int64(3)),
     ("runtime_name_unset_throws", (n::Int64) -> (m = _SmUR(); s = n > 0 ? :b : :a; try; getfield(m, s); 1; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),

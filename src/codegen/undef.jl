@@ -209,7 +209,7 @@ end
 as Julia's iteration reads it (getindex, null_pointer_check): the first that holds `#undef` throws
 UndefRefError (emit_undef_read_check!); a slot that is no reference, or no pointer
 (pointer_slot), is never `#undef` and emits nothing. A copy of a Memory's slots into a value (a
-splat, `Core.tuple(v...)`, `[v...]`) reads each through it.
+splat, `Core.tuple(v...)`, `[v...]`, `[x, v...]`) reads each through it.
 parity(quarantine: as undef_slot.)
 """
 function emit_slots_undef_check!(b::InstrBuilder, ctx::AbstractCompilationContext, arr_type_idx::Integer,
