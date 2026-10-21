@@ -1,6 +1,7 @@
 using Test
 using WasmTarget
 using Random: Xoshiro
+isdefined(@__MODULE__, :WasmReader) || include(joinpath(@__DIR__, "wasm_reader.jl"))
 
 # A foreigncall whose lowering calls the host takes its import before any function is defined:
 # an import is numbered ahead of every defined function, so one added later renumbers them
@@ -118,7 +119,7 @@ end
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmTarget.host_runtime_js(WasmTarget.function_import_names(m)));
     importObject.host = { late: (x) => x * 2n };
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     return [{ ok: String(instance.exports.late_entry(3n)) }];
@@ -170,12 +171,16 @@ _hi_import_no_method(n::Int64) = (y = n > 0 ? n : _hi_int32_stub();
     @test run_wasm_with_imports(bytes, "_hi_import_no_method", imports, Int64(-1)) == -1
 end
 
-# The host runtime is generated per module (A2E4, dart's RuntimeFinalizer.generate,
-# runtime_generator.dart:128): exactly the WT imports the module declares, answered. A module that
-# reads the clock gets env.perf_now and no env.random_i64, one that draws random words the reverse;
-# each instantiates with its own runtime, and not with one field taken out of it
-_hi_runtime_fields(bytes) = WasmRunner.run_driver_batch(bytes, """
-    const rt = $(WasmTarget.host_runtime_js(bytes));
+# The host runtime is generated per module, by the compile, from its own record of the imports it
+# added (A2E4; dart's RuntimeFinalizer.generate over the translator's record,
+# runtime_generator.dart:128, written beside the module, compile.dart:648-669): exactly the WT
+# imports the module declares, answered. A module that reads the clock gets env.perf_now and no
+# env.random_i64, one that draws random words the reverse; the runtime the compile hands back
+# equals the one built from what the bytes declare (read back by test/wasm_reader.jl, an oracle),
+# its fields equal the engine's own reading of the imports (WebAssembly.Module.imports), and the
+# module instantiates with it and not with one field taken out of it
+_hi_runtime_fields(bytes, rt) = WasmRunner.run_driver_batch(bytes, """
+    const rt = $(rt);
     const given = Object.entries(rt).flatMap(([m, fs]) => Object.keys(fs).map(f => m + '.' + f)).sort();
     const declared = WebAssembly.Module.imports(await WebAssembly.compile(bytes, { builtins: ['js-string'] }))
         .filter(i => i.kind === 'function').map(i => i.module + '.' + i.name).sort();
@@ -192,16 +197,17 @@ _hi_runtime_fields(bytes) = WasmRunner.run_driver_batch(bytes, """
     """; ninputs=1)
 @testset "the host runtime is the module's own imports" begin
     for (f, has, lacks) in ((_hi_clock, "env.perf_now", "env.random_i64"), (_hi_rand, "env.random_i64", "env.perf_now"))
-        local bytes = WasmTarget.compile(f, f === _hi_clock ? (Int64,) : (); validate=true)
-        local status, results = _hi_runtime_fields(bytes)
+        local bytes, rt = WasmTarget.compile_with_runtime(f, f === _hi_clock ? (Int64,) : (); validate=true)
+        @test rt == WasmReader.module_runtime_js(bytes)   # the compile's record is what the bytes declare
+        local status, results = _hi_runtime_fields(bytes, rt)
         @test status === :ok
         local r = WasmRunner.JSON.parse(results[1]["ok"])
         @test r["given"] == r["declared"] == sort(["wasmtarget.stack_trace", has])   # exactly its imports
         @test !(lacks in r["given"])
         @test r["missing"] == [x * " LinkError" for x in r["given"]]   # each field it needs
     end
-    # one method, over the bytes a host instantiates: no runtime without its module
-    @test only(methods(WasmTarget.host_runtime_js)).sig == Tuple{typeof(WasmTarget.host_runtime_js),Vector{UInt8}}
+    # one method, over the record of a module's imports: the compile's own, handed back beside the bytes
+    @test only(methods(WasmTarget.host_runtime_js)).sig == Tuple{typeof(WasmTarget.host_runtime_js),Vector{Tuple{String,String}}}
 end
 
 # One query reads an import by its function index (imported_function, wasm_builder's
@@ -221,36 +227,61 @@ end
         import_stubs=Any[(_hi_late_import, "late", (Int64,), h, Int64)], options=WasmTarget.options_from_env())
     @test unsaved_host_import_calls(m) == 0
     # the import section the bytes declare reads back as the module's imports
-    @test WasmTarget.module_function_imports(WasmTarget.to_bytes(m)) == [("wasmtarget", "stack_trace"), ("host", "late")]
+    @test WasmReader.module_function_imports(WasmTarget.to_bytes(m)) == [("wasmtarget", "stack_trace"), ("host", "late")]
 end
 
-# The module reader is wasm_builder's Deserializer: it checks the 8-byte preamble, reads each
-# section within its size, reads the one import section to its exact end and refuses invalid
-# UTF-8, every malformed module refused by name, never read past or answered with a default
+# The test tool that reads a module's imports back (test/wasm_reader.jl, wasm_builder's
+# Deserializer, which dart's tools and tests use): it checks the 8-byte preamble, reads each
+# section within its size, reads the one import section to its exact end, refuses invalid UTF-8,
+# reads each integer at the width its field has (a u32 at most 5 bytes, a heap type an s33) and a
+# global import's type and mutability as dart's deserializers accept them: every malformed module
+# refused by name, at the module's own byte offset, never read past or answered with a default
 @testset "the module reader refuses a malformed module" begin
     pre = UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]
     imp(contents...) = UInt8[0x02, length(contents), contents...]
     # one import "a"."b" of a function of type 0: count 1, name a, name b, kind 0, type 0
     one = (0x01, 0x01, UInt8('a'), 0x01, UInt8('b'), 0x00, 0x00)
-    @test WasmTarget.module_function_imports(vcat(pre, imp(one...))) == [("a", "b")]
-    @test WasmTarget.module_function_imports(pre) == Tuple{String,String}[]
-    refused(bytes, needle) = (e = try; WasmTarget.module_function_imports(bytes); nothing; catch x; x; end;
+    read(bytes) = WasmReader.module_function_imports(bytes)
+    @test read(vcat(pre, imp(one...))) == [("a", "b")]
+    @test read(pre) == Tuple{String,String}[]
+    refused(bytes, needle) = (e = try; read(bytes); nothing; catch x; x; end;
                               e isa ArgumentError && occursin(needle, e.msg))
     @test refused(pre[1:7], "invalid Wasm preamble")                                      # too short
     @test refused(vcat(pre[1:4], UInt8[0x02, 0x00, 0x00, 0x00]), "invalid Wasm preamble") # version 2
     @test refused(vcat(UInt8[0x00, 0x61, 0x73, 0x6e], pre[5:8]), "invalid Wasm preamble") # magic
     @test refused(vcat(pre, UInt8[0x01, 0x10, 0x00]), "where 16 are read")                # a section past the end
     @test refused(vcat(pre, imp(one..., 0x00)), "1 byte(s) after its last import")         # a byte left over
-    @test refused(vcat(pre, imp(one[1:end-1]...)), "where a byte is read")                 # the section ends inside an import
+    # the section ends inside an import: named at the module's byte 16, its end, not the section's 6
+    @test refused(vcat(pre, imp(one[1:end-1]...)), "the section ends at byte 16, where a byte is read")
     @test refused(vcat(pre, imp(0x00), imp(0x00)), "2 import sections")                    # a second import section
     @test refused(vcat(pre, imp(0x01, 0x01, 0xff, 0x01, UInt8('b'), 0x00, 0x00)), "not valid UTF-8")
     @test refused(vcat(pre, imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('b'), 0x01, 0x70, 0x00, 0x00)), "of kind 1")
     @test refused(vcat(pre, UInt8[0x00, 0x02, 0x01, 0xff]), "not valid UTF-8")             # a custom section's name
-    @test refused(vcat(pre, UInt8[0x02, 0x0b], fill(0xff, 10), [0x01]), "longer than 64 bits")
-    # a tenth byte with bits past bit 63: the count 1 with bit 64 set, never read as 1
-    @test refused(vcat(pre, imp(0x81, fill(0x80, 8)..., 0x02, one[2:end]...)), "longer than 64 bits")
-    # a global's reference heap type, a signed LEB128 whose tenth byte is neither sign extension
-    gref(last) = imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('g'), 0x03, 0x64, fill(0x80, 9)..., last, 0x00)
-    @test refused(vcat(pre, gref(0x01)), "longer than 64 bits")
-    @test WasmTarget.module_function_imports(vcat(pre, gref(0x7f))) == Tuple{String,String}[]
+    # a u32 (a count, a length, an index) is at most 5 bytes, its 5th holding bits 28-31 alone:
+    # ten bytes, six bytes, and five whose last holds bit 32 (the count 2^32) are refused
+    @test refused(vcat(pre, UInt8[0x02, 0x0b], fill(0xff, 10), [0x01]), "past 32 bits")
+    @test refused(vcat(pre, imp(0x81, fill(0x80, 8)..., 0x02, one[2:end]...)), "past 32 bits")
+    @test refused(vcat(pre, imp(0x81, 0x80, 0x80, 0x80, 0x80, 0x00, one[2:end]...)), "past 32 bits")
+    @test refused(vcat(pre, imp(0x80, 0x80, 0x80, 0x80, 0x10, one[2:end]...)), "past 32 bits")
+    # five bytes are a u32 when the 5th holds bits 28-31 alone: the count 1, spelled long
+    @test read(vcat(pre, imp(0x81, 0x80, 0x80, 0x80, 0x00, one[2:end]...))) == [("a", "b")]
+    # a global import's heap type is an s33: at most 5 bytes, the 5th's two high bits its sign's
+    # extension, so a ten-byte one is refused whatever its last byte (no ten-byte heap type is wasm)
+    gref(ht...) = imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('g'), 0x03, 0x64, ht..., 0x00)
+    @test refused(vcat(pre, gref(fill(0x80, 9)..., 0x01)), "past 33 bits")
+    @test refused(vcat(pre, gref(fill(0x80, 9)..., 0x7f)), "past 33 bits")
+    @test refused(vcat(pre, gref(0xef, 0xff, 0xff, 0xff, 0x5f)), "past 33 bits")          # its high bits not the sign's
+    # extern (-0x11) spelled in five bytes, and a type index, are heap types: read past, no function import
+    @test read(vcat(pre, gref(0xef, 0xff, 0xff, 0xff, 0x7f))) == Tuple{String,String}[]
+    @test read(vcat(pre, gref(0x00))) == Tuple{String,String}[]
+    # a global import's value type is a number type, a reference type's prefix and its heap type,
+    # or an abstract heap type's shorthand, as ValueType/RefType/HeapType.deserialize accept them;
+    # its mutability is 0 or 1
+    glob(vt...) = imp(0x01, 0x01, UInt8('a'), 0x01, UInt8('g'), 0x03, vt...)
+    @test read(vcat(pre, glob(0x7f, 0x01))) == Tuple{String,String}[]                       # i32, mutable
+    @test read(vcat(pre, glob(0x6f, 0x00))) == Tuple{String,String}[]                       # externref
+    @test refused(vcat(pre, glob(0x40, 0x00)), "invalid heap type code -64")               # no such type
+    @test refused(vcat(pre, glob(0x64, 0x40, 0x00)), "invalid heap type code -64")         # no such heap type
+    @test refused(vcat(pre, glob(0x00, 0x05)), "a type index at byte")                     # an index, no prefix
+    @test refused(vcat(pre, glob(0x7f, 0x05)), "neither 0 nor 1")                          # mutability 5
 end

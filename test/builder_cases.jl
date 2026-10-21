@@ -118,7 +118,7 @@ function builder_cases(W::Module)
         m = W.WasmModule(); b = W.InstrBuilder(VT[], VT[]; mod=m); W.f64_const!(b, 1.0)
         W.trunc_sat!(b, 0x0b) end)
     # A15B5: an imported function is named where it is imported (the name section drops none)
-    add("v", "A15B5", ArgumentError, () -> W.WasmImport("host", "f", 0x00, UInt32(0), ""))
+    add("v", "A15B5", ArgumentError, () -> W.WasmImport("host", "f", UInt32(0), ""))
     # A16B2: a constant fragment's ref.func is checked as a global initializer's, so a function
     # body takes none (its `ref.func f`, f declared nowhere, would reach only wasm-tools)
     add("w", "A16B2", ArgumentError, () -> begin
@@ -127,6 +127,11 @@ function builder_cases(W::Module)
         b = W.InstrBuilder(VT[], VT[]; mod=m)
         C = W.InstrBuilder(VT[], VT[]; mod=m, fragment=true, constant_expression=true)
         W.ref_func!(C, f); W.append_builder!(b, C) end)
+    # A19B4: a name is written as valid UTF-8 or refused (a Julia String, a Symbol a user wrote,
+    # may hold bytes that are not UTF-8, which an engine refuses at instantiation or drops)
+    add("x", "A19B4", W.ModuleValidationError, () -> begin
+        m = W.WasmModule(); b = W.InstrBuilder(VT[], VT[]; mod=m); W.finish_function!(b)
+        f = W.add_function!(m, b; name="f"); W.add_export!(m, "f\xff", 0, f); W.to_bytes(m) end)
     return cases
 end
 

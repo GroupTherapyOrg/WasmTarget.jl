@@ -116,7 +116,7 @@ _wt_oip_unused_s(n::Int64) = (_wt_oip_side_s("ab"); n * 2)
     @test idx !== nothing
     local callee = body.stmts[idx].node.mi
     local ctx = WasmTarget.CompilationContext(body, fn[2], rt, mod, treg;
-                                              translator=WasmTarget.Translator(plan, nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing),
+                                              translator=WasmTarget.Translator(plan, nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())),
                                               func_registry=freg, mi=fn[4])
     @test ctx.ssa_types[idx] === WasmTarget.get_function_by_mi(freg, callee).return_type
     @test ctx.ssa_types[idx] === WasmTarget.plan_ir(plan, callee)[2] === Int64

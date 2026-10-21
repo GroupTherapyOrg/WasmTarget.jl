@@ -166,7 +166,7 @@ _wt_eb_o2(x::Int64) = try; throw(ArgumentError("o")); catch; _wt_eb_cb2(x); _wt_
     @test wasm_boundary_sites(m) == 0
     bytes = WasmTarget.to_bytes(m)
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst;
     importObject.host = { cb: (x) => inst.exports.b(x), cbd: (x) => inst.exports.d(x), cbt: (x) => { throw new TypeError('dom'); },
                           cb2: (x) => inst.exports.lc(x), cbr: (x) => inst.exports.r(x) };
@@ -246,7 +246,7 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
                           cb7: (x) => { inst.exports.t6(x); } };
     """
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst;
     $host
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
@@ -266,7 +266,7 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
     # the glue is the module's runtime too: a module with a host-declared import imports its count,
     # so a host that instantiates without the glue is refused, by name
     refused = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst;
     $host
     try { await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] }); return [{ ok: 'instantiated' }]; }
@@ -281,7 +281,7 @@ _wt_hb_o7(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_hb_cb7(x); 0; e
     declared = sort!([imp.module_name * "." * imp.field_name for imp in m.imports if WasmTarget._is_host_declared_import(imp)])
     @test declared == ["host.cb", "host.cb6", "host.cb7", "host.cbg", "host.cbo"]
     wrapped = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst;
     $host
     const glued = ($(WasmTarget.host_glue_js()))(importObject);
@@ -315,7 +315,7 @@ _wt_cc_o(x::Int64) = try; throw(ArgumentError("a")); catch; _wt_cc_cbq(x); end
     @test unsaved_host_import_calls(m) == 0
     bytes = WasmTarget.to_bytes(m)
     status, results = WasmRunner.run_driver_batch(bytes, """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst;
     importObject.host = { cbq: (x) => { try { return inst.exports.b(x); } catch (e) { return inst.exports.r(0n); } } };
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
@@ -357,7 +357,7 @@ _wt_gl_p(x::Int64) = x + 100
     bytes = WasmTarget.to_bytes(m)
     glue = WasmTarget.host_glue_js()
     status, results = WasmRunner.run_driver_batch(bytes, """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     let inst; importObject.host = { cbr: (x) => inst.exports.r(x) };
     const io = ($glue)(importObject);
     const { instance } = await WebAssembly.instantiate(bytes, io, { builtins: ['js-string'] });
@@ -422,7 +422,7 @@ end
     @test WasmTarget.add_global_import!(hg, "host", "g", WasmTarget.I32, true) == 0
     hbytes = WasmTarget.to_bytes(WasmTarget.compile_module(Any[(_wt_hb_gw, (WasmGlobal{Int32,0},), "gw")]; existing_module=hg, options=WasmTarget.options_from_env()))
     status, results = WasmRunner.run_driver_batch(hbytes, """
-    const importObject = $(WasmTarget.host_runtime_js(hbytes));
+    const importObject = $(WasmRunner.module_runtime_js(hbytes));
     const g = new WebAssembly.Global({ value: 'i32', mutable: true }, 5);
     importObject.host = { g };
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
@@ -485,9 +485,11 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     mod4 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod4)
     pre4 = _wt_empty_function!(mod4, "pre")
-    WasmTarget.add_export!(mod4, "_wt_c1_inner(n::Int64)", 0, pre4)
+    local inner4 = WasmTarget.julia_function_name(WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
+    @test inner4 == "_wt_c1_inner(::Int64) @ $(@__MODULE__)"
+    WasmTarget.add_export!(mod4, inner4, 0, pre4)
     err = try; WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4, options=WasmTarget.options_from_env()); nothing; catch e; e; end
-    @test err isa ArgumentError && occursin("export name \"_wt_c1_inner(n::Int64)\" is taken (the module's export", err.msg)
+    @test err isa ArgumentError && occursin("export name \"$(inner4)\" is taken (the module's export", err.msg)
     # a hook exports by asking the compile: it adds no export itself
     mod5 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod5)
@@ -534,6 +536,39 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     # nor a name WasmTarget generates an export under
     err = try; WasmTarget.compile_module(Any[(_wt_c1_x, (Int64,), "wasmtarget.class_id")]; options=WasmTarget.options_from_env()); nothing; catch e; e; end
     @test err isa ArgumentError && occursin("export name \"wasmtarget.class_id\" is taken (reserved", err.msg)
+    # a hook's request names a function of the module: a negative index and one past the module's
+    # functions are refused where the hook returns, an ArgumentError naming the request, never an
+    # internal error "while planning" (the negative one) or an invalid module after codegen (the
+    # one past the end) (dev/AUDIT.md A19C7)
+    for bad in (-1, 10_000)
+        err = try
+            WasmTarget.compile_module(Any[(_wt_export_escape, (Int64,), "esc")];
+                link_roots=(lm, roots, _) -> ["far" => bad], options=WasmTarget.options_from_env())
+            nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError && occursin("the link_roots hook requested \"far\" => $(bad)", err.msg)
+    end
+    # a root binding, and an invoke binding's target, name a root of the plan, never another planned
+    # function by its signature (dev/AUDIT.md A19C6)
+    inner = WasmTarget.julia_function_name(WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
+    err = try
+        WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")];
+            root_bindings=Dict(inner => WasmTarget.RootBindings()), options=WasmTarget.options_from_env())
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("root bindings do not match compilation roots", err.msg) && occursin(inner, err.msg)
+    err = try
+        WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")];
+            root_bindings=Dict("outer" => WasmTarget.RootBindings(invoke_roots=Dict(1 => inner))), options=WasmTarget.options_from_env())
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError && occursin("invokes unknown compilation roots", err.msg) && occursin(inner, err.msg)
 
     # an export entry is a prologue with no local and no try, so a result that is not defaultable
     # (a hook's export of a function returning `(ref $t)`) leaves on the stack: the module
@@ -552,7 +587,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     bytes3 = WasmTarget.to_bytes(m3)
     @test success(pipeline(`wasm-tools validate --features=gc,legacy-exceptions`; stdin=IOBuffer(bytes3)))
     status, results = WasmRunner.run_driver_batch(bytes3, """
-    const importObject = $(WasmTarget.host_runtime_js(bytes3));
+    const importObject = $(WasmRunner.module_runtime_js(bytes3));
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     return [{ ok: typeof instance.exports.mk() }];
     """; ninputs=1)

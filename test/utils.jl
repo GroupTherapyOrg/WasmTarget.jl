@@ -225,7 +225,7 @@ callee's. Which imports are host-declared is the compiler's own rule (_is_host_d
 Read from the module's code as wasm-tools prints it (L156).
 """
 function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
-    local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
+    local funcs = mod.imports
     local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
     local count = _global_by_name(mod, "\$host_imports_open")
     local tops = _global_by_name(mod, "\$import_tops")
@@ -299,7 +299,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 
 async function validate() {
     try {
-        const importObject = $(WasmTarget.host_runtime_js(wasm_bytes));
+        const importObject = $(WasmRunner.module_runtime_js(wasm_bytes));
         const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
@@ -792,7 +792,7 @@ function _generate_bridge_driver(bytes::Vector{UInt8}, func_name, args, arg_type
     # reading a file and console.logging.
     lines = String[]
     push!(lines, "  try {")
-    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js(bytes));")
+    push!(lines, "    const importObject = $(WasmRunner.module_runtime_js(bytes));")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
@@ -988,7 +988,7 @@ function _generate_sidecar_bridge_driver(bytes::Vector{UInt8}, sidecar_bytes::Ve
     push!(lines, "    const sidecarHex = \"$(WasmRunner.enc_wasm(sidecar_bytes))\";")
     push!(lines, "    const sidecarBytes = Buffer.from(sidecarHex, 'hex');")
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
-    push!(lines, "    const importObject = $(WasmTarget.host_runtime_js(bytes));")
+    push!(lines, "    const importObject = $(WasmRunner.module_runtime_js(bytes));")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
     push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
@@ -1100,7 +1100,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
@@ -1167,7 +1167,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
     enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(WasmRunner.module_runtime_js(bytes));
     const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

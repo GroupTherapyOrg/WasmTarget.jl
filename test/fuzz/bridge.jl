@@ -18,7 +18,7 @@ using WasmTarget.Bridge
 using WasmTarget.Bridge: WALK_JS, _mangle, _acc!, _FN_CACHE, _INTS, _build!
 using JSON
 using ..FuzzHarness: DEFAULT_TIMEOUT, _js_inputs, run_driver_batch
-using ..FuzzHarness.WasmRunner: escaped_class_name
+using ..FuzzHarness.WasmRunner: escaped_class_name, module_runtime_js
 
 # back-compat alias for fuzz files that referenced the old internal name
 const _WALK_JS = WALK_JS
@@ -49,7 +49,7 @@ function bridge_run(fn, argtypes::Tuple, inputs::Vector; rettype::Type,
     end
     driver = """
     const inputs = $(_js_inputs(inputs));
-    const importObject = $(WasmTarget.host_runtime_js(bytes));
+    const importObject = $(module_runtime_js(bytes));
     const { instance } = await WebAssembly.instantiate(bytes, importObject, { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];

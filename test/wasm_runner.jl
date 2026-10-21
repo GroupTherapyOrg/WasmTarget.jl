@@ -20,13 +20,14 @@ module WasmRunner
 
 using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
 import WasmTarget
+include(joinpath(@__DIR__, "wasm_reader.jl")); using .WasmReader: module_runtime_js
 
-# The WT imports module `bytes` holds, answered by its runtime (WasmTarget.host_runtime_js, generated
-# from the module), beside what a test's own importObject answers — its answers win — then the glue
+# The WT imports module `bytes` holds, answered by its runtime (WasmTarget.host_runtime_js over the
+# module's import record, read back from the bytes: module_runtime_js), beside what a test's own importObject answers — its answers win — then the glue
 # (WasmTarget.host_glue_js): the count of open host-declared import calls, imported by a module that
 # has one, and each host-declared import wrapped to keep it.
 host_runtime_merge_js(bytes::Vector{UInt8})::String =
-    "for (const [m, fs] of Object.entries($(WasmTarget.host_runtime_js(bytes)))) " *
+    "for (const [m, fs] of Object.entries($(module_runtime_js(bytes)))) " *
     "importObject[m] = Object.assign({}, fs, importObject[m] || {}); " *
     "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
     "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"

@@ -361,7 +361,7 @@ _mbv_empty_function!(m, params; name) =
         mktempdir() do dir
             wasm = joinpath(dir, "void-root.wasm")
             write(wasm, MBV.to_bytes(void_module))
-            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js(MBV.to_bytes(void_module)))).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
+            probe = "WebAssembly.instantiate(require('fs').readFileSync(process.argv[1]), $(WasmTarget.host_runtime_js(WasmTarget.function_import_names(void_module)))).then(m=>m.instance.exports.void_numeric(1n)).catch(e=>{console.error(e);process.exit(1)})"
             proc = run(ignorestatus(`node -e $probe $wasm`))
             @test proc.exitcode == 0
         end

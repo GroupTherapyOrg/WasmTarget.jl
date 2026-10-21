@@ -1939,3 +1939,131 @@ commit carrying this entry), each case added and run on the tree before it first
   _compile_call_flipsign, calls.jl), so the needle would count them and break L180, a lock at 0.
   Everything else is on MARCH 13.17 under its row: A18C5 (one WasmInterpreter per compile, more
   than ~150 lines), A18C2, A18P2's remainder, A18E4's representation, A18E5's remainder.
+
+## 2026-10-21 — audited through f1c16321 (25e6a5b7..f1c16321: 4d8357c7, the blocking gate, 116e-2, A18C2 and the JIT fix)
+
+The nineteenth audit covers:
+- 4d8357c7, batch 118x, the eighteenth audit's fixes (its entry);
+- 22f9cea4, the blocking gate (`bash dev/gate.sh --block`, its budgets and timing ratchet, the landing on its record);
+- 99c12264, batch 116e-2, one export namer, a function named by its Julia identity, one import query, the host runtime
+  per module;
+- fe7b5405, A18C2, one sorted class list per round, and f1c16321, methods that take a type compile once (an addendum,
+  read in all four areas).
+
+It made 41 findings on 4d8357c7..99c12264 (34) and on fe7b5405 and f1c16321 (the addendum, 7), and one more while this
+commit was verified (A19P12), several seen from two
+areas (A19B1 = A19E3, A19B2 + A19B3 = A19E6, A19C1 = A19E2, A19C2 = A19E1, A19C7 = A19E5, A19C8 = A19E7). No silent
+wrong answer is in the range. A valid program refused, introduced in the range: A19C2 = A19E1, two generic functions
+of one name in two modules (`_GNA.f(x::Int64)`, `_GNB.f(x::Int64)`) printed alike and raised a WasmInternalError, where
+4d8357c7 compiled them and native `_gn_alike(3)` answers 9. A wrong answer the blocking gate lets land: A19E2, a changed
+operator-table row (`intrinsics_table.jl:111` F32_COPYSIGN to F32_MIN validates, answers `copysign(1.0f0, -2.0f0)`
+-2.0f0, native -1.0f0) runs no stage of the gate (by reading).
+
+Area: builder — (A19B1) the host runtime was built by reading the module's bytes back (writer.jl module_sections,
+module_function_imports, a port of wasm_builder's Deserializer), where dart2wasm generates its runtime from the
+translator's own record of the imports it used (runtime_generator.dart:60, :128) and writes it beside the module
+(compile.dart:648-669), its Deserializer serving only tools and tests: two readers of the import list. (A19B2) the
+reader read u64/s64 where the format gives u32 and s33, and host_imports.jl asserted a ten-byte heap type accepted.
+(A19B3) a global import's value type, heap type and mutability were read past unchecked. (A19B4) write_name! wrote a
+name without checking it is UTF-8. (A19B5) WasmImport took any kind byte and serialized every one as a function import,
+three `kind == 0x00` filters reading the dead case. (A19B6) L185 credited a `.imports` read to the last `^function` line
+and saw only a receiver spelled `mod`.
+
+Area: collection and planning — (A19C1) block_impact.jl's "ran a line" is not "detects a change" (overlay and ext bodies,
+const tables and `@static` blocks unkeyed, same-name definitions sharing keys, 40-line pieces, a 1-cover, no QA family,
+no 1.13 run for a src change). (A19C2) above. (A19C3) _user_shown_in_signature asked `which(show, Tuple{IO,T})`, not what
+the printer runs: a show for IOContext, `print` on the function slot, and Base shows that call a value's own methods
+(`show(io, ::Signed)` its `string`) decided a name. (A19C4) which of two methods over one specialization Julia's dispatch
+selects was decided twice (invoke_only by wt_method_which, the bare name by `morespecific`). (A19C5) "as Julia prints
+it in a stack trace" was false with aliases off. (A19C6) root bindings and invoke targets were checked against every
+planned function, not plan.roots. (A19C7) a hook's negative index raised an InexactError wrapped as an internal error, one
+past the end failed only after codegen. (A19C8) two ExportNamers per compile. (A19C9) a name printed up to three times;
+"does not depend on the session" overstated (a union's member order past three parameters, jltypes.c:434-455); an
+unnamed entry's form depends on the other entries.
+
+Area: emission and diagnostics — (A19E1) = A19C2. (A19E2) = A19C1, the copysign row above. (A19E3) = A19B1. (A19E4) the
+reader's messages gave a section offset as a module byte ("byte 6" for a fault at byte 16). (A19E5) = A19C7. (A19E6) =
+A19B2 + A19B3. (A19E7) = A19C8. (A19E8) a signature holding a closure type is named by its gensym, which Main's lowering
+counter decides, so a name and the probe bytes follow the session.
+
+Area: enforcement and prose — (A19P1) the blocking gate runs no QA test file the locks cite as behavior, and land.sh
+never reads the landed head's matrix verdict. (A19P2) a red record under the warm runner was overwritten by a green rerun.
+(A19P3) the stages inherit WT_*/TLC_* from the caller; `clean` is read once. (A19P4) the warm runner lives outside the
+repository and its stages are not ratcheted. (A19P5) the machine factor is uncapped, so "60 s" is not enforced. (A19P6)
+a calibration lowering loosens every best; a hand edit can raise a budget. (A19P7) the timing exemption accepts any
+existing MARCH row. (A19P8) a record of a narrowed change (`--base HEAD`) lands. (A19P9) 99c12264's message states as
+its own the smoke, probe and shard numbers measured on 0cefd742 (tree 0865d25f, on 0bc84e05); the landed record has no
+1.13 stage. (A19P10) gate.sh:6, block_groups.tsv:4 (84 core cases, not 58), HISTORY.md:151, block.jl:116's -U0 comment.
+(A19P11) the gate's selections are run by no lock. (A19P12, found while verifying this commit) a warm session collects
+what a fresh process does not: diagnostic_attribution.jl's receiver-free `print(x)` raised a WasmInternalError ("Base.string_index_err(::AbstractString,
+::Int64) @ Base was collected with no recorded reason") under the out-of-tree warm runner, on this commit and
+after a restart, where a fresh `julia --project=.` on this commit and on f1c16321 rejects it at its statement
+(current_task, lock.jl:10), so the warm runner's verdict is not a fresh process's. Addendum — (A19X1) fe7b5405's message states smoke "902 passed" and
+every timing and profile figure as its own; they were measured on 40934990 (A18C2 on 0bc84e05), and the landed record
+ran 115 smoke cases; its probe claims hold (b9b4d1f5's src equals fe7b5405's: 225 probes, 0 changed, 0 differ in reverse
+order). (A19X2) f1c16321's `@nospecialize(func_ref=nothing)` on CompilationContext's keyword reaches the body, not the
+kwcall sorter, which specializes on the NamedTuple (measured at 98d0e16f: 264 samples in the kwcall): the claim is
+false. (A19X3) f1c16321's timings compare 99c12264 with c614c0c9, whose parent is b9b4d1f5 (A18C2), so they include
+A18C2's gain; its probe claims hold (c614c0c9's src equals f1c16321's). (A19X4) nothing pins either perf fix. (A19X5)
+ClosedWorldClasses keeps the default constructor beside the deriving one. (A19X6) dfs! and box_capture.jl still sort
+their children by `string` per comparison. (A19X7) entry 18 still says A18C2 is pending on 9d59c973.
+
+Resolution: A18C2 is fixed by fe7b5405 (A19X7); entry 18's "pending on wip/eff-compile2 9d59c973" reads so. A19C1 =
+A19E2 and A19P1-A19P11 are fixed in 119g (march/119g, pending, after this commit), the copysign plant its acceptance test
+and L194's negative. A19P12 is on MARCH 13.17 (the warm runner collects what a fresh process collects, the receiver-free print its witness),
+for 119g's in-tree runner. A19X4, A19X5 and A19X6 are fixed in eff-compile3 (pending), and A19X2's code there (site 9,
+func_ref positional, 03fafe27), the decorative keyword form going with it. A19X1, A19X3 and A19P9: the numbers are
+attributed above (the landed messages cannot change); RULES-agents.md requires every number in a message to be measured
+on the exact commit or to name its sha. A19E8 is on MARCH 13.17 (a closure type printed by its parent method and its
+declaration ordinal, a case of two fresh processes and a session that lowered other closures first), fixed in 120x,
+the commit carrying entry 20;
+this commit retitles generated_names.jl's testset ("does not depend on Main's `using`s") and states the load-order
+dependence in julia_function_name's docstring and L184. Everything else in this commit, each case added and run on the
+tree before it first (native, f1c16321, and this commit):
+- A19B1 = A19E3: host_runtime_js takes the record of a module's function imports, `(module, field)` in index order
+  (RuntimeFinalizer.generate over the translator's record, runtime_generator.dart:128/:60), and _compile generates the
+  module's runtime from its own record (function_import_names, through imported_function) and returns it beside the
+  bytes, CompileResult.runtime (compile.dart:648-669), projected by compile_with_runtime and compile_multi_with_runtime
+  (L158's entries; the docs example uses the first); the reader leaves src: test/wasm_reader.jl, a test tool as dart's
+  wasm2wat and wasm_read_write_test are, through which the byte-holding harnesses read the record (module_runtime_js).
+  host_imports.jl's 'the host runtime is the module's own imports' checks the compile's runtime equals the one built from
+  what the bytes declare and the engine's WebAssembly.Module.imports; L150 and L65 restated (no codegen definition takes a
+  module's bytes, no reader name in src); MARCH 13.16 and downstream.yml state the API.
+- A19B2 + A19B3 = A19E6, A19E4 (in test/wasm_reader.jl): read_u32! (at most 5 bytes, the 5th holding bits 28-31 alone)
+  and read_s33! (the 5th's high bits the sign's extension) for every field; a global's value type, heap type and
+  mutability as ValueType/RefType/HeapType.deserialize accept them (type.dart:67, :256, :361), mutability 0 or 1; each
+  section a view over the module's bytes, so a message names the module's byte. host_imports.jl's reader testset:
+  `gref(0x7f)`, a ten-byte heap type, refused (asserted accepted before); a 6-byte u32 and a 5-byte u32 holding bit 32
+  refused, a long 5-byte count read; extern spelled in five bytes and a type index read; an unknown value type, an
+  unknown heap type, a prefix-less index and mutability 5 refused; the section's end named at byte 16.
+- A19B4: write_name! refuses a name that is not UTF-8 through _module_invalid (test/builder_cases.jl row x, held by L166);
+  no program reaches it: Julia's own MethodInstance printer throws InvalidCharError for such a Symbol first (A19B7, on
+  MARCH 13.17). A19B5: WasmImport is an imported function (ImportedFunction, function.dart:183), its kind field gone and
+  the serializer writing 0x00 (:202); the four filters (num_imported_funcs, imported_function, the name section,
+  _is_host_declared_import) go. A19B6: L185 finds each reader through the parser (field_readers), any receiver, and
+  counts the readers exactly.
+- A19C2 = A19E1: a function's name is the call form Julia prints for its MethodInstance (show_mi, show.jl:1388:
+  argument types only, the function qualified unless exported from its module or Main's), then ` @ ` and its method's
+  module as a stack frame prints it; the invoke-only suffix before the module. `_gn_alike` compiles and answers 9 (a
+  WasmInternalError on f1c16321); the name's one limit, two same-named functions printed unqualified whose methods of
+  one signature one module defines (`_gn_res`), is a WasmCompileError naming both methods' lines (L118's third site);
+  any other same-text pair stays a WasmInternalError, forced by a unit test (one specialization planned twice). A19C5:
+  the docstrings and compile_multi's say so (aliases off: `Array{Int64, 1}`). The probes are re-recorded: 54 of 225
+  baseline lines change, and with custom sections stripped and export names dropped all 225 modules print as on
+  f1c16321 (1,463 functions: export names 29,950 to 32,270 bytes, function names 58,449 to 63,406).
+- A19C3: the printer's questions asked as it runs them, one site (_printer_method, L171's allowlist): `show` and `print`
+  over IOContext{IOBuffer}, `print` for the function slot unless it is a function's own singleton type, a value
+  parameter accepted only when Base or Core shows it and its type is theirs or its show is the generic one
+  (generated_names.jl `_gn_ctx`, `_gn_call`, `_gn_signed`, each named by the user's text on f1c16321); the capability
+  this refuses (a package-shown value parameter, Unitful's units) is on MARCH 13.10.
+- A19C4 + A19C9: plan_function_names! names by `mi ∈ plan.invoke_only`, the one consult's answer; the grouping by text
+  and `morespecific` go; each signature is printed once per plan (an IdDict beside the plan); the two claims restated
+  (trim_compile_plan's unnamed entries, julia_function_name's load order).
+- A19C6: the bindings are checked against `values(plan.roots)` (real_bottom_exceptions.jl: a binding and an invoke target
+  naming a non-root's signature refused, both accepted on f1c16321). A19C7 = A19E5: run_link_roots refuses an index
+  outside the module's functions, an ArgumentError naming the request (`-1`: an internal error on f1c16321; `10000`: a
+  ModuleValidationError after codegen). A19C8 = A19E7: one ExportNamer, made at the compile's setup before the tag is
+  exported and held by its Translator (translator.dart:163), read by the tag, the compile's exports and the class reader;
+  a host's setup of the module it prepares, before any compile, names its one export through its own (L184).
+- Each new or tightened lock (L65, L118, L150, L158, L166's row x, L171, L184, L185) was planted, fired and restored on
+  this commit, and the QA files ran through runtests.jl's shards.

@@ -460,6 +460,39 @@ function toplevel_definitions(path::String)::Vector{Tuple{String,Int,Bool}}
 end
 
 """
+The top-level definitions of one source file whose syntax reads the field `field` on any receiver
+(`x.field`, whatever `x` is spelled), by name, one entry per definition that reads it; a top-level
+form that is not a definition and reads it counts as "<top level>". Walks Meta.parseall's tree,
+descending as toplevel_definitions does, so a reader is credited to the definition that holds it
+(a short form `f(m) = m.field` included) and a comment or a string never counts.
+"""
+function field_readers(path::String, field::Symbol)::Vector{String}
+    reads(ex) = ex isa Expr && ((ex.head === :. && length(ex.args) == 2 && ex.args[2] == QuoteNode(field)) ||
+                                any(reads, ex.args))
+    out = String[]
+    function visit(ex)
+        ex isa Expr || return
+        if ex.head in (:toplevel, :block, :module)
+            foreach(visit, ex.head === :module ? ex.args[3].args : ex.args)
+            return
+        end
+        if ex.head === :if || ex.head === :elseif
+            reads(ex.args[1]) && push!(out, "<top level>")
+            foreach(visit, ex.args[2:end])
+            return
+        end
+        d = ex
+        while d isa Expr && d.head === :macrocall
+            m = _macroname(d.args[1])
+            m === Symbol("@doc") ? (d = d.args[4]) : m in _DEF_WRAPPERS ? (d = d.args[end]) : break
+        end
+        reads(d) && push!(out, something(_def_name(d), "<top level>"))
+    end
+    visit(Meta.parseall(_text(path); filename=path))
+    return out
+end
+
+"""
 Bare string literals among the top-level statements of `src` — each is a docstring cut off from
 its definition (a comment line between a docstring and its definition detaches it) or prose
 with no definition under it. Either way the documentation is attached to nothing: stale by
@@ -1017,9 +1050,9 @@ const LOCKS = [
                           exclude_files=["parity_ratchet.jl"])),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
         () -> count_silent_catches()),
-    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted. One site is allowed, exactly: `function host_runtime_js(bytes::Vector{UInt8})::String`, no emission but the host runtime generated from the module a host instantiates, its imports read by the builder's module_function_imports (dart generates its runtime from the module it translated, runtime_generator.dart:128)",
+    "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted, and no codegen definition takes a module's bytes: the host runtime is generated from the compile's record of the module's imports (host_runtime_js(imports)), never read back from its bytes (until 2026-10-21 host_runtime_js(bytes) read them through a reader in the builder; dev/AUDIT.md A19B1)",
         () -> count_sites(r"bytes shell|[(,]\s*(?:target_)?bytes::Vector\{UInt8\}";
-                          roots=[CODEGEN], exclude_line=r"^function host_runtime_js\(bytes::Vector\{UInt8\}\)::String$")),
+                          roots=[CODEGEN])),
     "L66_no_fabricated_string_results" => ("string concatenation is Base's own compiled body, or the one N-way builder reached only when every operand is proven String or Symbol (builtins.jl `*`); the Method-keyed string builders are deleted and cannot return; mixed arguments can never become an empty string",
         () -> begin
             codegen_src = join((read(joinpath(CODEGEN, f), String) for f in readdir(CODEGEN) if endswith(f, ".jl")))
@@ -2427,12 +2460,14 @@ const LOCKS = [
             end
             n
         end),
-    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the collection's rejection (trimcollect.jl _collection_rejection), made while collecting and located at a statement with its source line and inline chain, for the walk of the constants past its bound at the statement holding the constant (audit #13 A13C7) and for a dynamic call's candidate tuples past _CANDIDATE_BOUND at the first statement making it (A9C2). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02); and the plan's rejection of a signature a `show` outside Base and Core would print (trimcollect.jl _julia_signature_text, naming the method and its line), made while naming the planned functions, before any statement (2026-10-20)",
+    "L118_every_codegen_rejection_is_attributed" => ("a rejection raised while a statement is being compiled goes through record_unsupported!/emit_unsupported_stub! — which attribute it to the statement (ctx.current_stmt_idx) and its inline chain — never through a bare throw(WasmCompileError(WasmDiagnostic(…))); the registrar (structs.jl) and the import-stub check (compile.jl) run before any statement exists and are the only exceptions, with one exact site, pinned by its needle with its reason: the collection's rejection (trimcollect.jl _collection_rejection), made while collecting and located at a statement with its source line and inline chain, for the walk of the constants past its bound at the statement holding the constant (audit #13 A13C7) and for a dynamic call's candidate tuples past _CANDIDATE_BOUND at the first statement making it (A9C2). The export entry's rejection of a result that is not defaultable is gone with the entry's locals (a prologue, emit_export_entry!; A13B1) (locked 2026-09-02); and the plan's rejection of a signature a `show` outside Base and Core would print (trimcollect.jl _julia_signature_text, naming the method and its line), made while naming the planned functions, before any statement (2026-10-20); and the plan's rejection of two functions whose names are alike by the name's one limit, two same-named functions printed unqualified whose methods of one signature one module defines (trimcollect.jl plan_function_names!, naming both methods' lines; 2026-10-21, dev/AUDIT.md A19C2)",
         () -> begin
             local allowed = [("trimcollect.jl", "    return WasmCompileError(WasmDiagnostic(kind, _collection_host_text(ci), why,") =>
                                  "the collection runs before codegen; its rejection is located at a statement (the constant's, or the dynamic call's)",
                              ("trimcollect.jl", "        throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(m.name),") =>
-                                 "naming a planned function runs before codegen, with no statement: a signature a show outside Base and Core would print is rejected at the plan, naming the method and its source line (_julia_signature_text)"]
+                                 "naming a planned function runs before codegen, with no statement: a signature a show outside Base and Core would print is rejected at the plan, naming the method and its source line (_julia_signature_text)",
+                             ("trimcollect.jl", "                throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(mm.name),") =>
+                                 "naming the planned functions runs before codegen, with no statement: two functions whose names are alike by the name's one limit are rejected at the plan, naming both methods' source lines (plan_function_names!)"]
             local n = count_sites(r"WasmCompileError\(WasmDiagnostic\("; roots=[CODEGEN],
                                   exclude_files=["structs.jl", "compile.jl", "diagnostics.jl"])
             abs(n - length(allowed)) +
@@ -2647,7 +2682,7 @@ const LOCKS = [
             local runner = read(joinpath(ROOT, "test", "wasm_runner.jl"), String)
             local required = [(gen, "call!(b, something(_stack_trace_func_idx(mod)))\n    struct_new!(b, cell)\n    global_set!(b, top)\n    _emit_throw_top!(b, mod, registry)"),
                               (gen, "add_import!(mod, \"wasmtarget\", \"stack_trace\", WasmValType[], WasmValType[ExternRef])"),
-                              (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod)\n    trace === nothing || ensure_trace_imports!(mod)"),
+                              (read(joinpath(CODEGEN, "compile.jl"), String), "    ensure_provenance_imports!(mod, translator.export_namer)\n    trace === nothing || ensure_trace_imports!(mod)"),
                               (gen, "const st = e.getArg(tag, 1);"),
                               (runner, "catch (e) { return [(\$(WasmTarget.host_escape_js()))(instance.exports, e)]; }"),
                               (runner, "    \$(host_runtime_merge_js(bytes))"),
@@ -2713,7 +2748,7 @@ const LOCKS = [
                         (loc, "pushfirst!(ir.argtypes, Tuple{})"),
                         (loc, "(:ok, Base.invokelatest(_OCS[trace.entry], f, args...))"),
                         (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
-                        (comp, "trace === nothing || ensure_trace_imports!(mod)\n    local translator = Translator(plan, trace; options, diagnostics)"),
+                        (comp, "    local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))\n    ensure_provenance_imports!(mod, translator.export_namer)\n    trace === nothing || ensure_trace_imports!(mod)"),
                         (loc, "filter!(keep, nevents)"),
                         (loc, "filter!(keep, wevents)"),
                         (smoke, "replace(_smoke_locate(f, args), "),
@@ -2727,7 +2762,7 @@ const LOCKS = [
                           roots=[joinpath(SRC, "builder")]) +
               (occursin("        m[1] == \"builder/types.jl\" && (started = true)\n        started && push!(files, m[1])",
                         read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)) ? 0 : 1)),
-    "L150_every_host_import_has_its_runtime" => ("WT's own imports are one list, WT_IMPORTS (generate.jl), which every reader reads: every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src, and the traced compile's per-type probes, ensure_trace_imports!), is on it or is the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and it lists none that no code creates; host_runtime_js answers each of them a module declares, _is_host_declared_import calls every other function import the host's (by that list alone, no module-name rule), and the glue leaves exactly them unwrapped. The runtime is generated per module, as dart2wasm generates its runtime's JS methods from the module it translated (runtime_generator.dart:60 generateJsMethods, :128 RuntimeFinalizer.generate): host_runtime_js has one method, over the bytes a host instantiates (their imports read by the builder's module_function_imports), so no harness answers a module with a fixed list or another module's runtime (no `host_runtime_js()` call in src, test or docs). Behavior: test/host_imports.jl's 'the host runtime is the module's own imports' instantiates a module that reads the clock and one that draws random words, each with its own runtime, whose fields equal the module's declared function imports exactly, and with any one field taken out raises a LinkError (until 2026-10-20 every harness instantiated every module with all three fixed answers; dev/AUDIT.md A2C9, A2E4, A13E4; dev/CHARTER.md C1)",
+    "L150_every_host_import_has_its_runtime" => ("WT's own imports are one list, WT_IMPORTS (generate.jl), which every reader reads: every import WT's code generator creates, function or global (a literal `add_import!(mod, \"<module>\", \"<field>\"` or `add_global_import!(mod, \"<module>\", \"<field>\"` in src, and the traced compile's per-type probes, ensure_trace_imports!), is on it or is the glue's one import, `wasmtarget.host_imports_open` (host_glue_js hands it to the module), and it lists none that no code creates; host_runtime_js answers each of them a module declares, _is_host_declared_import calls every other function import the host's (by that list alone, no module-name rule), and the glue leaves exactly them unwrapped. The runtime is generated per module by the compile, from its own record of the imports it added, as dart2wasm generates its runtime's JS methods from its translator's record (runtime_generator.dart:60 generateJsMethods over translatedProcedures, :128 RuntimeFinalizer.generate) and writes it beside the module (compile.dart:648-669): host_runtime_js has one method, over that record (function_import_names, through imported_function), and _compile hands the runtime back beside the bytes (CompileResult.runtime; compile_with_runtime, compile_multi_with_runtime), so no harness answers a module with a fixed list or another module's runtime (no `host_runtime_js()` call in src, test or docs), and src reads no module's bytes back (a harness that holds bytes alone reads their imports with the test tool test/wasm_reader.jl, as dart's tools use wasm_builder's Deserializer). Behavior: test/host_imports.jl's 'the host runtime is the module's own imports' compiles a module that reads the clock and one that draws random words, each runtime equal to the one built from what its bytes declare, its fields equal to the engine's own reading of the function imports, and with any one field taken out raising a LinkError (until 2026-10-20 every harness instantiated every module with all three fixed answers; until 2026-10-21 the runtime was read back from the bytes by a reader in the builder; dev/AUDIT.md A2C9, A2E4, A13E4, A19B1; dev/CHARTER.md C1)",
         () -> begin
             local gen = read(joinpath(CODEGEN, "generate.jl"), String)
             local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * replace(name, "!" => "\\!") * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
@@ -2751,15 +2786,21 @@ const LOCKS = [
                             !occursin("m === 'wasmtarget'", glue)
             glue_ok && push!(listed, ("wasmtarget", "host_imports_open"))
             local required = [
-                (gen, "_is_host_declared_import(imp::WasmImport)::Bool =\n    imp.kind == 0x00 && !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, WT_IMPORTS)\n"),
-                (fbody(gen, "host_runtime_js"), "local imported = Set{Tuple{String,String}}(module_function_imports(bytes))\n    local answered = [(m, f, js) for (m, f, js) in WT_IMPORTS if js !== nothing && (m, f) in imported]"),
+                (gen, "_is_host_declared_import(imp::WasmImport)::Bool =\n    !any(((m, f, _),) -> m == imp.module_name && f == imp.field_name, WT_IMPORTS)\n"),
+                (fbody(gen, "host_runtime_js"), "local imported = Set{Tuple{String,String}}(imports)\n    local answered = [(m, f, js) for (m, f, js) in WT_IMPORTS if js !== nothing && (m, f) in imported]"),
+                # the compile generates the runtime from its own record and hands it back beside the bytes
+                (read(joinpath(SRC, "WasmTarget.jl"), String), "return CompileResult(bytes, host_runtime_js(function_import_names(result[1])), source_map,"),
+                (fbody(gen, "function_import_names"), "for imp in (something(imported_function(mod, k)) for k in 0:num_imported_funcs(mod) - 1)]"),
+                (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test rt == WasmReader.module_runtime_js(bytes)   # the compile's record is what the bytes declare"),
                 (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"given\"] == r[\"declared\"] == sort([\"wasmtarget.stack_trace\", has])"),
                 (read(joinpath(ROOT, "test", "host_imports.jl"), String), "@test r[\"missing\"] == [x * \" LinkError\" for x in r[\"given\"]]")]
             local v = length(symdiff(created, listed)) + (glue_ok ? 0 : 1) +
                       count(((text, needle),) -> !occursin(needle, text), required)
-            # one method, over the module's bytes; no fixed runtime anywhere
+            # one method, over the record of a module's imports; no fixed runtime anywhere, and no reader
+            # of a module's bytes in src
             v += abs(count_sites(r"^function host_runtime_js\(|^host_runtime_js\(.*\)(?:::\w+)?\s*=") - 1)
-            v += count_sites(r"^function host_runtime_js\((?!bytes::Vector\{UInt8\}\)::String$)")
+            v += count_sites(r"^function host_runtime_js\((?!imports::Vector\{Tuple\{String,String\}\}\)::String$)")
+            v += count_sites(r"\b(?:module_function_imports|module_sections|WasmDeserializer|read_unsigned!|read_signed!)\b")
             v += count_sites(r"host_runtime_js\(\)|HOST_RUNTIME\b"; roots=[SRC, joinpath(ROOT, "test"), joinpath(ROOT, "docs")],
                              exclude_files=["parity_ratchet.jl"])
             v
@@ -2940,7 +2981,7 @@ const LOCKS = [
             local norm(x) = filter(!isempty, map(strip, split(x, '\n')))
             local helpers = [raw"""
 function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
-    local funcs = [imp for imp in mod.imports if imp.kind == 0x00]
+    local funcs = mod.imports
     local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
     local count = _global_by_name(mod, "\$host_imports_open")
     local tops = _global_by_name(mod, "\$import_tops")
@@ -3041,7 +3082,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 !occursin("        isempty(name) && throw(ArgumentError(\"WasmFunction(type \$type_idx; name=\\\"\\\"): ", def) +
                 occursin("isempty(f.name) || push!(func_names", def)
         end),
-    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone reads the options (options_from_env) and hands them with the caller's ledger to the compile, whose Translator holds them (no OPTIONS, no DIAGNOSTICS_SINK in src: R40); among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_statement_trace, compile_with_base — is one call of it, so the source-map and trace entries take diagnostics_sink and the source-map entries the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: its `options` is required (a test passes options_from_env() or CompilerOptions()), it reads no options itself and, called directly, routes no ledger, which its docstring says. No ENV is read in src outside codegen/options.jl, the switches' one reader (the `locals` trace point there replaces codegen's WASMTARGET_DEBUG_LOCALS reads and their process-wide `@warn maxlog` counters, dev/AUDIT.md A17P5 = A17C6 = A17E9), the wasm-tools cross-check's WT_VALIDATE included: CompilerOptions.validate, which an entry's `validate` keyword overrides when given (_compile); `optimize`, the post-pass over finished bytes, takes `validate` required from its caller and reads no options (compile_with_base passes it the options its compile used, CompileResult.options, unless its own `validate` decides). options_from_env has one reader in src, the entry (dev/AUDIT.md A18P1: compile_module's keyword default and optimize's validate default read it too, which entry 17's A17P5 resolution accepted). test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
+    "L158_one_compile_entry" => ("one compile entry, as dart2wasm's compile(options, ioManager, handleDiagnosticMessage) is (compile.dart:216): _compile (src/WasmTarget.jl) takes every public entry's keywords, typed, with source maps (`source_map_url`) and the statement trace (`trace`) options of it, and returns one CompileResult (compile.dart:88 CodegenResult); it alone reads the options (options_from_env) and hands them with the caller's ledger to the compile, whose Translator holds them (no OPTIONS, no DIAGNOSTICS_SINK in src: R40); among src/WasmTarget.jl's code it alone calls compile_module and _emit_module; each exported entry — compile, compile_multi, compile_with_sourcemap, compile_multi_with_sourcemap, compile_with_runtime, compile_multi_with_runtime, compile_with_statement_trace, compile_with_base — is one call of it, so the source-map, runtime and trace entries take diagnostics_sink and the source-map entries and compile_multi_with_runtime the framework keywords (existing_module, import_stubs, root_bindings, link_roots) compile_multi takes; and compile_function, a second road to compile_module, is gone from src and test. compile_module stays exported, the internal step below the entry that tests call to inspect a module: its `options` is required (a test passes options_from_env() or CompilerOptions()), it reads no options itself and, called directly, routes no ledger, which its docstring says. No ENV is read in src outside codegen/options.jl, the switches' one reader (the `locals` trace point there replaces codegen's WASMTARGET_DEBUG_LOCALS reads and their process-wide `@warn maxlog` counters, dev/AUDIT.md A17P5 = A17C6 = A17E9), the wasm-tools cross-check's WT_VALIDATE included: CompilerOptions.validate, which an entry's `validate` keyword overrides when given (_compile); `optimize`, the post-pass over finished bytes, takes `validate` required from its caller and reads no options (compile_with_base passes it the options its compile used, CompileResult.options, unless its own `validate` decides). options_from_env has one reader in src, the entry (dev/AUDIT.md A18P1: compile_module's keyword default and optimize's validate default read it too, which entry 17's A17P5 resolution accepted). test/source_maps.jl runs both: a rejection through the source-map and trace entries fills the caller's sink, and compile_multi_with_sourcemap into a host's module answers compile_multi's bytes plus the URL section (dev/CHARTER.md C10)",
         () -> begin
             local api = read(joinpath(SRC, "WasmTarget.jl"), String)
             local body(name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), api); m === nothing ? "" : m.match)
@@ -3079,7 +3120,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             # each exported entry is one call of the one entry
             for name in ("compile", "compile_multi", "compile_with_sourcemap",
-                         "compile_multi_with_sourcemap", "compile_with_statement_trace", "compile_with_base")
+                         "compile_multi_with_sourcemap", "compile_with_runtime", "compile_multi_with_runtime",
+                         "compile_with_statement_trace", "compile_with_base")
                 local b = body(name)
                 v += (!isempty(b) && length(collect(eachmatch(r"\b_compile\(", b))) == 1) ? 0 : 1
             end
@@ -3129,10 +3171,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local fbody(text, name) = (m = match(Regex("(?s)\\nfunction " * name * "\\(.*?\\nend\\n"), text); m === nothing ? "" : m.match)
             local reader = fbody(gen, "ensure_class_id_reader!")
             local helper = fbody(gen, "host_escape_js")
-            local required = [(reader, "add_export!(mod, generated_export_name!(namer, \"wasmtarget.class_id\"), 0,"),
+            local required = [(reader, "add_export!(mod, generated_export_name!(translator.export_namer, \"wasmtarget.class_id\"), 0,"),
                               (reader, "emit_type_object_kind!(b, registry, 0, allocate_local!(ctx, I32), done, id!)"),
                               (reader, "local_get!(b, 0)\n    emit_class_id!(b, ctx, Any)\n    end_block!(b)\n    finish_function!(b)"),
-                              (comp, "    ensure_class_id_reader!(mod, type_registry, translator, namer)\n"),
+                              (comp, "    ensure_class_id_reader!(mod, type_registry, translator)\n"),
                               (helper, "exports['wasmtarget.class_id'](e.getArg(tag, 0))"),
                               (helper, "return { throw: 'minified:Class' + id, stack }"),
                               (fbody(api, "_compile"), "_emit_module(result[1]; optimize, validate=something(validate, options.validate),\n                                           class_names=_class_names(result[2]))"),
@@ -3542,7 +3584,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             n += occursin("@test only(bodies) in plan.candidate_mis", oip) ? 0 : 1
             n
         end),
-    "L171_one_method_consult" => ("one consult answers which methods Julia selects: Julia's matching in the WasmInterpreter's overlay table at its world (trimcollect.jl wt_method_matches = CC.findall, wt_method_which = CC.findsup, wt_methods_ambiguous), as dart consults one class hierarchy (translator.dart:108). No hasmethod(, which( (Sys.which aside), _which(, _methods_by_ftype( or isambiguous( outside that block, qualified or not (its ambiguity check is Julia's isambiguous algorithm, base/reflection.jl, run over the consult's matches with the ambiguous ones kept, merged across the overlay table as CC.findall merges it; it calls no Base.isambiguous and never raises), CC.findall( and CC.findsup( (or Core.Compiler.'s) only there, and get_world_counter() only at the interpreter's world (interpreter.jl) and the TypeName world-bound projection (types.jl `host_world`). A statement's codegen asks no table: calls.jl, dispatch.jl, selector_table.jl and invoke.jl name no consult; the vtable pre-pass's ambiguity search, which decides a rejection before any body compiles, asks the one consult (compile.jl wt_methods_ambiguous, closures.jl ambiguous_class_tuple's wt_method_which, its one consult in that file). No flat method_error_args exists; a dynamic call's and a closure entry's MethodError index the plan's per-callee record (no_method), which holds an entry, empty or not, for every callee whose dynamic call the collector enrolled and every planned callable with a vtable, so a missing one raises, and no `get(…no_method…)` default reads it; test/dispatch_method_error.jl reads the module: each no-row block builds one MethodError per tuple of its own callee's record (a flat read adds the other callee's arms, which no answer shows, the rows coming first). Exactly one emitter builds a MethodError (emit_method_error!). Until 2026-10-11 enrollment asked Base's table at the latest world while the plan read the overlay table, and codegen re-asked hasmethod and _methods_by_ftype per switch over one flat set of every callee's tuples (dev/CHARTER.md C1). One site asks the native table another question, exactly: which `show` Julia's own printer calls for a type or a type parameter of a planned function's signature (_user_shown_in_signature, trimcollect.jl), the printing running natively, so that no name is printed by code outside Base and Core (2026-10-20)",
+    "L171_one_method_consult" => ("one consult answers which methods Julia selects: Julia's matching in the WasmInterpreter's overlay table at its world (trimcollect.jl wt_method_matches = CC.findall, wt_method_which = CC.findsup, wt_methods_ambiguous), as dart consults one class hierarchy (translator.dart:108). No hasmethod(, which( (Sys.which aside), _which(, _methods_by_ftype( or isambiguous( outside that block, qualified or not (its ambiguity check is Julia's isambiguous algorithm, base/reflection.jl, run over the consult's matches with the ambiguous ones kept, merged across the overlay table as CC.findall merges it; it calls no Base.isambiguous and never raises), CC.findall( and CC.findsup( (or Core.Compiler.'s) only there, and get_world_counter() only at the interpreter's world (interpreter.jl) and the TypeName world-bound projection (types.jl `host_world`). A statement's codegen asks no table: calls.jl, dispatch.jl, selector_table.jl and invoke.jl name no consult; the vtable pre-pass's ambiguity search, which decides a rejection before any body compiles, asks the one consult (compile.jl wt_methods_ambiguous, closures.jl ambiguous_class_tuple's wt_method_which, its one consult in that file). No flat method_error_args exists; a dynamic call's and a closure entry's MethodError index the plan's per-callee record (no_method), which holds an entry, empty or not, for every callee whose dynamic call the collector enrolled and every planned callable with a vtable, so a missing one raises, and no `get(…no_method…)` default reads it; test/dispatch_method_error.jl reads the module: each no-row block builds one MethodError per tuple of its own callee's record (a flat read adds the other callee's arms, which no answer shows, the rows coming first). Exactly one emitter builds a MethodError (emit_method_error!). Until 2026-10-11 enrollment asked Base's table at the latest world while the plan read the overlay table, and codegen re-asked hasmethod and _methods_by_ftype per switch over one flat set of every callee's tuples (dev/CHARTER.md C1). One site asks the native table another question, exactly: which `show` or `print` Julia's own printer runs, on its IOContext{IOBuffer}, for the function slot, a type or a type parameter of a planned function's signature (_printer_method, trimcollect.jl, asked by _user_shown_in_signature), the printing running natively, so that no name is printed by code outside Base and Core (2026-10-20; the IOContext and `print` questions 2026-10-21, dev/AUDIT.md A19C3)",
         () -> begin
             local n = 0
             local consult_fns = Set(["wt_method_matches", "wt_method_which", "wt_dispatch_mi", "wt_methods_ambiguous", "_wt_matches_with_ambiguous"])
@@ -3558,10 +3600,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     if occursin(banned, line)
                         (rel == "codegen/trimcollect.jl" && enclosing in consult_fns) ||
                             # exactly one site asks a question of the native table that is not dispatch of
-                            # compiled code: which `show` Julia's own printer calls for a value of a planned
-                            # function's signature, the printer running natively (_user_shown_in_signature)
-                            (rel == "codegen/trimcollect.jl" && enclosing == "_user_shown_in_signature" &&
-                             occursin("Base.moduleroot(parentmodule(which(show, Tuple{IO,Core.Typeof(x)}))) in (Base, Core)", line)) ||
+                            # compiled code: which `show` or `print` Julia's own printer runs for a value of a
+                            # planned function's signature, the printer running natively (_printer_method)
+                            (rel == "codegen/trimcollect.jl" && enclosing == "_printer_method" &&
+                             occursin("_printer_method(f::Function, @nospecialize(x))::Method = which(f, Tuple{IOContext{IOBuffer},Core.Typeof(x)})", line)) ||
                             (n += 1)
                     end
                     if occursin("get_world_counter()", line)
@@ -4077,7 +4119,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("_g(\"as_checkers\"", smk) && occursin("(\"empty_intersection_throws\"", smk) ? 0 : 1
             v
         end),
-    "L184_one_export_namer" => ("a module's export names come from one export namer, as dart's translator holds one exportNamer (translator.dart:163; namer.dart:23 Namer): ExportNamer, made from the module's exports with the names of the exports WasmTarget generates reserved (namer.dart:32 reserveName); every add_export! in codegen takes its name from it, export_name! or generated_export_name! (the compile's functions and its link_roots hook's requests, decided before any body compiles, the exception tag, the class reader), and a name already held is refused naming its holder, never renamed with a counter (no `_d<k>`, `name_<k>` or `base_<n>`: a compiled function's name is its Julia identity, plan_function_names!, Base.StackTraces.show_spec_sig of its method and specTypes printed from a fixed empty module (JuliaNameContext), uncompacted and unlimited, so no `using` in Main renames a function, and refused where a `show` outside Base and Core would print part of it, where of two methods over one specialization the one Julia's `morespecific` orders first keeps it and the other adds its method's own signature, the choice never the plan's order; a name still held twice after that is a WasmInternalError naming both methods); a link_roots hook returns the exports it requests (`name => function index`) and adds none itself (run_link_roots refuses one), and no export is retargeted after codegen (no assignment into a module's `.exports`). Behavior: test/real_bottom_exceptions.jl's 'each export is made once' (a hook's request exported once through its entry; a hook's own add_export!, a hook's request for a name a compiled function holds, a requested reserved name and a host export of a function's signature each refused, naming the holder) and test/generated_names.jl's 'a compiled function is named by its signature' (names independent of the order, smoke's invoke_names_its_method and closure_invoke_only_body named by rule (a), two generic functions printing alike refused) and 'a compiled function's name does not depend on the session' (the same names before and after a `using` in Main; a value parameter a user `show` prints refused); a hook that retargets an export the module holds is refused too (dev/AUDIT.md A13C2, A12C5, P6; dev/MARCH.md 13.4; dev/CHARTER.md C1)",
+    "L184_one_export_namer" => ("a module's export names come from one export namer, as dart's translator holds one exportNamer (translator.dart:163; namer.dart:23 Namer): ExportNamer, made at a compile's setup from the module's exports and held by its Translator (one per compile; the one other construction is a host's setup of the module it prepares before any compile, ensure_provenance_imports!(mod)), with the names of the exports WasmTarget generates reserved (namer.dart:32 reserveName); every add_export! in codegen takes its name from it, export_name! or generated_export_name! (the compile's functions and its link_roots hook's requests, decided before any body compiles, the exception tag, the class reader), and a name already held is refused naming its holder, never renamed with a counter (no `_d<k>`, `name_<k>` or `base_<n>`: a compiled function's name is its Julia identity, plan_function_names!, the call form Julia prints for its MethodInstance (show_mi: argument types only, the function qualified unless exported from its module or Main's) then ` @ ` and its method's module as a stack frame prints it, printed from a fixed empty module (JuliaNameContext) with type aliases off and unlimited, so no `using` in Main renames a function, and refused where a `show` or `print` outside Base and Core would print part of it, as the printer runs them, on its IOContext; of two methods over one specialization the one Julia's dispatch selects keeps it (the plan's invoke_only, the one consult) and the invoke-only one adds its method's own signature before the module, the choice never the plan's order; each signature printed once per plan; the name's one limit, two same-named functions printed unqualified whose methods of one signature one module defines, is a WasmCompileError naming both methods' lines, and any other name held twice a WasmInternalError naming both methods; a closure type's gensym (`#h#2`) is Julia's identity of the type and follows the order code is lowered in, so a name holding one, and the probe bytes, follow the load order, dev/AUDIT.md A19E8); a link_roots hook returns the exports it requests (`name => function index`, each a function of the module, or refused) and adds none itself (run_link_roots refuses one), and no export is retargeted after codegen (no assignment into a module's `.exports`). Behavior: test/real_bottom_exceptions.jl's 'each export is made once' (a hook's request exported once through its entry; a hook's own add_export!, a hook's request for a name a compiled function holds or an index no function has, a requested reserved name and a host export of a function's signature each refused, naming the holder) and test/generated_names.jl's 'a compiled function is named by its signature' (names independent of the order, smoke's invoke_names_its_method and closure_invoke_only_body named by the invoke-only rule, two generic functions of one name in two modules compiled and answering as native, the limit refused naming both lines, a specialization planned twice an internal error) and 'a compiled function's name does not depend on Main's `using`s' (the same names before and after a `using` in Main; a type or value parameter whose text a user `show` or `print` would write refused); a hook that retargets an export the module holds is refused too (dev/AUDIT.md A13C2, A12C5, P6, A19C2-A19C4, A19C8; dev/MARCH.md 13.4; dev/CHARTER.md C1)",
         () -> begin
             local comp = read(joinpath(CODEGEN, "compile.jl"), String)
             local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
@@ -4099,19 +4141,27 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                               # a name held is refused where it is taken, never renamed
                               (comp, "    prior === nothing || throw(ArgumentError(\n        \"the export name \\\"\$name\\\" is taken (\$(prior)), the name \$(holder) is exported under: \" *"),
                               (comp, "    prior === nothing || throw(ArgumentError(\n        \"the export name \\\"\$name\\\" is taken (\$(prior)), the name of the export WasmTarget generates\"))"),
-                              (trim, "all(o -> o === mi || Base.morespecific(mi.def::Method, o.def::Method), alike)) ? s :"),
-                              (trim, "julia_function_name(mi::Core.MethodInstance)::String = _julia_signature_text(mi.def::Method, mi.specTypes)"),
+                              # the selected method's function keeps the signature, by the plan's one answer
+                              (trim, "mi in invoke_only ? invoke_only_function_name(mi) : get!(() -> julia_function_name(mi), signatures, mi)"),
+                              (trim, "    plan_function_names!(functions, entry_keys, invoke_only, signatures)\n"),
+                              (trim, "julia_function_name(mi::Core.MethodInstance)::String =\n    string(_julia_signature_text(mi.def::Method, mi.specTypes), \" @ \", (mi.def::Method).module)"),
                               (trim, "    local shown = _user_shown_in_signature(sig)\n    if shown !== nothing"),
-                              (trim, "IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m, sig))"),
-                              (trim, "string(s, \" [\", _julia_signature_text(mi.def::Method, (mi.def::Method).sig), \"]\")"),
+                              (trim, "IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m.name, sig;\n        qualified=true))"),
                               (read(joinpath(ROOT, "test", "real_bottom_exceptions.jl"), String), "occursin(\"the link_roots hook's request\", err.msg)"),
-                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test \"_sm_oc(x::Int64) [_sm_oc(x::Integer)]\" in names(mi)"),
-                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test occursin(\"print alike\", msg)")]
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test \"\$S._sm_oc(::Int64) [\$S._sm_oc(::Integer)] @ \$S\" in names(mi)"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test run_i64(ma, \"alike\") == _gn_alike(3) == 9"),
+                              (read(joinpath(ROOT, "test", "generated_names.jl"), String), "@test err isa _GN.WasmInternalError && occursin(\"print alike\", sprint(showerror, err))")]
             v += count(((text, needle),) -> !occursin(needle, text), required)
             # one place each export is made: the compile's loop runs once, after codegen, over names
             # decided before it; nothing retargets an export, and no counter renames one
             v += count_sites(r"\.exports\[[^\]]*\]\s*=(?!=)|codegen_export_names|used_names|export_name_counts|given_names|\"_d\"")
-            v += count("local namer = ExportNamer(mod)", comp) == 1 ? 0 : 1
+            # one namer per compile, made at its setup and held by its Translator; a host's setup of
+            # the module it prepares, before any compile, names its one export through its own
+            v += count_sites(r"\bExportNamer\(mod\)"; exclude_line=r"^    ExportNamer\(mod\)$") == 2 ? 0 : 1   # (its docstring's signature line aside)
+            v += occursin("local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))", comp) ? 0 : 1
+            v += occursin("ensure_provenance_imports!(mod::WasmModule)::Nothing = ensure_provenance_imports!(mod, ExportNamer(mod))",
+                          read(joinpath(CODEGEN, "generate.jl"), String)) ? 0 : 1
+            v += count("local namer = translator.export_namer", comp) == 1 ? 0 : 1
             v
         end),
     "L185_one_import_query" => ("the import at a function index is read by one builder query, imported_function(mod, idx), as wasm_builder's FunctionsBuilder holds its imported functions (functions.dart:13 _importedFunctions) and FunctionsBuilder.import (:43) hands its caller the imported function: codegen, the frontend and ext read no module's `.imports` (no filter over a module's imports at a call site, no index into them), every import query there being imported_function, with num_imported_funcs for the count; inside the builder the list is read only by the functions that keep it (add_import!, num_imported_funcs, imported_function) and the serializer (to_bytes_mapped). Behavior: test/host_imports.jl's 'one query for the import at a function index', its assertions pinned (the k-th function import for each k from 0, nothing at a defined function's index, a host-declared import told apart by that answer alone), and the import section the bytes declare read back the same (dev/AUDIT.md A13E4; dev/CHARTER.md C1)",
@@ -4119,19 +4169,14 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = count_sites(r"\.imports\b"; roots=[CODEGEN, joinpath(SRC, "frontend"), joinpath(ROOT, "ext")])
             v += count_sites(r"filter\([^\n]*\bimports\b")
             v += count_sites(r"^function imported_function\(") == 1 ? 0 : 1
-            # the builder: the functions that read the list, exactly
-            local readers = Set{String}()
+            # the builder: the definitions that read the list, on any receiver, each credited by
+            # the parser to the definition that holds it, exactly
+            local readers = String[]
             for (dir, _, fs) in walkdir(joinpath(SRC, "builder")), f in fs
-                endswith(f, ".jl") || continue
-                local enclosing = ""
-                for line in eachline(joinpath(dir, f))
-                    local d = match(r"^function\s+([^\s(]+)\(", line)
-                    d === nothing || (enclosing = d.captures[1])
-                    _iscomment(line) && continue
-                    occursin(r"\bmod\.imports\b", line) && push!(readers, enclosing)
-                end
+                endswith(f, ".jl") && append!(readers, field_readers(joinpath(dir, f), :imports))
             end
-            v += length(symdiff(readers, Set(["add_import!", "num_imported_funcs", "imported_function", "to_bytes_mapped"])))
+            local keepers = ["add_import!", "add_import!", "imported_function", "num_imported_funcs", "to_bytes_mapped"]
+            v += sort!(readers) == keepers ? 0 : max(1, length(symdiff(Set(readers), Set(keepers))))
             local hi = read(joinpath(ROOT, "test", "host_imports.jl"), String)
             v += occursin("@testset \"one query for the import at a function index\" begin", hi) &&
                  occursin("""

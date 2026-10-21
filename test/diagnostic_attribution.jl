@@ -127,7 +127,7 @@ end
     # funnel for one must reject at the statement, never leave the value unconverted.
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing)
+                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())), mi=nothing)
     ctx.current_stmt_idx = 1
     b = WasmTarget._ctx_builder(ctx, "funnel_negative")
     WasmTarget.f64_const!(b, 1.5)
@@ -147,7 +147,7 @@ end
     # value's own type (value_type, a literal's value) does not admit raises, never converts it
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mkctx() = (c = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                   translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing);
+                   translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())), mi=nothing);
                c.current_stmt_idx = 1; c)
     local ctx = mkctx()
     local b = WasmTarget._ctx_builder(ctx, "stated_class")
@@ -167,7 +167,7 @@ end
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     for src in (Any, Union{Nothing,Tuple{Vararg{Int64}}}, Tuple{Vararg{Int64}}, nothing)
         ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                            translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing)
+                                            translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())), mi=nothing)
         ctx.current_stmt_idx = 1
         local info = WasmTarget.register_vararg_tuple_type!(ctx.mod, ctx.type_registry, Tuple{Vararg{Int64}})
         local from = WasmTarget.ConcreteRef(UInt32(info.wasm_type_idx), true)
@@ -189,7 +189,7 @@ end
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
         ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing)
+                                        translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())), mi=nothing)
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "funnel_negative")
     end
@@ -222,7 +222,7 @@ end
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
         ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
-                                            translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing)
+                                            translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing, export_namer=WasmTarget.ExportNamer(WasmTarget.WasmModule())), mi=nothing)
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "nothing_is_null")
     end

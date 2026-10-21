@@ -2586,7 +2586,7 @@ begin
         # the i32 at byte `offset` of the module's exported memory, read by the host (Node.js)
         _read_memory_i32(bytes, offset) = parse(Int32, strip(read(`node -e $("""
             const bytes = Buffer.from([$(join(bytes, ","))]);
-            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js(bytes))).then(result => {
+            WebAssembly.instantiate(bytes, $(WasmRunner.module_runtime_js(bytes))).then(result => {
                 console.log(new DataView(result.instance.exports.memory.buffer).getInt32($offset, true));
             });
             """)`, String)))
@@ -2723,7 +2723,7 @@ begin
             # the exported memory, written and read by the host via Node.js
             js_code = """
             const bytes = Buffer.from([$(join(bytes, ","))]);
-            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js(bytes))).then(result => {
+            WebAssembly.instantiate(bytes, $(WasmRunner.module_runtime_js(bytes))).then(result => {
                 const { memory } = result.instance.exports;
                 new Int32Array(memory.buffer)[0] = 42;
                 console.log(new Int32Array(memory.buffer)[0]);
@@ -4359,7 +4359,7 @@ begin
             js_code = """
             import fs from 'fs';
             const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-            const importObject = $(WasmTarget.host_runtime_js(bytes));
+            const importObject = $(WasmRunner.module_runtime_js(bytes));
             async function run() {
                 const mod = await WebAssembly.instantiate(bytes, importObject);
                 const e = mod.instance.exports;
@@ -4450,7 +4450,7 @@ begin
             js_code = """
             import fs from 'fs';
             const bytes = fs.readFileSync('$(escape_string(wasm_path))');
-            const importObject = $(WasmTarget.host_runtime_js(bytes));
+            const importObject = $(WasmRunner.module_runtime_js(bytes));
             async function run() {
                 const mod = await WebAssembly.instantiate(bytes, importObject);
                 const e = mod.instance.exports;
@@ -4541,7 +4541,7 @@ begin
 
             js_code = """
             const bytes = require('fs').readFileSync('$(escape_string(wasm_path))');
-            WebAssembly.instantiate(bytes, $(WasmTarget.host_runtime_js(bytes))).then(m => {
+            WebAssembly.instantiate(bytes, $(WasmRunner.module_runtime_js(bytes))).then(m => {
                 const exp = m.instance.exports;
                 const s1 = exp.make_th_s1(42);
                 const s2 = exp.make_th_s2(42);
@@ -5433,7 +5433,7 @@ begin
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const r = e.tf5_dispatch_ab(a);
@@ -5483,7 +5483,7 @@ console.log(JSON.stringify({result: Number(r)}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const a = e.tf5_make_alpha(42);
 const b = e.tf5_make_beta(10n);
@@ -5522,7 +5522,7 @@ console.log(JSON.stringify({ca:Number(ca),cb:Number(cb),cg:Number(cg),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const cat = e.tf5_make_cat(10);
 const dog = e.tf5_make_dog(20);
@@ -5621,7 +5621,7 @@ console.log(JSON.stringify({cc:Number(cc),cd:Number(cd),ok}));
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const rn = e.ir001_make_returnnode(99n);
 const gn = e.ir001_make_gotonode(10n);
@@ -5700,7 +5700,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const ssa = e.ir002_make_ssaval(42n);
 const arg = e.ir002_make_argument(7n);
@@ -5790,7 +5790,7 @@ console.log(JSON.stringify({
             write(js_path, """
 import fs from 'fs';
 const buf = fs.readFileSync('$(escape_string(wasm_path))');
-const { instance } = await WebAssembly.instantiate(buf, $(WasmTarget.host_runtime_js(bytes)));
+const { instance } = await WebAssembly.instantiate(buf, $(WasmRunner.module_runtime_js(bytes)));
 const e = instance.exports;
 const call_expr = e.ir003_make_call_expr();
 const invoke_expr = e.ir003_make_invoke_expr();

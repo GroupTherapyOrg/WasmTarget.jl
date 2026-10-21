@@ -130,6 +130,29 @@ StatementTrace(entry_name::String)::StatementTrace =
     StatementTrace(entry_name, Dict{UInt32,Int}(), Core.CodeInfo[], Core.MethodInstance[], Set{Int}[], 0)
 
 """
+    ExportNamer(mod)
+
+The one namespace a module's export names are taken from, as dart's translator holds one
+exportNamer (translator.dart:163): made at a compile's setup and held by its Translator, it holds
+the names the module already exports (a host's existing_module), each with what holds it, and
+reserves the names of the exports WasmTarget generates, `wasmtarget.exception` and
+`wasmtarget.class_id`, which only generated_export_name! takes. Every export a compile makes takes
+its name through it, once.
+parity(pkg/dart2wasm/lib/namer.dart:23 Namer): the used names of one namespace, the names of
+pre-specified exports reserved among them (namer.dart:32 reserveName)
+"""
+struct ExportNamer
+    taken::Dict{String,String}   # each name taken, and what holds it
+    reserved::Set{String}        # the generated exports' names, taken by their export alone
+end
+
+# the names a module's exports hold, and the generated exports' reserved names
+# parity(pkg/dart2wasm/lib/namer.dart:23 Namer)
+ExportNamer(mod::WasmModule)::ExportNamer =
+    ExportNamer(Dict{String,String}(e.name => "the module's export $(k - 1)" for (k, e) in enumerate(mod.exports)),
+                Set{String}(["wasmtarget.exception", "wasmtarget.class_id"]))
+
+"""
 One compilation's state, shared by the code generator of every function it compiles (dart: the
 Translator each CodeGenerator holds).
 parity(pkg/dart2wasm/lib/translator.dart:96 Translator)
@@ -149,12 +172,16 @@ struct Translator
     # graph rejects, never recurses without end
     # parity(quarantine: a Julia constant object graph can be cyclic or unboundedly deep; dart's CFE constants are acyclic canonical trees, so constants.dart needs no in-progress stack.)
     constants_in_progress::Vector{Any}
+    # the compile's one export namer, made at its setup (translator.dart:163 `exportNamer`)
+    export_namer::ExportNamer
 end
 # parity(pkg/dart2wasm/lib/translator.dart:470 Translator): one Translator per compile, its
-# options and diagnostics ledger given by the compile (both required: no default answers them)
+# options, diagnostics ledger and export namer given by the compile (all required: no default
+# answers them)
 Translator(plan::ClosedWorldPlan, trace::Union{Nothing,StatementTrace};
-           options::CompilerOptions, diagnostics::Union{Nothing,Vector{WasmDiagnostic}})::Translator =
-    Translator(plan, trace, options, diagnostics, Any[])
+           options::CompilerOptions, diagnostics::Union{Nothing,Vector{WasmDiagnostic}},
+           export_namer::ExportNamer)::Translator =
+    Translator(plan, trace, options, diagnostics, Any[], export_namer)
 
 # ============================================================================
 # Julia types to wasm value types (the translator side of dart's translateType)

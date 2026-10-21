@@ -260,9 +260,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # a module with a host-declared import imports the count of its open calls, which the host's
     # glue writes (host_glue_js), before any global it defines
     ensure_host_imports_open!(mod)
-    ensure_provenance_imports!(mod)
+    # the compile's state owner, holding the one export namer every export this compile makes
+    # takes its name from, made before the first (the exception tag's)
+    local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))
+    ensure_provenance_imports!(mod, translator.export_namer)
     trace === nothing || ensure_trace_imports!(mod)
-    local translator = Translator(plan, trace; options, diagnostics)
     type_registry = TypeRegistry()
     recover_module_handles!(type_registry, mod)
     func_registry = FunctionRegistry(; log=options.log_registry)
@@ -299,10 +301,9 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # Pre-register BoxedNothing type
     get_nothing_box_type!(mod, type_registry)
 
-    # the plan's entries carry their names (trim_compile_plan's), so none needs normalizing
-    normalized = functions
-
-    requested_names = Set(String(entry[3]) for entry in normalized)
+    # a root binding and an invoke binding's target name a root of the plan (its entries, by the
+    # names trim_compile_plan gave them), never another planned function
+    requested_names = Set{String}(values(plan.roots))
     unknown_bindings = setdiff(Set(keys(root_bindings)), requested_names)
     isempty(unknown_bindings) || throw(ArgumentError(
         "root bindings do not match compilation roots: $(sort!(collect(unknown_bindings)))"))
@@ -355,7 +356,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # the NIR body, built once here
     function_data = []
 
-    for entry in normalized
+    for entry in functions
         f, arg_types, name = entry[1], entry[2], entry[3]
         local entry_mi = length(entry) >= 4 ? entry[4] : nothing
         # Check if this is a closure (function with captured variables)
@@ -671,7 +672,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     # plan_function_names!), then each export the hook requests; a name already held is refused
     # now, not after codegen
     # parity(pkg/dart2wasm/lib/translator.dart:163 Translator.exportNamer)
-    local namer = ExportNamer(mod)
+    local namer = translator.export_namer
     local compile_exports = Tuple{String,UInt32}[]
     for (i, (_, _, name, _, _, _, _, _, _)) in enumerate(function_data)
         push!(compile_exports, (export_name!(namer, String(name), "the compiled function \"$(name)\""),
@@ -795,7 +796,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     end
     # the class reader of an escaped exception, over the final numbering, as the egal function's
     # body is filled once codegen has numbered every class
-    ensure_class_id_reader!(mod, type_registry, translator, namer)
+    ensure_class_id_reader!(mod, type_registry, translator)
 
     if return_registries
         return (mod, type_registry, func_registry, dispatch_registry)
@@ -899,28 +900,6 @@ end
 # trimcollect.jl beside the planner; it reads the NIR bodies in `function_data`.
 
 """
-    ExportNamer(mod)
-
-The one namespace a module's export names are taken from, as dart's translator holds one
-exportNamer (translator.dart:163): it holds the names the module already exports (a host's
-existing_module, the exception tag its setup exported), each with what holds it, and reserves the
-names of the exports WasmTarget generates, `wasmtarget.exception` and `wasmtarget.class_id`, which
-only generated_export_name! takes. Every export codegen makes takes its name through it, once.
-parity(pkg/dart2wasm/lib/namer.dart:23 Namer): the used names of one namespace, the names of
-pre-specified exports reserved among them (namer.dart:32 reserveName)
-"""
-struct ExportNamer
-    taken::Dict{String,String}   # each name taken, and what holds it
-    reserved::Set{String}        # the generated exports' names, taken by their export alone
-end
-
-# the names a module's exports hold, and the generated exports' reserved names
-# parity(pkg/dart2wasm/lib/namer.dart:23 Namer)
-ExportNamer(mod::WasmModule)::ExportNamer =
-    ExportNamer(Dict{String,String}(e.name => "the module's export $(k - 1)" for (k, e) in enumerate(mod.exports)),
-                Set{String}(["wasmtarget.exception", "wasmtarget.class_id"]))
-
-"""
     export_name!(namer, name, holder) -> String
 
 Take `name` for one export, `holder` saying what it exports (for the message of a later
@@ -966,9 +945,11 @@ Run a framework's `link_roots(mod, root_indices, registry)` hook once, after eve
 its index and before any body is compiled, `root_indices` mapping each entry's name to its
 function index. The hook returns the function exports it requests, `name => function index` (or
 `nothing` for none), which the compile makes with its own (each once, its name through the one
-export namer, through its entry); the hook changes no export itself (the module's exports after it
-equal those before it, so an export it adds, removes or retargets is refused), and it adds no
-import (add_import! refuses one after a definition).
+export namer, through its entry); a requested index that names no function of the module
+(negative, or past its imported and defined functions) is refused here, an ArgumentError naming
+the request, before any body compiles; the hook changes no export itself (the module's exports
+after it equal those before it, so an export it adds, removes or retargets is refused), and it
+adds no import (add_import! refuses one after a definition).
 parity(quarantine: a host framework links its runtime adapters to the compiled roots (existing_module, dev/MARCH.md 13.16); dart's translator builds its module whole, each export from a wasm:export pragma, functions.dart:178.)
 """
 function run_link_roots(link_roots::Function, mod::WasmModule, registry::TypeRegistry,
@@ -985,9 +966,12 @@ function run_link_roots(link_roots::Function, mod::WasmModule, registry::TypeReg
     requested isa AbstractVector || throw(ArgumentError(
         "the link_roots hook returned $(repr(requested)): a hook returns `nothing` or the exports it requests, " *
         "a vector of `name => function index`"))
+    local n_functions = _function_count(mod)
     for r in requested
         r isa Pair{String,<:Integer} || throw(ArgumentError(
             "the link_roots hook requested $(repr(r)): each requested export is `name => function index`"))
+        0 <= last(r) < n_functions || throw(ArgumentError(
+            "the link_roots hook requested $(repr(r)): the module has functions 0 to $(n_functions - 1)"))
     end
     return Pair{String,UInt32}[first(r) => UInt32(last(r)) for r in requested]
 end

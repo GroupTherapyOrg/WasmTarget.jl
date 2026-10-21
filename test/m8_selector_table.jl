@@ -2,6 +2,8 @@
 # its subject — the transcription was dead production code (zero callers; the live
 # packer is pack_dispatch_selectors!, covered end-to-end by the M8.2 testset below).
 
+isdefined(@__MODULE__, :WasmReader) || include(joinpath(@__DIR__, "wasm_reader.jl"))
+
 # M8.2: the dart virtual call end-to-end — classId + offset + call_indirect through
 # the ONE flat table, replacing the FNV probe for single-axis selectors.
 module M8DispatchE2E
@@ -33,7 +35,7 @@ end
         js = """
         import fs from 'fs';
         const b = fs.readFileSync('$(escape_string(p))');
-        const m = await WebAssembly.instantiate(b, $(WasmTarget.host_runtime_js(bytes)));
+        const m = await WebAssembly.instantiate(b, $(WasmReader.module_runtime_js(bytes)));
         const e = m.instance.exports;
         console.log(JSON.stringify([e.caller(e.mk1(0)), e.caller(e.mk3(0)), e.caller(e.mk10(0))]));
         """
@@ -72,7 +74,7 @@ end
         js = """
         import fs from 'fs';
         const b = fs.readFileSync('$(escape_string(p))');
-        const m = await WebAssembly.instantiate(b, $(WasmTarget.host_runtime_js(bytes)));
+        const m = await WebAssembly.instantiate(b, $(WasmReader.module_runtime_js(bytes)));
         const e = m.instance.exports;
         console.log(JSON.stringify([
           e.caller2(e.mkp2(0), e.mka(0)), e.caller2(e.mkp2(0), e.mkb(0)),

@@ -296,22 +296,23 @@ struct WasmExport
 end
 
 """
-Represents an import entry, and for an imported function the name the name section gives it,
-given where it is imported.
-parity(pkg/wasm_builder/lib/src/ir/imports.dart:39 Import)
+An imported function: its module and field, its type's index, and the name the name section
+gives it, given where it is imported. Every entry of a module's `imports` is a function (an
+imported global is a WasmGlobalImport, held with the globals), serialized as a function import,
+kind 0x00 (ImportedFunction.serialize, :202).
+parity(pkg/wasm_builder/lib/src/ir/function.dart:183 ImportedFunction)
 """
 struct WasmImport
     module_name::String
     field_name::String
-    kind::UInt8  # 0=func, 1=table, 2=memory, 3=global
-    type_idx::UInt32  # For functions, the type index
+    type_idx::UInt32  # the function's type index
     # parity(pkg/wasm_builder/lib/src/ir/function.dart:37 BaseFunction.functionName): an imported function's name
     function_name::String
-    function WasmImport(module_name::String, field_name::String, kind::UInt8, type_idx::UInt32,
+    function WasmImport(module_name::String, field_name::String, type_idx::UInt32,
                         function_name::String)::WasmImport
-        (kind == 0x00 && isempty(function_name)) &&
+        isempty(function_name) &&
             throw(ArgumentError("WasmImport($(module_name).$(field_name); function_name=\"\"): a function is named where it is imported, and the name section drops an empty name"))
-        return new(module_name, field_name, kind, type_idx, function_name)
+        return new(module_name, field_name, type_idx, function_name)
     end
 end
 
@@ -424,7 +425,7 @@ parity(pkg/wasm_builder/lib/src/builder/module.dart:24 ModuleBuilder)
 """
 mutable struct WasmModule
     types::Vector{CompositeType}  # Can contain FuncType, StructType, ArrayType; recursion groups are computed (recursion_groups)
-    imports::Vector{WasmImport}   # Imported functions/tables/etc
+    imports::Vector{WasmImport}   # the imported functions, in index order
     functions::Vector{WasmFunction}
     tables::Vector{WasmTable}     # Tables for funcref/externref
     memories::Vector{WasmMemory}  # Linear memories
@@ -810,7 +811,7 @@ function add_import!(mod::WasmModule,
     _check_import_precedes_definitions(mod, module_name, field_name)
     ft = FuncType(params, results)
     type_idx = add_type!(mod, ft)
-    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx,
+    push!(mod.imports, WasmImport(module_name, field_name, type_idx,
                                   _import_function_name(module_name, field_name)))
     return UInt32(length(mod.imports) - 1)  # Import function indices
 end
@@ -828,7 +829,7 @@ function add_import!(mod::WasmModule,
     result_vec = WasmValType[r for r in results]
     ft = FuncType(param_vec, result_vec)
     type_idx = add_type!(mod, ft)
-    push!(mod.imports, WasmImport(module_name, field_name, 0x00, type_idx,
+    push!(mod.imports, WasmImport(module_name, field_name, type_idx,
                                   _import_function_name(module_name, field_name)))
     return UInt32(length(mod.imports) - 1)
 end
@@ -866,7 +867,7 @@ Return the number of imported functions (affects function index space).
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:13 FunctionsBuilder._importedFunctions)
 """
 function num_imported_funcs(mod::WasmModule)::Int
-    count(imp -> imp.kind == 0x00, mod.imports)
+    length(mod.imports)
 end
 
 """
@@ -877,13 +878,7 @@ The imported function at function index `idx`, or `nothing` where `idx` is no im
 parity(pkg/wasm_builder/lib/src/builder/functions.dart:13 FunctionsBuilder._importedFunctions)
 """
 function imported_function(mod::WasmModule, idx::Integer)::Union{Nothing,WasmImport}
-    local n = 0
-    for imp in mod.imports
-        imp.kind == 0x00 || continue
-        n == idx && return imp
-        n += 1
-    end
-    return nothing
+    return 0 <= idx < length(mod.imports) ? mod.imports[idx + 1] : nothing
 end
 
 """
@@ -1238,7 +1233,7 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
             for imp in mod.imports
                 write_name!(section, imp.module_name)
                 write_name!(section, imp.field_name)
-                write_byte!(section, imp.kind)
+                write_byte!(section, 0x00)   # a function (ImportedFunction.serialize, function.dart:202)
                 write_u32!(section, imp.type_idx)
             end
             # an imported global: its names, kind 0x03, its global type (ImportedGlobal.serialize)
@@ -1470,7 +1465,6 @@ function to_bytes_mapped(mod::WasmModule)::Tuple{Vector{UInt8},Vector{SourceMapp
     func_names = Pair{UInt32, String}[]
     func_idx = UInt32(0)
     for imp in mod.imports
-        imp.kind == 0x00 || continue  # a function import
         push!(func_names, func_idx => imp.function_name)   # never empty (WasmImport refuses one)
         func_idx += 1
     end
