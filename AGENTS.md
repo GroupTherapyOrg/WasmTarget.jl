@@ -45,7 +45,8 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 | Layer | Command |
 |---|---|
 | the landing gate, at most 60 s, local | `bash dev/gate.sh --block` (L194, L195) |
-| full matrix, and CI, Formal models and Downstream, at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |
+| full matrix at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |
+| CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |
 | locks, ratchets, charter status | `julia --project=. test/parity_ratchet.jl` |
 | differential smoke | `julia --project=. test/smoke.jl [group]` |
 | byte-identity probes | `julia --project=. test/probe_bytes.jl` |
@@ -54,9 +55,7 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 | one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
 
 `bash dev/land.sh land` in a batch's worktree rebases, gates and lands its branch (L197) by `merge`,
-never while the last closure matrix is red; the full matrix (L153, L162; local `bash dev/lanes.sh`)
-runs at clause closure (a `march/**` head with `Closes: C<n>`) and on PR #122's merge head;
-CI, Formal models and Downstream trigger the same way, never on a plain landing.
+never while the last closure matrix is red (local full matrix: `bash dev/lanes.sh`, L153, L162).
 A pure restructuring is byte-identical on the probes; a semantic change is differential, its cases
 in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDATE=1` tightens one.
 
