@@ -1796,9 +1796,9 @@ function _lower_expr!(b, fb, ctx, call, idx, args, callee)::InstrBuilder
         local_set!(fb, head_local)
 
     # Step 2: Create data array (array<anyref>) → local
-    # Any maps to the registered array element type. Every element flows
-    # through the typed boxing/conversion chokepoint.
-    wasm_elem_type = get_concrete_wasm_type(Any, ctx.mod, ctx.type_registry)
+    # Each element is pushed as the array type's own element type (its declaration, read
+    # back), through the typed boxing/conversion chokepoint.
+    wasm_elem_type = unpacked(ctx.mod.types[any_array_type_idx + 1].elem.valtype)
     if n_expr_args == 0
             i32_const!(fb, 0)
             array_new_default!(fb, any_array_type_idx)
