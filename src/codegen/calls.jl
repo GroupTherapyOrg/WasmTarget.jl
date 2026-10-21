@@ -202,7 +202,7 @@ function _emit_getfield_runtime_name!(bld::InstrBuilder, ctx::AbstractCompilatio
     local mref = findfirst(i -> fieldtype(T, i) <: Core.GenericMemoryRef, eachindex(names))
     mref === nothing || return reject("field $(names[mref]) is a MemoryRef, whose read unpacks a pair")
     local flds = ctx.mod.types[info.wasm_type_idx + 1].fields
-    local R = get(ctx.ssa_types, idx, Any)
+    local R = ctx.ssa_types[idx]
     local out = if isconcretetype(R)
         all(i -> fieldtype(T, i) === R, eachindex(names)) || return false
         flds[Int(info.field_offset) + 1].valtype
@@ -953,7 +953,7 @@ function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::Abstrac
     # The result is Julia's `Tuple{T, Bool}` for the OPERAND type T — the statement's own
     # inferred type, never a register-width stand-in (Tuple{Int64,Bool} for a UInt64 add
     # carried the wrong classId; the closed-world numbering rejects it).
-    local _tt = get(ctx.ssa_types, idx, nothing)
+    local _tt = ctx.ssa_types[idx]
     if !(_tt isa DataType && _tt <: Tuple && length(_tt.parameters) == 2 &&
          _tt.parameters[2] === Bool && _tt.parameters[1] === arg_type)
         _tt = Tuple{arg_type, Bool}
@@ -1038,7 +1038,7 @@ function _compile_call_bswap!(fb::InstrBuilder, ctx::AbstractCompilationContext,
     is_128bit && error("_compile_call_bswap!: a 128-bit bswap_int reached the misc registry")
     # The swap reverses exactly the value's own bytes: bswap_int returns its operand's type,
     # and a 16-bit value in an i32 register has two bytes, not four.
-    local _bsT = get(ctx.ssa_types, idx, nothing)
+    local _bsT = ctx.ssa_types[idx]
     if !(_bsT isa DataType && _bsT <: Base.BitInteger)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
             "byte-swap of a value whose integer width is unknown ($(repr(_bsT)))"; idx=idx)
@@ -2593,7 +2593,7 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     end
 
     isempty(branches) && return nothing
-    result_julia = get(ctx.ssa_types, idx, Any)
+    result_julia = ctx.ssa_types[idx]
     result_wasm = (result_julia isa Type && result_julia !== Nothing && result_julia !== Union{}) ?
         get_concrete_wasm_type(result_julia, ctx.mod, ctx.type_registry) : nothing
 
@@ -3762,7 +3762,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # empty. A runtime-length Julia tuple needs a genuine variable-tuple
         # representation; never fabricate Tuple{} for a nonempty/unknown input.
         if target_is_tuple
-            local result_type = get(ctx.ssa_types, idx, Any)
+            local result_type = ctx.ssa_types[idx]
             if container_type isa DataType && container_type <: Vector &&
                is_runtime_vararg_tuple_type(result_type)
                 register_vararg_tuple_type!(ctx.mod, ctx.type_registry, result_type)
@@ -3863,7 +3863,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _gft_pack_n = length(ctx.arg_types) - _gft_fixed
             if _gft_slot_T isa DataType && _gft_slot_T <: Tuple &&
                _gft_fixed >= 0 && fieldcount(_gft_slot_T) == _gft_pack_n
-                local _gft_result_T = get(ctx.ssa_types, idx, Any)
+                local _gft_result_T = ctx.ssa_types[idx]
                 # A runtime index over heterogeneous tuple fields joins at the
                 # value representation LUB. Julia inference reports that join
                 # as a Union; WT's single boxed-value channel for such unions is
@@ -4082,7 +4082,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
             # dynamic-dispatch sites must not pick a same-name
             # overload with an incompatible return (i32 getindex for a ref site)
-            _exp_ret_c = get(ctx.ssa_types, idx, nothing)
+            _exp_ret_c = ctx.ssa_types[idx]
             target_info = get_function(ctx.func_registry, called_func, call_arg_types;
                                        expected_return=_exp_ret_c isa Type ? _exp_ret_c : nothing)
 
@@ -4213,7 +4213,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # prove the allocation even when inference erased a field value
                 # to Any (for example DimensionMismatch(message_phi)). Route it
                 # through THE %new implementation and its physical field contract.
-                local _ctor_result = get(ctx.ssa_types, idx, Any)
+                local _ctor_result = ctx.ssa_types[idx]
                 if (called_func isa DataType || called_func isa UnionAll) &&
                    _ctor_result isa DataType && isconcretetype(_ctor_result) &&
                    isstructtype(_ctor_result) && !isprimitivetype(_ctor_result) &&
@@ -4236,7 +4236,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 _has_abstract = any(t -> t === Any || !isconcretetype(t), call_arg_types)
                 @debug "CROSS-CALL UNREACHABLE: $(func) with arg types $(call_arg_types) (in func_$(ctx.func_idx))$((_has_abstract ? " [abstract-suppressed]" : ""))"
                 fb = _ctx_builder(ctx, "compile_call.frag")
-                if get(ctx.ssa_types, idx, Any) === Union{}
+                if ctx.ssa_types[idx] === Union{}
                     # always-throws callee (Category-B parity) — sound silent trap.
                     ctx.last_stmt_was_stub = true
                 else
@@ -4433,7 +4433,7 @@ function _emit_apply_iterate_vararg_call!(fb::InstrBuilder, target_value,
     local bld = _ctx_builder(ctx, "_emit_apply_iterate_vararg_call!")
     local target = (ctx.func_registry === nothing || !(target_value isa Function)) ? nothing :
                    get_function(ctx.func_registry, target_value, (container_type,))
-    local want = get(ctx.ssa_types, idx, Any)
+    local want = ctx.ssa_types[idx]
     # EXACT signature only. get_function's subtype-tolerant passes exist for
     # overload resolution; here a near-miss would run a body compiled for a
     # different packed layout (a non-empty narrowing's body assumes length >= 1).

@@ -533,7 +533,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
         # single-value struct (emit_value!'s MemoryRef arm).
         local _mr_val_t = value_type(ctx, val)
         if _mr_val_t isa DataType && _mr_val_t <: Core.GenericMemoryRef && haskey(ctx.phi_locals, phi_idx)
-            local _mr_phi_t = get(ctx.ssa_types, phi_idx, Any)
+            local _mr_phi_t = ctx.ssa_types[phi_idx]
             local _mr_kind = first(_memoryref_source(ctx, val))
             if _mr_phi_t isa Type && _mr_phi_t !== Union{} && _mr_phi_t <: Core.GenericMemoryRef
                 if _mr_kind === :indexed || _mr_kind === :pair || _mr_kind === :snapshot ||
@@ -556,7 +556,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
             if haskey(ctx.phi_locals, phi_idx)
                 local_idx = ctx.phi_locals[phi_idx]
                 local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
-                local phi_julia = get(ctx.ssa_types, phi_idx, Any)
+                local phi_julia = ctx.ssa_types[phi_idx]
                 if local_wasm_type isa ConcreteRef
                     ref_null!(pvb, Int64(local_wasm_type.type_idx))
                 elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
@@ -777,7 +777,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
             for (edge_idx, edge) in enumerate(stmt.edges)
                 if edge == terminator_idx && stmt.values[edge_idx] !== nothing
                     val = stmt.values[edge_idx]
-                    phi_t = get(ctx.ssa_types, i, Any)
+                    phi_t = ctx.ssa_types[i]
                     if phi_t isa Type && phi_t !== Union{} && phi_t <: Core.GenericMemoryRef &&
                        first(_memoryref_source(ctx, val)) === :indexed
                         mem_tmp = allocate_local!(ctx, ctx.locals[ctx.phi_locals[i] - ctx.n_params + 1])
@@ -877,7 +877,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
         for i in block.start_idx:block.end_idx
             nir[i].node isa NirReturn && continue
             compile_statement!(tb, i, ctx)
-            (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
+            (ctx.ssa_types[i] === Union{} || ctx.last_stmt_was_stub) && break
         end
         if isempty(tb.instrs) || !(tb.instrs[end] isa InstrIR.Unreachable)
             unreachable!(tb)  # structural trap: duplicated tail is proven non-returning
@@ -1101,7 +1101,7 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                 # Previous `break` exited the block loop, causing subsequent dead
                 # statements to be placed in the wrong block. Now we mark dead code
                 # and skip remaining statements with `continue` at the top of the loop.
-                stmt_type2 = get(ctx.ssa_types, i, Any)
+                stmt_type2 = ctx.ssa_types[i]
                 if stmt_type2 === Union{} || ctx.last_stmt_was_stub
                     _block_is_dead = true
                     continue  # Skip drop/local checks but stay in block

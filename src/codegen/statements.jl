@@ -90,7 +90,7 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                 continue
             end
             if storage_pointer && (consumer isa NirReturn || consumer isa NirInvoke)
-                source_type = get(ctx.ssa_types, source, Any)
+                source_type = ctx.ssa_types[source]
                 source_type isa Type && source_type <: Ptr || return false
             elseif consumer isa NirCall && (consumer.callee === Core.:(===) || consumer.callee === Core.:(!==))
                 storage_pointer && length(consumer.operands) == 2 &&
@@ -106,13 +106,13 @@ function _storage_relative_pointer_is_closed(ctx::AbstractCompilationContext,
                 (callee === Core.Intrinsics.pointerset ||
                  callee === Core.Intrinsics.atomic_pointerset) &&
                     any(o -> o isa NirSSA && o.id == source, consumer.operands[2:end]) && return false
-                result_type = get(ctx.ssa_types, consumer_idx, Any)
+                result_type = ctx.ssa_types[consumer_idx]
                 # a bitcast to an integer is followed too: its consumers decide
                 (result_type isa Type && result_type <: Ptr ||
                  callee === Core.Intrinsics.bitcast) && push!(pending, consumer_idx)
             elseif consumer isa NirForeignCall
                 consumer.c_symbol in _STORAGE_RELATIVE_PTR_FOREIGNCALLS || return false
-                result_type = get(ctx.ssa_types, consumer_idx, Any)
+                result_type = ctx.ssa_types[consumer_idx]
                 result_type isa Type && result_type <: Ptr && push!(pending, consumer_idx)
             else
                 return false
@@ -550,7 +550,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # A PiNode narrows an existing value. Like dart's wrap/convertType path,
         # preserve that value and coerce its emitted physical type; never repair a
         # failed narrowing with zero or ref.null.
-        pi_type = get(ctx.ssa_types, idx, Any)
+        pi_type = ctx.ssa_types[idx]
         if haskey(ctx.memoryref_offset_locals, idx)
             # a MemoryRef out of a slot that holds any value: unpack its single-value struct
             emit_value!(b, node.value, ctx, AnyRef)
@@ -751,7 +751,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # If the statement type is Union{} (bottom/never returns), emit unreachable
         # This handles calls to error/throw functions that have void return type in wasm
         # The unreachable instruction is polymorphic and satisfies any type expectation
-        stmt_type_check = get(ctx.ssa_types, idx, Any)
+        stmt_type_check = ctx.ssa_types[idx]
         if stmt_type_check === Union{} && !isempty(stmt_bytes) &&
            !(!isempty(_sf.instrs) && _sf.instrs[end] isa InstrIR.Unreachable)
             local _urb = _ctx_builder(ctx, "compile_statement")
@@ -761,7 +761,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
 
         # If this SSA value needs a local, store it (and remove from stack)
         if haskey(ctx.ssa_locals, idx)
-            stmt_type = get(ctx.ssa_types, idx, Any)
+            stmt_type = ctx.ssa_types[idx]
             is_unreachable_type = stmt_type === Union{}
             # Phase B: DROP+UNREACHABLE tail is two node-kind tests — the
             # false-positive class (struct_get operand bytes 0x1a 0x00)
@@ -893,7 +893,7 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
                                                  missing::Set{Int},
                                                  ctx::AbstractCompilationContext)::Bool
     ismutabletype(T) || return false
-    subject = NirSSA(idx, get(ctx.ssa_types, idx, Any))
+    subject = NirSSA(idx, ctx.ssa_types[idx])
     idx < length(ctx.nir) &&
         _definitely_initializes_in_nir(ctx.nir, ctx.cfg, idx + 1, subject, T, missing) &&
         return true

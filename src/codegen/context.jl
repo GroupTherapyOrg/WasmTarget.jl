@@ -166,7 +166,8 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
     # Each SSA's type is the NIR boundary's (Julia inference's own answer, widened), with the
     # plan's joins applied in analyze_control_flow!; nothing else retypes it before emission
     # (parity(code_generator.dart:129 CodeGenerator.dartTypeOf): one static type per expression).
-    # An `Any` SSA has no entry: value_type reads the node's own type for it. An `:invoke` whose
+    # Every statement has its entry (an `Any` statement's is Any), so a statement's type is read
+    # as `ctx.ssa_types[i]`, never with a default (a missing one raises). An `:invoke` whose
     # value the optimizer left unused reads `::Any` in the caller's IR, which is no answer for
     # it: its type is the return type of the function it calls, the one compile_invoke! calls
     # (get_function_by_mi): a planned body's is its rettype in the plan, a declared import's its
@@ -174,13 +175,13 @@ function CompilationContext(body::NirBody, arg_types::Tuple, return_type, mod::W
     # (parity(pkg/kernel/lib/src/ast/expressions.dart:2856 getStaticTypeInternal): a static
     # invocation's type is its target's return type).
     for (i, rec) in enumerate(ctx.nir)
-        if rec.julia_type !== Any
-            ctx.ssa_types[i] = rec.julia_type
-        elseif ctx.func_registry !== nothing && rec.slot == 0 && rec.node isa NirInvoke &&
-               rec.node.mi isa Core.MethodInstance
+        local T = rec.julia_type
+        if T === Any && ctx.func_registry !== nothing && rec.slot == 0 && rec.node isa NirInvoke &&
+           rec.node.mi isa Core.MethodInstance
             local target = get_function_by_mi(ctx.func_registry, rec.node.mi)
-            (target === nothing || target.return_type === Any) || (ctx.ssa_types[i] = target.return_type)
+            target === nothing || (T = target.return_type)
         end
+        ctx.ssa_types[i] = T
     end
     # Allocate locals for multi-use SSAs. These passes run before
     # any statement is compiled, so a failure inside them is attributed to the FUNCTION
@@ -430,7 +431,7 @@ function refine_checked_cast_types!(ctx::AbstractCompilationContext)::Nothing
         _cT isa DataType || continue
         local _cx = _cargs[_isconv ? 2 : 1]
         _cx isa NirSSA || continue
-        local _corig = get(ctx.ssa_types, _ck, Any)
+        local _corig = ctx.ssa_types[_ck]
         (_corig === Any || _corig isa Union) || continue
         value_type(ctx, _cx) === _cT || continue
         ctx.ssa_types[_ck] = _cT
@@ -491,7 +492,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     # SSA type so every consumer sees the proven type.
     _numeric_joins = numeric_local_joins(ctx)
     for (_jk, _jv) in _numeric_joins
-        local _orig = get(ctx.ssa_types, _jk, Any)
+        local _orig = ctx.ssa_types[_jk]
         if _orig === Any || _orig isa Union
             ctx.ssa_types[_jk] = _jv
         end
@@ -501,10 +502,9 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     # Allocate locals for phi nodes (they need to persist across iterations)
     for (i, rec) in enumerate(nir)
         if rec.node isa NirPhi
-            # Preserve missing type evidence as Any; never guess a numeric phi.
-            # An Any-typed SSA has no ssa_types entry, and a phi typed Any
-            # maps to a reference, not I64: inference's own type is the fallback.
-            phi_julia_type = get(ctx.ssa_types, i, rec.julia_type)
+            # Preserve missing type evidence as Any; never guess a numeric phi: a phi typed
+            # Any (its entry is Any) maps to a reference, not I64.
+            phi_julia_type = ctx.ssa_types[i]
             haskey(_numeric_joins, i) && (phi_julia_type = _numeric_joins[i])
             phi_wasm_type = get_concrete_wasm_type(phi_julia_type, ctx.mod, ctx.type_registry; for_local=true)
 
@@ -628,7 +628,7 @@ function analyze_control_flow!(ctx::AbstractCompilationContext)::Dict{Int,Type}
     # Each PhiCNode gets a local so UpsilonNode can local.set and PhiCNode can local.get.
     for (i, rec) in enumerate(nir)
         if rec.node isa NirPhiC
-            phic_julia_type = get(ctx.ssa_types, i, rec.julia_type)
+            phic_julia_type = ctx.ssa_types[i]
             phic_wasm_type = get_concrete_wasm_type(phic_julia_type, ctx.mod, ctx.type_registry; for_local=true)
             local_idx = allocate_local!(ctx, phic_wasm_type)
             ctx.phi_locals[i] = local_idx
@@ -742,7 +742,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
     if _trace_id(ctx) !== nothing
         for (i, rec) in enumerate(nir)
             rec.slot == 0 && produces_stack_value(rec) && !(rec.node isa NirPhi) &&
-                haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)
+                haskey(TRACED_STATEMENT_TYPES, ctx.ssa_types[i]) && push!(needs_local_set, i)
         end
     end
 
@@ -837,7 +837,7 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
     # Actually allocate the locals
     for ssa_id in sort(collect(needs_local_set))
         if !haskey(ctx.ssa_locals, ssa_id)  # Skip phi nodes already added
-            ssa_type = get(ctx.ssa_types, ssa_id, Any)
+            ssa_type = ctx.ssa_types[ssa_id]
 
             # Skip Task SSAs (from jl_get_current_task foreigncall)
             # Task values are phantom — rngState fields map to Wasm globals
@@ -1147,7 +1147,7 @@ function allocate_slot_locals!(ctx::AbstractCompilationContext)::Nothing
         slot_id = rec.slot
         if slot_id > n_arg_slots && !haskey(ctx.slot_locals, slot_id)
             # Determine type from the SSA type of this statement
-            ssa_type = get(ctx.ssa_types, i, Any)
+            ssa_type = ctx.ssa_types[i]
             wasm_type = get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
             local_idx = allocate_local!(ctx, wasm_type)
             ctx.slot_locals[slot_id] = local_idx
@@ -1498,7 +1498,7 @@ function narrowed_local_type(ctx::AbstractCompilationContext, local_idx::Integer
     local_wasm_type = ctx.locals[arr_idx]
     (local_wasm_type === AnyRef || local_wasm_type === StructRef ||
      local_wasm_type === ExternRef || local_wasm_type === EqRef) || return nothing
-    ssa_julia_type = get(ctx.ssa_types, ssa_id, Any)
+    ssa_julia_type = ctx.ssa_types[ssa_id]
     # A Union{Nothing, T} stays unnarrowed: the value may be nothing, and its narrowing is
     # the PiNode after the null check.
     (ssa_julia_type === Any || ssa_julia_type === Union{} || ssa_julia_type isa Union) &&

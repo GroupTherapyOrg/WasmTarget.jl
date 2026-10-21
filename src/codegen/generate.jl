@@ -662,7 +662,7 @@ function emit_statement_trace!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                local_idx::Integer, local_type)::InstrBuilder
     local id = _trace_id(ctx)
     id === nothing && return b
-    local T = get(ctx.ssa_types, idx, Any)
+    local T = ctx.ssa_types[idx]
     get(TRACED_STATEMENT_TYPES, T, nothing) === local_type || return b
     local name = local_type === I64 ? "trace_i64" : local_type === I32 ? "trace_i32" :
                  local_type === F32 ? "trace_f32" : "trace_f64"

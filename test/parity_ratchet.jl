@@ -2376,7 +2376,7 @@ const LOCKS = [
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
-            required = ["result_julia = get(ctx.ssa_types, idx, Any)",
+            required = ["result_julia = ctx.ssa_types[idx]",
                         "local target = get_function_by_mi(ctx.func_registry, rec.node.mi)",
                         "ctx.ssa_types[_jk] = _jv",
                         "foreach(observe_type!, T.parameters)",
@@ -3335,7 +3335,7 @@ const LOCKS = [
                         (loc, "v isa Core.Argument && (op[] = Core.Argument(v.n + 1))"),
                         (loc, "pushfirst!(ir.argtypes, Tuple{})"),
                         (loc, "(:ok, Base.invokelatest(_OCS[trace.entry], f, args...))"),
-                        (ctxs, "haskey(TRACED_STATEMENT_TYPES, get(ctx.ssa_types, i, Any)) && push!(needs_local_set, i)"),
+                        (ctxs, "haskey(TRACED_STATEMENT_TYPES, ctx.ssa_types[i]) && push!(needs_local_set, i)"),
                         (comp, "    local translator = Translator(plan, trace; options, diagnostics, export_namer=ExportNamer(mod))\n    ensure_provenance_imports!(mod, translator.export_namer)\n    trace === nothing || ensure_trace_imports!(mod)"),
                         (loc, "filter!(keep, nevents)"),
                         (loc, "filter!(keep, wevents)"),
@@ -4753,7 +4753,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("a box's scratch is the local declared for it (L173)", dme) ? 0 : 1
             v + builder_rows_failing(["c"])
         end),
-    "L174_one_value_type_reader" => ("an operand's Julia type has one reader, value_type (context.jl), Julia's argextype widened (Compiler optimize.jl:423 on 1.12.7, :502 on 1.13.1): an SSA value's statement type (ctx.ssa_types, the boundary's type plus the plan's joins), a slot's type, a literal's Core.Typeof, a global's type the boundary read; collection and codegen both read it, as dart's dartTypeOf answers every node (code_generator.dart:129). Exactly its two methods (the rule over (slot types, SSA types) and the context's form) are defined; no other reader exists in src (get_ssa_type, infer_value_type, _value_julia_type, _call_site_arg_type, _collector_static_type, source_slot_type, the box analyses' _f3_ssa_type and _f3_literal_type), and no site reads `ssa_types` keyed by an operand node's `.id` or indexes a slot table outside value_type and the NIR boundary (a statement's own type, keyed by its statement index, is no operand read; a physical `ctx.arg_types` entry is the wasm signature's parameter, not an operand's Julia type); the joins codegen applies are the plan's (numeric_local_joins reads plan_joins), and the box analyses (propagate_numeric_value_types, capture_read_types, record_capture_contents, f3_box_value_types, box_contents_type) run nowhere outside box_capture.jl and trimcollect.jl's collector. Its behavior: test/ir_one_inference_path.jl compares value_type with Compiler's argextype for every call operand of every planned body of a program (dev/AUDIT.md A3C1, A3C4; dev/CHARTER.md C1)",
+    "L174_one_value_type_reader" => ("an operand's Julia type has one reader, value_type (context.jl), Julia's argextype widened (Compiler optimize.jl:423 on 1.12.7, :502 on 1.13.1): an SSA value's statement type (ctx.ssa_types, the boundary's type plus the plan's joins), a slot's type, a literal's Core.Typeof, a global's type the boundary read; collection and codegen both read it, as dart's dartTypeOf answers every node (code_generator.dart:129). Exactly its two methods (the rule over (slot types, SSA types) and the context's form) are defined; no other reader exists in src (get_ssa_type, infer_value_type, _value_julia_type, _call_site_arg_type, _collector_static_type, source_slot_type, the box analyses' _f3_ssa_type and _f3_literal_type), and no site reads `ssa_types` keyed by an operand node's `.id` or indexes a slot table outside value_type and the NIR boundary (a statement's own type, keyed by its statement index, is no operand read; a physical `ctx.arg_types` entry is the wasm signature's parameter, not an operand's Julia type); every statement holds its entry in ctx.ssa_types (an `Any` statement's is Any), and a statement's type is read as `ctx.ssa_types[i]`, which raises on a missing one, never `get(ctx.ssa_types, i, default)` (39 such reads answered a default where the entry was the fact, dev/AUDIT.md A18P2); the joins codegen applies are the plan's (numeric_local_joins reads plan_joins), and the box analyses (propagate_numeric_value_types, capture_read_types, record_capture_contents, f3_box_value_types, box_contents_type) run nowhere outside box_capture.jl and trimcollect.jl's collector. Its behavior: test/ir_one_inference_path.jl compares value_type with Compiler's argextype for every call operand of every planned body of a program (dev/AUDIT.md A3C1, A3C4; dev/CHARTER.md C1)",
         () -> begin
             local cx = read(joinpath(CODEGEN, "context.jl"), String)
             local v = abs(count_sites(r"^function value_type\(|^value_type\(ctx::AbstractCompilationContext"; roots=[SRC]) - 2)
@@ -4770,6 +4770,9 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += count_sites(r"(?<![\w.])(propagate_numeric_value_types|capture_read_types|record_capture_contents|f3_box_value_types|box_contents_type)\(";
                              roots=[SRC], exclude_files=["codegen/box_capture.jl", "codegen/trimcollect.jl"],
                              exclude_line=r"^\s*#|^\s{4}\w+\(.*\) ->")
+            # a statement's type: its entry, never a default (A18P2)
+            v += count_sites(r"get\(ctx\.ssa_types\b"; roots=[SRC])
+            v += occursin("            target === nothing || (T = target.return_type)\n        end\n        ctx.ssa_types[i] = T\n", cx) ? 0 : 1
             local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
             v += occursin("@testset \"value_type is Julia's argextype\"", oip) ? 0 : 1
             v

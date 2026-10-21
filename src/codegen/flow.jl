@@ -163,7 +163,7 @@ function _emit_phi_edge_convert!(b::InstrBuilder, ctx::AbstractCompilationContex
     isempty(src.instrs) && return false
     (!_wt_is_ref(src_type) && _wt_is_ref(phi_local_type) && !isconcretetype(src_julia)) &&
         return false
-    local phi_julia = get(ctx.ssa_types, phi_idx, Any)
+    local phi_julia = ctx.ssa_types[phi_idx]
     if _wt_is_ref(src_type) && !_wt_is_ref(phi_local_type) &&
        phi_julia isa DataType && isconcretetype(phi_julia) && !(src_julia <: phi_julia)
         return _emit_phi_edge_guarded_unbox!(b, ctx, phi_local_type, src_type, src,

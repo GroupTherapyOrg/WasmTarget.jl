@@ -789,7 +789,7 @@ function emit_dynamic_closure_call!(b::InstrBuilder, ctx, func, args, idx::Int):
     call_ref!(b, sig_idx)
     # the uniform result (anyref) converts to the call's inferred type (the funnel
     # unboxes numerics / casts refs — dart converts at the same seam)
-    local _rt = get(ctx.ssa_types, idx, Any)
+    local _rt = ctx.ssa_types[idx]
     if _rt isa Type && _rt !== Any && _rt !== Union{}
         local _rw = get_concrete_wasm_type(_rt, ctx.mod, ctx.type_registry)
         _rw !== AnyRef && coerce_stack_top!(b, _rw, ctx; from_julia=_rt)

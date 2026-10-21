@@ -86,8 +86,7 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Not
     local target = (!(f isa Function || f isa Type) || ctx.func_registry === nothing) ? nothing :
         get_function(ctx.func_registry, f, Tuple(Any[value_type(ctx, a) for a in args[3:end]]))
     local R = target === nothing ? Any : target.return_type
-    local had_result = haskey(ctx.ssa_types, idx)
-    local old_result = get(ctx.ssa_types, idx, Any)
+    local old_result = ctx.ssa_types[idx]
     ctx.ssa_types[idx] = R
     # the call's own result is what it pushes above the values already on the stack (a
     # fragment's stack starts with its parent's)
@@ -95,7 +94,7 @@ function _lower_invoke_in_world!(b, fb, ctx, call, idx, args, callee)::Union{Not
     try
         compile_call!(b, nir_call(args[2], args[3:end], value_type(ctx, args[2])), idx, ctx)
     finally
-        had_result ? (ctx.ssa_types[idx] = old_result) : delete!(ctx.ssa_types, idx)
+        ctx.ssa_types[idx] = old_result
     end
     (ctx.last_stmt_was_stub || R === Union{} || length(b.v.stack) == height) && return b
     # a numeric result stored under a non-concrete statement type is boxed by its own type,
@@ -240,7 +239,7 @@ function _lower_ncodeunits!(b, fb, ctx, call, idx, args, callee)::Union{Nothing,
         # parity(translator.dart:1597 Translator.convertType): the lowering's value is `Int`;
         # a statement Julia typed wider (`::Any` for an AbstractString receiver) receives
         # it boxed with Int's class
-        get(ctx.ssa_types, idx, Any) === Int || coerce_stack_top!(_ncb, AnyRef, ctx; from_julia=Int)
+        ctx.ssa_types[idx] === Int || coerce_stack_top!(_ncb, AnyRef, ctx; from_julia=Int)
         append_builder!(fb, _ncb)
         return append_builder!(b, fb)
     end
@@ -617,7 +616,7 @@ function allocate_memoryref_offset_locals!(ctx::AbstractCompilationContext)::Not
     end
     phis = Int[i for (i, rec) in enumerate(ctx.nir)
                if rec.slot == 0 && rec.node isa NirPhi && haskey(ctx.ssa_locals, i) &&
-                  (T = get(ctx.ssa_types, i, Any); T isa Type && T !== Union{} &&
+                  (T = ctx.ssa_types[i]; T isa Type && T !== Union{} &&
                    T <: Core.GenericMemoryRef)]
     changed = true
     while changed
@@ -1458,7 +1457,7 @@ function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)::InstrBuil
     local li = get(ctx.ssa_locals, idx, nothing)
     local target = (li !== nothing && 1 <= li - ctx.n_params + 1 <= length(ctx.locals)) ?
         ctx.locals[li - ctx.n_params + 1] :                      # the local, before any narrowing
-        static_wasm_type(NirSSA(idx, get(ctx.ssa_types, idx, value_type(ctx, args[2]))), ctx)
+        static_wasm_type(NirSSA(idx, ctx.ssa_types[idx]), ctx)
     emit_value!(fb, args[2], ctx, target)
     return append_builder!(b, fb)
 end
@@ -2147,7 +2146,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             emit_undef_read_check!(_mb_ib, ctx, Any, _mb_ft)
             # Emit at the SSA's REFINED type (the numeric join = dart's variable type):
             # unbox through the ONE funnel so declared and actual agree at the store.
-            local _mb_jt = get(ctx.ssa_types, idx, Any)
+            local _mb_jt = ctx.ssa_types[idx]
             local _mb_want = exact_register(_mb_jt)
             local _mb_out = _mb_ft
             if _mb_want !== nothing && _mb_want !== _mb_ft && _wt_is_ref(_mb_ft)
@@ -2595,7 +2594,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                             # StructRef (all-struct union, e.g. Union{Dog,Cat}) push the raw
                             # struct ref (subtype of structref) — tag-wrapping it would make
                             # the consumer's isa/π cast trap "illegal cast".
-                            _ssa_t = get(ctx.ssa_types, idx, nothing)
+                            _ssa_t = ctx.ssa_types[idx]
                             local Ueff
                             if _ssa_t isa Type && _ssa_t !== Union{}
                                 union_wasm = get_concrete_wasm_type(_ssa_t, ctx.mod, ctx.type_registry; for_local=true)
