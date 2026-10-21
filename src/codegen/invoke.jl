@@ -224,9 +224,15 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 f32_const!(_nb, 0.0)
             elseif wasm_type === F64
                 f64_const!(_nb, 0.0)
-            else
-                # I32 or other — push i32(0)
+            elseif wasm_type === I32
                 i32_const!(_nb, 0)
+            else
+                # a register no arm names (eqref, i31ref, funcref, exnref, a non-null abstract
+                # reference) holds no `nothing` this lowering makes: rejected at its statement,
+                # never an i32 zero the call's parameter does not take (MARCH 13.20)
+                emit_unsupported_stub!(ctx, _nb, :unsupported_type,
+                    "a `nothing` argument into a $(wasm_type) parameter has no representation here";
+                    idx=idx, detail=param_type)
             end
             append_builder!(fb, _nb)
         elseif is_nothing_arg
