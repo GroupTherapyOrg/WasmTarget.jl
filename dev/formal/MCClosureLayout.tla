@@ -28,4 +28,7 @@ MCMaxArrivals == 2
 \* rule of the closure registrar's own erased the struct to structref (julia_to_wasm_type)
 MCFieldStorage == [c \in MCFieldClasses |-> IF c = "Num" THEN "i64" ELSE "ref_struct"]
 MCOwnStorage == [c \in MCFieldClasses |-> IF c = "Num" THEN "i64" ELSE "structref"]
+
+\* t1's entry returns a closure of type t3, laid out after it in some order
+MCReturns == [T \in MCTypes |-> IF T = "t1" THEN "t3" ELSE "none"]
 =============================================================================

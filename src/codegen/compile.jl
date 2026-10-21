@@ -591,6 +591,7 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
         local _cv_types = DataType[]
         local _cv_bodies = Dict{DataType, Vector{ClosureBody}}()
         local _cv_ctx = Dict{DataType, Bool}()
+        local _cv_queue = ClosureTrampolineTask[]
         for (_i, _T, _takes_context) in _cvp
             local _entry = function_data[_i]
             # a body reached only by `invoke` is no row: dispatch never selects it
@@ -651,7 +652,11 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
                         nothing, nothing)))
             end
             build_closure_vtable!(mod, type_registry, _T, _cv_bodies[_T]; takes_context=_cv_ctx[_T],
-                                  no_method=plan.no_method[_T])
+                                  no_method=plan.no_method[_T], queue=_cv_queue)
+        end
+        # the entries' bodies, once every vtable global is defined (dart's compilation queue)
+        for _task in _cv_queue
+            fill_closure_trampoline!(mod, type_registry, _task)
         end
     end
 

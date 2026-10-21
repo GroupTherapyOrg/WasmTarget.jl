@@ -36,7 +36,25 @@ struct ClosureBody
 end
 
 """
-    build_closure_vtable!(mod, registry, closure_type, bodies; takes_context, no_method)
+    ClosureTrampolineTask(func_idx, closure_type, cands, arity, takes_context, captured_info, no_method)
+
+A vtable entry build_closure_vtable! defined, whose body fill_closure_trampoline! generates once
+every vtable global exists: the entry for `arity` of `closure_type`, over its bodies of that
+arity most specific first (`cands`; one body is a direct entry, several a dispatching one).
+parity(translator.dart:1461 makeTrampoline)
+"""
+struct ClosureTrampolineTask
+    func_idx::UInt32
+    closure_type::Type
+    cands::Vector{ClosureBody}
+    arity::Int
+    takes_context::Bool
+    captured_info::Union{Nothing, StructInfo}
+    no_method::Vector{DataType}
+end
+
+"""
+    build_closure_vtable!(mod, registry, closure_type, bodies; takes_context, no_method, queue)
         -> (vtable_global_idx, vtable_struct_idx)
 
 ONE immutable vtable GLOBAL per closure TYPE (dart ClosureLayouter: one representation
@@ -52,6 +70,10 @@ arguments' runtime classes (`_closure_dispatch_trampoline!`).
 
 `no_method` is the plan's record of the args tuples the callable has no method for: an entry
 whose arguments no body takes throws Julia's MethodError for them.
+Each trampoline is DEFINED here, its index frozen into the vtable global, and its body pushed
+onto `queue` (a ClosureTrampolineTask), generated once every vtable global exists
+(fill_closure_trampoline!): an entry returning a closure builds its object with the result
+type's vtable global, which a later type's layout may define.
 For capturing closures, `params` includes the captured-struct self at slot 0 and
 `takes_context=true`. Static tear-offs have only their public parameters and
 `takes_context=false`; both use the same closure object and vtable ABI.
@@ -61,7 +83,8 @@ parity(translator.dart:1360 Translator.getClosure)
 function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
                                closure_type::Type, bodies::Vector{ClosureBody};
                                takes_context::Bool=is_closure_type(closure_type),
-                               no_method::Vector{DataType})::Tuple{UInt32, UInt32}
+                               no_method::Vector{DataType},
+                               queue::Vector{ClosureTrampolineTask})::Tuple{UInt32, UInt32}
     cache = registry.closure_vtable_globals
     cache === nothing && throw(_closure_layout_error(closure_type, bodies, "the layouter is unavailable on a minimal registry"))
     haskey(cache, closure_type) && throw(_closure_layout_error(closure_type, bodies, "built twice"))
@@ -86,9 +109,12 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     local tramps = Dict{Int, UInt32}()
     for arity in arities
         local cands = _most_specific_first(by_arity[arity], closure_type)
-        tramps[arity] = length(cands) == 1 ?
-            _closure_trampoline!(mod, registry, closure_type, cands[1], arity, takes_context, base_idx, captured_info, no_method) :
-            _closure_dispatch_trampoline!(mod, registry, closure_type, cands, arity, takes_context, base_idx, captured_info, no_method)
+        local kind = length(cands) == 1 ? :closure_trampoline : :closure_dispatching_trampoline
+        local idx = define_function!(mod, WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
+                                     name=generated_function_name(kind, string(nameof(closure_type))))
+        declare_funcs!(mod, UInt32[idx])
+        tramps[arity] = idx
+        push!(queue, ClosureTrampolineTask(idx, closure_type, cands, arity, takes_context, captured_info, no_method))
     end
     local max_arity = maximum(keys(tramps))
     vt_struct = get_closure_vtable_struct!(mod, registry, max_arity)
@@ -102,6 +128,24 @@ function build_closure_vtable!(mod::WasmModule, registry::TypeRegistry,
     end
     cache[closure_type] = g
     return (g, vt_struct)
+end
+
+"""
+    fill_closure_trampoline!(mod, registry, task) -> func_idx
+
+The body of the vtable entry `task` defined: the compilation queue's task, run after every
+vtable global is defined, so an entry returning a closure holds that closure type's own vtable.
+formal(dev/formal/ClosureLayout.tla): an entry's closure result holds its type's vtable
+parity(translator.dart:2767 _ClosureTrampolineGenerator)
+"""
+function fill_closure_trampoline!(mod::WasmModule, registry::TypeRegistry, task::ClosureTrampolineTask)::UInt32
+    local base_idx = get_closure_base_struct!(mod, registry)
+    local tb = length(task.cands) == 1 ?
+        _closure_trampoline!(mod, registry, task.closure_type, task.cands[1], task.arity, task.takes_context,
+                             base_idx, task.captured_info, task.no_method) :
+        _closure_dispatch_trampoline!(mod, registry, task.closure_type, task.cands, task.arity, task.takes_context,
+                                      base_idx, task.captured_info, task.no_method)
+    return fill_function!(mod, task.func_idx, tb)
 end
 
 """
@@ -307,7 +351,7 @@ end
 # parity(translator.dart:2767 _ClosureTrampolineGenerator)
 function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type, body::ClosureBody,
                               arity::Int, takes_context::Bool, base_idx::UInt32, captured_info,
-                              no_method::Vector{DataType})::UInt32
+                              no_method::Vector{DataType})::InstrBuilder
     tb = InstrBuilder(WasmValType[AnyRef for _ in 0:arity], WasmValType[AnyRef];
                       func_name="closure_trampoline", mod=mod)
     local numeric = !isempty(body.results) && body.results[1] in (I32, I64, F32, F64)
@@ -336,10 +380,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
                             captured_info, res_scratch; obj_scratch)
     end
     end_block!(tb)   # the function frame's own end
-    tramp_idx = add_function!(mod, tb;
-                              name=generated_function_name(:closure_trampoline, string(nameof(closure_type))))
-    declare_funcs!(mod, UInt32[tramp_idx])
-    return tramp_idx
+    return tb
 end
 
 """
@@ -501,7 +542,7 @@ calls it directly)
 """
 function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_type::Type,
                                        cands::Vector{ClosureBody}, arity::Int, takes_context::Bool,
-                                       base_idx::UInt32, captured_info, no_method::Vector{DataType})::UInt32
+                                       base_idx::UInt32, captured_info, no_method::Vector{DataType})::InstrBuilder
     local top_idx = registry.base_struct_idx
     top_idx === nothing && throw(_closure_layout_error(closure_type, cands,
         "a dispatching arity-$arity entry needs the class base struct"))
@@ -530,10 +571,7 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     end
     _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method)
     end_block!(tb)
-    tramp_idx = add_function!(mod, tb;
-                              name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))
-    declare_funcs!(mod, UInt32[tramp_idx])
-    return tramp_idx
+    return tb
 end
 
 """

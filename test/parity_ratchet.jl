@@ -2791,18 +2791,24 @@ const LOCKS = [
             count(p -> !occursin(p, all_src), required) +
             count(p -> occursin(p, all_src), forbidden)
         end),
-    "L23_closure_rti" => ("closure objects copy Dart's Object/context/vtable/functionType layout and use a real closed-world Julia type object",
+    "L23_closure_rti" => ("closure objects copy Dart's Object/context/vtable/functionType layout and use a real closed-world Julia type object; a vtable entry is defined with its vtable global and its body generated once every vtable global exists, as dart defines a trampoline and queues its body (translator.dart:1461 makeTrampoline), so an entry returning a closure gives it that closure type's own vtable (an entry's body built where it was defined read a later type's vtable before it existed and gave the result the empty vtable: smoke closure_called_elsewhere's inner_closure_returned trapped, native 6; dev/formal/ClosureLayout.tla EntryResultHoldsItsVtable)",
         () -> begin
             types_src = read(joinpath(CODEGEN, "types.jl"), String)
             closure_src = read(joinpath(CODEGEN, "closures.jl"), String)
             trim_src = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            compile_src = read(joinpath(CODEGEN, "compile.jl"), String)
             required = ["FieldType(ConcreteRef(get_datatype_type_idx(registry), false), false)",
                         "haskey(type_globals, closure_type)",
                         "global_get!(b, type_global",
                         # the SSA-typed callable observation, now read off the boundary (Phase 12D)
-                        "observe_callable!(s.julia_type)"]
-            forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType"]
-            count(p -> !occursin(p, types_src * closure_src * trim_src), required) +
+                        "observe_callable!(s.julia_type)",
+                        # an entry defined with its vtable, its body queued (closures.jl) and generated after
+                        # the last vtable global (compile.jl)
+                        "push!(queue, ClosureTrampolineTask(idx, closure_type, cands, arity, takes_context, captured_info, no_method))",
+                        "no_method=plan.no_method[_T], queue=_cv_queue)\n        end\n        # the entries' bodies, once every vtable global is defined (dart's compilation queue)\n        for _task in _cv_queue\n            fill_closure_trampoline!(mod, type_registry, _task)"]
+            forbidden = ["functionType=ref.null", "dummy functionType", "placeholder functionType",
+                         "add_function!(mod, tb"]
+            count(p -> !occursin(p, types_src * closure_src * trim_src * compile_src), required) +
             count(p -> occursin(p, types_src * closure_src), forbidden)
         end),
     "L22_artifact_binaryen" => ("optimization uses Binaryen_jll's artifact executable and cannot silently depend on or skip for a system wasm-opt",
@@ -4680,7 +4686,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             # each reads its callee's record, which the plan holds for every callee it can reach (a
             # missing one raises), never a default
             n += occursin("local tuples = DataType[T for T in ctx.translator.plan.no_method[Core.Typeof(f)]", calls) ? 0 : 1
-            n += occursin("no_method=plan.no_method[_T])", read(joinpath(CODEGEN, "compile.jl"), String)) ? 0 : 1
+            n += occursin("no_method=plan.no_method[_T], queue=_cv_queue)", read(joinpath(CODEGEN, "compile.jl"), String)) ? 0 : 1
             n += count_sites(r"get\([^)]*no_method"; roots=[SRC])
             # the behavior pin: a callable's MethodError arms are its own record's, read from the module
             # (an answer cannot tell a flat record apart: the rows come first)

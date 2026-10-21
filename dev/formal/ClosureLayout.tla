@@ -102,6 +102,16 @@
 (*     -- silently, with no reject in between, exactly the "no shape         *)
 (*     mismatch reaches call_ref" claim below turned on its head.            *)
 (*                                                                           *)
+(* (D) A VTABLE ENTRY'S BODY (fill_closure_trampoline!, closures.jl). An     *)
+(*     entry of T whose body returns a closure of type U builds U's object   *)
+(*     with U's vtable global (`Returns[T] = U`, a CONSTANT). The pre-pass    *)
+(*     DEFINES every entry with its global and generates the bodies after    *)
+(*     the last global (dart: functions.define, then the compilation queue,  *)
+(*     translator.dart:1461), so the object holds U's own vtable. Filling a  *)
+(*     body where its entry is defined reads U's global before U's layout    *)
+(*     defines it, and the object holds the empty vtable: a dynamic call of  *)
+(*     the result traps.                                                     *)
+(*                                                                           *)
 (* WHAT THIS MODEL ABSTRACTS, AND WHY THAT IS SUFFICIENT.                    *)
 (*  - Julia types collapse to opaque ids (`Types`); a captured field's       *)
 (*    Julia type collapses to an opaque CLASS (`FieldClasses`), whose        *)
@@ -137,7 +147,11 @@
 (*    sequence (out of scope here, exactly as ClosedWorld.tla takes the call *)
 (*    graph as CONSTANT input rather than re-deriving it).                   *)
 (*                                                                           *)
-(* THE FOUR BROKEN VARIANTS.                                                 *)
+(* THE FIVE BROKEN VARIANTS.                                                 *)
+(*  - `FillAtDefine = TRUE`: an entry's body is generated where the entry is *)
+(*    defined, before a later type's vtable global exists. TLC must find an  *)
+(*    entry whose closure result holds the empty vtable                     *)
+(*    (`EntryResultHoldsItsVtable` violated).                               *)
 (*  - `TellApartByStruct = TRUE`: a context's class is read from its struct  *)
 (*    type -- the claim that distinct closure types have distinct structs,  *)
 (*    which add_type!'s merge of equal structs makes false. TLC must find two *)
@@ -178,7 +192,8 @@
 (* body of the same arity (dart2wasm's per-shape ClosureRepresentation); and *)
 (* the vt_struct annotation returned for a closure type's vtable global      *)
 (* always matches the shape that global was actually populated with, so no  *)
-(* shape mismatch ever reaches `call_ref`.                                   *)
+(* shape mismatch ever reaches `call_ref`; an entry returning a closure      *)
+(* holds that closure type's own vtable global.                              *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
@@ -194,7 +209,9 @@ CONSTANTS
     TellApartByStruct, \* BOOLEAN: TRUE = a context's class read from its struct type, not its classId
     HashOrderCapture,  \* BOOLEAN: TRUE = the retired/counterfactual hash-order field variant
     AllowArityDrift,   \* BOOLEAN: TRUE = a revisit of T may request a different arity
-    OwnFieldRule       \* BOOLEAN: TRUE = the closure registrar translates a field by its own rule
+    OwnFieldRule,      \* BOOLEAN: TRUE = the closure registrar translates a field by its own rule
+    Returns,           \* [Types -> Types \cup {"none"}]: the closure type T's entry returns, if any
+    FillAtDefine       \* BOOLEAN: TRUE = an entry's body is generated where the entry is defined
 
 ASSUME IsFiniteSet(Types)
 ASSUME Arities \subseteq Nat /\ IsFiniteSet(Arities)
@@ -207,6 +224,8 @@ ASSUME TellApartByStruct \in BOOLEAN
 ASSUME AllowArityDrift \in BOOLEAN
 ASSUME OwnFieldRule \in BOOLEAN
 ASSUME FieldStorage \in [FieldClasses -> STRING] /\ OwnStorage \in [FieldClasses -> STRING]
+ASSUME Returns \in [Types -> Types \cup {"none"}]
+ASSUME FillAtDefine \in BOOLEAN
 
 Storages == {FieldStorage[c] : c \in FieldClasses} \cup {OwnStorage[c] : c \in FieldClasses}
 
@@ -226,11 +245,13 @@ VARIABLES
     arityOf,           \* [Types -> Nat] -- the arity of T's most recent arrival (diagnostic/history)
     vtStructOf,        \* [Arities -> Nat] -- get_closure_vtable_struct!'s per-arity struct index (0 = unassigned)
     seenArities,       \* SUBSET Arities -- arities with an assigned vtable struct
-    nextVtStructId     \* Nat -- the per-arity monotonic counter
+    nextVtStructId,    \* Nat -- the per-arity monotonic counter
+    filled,            \* SUBSET Types -- T's whose entry body is generated
+    resultVt           \* [Types -> Nat] -- the vtable global T's entry gives its closure result (0 = the empty vtable)
 
 vars == <<ctxArrivals, seenCtx, fieldSeq, structId, nextStructId,
           vtArrivals, seenVt, globalId, nextGlobalId, shapeAtCreation,
-          lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId>>
+          lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId, filled, resultVt>>
 
 ----------------------------------------------------------------------------
 (* Field-order choices: the identity order under the real algorithm, or any *)
@@ -273,6 +294,8 @@ Init ==
     /\ vtStructOf = [a \in Arities |-> 0]
     /\ seenArities = {}
     /\ nextVtStructId = 1
+    /\ filled = {}
+    /\ resultVt = [T \in Types |-> 0]
 
 ----------------------------------------------------------------------------
 (* (A) register_closure_type!: first sight allocates a fresh struct id and  *)
@@ -299,7 +322,7 @@ RegisterContext(T) ==
                     /\ structId' = [structId EXCEPT ![T] = id]
                     /\ nextStructId' = IF same = {} THEN nextStructId + 1 ELSE nextStructId
     /\ UNCHANGED <<vtArrivals, seenVt, globalId, nextGlobalId, shapeAtCreation,
-                   lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId>>
+                   lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId, filled, resultVt>>
 
 ----------------------------------------------------------------------------
 (* (B)+(C) build_closure_vtable!: requires T's context already registered   *)
@@ -314,6 +337,10 @@ RegisterContext(T) ==
 (* OVERWRITTEN with THIS call's `vId` while `shapeAtCreation` -- the         *)
 (* global's real, frozen-at-birth shape -- never changes: exactly the        *)
 (* asymmetry the header explains.                                           *)
+
+\* the vtable global an entry of T gives its closure result under the globals `g` (0: none yet, so
+\* closure_vtable_global's empty vtable)
+ResultGlobal(T, g) == IF Returns[T] = "none" THEN 0 ELSE g[Returns[T]]
 
 EnsureVtable(T) ==
     /\ T \in seenCtx
@@ -330,12 +357,31 @@ EnsureVtable(T) ==
                /\ nextVtStructId' = IF isNewArity THEN nextVtStructId + 1 ELSE nextVtStructId
                /\ lastAnnotated' = [lastAnnotated EXCEPT ![T] = vId]
                /\ IF T \in seenVt
-                  THEN UNCHANGED <<seenVt, globalId, nextGlobalId, shapeAtCreation>>
+                  THEN UNCHANGED <<seenVt, globalId, nextGlobalId, shapeAtCreation, filled, resultVt>>
                   ELSE /\ seenVt' = seenVt \cup {T}
                        /\ globalId' = [globalId EXCEPT ![T] = nextGlobalId]
                        /\ nextGlobalId' = nextGlobalId + 1
                        /\ shapeAtCreation' = [shapeAtCreation EXCEPT ![T] = vId]
+                       \* (Broken) the entry's body generated here, reading its result's global as it stands
+                       /\ IF FillAtDefine
+                          THEN /\ filled' = filled \cup {T}
+                               /\ resultVt' = [resultVt EXCEPT ![T] = ResultGlobal(T, globalId')]
+                          ELSE UNCHANGED <<filled, resultVt>>
     /\ UNCHANGED <<ctxArrivals, seenCtx, fieldSeq, structId, nextStructId>>
+
+----------------------------------------------------------------------------
+(* (D) fill_closure_trampoline!: the compilation queue, run once every       *)
+(* vtable global is defined (every type's layout done).                       *)
+
+FillEntry(T) ==
+    /\ ~FillAtDefine
+    /\ seenVt = Types
+    /\ T \notin filled
+    /\ filled' = filled \cup {T}
+    /\ resultVt' = [resultVt EXCEPT ![T] = ResultGlobal(T, globalId)]
+    /\ UNCHANGED <<ctxArrivals, seenCtx, fieldSeq, structId, nextStructId,
+                   vtArrivals, seenVt, globalId, nextGlobalId, shapeAtCreation,
+                   lastAnnotated, arityOf, vtStructOf, seenArities, nextVtStructId>>
 
 ----------------------------------------------------------------------------
 (* Next: an explicit stutter once every arrival budget is exhausted, so the *)
@@ -345,11 +391,13 @@ EnsureVtable(T) ==
 
 AllDone ==
     /\ \A T \in Types : ctxArrivals[T] = MaxArrivals /\ vtArrivals[T] = MaxArrivals
+    /\ filled = Types
     /\ UNCHANGED vars
 
 Next ==
     \/ \E T \in Types : RegisterContext(T)
     \/ \E T \in Types : EnsureVtable(T)
+    \/ \E T \in Types : FillEntry(T)
     \/ AllDone
 
 Spec == Init /\ [][Next]_vars
@@ -373,6 +421,8 @@ TypeOK ==
     /\ vtStructOf \in [Arities -> Nat]
     /\ seenArities \subseteq Arities
     /\ nextVtStructId \in Nat
+    /\ filled \subseteq Types
+    /\ resultVt \in [Types -> Nat]
 
 \* (1) The context struct lists exactly the captured variables in the
 \* program's declared order -- never a hash-dependent one.
@@ -410,5 +460,10 @@ OneVtableStructPerArity ==
 \* slot always executes under the signature the trampoline was built with;
 \* no shape mismatch ever reaches call_ref.
 WellFormedVtable == \A T \in seenVt : lastAnnotated[T] = shapeAtCreation[T]
+
+\* (4) An entry returning a closure gives it that closure type's own vtable global, never the
+\* empty vtable, so a dynamic call of the result reaches its entries.
+EntryResultHoldsItsVtable ==
+    \A T \in filled : Returns[T] # "none" => resultVt[T] # 0 /\ resultVt[T] = globalId[Returns[T]]
 
 =============================================================================

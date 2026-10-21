@@ -2722,11 +2722,13 @@ _xf("unionall_array_values", Any[
     ("vector_unionall_field_sum", (x::Int64) -> Float64(sum(_ft_uvec(x).v)), Int64(1)),
 ])
 # a closure called dynamically in another function than the one that builds it: every closure the
-# program builds is enrolled at every arity a dynamic call makes, so its object has the entry
-# (dev/AUDIT.md A11E1: its object held a null entry and the call trapped at the entry's cast, native 6)
+# program builds is enrolled at every arity a dynamic call makes, so its object has the entry, and an
+# entry returning a closure gives it that closure's own vtable (dev/AUDIT.md A11E1: its object held a
+# null entry, or the empty vtable, and the call trapped at the entry's cast, native 6)
 @noinline _ft_run_any(f, y) = f(y)
 _g("closure_called_elsewhere", Any[
     ("closure_built_here_called_there", (n::Int64) -> (k = n; c = x -> x + k; _ft_run_any(Base.inferencebarrier(c), n)::Int64), Int64(3)),
+    ("inner_closure_returned", (n::Int64) -> (mk = () -> (y -> y + n); g = Base.inferencebarrier(mk); h = g(); (h(n))::Int64), Int64(3)),
 ])
 
 # Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
