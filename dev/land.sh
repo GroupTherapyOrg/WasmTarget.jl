@@ -32,10 +32,12 @@
 #       `dev/land.sh merge`, the one landing path, on a green run, a cold one included (its checks
 #       pass, its timing unjudged), and prints `LOOP <edit_to_landed_s> s`, the push being the
 #       landing; after a cold landing, still holding the machine, judges its timing by a warm run of
-#       the landed tree and writes it into the landing's line (judged, unjudged, or SLOWER / FAILED
-#       <stages>, its record red and standing); then releases the hold, prints each step's wall and
-#       the unjudged streak (L198). After a line judged red, a landing lands only on a judged green
-#       run (`merge` refuses any other).
+#       the landed tree and writes it into the landing's line (judged; unjudged; SLOWER / OVER
+#       <stages>, bests / budgets missed under the cap; FAILED <stages>, a check other than the
+#       ratchet's; a red record standing); then releases the hold, prints each step's wall and the
+#       timing's state (L198). After a line judged red, a landing lands on a judged green run or
+#       names the red landing in a dev/MARCH.md row of its own tree (`merge` refuses any other). A
+#       worktree whose Manifest.toml names other WasmTarget extensions than Project.toml is refused.
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
@@ -60,8 +62,11 @@ WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
 CHARTER_AUTHORISED="C10:2026-10-21"
 LOG="$MAIN/dev/.loop/landings.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
-# the landing log's last line, when its timing was judged red (SLOWER or FAILED, L198): its commit and timing
-OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
+# the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
+OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
+# a red landing's debt is lifted by a dev/MARCH.md row in the landing's own tree naming it by its
+# first 8 hex digits (a Timing exemption row, or the fix's row): <commit> <owed>
+owed_lifted() { git show "$1:dev/MARCH.md" 2>/dev/null | grep '^| 13\.' | grep -q "${2:0:8}"; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
 cmd=${1:?usage: dev/land.sh prepare|merge <branch> [old-base] | land}
@@ -148,8 +153,13 @@ merge)
     # a landing whose timing was judged red is owed a judged green run: until one lands, a landing
     # whose timing is unjudged is refused (L198)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
-    [ -z "$owed" ] || [ "$timing" = judged ] ||
-        { echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next (a fix, or a Timing: correctness fix row) — refusing"; exit 1; }
+    if [ -n "$owed" ] && [ "$timing" != judged ]; then
+        if owed_lifted "$head" "$owed"; then
+            echo "the last landing's timing is red ($owed); this landing's dev/MARCH.md names it: lifted"
+        else
+            echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing whose dev/MARCH.md names ${owed%% *} (a fix, or a Timing: correctness fix row) — refusing"; exit 1
+        fi
+    fi
     # the full matrix on the last landed head: gate.yml's newest run of it on a march/** or gate/** push
     # (by name, not --workflow, which finds only a workflow on the default branch; a gate.yml not yet
     # parsed is named by its path), read three times at most, never waited for
@@ -210,6 +220,12 @@ land)
     [ "$br" != "$MARCH" ] || { echo "land: $br is the march branch — refusing"; exit 1; }
     cd "$W"
     [ -z "$(git status --porcelain)" ] || { echo "land: $W has uncommitted or untracked files — refusing"; git status --short | awk 'NR <= 10'; exit 1; }
+    # the worktree's untracked Manifest.toml resolved for this Project.toml: a stale one names extensions
+    # WasmTarget no longer has, and a package image built over it fails (A20P23)
+    want=$(awk '/^\[extensions\]/ { f = 1; next } /^\[/ { f = 0 } f && NF { print $1 }' Project.toml | sort | tr '\n' ' ')
+    have=$([ -f Manifest.toml ] && awk '/^ *\[deps\.WasmTarget\.extensions\]/ { f = 1; next } /^ *\[/ { f = 0 } f && NF { print $1 }' Manifest.toml | sort | tr '\n' ' ' || true)
+    [ "$want" = "$have" ] ||
+        { echo "land: Manifest.toml's WasmTarget extensions ($have) are not Project.toml's ($want): julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
     step preflight
     # the hold: one landing at a time, and while it exists no other agent's Julia job starts (bin/jlrun
     # reads it); created only if absent, with this shell's pid, removed only by it
@@ -290,7 +306,10 @@ land)
     # a landing whose timing was judged red (its line SLOWER or FAILED, L198) is owed a judged green
     # run: the next landing lands only on one (a fix, or a `Timing: correctness fix` row)
     owed=$(tail -n 1 "$LOG" 2>/dev/null | awk -F'\t' "$OWED_AWK" || true)
-    [ -z "$owed" ] || echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run"
+    if [ -n "$owed" ] && owed_lifted HEAD "$owed"; then
+        echo "land: the last landing's timing is red ($owed); this branch's dev/MARCH.md names it: lifted"; owed=""
+    fi
+    [ -z "$owed" ] || echo "land: the last landing's timing is red ($owed): this landing lands only on a judged green run, or with a dev/MARCH.md row naming ${owed%% *}"
     # the gate to a verdict: a green run lands, a cold one whose checks pass included (its timing judged
     # by a warm run after the push, below) unless a judged run is owed; a no-verdict run once more after
     # 20 s; a red stops
@@ -334,11 +353,16 @@ land)
             set +e; bash dev/gate.sh --block --warm --base "$tip" 2>&1 | tee "$glog"; st=${PIPESTATUS[0]}; set -e
             step "judge-$k"
             rec=$(sed -n 's/^BLOCK .*→ \(dev\/\.block\/.*\.toml\)$/\1/p' "$glog")
-            failed=$([ -f "$rec" ] && sed -n 's/^timing_failed = \[\(.*\)\]$/\1/p' "$rec" | tr -d '",' || true)
+            field() { [ -f "$rec" ] && sed -n "s/^$1 = \[\(.*\)\]\$/\1/p" "$rec" | tr -d '",' || true; }
             case $st in
             0) if [ -f "$rec" ] && grep -qx 'timing = "judged"' "$rec"; then verdict_t=judged; break; fi
                grep -q '^BLOCK green (timing unjudged: the run was cold' "$glog" || break ;;
-            1) if grep -qx 'verdict_why = "a check fails"' "$rec"; then verdict_t="FAILED${failed:+ $failed}"; else verdict_t="SLOWER $failed"; fi
+            1) # FAILED for a check other than the ratchet's (the cold run judged the same tree's checks);
+               # otherwise the timing missed under the cap, SLOWER (a best) and OVER (a budget)
+               chk=$(field checks_failed | tr ' ' '\n' | grep -vx ratchet | tr '\n' ' ' | sed 's/ *$//' || true)
+               slow=$(field timing_slower); over=$(field timing_over)
+               if [ -n "$chk" ]; then verdict_t="FAILED $chk"
+               else verdict_t="${slow:+SLOWER $slow}${slow:+${over:+ }}${over:+OVER $over}"; verdict_t=${verdict_t:-unjudged}; fi
                break ;;
             *) break ;;
             esac
@@ -347,8 +371,8 @@ land)
         awk -F'\t' -v OFS='\t' -v n="$n" -v h="$head" -v t="$verdict_t" 'NR == n && $2 == h { $11 = t } { print }' "$LOG" > "$LOG.new"
         mv "$LOG.new" "$LOG"
         echo "land: the timing of ${head:0:8}: $verdict_t"
-        case $verdict_t in SLOWER* | FAILED*)
-            echo "land: its record is red and stands: the next landing lands only on a judged green run (a fix, or a Timing: correctness fix row; L198)" ;;
+        case $verdict_t in SLOWER* | OVER* | FAILED*)
+            echo "land: its record is red and stands: the next landing lands on a judged green run, or names ${head:0:8} in a dev/MARCH.md row (a fix, or a Timing: correctness fix row; L198)" ;;
         esac
     fi
     rm -f "$glog"
@@ -369,7 +393,10 @@ land)
         [ $judged -eq 0 ] || break
         unjudged=$((unjudged + 1))
     done
-    if [ "$unjudged" -gt 0 ]; then
+    owed=$(tail -n 1 "$LOG" | awk -F'\t' "$OWED_AWK" || true)
+    if [ -n "$owed" ]; then
+        echo "land: timing red ($owed): owed by the next landing, a judged green run or a dev/MARCH.md row naming ${owed%% *}"
+    elif [ "$unjudged" -gt 0 ]; then
         echo "land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm"
     else
         echo "land: timing judged"

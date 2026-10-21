@@ -898,7 +898,7 @@ end
 # numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
 # that; and over the last 5 lines no MARCH row names (by the commit's first 8 hex digits, the row
 # stating a slower landing's cause), the upper median of edit_to_landed_s over its target at most 1
-function l197_check(log::AbstractString, hist, march::AbstractString)
+function l197_check(log::AbstractString, hist, march::AbstractString; head::AbstractString = "")
     bad = String[]
     rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
     if !isempty(rows)
@@ -928,7 +928,9 @@ function l197_check(log::AbstractString, hist, march::AbstractString)
     end
     k == length(hist) || push!(bad, "$(length(hist) - k) commit(s) up to the march tip $(first(hist[end][1], 8)) landed with no line (dev/land.sh merge writes one per landing)")
     named(c) = any(l -> startswith(l, "| ") && occursin(first(c, 8), l), split(march, '\n'))
-    window = last(filter(x -> !named(x[1]), ratios), 5)
+    # the line of the commit being gated is never judged by its own gate: a landing's judgement after
+    # its push runs on the landed head, whose line is already written
+    window = last(filter(x -> !named(x[1]) && x[1] != head, ratios), 5)
     if !isempty(window)
         s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
         med <= 1 || push!(bad, "the median edit to landed of the last $(length(window)) landings no dev/MARCH.md row names is $(round(med; digits = 2)) times its target ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): name each slower landing's cause in a row, by its commit's first 8 hex digits")
@@ -942,8 +944,8 @@ function l198_check(log::AbstractString)
     bad = String[]
     for r in [split(l, '\t') for l in split(log, '\n') if !isempty(l)][2:end]
         t = length(r) >= 11 ? r[11] : ""
-        t in ("judged", "unjudged") || occursin(r"^(SLOWER|FAILED)( [a-z0-9.-]+)*$", t) ||
-            push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), not judged, unjudged, SLOWER <stages> or FAILED <stages>")
+        t in ("judged", "unjudged") || occursin(r"^(FAILED( [a-z0-9.-]+)+|SLOWER( [a-z0-9.-]+)+( OVER( [a-z0-9.-]+)+)?|OVER( [a-z0-9.-]+)+)$", t) ||
+            push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), not judged, unjudged, FAILED <stages>, SLOWER <stages> or OVER <stages>")
     end
     return bad
 end
@@ -4111,7 +4113,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v
         end),
-    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid: one landing at a time, and the agents' Julia scheduler starts no other job while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md without a `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation (CHARTER_AUTHORISED) whose clause holds every changed line (an edit changing only MARCH row numbers, L154's citations, exempt and named), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, the one landing path, which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: a log whose lines cover the history passes; a landing with no line, a slower median, a line out of order and an uncovered tip each fail; a slower landing a MARCH row names leaves the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid: one landing at a time, and the agents' Julia scheduler starts no other job while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md without a `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation (CHARTER_AUTHORISED) whose clause holds every changed line (an edit changing only MARCH row numbers, L154's citations, exempt and named), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, the one landing path, which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: a log whose lines cover the history passes; a landing with no line, a slower median, a line out of order and an uncovered tip each fail; a slower landing a MARCH row names leaves the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
         () -> begin
             local v = 0
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
@@ -4152,6 +4154,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                !isempty(first(l197_check(slow, hist, ""))),
                                # a slower landing a MARCH row names leaves the window: the other is the median
                                isempty(first(l197_check(slow, hist, "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |"))),
+                               # the gated commit's own line is out of its own window
+                               isempty(first(l197_check(slow, hist, ""; head = "cccccccc33"))),
                                !isempty(first(l197_check(gap, hist, ""))),
                                !isempty(first(l197_check(order, hist, ""))),
                                !isempty(first(l197_check(partial, hist, ""))),
@@ -4173,7 +4177,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                         local tip = readchomp(`git -C $ROOT rev-parse wt-p0-strict-hygiene`)
                         local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
                         local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
-                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, read(joinpath(ROOT, "dev", "MARCH.md"), String))
+                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, read(joinpath(ROOT, "dev", "MARCH.md"), String);
+                                                       head = readchomp(`git -C $ROOT rev-parse HEAD`))
                         foreach(b -> println("    ✗ L197: ", b), bad)
                         println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
                                 isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))
@@ -4186,7 +4191,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v
         end),
-    "L198_timing_is_recorded" => ("a landing whose timing the gate could not judge says so, and the streak of such landings is shown at every landing until a judged run ends it, never forgotten (Dale 2026-10-21; the machine's working floor is other work, so a cap that refused would stall the loop): the blocking gate leaves a run's timing ratchet unjudged on a machine more than FACTOR_CAP times slower than its best (L195: `timing = \"unjudged\"` in its record, `judged` otherwise), `dev/land.sh merge` writes the record's timing into the landing log's `timing` column (a record from before the rule judged), a cold run whose checks pass is green with its timing unjudged and `dev/land.sh land` lands on it, prints `LOOP <s> s` right after the push, then, still holding the machine, judges the timing by a warm run of the landed tree (`--base` the tip it landed on) and writes it into the landing's line: judged, unjudged, or SLOWER <stages> / FAILED <stages> (the record's `timing_failed`, its red record standing); after a line judged red the next landing lands only on a judged green run (`land` runs the gate once more rather than land a cold run, and `merge` refuses a record whose timing is not judged: a fix, or a `Timing: correctness fix` row, lands next); and `land` prints the unjudged streak, `timing unjudged for N landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm`: the log's last lines in a row whose timing is unjudged, counted newest first until one whose commit's tree has a green run with its timing judged recorded in any worktree. Here: those steps in dev/land.sh and dev/block.jl, every line of the main tree's landing log with a timing, and land.sh's own streak program run on fixed text: three unjudged lines after a judged one give those three newest first, a judged last line none, an empty log none; and its owed program: a last line SLOWER or FAILED names it, a judged or unjudged one and an empty log none. Negative-tested: the record's field, the streak's count, the owed program and the merge's refusal each broken fire it, and a planted SLOWER line made `dev/land.sh merge` refuse a cold-green record (dev/CHARTER.md C10)",
+    "L198_timing_is_recorded" => ("a landing whose timing the gate could not judge says so, and the streak of such landings is shown at every landing until a judged run ends it, never forgotten (Dale 2026-10-21; the machine's working floor is other work, so a cap that refused would stall the loop): the blocking gate leaves a run's timing ratchet unjudged on a machine more than FACTOR_CAP times slower than its best (L195: `timing = \"unjudged\"` in its record, `judged` otherwise), `dev/land.sh merge` writes the record's timing into the landing log's `timing` column (a record from before the rule judged), a cold run whose checks pass is green with its timing unjudged and `dev/land.sh land` lands on it, prints `LOOP <s> s` right after the push, then, still holding the machine, judges the timing by a warm run of the landed tree (`--base` the tip it landed on) and writes it into the landing's line: judged; unjudged (past the cap, busy, or only the ratchet's check failing); SLOWER <stages> and OVER <stages> for bests and budgets missed under the cap (the record's `timing_slower`, `timing_over`); FAILED <stages> for a check other than the ratchet's (`checks_failed`), its red record standing; after a line judged red the next landing lands on a judged green run (`land` runs the gate once more rather than land a cold run, and `merge` refuses a record whose timing is not judged) or carries a dev/MARCH.md row naming the red landing by its first 8 hex digits in its own tree (a fix, or a `Timing: correctness fix` row), which lifts the refusal, so no rule needs a quiet machine to be met; `land` refuses a worktree whose Manifest.toml names other WasmTarget extensions than Project.toml (a stale manifest's image build fails, A20P23), printing the resolve command; and `land` prints the unjudged streak, `timing unjudged for N landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm`: the log's last lines in a row whose timing is unjudged, counted newest first until one whose commit's tree has a green run with its timing judged recorded in any worktree. Here: those steps in dev/land.sh and dev/block.jl, every line of the main tree's landing log with a timing, and land.sh's own streak program run on fixed text: three unjudged lines after a judged one give those three newest first, a judged last line none, an empty log none; and its owed program: a last line SLOWER or FAILED names it, a judged or unjudged one and an empty log none. Negative-tested: the record's field, the streak's count, the owed program and the merge's refusal each broken fire it, and a planted SLOWER line made `dev/land.sh merge` refuse a cold-green record (dev/CHARTER.md C10)",
         () -> begin
             local v = 0
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
@@ -4197,8 +4202,12 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                          raw"                [ -f \"$f\" ] && grep -qx 'verdict = \"green\"' \"$f\" && grep -qx 'timing = \"judged\"' \"$f\" && judged=1",
                          raw"        [ $judged -eq 0 ] || break",
                          raw"        echo \"land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm\"",
-                         raw"OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|FAILED)/ { print substr($2, 1, 8) \" \" $11 }'",
-                         raw"    owed=$(tail -n 1 \"$LOG\" 2>/dev/null | awk -F'\t' \"$OWED_AWK\" || true)" * "\n" * raw"    [ -z \"$owed\" ] || [ \"$timing\" = judged ] ||",
+                         raw"OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) \" \" $11 }'",
+                         raw"owed_lifted() { git show \"$1:dev/MARCH.md\" 2>/dev/null | grep '^| 13\.' | grep -q \"${2:0:8}\"; }",
+                         raw"    owed=$(tail -n 1 \"$LOG\" 2>/dev/null | awk -F'\t' \"$OWED_AWK\" || true)" * "\n" * raw"    if [ -n \"$owed\" ] && [ \"$timing\" != judged ]; then" * "\n" * raw"        if owed_lifted \"$head\" \"$owed\"; then",
+                         raw"    if [ -n \"$owed\" ] && owed_lifted HEAD \"$owed\"; then",
+                         raw"               chk=$(field checks_failed | tr ' ' '\n' | grep -vx ratchet | tr '\n' ' ' | sed 's/ *$//' || true)",
+                         raw"    [ \"$want\" = \"$have\" ] ||",
                          raw"        0) if grep -q '^BLOCK green (timing unjudged: the run was cold' \"$glog\"; then",
                          raw"            set +e; bash dev/gate.sh --block --warm --base \"$tip\" 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
                          raw"        awk -F'\t' -v OFS='\t' -v n=\"$n\" -v h=\"$head\" -v t=\"$verdict_t\" 'NR == n && $2 == h { $11 = t } { print }' \"$LOG\" > \"$LOG.new\""]
@@ -4226,7 +4235,10 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     readchomp(`awk -F'\t' $(om[1]) $path`)
                 end
                 v += count(!, [owed(three * ln("eeeeeeee", "SLOWER probes ratchet")) == "eeeeeeee SLOWER probes ratchet",
-                               owed(three * ln("eeeeeeee", "FAILED")) == "eeeeeeee FAILED",
+                               owed(three * ln("eeeeeeee", "OVER total")) == "eeeeeeee OVER total",
+                               isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes OVER total"))),
+                               !isempty(l198_check(three * ln("eeeeeeee", "FAILED"))),
+                               owed(three * ln("eeeeeeee", "FAILED smoke-core")) == "eeeeeeee FAILED smoke-core",
                                isempty(owed(three)), isempty(owed(three * ln("eeeeeeee", "judged"))), isempty(owed(hd)),
                                isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes")))])
                 v += count(!, [streak(three) == ["dddddddd", "cccccccc", "bbbbbbbb"],

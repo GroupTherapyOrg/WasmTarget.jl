@@ -801,6 +801,12 @@ function main(args)
     # the stages whose timing failed (over a budget or slower than a best), by name: `dev/land.sh land`
     # writes them into the landing log when its warm run after a cold landing is red
     timing_failed = sort(unique(String[first(split(f, ':')) for f in judged_tfails]))
+    # the stages a check failed in, and the timing's two kinds judged under the cap (a budget missed:
+    # over; a best missed: slower), by name, for the landing log's judgement of a cold landing
+    stagename(f) = String(first(split(f, ':')))
+    checks_failed = sort(unique(stagename.(fails)))
+    timing_over = capped || cold ? String[] : sort(unique(stagename.(tfails)))
+    timing_slower = capped || cold ? String[] : sort(unique(stagename.(sfails)))
     why = verdict == "green" ? (cold ? "timing unjudged: the run was $runner_state" :
                                 capped ? "timing unjudged: machine factor $(round(factor; digits = 2)) past the cap of $FACTOR_CAP" : "") : verdict == "red" ? (isempty(fails) ? "over a budget or slower than a best" : "a check fails") :
           !isempty(efails) ? "the machine cannot judge" : cold ? "the run was $runner_state: rerun" :
@@ -838,7 +844,8 @@ function main(args)
     path = joinpath(RECORD_DIR, "$tree-$n.toml")
     record = Dict{String,Any}(
         "tree" => tree, "head" => head, "base" => base, "clean" => clean, "env_removed" => removed,
-        "verdict" => verdict, "verdict_why" => why, "timing" => timing, "timing_failed" => timing_failed, "failures" => vcat(fails, judged_tfails, efails), "notes" => notes,
+        "verdict" => verdict, "verdict_why" => why, "timing" => timing, "timing_failed" => timing_failed, "checks_failed" => checks_failed,
+        "timing_over" => timing_over, "timing_slower" => timing_slower, "failures" => vcat(fails, judged_tfails, efails), "notes" => notes,
         "run" => n, "finished" => round(time(); digits = 3), "runner_state" => runner_state,
         "total_wall" => round(total; digits = 2), "total_budget" => tb,
         "machine_factor" => round(factor; digits = 3), "calibration" => isnan(calib) ? 0.0 : round(calib; digits = 6),
