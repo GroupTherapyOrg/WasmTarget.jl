@@ -2524,12 +2524,12 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                         # Compile the tuple as an array
                         # First compile the tuple value
                         local _htb = _ctx_builder(ctx, "compile_call")
-                        emit_value!(_htb, obj_arg, ctx,
-                                    ConcreteRef(UInt32(info.wasm_type_idx), true))
+                        local _tuple_wasm = emit_value!(_htb, obj_arg, ctx,
+                                                        ConcreteRef(UInt32(info.wasm_type_idx), true))
 
                         # The struct is on the stack, we need to convert struct fields to array
-                        # Store in local, then create array from fields
-                        tuple_local = allocate_local!(ctx, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                        # Store in local (the type the emission pushed), then create array from fields
+                        tuple_local = allocate_local!(ctx, _tuple_wasm)
                         local_set!(_htb, tuple_local)
 
                         # Push all fields onto stack (account for typeId at field 0)
@@ -2613,9 +2613,9 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
 
                             local _hetb = _ctx_builder(ctx, "compile_call")
                             # tuple value → tuple_local
-                            emit_value!(_hetb, obj_arg, ctx,
-                                        ConcreteRef(UInt32(info.wasm_type_idx), true))
-                            tuple_local = allocate_local!(ctx, get_concrete_wasm_type(obj_type, ctx.mod, ctx.type_registry; for_local=true))
+                            local _het_tuple_wasm = emit_value!(_hetb, obj_arg, ctx,
+                                                                ConcreteRef(UInt32(info.wasm_type_idx), true))
+                            tuple_local = allocate_local!(ctx, _het_tuple_wasm)
                             local_set!(_hetb, tuple_local)
 
                             # index (1-based i64) → 0-based i32 → idx_local

@@ -1244,11 +1244,11 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         struct_rt = get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true)
 
         # Pop y struct to local
-        y_struct_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        y_struct_local = allocate_local!(ctx, struct_rt)
         local_set!(bld, y_struct_local)
 
         # Pop x struct to local
-        x_struct_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        x_struct_local = allocate_local!(ctx, struct_rt)
         local_set!(bld, x_struct_local)
 
         # Get y's hi part to check sign
@@ -1268,11 +1268,11 @@ function _compile_call_flipsign(args, fb::InstrBuilder, ctx::AbstractCompilation
         emit_int128_neg!(bld, ctx, arg_type)
 
         # Store negated x
-        neg_x_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        neg_x_local = allocate_local!(ctx, struct_rt)
         local_set!(bld, neg_x_local)
 
         # Allocate result local
-        result_local = allocate_local!(ctx, get_concrete_wasm_type(arg_type, ctx.mod, ctx.type_registry; for_local=true))
+        result_local = allocate_local!(ctx, struct_rt)
 
         # if is_neg { result = neg_x } else { result = x }
         local_get!(bld, is_neg_local)
