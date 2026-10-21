@@ -2717,3 +2717,48 @@ Landing times: 3911e790 142 s, 9d6cdedd 185 s, 24690061 2777 s (unexcused, A30E1
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A30E1-A30E6 are open on MARCH 13.18.
 A29S2 returns to 13.20, where C0's findings sit until a row may carry them (A30E3).
+
+## 2026-10-21 — audited through 9eb30016 (4f63d628..9eb30016: entry 30, one smoke corpus, the audit window read before the hold, the change's own stale pieces)
+
+The thirty-first audit covers 3c2e735c (entry 30; its author's), 0d2ab5b5 (the smoke cases moved, unchanged and in
+order, into test/smoke_corpus.jl; touched lines read with git's rename and copy detection; 1.A1's first half),
+6e061943 (`land` reads L148's window before its hold through dev/audit_window.sh, the ratchet's own program, and
+refuses a full one) and 9eb30016 (the staleness budget counts the change's own pieces among the moved ones; a file
+whose code a change leaves alone moves none, by Julia's own parse, A30E5). No wrong answer. Each landed head's record
+is green. A30E5 is fixed as 9eb30016 states. The corpus moved verbatim: the removed lines of test/smoke.jl and the added
+lines of test/smoke_corpus.jl differ by one three-line header comment and two blank lines. No red flag: no commit
+claims strictness or closure. Four findings: A31E1-A31E4.
+
+Area: builder — empty by diff: `git diff 4f63d628..9eb30016 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of 0d2ab5b5 (dev/block.jl, test/parity_ratchet.jl, test/registry_cases.jl,
+test/smoke.jl, test/smoke_corpus.jl), 6e061943 (dev/audit_window.sh, dev/land.sh, test/parity_ratchet.jl,
+test/lock_negatives.jl) and 9eb30016 (dev/block.jl, test/parity_ratchet.jl, test/lock_negatives.jl), and the red
+records of 945eef47 and 360cb793. (A31E1, high, intent band) 6e061943's preflight refuses the commit L148 exists to
+admit. It reads origin's last entry and adds the landing's own commits, so once five commits sit past the last
+audited-through commit, the audit entry that would empty the window counts as the sixth and is refused before its hold,
+and no later landing passes either: a deadlock that only a hand landing ends. Measured on origin/wt2 at 9eb30016:
+`bash dev/audit_window.sh . origin/wt2 1` reads "4f63d628 5 5 30"; with a fifth commit landed it would read 6, exit 1,
+for this entry. L148 itself reads the landing's own tree, where the new entry resets the count. The construction is the
+preflight reading the landing's own dev/AUDIT.md, the tree L148 judges. (A31E2, medium) 9eb30016 judges a map's
+staleness by the change's own pieces, but a map row is a fact of the whole tree: which cases run a piece changes when
+other code moves (a new caller, a collection rule, a dispatch reached), as 82a227bd's 55 pieces did. A change to a piece
+no landing moved now passes on a row measured before those landings, and a case that newly reaches it may go unselected.
+The 8-piece budget now bounds what the change alters, not what the selection may misread; the full matrix runs only at
+closure (A28E3's and A24S1's class: the selection's universe stays a gate-time staleness count). (A31E3, low) 1.A1 lands
+its corpus and not its driver: test/smoke.jl still calls WasmTarget.compile at its two sites, where 1.A1's row asks one
+driver parametrised by the compiler module; its exit, smoke counts and probe hashes identical to the base, is evidenced
+by 21 cases of two groups and the gate's core. The row stays open, as it should. (A31E4, low) Requirements and checks:
+6e061943's window has one program run by L148 and land, L148 also requiring its entry to equal L148's own chain
+reading, two readers of the last entry reconciled by a check; 9eb30016's decisions are pinned by L194 on fixed texts
+with a negative plant; 0d2ab5b5's one corpus has no check that cases live only in the corpus. None claims a
+construction.
+
+Landing times: 3c2e735c 135 s, judged; 0d2ab5b5, 6e061943 and 9eb30016 as the landing log records.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A31E1-A31E4 are open on MARCH 13.18.
+A31E1 is the loop lane's next fix: until it lands, every audit entry must land as the fifth commit at the latest.
