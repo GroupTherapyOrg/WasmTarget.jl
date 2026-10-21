@@ -13,12 +13,12 @@
 #       the last one is green, of exactly that commit, made on a clean tree, judging the change
 #       from the head's merge base with the march branch,
 #       and the main tree is clean; refuses while the last closure matrix (gate.yml's newest run on
-#       a dispatch, a gate/** push or a march/** head carrying `Closes: C<n>`) is red, its red the
-#       next item, naming it, and lands with a WARNING, written into the record, while that run has
-#       not finished or there is none; then fast-forwards the march branch to it from the main tree,
-#       pushes it, and pushes the head to march/<branch-leaf>, where gate.yml runs the full matrix
-#       when its commit carries `Closes: C<n>`, non-blocking; appends the landing's line to the
-#       landing log (below).
+#       a dispatch, a gate/** push or a push of the march branch whose head carries `Closes: C<n>`)
+#       is red, its red the next item, naming it, and lands with a WARNING, written into the record,
+#       while that run has not finished or there is none; then fast-forwards the march branch to it
+#       from the main tree and pushes it, the landing's one push (gate.yml runs the full matrix on
+#       that push when its head carries `Closes: C<n>`, non-blocking); appends the landing's line to
+#       the landing log (below).
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
 #       a dirty tree; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
@@ -58,7 +58,7 @@
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
 # holds a landing: the last closure matrix's verdict is read, never waited for. The one
-# final full gate before PR #122 merges is `bash dev/gate.sh` on the exact merge head.
+# final full gate before PR #128 merges is `bash dev/gate.sh` on the exact merge head.
 set -euo pipefail
 MARCH=${WT_MARCH_BRANCH:-wt2}
 # the main tree: the worktree holding the march branch (the one `merge` fast-forwards), whichever
@@ -222,7 +222,7 @@ merge)
         fi
     fi
     # the last closure matrix (the full matrix runs only at clause closure, Dale 2026-10-21): gate.yml's
-    # newest run on a dispatch, a gate/** push, or a march/** push whose head commit carries a
+    # newest run on a dispatch, a gate/** push, or a push of the march branch whose head commit carries a
     # `Closes: C<n>` line (read from the commit itself, not the run's name), by workflow name, not
     # --workflow, which finds only a workflow on the default branch (a gate.yml not yet parsed is named
     # by its path), read three times at most, never waited for
@@ -231,7 +231,7 @@ merge)
     runs=""
     for k in 1 2 3; do
         runs=$(gh run list --limit 200 --json databaseId,status,conclusion,workflowName,event,headBranch,headSha \
-            --jq '[.[] | select((.event == "workflow_dispatch" or (.event == "push" and ((.headBranch | startswith("march/")) or (.headBranch | startswith("gate/")))))
+            --jq '[.[] | select((.event == "workflow_dispatch" or (.event == "push" and ((.headBranch == "'"$MARCH"'") or (.headBranch | startswith("gate/")))))
                                 and (.workflowName == "Gate" or .workflowName == ".github/workflows/gate.yml"))]
                   | sort_by(.databaseId) | reverse | .[] | "\(.status):\(.conclusion // ""):\(.databaseId):\(.headSha):\(.event):\(.headBranch)"' 2>/dev/null) && break
         runs=""; [ $k -lt 3 ] && sleep $((k * 10))
@@ -275,9 +275,9 @@ merge)
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
         "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
         "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "${landed%.*}" "$author")" "$files" "$ins" "$timing" >> "$LOG"
-    # the full matrix on the landed head, non-blocking (gate.yml runs on march/**)
-    git push -q --force origin "$head:refs/heads/march/$leaf"
-    echo "landed $br @ ${head:0:8} on $MARCH; the full matrix: gh run list --branch march/$leaf"
+    # the landing's one push is the march branch's, above: gate.yml runs the full matrix on it when its
+    # head carries `Closes: C<n>` (no other ref is pushed, L153)
+    echo "landed $br @ ${head:0:8} on $MARCH"
     ;;
 land)
     # bash reads this whole case statement before it runs any of it, and every way out of this arm

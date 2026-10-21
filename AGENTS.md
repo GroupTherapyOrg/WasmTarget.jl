@@ -45,7 +45,7 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 | Layer | Command |
 |---|---|
 | the landing gate, at most 60 s, local | `bash dev/gate.sh --block` (L194, L195) |
-| full matrix at clause closure (`Closes: C<n>`), #122's merge head, dispatch | `bash dev/gate.sh` |
+| full matrix at clause closure (`Closes: C<n>`), #128's merge head, dispatch | `bash dev/gate.sh` |
 | CI, Formal models, Downstream: the same triggers, never a plain landing | `.github/workflows` |
 | locks, ratchets, charter status | `julia --project=. test/parity_ratchet.jl` |
 | differential smoke | `julia --project=. test/smoke.jl [group]` |

@@ -10,8 +10,8 @@
 #       lands on. No CI.
 #
 # Without --block: the full matrix on CI's runners, never a landing's gate: it runs at clause
-# closure (gate.yml on a march/** head carrying `Closes: C<n>`, non-blocking), and the one final
-# full gate before PR #122 merges is this command on the exact merge head. It pushes a commit to
+# closure (gate.yml on a wt2 head carrying `Closes: C<n>`, non-blocking), and the one final
+# full gate before PR #128 merges is this command on the exact merge head. It pushes a commit to
 # gate/<name>, where .github/workflows/gate.yml runs every lane of `bash dev/lanes.sh`'s default run as its own job
 # (the first red job cancels the rest), waits for the run, and prints one verdict line per lane,
 # the slowest lane job against the budget gate.yml's lane timeout sets (a job the budget cut off is

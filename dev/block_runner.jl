@@ -41,7 +41,7 @@
 # methods a check adds to Base's or WasmTarget's functions, WasmTarget's own globals, packages
 # loaded by an earlier request, the session's threads. Should Main's `using` list still differ
 # from its start at a request (the reset failing), the server restarts rather than run the check
-# where a name it defines again is ambiguous between two modules, which a fresh process never sees. The final evidence before PR #122 merges is
+# where a name it defines again is ambiguous between two modules, which a fresh process never sees. The final evidence before PR #128 merges is
 # the full matrix, fresh processes on CI's runners.
 #
 # Wire (client -> server): u32 nfields, then per field u32 len + bytes:

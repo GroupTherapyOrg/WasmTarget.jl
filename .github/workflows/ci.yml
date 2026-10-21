@@ -3,16 +3,18 @@ name: CI
 on:
   push:
     # the full matrix's triggers (gate.yml; Dale 2026-10-21: large-scale runs only when a full clause is
-    # closed out): a march/** head whose commit carries a `Closes: C<n>` line, a gate/** push (PR #122's
-    # merge head, `bash dev/gate.sh`) and a dispatch; a plain march/** push, a landing, runs nothing.
+    # closed out): a push of wt2, the march branch `dev/land.sh land` pushes, whose head commit carries a
+    # `Closes: C<n>` line, a gate/** push (PR #128's merge head, `bash dev/gate.sh`) and a dispatch; any
+    # other wt2 push, a landing, runs nothing.
     # Every job with no `needs:` runs only under the closure predicate, gate.yml's run-name's and closure
     # job's text (L153); the pull request, whose branch every landing pushes, triggers nothing (A23E4)
-    branches: ['gate/**', 'march/**']
+    branches: ['gate/**', 'wt2']
   workflow_dispatch:
 
-# Only the newest push per branch runs; a superseded run is cancelled.
+# Only the newest push per branch runs; a superseded run is cancelled. A wt2 push's run is its head's
+# own group: every landing pushes wt2, and a later landing's push never cancels a closure matrix.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref == 'refs/heads/wt2' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:

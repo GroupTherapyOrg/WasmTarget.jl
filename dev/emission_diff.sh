@@ -3,7 +3,7 @@
 # body the head emits for a smoke case and the merge base does not must have been entered by a
 # passing differential case (at function entry). The head's side is smoke on Julia 1.12 (`dev/lanes.sh
 # --lane smoke` sets WT_EMISSION_DIR). It runs in gate.yml's matrix alone, non-blocking: on every
-# landed head (its march/** push) and on a `bash dev/gate.sh` run, never in a landing's gate. The
+# landed head (its wt2 push) and on a `bash dev/gate.sh` run, never in a landing's gate. The
 # base's side is computed once per landed head: gate.yml's run of a commit publishes its own smoke
 # rows as that commit's base file, a long-retention artifact named by the key below; a run whose
 # base no run published fails, naming the key, until `bootstrap` publishes it. Only when src, ext

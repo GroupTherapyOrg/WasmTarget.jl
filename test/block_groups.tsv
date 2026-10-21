@@ -21,7 +21,7 @@
 # generated groups, whose blocking sample is its registry_sample group (Amendment 117-14: split,
 # never exempt), and entered_paths, which exists for a matrix-only check (the emission-diff check's
 # Base paths, L190). Every probe, group and QA family still runs on every landed head (non-blocking:
-# gate.yml on march/**). `measured`: the src tree measured; a change to src/ fails the gate when
+# gate.yml on wt2). `measured`: the src tree measured; a change to src/ fails the gate when
 # more than 8 pieces of src (dev/block.jl STALE_PIECES) changed between it and the change's base,
 # when this repository does not hold it, or when a changed line of code lies in no piece, and a
 # change to ext/, which no map measures, fails (A20C13): the re-record runs off the landing path and

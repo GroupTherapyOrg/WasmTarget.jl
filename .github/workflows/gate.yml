@@ -5,15 +5,15 @@ name: Gate
 # the script calls them), Node from ci.yml's node-version, wasm-tools, Java 17 for TLC. The
 # first red job cancels the rest (fail-fast), as the script stops at the first red lane.
 # It runs at clause closure only (Dale, 2026-10-21: large-scale runs happen only when a full clause
-# is closed out): on a march/** push whose head commit carries a `Closes: C<n>` line (the commit that
+# is closed out): on a push of wt2, the march branch, whose head commit carries a `Closes: C<n>` line (the commit that
 # closes clause n; dev/hooks/commit-msg and `dev/land.sh land` refuse that line unless the ratchet
 # reads C<n> CLOSED on its tree), on a gate/** push and on workflow_dispatch; every other push runs
 # the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/land.sh
-# land` pushes each landed head to march/<name> (ci.yml, formal.yml and downstream.yml trigger
+# land` pushes wt2 and nothing else, each landing one push (ci.yml, formal.yml and downstream.yml trigger
 # exactly as this file does, under the same closure predicate, A23E4), refuses while the last closure matrix (the newest
 # run named "Gate closure") is red, its red the next item, and is never gated by it (a landing's
 # gate is `bash dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
-# verdict: the one final full gate before PR #122 merges is that run on the exact merge head.
+# verdict: the one final full gate before PR #128 merges is that run on the exact merge head.
 # The parts are sized from measured job times (each lane's
 # work under ~12 min on ubuntu-latest): smoke in 2 parts per version, registry coverage in 2 (and
 # a merge job for its verdict), TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
@@ -34,7 +34,7 @@ name: Gate
 # 5 fuzz parts. B is lowered, never raised: a lane past it is split or rebalanced first.
 on:
   push:
-    branches: ['gate/**', 'march/**']
+    branches: ['gate/**', 'wt2']
   workflow_dispatch:
 
 # the run's name says whether this run is a closure matrix ("Gate closure", what `dev/land.sh land`
@@ -45,9 +45,10 @@ on:
 run-name: >-
   ${{ (github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"')))) && 'Gate closure' || 'Gate (no closure)' }}
 
-# Only the newest push per branch runs; a superseded run is cancelled.
+# Only the newest push per branch runs; a superseded run is cancelled. A wt2 push's run is its head's
+# own group: every landing pushes wt2, and a later landing's push never cancels a closure matrix.
 concurrency:
-  group: gate-${{ github.ref }}
+  group: gate-${{ github.ref == 'refs/heads/wt2' && github.sha || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -59,7 +60,7 @@ defaults:
     shell: bash
 
 jobs:
-  # the full matrix runs only at clause closure: a dispatch, a gate/** push, or a march/** push whose
+  # the full matrix runs only at clause closure: a dispatch, a gate/** push, or a wt2 push whose
   # head commit carries a `Closes: C<n>` line; any other push stops here and says so
   closure:
     runs-on: ubuntu-latest
