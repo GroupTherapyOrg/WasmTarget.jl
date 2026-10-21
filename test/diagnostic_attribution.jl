@@ -132,7 +132,7 @@ end
     b = WasmTarget._ctx_builder(ctx, "funnel_negative")
     WasmTarget.f64_const!(b, 1.5)
     err = try
-        WasmTarget.convert_type!(b, WasmTarget.F64, WasmTarget.I64, ctx)
+        WasmTarget.convert_type!(b, WasmTarget.F64, WasmTarget.I64, ctx; from_julia=nothing)
         nothing
     catch e
         e
@@ -140,6 +140,24 @@ end
     @test err isa WasmTarget.WasmCompileError
     @test occursin("no numeric conversion from F64 to I64", sprint(showerror, err))
     @test length(ctx.diagnostics) == 1 && ctx.diagnostics[1].stmt_idx == 1
+end
+
+@testset "diagnostics: a class stated for a value is narrower than the value's own type" begin
+    # emit_value_as! and _emit_value_static! state a class the funnel boxes and casts by; one the
+    # value's own type (value_type, a literal's value) does not admit raises, never converts it
+    ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
+    mkctx() = (c = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
+                   translator=WasmTarget.Translator(WasmTarget.trim_compile_plan(Any[(identity, (Float64,), "identity")]), nothing; options=WasmTarget.CompilerOptions(), diagnostics=nothing), mi=nothing);
+               c.current_stmt_idx = 1; c)
+    local ctx = mkctx()
+    local b = WasmTarget._ctx_builder(ctx, "stated_class")
+    # the argument is a Float64: Int64 is no class of it, a literal 1.5 no Int64
+    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.AnyRef, Int64)
+    @test_throws ErrorException WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.AnyRef, Int64)
+    # its own class, and a literal's, are admitted
+    ctx = mkctx(); b = WasmTarget._ctx_builder(ctx, "stated_class")
+    @test WasmTarget.emit_value_as!(b, WasmTarget.NirArgument(2), ctx, WasmTarget.F64, Float64) === WasmTarget.F64
+    @test WasmTarget.emit_value_as!(b, WasmTarget.NirLiteral(1.5), ctx, WasmTarget.F64, Float64) === WasmTarget.F64
 end
 
 @testset "diagnostics: the one widening check rejects a source type that names no class (A7E4, Coercion.tla NoUnclassedWidening)" begin
@@ -178,7 +196,7 @@ end
     ctx, b = mk()
     WasmTarget.ref_null!(b, WasmTarget.FuncRef)
     err = try
-        WasmTarget.convert_type!(b, WasmTarget.FuncRef, WasmTarget.AnyRef, ctx)
+        WasmTarget.convert_type!(b, WasmTarget.FuncRef, WasmTarget.AnyRef, ctx; from_julia=nothing)
         nothing
     catch e
         e
@@ -189,13 +207,13 @@ end
     # (this pair emitted NOTHING before the model was checked)
     ctx, b = mk()
     WasmTarget.ref_null!(b, WasmTarget.AnyRef)
-    WasmTarget.convert_type!(b, WasmTarget.AnyRef, WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.StructRef)), ctx)
+    WasmTarget.convert_type!(b, WasmTarget.AnyRef, WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.StructRef)), ctx; from_julia=nothing)
     @test b.instrs[end] isa WasmTarget.InstrIR.RefCastAbstract && !b.instrs[end].nullable
     @test b.v.stack[end] == WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.StructRef))
     # externref (nullable) → (ref extern): the bridge is not needed, only a null check
     ctx, b = mk()
     WasmTarget.ref_null!(b, WasmTarget.ExternRef)
-    WasmTarget.convert_type!(b, WasmTarget.ExternRef, WasmTarget.NonNullExternRef, ctx)
+    WasmTarget.convert_type!(b, WasmTarget.ExternRef, WasmTarget.NonNullExternRef, ctx; from_julia=nothing)
     @test b.instrs[end] isa WasmTarget.InstrIR.RefAsNonNull
 end
 

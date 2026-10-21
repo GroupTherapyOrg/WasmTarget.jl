@@ -1311,12 +1311,14 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                         # Find the return phi local: look at the destination block
                         # for a ReturnNode whose value is a phi with a phi_local.
                         ret_local = nothing
+                        ret_value = nothing   # the returned value, whose own type a conversion reads
                         dest_start = blocks[dest_block].start_idx
                         dest_end = blocks[dest_block].end_idx
                         for di in dest_start:dest_end
                             s = nir[di].node
                             if s isa NirReturn && s.value isa NirSSA
                                 vid = s.value.id
+                                ret_value = s.value
                                 if haskey(ctx.phi_locals, vid)
                                     ret_local = ctx.phi_locals[vid]
                                     break
@@ -1345,11 +1347,12 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                                 # narrower than the function result (Int32 return
                                 # value in a function whose rettype widened to
                                 # Union{Int32,Int64} → i64). Mirror the numeric
-                                # conversions of the in-block ReturnNode handler.
-                                _rl_arr = Int(ret_local) - ctx.n_params + 1
-                                _rl_wasm = _rl_arr >= 1 && _rl_arr <= length(ctx.locals) ?
-                                           ctx.locals[_rl_arr] : nothing
-                                coerce_stack_top!(b, func_ret_wasm, ctx)
+                                # conversions of the in-block ReturnNode handler, typed by
+                                # the returned value's own type when it is one class (a
+                                # number bound for a reference result is boxed under it)
+                                local _rv_jt = value_type(ctx, ret_value)
+                                coerce_stack_top!(b, func_ret_wasm, ctx;
+                                                  from_julia=isconcretetype(_rv_jt) ? _rv_jt : nothing)
                             end
                             return_!(b)
                         else

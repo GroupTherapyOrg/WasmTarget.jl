@@ -137,16 +137,24 @@
 (* typed by the join of the writes of the captor bodies collected yet, and *)
 (* a captor a later round collects can widen it (a writer reached through  *)
 (* a dynamic call, collected by the round's own dynamic step after its     *)
-(* scan). A TypedRetargets site <<original, replacement, captor>> selects  *)
-(* the replacement only while the captor is not collected. The scan        *)
-(* recomputes every such site each round from the :invoke's original      *)
-(* MethodInstance (ReType), so the IR at the fixpoint holds the target the *)
-(* final world's typing selects (RetargetsSound). InPlaceRetarget = TRUE   *)
+(* scan). The typing narrows too: a captured field erased while its        *)
+(* creator is outside the world (its base unknown) is concrete once a      *)
+(* later round collects the creator, and only then is the site exact. A    *)
+(* TypedRetargets site <<original, replacement, body, direction>> selects  *)
+(* the replacement only while `body` (a captor) is not collected           *)
+(* (direction "widen"), or only once `body` (the creator) is collected     *)
+(* ("narrow"). The scan recomputes every such site each round from the     *)
+(* :invoke's original MethodInstance (ReType), so the IR at the fixpoint   *)
+(* holds exactly the targets the final world's typing selects, in both     *)
+(* directions (RetargetsSound). InPlaceRetarget = TRUE                     *)
 (* is the code before (a retarget made under a round's typing is kept by   *)
 (* every later round, whose operand is no longer exact and so keeps the    *)
 (* IR's stale target): the narrow body is called with the wider value, a   *)
-(* trap where Julia answers. Both are definitions an instance's cfg        *)
-(* overrides; every other instance has no typed site.                      *)
+(* trap where Julia answers. ReTypeOnlyRestores = TRUE recomputes a site   *)
+(* only to undo a retarget, never to make one a later round's typing       *)
+(* selects: a narrowing site keeps calling the original. All three are     *)
+(* definitions an instance's cfg overrides; every other instance has no    *)
+(* typed site.                                                             *)
 (*                                                                         *)
 (* REASONS. Every collected body has the reason it entered the world,      *)
 (* recorded by the collector as it follows the edge, candidate or root     *)
@@ -280,12 +288,15 @@ vars == <<collected, discarded, status, steps, pruned, invokeScanned, invokeSeen
           superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned, narrowed>>
 
 (* The round-dependent typing (an instance's cfg overrides both):          *)
-(* TypedRetargets[m] holds <<original, replacement, captor>>: m's :invoke  *)
-(* of original (in InvokeEdges[m]) has exact operands, and retargets to    *)
-(* replacement, while captor is not collected; InPlaceRetarget = TRUE      *)
-(* keeps a retarget once made (broken).                                    *)
+(* TypedRetargets[m] holds <<original, replacement, body, direction>>: m's *)
+(* :invoke of original (in InvokeEdges[m]) has exact operands, and         *)
+(* retargets to replacement, while body is not collected ("widen") or once *)
+(* it is ("narrow"); InPlaceRetarget = TRUE keeps a retarget once made,    *)
+(* ReTypeOnlyRestores = TRUE makes none after a body's first scan (both    *)
+(* broken).                                                                *)
 TypedRetargets  == [m \in Methods |-> {}]
 InPlaceRetarget == FALSE
+ReTypeOnlyRestores == FALSE
 
 ----------------------------------------------------------------------------
 HiddenTargets(m)  == {p[1] : p \in HiddenEdges[m]}
@@ -300,12 +311,16 @@ CurrentInvoke(m) == IF m \in invokeScanned THEN FinalInvoke(m) ELSE InvokeEdges[
 AllOriginals     == UNION {Originals(m) : m \in Methods}
 
 (* the typed sites of m the current world's typing retargets *)
-Wanted(m)    == {<<m, t[1], t[2], t[3]>> : t \in {u \in TypedRetargets[m] : u[3] \notin collected}}
+Wanted(m)    == {<<m, t[1], t[2], t[3]>> : t \in {u \in TypedRetargets[m] :
+                    IF u[4] = "narrow" THEN u[3] \in collected ELSE u[3] \notin collected}}
 (* the typed sites of m its IR holds retargeted now *)
 AppliedAt(m) == {x \in narrowed : x[1] = m}
 (* what a scan of m leaves in its IR: recomputed from the originals, or (InPlaceRetarget, *)
 (* broken) the retargets made before kept                                                *)
 Retyped(m)   == IF InPlaceRetarget THEN AppliedAt(m) \cup Wanted(m) ELSE Wanted(m)
+(* what a later round's recomputation leaves: Retyped, or (ReTypeOnlyRestores, broken) only the *)
+(* retargets already made that the typing still selects                                         *)
+ReTyped(m)   == IF ReTypeOnlyRestores THEN AppliedAt(m) \cap Retyped(m) ELSE Retyped(m)
 (* the replacements a set of retargeted sites calls *)
 Replacements(N) == {x[3] : x \in N}
 
@@ -445,11 +460,11 @@ ReType(m) ==
     /\ CeilingOpen
     /\ ~PrunePending
     /\ m \in invokeScanned
-    /\ Retyped(m) # AppliedAt(m)
-    /\ LET proposals == Replacements(Retyped(m)) \ invokeSeen
-       IN  /\ narrowed' = (narrowed \ AppliedAt(m)) \cup Retyped(m)
+    /\ ReTyped(m) # AppliedAt(m)
+    /\ LET proposals == Replacements(ReTyped(m)) \ invokeSeen
+       IN  /\ narrowed' = (narrowed \ AppliedAt(m)) \cup ReTyped(m)
            /\ invokeSeen' = invokeSeen \cup proposals
-           /\ reasoned' = reasoned \cup Replacements(Retyped(m))
+           /\ reasoned' = reasoned \cup Replacements(ReTyped(m))
            /\ Enroll(proposals)
     /\ UNCHANGED <<pruned, invokeScanned, superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>
 
@@ -527,7 +542,7 @@ Finish ==
     /\ collected \subseteq invokeScanned
     /\ collected \subseteq fmaScanned
     /\ ~DynamicWorkAvailable
-    /\ \A m \in invokeScanned : Retyped(m) = AppliedAt(m)
+    /\ \A m \in invokeScanned : ReTyped(m) = AppliedAt(m)
     /\ status' = "Done"
     /\ UNCHANGED <<collected, discarded, steps, pruned, invokeScanned, invokeSeen,
                    superseded, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots, reasoned, narrowed>>
@@ -611,7 +626,7 @@ Idempotence == status = "Done" =>
     /\ collected \subseteq invokeScanned
     /\ collected \subseteq fmaScanned
     /\ ~DynamicWorkAvailable
-    /\ \A m \in invokeScanned : Retyped(m) = AppliedAt(m)
+    /\ \A m \in invokeScanned : ReTyped(m) = AppliedAt(m)
 
 (* (6) NoGarbage, minimality in EVERY state: nothing outside Reachable is  *)
 (* collected. The code does not guarantee it: a materialized dead original *)
@@ -640,11 +655,14 @@ LeavesNeverCollected == collected \cap ExternalLeaves = {}
 (* edge names it, so no reason does.                                       *)
 ReasonsComplete == status = "Done" => collected \subseteq reasoned
 
-(* (10) RetargetsSound: at the fixpoint no :invoke calls a replacement the *)
-(* final world's typing does not select: every typed site the IR holds     *)
-(* retargeted has its captor outside the world (MCClosedWorldTyping;       *)
-(* its InPlaceRetarget variant breaks it).                                 *)
-RetargetsSound == status = "Done" => \A x \in narrowed : x[4] \notin collected
+(* (10) RetargetsSound: at the fixpoint the IR holds exactly the retargets *)
+(* the final world's typing selects: no :invoke calls a replacement it     *)
+(* does not select (a "widen" site whose captor is collected,              *)
+(* MCClosedWorldTyping, broken by its InPlaceRetarget variant), and every  *)
+(* site it selects is retargeted (a "narrow" site whose creator a later    *)
+(* round collects, MCClosedWorldTypingNarrow, broken by its                *)
+(* ReTypeOnlyRestores variant).                                            *)
+RetargetsSound == status = "Done" => narrowed = UNION {Wanted(m) : m \in invokeScanned}
 
 (* Support invariant: the worklist is genuinely finite -- each enrolling   *)
 (* scan adds a body `invoke_seen`, `seen_disp` or an fma root admits once, *)

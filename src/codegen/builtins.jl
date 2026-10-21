@@ -386,22 +386,19 @@ function memoryref_offset_is_zero(ctx::AbstractCompilationContext, ref::NirNode)
 end
 
 """
-    emit_memoryref_mem!(b, ctx, ref[, expected; from_julia]) -> b
+    emit_memoryref_mem!(b, ctx, ref) -> b
 
-Push the Memory (the raw wasm array) of MemoryRef operand `ref`, coerced to `expected`
-when one is given. `temp_map` substitutes a phi's saved local on a phi edge.
+Push the Memory (the raw wasm array) of MemoryRef operand `ref` at its own array type (a
+caller converts it through coerce_stack_top!, its Julia type memoryref_memory_type's).
+`temp_map` substitutes a phi's saved local on a phi edge.
 parity(sdk/lib/_internal/wasm/common/typed_data.dart:2442 WasmI8ArrayBase._data)
 """
-function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode,
-                             expected::Union{WasmValType,Nothing}=nothing;
-                             from_julia::Union{Type,Nothing}=nothing,
+function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, ref::NirNode;
                              temp_map::Dict{Int,Int}=Dict{Int,Int}())::InstrBuilder
     kind, src = _memoryref_source(ctx, ref)
     if kind === :zero
-        # a MemoryRef at offset 0 is its memory, at its own array type unless the caller names one
-        emit_value!(b, ref, ctx, expected === nothing ? static_wasm_type(ref, ctx) : expected;
-                    from_julia=from_julia)
-        return b
+        # a MemoryRef at offset 0 is its memory, at its own array type
+        emit_value!(b, ref, ctx, static_wasm_type(ref, ctx))
     elseif kind === :boxed
         _emit_memoryref_box_field!(b, ctx, src, UInt32(2))
     elseif kind === :indexed
@@ -413,8 +410,20 @@ function emit_memoryref_mem!(b::InstrBuilder, ctx::AbstractCompilationContext, r
         local mem_lit = NirLiteral(getfield(src, :mem))
         emit_value!(b, mem_lit, ctx, static_wasm_type(mem_lit, ctx))
     end
-    expected === nothing || coerce_stack_top!(b, expected, ctx; from_julia=from_julia)
     return b
+end
+
+"""
+    memoryref_memory_type(T) -> Type
+
+The Memory a MemoryRef of type `T` points into (`GenericMemoryRef{a,E,s}`'s
+`GenericMemory{a,E,s}`), a Memory type itself: the Julia type of emit_memoryref_mem!'s value.
+parity(quarantine: Julia's GenericMemoryRef is an (array, index) pair; dart has no interior array reference.)
+"""
+function memoryref_memory_type(@nospecialize(T))::Type
+    T isa DataType && T <: Core.GenericMemory && return T
+    (T isa DataType && T <: Core.GenericMemoryRef) || error("$(T) is no MemoryRef or Memory")
+    return Core.GenericMemory{T.parameters...}
 end
 
 """
@@ -896,13 +905,13 @@ function _emit_memoryrefnew_boundscheck!(b::InstrBuilder, ctx::AbstractCompilati
     # with its offset.
     base_type = value_type(ctx, base)
     if base_type isa DataType && base_type <: GenericMemory
-        emit_value!(b, base, ctx, AnyRef; from_julia=base_type)
+        emit_value_as!(b, base, ctx, AnyRef, base_type)
     else
         base_type isa DataType && base_type <: Core.GenericMemoryRef && isconcretetype(base_type) ||
             error("memoryrefnew's base is neither a Memory nor a concrete MemoryRef: $base_type")
         emit_memoryref_box!(b, ctx, base, base_type)
     end
-    emit_value!(b, index, ctx, AnyRef; from_julia=Int64)
+    emit_value_as!(b, index, ctx, AnyRef, Int64)
     struct_new!(b, error_info.wasm_type_idx)
     emit_throw_value!(b, ctx.mod, ctx.type_registry)
     end_block!(b)
@@ -1217,7 +1226,7 @@ end
 # thrown through the one (exn, trace) tag, stashed in the exception global as every
 # WT throw site does.
 function _emit_throw_value!(b::InstrBuilder, ctx::AbstractCompilationContext, exn::Exception)::InstrBuilder
-    emit_value!(b, NirLiteral(exn), ctx, AnyRef; from_julia=typeof(exn))   # a host exception value: the explicit literal node
+    emit_value_as!(b, NirLiteral(exn), ctx, AnyRef, typeof(exn))   # a host exception value: the explicit literal node
     emit_throw_value!(b, ctx.mod, ctx.type_registry)
     return b
 end
@@ -1461,13 +1470,11 @@ function _lower_compilerbarrier!(b, fb, ctx, call, idx, args, callee)::InstrBuil
     # type is a supertype of the value's, so the value is emitted in the statement's
     # representation, a boxed value carrying its own class (Base.inferencebarrier)
     length(args) == 2 || error("compilerbarrier takes a kind and a value, got $(length(args)) operands")
-    local vt = value_type(ctx, args[2])
     local li = get(ctx.ssa_locals, idx, nothing)
     local target = (li !== nothing && 1 <= li - ctx.n_params + 1 <= length(ctx.locals)) ?
         ctx.locals[li - ctx.n_params + 1] :                      # the local, before any narrowing
-        static_wasm_type(NirSSA(idx, get(ctx.ssa_types, idx, vt)), ctx)
-    emit_value!(fb, args[2], ctx, target;
-                from_julia=(vt isa DataType && isconcretetype(vt)) ? vt : nothing)
+        static_wasm_type(NirSSA(idx, get(ctx.ssa_types, idx, value_type(ctx, args[2]))), ctx)
+    emit_value!(fb, args[2], ctx, target)
     return append_builder!(b, fb)
 end
 
@@ -1687,18 +1694,22 @@ for a null `nothing` where the static type admits Nothing, Nothing's id.
 A closure of any class is its object (maybe_wrap_closure!), whose header names its class.
 parity(code_generator.dart:6076 loadClassId)
 """
-function emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T);
-                        arrays::Bool=true)::InstrBuilder
-    local reg = ctx.type_registry
+emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T); arrays::Bool=true)::InstrBuilder =
+    emit_class_id!(b, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w), T; arrays)
+# parity(code_generator.dart:6076 loadClassId): the same read in a function a module builds
+# with no compilation context (a selector caller), its scratch declared through `alloc`
+function emit_class_id!(b::InstrBuilder, mod::WasmModule, reg::TypeRegistry, alloc::Function,
+                        @nospecialize(T); arrays::Bool)::InstrBuilder
     local base_idx = reg.base_struct_idx
-    local bare = arrays ? bare_array_partition(ctx.mod, reg, T).told : Tuple{Type,UInt32}[]
+    base_idx === nothing && throw(ArgumentError("a class read needs the class base struct"))
+    local bare = arrays ? bare_array_partition(mod, reg, T).told : Tuple{Type,UInt32}[]
     # `nothing` may be the null reference, which has no header: its class is Nothing's, read
     # before the header as dart branches on null before loadClassId (A11E2: the read trapped
     # where Julia throws a MethodError)
     local nid = get_type_id(reg, Nothing)
     local nullable = nid > 0 && (T === nothing || Nothing <: T)
     isempty(bare) && !nullable && return emit_typeof!(b, base_idx)
-    local v = allocate_local!(ctx, AnyRef)
+    local v = alloc(AnyRef)
     local_set!(b, v)
     local done = block!(b; results=WasmValType[I32])
     if nullable
@@ -1915,8 +1926,7 @@ end
 # parity(types.dart:527 emitAsCheck)
 function _lower_typeassert!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuilder,Nothing}
     length(args) == 2 || return nothing
-    local _ta_target = nir_const(args[2]) isa Type ? nir_const(args[2]) :
-        (args[2] isa NirGlobalRef && args[2].bound && args[2].value isa Type) ? args[2].value : nothing
+    local _ta_target = nir_type_operand(args[2])
     if !(_ta_target isa Type)
         record_unsupported!(ctx, :unsupported_method,
             "typeassert(x, T) with a T known only at run time"; idx=idx)
@@ -2077,8 +2087,8 @@ function _lower_getfield_closure_capture!(b, fb, ctx, call, idx, args)::Union{In
                 # The canonical pre-emission type query owns Julia→Wasm mapping;
                 # root substitutions do not introduce another conversion site.
                 local _captured_wasm = static_wasm_type(NirLiteral(_captured_value), ctx)
-                emit_value!(fb, NirLiteral(_captured_value), ctx, _captured_wasm;
-                            from_julia=typeof(_captured_value))
+                emit_value_as!(fb, NirLiteral(_captured_value), ctx, _captured_wasm,
+                            typeof(_captured_value))
                 return append_builder!(b, fb)
             end
             if field_name isa Symbol && haskey(ctx.captured_signal_fields, field_name)
@@ -2152,7 +2162,7 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
             local _mb_want = exact_register(_mb_jt)
             local _mb_out = _mb_ft
             if _mb_want !== nothing && _mb_want !== _mb_ft && _wt_is_ref(_mb_ft)
-                coerce_stack_top!(_mb_ib, _mb_want, ctx)
+                coerce_stack_top!(_mb_ib, _mb_want, ctx; from_julia=_mb_jt)
                 _mb_out = _mb_want
             end
             # Land in a typed scratch + end with local.get (unambiguous tail for the
@@ -2737,13 +2747,12 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 end
                 if value_has_local || first(_memoryref_source(ctx, value_arg)) === :indexed
                     info = ctx.type_registry.structs[obj_type]
-                    val_jt = value_type(ctx, value_arg)
                     local _vr_def = ctx.mod.types[info.wasm_type_idx + 1]
                     local _vr_expected = _vr_def.fields[wasm_field_idx(info, 1) + 1].valtype
                     temp_local = allocate_local!(ctx, _vr_expected)
                     local _vrb = _ctx_builder(ctx, "compile_call")
-                    emit_memoryref_mem!(_vrb, ctx, value_arg, _vr_expected;
-                                from_julia=(val_jt isa Type && isconcretetype(val_jt)) ? val_jt : nothing)
+                    emit_memoryref_mem!(_vrb, ctx, value_arg)
+                    coerce_stack_top!(_vrb, _vr_expected, ctx; from_julia=memoryref_memory_type(value_type(ctx, value_arg)))
                     local_set!(_vrb, temp_local)
                     emit_value!(_vrb, obj_arg, ctx, ConcreteRef(UInt32(info.wasm_type_idx), true))
                     # If obj_arg's local is structref, insert ref.cast null before struct_set
@@ -2773,15 +2782,13 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 # is on top of the stack. If we compile obj_arg first, we'd push it
                 # AFTER the value, giving wrong order [value, ref] instead of [ref, value].
                 # Solution: compile value first, store in temp local, then compile ref.
-                val_jt = value_type(ctx, value_arg)
                 local _vs_def = ctx.mod.types[info.wasm_type_idx + 1]
                 local _vs_expected = _vs_def.fields[wasm_field_idx(info, 2) + 1].valtype
                 temp_local = allocate_local!(ctx, _vs_expected)
                 local _vsb = _ctx_builder(ctx, "compile_call")
 
                 # Compile value and store in local (value may already be on stack from prev stmt)
-                emit_value!(_vsb, value_arg, ctx, _vs_expected;
-                            from_julia=(val_jt isa Type && isconcretetype(val_jt)) ? val_jt : nothing)
+                emit_value!(_vsb, value_arg, ctx, _vs_expected)
                 local_set!(_vsb, temp_local)
 
                 # Now compile obj (struct ref)
@@ -2842,11 +2849,10 @@ function _lower_setfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                     # AnyRef; a narrower ConcreteRef field, e.g. MOI.Utilities.Model{Float64}()'s
                     # `single_variable::Union{Nothing,VariableIndex}`, rejected it.)
                     local _sf_val = is_nothing_value(value_arg, ctx) ? NirLiteral(nothing) : value_arg
-                    local _sf_from_julia = (field_type isa Type && isconcretetype(field_type)) ? field_type : nothing
-                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
+                    _emit_value_static!(_sfsb, _sf_val, ctx, _sf_expected, field_type)
                     struct_set!(_sfsb, info.wasm_type_idx, wasm_field_idx(info, field_idx))
                     # setfield! returns the value — use compile_value to match SSA return type
-                    emit_value!(_sfsb, _sf_val, ctx, _sf_expected; from_julia=_sf_from_julia)
+                    _emit_value_static!(_sfsb, _sf_val, ctx, _sf_expected, field_type)
                     append_builder!(fb, _sfsb)
                     return append_builder!(b, fb)
                 end
@@ -2919,7 +2925,7 @@ parity(pkg/dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrins
 function _call_operand_shape(args, ctx)::Tuple{Any,Bool,Bool}
     arg_type = length(args) > 0 ? value_type(ctx, args[1]) : Int64
     is_32bit = operand_register(arg_type) in (I32, F32)
-    is_128bit = _julia_int_width(arg_type, false) == 128
+    is_128bit = _julia_int_width(arg_type) == 128
     return arg_type, is_32bit, is_128bit
 end
 
@@ -2959,7 +2965,7 @@ end
 
 The intrinsic Julia's own method of `f(::T, ::T)` runs, for `f` one of `+`, `-`, `*` (or that
 intrinsic itself) and `T` a type whose wasm arithmetic is Julia's: a 32- or 64-bit BitInteger
-(`add_int`, base/int.jl:86-88 on 1.12.7, :85-87 on 1.13.1) or an IEEE Float32/Float64 (`add_float`,
+(`add_int`, base/int.jl:86-88 on 1.12.7 and 1.13.1) or an IEEE Float32/Float64 (`add_float`,
 base/float.jl:495-497 on 1.12.7, :492-494 on 1.13.1);
 `nothing` otherwise (a narrow integer wraps at its own width, which no single opcode does). Its
 opcode is the one operator table's, INTRINSIC_BINOPS.
@@ -2967,7 +2973,7 @@ parity(quarantine: Julia's surface operators are methods whose bodies call intri
 `_binaryOperatorMap` (intrinsics.dart:437) is keyed by the operator's name directly.)
 """
 function operator_intrinsic(@nospecialize(f), @nospecialize(T))::Union{Nothing, Symbol}
-    local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T, false) in (32, 64)
+    local int = T isa DataType && T <: Base.BitInteger && _julia_int_width(T) in (32, 64)
     local flt = numeric_register(T) in (F32, F64)
     (int || flt) || return nothing
     # an intrinsic runs as itself, over its own kind only: `add_int` over floats adds their bits,
@@ -3032,7 +3038,7 @@ function _lower_operator!(b, fb, ctx, call, idx, args, callee)::Union{InstrBuild
             boxed_operand_unboxed = true
         end
     end
-    emit_intrinsic_binop!(fb, wt, wt, op, ctx, _julia_int_width(T, wt === I32)) === nothing &&
+    emit_intrinsic_binop!(fb, wt, wt, op, ctx, _operand_width(T)) === nothing &&
         error("the operator table has no $(op) over $(wt)")
 
     # parity(translator.dart:1597 Translator.convertType): the symmetric RESULT

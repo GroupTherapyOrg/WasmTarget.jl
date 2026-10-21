@@ -20,7 +20,8 @@ function _emit_backing_array!(b::InstrBuilder, vec, ctx::AbstractCompilationCont
     end
     if vt isa DataType && vt <: Core.GenericMemoryRef
         # a ref's storage is its Memory; its offset rides the pointer (ptr_or_offset)
-        emit_memoryref_mem!(b, ctx, vec, ConcreteRef(UInt32(arr_t), true))
+        emit_memoryref_mem!(b, ctx, vec)
+        coerce_stack_top!(b, ConcreteRef(UInt32(arr_t), true), ctx; from_julia=memoryref_memory_type(vt))
     elseif vt isa DataType && (vt.name.name === :Memory || vt.name.name === :GenericMemory)
         emit_value!(b, vec, ctx, ConcreteRef(UInt32(arr_t), true))
     else
@@ -185,8 +186,12 @@ function _is_never_a_storage_pointer(ctx::AbstractCompilationContext, operand::N
     return false
 end
 
+# The element types a storage pointer may address: every one of a numeric storage array, and a
+# byte array's. Each pointer reader names its set (_trace_memmove_ptr's `eltypes`).
 # parity(quarantine: Julia byte pointers into storage; dart's WasmArrayExt.copy/fill take element offsets, intrinsics.dart:1255/:1279.)
 const _STORAGE_PRIMITIVE_ELTYPES = (Int8, UInt8, Int16, UInt16, Int32, UInt32, Int64, UInt64, Float32, Float64)
+# parity(quarantine: as _STORAGE_PRIMITIVE_ELTYPES, above: a C string's, a String's or Symbol's bytes.)
+const _BYTE_ELTYPES = (UInt8, Int8)
 
 # parity(quarantine: Julia byte pointers into storage): the element type a traced backing
 # holds — a String/Symbol backing is its byte array.
@@ -195,17 +200,33 @@ function _storage_element_type(backing, ctx::AbstractCompilationContext)::Type
     return T === String || T === Symbol ? UInt8 : eltype(T)
 end
 
-# parity(intrinsics.dart:1254 wasmArrayCopy): dart passes each offset and size as an i64
-# narrowed by i32.wrap_i64; a Julia storage-relative byte pointer or byte count becomes that
-# element offset by the element-size shift (a String backing's pointer counts from 1).
-function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
-                                       ctx::AbstractCompilationContext, shift::Integer)::InstrBuilder
-    emit_value!(b, ptr_or_count, ctx, I64)
-    backing_type = backing === nothing ? Nothing : value_type(ctx, backing)   # a byte count has no backing
+"""
+    _emit_storage_byte_offset!(b, backing_type) -> b
+
+THE storage-pointer rule: the i64 pointer value on the stack becomes the byte offset into its
+traced backing array. A storage pointer's value is its object's base plus that offset, the
+base 1 for a String's or Symbol's bytes (`_fc_jl_string_ptr!`: a match at offset 0 is never
+C NULL) and 0 for a Memory's, so the rule subtracts 1 for those two. Every reader of a storage
+pointer (an element offset, a pointer load or store, memcmp, memchr) reaches it here (L143).
+parity(quarantine: Julia byte pointers into storage; dart's WasmArrayExt.copy/fill take element
+offsets, intrinsics.dart:1255/:1279.)
+"""
+function _emit_storage_byte_offset!(b::InstrBuilder, @nospecialize(backing_type))::InstrBuilder
     if backing_type === String || backing_type === Symbol
         i64_const!(b, 1)
         num!(b, Opcode.I64_SUB)
     end
+    return b
+end
+
+# parity(intrinsics.dart:1254 wasmArrayCopy): dart passes each offset and size as an i64
+# narrowed by i32.wrap_i64; a Julia storage-relative byte pointer or byte count becomes that
+# element offset by the storage-pointer rule and the element-size shift.
+function _emit_storage_element_offset!(b::InstrBuilder, ptr_or_count, backing,
+                                       ctx::AbstractCompilationContext, shift::Integer)::InstrBuilder
+    emit_value!(b, ptr_or_count, ctx, I64)
+    # a byte count has no backing, and no base to subtract
+    backing === nothing || _emit_storage_byte_offset!(b, value_type(ctx, backing))
     narrow_length_to_i32!(b)
     if shift != 0
         i32_const!(b, Int64(shift))
@@ -229,7 +250,7 @@ end
 # formal(dev/formal/StoragePointer.tla): the object this names is the only one the pointer can point into
 # parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi.)
 function _trace_memmove_ptr(arg::NirNode, ctx::AbstractCompilationContext;
-                            eltypes = (UInt8, Int8), allow_ref::Bool = false,
+                            eltypes, allow_ref::Bool = false,
                             through_value_ptr::Bool = true,
                             _seen::Set{Int} = Set{Int}())::Union{Nothing, NirNode}
     # Walk through recognized storage-relative operations looking only for the
@@ -693,11 +714,11 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
             num!(_sf, Opcode.I32_EQZ)
             if_!(_sf)
             emit_struct_prefix!(_sf, ctx.type_registry, UndefVarError, _tu_info)
-            emit_value!(_sf, NirLiteral(_tu_node.var), ctx,
-                        _tu_fields[Int(wasm_field_idx(_tu_info, 1)) + 1].valtype; from_julia=Symbol)
+            emit_value_as!(_sf, NirLiteral(_tu_node.var), ctx,
+                        _tu_fields[Int(wasm_field_idx(_tu_info, 1)) + 1].valtype, Symbol)
             i64_const!(_sf, Int64(WASM_WORLD_AGE))
-            emit_value!(_sf, NirLiteral(:local), ctx,
-                        _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype; from_julia=Symbol)
+            emit_value_as!(_sf, NirLiteral(:local), ctx,
+                        _tu_fields[Int(wasm_field_idx(_tu_info, 3)) + 1].valtype, Symbol)
             struct_new!(_sf, _tu_info.wasm_type_idx)
             emit_throw_value!(_sf, ctx.mod, ctx.type_registry)
             end_block!(_sf)
@@ -819,11 +840,12 @@ end
 # parity(quarantine: a partial `%new` leaves fields undefined until later stores;
 # Dart's definite assignment is a front-end guarantee, so dart2wasm never proves it.)
 # formal(dev/formal/DefiniteInit.tla): an answer of true means every path stores each missing field before the object is read
-function _definitely_initializes_in_nir(nir::Vector{NirStmt}, start_pc::Int,
+# `cfg` is the body's CFG (nir_cfg): the caller's own, built once into its context (ctx.cfg), or
+# the callee's for the interprocedural step. An Enter reaches its catch destination.
+function _definitely_initializes_in_nir(nir::Vector{NirStmt}, cfg::NirCFG, start_pc::Int,
                                         subject::NirNode, T::DataType,
                                         missing::Set{Int})::Bool
     1 <= start_pc <= length(nir) || return false
-    local cfg = nir_cfg(nir)   # the body's CFG: an Enter reaches its catch destination
     incoming = Dict{Int,Set{Int}}(start_pc => Set{Int}())
     queue = Int[start_pc]
     while !isempty(queue)
@@ -877,7 +899,7 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
     ismutabletype(T) || return false
     subject = NirSSA(idx, get(ctx.ssa_types, idx, Any))
     idx < length(ctx.nir) &&
-        _definitely_initializes_in_nir(ctx.nir, idx + 1, subject, T, missing) &&
+        _definitely_initializes_in_nir(ctx.nir, ctx.cfg, idx + 1, subject, T, missing) &&
         return true
     uses = Tuple{NirInvoke,Int}[]
     for j in ssa_users(ctx, idx)   # the statements that use the new object
@@ -892,8 +914,8 @@ function _partial_new_is_definitely_initialized(idx::Int, T::DataType,
     callee_ir = _cached_invoke_ir(use, ctx)
     callee_ir isa Core.CodeInfo || return false
     arg_n = explicit_pos + 1 # Core.Argument(1) is the callable/self slot
-    return _definitely_initializes_in_nir(
-        build_nir(callee_ir), 1, NirArgument(arg_n), T, missing)
+    local callee_nir = build_nir(callee_ir)
+    return _definitely_initializes_in_nir(callee_nir, nir_cfg(callee_nir), 1, NirArgument(arg_n), T, missing)
 end
 
 """dart visitConstructorInvocation shape (): emits the struct construction
@@ -1113,9 +1135,7 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
                  _cn_wasm_fi <= length(_cn_struct_def.fields)) ||
                     error("registered union field $i has no physical Wasm type")
                 local _cn_expected = _cn_struct_def.fields[_cn_wasm_fi].valtype
-                local _cn_julia = value_type(ctx, val)
-                emit_value!(b, val, ctx, _cn_expected;
-                    from_julia=(_cn_julia === Any ? nothing : _cn_julia))   # Any states no source type
+                emit_value!(b, val, ctx, _cn_expected)
             end
         elseif field_type === Any
             # Determine actual Wasm field type (AnyRef when JlType hierarchy active,
@@ -1439,9 +1459,8 @@ function _fc_jl_string_ptr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx
             # jl_string_ptr(s) -> Ptr{UInt8}: get pointer to string bytes
             # In WasmGC, String is array<i32>. We emit i64.const 1 as base pointer.
             # Base=1 avoids ambiguity with memchr returning 0 for "not found" vs
-            # finding at position 0. The pointerref handler traces back to find the
-            # original string arg, so the base value doesn't affect it.
-            # The memchr handler uses base=1 arithmetic: array_index = ptr - 1.
+            # finding at position 0. Every reader of the pointer subtracts it through the one
+            # storage-pointer rule (_emit_storage_byte_offset!).
             i64_const!(b, 1)
             return b
 end
@@ -1589,7 +1608,7 @@ function _fc_jl_pchar_to_string!(b::InstrBuilder, node::NirForeignCall, idx::Int
                 owner_is_memory = owner_type isa DataType &&
                     owner_type.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
                 data_owner = owner_is_memory ? owner_arg :
-                    _trace_memmove_ptr(ptr_arg, ctx; eltypes=(UInt8, Int8))
+                    _trace_memmove_ptr(ptr_arg, ctx; eltypes = _BYTE_ELTYPES)
                 if data_owner !== nothing
                     str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
@@ -1696,7 +1715,7 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
         # pointer(s.string) + s.offset included). Only a String/Symbol backing is
         # accepted: its base is 1, so a match at its first byte stays distinct from
         # C NULL (0), which a Memory backing's base 0 could not guarantee.
-        str_ssa = _trace_memmove_ptr(ptr_arg, ctx)
+        str_ssa = _trace_memmove_ptr(ptr_arg, ctx; eltypes = _BYTE_ELTYPES)
         if str_ssa !== nothing && value_type(ctx, str_ssa) in (String, Symbol)
             str_arr_type = get_string_array_type!(ctx.mod, ctx.type_registry)
 
@@ -1741,12 +1760,11 @@ function _fc_memchr!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
             num!(b, Opcode.I64_GE_U)
             br_if!(b, done_label)
 
-            #     array_index = current - 1 (base=1, so ptr=1 means index=0)
+            #     the byte at the current pointer, by the storage-pointer rule
             local_get!(b, str_local)
             local_get!(b, current_local)
+            _emit_storage_byte_offset!(b, value_type(ctx, str_ssa))
             narrow_length_to_i32!(b)
-            i32_const!(b, 1)
-            num!(b, Opcode.I32_SUB)  # 0-based index
             array_get!(b, str_arr_type; signed=false)
 
             #     if array[idx] == byte, found!
@@ -1787,9 +1805,9 @@ end
 # parity(quarantine: Julia pointer intrinsics; Dart has no raw pointers outside dart:ffi. Base's String/SubString ==, cmp and memcmp compare bytes through this libc call)
 function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::AbstractCompilationContext)::Union{InstrBuilder,Nothing}
     length(node.operands) >= 3 || return nothing
-    a_backing = _trace_memmove_ptr(node.operands[1], ctx)
+    a_backing = _trace_memmove_ptr(node.operands[1], ctx; eltypes = _BYTE_ELTYPES)
     a_backing === nothing && return nothing
-    b_backing = _trace_memmove_ptr(node.operands[2], ctx)
+    b_backing = _trace_memmove_ptr(node.operands[2], ctx; eltypes = _BYTE_ELTYPES)
     b_backing === nothing && return nothing
     arr = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
     arr_ref = ConcreteRef(UInt32(arr), true)
@@ -1800,13 +1818,7 @@ function _fc_memcmp!(b::InstrBuilder, node::NirForeignCall, idx::Int, ctx::Abstr
                                                  (b_backing, node.operands[2], b_arr, b_off))
         _emit_backing_array!(b, backing, ctx, arr)
         local_set!(b, arr_local)
-        emit_value!(b, ptr, ctx, I64)
-        backing_type = value_type(ctx, backing)
-        if backing_type === String || backing_type === Symbol
-            i64_const!(b, 1)
-            num!(b, Opcode.I64_SUB)
-        end
-        narrow_length_to_i32!(b)
+        _emit_storage_element_offset!(b, ptr, backing, ctx, 0)
         local_set!(b, off_local)
     end
     emit_value!(b, node.operands[3], ctx, I64)
@@ -1951,7 +1963,7 @@ function _fc_jl_type_intersection!(b::InstrBuilder, node::NirForeignCall, idx::I
         # statement's located WasmInternalError, never into a declined lowering.
         if _ti_a isa Type && _ti_b isa Type
             local _ti_r = typeintersect(_ti_a, _ti_b)
-            emit_value!(b, NirLiteral(_ti_r), ctx, AnyRef; from_julia=Type{_ti_r})
+            emit_value_as!(b, NirLiteral(_ti_r), ctx, AnyRef, Type{_ti_r})
             return b
         end
     return nothing

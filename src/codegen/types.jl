@@ -737,7 +737,7 @@ end
 # parity(constants.dart:908 ConstantCreator.visitInstanceConstant): header fields, then each field's constant.
 function _const_init!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry, @nospecialize(val))::Union{UInt32, Nothing}
     T = typeof(val)
-    if _julia_int_width(T, false) == 128
+    if _julia_int_width(T) == 128
         # parity(constants.dart:622-655 visitIntConstant valueTypeConstants): a boxed
         # numeric constant gets one cached module global. Int128 is a Julia primitive
         # (not isstructtype), so it cannot take the struct path below.
@@ -3123,7 +3123,7 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
                 return ConcreteRef(info.wasm_type_idx, true)
             end
         end
-    elseif _julia_int_width(T, false) == 128
+    elseif _julia_int_width(T) == 128
         # 128-bit integers are represented as WasmGC structs with two i64 fields
         if haskey(registry.structs, T)
             info = registry.structs[T]

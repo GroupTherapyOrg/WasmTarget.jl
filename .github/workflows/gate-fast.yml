@@ -1,7 +1,8 @@
 name: Gate fast
 # The inner loop on CI's runners (AGENTS.md; dev/CHARTER.md C10, L163): the ratchet and smoke on
 # Julia 1.12 and 1.13, each job through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13>
-# [--part i/N]`, the smokes dealt into N and M parts (test/smoke.jl's round-robin _smoke_part).
+# [--part i/N]`, the smokes dealt into N and M parts by their recorded durations (test/smoke.jl's
+# _smoke_part over test/smoke_times.tsv).
 # `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name> and prints the verdict. It is not
 # the push gate: the full gate (gate.yml, `bash dev/gate.sh`, L153, L162) stays that. Its steps
 # and caches are gate.yml's lane job's, minus Java and TLC. The first red job cancels the rest.

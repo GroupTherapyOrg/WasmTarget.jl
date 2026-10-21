@@ -91,7 +91,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
                 local st = seeds[k]
                 if _wt_is_ref(st)
                     if k == n
-                        coerce_stack_top!(b, narrow_to, ctx)
+                        coerce_stack_top!(b, narrow_to, ctx; from_julia=nothing)   # an erased operand: no type of its own
                     else
                         # rotate: store the above values, convert, restore
                         local _tmp = UInt32[]
@@ -99,7 +99,7 @@ function _sub_builder(fb::InstrBuilder, ctx::AbstractCompilationContext, name::S
                             local t2 = UInt32(allocate_local!(ctx, narrow_to))
                             local_set!(b, t2); pushfirst!(_tmp, t2)
                         end
-                        coerce_stack_top!(b, narrow_to, ctx)
+                        coerce_stack_top!(b, narrow_to, ctx; from_julia=nothing)   # an erased operand: no type of its own
                         for t2 in _tmp
                             local_get!(b, t2)
                         end
@@ -114,19 +114,16 @@ end
 
 # parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_normalise_narrow_pair!(fb::InstrBuilder, ctx::AbstractCompilationContext,
-                                      signed::Bool, julia_width::Int)::InstrBuilder
-    julia_width < 32 || return fb
+                                      signed::Bool, @nospecialize(T))::InstrBuilder
+    local reg = numeric_register(T)
+    (reg === I32 || reg === I64) || error("an integer pair of $(T), which no integer register holds")
+    _operand_width(T) < (reg === I32 ? 32 : 64) || return fb
     bld = _sub_builder(fb, ctx, "_emit_normalise_narrow_pair!", 2)
-    li = UInt32(allocate_local!(ctx, I32))
-    # normalise_narrow! (julia_numeric_tier.jl) classifies width from a Type, not an
-    # Int — synthesize a representative one; `normalise_narrow!` only reads its width
-    # class (8 vs 16), never its own signedness, so Int8/UInt8 (and Int16/UInt16) are
-    # interchangeable here.
-    julia_type = julia_width == 8 ? (signed ? Int8 : UInt8) : (signed ? Int16 : UInt16)
-    local_set!(bld, li)                              # [a]
-    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*]
-    local_get!(bld, li)                               # [a*, b]
-    normalise_narrow!(bld, ctx, julia_type, signed)   # [a*, b*]
+    li = UInt32(allocate_local!(ctx, reg))
+    local_set!(bld, li)                        # [a]
+    normalise_narrow!(bld, ctx, T, signed)     # [a*]
+    local_get!(bld, li)                        # [a*, b]
+    normalise_narrow!(bld, ctx, T, signed)     # [a*, b*]
     append_builder!(fb, bld)
     return fb
 end
@@ -155,10 +152,10 @@ function _emit_field_error!(bld::InstrBuilder, ctx::AbstractCompilationContext,
     info === nothing && error("FieldError layout is unavailable")
     emit_struct_prefix!(bld, ctx.type_registry, FieldError, info)
     fields = ctx.mod.types[info.wasm_type_idx + 1].fields
-    emit_value!(bld, NirLiteral(owner_type), ctx, fields[Int(info.field_offset) + 1].valtype;
-                from_julia=DataType)
-    emit_value!(bld, field isa Symbol ? NirLiteral(field) : field, ctx,
-                fields[Int(info.field_offset) + 2].valtype; from_julia=Symbol)
+    emit_value_as!(bld, NirLiteral(owner_type), ctx, fields[Int(info.field_offset) + 1].valtype,
+                DataType)
+    emit_value_as!(bld, field isa Symbol ? NirLiteral(field) : field, ctx,
+                fields[Int(info.field_offset) + 2].valtype, Symbol)
     struct_new!(bld, info.wasm_type_idx)
     emit_throw_value!(bld, ctx.mod, ctx.type_registry)
     return bld
@@ -271,7 +268,8 @@ function _emit_fpiseq!(b::InstrBuilder, ctx::AbstractCompilationContext, t::Wasm
     local_get!(b, la); local_get!(b, la); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(a)
     local_get!(b, lb); local_get!(b, lb); num!(b, wide ? Opcode.F64_NE : Opcode.F32_NE)   # isnan(b)
     num!(b, Opcode.I32_AND)
-    local F, U = wide ? (Float64, UInt64) : (Float32, UInt32)
+    local F = wide ? Float64 : Float32
+    local U = Base.uinttype(F)   # its bits' unsigned integer, Julia's own
     local_get!(b, la); emit_bitcast!(b, F, U)
     local_get!(b, lb); emit_bitcast!(b, F, U)
     num!(b, wide ? Opcode.I64_EQ : Opcode.I32_EQ)
@@ -284,10 +282,9 @@ end
 
 The byte offset, as an i32, that `pointerref(ptr, index, align)` / `pointerset(ptr, x, index,
 align)` reaches inside the storage object `source` its pointer was traced to
-(`_trace_memmove_ptr`). A storage pointer's value is its object's base plus a byte offset --
-1 for a String's or Symbol's bytes (`_fc_jl_string_ptr!`: a match at offset 0 is never NULL),
-0 for a Memory's -- and add_ptr/sub_ptr compile to arithmetic on that value, so the offset is
-`ptr - base + (index - 1) * step`, `step` being the size of the pointer's element type (Julia's
+(`_trace_memmove_ptr`). add_ptr/sub_ptr compile to arithmetic on a storage pointer's value, so
+the offset is the storage-pointer rule's (_emit_storage_byte_offset!: `ptr - base`) plus
+`(index - 1) * step`, `step` being the size of the pointer's element type (Julia's
 `pointerref` addresses `ptr + (index - 1) * sizeof(T)`). Every pointer load and store arm reads
 it here: they computed it apiece, and one ignored `index` while another read a String pointer
 by pattern-matching one add_ptr step.
@@ -297,8 +294,7 @@ WasmArrayExt.copy/fill take an array and an element offset, intrinsics.dart:1255
 function _emit_storage_pointer_offset!(b::InstrBuilder, ctx::AbstractCompilationContext,
                                        ptr::NirNode, index, source::NirNode, step::Int)::Nothing
     emit_value!(b, ptr, ctx, I64)
-    local src_type = value_type(ctx, source)
-    (src_type === String || src_type === Symbol) && (i64_const!(b, 1); num!(b, Opcode.I64_SUB))
+    _emit_storage_byte_offset!(b, value_type(ctx, source))
     if index !== nothing && !(nir_const(index) isa Integer && nir_const(index) == 1)
         emit_value!(b, index, ctx, I64)
         i64_const!(b, Int64(1))
@@ -324,7 +320,7 @@ end
 # must already be narrow-normalised).
 # parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_div_guard!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool;
-                          check_overflow::Bool=false, julia_width::Int=(is32 ? 32 : 64))::InstrBuilder
+                          check_overflow::Bool=false, julia_width::Int)::InstrBuilder
     lt     = is32 ? I32 : I64
     wconst!(blr, v) = is32 ? i32_const!(blr, v) : i64_const!(blr, v)
     weqz   = is32 ? Opcode.I32_EQZ : Opcode.I64_EQZ
@@ -366,15 +362,34 @@ end
 # (so e.g. `1 << 64` is 1 in raw wasm but 0 in Julia). We guard:
 #   shl/lshr:  (shift < width) ? (value <op> shift) : 0
 #   ashr:      value >>s (shift < width ? shift : width-1)   (clamp → sign-fill)
-# Bit width of the Julia integer operand being shifted (8/16/32/64). Falls back to
-# the wasm register width for non-concrete / non-bitsinteger operand types so the
-# guard is a no-op (behaviour unchanged) unless we positively know it's narrow.
-# parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
-function _julia_int_width(@nospecialize(T), is32::Bool)::Int64
-    if T isa Type && isconcretetype(T) && T <: Base.BitInteger
-        return sizeof(T) * 8
-    end
-    return is32 ? 32 : 64
+"""
+    _julia_int_width(T) -> Union{Nothing,Int64}
+
+The bit width of a value of the primitive type `T`, Julia's own (its intrinsics read
+jl_datatype_size): `8 * sizeof(T)` for every primitive WT represents, one held in a register
+(an 8- or 16-bit one rides in an i32 with junk above its width, whatever its type) and a 128-bit
+integer held as two limbs; `nothing` for any other type, which has no width (no register-width
+stand-in: a width decision over it rejects).
+parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
+"""
+function _julia_int_width(@nospecialize(T))::Union{Nothing,Int64}
+    (T isa DataType && isprimitivetype(T)) || return nothing
+    (numeric_register(T) !== nothing || T <: Base.BitInteger) || return nothing
+    return 8 * sizeof(T)
+end
+
+"""
+    _operand_width(T) -> Int64
+
+`_julia_int_width(T)` for an intrinsic's operand, which is a primitive WT represents: any other
+type has no width to decide by, and raises.
+parity(quarantine: Julia's intrinsics take primitive operands only (jl_intrinsic_cvt and the
+arithmetic intrinsics check `jl_is_primitivetype`); dart's ints are one 64-bit class.)
+"""
+function _operand_width(@nospecialize(T))::Int64
+    local w = _julia_int_width(T)
+    w === nothing && throw(ArgumentError("an intrinsic's operand of type $(T), which is no primitive WT represents, has no width"))
+    return w
 end
 
 # `julia_width` is the Julia operand's bit width (8/16/32/64). It can be NARROWER
@@ -393,9 +408,8 @@ end
 # over-shift threshold (shr_u of a width-bit value by ≥ width = 0).
 # parity(quarantine: Julia's integer intrinsics: an 8- or 16-bit integer rides in an i32 register with junk above its width, division throws DivideError, a shift of the width or more is 0 or sign-fill; dart's ints are 64-bit and its ~/ calls a runtime function, intrinsics.dart:457.)
 function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext, is32::Bool, kind::Symbol;
-                              julia_width::Int = (is32 ? 32 : 64), signed_narrow::Bool = false)::InstrBuilder
+                              julia_width::Int, signed_narrow::Bool = false)::InstrBuilder
     wltu   = is32 ? Opcode.I32_LT_U : Opcode.I64_LT_U
-    wand   = is32 ? Opcode.I32_AND : Opcode.I64_AND
     width  = is32 ? 32 : 64
     thr    = clamp(julia_width, 1, width)        # over-shift threshold (Julia width)
     narrow = thr < width                          # operand narrower than its wasm reg
@@ -407,15 +421,12 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
     _lset(op, i) = op === Opcode.LOCAL_SET ? local_set!(bld, i) :
                    op === Opcode.LOCAL_TEE ? local_tee!(bld, i) : local_get!(bld, i)
     _wc(v) = is32 ? i32_const!(bld, Int64(v)) : i64_const!(bld, Int64(v))
-    if narrow && (kind === :lshr || (kind === :ashr && is32 && (thr == 8 || thr == 16)))
+    if narrow && (kind === :lshr || kind === :ashr)
         # Normalise the value (under the shift amount): stash shift, fix value, restore.
+        # lshr zeroes the junk above julia_width; ashr replicates bit thr-1 upward so
+        # shr_s sign-fills correctly
         _lset(Opcode.LOCAL_SET, sl)              # [value]
-        if kind === :lshr
-            _wc((Int64(1) << thr) - 1)
-            num!(bld, wand)                      # zero out junk above julia_width
-        else  # ashr: replicate bit thr-1 upward so shr_s sign-fills correctly
-            num!(bld, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-        end
+        emit_extend_from_width!(bld, is32 ? I32 : I64, thr, kind === :ashr)
         _lset(Opcode.LOCAL_GET, sl)              # [value', shift]
     end
     if kind === :ashr
@@ -443,13 +454,9 @@ function _emit_shift_guarded!(fb::InstrBuilder, ctx::AbstractCompilationContext,
             # 0xFF read back as 255. extend8_s/16_s ignores the spilled high
             # bits, so it replaces the mask. lshr needs it too: the shifted
             # bits are width-canonical but bit thr-1 can be set (shift 0 of
-            # 0x80 → Int8 -128, not 128).
-            if signed_narrow && is32 && (thr == 8 || thr == 16)
-                num!(bld, thr == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-            elseif kind === :shl
-                _wc((Int64(1) << thr) - 1)       # [result, mask]  (2^width - 1)
-                num!(bld, wand)                  # [result & mask]  truncate to width
-            end
+            # 0x80 → Int8 -128, not 128). [result] truncated to width: re-sign-extended
+            # (signed) or masked.
+            emit_extend_from_width!(bld, is32 ? I32 : I64, thr, signed_narrow)
         end
     end
     append_builder!(fb, bld)
@@ -722,56 +729,58 @@ function emit_char_rawbits_to_codepoint(ctx::AbstractCompilationContext)::Vector
 end
 
 """
-    _compile_call_checked_narrow!(fb, ctx, op, arg_type, is_32bit)
+    _compile_call_checked_narrow!(fbref, ctx, op, arg_type, idx, tt)
 
 Extracted handler for checked_s{add,sub,mul}_int / checked_u{add,sub,mul}_int
-when the JULIA operand width is < 32 bits (Int8/UInt8/Int16/UInt16). The
+when the JULIA operand width is narrower than its register (Int8/UInt8/Int16/UInt16
+or a 24-bit primitive in an i32, a 40-, 48- or 56-bit one in an i64). The
 register-width overflow tricks in `_compile_call_checked_add!`/`_sub!`/
 `_compile_call_checked_mul` detect overflow with sign-bit tests at bit 31/63 —
-a narrow op can never overflow the wide i32 register, so the flag would stay
+a narrow op can never overflow the wide register, so the flag would stay
 false (e.g. `checked_abs(Int8(-128))` used to leak 128 instead of throwing
 OverflowError — the `lcm(Int8(-128), 1)` divergent_throw family). Computed in
-i32 on normalised inputs; flag = result fails the sign/zero-extend round-trip
-at the JULIA width; value = wrapped result. A pure move of the arm that used
-to gate the head of the `is_func` ladder (was a combined `if is_32bit &&
-_julia_int_width(...) < 32 && (is_func(...) || ...)`, checked before any of
-checked_sadd/ssub/smul_int's own branches). `op` is the ALREADY-DISPATCHED
-CHECKED_OPS key (R19: a data test against the Symbol the registry looked up
-by, not a re-derivation via `is_func`).
+the register on normalised inputs; flag = result fails the sign/zero-extend
+round-trip at the JULIA width (emit_extend_from_width!); value = wrapped result.
+A sum or difference of two w-bit operands needs w+1 bits, which the register
+holds; a product needs 2w, which it holds only up to w = 16 in an i32 and never
+past 32 in an i64, so a wider product rejects at its statement. `op` is the
+ALREADY-DISPATCHED CHECKED_OPS key (R19: a data test against the Symbol the
+registry looked up by, not a re-derivation via `is_func`).
 parity(quarantine: Julia's checked_*_int intrinsics answer a value and an overflow flag; dart's ints wrap.)
 """
-function _compile_call_checked_narrow!(fb::InstrBuilder, ctx::AbstractCompilationContext,
-                                       op::Symbol, arg_type, is_32bit::Bool, _nc_tt::Type)::Nothing
-    local _ncw = _julia_int_width(arg_type, is_32bit)
+function _compile_call_checked_narrow!(fbref::Base.RefValue{InstrBuilder}, ctx::AbstractCompilationContext,
+                                       op::Symbol, @nospecialize(arg_type), idx::Int, _nc_tt::Type)::Nothing
+    local _ncw = _operand_width(arg_type)
+    local reg = numeric_register(arg_type)
+    local bits = reg === I32 ? 32 : 64
     local _nc_signed = op === :checked_sadd_int || op === :checked_ssub_int ||
                        op === :checked_smul_int
-    local _nc_op = (op === :checked_sadd_int || op === :checked_uadd_int) ? Opcode.I32_ADD :
-                   (op === :checked_ssub_int || op === :checked_usub_int) ? Opcode.I32_SUB :
-                   Opcode.I32_MUL
-    _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, _ncw)
-    local _nc_r = UInt32(allocate_local!(ctx, I32))
+    local _nc_mul = op === :checked_smul_int || op === :checked_umul_int
+    if _nc_mul && 2 * _ncw > bits
+        local _ncrej = _ctx_builder(ctx, "compile_call.frag")
+        emit_unsupported_stub!(ctx, _ncrej, :unsupported_method,
+            "checked multiplication of $(arg_type) ($(_ncw) bits): its product needs $(2 * _ncw) bits, wider than its i$(bits) register"; idx=idx)
+        fbref[] = _ncrej
+        return nothing
+    end
+    local fb = fbref[]
+    local _nc_op = (op === :checked_sadd_int || op === :checked_uadd_int) ? (reg === I32 ? Opcode.I32_ADD : Opcode.I64_ADD) :
+                   (op === :checked_ssub_int || op === :checked_usub_int) ? (reg === I32 ? Opcode.I32_SUB : Opcode.I64_SUB) :
+                   (reg === I32 ? Opcode.I32_MUL : Opcode.I64_MUL)
+    _emit_normalise_narrow_pair!(fb, ctx, _nc_signed, arg_type)
+    local _nc_r = UInt32(allocate_local!(ctx, reg))
     local _ncb = _sub_builder(fb, ctx, "compile_call", 2)   # [a*, b*] normalised pair
     num!(_ncb, _nc_op)
     local_set!(_ncb, _nc_r)
-    # helper: push wrapped-to-width copy of result
-    local _nc_norm! = function ()
-        local_get!(_ncb, _nc_r)
-        if _nc_signed
-            num!(_ncb, _ncw == 8 ? Opcode.I32_EXTEND8_S : Opcode.I32_EXTEND16_S)
-        else
-            i32_const!(_ncb, Int64((1 << _ncw) - 1))
-            num!(_ncb, Opcode.I32_AND)
-        end
-    end
     if !haskey(ctx.type_registry.structs, _nc_tt)
         register_tuple_type!(ctx.mod, ctx.type_registry, _nc_tt)
     end
     local _nc_info = ctx.type_registry.structs[_nc_tt]
     emit_struct_prefix!(_ncb, ctx.type_registry, _nc_tt, _nc_info)
-    _nc_norm!()                                           # field 1: wrapped value
-    _nc_norm!()                                           # flag: wrapped != raw
+    local_get!(_ncb, _nc_r); emit_extend_from_width!(_ncb, reg, _ncw, _nc_signed)   # field 1: wrapped value
+    local_get!(_ncb, _nc_r); emit_extend_from_width!(_ncb, reg, _ncw, _nc_signed)   # flag: wrapped != raw
     local_get!(_ncb, _nc_r)
-    num!(_ncb, Opcode.I32_NE)
+    num!(_ncb, reg === I32 ? Opcode.I32_NE : Opcode.I64_NE)
     struct_new!(_ncb, _nc_info.wasm_type_idx)   # mod-resolved fields
     append_builder!(fb, _ncb)
     return nothing
@@ -946,9 +955,9 @@ function _compile_call_checked!(fbref::Base.RefValue{InstrBuilder}, ctx::Abstrac
          _tt.parameters[2] === Bool && _tt.parameters[1] === arg_type)
         _tt = Tuple{arg_type, Bool}
     end
-    local _narrow = is_32bit && _julia_int_width(arg_type, is_32bit) < 32
+    local _narrow = !is_128bit && _operand_width(arg_type) < (is_32bit ? 32 : 64)
     if _narrow
-        _compile_call_checked_narrow!(fbref[], ctx, op, arg_type, is_32bit, _tt)
+        _compile_call_checked_narrow!(fbref, ctx, op, arg_type, idx, _tt)
     elseif op === :checked_smul_int || op === :checked_umul_int
         _compile_call_checked_mul(op, args, fbref[], ctx, is_128bit, is_32bit, _tt)
     elseif op === :checked_sadd_int || op === :checked_uadd_int
@@ -981,22 +990,22 @@ function _compile_call_shift!(fb::InstrBuilder, ctx::AbstractCompilationContext,
         local _want = is_32bit ? I32 : I64
         if _cnt === I32 || _cnt === I64
             if kind !== :ashr && is_32bit && _cnt === I64
-                _emit_wrap_shift_amount_saturating!(fb, ctx, _julia_int_width(arg_type, is_32bit))
+                _emit_wrap_shift_amount_saturating!(fb, ctx, _operand_width(arg_type))
             else
-                coerce_stack_top!(fb, _want, ctx)
+                coerce_stack_top!(fb, _want, ctx; from_julia=value_type(ctx, args[2]))
             end
         end
     end
     if kind === :shl
         _emit_shift_guarded!(fb, ctx, is_32bit, :shl;
-                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             julia_width = _operand_width(arg_type),
                              signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 + narrow truncation
     elseif kind === :ashr
         _emit_shift_guarded!(fb, ctx, is_32bit, :ashr;
-                             julia_width = _julia_int_width(arg_type, is_32bit))   # over-shift → sign-fill; narrow input sign-extended
+                             julia_width = _operand_width(arg_type))   # over-shift → sign-fill; narrow input sign-extended
     else
         _emit_shift_guarded!(fb, ctx, is_32bit, :lshr;
-                             julia_width = _julia_int_width(arg_type, is_32bit),
+                             julia_width = _operand_width(arg_type),
                              signed_narrow = arg_type isa Type && arg_type <: Signed)   # over-shift → 0 (Julia semantics)
     end
     return is_32bit ? I32 : I64
@@ -1411,7 +1420,7 @@ double arm (`i64.reinterpret_f64` of both, then `i64.eq`), per Julia primitive w
 """
 function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                           alloc::Function, @nospecialize(P), p1::Function, p2::Function)::InstrBuilder
-    if _julia_int_width(P, false) == 128
+    if _julia_int_width(P) == 128
         local idx = get_int128_type!(mod, registry, P)
         local w = ConcreteRef(UInt32(idx), true)
         local l1, l2 = _egal_local!(b, alloc, p1, w), _egal_local!(b, alloc, p2, w)
@@ -1424,7 +1433,7 @@ function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         return b
     end
     local w = julia_to_wasm_type(P)
-    local nbits = 8 * sizeof(P)
+    local nbits = _operand_width(P)
     if w === F64
         p1(); emit_bitcast!(b, P, UInt64)
         p2(); emit_bitcast!(b, P, UInt64)
@@ -1433,14 +1442,15 @@ function _emit_bits_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
         p1(); emit_bitcast!(b, P, UInt32)
         p2(); emit_bitcast!(b, P, UInt32)
         num!(b, Opcode.I32_EQ)
-    elseif w === I64
+    elseif w === I64 && nbits >= 64
         p1(); p2(); num!(b, Opcode.I64_EQ)
     elseif w === I32 && nbits >= 32
         p1(); p2(); num!(b, Opcode.I32_EQ)
-    elseif w === I32
-        p1(); p2(); num!(b, Opcode.I32_XOR)
-        i32_const!(b, Int64((1 << nbits) - 1)); num!(b, Opcode.I32_AND)
-        num!(b, Opcode.I32_EQZ)
+    elseif w === I32 || w === I64
+        # a narrower primitive's bits are its width's: the junk above them is not compared
+        p1(); p2(); num!(b, w === I32 ? Opcode.I32_XOR : Opcode.I64_XOR)
+        emit_extend_from_width!(b, w, nbits, false)
+        num!(b, w === I32 ? Opcode.I32_EQZ : Opcode.I64_EQZ)
     else
         error("egal: primitive $P has no numeric representation (got $w)")
     end
@@ -1513,7 +1523,7 @@ would register it), and `anyref` for a value compared by identity.
 parity(translator.dart:1044 translateType): the storage type of a class's values.
 """
 function _egal_rep(@nospecialize(T), mod::WasmModule, registry::TypeRegistry)::WasmValType
-    _julia_int_width(T, false) == 128 &&
+    _julia_int_width(T) == 128 &&
         return ConcreteRef(UInt32(get_int128_type!(mod, registry, T)), true)
     isprimitivetype(T) && return julia_to_wasm_type(T)
     (T === String || T === Symbol) &&
@@ -1550,7 +1560,7 @@ function _emit_egal_same!(b::InstrBuilder, mod::WasmModule, registry::TypeRegist
     if concrete && Base.issingletontype(T)
         i32_const!(b, 1)
     elseif concrete && isprimitivetype(T) && !_wt_is_ref(w1) && !_wt_is_ref(w2) ||
-           _julia_int_width(T, false) == 128
+           _julia_int_width(T) == 128
         _emit_bits_egal!(b, mod, registry, alloc, T, p1, p2)
     elseif T === String || T === Symbol
         _emit_string_egal!(b, mod, registry, alloc, p1, p2)
@@ -2015,7 +2025,7 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
     local mod, reg = ctx.mod, ctx.type_registry
     local alloc = w -> allocate_local!(ctx, w)
     local bld = _ctx_builder(ctx, "egal")
-    local pusher(v, w, J) = () -> emit_value!(bld, v, ctx, w; from_julia=J)
+    local pusher(v, w, J) = () -> (J === nothing ? emit_value!(bld, v, ctx, w) : emit_value_as!(bld, v, ctx, w, J))
     local concrete(T) = T isa DataType && isconcretetype(T)
     local lossy = [(v, T) for (v, T) in ((x, T1), (y, T2))
                    if !concrete(T) && !_wt_is_ref(static_wasm_type(v, ctx))]
@@ -2047,7 +2057,7 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
         local inner = OT isa Union ? get_nullable_inner_type(OT) : nothing
         if w isa ConcreteRef && inner isa DataType && is_struct_type(inner)
             # Union{Nothing,S} of a struct S: null is the only nothing
-            emit_value!(bld, other, ctx, w; from_julia=OT)
+            emit_value_as!(bld, other, ctx, w, OT)
             ref_is_null!(bld)
         else
             local l = _egal_local!(bld, alloc, pusher(other, AnyRef, concrete(OT) ? OT : nothing), AnyRef)
@@ -2077,13 +2087,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # Get the type being checked: a literal, or a constant global's value (the boundary's one
     # resolution, NirGlobalRef); a global that is no constant is read at run time, by Julia's
     # jl_isa, which WT does not have
-    check_type = if nir_const(type_arg) isa Type
-        nir_const(type_arg)
-    elseif type_arg isa NirGlobalRef && type_arg.constant
-        type_arg.value
-    else
-        nothing
-    end
+    check_type = nir_type_operand(type_arg)
 
     # Get the type of the value being checked (for detecting tagged unions)
     val_jt = value_type(ctx, value_arg)
@@ -2651,14 +2655,12 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
     arg_locals = Int[]
     for (j, arg) in enumerate(args)
         if j == dpos
-            emit_value!(bld, arg, ctx, AnyRef;
-                        from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
+            _emit_value_static!(bld, arg, ctx, AnyRef, call_arg_types[j])
             aw = AnyRef
         else
             # the candidates agree on this argument's type, so on its wasm type
             aw = _function_type(ctx.mod, cands[1].wasm_idx).params[j]
-            emit_value!(bld, arg, ctx, aw;
-                        from_julia=(call_arg_types[j] isa Type && isconcretetype(call_arg_types[j])) ? call_arg_types[j] : nothing)
+            _emit_value_static!(bld, arg, ctx, aw, call_arg_types[j])
         end
         l = allocate_local!(ctx, aw)
         local_set!(bld, l)
@@ -2820,7 +2822,11 @@ run-time asSubtype for a type no class-id range decides (types.dart:562-592), ha
 counterpart: every WT isa is lowered at compile time over the closed world.
 parity(quarantine: dart keys its checker by the tested type and the operand's nullability; Julia's
 isa is decided over the operand's static type too (emit_isa tests S ∩ T, cgutils.cpp), so WT keys
-it by (target, static type).)
+it by (target, static type). dart defines the checker's function first and fills it from its
+compilation queue (types.dart:1047-1053 AsCheckerCallTarget.function, :1056 compilationQueue.add);
+WT builds the body first and defines the function only once the body is built, because a check
+WT cannot lower is a rejection, never a defined function left unfilled, and WT's builder has no
+way to drop a defined function.)
 """
 function as_checker!(ctx::AbstractCompilationContext, target::Type,
                      static_type::Type)::Union{UInt32, WasmDiagnostic}
@@ -3039,7 +3045,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             local _t = ptr_arg !== nothing ? value_type(ctx, ptr_arg) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
-        local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx) : nothing
+        local _pr_vec = ptr_arg !== nothing ? _trace_memmove_ptr(ptr_arg, ctx; eltypes = _BYTE_ELTYPES) : nothing
         if _pr_vec !== nothing && (_pr_tp0 === UInt8 || _pr_tp0 === Int8 || _pr_tp0 === Nothing || _pr_tp0 === nothing)
             local _pr_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
             local _prvb = _ctx_builder(ctx, "compile_call")
@@ -3148,14 +3154,12 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # The pointer value is the proven storage-relative byte offset;
         # element index = (ptr + (i-1)*sizeof(Te)) >> log2(sizeof(Te));
         # a same-size reinterpret bridges element type vs pointer target.
-        local _PRG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
-                            Int64, UInt64, Float32, Float64)
         local _prg_tp = begin
             local _t = ptr_arg !== nothing ? value_type(ctx, ptr_arg) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
-        local _prg_vec = (ptr_arg !== nothing && _prg_tp in _PRG_PRIMS) ?
-            _trace_memmove_ptr(ptr_arg, ctx; eltypes = _PRG_PRIMS, allow_ref = true) : nothing
+        local _prg_vec = (ptr_arg !== nothing && _prg_tp in _STORAGE_PRIMITIVE_ELTYPES) ?
+            _trace_memmove_ptr(ptr_arg, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES, allow_ref = true) : nothing
         if _prg_vec !== nothing && begin
                 local _t = value_type(ctx, _prg_vec)
                 _t isa DataType && _t <: Base.RefValue
@@ -3163,7 +3167,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # Pointer into a RefValue{T} box: load is struct.get of field :x
             local _prr_rt = value_type(ctx, _prg_vec)
             local _prr_te = _prr_rt.parameters[1]
-            if _prr_te in _PRG_PRIMS && sizeof(_prr_te) == sizeof(_prg_tp)
+            if _prr_te in _STORAGE_PRIMITIVE_ELTYPES && sizeof(_prr_te) == sizeof(_prg_tp)
                 if !haskey(ctx.type_registry.structs, _prr_rt)
                     register_struct_type!(ctx.mod, ctx.type_registry, _prr_rt)
                 end
@@ -3211,7 +3215,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # pointers (Ryu digit emission). pointerset(ptr, value, i, align)
         # returns the original pointer.
         local _ps_ptr = length(args) >= 1 ? args[1] : nothing
-        local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+        local _ps_vec = _ps_ptr !== nothing ? _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _BYTE_ELTYPES) : nothing
         local _ps_vt = length(args) >= 2 ? value_type(ctx, args[2]) : nothing
         if _ps_vec !== nothing && (_ps_vt === UInt8 || _ps_vt === Int8)
             local _ps_arr_t = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
@@ -3228,21 +3232,19 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # mirror of the typed pointerref path (radix sort scatter phase).
         # pointerset(ptr, value, i, align); same index arithmetic; the value
         # reinterprets from the pointer target type to the element type.
-        local _PSG_PRIMS = (Int8, UInt8, Int16, UInt16, Int32, UInt32,
-                            Int64, UInt64, Float32, Float64)
         local _psg_tp = begin
             local _t = _ps_ptr !== nothing ? value_type(ctx, _ps_ptr) : nothing
             _t isa DataType && _t <: Ptr ? eltype(_t) : nothing
         end
-        local _psg_vec = (_ps_ptr !== nothing && _psg_tp in _PSG_PRIMS) ?
-            _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _PSG_PRIMS, allow_ref = true) : nothing
+        local _psg_vec = (_ps_ptr !== nothing && _psg_tp in _STORAGE_PRIMITIVE_ELTYPES) ?
+            _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _STORAGE_PRIMITIVE_ELTYPES, allow_ref = true) : nothing
         if _psg_vec !== nothing && length(args) >= 2 && begin
                 local _t = value_type(ctx, _psg_vec)
                 _t isa DataType && _t <: Base.RefValue
             end
             local _psr_rt = value_type(ctx, _psg_vec)
             local _psr_te = _psr_rt.parameters[1]
-            if _psr_te in _PSG_PRIMS && sizeof(_psr_te) == sizeof(_psg_tp)
+            if _psr_te in _STORAGE_PRIMITIVE_ELTYPES && sizeof(_psr_te) == sizeof(_psg_tp)
                 if !haskey(ctx.type_registry.structs, _psr_rt)
                     register_struct_type!(ctx.mod, ctx.type_registry, _psr_rt)
                 end
@@ -3274,7 +3276,9 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     _psg_vt.name.name in (:Memory, :GenericMemory, :MemoryRef, :GenericMemoryRef)
                 if _psg_is_mem
                     # a ref's storage is its Memory; its offset rides the pointer
-                    emit_memoryref_mem!(_psgb, ctx, _psg_vec, ConcreteRef(UInt32(_psg_arr), true))
+                    emit_memoryref_mem!(_psgb, ctx, _psg_vec)
+                    coerce_stack_top!(_psgb, ConcreteRef(UInt32(_psg_arr), true), ctx;
+                                      from_julia=memoryref_memory_type(_psg_vt))
                 end
                 if !_psg_is_mem
                     if !haskey(ctx.type_registry.structs, _psg_vt)
@@ -3304,7 +3308,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
         # a 128-bit value's bytes are its low limb's, then its high limb's.
         local _psw_vec = (_ps_ptr !== nothing && _psg_tp isa DataType &&
                           isprimitivetype(_psg_tp) && sizeof(_psg_tp) in (2, 4, 8, 16)) ?
-            _trace_memmove_ptr(_ps_ptr, ctx) : nothing
+            _trace_memmove_ptr(_ps_ptr, ctx; eltypes = _BYTE_ELTYPES) : nothing
         if _psw_vec !== nothing && length(args) >= 2
             local _psw_te = eltype(value_type(ctx, _psw_vec))
             if _psw_te === UInt8 || _psw_te === Int8
@@ -3369,7 +3373,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
 
     # 128-bit overflow-checked add/sub/mul (the Tuple{T,Bool} intrinsics) has no limb lowering:
     # reject before the arguments are pushed. Division and remainder are INT128_OPS entries.
-    if _julia_int_width(arg_type, false) == 128 && func isa Core.IntrinsicFunction && nameof(func) in
+    if _julia_int_width(arg_type) == 128 && func isa Core.IntrinsicFunction && nameof(func) in
             (:checked_smul_int, :checked_umul_int, :checked_sadd_int, :checked_uadd_int,
              :checked_ssub_int, :checked_usub_int)
         emit_unsupported_stub!(ctx, fb, :unsupported_method,
@@ -3508,13 +3512,13 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             # route — same signed/unsigned choice the retired arms used).
             # This is the callers' wrap channel that `emit_intrinsic_binop!`'s
             # contract assumes (operands already at their table types).
-            local _dw = _julia_int_width(arg_type, is_32bit)
-            if is_32bit && _it_name in (:slt_int, :sle_int, :eq_int, :ne_int,
-                                         :sdiv_int, :srem_int, :checked_sdiv_int, :checked_srem_int)
-                _emit_normalise_narrow_pair!(fb, ctx, true, _dw)
-            elseif is_32bit && _it_name in (:ult_int, :ule_int,
-                                             :udiv_int, :urem_int, :checked_udiv_int, :checked_urem_int)
-                _emit_normalise_narrow_pair!(fb, ctx, false, _dw)
+            local _dw = _operand_width(arg_type)
+            if _it_name in (:slt_int, :sle_int, :eq_int, :ne_int,
+                            :sdiv_int, :srem_int, :checked_sdiv_int, :checked_srem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, true, arg_type)
+            elseif _it_name in (:ult_int, :ule_int,
+                                :udiv_int, :urem_int, :checked_udiv_int, :checked_urem_int)
+                _emit_normalise_narrow_pair!(fb, ctx, false, arg_type)
             end
             local _it_result = emit_intrinsic_binop!(fb, _it_w, _it_w, _it_name, ctx, _dw)
             # (The rebox link): a numeric intrinsic whose SSA LOCAL is
@@ -3606,8 +3610,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
     if _it_name in (:sext_int, :zext_int, :trunc_int, :sitofp, :uitofp, :fptosi,
                     :fptoui, :fpext, :fptrunc, :bitcast)
         local _cv_target_ref = length(args) >= 1 ? nir_const(args[1]) : nothing
-        local _cv_julia_dst = _cv_target_ref isa NirGlobalRef ?
-            (_cv_target_ref.bound && _cv_target_ref.constant ? _cv_target_ref.value : nothing) : _cv_target_ref
+        local _cv_julia_dst = length(args) >= 1 ? nir_type_operand(args[1]) : nothing
         if !(_cv_julia_dst isa Type)
             local _cv_why = _it_name === :sext_int ? "sext_int target is not a defined Julia type" :
                             _it_name === :zext_int ? "zext_int target is not a defined Julia type" :
@@ -3698,9 +3701,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
             end
             # Constants with undefined fields were rejected above because WasmGC has no
             # equivalent representation.
-            local _throw_st = value_type(ctx, _throw_val)
-            emit_value!(_thrb, _throw_val, ctx, AnyRef;
-                        from_julia=(_throw_st isa DataType && isconcretetype(_throw_st)) ? _throw_st : nothing)
+            emit_value!(_thrb, _throw_val, ctx, AnyRef)
         end
         emit_throw_value!(_thrb, ctx.mod, ctx.type_registry)   # typed (exn, trace) tag
         append_builder!(fb, _thrb)
@@ -4650,9 +4651,8 @@ function _emit_throw_methoderror!(bld::InstrBuilder, args::AbstractVector,
     end
     local f_type = static(args[1])
     return emit_method_error!(bld, ctx.mod, ctx.type_registry, tuple_type,
-        (b, w) -> emit_value!(b, args[1], ctx, w;
-                              from_julia=(f_type isa DataType && isconcretetype(f_type)) ? f_type : nothing),
-        Function[(b, w) -> emit_value!(b, a, ctx, w; from_julia=tuple_type.parameters[i])
+        (b, w) -> _emit_value_static!(b, args[1], ctx, w, f_type),
+        Function[(b, w) -> emit_value_as!(b, a, ctx, w, tuple_type.parameters[i])
                  for (i, a) in enumerate(args[2:end])])
 end
 
@@ -4681,7 +4681,7 @@ function _emit_switch_methoderror!(bld::InstrBuilder, ctx::AbstractCompilationCo
         local_get!(bld, tid_local); i32_const!(bld, Int64(ensure_type_id!(reg, C))); num!(bld, Opcode.I32_EQ)
         if_!(bld)
         emit_method_error!(bld, ctx.mod, reg, T,
-            (b, w) -> emit_value!(b, NirLiteral(f), ctx, w; from_julia=typeof(f)),
+            (b, w) -> emit_value_as!(b, NirLiteral(f), ctx, w, typeof(f)),
             Function[(b, w) -> (local_get!(b, l); coerce_stack_top!(b, w, ctx; from_julia=T.parameters[j]))
                      for (j, l) in enumerate(arg_locals)])
         end_block!(bld)
@@ -4721,10 +4721,9 @@ function _emit_throw_methoderror_by_class!(bld::InstrBuilder, args::AbstractVect
         local_get!(bld, cid); i32_const!(bld, Int64(id)); num!(bld, Opcode.I32_EQ)
         if_!(bld)
         emit_method_error!(bld, ctx.mod, reg, T,
-            (b, w) -> emit_value!(b, args[1], ctx, w;
-                                  from_julia=(f_type isa DataType && isconcretetype(f_type)) ? f_type : nothing),
+            (b, w) -> _emit_value_static!(b, args[1], ctx, w, f_type),
             Function[i == p ? (b, w) -> (local_get!(b, v); coerce_stack_top!(b, w, ctx; from_julia=C)) :
-                              (b, w) -> emit_value!(b, a, ctx, w; from_julia=rt[i])
+                              (b, w) -> emit_value_as!(b, a, ctx, w, rt[i])
                      for (i, a) in enumerate(operands)])
         end_block!(bld)
     end
@@ -4816,7 +4815,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
         local_get!(bld, acc_local)
         local_get!(bld, elem_local)
         emit_intrinsic_binop!(bld, elem_wasm_type, elem_wasm_type, reduce_op, ctx,
-                              _julia_int_width(elem_type, elem_wasm_type === I32)) === nothing &&
+                              _operand_width(elem_type)) === nothing &&
             error("the operator table has no $(reduce_op) over $(elem_wasm_type)")
         else_!(bld)
         local_get!(bld, elem_local)
@@ -4853,7 +4852,7 @@ function _emit_apply_iterate_reduce!(fb::InstrBuilder, container_args,
     if_!(bld)
     # an all-empty input: Julia's MethodError(f, (), world), never an identity value
     emit_method_error!(bld, ctx.mod, ctx.type_registry, Tuple{},
-        (b, _) -> emit_value!(b, NirLiteral(target_value), ctx, AnyRef; from_julia=typeof(target_value)),
+        (b, _) -> emit_value_as!(b, NirLiteral(target_value), ctx, AnyRef, typeof(target_value)),
         Function[])
     end_block!(bld)
     local_get!(bld, acc_local)

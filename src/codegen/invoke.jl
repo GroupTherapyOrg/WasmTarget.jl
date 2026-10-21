@@ -40,8 +40,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
             "bound invoke $idx supplies $(length(projected_args)) arguments to a $(length(params))-parameter target"))
         for (arg, expected) in zip(projected_args, params)
             jt = _invoke_arg_static_type(arg, ctx)
-            emit_value!(bii, arg, ctx, expected;
-                        from_julia=(jt isa Type && isconcretetype(jt)) ? jt : nothing)
+            (jt isa Type && isconcretetype(jt)) ? emit_value_as!(bii, arg, ctx, expected, jt) :
+                                                  emit_value!(bii, arg, ctx, expected)
         end
         emit_direct_call!(bii, ctx.mod, ctx.type_registry, target_idx)
         return append_builder!(b, bii)

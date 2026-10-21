@@ -172,7 +172,7 @@ function return_type_compatible(value_type::WasmValType, return_type::WasmValTyp
 end
 
 """
-    convert_type!(b, from, to, ctx; from_julia=nothing)
+    convert_type!(b, from, to, ctx; from_julia)
 
 The single coercion funnel (dart2wasm `translator.dart:1597 convertType`). Given a value of
 wasm type `from` already on the stack, emit the ops that leave a value of type `to`, or
@@ -205,7 +205,7 @@ parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
-                       from_julia::Union{Type,Nothing}=nothing)::Union{Nothing,InstrBuilder}
+                       from_julia::Union{Type,Nothing})::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
     # `nothing` meeting a nullable reference of the any hierarchy (a Union{T,Nothing}'s box or
     # struct, anyref, eqref, structref) is its null, whichever position's form it arrives in (a
@@ -282,7 +282,7 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             return emit_unsupported_stub!(ctx, b, :unsupported_type,
                 "a $(from) value cannot be boxed into a $(to) sink"; detail=from_julia)
         box_idx = emit_classid_box!(b, ctx, from, from_julia)
-        convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx)
+        convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx; from_julia=from_julia)
         return b
     elseif _wt_is_ref(from) && !_wt_is_ref(to)
         # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
@@ -345,7 +345,8 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                 # it stays the array and takes the ref→ref arms below.
                 emit_string_wrap!(b, ctx, from_julia === Symbol ? Symbol : String)
                 _to_is_sstr && return b
-                convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx)
+                convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx;
+                              from_julia=(from_julia === Symbol ? Symbol : String))
                 return b
             end
         end
@@ -515,7 +516,7 @@ function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::Wa
 end
 
 """
-    coerce_stack_top!(b, expected, ctx; from_julia=nothing)
+    coerce_stack_top!(b, expected, ctx; from_julia)
 
 Adjust the value most recently emitted into `b` to a storage/call boundary type. The
 builder's tracked stack is the sole source of the actual type; callers never re-derive it
@@ -526,7 +527,7 @@ the emitted result type.
 """
 function coerce_stack_top!(b::InstrBuilder, expected::WasmValType,
                            ctx::AbstractCompilationContext;
-                           from_julia::Union{Type,Nothing}=nothing)::WasmValType
+                           from_julia::Union{Type,Nothing})::WasmValType
     isempty(b.v.stack) && throw(ArgumentError("cannot coerce an empty emitted-value stack"))
     actual = b.v.stack[end]
     actual === expected || convert_type!(b, actual, expected, ctx; from_julia=from_julia)
@@ -537,9 +538,11 @@ end
 # inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
 # branch matches), so a no-op preserves byte-identity.
 # parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
-convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext)::InstrBuilder = b
+convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext;
+              from_julia::Union{Type,Nothing})::InstrBuilder = b
 # parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
-convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext)::InstrBuilder = b
+convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext;
+              from_julia::Union{Type,Nothing})::InstrBuilder = b
 
 # ============================================================================
 # Single-source classId box/unbox/discriminate (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
@@ -571,12 +574,18 @@ function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
 end
 # Core (mod, registry) method, the scratch local the caller's own: the dispatch wrappers, the
 # selector callers and the closure entries build their functions without a codegen context.
+# The scratch is a local the caller declared for this box, of the boxed value's own wasm type:
+# a parameter, or a local of another type, is refused (a same-typed index is told only by its
+# declaration, L173).
 # parity(translator.dart:1597 convertType): the boxing arm — save the value, the classId, the
 # value, struct.new (:1640-1644).
 function emit_classid_box!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
                            scratch::Integer, wasm_type::WasmValType, julia_type::Type)::UInt32
     isconcretetype(julia_type) || error(
         "numeric boxing requires a concrete Julia source type, got $julia_type")
+    (scratch >= length(b.params) && _local_type(b, scratch, "the box's scratch") === wasm_type) ||
+        throw(ArgumentError("$(b.func_name): the scratch of a $(wasm_type) box is local $(scratch), " *
+                            "which is no local declared with the type $(wasm_type)"))
     box_idx = get_numeric_box_type!(mod, registry, wasm_type)
     local_set!(b, scratch)                  # save the value
     emit_type_id!(b, registry, julia_type)
@@ -922,8 +931,8 @@ end
 """
     _is_boxed_numeric_operand(arg, ctx) -> Bool
 
-True when `arg` arrives in a physically `AnyRef` local and its refined type is not one of the
-machine numerics (Int64, Int32, UInt64, UInt32, Float64, Float32, Bool): a numeric operation on
+True when `arg` arrives in a physically `AnyRef` local and its refined type is not a number its
+register holds exactly (exact_register: a Bool, or a 32- or 64-bit number): a numeric operation on
 it rejects in compile_call! (its class is known only at run time, dev/AUDIT.md A3E6), and
 `_lower_operator!` unboxes it at the width its node states. An SSA whose refined type is a machine
 numeric is not included: its load is the one unbox (translator.dart:2099
@@ -971,21 +980,57 @@ function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)
 end
 
 """
-    emit_value!(b, val, ctx, expected; from_julia=nothing) -> WasmValType
+    emit_value!(b, val, ctx, expected) -> WasmValType
 
 THE wrap chokepoint (dart `translateExpression`, code_generator.dart:665): emit `val`, take
 the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
 `convert_type!` funnel (dart `convertType`), and return `expected`; the type is never
-re-derived after emission.
+re-derived after emission. The source type the funnel reads is the node's own static type
+(value_type, dart's `dartTypeOf(node)`); emit_value_as! states a narrower one the caller knows.
 
-`from_julia` (when the caller knows the value's Julia type) lets the boxing arm stamp the REAL
-classId. A `nothing` actual type means the emit produced no single result (dead/unreachable
+A `nothing` actual type means the emit produced no single result (dead/unreachable
 path — the `unreachable` is already emitted); `expected` is returned so the declared stack
 shape stays consistent, matching dart's posture that unreachable code still validates.
 parity(code_generator.dart:665 translateExpression)
 """
-function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
-                     expected::WasmValType; from_julia::Union{Type,Nothing}=nothing)::WasmValType
+emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+            expected::WasmValType)::WasmValType =
+    _emit_value_wrap!(b, val, ctx, expected, nothing)
+
+"""
+    emit_value_as!(b, val, ctx, expected, from_julia) -> WasmValType
+
+emit_value! for a value whose class the caller knows to be `from_julia`, narrower than the
+node's static type (a class switch's arm, a method error's argument class, a constant's own
+class), so the funnel stamps that class where it boxes.
+parity(code_generator.dart:665 translateExpression)
+"""
+emit_value_as!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+               expected::WasmValType, from_julia::Type)::WasmValType =
+    _emit_value_wrap!(b, val, ctx, expected, from_julia)
+
+"""
+    _emit_value_static!(b, val, ctx, expected, T) -> WasmValType
+
+emit_value! for a value the caller types `T` (a call's static argument type, a field's declared
+type): emit_value_as! at `T` where `T` is a concrete class, else the node's own static type.
+parity(code_generator.dart:665 translateExpression)
+"""
+_emit_value_static!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+                    expected::WasmValType, @nospecialize(T))::WasmValType =
+    (T isa DataType && isconcretetype(T)) ? emit_value_as!(b, val, ctx, expected, T) :
+                                            emit_value!(b, val, ctx, expected)
+
+# parity(code_generator.dart:665 translateExpression): its one body; `from_julia` nothing reads
+# the node's own static type (value_type) when the funnel needs it, and a stated one must be
+# narrower than it (a literal's value of it): a class that disagrees with the value's own type
+# raises at its statement, never converts the value as another class's.
+function _emit_value_wrap!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+                           expected::WasmValType, from_julia::Union{Type,Nothing})::WasmValType
+    from_julia === nothing ||
+        (val isa NirLiteral ? val.value isa from_julia : from_julia <: value_type(ctx, val)) ||
+        error("the class $(from_julia) stated for $(val) disagrees with its own type " *
+              "$(val isa NirLiteral ? Core.Typeof(val.value) : value_type(ctx, val))")
     # A literal `nothing` has an exact null representation at a reference sink.
     # This is deliberately literal-only; SSA/Union shape guesses once swallowed
     # live values here. Dynamic Nothing is handled by its typed producer.
@@ -1015,8 +1060,7 @@ function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationCont
         # Like dart's wrap(node, expectedType), the single wrap funnel owns both
         # the emitted Wasm type and the node's static source type. Callers must
         # not independently rediscover source types just to request a coercion.
-        from_julia === nothing && (from_julia = value_type(ctx, val))
-        convert_type!(b, ty, expected, ctx; from_julia=from_julia)
+        convert_type!(b, ty, expected, ctx; from_julia=(from_julia === nothing ? value_type(ctx, val) : from_julia))
     end
     return expected
 end
@@ -1449,21 +1493,18 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
            !isa(val, Int8) && !isa(val, Int16) && !isa(val, Int32) && !isa(val, Int64) &&
            !isa(val, UInt8) && !isa(val, UInt16) && !isa(val, UInt32) && !isa(val, UInt64) &&
            !isa(val, Float32) && !isa(val, Float64)
-        # Custom primitive type (e.g., JuliaSyntax.Kind) - bitcast to integer
+        # Custom primitive type (e.g., JuliaSyntax.Kind): its bits in its register, zero above
+        # its width (8*sizeof, the register's when as wide)
         T = typeof(val)
         sz = sizeof(T)
-        if sz == 1
-            int_val = Core.Intrinsics.bitcast(UInt8, val)
-            i32_const!(b, Int32(int_val))
-        elseif sz == 2
-            int_val = Core.Intrinsics.bitcast(UInt16, val)
-            i32_const!(b, Int32(int_val))
-        elseif sz == 4
-            int_val = Core.Intrinsics.bitcast(UInt32, val)
-            i32_const!(b, Int32(int_val))
+        if sz == 4
+            i32_const!(b, Int64(Core.Intrinsics.bitcast(Int32, val)))
+        elseif sz < 4
+            i32_const!(b, Int64(Core.Intrinsics.zext_int(UInt32, val)))
         elseif sz == 8
-            int_val = Core.Intrinsics.bitcast(UInt64, val)
-            i64_const!(b, Int64(int_val))
+            i64_const!(b, Core.Intrinsics.bitcast(Int64, val))
+        elseif sz < 8
+            i64_const!(b, Int64(Core.Intrinsics.zext_int(UInt64, val)))
         else
             error("Primitive type with unsupported size for Wasm: $T ($sz bytes)")
         end
@@ -1500,7 +1541,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
                 error("tuple constant field lacks a physical Wasm type")
             local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
-            emit_value!(b, NirLiteral(field_val), ctx, expected_wasm; from_julia=typeof(field_val))
+            emit_value_as!(b, NirLiteral(field_val), ctx, expected_wasm, typeof(field_val))
         end
 
         # Create the struct
@@ -1571,7 +1612,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         for (fi, field_name) in enumerate(fieldnames(T))
             field_val = getfield(val, field_name)
             local _fw = struct_type_def.fields[fi + Int(info.field_offset)].valtype
-            emit_value!(b, NirLiteral(field_val), ctx, _fw; from_julia=typeof(field_val))
+            emit_value_as!(b, NirLiteral(field_val), ctx, _fw, typeof(field_val))
         end
 
         struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
@@ -1619,7 +1660,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
                 end
                 if (dict_slots[i] & 0x80) != 0
                     v = mem[i]
-                    emit_value!(b, NirLiteral(v), ctx, expected; from_julia=typeof(v))
+                    emit_value_as!(b, NirLiteral(v), ctx, expected, typeof(v))
                 elseif expected isa RefType
                     ref_null!(b, expected)
                 elseif expected isa ConcreteRef && expected.nullable
@@ -1700,7 +1741,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             if ctx.last_stmt_was_stub
                 break
             end
-            emit_value!(b, NirLiteral(val[i]), ctx, wasm_elem_type; from_julia=typeof(val[i]))
+            emit_value_as!(b, NirLiteral(val[i]), ctx, wasm_elem_type, typeof(val[i]))
             # Check after each element in case compile_value hit a stub
             if ctx.last_stmt_was_stub
                 break
@@ -1821,7 +1862,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             # A materialized constant supplies stronger evidence than its declared
             # field annotation (e.g. KeyError.key::Any holding Int64). Preserve the
             # exact runtime Julia class so numeric boxing stamps the real classId.
-            emit_value!(b, NirLiteral(field_val), ctx, expected; from_julia=typeof(field_val))
+            emit_value_as!(b, NirLiteral(field_val), ctx, expected, typeof(field_val))
         end
 
         # Create the struct
