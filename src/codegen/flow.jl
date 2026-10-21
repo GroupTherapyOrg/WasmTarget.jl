@@ -67,7 +67,7 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
         # Fall back to param mapping or slottypes
         arg_types_idx = val.id - 1
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
-            return get_concrete_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
+            return boundary_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)   # the param's declared type
         else
             return get_concrete_wasm_type(value_type(ctx, val), ctx.mod, ctx.type_registry; for_local=true)
         end
@@ -77,12 +77,8 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
         # So arg_types index = val.n - 1 for non-closures.
         arg_types_idx = val.n - 1  # _2 → arg_types[1], _3 → arg_types[2], etc.
         if arg_types_idx >= 1 && arg_types_idx <= length(ctx.arg_types)
-            local _arg_t = ctx.arg_types[arg_types_idx]
-            # Union params promoted to anyref for dispatch
-            if _arg_t isa Union && needs_anyref_boxing(_arg_t)
-                return AnyRef
-            end
-            return get_concrete_wasm_type(_arg_t, ctx.mod, ctx.type_registry)
+            # the param's declared type (boundary_wasm_type: a boxed Union is anyref)
+            return boundary_wasm_type(ctx.arg_types[arg_types_idx], ctx.mod, ctx.type_registry)
         end
     elseif val isa NirGlobalRef
         # Resolve GlobalRef to actual value to determine Wasm type

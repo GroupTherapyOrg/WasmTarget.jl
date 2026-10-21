@@ -2253,12 +2253,8 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             if arg_idx_isa >= 1 && arg_idx_isa <= length(ctx.arg_types)
                 local _arg_jtype = ctx.arg_types[arg_idx_isa]
                 isconcretetype(_arg_jtype) && (isa2_julia = _arg_jtype)
-                # Check if this param was promoted to anyref for Union dispatch
-                if _arg_jtype isa Union && needs_anyref_boxing(_arg_jtype)
-                    isa2_val_wasm = AnyRef
-                else
-                    isa2_val_wasm = get_concrete_wasm_type(_arg_jtype, ctx.mod, ctx.type_registry)
-                end
+                # the param's declared type (boundary_wasm_type: a boxed Union is anyref)
+                isa2_val_wasm = boundary_wasm_type(_arg_jtype, ctx.mod, ctx.type_registry)
             end
         end
         if isa2_val_wasm !== nothing && (isa2_val_wasm === I64 || isa2_val_wasm === I32 || isa2_val_wasm === F64 || isa2_val_wasm === F32)
@@ -2347,7 +2343,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             local _arg_idx3 = ctx.is_compiled_closure ? value_arg.n : value_arg.n - 1
             if _arg_idx3 >= 1 && _arg_idx3 <= length(ctx.arg_types)
                 isconcretetype(ctx.arg_types[_arg_idx3]) && (isa3_julia = ctx.arg_types[_arg_idx3])
-                isa3_val_wasm = get_concrete_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)
+                isa3_val_wasm = boundary_wasm_type(ctx.arg_types[_arg_idx3], ctx.mod, ctx.type_registry)   # the param's declared type
             end
         end
         if isa3_val_wasm === ExternRef

@@ -1367,13 +1367,12 @@ function _ref_cast_source_type(val::NirNode, ctx::AbstractCompilationContext)::U
         # on an abstract value arg (e.g. `show(::IO, x)` where the body narrows x
         # to a concrete struct via inference) — the body then emits `struct.get
         # $Concrete` against a `structref` param and validation fails. Resolve the
-        # param's DECLARED wasm type the same way the signature builder does
-        # (compile.jl) so the cast matches the slot, not the (ideal) concrete type.
+        # param's DECLARED wasm type with the signature builder's own translator
+        # (boundary_wasm_type, compile.jl) so the cast matches the slot, not the (ideal)
+        # concrete type.
         arg_idx = ctx.is_compiled_closure ? val.n : val.n - 1
         if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
-            T = ctx.arg_types[arg_idx]
-            return (T isa Union && needs_anyref_boxing(T)) ? AnyRef :
-                get_concrete_wasm_type(T, ctx.mod, ctx.type_registry)
+            return boundary_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry)
         end
     end
     return nothing
