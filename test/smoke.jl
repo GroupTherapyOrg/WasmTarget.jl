@@ -2698,6 +2698,9 @@ struct _FtCall <: Function; u::Union{Nothing,Int64}; end
 @noinline _ft_uvec(x::Int64) = _FtUVec(x > 0 ? Float64[1.5, 2.5] : Int64[3])
 @noinline _ft_call(x::Int64) = _FtCall(x > 0 ? x : nothing)
 @noinline _ft_mat(x::Int64) = _FtMat(x > 0 ? fill(1.5, 2, 2) : nothing)
+# a field of type Union{} no value sets: a partial `new` leaves it undefined
+struct _FtBot; a::Int64; b::Union{}; _FtBot(a) = new(a); end
+@noinline _ft_bot(x::Int64) = _FtBot(x + 1)
 _g("one_field_translation", Any[
     ("range_struct", (x::Int64) -> sum(_FtRange(1:x).r), Int64(4)),
     ("range_tuple", (x::Int64) -> (t = (1:x, x); sum(t[1]) + t[2]), Int64(4)),
@@ -2713,6 +2716,9 @@ _g("one_field_translation", Any[
     ("union_callable_erased", (x::Int64) -> (fs = Any[_ft_call(x)]; fs[1]()::Int64), Int64(3)),
     ("union_matrix_field", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(1)),
     ("union_matrix_field_nothing", (x::Int64) -> (s = _ft_mat(x); s.m === nothing ? -1.0 : sum(s.m)), Int64(-1)),
+    ("union_bottom_field", (x::Int64) -> _ft_bot(x).a, Int64(3)),
+    ("union_bottom_isdefined", (x::Int64) -> isdefined(_ft_bot(x), :b) ? 1 : 2, Int64(3)),
+    ("union_bottom_erased", (x::Int64) -> (t = Any[_ft_bot(x)]; (t[1]::_FtBot).a), Int64(3)),
 ])
 # a value of a non-concrete Array type (Vector{<:Real}) is the join, anyref: its class is known only
 # at run time, so a field read or a call over it rejects at its statement (MARCH 13.10; a UnionAll

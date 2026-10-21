@@ -5403,7 +5403,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 n += occursin("field_storage_type(mod, registry, T, ", fb) ? 0 : 1
                 n += occursin(r"\b(if|elseif)\s+\(?\s*ft\b|\.name\.name", fb) ? 1 : 0   # no ladder over the field's type
             end
-            n += occursin("    ft === Union{} && return StructRef\n    memoryref_eltype(ft) === nothing || return memoryref_field_type!(mod, registry, ft)\n    return get_concrete_wasm_type(ft, mod, registry)\n", structs) ? 0 : 1
+            n += occursin("    memoryref_eltype(ft) === nothing || return memoryref_field_type!(mod, registry, ft)\n    return get_concrete_wasm_type(ft, mod, registry)\nend\n", structs) &&
+                 occursin("\ntranslate_storage_type(::WasmModule, ::TypeRegistry, ::Type{Union{}})::WasmValType = NoneRef\n", structs) ? 0 : 1
             n += count_sites(r"_nullable_field_storage_type!|is_string_codeunits")
             # the routes that register an Array: one per Array, register_array_wrapper!
             n += occursin("register_array_wrapper!(mod, registry, T)", structs) ? 0 : 1

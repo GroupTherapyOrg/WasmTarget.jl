@@ -61,15 +61,17 @@ translateStorageType. It is the value translation, get_concrete_wasm_type, which
 layout (a struct's, an Array's wrapper, a Union's, `nothing`'s null), but for a MemoryRef: a
 field holds the ref's single-value struct, which keeps its element offset (memoryref_field_type!),
 where a value is carried as its Memory with the offset in a local beside it, and for a field of
-type Union{}, which no value ever sets and which a nullable reference holds unset, as every
-registrar held it.
+type Union{}, its own method below.
 parity(translator.dart:1067 translateStorageType)
 """
 function translate_storage_type(mod::WasmModule, registry::TypeRegistry, @nospecialize(ft))::WasmValType
-    ft === Union{} && return StructRef
     memoryref_eltype(ft) === nothing || return memoryref_field_type!(mod, registry, ft)
     return get_concrete_wasm_type(ft, mod, registry)
 end
+# a field of type Union{}: no value ever sets it, so the bottom reference, (ref null none), holds it
+# unset (Julia's dispatch selects this method for the bottom type alone)
+# parity(translator.dart:1067 translateStorageType)
+translate_storage_type(::WasmModule, ::TypeRegistry, ::Type{Union{}})::WasmValType = NoneRef
 
 """
     field_storage_type(mod, registry, T, i) -> WasmValType
