@@ -335,6 +335,14 @@ land)
         echo "land: $what changes dev/CHARTER.md inside ${a%% *} exactly as authorised ($ob → $nb)"
     done
     step checks
+    # the landing log through the previous landing, carried in this landing's own tree (A21E4): the
+    # main tree's git-ignored log copied to the tracked dev/.loop/landings.log, into the branch's head
+    # commit (its author time kept), before the gate, so the gated tree is the tree that lands
+    if [ -s "$LOG" ] && ! cmp -s "$LOG" dev/.loop/landings.log; then
+        mkdir -p dev/.loop && cp "$LOG" dev/.loop/landings.log && git add dev/.loop/landings.log
+        git commit -q --amend --no-edit
+        echo "land: the landing log through $(tail -n 1 "$LOG" | cut -c22-29) carried in ${br}'s head, now $(git rev-parse --short HEAD)"
+    fi
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
     echo "$out" | tail -1
     step runner

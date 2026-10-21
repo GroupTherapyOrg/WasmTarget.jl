@@ -940,6 +940,24 @@ function l197_check(log::AbstractString, hist, march::AbstractString; head::Abst
     return bad, window
 end
 
+# L197 (A21E4): the landing log each landing carries in its own tree (dev/.loop/landings.log) against
+# the main tree's git-ignored one: a line-by-line prefix of it (an earlier line edited afterwards
+# differs), missing at most one landing that is HEAD or its ancestor (the tip's own line, which no
+# tree can carry before it lands); `isanc(c)` says whether commit c is HEAD or its ancestor
+function l197_carried(tracked::Vector, untracked::Vector, isanc)
+    bad = String[]
+    n = length(tracked)
+    if n > length(untracked) || tracked != untracked[1:n]
+        k = something(findfirst(i -> i > length(untracked) || tracked[i] != untracked[i], 1:n), n)
+        push!(bad, "the landing log this tree carries (dev/.loop/landings.log) differs from the main tree's at its line $k: a line edited after it was carried")
+        return bad
+    end
+    missing = [String(split(l, '\t')[2]) for l in untracked[n+1:end] if occursin(r"^[^\t]+\t[0-9a-f]{40}\t", l)]
+    owed = filter(isanc, missing)
+    length(owed) <= 1 || push!(bad, "the landing log this tree carries lacks $(length(owed)) landings this tree holds ($(join(first.(owed, 8), ", "))): only the tip's own may be missing")
+    return bad
+end
+
 # L198: every line of the landing log says whether its landing's timing was judged, and how (what
 # the log gets wrong, a sentence each)
 function l198_check(log::AbstractString)
@@ -4196,7 +4214,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v
         end),
-    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: <clause> authorised by Dale <date>` line, the change's parent and new dev/CHARTER.md blobs listed with that clause and date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit), and every changed line in that clause (CLAUSE_AWK, HUNK_AWK); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), once at least 3 such lines exist (L197_JUDGED_FROM: a median of fewer is one landing's own number, so an early landing is never hostage to a naming row; fewer are printed with the target, not judged), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's own programs: CLAUSE_AWK maps a text's lines to C1, C10 or none, HUNK_AWK maps a changed line and a deletion to their clauses, EXEMPT_AWK admits added row numbers and an added \"and\" and refuses a deleted citation, a deleted \"and\" and any other word; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; a slower landing a MARCH row names, and the gated commit's own line, leave the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: <clause> authorised by Dale <date>` line, the change's parent and new dev/CHARTER.md blobs listed with that clause and date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit), and every changed line in that clause (CLAUSE_AWK, HUNK_AWK); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: the landing log each landing carries in its own tree (dev/.loop/landings.log, written by `land` into the branch's head before the gate, A21E4) is a line-by-line prefix of the main tree's git-ignored log, missing at most one landing this tree holds (the tip's own); every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), once at least 3 such lines exist (L197_JUDGED_FROM: a median of fewer is one landing's own number, so an early landing is never hostage to a naming row; fewer are printed with the target, not judged), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's own programs: CLAUSE_AWK maps a text's lines to C1, C10 or none, HUNK_AWK maps a changed line and a deletion to their clauses, EXEMPT_AWK admits added row numbers and an added \"and\" and refuses a deleted citation, a deleted \"and\" and any other word; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; a slower landing a MARCH row names, and the gated commit's own line, leave the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
         () -> begin
             local v = 0
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
@@ -4210,6 +4228,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                          raw"LOG=\"$MAIN/dev/.loop/landings.tsv\"",
                          raw"HOLD=\"$MAIN/dev/.block/HOLD\"",
                          raw"AUTHORISED=\"$MAIN/dev/.block/charter_authorised\"",
+                         # the landing log through the previous landing carried in the landing's own tree (A21E4)
+                         raw"        mkdir -p dev/.loop && cp \"$LOG\" dev/.loop/landings.log && git add dev/.loop/landings.log" * "\n" * raw"        git commit -q --amend --no-edit",
                          raw"        grep -qx \"$ob $nb $a\" \"$AUTHORISED\" 2>/dev/null ||",
                          raw"            [ \"$c\" = \"${a%% *}\" ] ||",
                          raw"        if [ \"$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' \"$h^\" \"$h\" -- dev/CHARTER.md | awk \"$EXEMPT_AWK\")\" = yes ]; then",
@@ -4221,7 +4241,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                           read(joinpath(ROOT, "dev", "block_runner.jl"), String)) ? 0 : 1
             # the targets are literals, never raised
             v += occursin("const L197_TARGET_SRC = 180 ", rx) && occursin("const L197_TARGET_OTHER = 90 ", rx) && occursin("const L197_JUDGED_FROM = 3 ", rx) ? 0 : 1
-            v += occursin("\ndev/.loop/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
+            v += occursin("\ndev/.loop/*\n!dev/.loop/landings.log\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
             try
                 # land.sh's charter programs, run on fixed text (A21E6)
                 local prog = name -> (m = match(Regex("\n" * name * "='([^']+)'\n"), land); m === nothing ? error("dev/land.sh has no $name") : String(m[1]))
@@ -4278,6 +4298,14 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                isempty(first(l197_check("", hist[1:0], ""))),
                                !isempty(first(l197_check("", hist, ""))),
                                _l197_epoch("1970-01-01T00:00:00Z") == 0, _l197_epoch("2026-10-21T14:00:00Z") == 1792591200])
+                # the carried copy (A21E4): a prefix missing only the tip's own line passes; an edited earlier
+                # line, or two of this tree's landings missing, fail
+                local cl = c -> "2026-10-21T14:00:00Z\t" * c * "\tx"
+                local A = repeat("a", 40); local B = repeat("b", 40); local C = repeat("c", 40)
+                local U = [L197_COLUMNS, cl(A), cl(B), cl(C)]
+                v += count(!, [isempty(l197_carried(U, U, c -> true)), isempty(l197_carried(U[1:3], U, c -> true)),
+                               !isempty(l197_carried(U[1:2], U, c -> true)), isempty(l197_carried(U[1:2], U, c -> c == B)),
+                               !isempty(l197_carried([U[1], cl(A) * "y", U[3]], U, c -> true)), !isempty(l197_carried(String[], U, c -> true))])
                 if get(ENV, "GITHUB_ACTIONS", "") == "true"
                     println("    · L197: a CI checkout: the landing log is the landing machine's; nothing counted here")
                 else
@@ -4295,6 +4323,12 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                         local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
                         local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real, read(joinpath(ROOT, "dev", "MARCH.md"), String);
                                                        head = readchomp(`git -C $ROOT rev-parse HEAD`))
+                        # the copy each landing carries in its own tree (A21E4)
+                        local tp = joinpath(ROOT, "dev", ".loop", "landings.log")
+                        local lines_of = t -> String.(filter(!isempty, split(t, '\n')))
+                        append!(bad, l197_carried(isfile(tp) ? lines_of(read(tp, String)) : String[],
+                                                  isfile(logp) ? lines_of(read(logp, String)) : String[],
+                                                  c -> success(`git -C $ROOT merge-base --is-ancestor $c HEAD`)))
                         foreach(b -> println("    ✗ L197: ", b), bad)
                         println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
                                 isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "),
