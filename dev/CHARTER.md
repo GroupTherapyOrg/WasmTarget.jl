@@ -140,7 +140,8 @@ with the per-clause status. A clause is never closed by argument.
   landing's gate is `bash dev/gate.sh --block` on this machine, at most 60 s of wall, measured
   by the gate itself, which `dev/land.sh merge` lands on (its green record of the exact commit,
   made on a clean tree); the full CI matrix runs on every landed head and never holds a landing
-  (its red is the next batch's first item), and once, blocking, on PR #122's merge head; a
+  (its red is the next batch's first item: `dev/land.sh merge` refuses while the last landed
+  head's matrix is red), and once, blocking, on PR #122's merge head; a
   failure names its site. Checks: `L144` (every instruction a statement emits maps to its
   source, so a trap at run time names its statement as a rejection at compile time does)
   `L145` (every throw carries the stack it was raised on, so an escaped exception names its
@@ -158,10 +159,14 @@ with the per-clause status. A clause is never closed by argument.
   runners, gives its verdict within its 20-minute budget per lane job) `L163` (the CI inner loop,
   `bash dev/gate.sh --fast`, is never a landing's gate) `L194` (the blocking gate: the ratchet, a
   fixed smoke core with the groups the change maps to and its own cases on 1.12 and 1.13, the
-  probe core with the change's probes, TLC for the models it touches, side by side, each stage and
-  the whole run on a budget, an evidence record per tree, the landing on that record alone)
+  probe core with the change's probes, the QA families its change selects (every changed one and
+  those the locks cite as behavior for what it changes), TLC for the models it touches, side by
+  side, each stage and the whole run on a budget, an evidence record per tree, the landing on
+  that record alone, never while the last landed head's matrix is red)
   `L195` (its timing ratchet: a stage more than 15% and 0.3 s slower than its best fails, unless
-  the commit declares a correctness fix with its MARCH row).
+  the commit declares a correctness fix with its MARCH row; the budgets are literal walls, and a
+  machine more than 1.5 times slower than its best gives no verdict, never a scaled pass).
+  Planned: dev/MARCH.md 13.18 — the ratchet stage's time to win back (L195).
 - **C0 · The charter holds.** Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this

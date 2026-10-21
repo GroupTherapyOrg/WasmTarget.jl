@@ -3737,7 +3737,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
             v
         end),
-    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12 and the probes through `WT_BLOCK_RUNNER` when it names a warm session's runner (one after another), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`). dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, each a hard limit (L195 scales them by the machine's measured speed); a changed file under src/ or ext/ with no row in test/block_groups.tsv fails the gate, and every src file has one; every group the file names is a smoke group or xfail group and every probe a corpus probe; a selection naming no group or probe fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, run_tlc.sh's `no instance`), never a green run of nothing. The evidence record dev/.block/<tree>.toml (git-ignored) is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of exactly that commit, green, made on a clean tree, from a clean main tree, and reads no CI check (dev/CHARTER.md C10)",
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, at most 60 s of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names (the cover of the file's pieces by the QA families the locks cite as behavior, test/block_impact.jl), so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a hard limit of wall, never scaled (a machine more than 1.5 times slower than its best gives no verdict, L195); a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate, and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types, as the export namer src/codegen/trimcollect.jl does, names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree test/block_impact.jl measured, and the gate notes how many pieces of src changed since; a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family or phase`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) or the warm runner was cold (its first request, or the first after a revise: red then only for a failing check), green otherwise (exit 0, 1, 3). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the full matrix on the last landed head is not red: it reads that head's newest gate.yml run (`gh run list --commit`, a march/** or gate/** push), refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check (dev/CHARTER.md C10)",
         () -> begin
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
@@ -3749,41 +3749,67 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local v = 0
             v += occursin("if [ \"\${1:-}\" = --block ]; then shift; exec julia --startup-file=no dev/block.jl \"\$@\"; fi", sh) ? 0 : 1
             # every stage, started side by side
-            for line in [raw"    ld = launch!(Stage(\"load\", `$jl --project=. -e 'using WasmTarget; print(VERSION)'`, logf(\"load\")))",
-                         raw"    rat = launch!(Stage(\"ratchet\", `$jl -O0 --project=. test/parity_ratchet.jl`, logf(\"ratchet\")))",
+            for line in [raw"    ld = launch!(Stage(\"load\", setenv(`$jl --project=. -e 'using WasmTarget; print(VERSION)'`, stage_env()), logf(\"load\")))",
+                         raw"    rat = launch!(Stage(\"ratchet\", setenv(`$jl -O0 --project=. test/parity_ratchet.jl`, stage_env()), logf(\"ratchet\")))",
                          raw"        launch!(Stage(\"smoke-core\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $core`, smokeenv), logf(\"smoke-core\")))",
                          raw"            launch!(Stage(\"smoke-batch\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $batch`, smokeenv), logf(\"smoke-batch\")))",
-                         raw"        launch!(Stage(\"smoke-1.13\", setenv(`julia +1.13 --startup-file=no --project=. -L dev/block_jit.jl test/smoke.jl $newgroups`, smokeenv), logf(\"smoke-1.13\")))",
-                         raw"    probe_env(c) = merge(ENV, Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
-                         raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, merge(ENV, Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
-                         raw"    smokeenv = merge(ENV, Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
-                         raw"                append!(out, last.(spans))   # an included case file's generators feed every group it defines",
+                         raw"        launch!(Stage(\"smoke-1.13\", setenv(`julia +1.13 --startup-file=no --project=. -L dev/block_jit.jl test/smoke.jl $smoke113`, smokeenv), logf(\"smoke-1.13\")))",
+                         raw"    smoke113 = setdiff(unique(vcat(newgroups, v113)), matrix)",
+                         raw"        append!(mapped, row[1]); append!(tests, row[2]); append!(v113, row[3])",
+                         raw"    probe_env(c) = stage_env(Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
+                         raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, stage_env(Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
+                         raw"    smokeenv = stage_env(Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
+                         raw"    batch = setdiff(unique(vcat(mapped, newgroups)), core, matrix)",
+                         raw"            append!(out, last.(spans))",
                          raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
-                         raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups that exercise it\")",
-                         raw"    foreach(wait, tasks)"]
+                         raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups and QA families that exercise it\")",
+                         raw"    foreach(wait, tasks)",
+                         raw"        isempty(tests) || launch!(Stage(\"tests\", setenv(`$jl --project=. test/runtests.jl`, tests_env), logf(\"tests\")))",
+                         raw"        isempty(tests) || push!(chain, Stage(\"tests\", setenv(`$runner test/runtests.jl`, tests_env), logf(\"tests\")))",
+                         raw"    tests_env = stage_env(Dict(\"WT_QA_ONLY\" => join(tests, '\n')))",
+                         raw"    unchanged || push!(efails, \"the tree changed while the stages ran (HEAD, or what is uncommitted): no verdict, rerun\")",
+                         raw"    if clean && unchanged",
+                         raw"            name in families && name != \"parity_ratchet.jl\" && (push!(tests, name); continue)",
+                         raw"            f == \"test/runtests.jl\" && (append!(tests, touched_runtests(base)); continue)",
+                         raw"        ok = s.exit == 0 && isempty(missing)"]
                 v += occursin(line, blk) ? 0 : 1
             end
             # the budgets: the whole run at most 60 s, every stage within it
             local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
             local sec = match(r"(?s)\n\[budget\]\n(.*?)(?:\n\[|\z)", bt)
             local budgets = sec === nothing ? Dict{String,Float64}() :
-                Dict(String(m[1]) => parse(Float64, m[2]) for m in eachmatch(r"^\"([a-z0-9.-]+)\" = ([0-9.]+)$"m, sec[1]))
-            local stages = ["total", "load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tlc", "case-median"]
+                Dict(String(m[1]) => parse(Float64, m[2]) for m in eachmatch(r"^\"([a-z0-9.@-]+)\" = ([0-9.]+)$"m, sec[1]))
+            local stages = ["total", "load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tests@warm", "tlc", "case-median"]
             v += sort(collect(keys(budgets))) == sort(stages) ? 0 : 1
             v += get(budgets, "total", Inf) <= 60 && all(k -> get(budgets, k, Inf) <= get(budgets, "total", 0), stages) ? 0 : 1
-            v += occursin(raw"        push!(fails, \"total: $(fmt(total)) s, over the budget of $tb s ($(fmt(total / factor)) s at the machine's best speed)\")", blk) ? 0 : 1
-            v += occursin(raw"                push!(fails, \"$name: $(fmt(wall)) s, over its budget of $b s ($(fmt(scaled)) s at the machine's best speed)\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
+            v += get(budgets, "tests@warm", Inf) <= 20 ? 0 : 1
+            v += occursin(raw"    total > tb && push!(tfails, \"total: $(fmt(total)) s of wall, over the budget of $tb s\")", blk) ? 0 : 1
+            v += occursin(raw"            push!(tfails, \"$name: $(fmt(wall)) s of wall, over its budget of $b s\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
+            # no budget is scaled to pass: the scaled time is the ratchet's alone (A19P5)
+            v += occursin(r"scaled <= b|total / factor <= tb|not blocking", blk) ? 1 : 0
             # the map: every src file has a row, every group and probe exists
             # smoke's groups: smoke.jl's, its lazy ones (registry_cases.jl's) and those of the case files it includes
             local smoke_all = join([smoke; [read(joinpath(ROOT, "test", m[1]), String)
                                             for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smoke)]], '\n')
             local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smoke_all))
             local cases = Set(m[1] for m in eachmatch(r"^_c\(\"([^\"]+)\""m, corpus))
+            local rt = read(joinpath(ROOT, "test", "runtests.jl"), String)
+            local families = Set(m[1] !== nothing ? String(m[1]) : String(m[2]) * "/" * String(m[3])
+                                 for m in eachmatch(r"_wt_qa_include\((?:\"([^\"]+)\"|joinpath\(@__DIR__, \"([^\"]+)\", \"([^\"]+)\"\))\)", rt))
             local rows = Dict{String,Vector{String}}()
             for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
                 (isempty(strip(l)) || startswith(l, '#')) && continue
                 local f = split(l, '\t')
-                length(f) == 2 ? (rows[String(f[1])] = filter(!=("-"), String.(split(f[2])))) : (v += 1)
+                local names(x) = filter(!=("-"), String.(split(x)))
+                if f[1] == "measured"
+                    v += length(f) == 2 && occursin(r"^[0-9a-f]{40}$", f[2]) ? 0 : 1
+                elseif f[1] in ("core", "probes", "matrix-only")
+                    length(f) == 2 ? (rows[String(f[1])] = names(f[2])) : (v += 1)
+                else
+                    length(f) == 4 || (v += 1; continue)
+                    rows[String(f[1])] = vcat(names(f[2]), names(f[4]))
+                    v += count(t -> !(t in families), names(f[3]))
+                end
             end
             v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
             # the matrix-only row: exactly the generated registry groups (Amendment 117-14) and
@@ -3809,7 +3835,9 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 v += occursin(needle, read(joinpath(ROOT, f), String)) ? 0 : 1
             end
             v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = setdiff(unique(vcat(mapped, newgroups)), core, matrix)", blk) &&
-                 occursin("            f[1] == \"matrix-only\" ? append!(matrix, gs) : push!(rows, String(f[1]) => gs)", blk) ? 0 : 1
+                 occursin("            append!(f[1] == \"core\" ? core : f[1] == \"probes\" ? probes : matrix, names(f[2]))", blk) ? 0 : 1
+            v += count(l -> startswith(l, "measured\t"), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) == 1 ? 0 : 1
+            v += any(l -> occursin(r"^src/codegen/trimcollect\.jl\t[^\t]*\t[^\t]*\t[a-z_]", l), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) ? 0 : 1
             for (k, gs) in rows
                 v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
             end
@@ -3822,21 +3850,108 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("        println(\"smoke: no group named \", join(unknown, \", \"))\n        exit(1)", smoke) ? 0 : 1
             v += occursin("isempty(unknown) || (println(\"probe_bytes: WT_PROBE_ONLY names no probe \", join(unknown, \", \")); return 1)", probe) ? 0 : 1
             v += occursin(raw"[[ \" ${cfgs[*]} \" == *\" $o \"* ]] || { echo \"TLC_ONLY names $o, which is no instance\" >&2; exit 1; }", tlc) ? 0 : 1
+            v += occursin("        isempty(unknown) || (println(\"runtests: WT_QA_ONLY names no QA family or phase \", join(unknown, \", \")); exit(1))", rt) ? 0 : 1
             # the record, on a clean tree only, and the landing on it alone
-            v += occursin("    if clean\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
+            v += occursin("    if clean && unchanged\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
+            for line in [raw"    path = joinpath(RECORD_DIR, \"$tree-$n.toml\")",
+                         raw"    verdict = run_verdict(fails, tfails, efails, cold, busy)",
+                         raw"    return verdict == \"green\" ? 0 : verdict == \"red\" ? 1 : 3"]
+                v += occursin(line, blk) ? 0 : 1
+            end
+            # a check's failure is red, never classed as the machine's or the runner's
+            v += occursin(r"push!\((tfails|efails), \"(no row|ratchet|smoke|probes|tests|tlc: [^n])", blk) ? 1 : 0
+            # a stage sees no WT_*, TLC_* or WASMTARGET_* variable but the gate's own (run, A19P3), and
+            # every stage's Cmd is built from stage_env: no merge(ENV, ...) and no Cmd without setenv
+            v += occursin(r"merge\(ENV", blk) ? 1 : 0
+            local Bm = Module(:BlockEnv)
+            try
+                Base.include(Bm, joinpath(ROOT, "dev", "block.jl"))
+                local e = withenv("WT_RATCHET_INCLUDED" => "1", "WT_SMOKE_PART" => "0/8", "WT_RATCHET_UPDATE" => "1",
+                                  "TLC_DEEP" => "x", "WASMTARGET_X" => "1", "BLOCK_KEEP" => "k") do
+                    Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_QA_ONLY" => "q"))
+                end
+                v += e == merge(Dict(k => v2 for (k, v2) in ENV if !any(p -> startswith(k, p), ("WT_", "TLC_", "WASMTARGET_"))), Dict("WT_QA_ONLY" => "q", "BLOCK_KEEP" => "k")) ? 0 : 1
+                v += (try; Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_RATCHET_UPDATE" => "1")); false; catch; true; end) ? 0 : 1
+                # the selections, run on fixed text (A19P11): a selection that silently picks nothing fails here
+                local g = (n, a...) -> Base.invokelatest(getglobal(Bm, n), a...)
+                local smoke_l = ["# harness", "_g(\"a\", Any[", "  case", "])", "helper() = 1", "_xf(\"b\", Any[", "  case", "])", "main()"]
+                local corpus_l = ["# head", "_c(\"p1\", f1, (Int,))", "  x", "_c(\"p2\", f2, (Int,))", "  y"]
+                local rt_l = ["x", "_wt_qa_include(\"a.jl\")", "_wt_qa_include(joinpath(@__DIR__, \"s\", \"t.jl\"))", "begin",
+                              "    @pphase \"Phase 1: A\" begin", "  y", "    end", "    @pphase \"Phase 2: B\" begin", "  z",
+                              "end  # end of phase-registration block", "tail"]
+                local rows_ = ["src/" => (["g1"], ["t1"]), "src/a.jl" => (["g2"], String[]), "ext/" => (String[], String[])]
+                v += count(!, [g(:hunk_lines, "@@ -3,2 +3,3 @@\n@@ -10 +11,0 @@\n@@ -20 +20 @@\n") == [3, 4, 5, 11, 12, 20],
+                               g(:groups_touched, smoke_l, [3], true) == ["a"], g(:groups_touched, smoke_l, [5], true) == ["b"],
+                               isempty(g(:groups_touched, smoke_l, [1], true)), isempty(g(:groups_touched, smoke_l, [9], true)),
+                               g(:groups_touched, smoke_l, g(:hunk_lines, "@@ -5 +4,0 @@\n"), true) == ["a", "b"],
+                               # an included case file: its generators feed every group it defines; a one-line group is its line
+                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [1], false) == ["c", "d"],
+                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [3], false) == ["d"],
+                               isempty(g(:groups_touched, ["no_groups() = 1"], [1], false)),
+                               g(:groups_touched, ["_g(\"c\", gen())", "_g(\"d\", Any[", "  x", "])"], [3], false) == ["d"],
+                               g(:probes_touched, corpus_l, [3, 5, 1], ["p1\tabc", "p2\tdef"], [2]) == ["p1", "p2"],
+                               isempty(g(:probes_touched, corpus_l, [1], String[], Int[])),
+                               g(:runtests_touched, rt_l, [1, 2, 3, 6, 9, 11]) == ["a.jl", "s/t.jl", "Phase 1: A", "Phase 2: B"],
+                               g(:tlc_select, ["dev/formal/Foo.tla", "dev/formal/nightly/Bar.tla", "src/x.jl", "dev/formal/MCBazBroken.cfg"],
+                                 ["MCFoo.cfg", "MCFooDeep.cfg", "MCBar.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]) == (["MCFoo.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]),
+                               g(:row_for, "src/a.jl", rows_) == (["g2"], String[]), g(:row_for, "src/b.jl", rows_) == (["g1"], ["t1"]),
+                               g(:row_for, "test/x.jl", rows_) === nothing])
+            catch err
+                println("    ✗ dev/block.jl does not load for its environment rule: ", sprint(showerror, err))
+                v += 1
+            end
             v += occursin("\ndev/.block/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
-            for line in [raw"        if [ -f \"$w/dev/.block/$tree.toml\" ] && grep -qx \"head = \\\"$head\\\"\" \"$w/dev/.block/$tree.toml\"; then rec=\"$w/dev/.block/$tree.toml\"; break; fi",
+            for line in [raw"        for f in \"$w/dev/.block/$tree\"-*.toml; do [ -f \"$f\" ] && recs+=(\"$f\"); done",
+                         raw"        grep -qx 'verdict = \"red\"' \"$f\" && { echo \"$f is red: a red run of this tree stands — refusing\"; grep -A8 '^failures' \"$f\"; exit 1; }",
+                         raw"    grep -qx \"head = \\\"$head\\\"\" \"$rec\" || { echo \"$rec, the last record of this tree, is of another commit — refusing\"; exit 1; }",
                          raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
-                         raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec is not green — refusing\"; grep -A8 '^failures' \"$rec\"; exit 1; }",
+                         raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' \"$rec\")) — refusing\"; exit 1; }",
                          raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
                          raw"    bash dev/gate.sh --block"]
                 v += occursin(line, land) ? 0 : 1
             end
-            # no CI result read: no check run, no workflow run, no gh api call
-            v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api"i, land) ? 1 : 0
+            # the matrix on the last landed head read, never waited for: its newest gate.yml run, red
+            # refusing, unfinished or absent a WARNING in the record; no other check read
+            for line in [raw"    prev=$(git -C \"$MAIN\" rev-parse \"$MARCH\")",
+                         raw"        matrix=$(gh run list --commit \"$prev\" --limit 50 --json databaseId,status,conclusion,workflowName,event,headBranch \\",
+                         raw"                                and (.workflowName == \"Gate\" or .workflowName == \".github/workflows/gate.yml\"))]",
+                         raw"    completed:failure | completed:timed_out | completed:startup_failure)",
+                         raw"        echo \"a red matrix on ${prev:0:8} is the next item (gate.yml run $mrun, $mconclusion): fix it first — refusing\"; exit 1 ;;",
+                         raw"        printf '\n[landing]\nwarning = \"%s\"\n' \"$warning\" >> \"$rec\""]
+                v += occursin(line, land) ? 0 : 1
+            end
+            v += length(collect(eachmatch(r"\$\(gh run list", land))) == 1 ? 0 : 1
+            v += occursin(raw"    mb=$(git -C \"$MAIN\" merge-base \"$head\" \"$MARCH\")", land) &&
+                 occursin(raw"    grep -qx \"base = \\\"$mb\\\"\" \"$rec\" ||", land) ? 0 : 1
+            # the warm runner is this tree's, versioned, its reset the one quarantined mechanism (A19P4)
+            local rn = read(joinpath(ROOT, "dev", "block_runner.jl"), String)
+            for (txt, line) in [(rn, raw"const REFUSED = (\"WT_PROBE_RECORD\", \"WT_RATCHET_UPDATE\", \"WT_RECORD_TIMES\")"),
+                                (rn, raw"        state = get(ran_on, key, -1) == version[] ? \"warm\" :"),
+                                (rn, raw"        isempty(s) || (version[] += 1)"),
+                                (rn, raw"        key = join(vcat(normpath(abspath(cwd, target)), args, sort([k * \"=\" * v for (k, v) in env if startswith(k, \"WT_\")])), '\0')"),
+                                (rn, raw"        s isa String || !usings_changed() || (s = \"Main's `using` list differs from its start after the reset\")"),
+                                (rn, raw"        frame(sock, 'e', \"block_runner: $state $BLOB\n\")"),
+                                (rn, raw"    c1 == c2 > COUNTER0 || error("),
+                                (rn, "# The reset (parity(quarantine: a Julia process has no API to give Main a fresh binding table;"),
+                                (blk, raw"    haskey(ENV, \"WT_BLOCK_RUNNER\") && error("),
+                                (blk, raw"    runner = \"--warm\" in args ? `julia --startup-file=no dev/block_runner.jl run` : ``"),
+                                (blk, raw"                m[2] == runner_blob || push!(efails,"),
+                                (blk, raw"    occursin(\"Precompiling\", read(ld.log, String)) && pushfirst!(rstates,"),
+                                (land, raw"    [ -z \"$runner\" ] || [ \"$runner\" = \"dev/block_runner.jl $(git -C \"$MAIN\" rev-parse \"$head:dev/block_runner.jl\")\" ] ||")]
+                v += occursin(line, txt) ? 0 : 1
+            end
+            # Main's table is stored only by reset_main!, and dev/runner_env pins every package exactly
+            local rm_ = match(r"(?s)    function reset_main!\(\)\n.*?\n    end\n", rn)
+            v += rm_ !== nothing && count("unsafe_store!", rn) == 4 && count("unsafe_store!", rm_.match) == 4 ? 0 : 1
+            v += occursin(raw"        error(\"block_runner: a `using` added to Main is not taken back by storing its length at byte $USINGS_LEN_OFFSET (Julia $VERSION)\")", rn) ? 0 : 1
+            local renv = read(joinpath(ROOT, "dev", "runner_env", "Project.toml"), String)
+            local compat = match(r"(?s)\n\[compat\]\n(.*)", renv)
+            v += compat !== nothing && occursin("Revise = \"=", compat[1]) &&
+                 all(l -> occursin(r"^[A-Za-z]+ = \"=[0-9.]+\"$", l), filter(!isempty, split(compat[1], '\n'))) ? 0 : 1
+            v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api|gh pr checks"i, land) ? 1 : 0
             v
         end),
-    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under WT_BLOCK_RUNNER, a warm session's runner, the smokes and probes it runs are budgeted and not ratcheted, their time the session's state, and load and ratchet hold bests of their own, `<stage>@warm`; a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row dev/MARCH.md has (a row the commit adds: the time is won back there); a budget exceeded only on a slower machine (within it once scaled) is recorded, not blocking. `WT_TIMING_UPDATE=1` lowers a best only from a green run on a clean tree on a quiet machine (load average at most Julia's CPU threads) and never raises one. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
+    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under the warm runner (`--warm`) every stage holds a best of its own, `<stage>@warm`, smoke-core and probes included: the compiler's speed is held warm, against a best recorded from a warm run, never a cold one (A19P4); a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 15% AND more than 0.3 s above its best fails the gate (`slower`), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row the change itself adds to dev/MARCH.md (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`; an existing row exempts nothing) that names the stages it leaves slower, which alone are exempt, and whose bests that run's update raises in the same diff (A19P7); the budgets are literal walls: a machine more than 1.5 times slower than its best while the stages ran (FACTOR_CAP) gives no verdict, rerun on a quieter one, never a scaled pass, and under that cap a budget or best exceeded is red, unless the machine was busy (its 1-minute load above Julia's CPU threads at the run's start or end, the rule a best is recorded under): a load reason is no verdict, and a red run stands only for a reason of the change's (A19P2, A19P5). `WT_TIMING_UPDATE=1` lowers a best only from a green run on a clean tree on a quiet machine (load average at most Julia's CPU threads) and never raises one, and lowering the calibration lowers every best in proportion in the same write. A change is judged by its own dev/timing_best.toml held to its base's (`git show <base>:dev/timing_best.toml`, A19P6): a budget or best of the base's removed, or raised (a best compared at one calibration, as best / calibration), fails the gate. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
         () -> begin
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
             local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
@@ -3844,16 +3959,23 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("const SLOWER_FRACTION = 0.15\nconst SLOWER_SECONDS = 0.3\n", blk) ? 0 : 1
             v += occursin("const RATCHETED = (\"load\", \"ratchet\", \"smoke-core\", \"probes\")", blk) ? 0 : 1
             v += occursin("        if name in RATCHETED && ok && fixed && slower(scaled, bw)", blk) ? 0 : 1
+            v += occursin("        timing_exemption(msg, git(\"diff\", \"\$base..HEAD\", \"--\", \"dev/MARCH.md\"))", blk) &&
+                 occursin("    isempty(exempt_problem) || push!(fails, exempt_problem)", blk) &&
+                 occursin("            if name in exempt_stages\n", blk) ? 0 : 1
             v += occursin("        scaled = wall / factor\n", blk) ? 0 : 1
-            v += occursin("    warm_stage(name) = !isempty(runner) && name in (\"smoke-core\", \"probes\")", blk) &&
-                 occursin("        fixed &= !warm_stage(name)", blk) ? 0 : 1
+            v += occursin("const FACTOR_CAP = 1.5\n", blk) && occursin("    factor > FACTOR_CAP && push!(efails, ", blk) ? 0 : 1
+            v += occursin("    busy = max(loadavg[1], loadavg_end[1]) > Sys.CPU_THREADS\n", blk) ? 0 : 1
+            v += occursin("    bestkey(name) = !isempty(runner) ? name * \"@warm\" : name", blk) && !occursin("warm_stage", blk) ? 0 : 1
             v += occursin("                (!haskey(best, bk) || w < best[bk]) && (best[bk] = w; push!(lowered, \"\$bk \$w\"))", blk) ? 0 : 1
-            v += occursin("        if !green\n            push!(notes, \"WT_TIMING_UPDATE: refused, the run is not green\")\n        elseif !clean", blk) ? 0 : 1
+            v += occursin("        if !green\n            push!(notes, \"WT_TIMING_UPDATE: refused, the run is not green (\$verdict)\")\n        elseif !clean", blk) ? 0 : 1
             v += occursin("    quiet = loadavg[1] <= Sys.CPU_THREADS\n    updating && !quiet && (updating = false;", blk) ? 0 : 1
             # a best not recorded fails the gate outside the update, which records it
             v += occursin(raw"                push!(fails, \"$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\")", blk) ? 0 : 1
             v += occursin(raw"                    push!(fails, \"calibration: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\"))", blk) ? 0 : 1
             v += occursin("\n[best]\n", bt) && occursin("\n[budget]\n", bt) ? 0 : 1
+            v += occursin("    loosened = isempty(base_text) ? String[] : timing_against_base(timing, Base.invokelatest(TOML.parse, base_text), exempt_stages)", blk) &&
+                 occursin("    append!(fails, loosened)\n", blk) &&
+                 occursin("            k == \"calibration\" || (best[k] = round(best[k] * bcal / old; digits = 2))", blk) ? 0 : 1
             # the decisions, run
             local B = Module(:BlockDecisions)
             try
@@ -3861,9 +3983,27 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 local f = (n, a...) -> Base.invokelatest(getglobal(B, n), a...)
                 v += count(!, [f(:slower, 11.6, 10.0), !f(:slower, 11.4, 10.0), !f(:slower, 1.25, 1.0), f(:slower, 1.4, 1.0),
                                !f(:slower, 100.0, NaN), f(:machine_factor, 0.04, 0.02) == 2.0, f(:machine_factor, 0.01, 0.02) == 1.0,
-                               f(:timing_exemption, "Charter: C10\n", "| 13.4 | C1 |") == "",
-                               f(:timing_exemption, "x\nTiming: correctness fix (MARCH 13.4)\n", "| 13.4 | C1 | w |") == "correctness fix, MARCH 13.4",
-                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.99)", "| 13.4 | C1 |"); false; catch; true; end)])
+                               f(:timing_exemption, "Charter: C10\n", "+| 13.4 | C1 |") == ("", String[]),
+                               f(:timing_exemption, "x\nTiming: correctness fix (MARCH 13.20)\n", "+| 13.20 | C6 | win back smoke-core and probes |") ==
+                                   ("correctness fix, MARCH 13.20 (smoke-core, probes)", ["smoke-core", "probes"]),
+                               # a row the change does not add (context or an existing row), or one naming no stage, raises
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.4)", " | 13.4 | C1 | smoke-core |"); false; catch; true; end),
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.20)", "+| 13.20 | C6 | the time |"); false; catch; true; end),
+                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.99)", "+| 13.4 | C1 | smoke-core |"); false; catch; true; end),
+                               f(:run_verdict, ["x"], String[], String[], false, true) == "red", f(:run_verdict, ["x"], String[], ["busy"], true, false) == "red",
+                               f(:run_verdict, String[], ["over"], ["busy"], false, false) == "none", f(:run_verdict, String[], ["over"], String[], true, false) == "none",
+                               f(:run_verdict, String[], ["over"], String[], false, false) == "red", f(:run_verdict, String[], ["over"], String[], false, true) == "none",
+                               f(:run_verdict, String[], String[], String[], false, true) == "green",
+                               # held to the base: a raised budget, a raised best, a removed one, a best raised by a lowered calibration fail; a lowered one passes
+                               let tb(bu, be) = Dict("budget" => bu, "best" => be), base = tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.0))
+                                   isempty(f(:timing_against_base, base, base)) &&
+                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 50), Dict("calibration" => 0.004, "ratchet" => 9.0)), base)) &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.5)), base)) == 1 &&
+                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 10.0)), base)) == 1 &&
+                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 5.0)), base))
+                               end])
             catch e
                 println("    ✗ dev/block.jl does not load for its decisions: ", sprint(showerror, e))
                 v += 1

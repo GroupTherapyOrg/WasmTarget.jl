@@ -18,9 +18,15 @@ function _wt_logical_cpus()
     end
     return Sys.CPU_THREADS
 end
+# WT_QA_ONLY="<name>\n<name>...": this process runs exactly these QA families (by the name _wt_qa
+# deals them by, e.g. host_imports.jl, sidecar/sidecar_test.jl) and phases (by their exact name),
+# each as the shard it is dealt to runs it, and nothing else (dev/block.jl's tests stage, L194); a
+# name that is neither fails the run.
+const _WT_QA_ONLY = Set{String}(filter(!isempty, strip.(split(get(ENV, "WT_QA_ONLY", ""), '\n'))))
+const _WT_QA_SEEN = Set{String}()
 # A child process runs either ONE codegen shard (WT_SHARD="i,N") or the fuzz pass
 # (WT_FUZZ=1). The orchestrator (neither var set) spawns both phases below.
-if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1" && get(ENV, "WT_PHASE", "") == ""
+if get(ENV, "WT_SHARD", "") == "" && get(ENV, "WT_FUZZ", "") != "1" && get(ENV, "WT_NO_SHARD", "") != "1" && get(ENV, "WT_PHASE", "") == "" && isempty(_WT_QA_ONLY)
     nshards = max(1, min(_wt_logical_cpus(), 16))
     if nshards > 1
         @info "Sharding test suite across $nshards worker processes (+ overlapped fuzz pass)"
@@ -144,7 +150,12 @@ const _WT_QA_LOAD = zeros(_WT_NSHARDS)
 function _wt_qa(name::AbstractString)::Bool
     local s = argmin(_WT_QA_LOAD)
     _WT_QA_LOAD[s] += get(_WT_TIMES, "QA: " * name, _WT_QA_MEDIAN)
-    (s - 1 == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
+    push!(_WT_QA_SEEN, name)
+    if !isempty(_WT_QA_ONLY)
+        name in _WT_QA_ONLY || return false
+    else
+        (s - 1 == _WT_SHARD && !_wt_fuzz() && get(ENV, "WT_PHASE", "") == "") || return false
+    end
     println("WT_QA\t", name)
     return true
 end
@@ -275,6 +286,9 @@ if _wt_qa("parity_ratchet.jl")
     end
     println("WT_QA_TIME\t", round(time() - _wt_ratchet_t0; digits = 3), "\tparity_ratchet.jl")
 end
+# WT_QA_ONLY naming QA families alone: every QA family is dealt above, so the phases are not even
+# defined
+isempty(_WT_QA_ONLY) || any(n -> !(n in _WT_QA_SEEN), _WT_QA_ONLY) || exit(0)
 
 # ── Parallel-phase infrastructure (process sharding) ─────────────────────────
 # Test fixtures hoisted from inside phase testsets — `struct`/`using` are illegal
@@ -539,7 +553,13 @@ function _run_phases()
     println("WT_SETUP_TIME\t", round(time() - _WT_T0; digits = 1))   # worker fixed overhead (boot + using + includes)
     # WT_PHASE=<substring> selector: run phases matching substring (case-insensitive), skip shard assignment
     phase_filter = get(ENV, "WT_PHASE", "")
-    if phase_filter != ""
+    if !isempty(_WT_QA_ONLY)
+        for (name, pf) in _PHASES
+            name in _WT_QA_ONLY || continue
+            t = @elapsed pf()
+            println("WT_PHASE_TIME\t", round(t; digits = 3), "\t", name)
+        end
+    elseif phase_filter != ""
         filter_lower = lowercase(phase_filter)
         matches = Int[]
         for (i, (name, _)) in enumerate(_PHASES)
@@ -9382,6 +9402,13 @@ console.log(JSON.stringify({
     end
 
 end  # end of phase-registration block
+
+# WT_QA_ONLY: a name that is no QA family and no phase fails the run before any phase runs
+if !isempty(_WT_QA_ONLY)
+    let unknown = sort([n for n in _WT_QA_ONLY if !(n in _WT_QA_SEEN) && !any(p -> first(p) == n, _PHASES)])
+        isempty(unknown) || (println("runtests: WT_QA_ONLY names no QA family or phase ", join(unknown, ", ")); exit(1))
+    end
+end
 
 # The dedicated fuzz pass (WT_FUZZ=1) skips the codegen phases entirely — it exists
 # only to run the differential fuzz alone, contention-free.

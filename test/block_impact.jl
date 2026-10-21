@@ -9,7 +9,7 @@
 # .cov file beside every source file). Each probe of test/probe_corpus.jl is compiled as
 # test/probe_bytes.jl compiles it and each smoke case run as test/smoke.jl runs it, with Julia's
 # line coverage of src/ cleared before and written after (lcov): a probe's or a group's set is the
-# pieces of src/ whose lines it ran, a piece being BLOCK_LINES lines of a top-level definition of a
+# pieces of src/ whose lines it ran, a piece being dev/block.jl's BLOCK_LINES lines of a top-level definition of a
 # src/ file (inside a module, its definitions), `<file>:<name>#<k>`, the k-th from the definition's
 # first line, so a long function is many pieces (calls.jl's compile_call! is thousands of lines) and
 # a short one is one. It prints, as test/block_groups.tsv takes them:
@@ -19,7 +19,16 @@
 #            CORE_SECONDS seconds (a group's cost is its recorded seconds, test/smoke_times.tsv's
 #            1.12 column, the median for a group it lacks; a tie to the earlier group)
 #   <file>   for each src file, the groups that cover, by the same rule up to FILE_SECONDS seconds,
-#            pieces some group runs and the core does not (`-` when the core runs them all)
+#            pieces some group runs and the core does not (`-` when the core runs them all), then
+#            the QA families that cover, by the same rule up to TESTS_SECONDS seconds (a family's
+#            cost its recorded seconds, test/phase_times.tsv's `QA: <name>`), the file's pieces run
+#            by the families the file's locks cite as behavior (`-` when they run none of its
+#            pieces): a lock's file is a src file it reads by path (`joinpath(SRC, ...)` or
+#            `joinpath(CODEGEN, ...)`, a directory meaning its files), its cited families the QA
+#            families of test/runtests.jl its entry in test/parity_ratchet.jl names by path, each
+#            measured as test/runtests.jl runs it alone (WT_QA_ONLY=<name>, after the prelude its
+#            shard runs it after). A cited family past TESTS_SECONDS on its own is printed as such:
+#            the full matrix runs it; then the file's 1.13 groups, set by hand and carried over
 # With a path, the measured lines are also written there (a line per probe or group: its name, then
 # the lines of src/ it ran), so `--from` recomputes the selections without measuring again.
 # A changed piece of src/ is then run by a probe and, where any group reaches it, a group the gate
@@ -38,54 +47,21 @@ isempty(FROM) && Base.JLOptions().code_coverage == 0 && (println("block_impact: 
 # rejects): in this process the optimizer marks none, so each case compiles the IR it always does.
 Core.eval(Core.Compiler, :(should_insert_coverage(mod::Module, debuginfo::Core.DebugInfo) = false))
 
+# the gate's own reading of the map, the QA families and a file's pieces
+const BLOCK = Module(:Block)
+Base.include(BLOCK, joinpath(@__DIR__, "..", "dev", "block.jl"))
+
 const CORE_SECONDS = 30.0
 const FILE_SECONDS = 25.0
-const BLOCK_LINES = 40
+const TESTS_SECONDS = 20.0
 const SRC = normpath(joinpath(@__DIR__, "..", "src"))
 
 include(joinpath(@__DIR__, "probe_corpus.jl"))
 include(joinpath(@__DIR__, "smoke.jl"))   # GROUPS; its main() runs only when it is the program
 _build!(collect(keys(LAZY_FILE)))   # every lazy group's cases (test/registry_cases.jl's)
 
-# the name a top-level definition gives, or nothing (a struct, a const, a using)
-function defname(ex)
-    ex isa Expr || return nothing
-    ex.head === :macrocall && return defname(ex.args[end])
-    if ex.head in (:function, :(=)) && !isempty(ex.args)
-        sig = ex.args[1]
-        while sig isa Expr && sig.head in (:where, :(::))
-            sig = sig.args[1]
-        end
-        sig isa Expr && sig.head === :call || return nothing
-        f = sig.args[1]
-        f isa Expr && f.head === :curly && (f = f.args[1])
-        return string(f)
-    end
-    return nothing
-end
-
-# line => piece key, for every line of every top-level definition of the file
-function line_keys(path::String)::Dict{Int,String}
-    rel = relpath(path, dirname(SRC))
-    out = Dict{Int,String}()
-    function walk(args, stop)
-        items = [(args[i].line, args[i+1]) for i in 1:length(args)-1 if args[i] isa LineNumberNode]
-        for (k, (l, ex)) in enumerate(items)
-            last = k < length(items) ? items[k+1][1] - 1 : stop
-            if ex isa Expr && ex.head === :module
-                walk(ex.args[3].args, last)
-                continue
-            end
-            n = defname(ex)
-            n === nothing && continue
-            for x in l:last
-                out[x] = "$rel:$n#$((x - l) ÷ BLOCK_LINES)"
-            end
-        end
-    end
-    walk(Meta.parseall(read(path, String); filename = path).args, countlines(path))
-    return out
-end
+# a file's pieces, as the gate cuts them (dev/block.jl's line_keys)
+line_keys(path::String) = Base.invokelatest(BLOCK.line_keys, read(path, String), relpath(path, dirname(SRC)))
 
 const KEYS = Dict{String,Dict{Int,String}}()
 for (d, _, fs) in walkdir(SRC), f in fs
@@ -126,8 +102,65 @@ function cover(sets::Vector{Pair{String,Set{String}}}, cost::Vector{<:Real}, lef
     return out, left
 end
 
+# the QA families test/runtests.jl deals, read as the gate reads them (dev/block.jl's qa_families)
+qa_families() = Base.invokelatest(BLOCK.qa_families)
+# of them, the ones test/parity_ratchet.jl names by path: the families a lock cites as its behavior
+# (the ratchet itself is the gate's own stage)
+function cited_qa_families()
+    pr = read(joinpath(@__DIR__, "parity_ratchet.jl"), String)
+    return [n for n in qa_families() if occursin("test/" * n, pr) ||
+            occursin("\"test\", " * join(map(p -> "\"" * p * "\"", split(n, '/')), ", "), pr)]
+end
+
+# each cited QA family => the src files the locks citing it read by path
+function lock_reads()::Dict{String,Set{String}}
+    pr = read(joinpath(@__DIR__, "parity_ratchet.jl"), String)
+    fams = qa_families()
+    srcfiles = collect(keys(KEYS))
+    starts = [m.offset for m in eachmatch(r"^    \"[LR][0-9]+[a-z]?_[A-Za-z0-9_]+\" => \("m, pr)]
+    out = Dict{String,Set{String}}()
+    for (a, b) in zip(starts, vcat(starts[2:end], [ncodeunits(pr) + 1]))
+        e = pr[a:prevind(pr, b)]
+        cited = [f for f in fams if f != "parity_ratchet.jl" && (occursin("test/" * f, e) ||
+                 occursin("\"test\", " * join(map(p -> "\"" * p * "\"", split(f, '/')), ", "), e))]
+        isempty(cited) && continue
+        reads = Set{String}()
+        for m in eachmatch(r"joinpath\((SRC|CODEGEN)((?:, \"[^\"]+\")*)\)", e)
+            path = join(vcat(m[1] == "SRC" ? ["src"] : ["src", "codegen"], [x[1] for x in eachmatch(r"\"([^\"]+)\"", m[2])]), '/')
+            endswith(path, ".jl") ? push!(reads, path) : union!(reads, filter(f -> startswith(f, path * "/"), srcfiles))
+        end
+        for f in cited
+            union!(get!(out, f, Set{String}()), reads)
+        end
+    end
+    return out
+end
+
+# runs one QA family as test/runtests.jl runs it alone (WT_QA_ONLY): its prelude, then the family, in
+# a module of its own; runtests' exit after the QA families ends the include, not this process
+struct QAExit <: Exception
+    code::Int
+end
+function run_qa(name)
+    M = Module(:BlockImpactQA)
+    Core.eval(M, :(include(p) = Base.include($M, p)))
+    Core.eval(M, :(eval(x) = Core.eval($M, x)))
+    Core.eval(M, :(exit(n = 0) = throw($QAExit(Int(n)))))
+    try
+        withenv(() -> Base.include(M, joinpath(@__DIR__, "runtests.jl")), "WT_QA_ONLY" => name)
+    catch e
+        x = e
+        while x isa LoadError; x = x.error; end
+        # a family that fails here still ran the lines it ran: they count, and the failure is printed
+        x isa QAExit && x.code == 0 || println("block_impact: QA family $name failed while measured: ", first(sprint(showerror, x), 300))
+    finally
+        isdefined(M, :shutdown_pool!) && Base.invokelatest(getglobal(M, :shutdown_pool!))
+    end
+end
+
 function measure()
-    probes = [name => covered(() -> WasmTarget.to_bytes(WasmTarget.compile_module([(f, argtypes, name)])))
+    tests = [name => covered(() -> run_qa(name)) for name in cited_qa_families()]
+    probes = [name => covered(() -> WasmTarget.to_bytes(WasmTarget.compile_module([(f, argtypes, name)]; options = WasmTarget.options_from_env())))
               for (name, (f, argtypes)) in CASES]
     groups = Pair{String,Dict{String,Set{Int}}}[]
     for (g, cases) in GROUPS
@@ -140,16 +173,16 @@ function measure()
     rm(INFO; force = true)
     if !isempty(SETS_OUT)
         open(SETS_OUT, "w") do io
-            for (kind, sets) in (("probe", probes), ("group", groups)), (n, lines) in sets
+            for (kind, sets) in (("probe", probes), ("group", groups), ("test", tests)), (n, lines) in sets
                 println(io, kind, '\t', n, '\t', join([f * ":" * join(sort(collect(ls)), ',') for (f, ls) in sort(collect(lines); by = first)], ' '))
             end
         end
     end
-    return probes, groups
+    return probes, groups, tests
 end
 
 function load_sets(path)
-    probes = Pair{String,Dict{String,Set{Int}}}[]; groups = Pair{String,Dict{String,Set{Int}}}[]
+    sets = Dict(k => Pair{String,Dict{String,Set{Int}}}[] for k in ("probe", "group", "test"))
     for l in eachline(path)
         f = split(l, '\t')
         lines = Dict{String,Set{Int}}()
@@ -157,13 +190,13 @@ function load_sets(path)
             file, ls = split(part, ':')
             lines[String(file)] = Set(parse.(Int, split(ls, ',')))
         end
-        push!(f[1] == "probe" ? probes : groups, String(f[2]) => lines)
+        push!(sets[f[1]], String(f[2]) => lines)
     end
-    return probes, groups
+    return sets["probe"], sets["group"], sets["test"]
 end
 
 function main()
-    plines, glines = isempty(FROM) ? measure() : load_sets(FROM)
+    plines, glines, tlines = isempty(FROM) ? measure() : load_sets(FROM)
     probes = [n => pieces(l) for (n, l) in plines]
     # a matrix-only group (test/block_groups.tsv) is no stage's here: never a cover's candidate
     local matrix = String[]
@@ -171,6 +204,7 @@ function main()
         startswith(l, "matrix-only\t") && append!(matrix, split(l, '\t')[2] |> split .|> String)
     end
     groups = [n => pieces(l) for (n, l) in glines if !(n in matrix)]
+    tests = [n => pieces(l) for (n, l) in tlines]
     pu = reduce(union, last.(probes); init = Set{String}())
     pcore, _ = cover(probes, ones(Int, length(probes)), pu, typemax(Int))
     # a group's cost: its recorded seconds (test/smoke_times.tsv, 1.12), the median for one it lacks
@@ -187,14 +221,48 @@ function main()
     println("block_impact: $(length(probes)) probes run $(length(pu)) pieces of src/, $(length(pcore)) cover them; ",
             "$(length(groups)) smoke groups run $(length(su)), the core's $(length(core)) groups ",
             "($(sum(length(GROUPS[pick(c)][2]) for c in core; init = 0)) cases, $(round(sum(secs[pick(c)] for c in core; init = 0.0); digits = 1)) s recorded) run $(length(su) - length(uncovered))")
+    # the src tree measured, so the gate can say how far src/ has moved since (a measurement of a
+    # src/ with uncommitted changes is of no tree)
+    println("measured\t", success(`git -C $(dirname(SRC)) diff --quiet HEAD -- src`) && isempty(FROM) ?
+            readchomp(`git -C $(dirname(SRC)) rev-parse HEAD:src`) : "unknown")
     println("probes\t", join(pcore, ' '))
     println("core\t", join(core, ' '))
     println("matrix-only\t", join(matrix, ' '))
-    for file in sort(unique(first.(split.(collect(uncovered), ':'))))
+    # a QA family's cost: its recorded seconds (test/phase_times.tsv, `QA: <name>`), the median for
+    # one it lacks
+    qrec = Dict{String,Float64}()
+    for l in eachline(joinpath(@__DIR__, "phase_times.tsv"))
+        f = split(l, '\t'; limit = 2)
+        length(f) == 2 && startswith(f[2], "QA: ") || continue
+        t = tryparse(Float64, f[1]); t === nothing || (qrec[String(f[2][5:end])] = t)
+    end
+    qmed = isempty(qrec) ? 1.0 : sort(collect(values(qrec)))[(length(qrec) + 1) ÷ 2]
+    tsecs = [get(qrec, first(t), qmed) for t in tests]
+    tu = reduce(union, last.(tests); init = Set{String}())
+    println("block_impact: the $(length(tests)) QA families the locks cite run $(length(tu)) pieces of src/")
+    reads = lock_reads()
+    # the 1.13 groups are set by hand (which file prints version-dependent text is not measured):
+    # carried over from the map as it is
+    v113 = Dict{String,String}()
+    for l in eachline(joinpath(@__DIR__, "block_groups.tsv"))
+        f = split(l, '\t')
+        length(f) == 4 && (v113[String(f[1])] = String(f[4]))
+    end
+    past = String[]
+    for (i, t) in enumerate(tests)
+        tsecs[i] <= TESTS_SECONDS || push!(past, "$(first(t)): $(tsecs[i]) s recorded, past $TESTS_SECONDS s on its own: the full matrix runs it")
+    end
+    for file in sort(collect(keys(KEYS)))
         left = Set(k for k in uncovered if startswith(k, file * ":"))
         gs, rest = cover(groups, secs, left, FILE_SECONDS)
-        println(file, "\t", isempty(gs) ? "-" : join(gs, ' '), isempty(rest) ? "" : "\t# $(length(rest)) of its pieces past $FILE_SECONDS s")
+        isempty(rest) || push!(past, "$file: $(length(rest)) of its pieces the groups run past $FILE_SECONDS s")
+        mine = [i for (i, t) in enumerate(tests) if file in get(reads, first(t), Set{String}())]
+        tleft = Set(k for i in mine for k in last(tests[i]) if startswith(k, file * ":"))
+        ts, trest = cover(tests[mine], tsecs[mine], tleft, TESTS_SECONDS)
+        isempty(trest) || push!(past, "$file: $(length(trest)) of its pieces its locks' QA families run past $TESTS_SECONDS s")
+        println(file, "\t", isempty(gs) ? "-" : join(gs, ' '), "\t", isempty(ts) ? "-" : join(ts, ' '), "\t", get(v113, file, "-"))
     end
+    foreach(l -> println("# ", l), past)
     return 0
 end
 

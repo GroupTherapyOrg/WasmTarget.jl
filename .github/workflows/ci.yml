@@ -4,7 +4,8 @@ on:
   push:
     # not march/**: a landed head's push runs gate.yml's full matrix alone, non-blocking
     # (dev/CHARTER.md C10; the landing's gate is `bash dev/gate.sh --block`, L163); the pull
-    # request runs this matrix on every landing pushed to its branch
+    # request runs this matrix on its branch's newest head (a landing pushed before the run ends
+    # cancels it, below), so the matrix on every landed head is gate.yml's
     branches: [main]
   pull_request:
 

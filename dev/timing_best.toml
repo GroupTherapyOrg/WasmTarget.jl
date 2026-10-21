@@ -1,7 +1,9 @@
 # dev/timing_best.toml — the blocking gate's budgets and timing ratchet (dev/block.jl, `bash
 # dev/gate.sh --block`; dev/CHARTER.md C10, L194, L195). [budget]: wall seconds, the whole run
 # (`total`) and each stage, the core's median smoke case (`case-median`); a budget is lowered, never
-# raised: a stage past it is split or made faster first. [best]: each ratcheted stage's best wall
+# raised (dev/block.jl holds every budget and best to the change's base's): a stage past it is split
+# or made faster first; `<stage>@warm` is a stage's budget under
+# the warm runner (`--warm`), where it has one. [best]: each ratcheted stage's best wall
 # seconds at the machine's best speed, and `calibration`, the best seconds of dev/block.jl's fixed
 # piece of work (a run's lower quartile); a stage more than 15% AND more than 0.3 s slower than its
 # best fails. [best_cpu]: the CPU seconds of the run that set each best, for the record.
@@ -15,14 +17,28 @@
 "smoke-1.13" = 58
 "smoke-batch" = 58
 "smoke-core" = 58
+"tests" = 58
+"tests@warm" = 20
 "tlc" = 50
 "total" = 60
 
 [best]
 "calibration" = 0.003477
+"load" = 0.21
 "load@warm" = 0.25
-"ratchet@warm" = 10.9
+"probes" = 24.28
+"probes@warm" = 5.57
+"ratchet" = 8.25
+"ratchet@warm" = 10.69
+"smoke-core" = 44.49
+"smoke-core@warm" = 19.75
 
 [best_cpu]
-"load@warm" = 0.57
+"load" = 0.51
+"load@warm" = 0.56
+"probes" = 37.55
+"probes@warm" = 1.25
+"ratchet" = 12.89
 "ratchet@warm" = 11.94
+"smoke-core" = 66.83
+"smoke-core@warm" = 1.25

@@ -53,11 +53,11 @@ codegen cannot lower rejects through `record_unsupported!` / `emit_unsupported_s
 | model checking | `bash dev/formal/run_tlc.sh` |
 | one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
 
-`bash dev/land.sh merge <branch>` lands only a green `--block` record's commit; the full matrix then
-runs on it (gate.yml on `march/**`), and on PR #122's merge head as the final gate. A pure
-restructuring is byte-identical on the probes; a semantic change is differential, its cases added to
-smoke first; every new lock is negative-tested (break it, watch it fire, restore) before it counts;
-`WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.
+`bash dev/land.sh merge <branch>` lands a green `--block` record's commit, not while the last landed
+head's matrix is red; the full matrix then runs on it (gate.yml on `march/**`), and on PR #122's
+merge head as the final gate. A pure restructuring is byte-identical on the probes; a semantic
+change is differential, its cases in smoke first; a new lock is negative-tested (break it, watch it
+fire, restore) before it counts; `WT_RATCHET_UPDATE=1` tightens a ratchet to its measured value.
 
 ## The anti-drift audit — `dev/AUDIT.md`
 

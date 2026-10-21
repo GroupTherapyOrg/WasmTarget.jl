@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # The gates (AGENTS.md; dev/CHARTER.md C10).
 #
-#   bash dev/gate.sh --block [--base <rev>]   # THE landing gate (L163, L194, L195): dev/block.jl on
-#       this machine, at most 60 s of wall: the ratchet, a fixed smoke core plus the groups the
-#       change maps to and its own cases (on 1.13 too), every probe, TLC for the models it touches,
-#       side by side, each stage on a budget and a timing ratchet (dev/timing_best.toml); writes
-#       the evidence record dev/.block/<tree>.toml that `dev/land.sh merge` lands on. No CI.
+#   bash dev/gate.sh --block [--warm] [--base <rev>]   # THE landing gate (L163, L194, L195):
+#       dev/block.jl on this machine, at most 60 s of wall: the ratchet, a fixed smoke core plus the
+#       groups the change maps to and its own cases (on 1.13 too), the probe core with the probes
+#       the change touches, the QA families the change selects, TLC for the models it touches, side by side (under --warm the package
+#       stages through this tree's runner, dev/block_runner.jl), each stage on a budget and a
+#       timing ratchet (dev/timing_best.toml); writes the evidence record that `dev/land.sh merge`
+#       lands on. No CI.
 #
 # Without --block: the full matrix on CI's runners, never a landing's gate: every landed head gets
 # it on its march/** push (non-blocking, gate.yml), and the one final full gate before PR #122
