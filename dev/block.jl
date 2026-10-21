@@ -509,29 +509,65 @@ function table_cases(entries, tables::AbstractDict)::Tuple{Vector{String},Vector
     return unique(cases), fails
 end
 
-# how far src/ had moved, under the change, since test/block_groups.tsv was measured (its `measured`
-# row, the src tree test/block_impact.jl ran): the pieces of src that differ between that tree and
-# `now` (the change's base's src tree), keyed on `now`'s text, a removed file one piece; nothing when
-# the measured tree is unknown here
-function pieces_moved(measured, now)::Union{Nothing,Int}
+# whether a src file's change is comments and docstrings alone (A30E5): Julia's own parse of both
+# texts (Meta.parseall), line numbers and docstrings dropped, is one expression; a text that does not
+# parse is changed (a decision over text, L194 runs it on fixed texts)
+code_unchanged(old::AbstractString, new::AbstractString)::Bool = (a = code_expr(old); a !== nothing && a == code_expr(new))
+function code_expr(text::AbstractString)
+    ex = Meta.parseall(text)
+    return has_parse_error(ex) ? nothing : drop_docs(ex)
+end
+has_parse_error(x) = false
+has_parse_error(e::Expr) = e.head === :error || e.head === :incomplete || any(has_parse_error, e.args)
+drop_docs(x) = x
+drop_docs(e::Expr) =
+    e.head === :macrocall && length(e.args) == 4 && e.args[1] == GlobalRef(Core, Symbol("@doc")) ? drop_docs(e.args[4]) :
+    Expr(e.head, Any[drop_docs(a) for a in e.args if !(a isa LineNumberNode)]...)
+
+# the pieces of src that moved since test/block_groups.tsv was measured (its `measured` row, the src
+# tree test/block_impact.jl ran), at `now` (the change's base's src tree): the pieces that differ
+# between the two trees, keyed on `now`'s text, a removed file one piece, a file whose code did not
+# change (code_unchanged) none; nothing when the measured tree is unknown here
+function pieces_moved(measured, now)::Union{Nothing,Set{String}}
     occursin(r"^[0-9a-f]{40}$", measured) && gitok("cat-file", "-e", measured) && !isempty(now) || return nothing
     moved = Set{String}()
     for f in split(git("diff", "--name-only", measured, now), '\n'; keepempty = false)
         gitok("cat-file", "-e", "$now:$f") || (push!(moved, "src/$f:(removed)"); continue)
-        keys_of = line_keys(git("show", "$now:$f"), "src/" * f)
+        text = git("show", "$now:$f")
+        gitok("cat-file", "-e", "$measured:$f") && code_unchanged(git("show", "$measured:$f"), text) && continue
+        keys_of = line_keys(text, "src/" * f)
         for h in hunk_lines(git("diff", "-U0", measured, now, "--", f))
             haskey(keys_of, h) && push!(moved, keys_of[h])
         end
     end
-    return length(moved)
+    return moved
 end
 
-# the staleness budget: a change to src/ is judged by a map that measured a tree at most this many
-# pieces of src away from the change's base; past it the map is re-recorded off the landing path, at
-# JLRUN_PRIO=5, landing as its own commit of test/block_groups.tsv, never by the landing (A20C13):
-# incrementally from the sets the last measurement saved in the main tree (test/block_impact.jl
-# --pieces, which measures again only what touches the src files that moved, minutes), or in full
-# (about 34 minutes), which saves the sets there
+# the pieces of the change's base a change alters, keyed on the base's text as pieces_moved keys
+# them: each base-side line a hunk changes, an insertion the lines on both sides of it; none for a
+# file the change adds or whose code it leaves alone (code_unchanged) (a decision over text, L194
+# runs it on fixed texts)
+function change_pieces(rel, base_text, head_text, diff)::Set{String}
+    out = Set{String}()
+    (isempty(base_text) || code_unchanged(base_text, head_text)) && return out
+    keys_of = line_keys(base_text, rel)
+    for m in eachmatch(r"^@@ -(\d+)(?:,(\d+))? \+"m, diff)
+        a = parse(Int, m[1]); n = m[2] === nothing ? 1 : parse(Int, m[2])
+        for x in (n == 0 ? (a, a + 1) : (a:a+n-1))
+            haskey(keys_of, x) && push!(out, keys_of[x])
+        end
+    end
+    return out
+end
+
+# the staleness budget (A30E5): a change to src/ fails when more than this many of the pieces it
+# alters are pieces that moved since the map was measured, the pieces whose map rows the selection may
+# misread; how far the base moved is a note, a change in code no other landing moved passes however
+# stale the map, a change of comments and docstrings alone alters no piece, and a map measured on the
+# change's own src tree (a change carrying its re-recorded map) is fresh. The map is re-recorded off
+# the landing path, at JLRUN_PRIO=5 (A20C13): incrementally from the sets the last measurement saved
+# in the main tree (test/block_impact.jl --pieces, which measures again only what touches the src
+# files that moved, minutes), or in full (about 34 minutes), which saves the sets there
 const STALE_PIECES = 8
 const SETS_PATH = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".block", "impact_sets.tsv")
 const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH " *
@@ -539,9 +575,9 @@ const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_im
                  "measurement: the same command with $SETS_PATH alone in place of --pieces and its path)"
 
 # a stale map fails a change it cannot judge (a decision over text, L194 runs it on fixed inputs):
-# for a change to src/, `moved` (pieces_moved at the change's base) past STALE_PIECES or unknown,
-# and each changed line of code (`touched`, the head's line numbers) in no piece of the head's text;
-# for a change to ext/, which no map measures, always (A20C13)
+# for a change to src/, `moved` (the change's own pieces among those pieces_moved finds at its base)
+# past STALE_PIECES or unknown, and each changed line of code (`touched`, the head's line numbers) in
+# no piece of the head's text; for a change to ext/, which no map measures, always (A20C13, A30E5)
 function stale_map(moved::Union{Nothing,Int}, measured, changed, head_texts::AbstractDict, touched::AbstractDict)::Vector{String}
     fails = String[]
     exts = filter(f -> startswith(f, "ext/"), changed)
@@ -550,8 +586,8 @@ function stale_map(moved::Union{Nothing,Int}, measured, changed, head_texts::Abs
     if moved === nothing
         push!(fails, "test/block_groups.tsv measured src tree $(first(measured, 8)), which this repository does not hold: re-record it: $RERECORD")
     elseif moved > STALE_PIECES
-        push!(fails, "test/block_groups.tsv is stale: $moved pieces of src changed between the src tree it measured ($(first(measured, 8))) " *
-                     "and this change's base, over the budget of $STALE_PIECES: re-record it: $RERECORD")
+        push!(fails, "test/block_groups.tsv is stale for this change: $moved of the pieces it alters moved since the src tree the map measured " *
+                     "($(first(measured, 8))), over the budget of $STALE_PIECES: re-record it: $RERECORD")
     end
     for (f, text) in head_texts
         keys_of = line_keys(text, f)
@@ -815,10 +851,26 @@ function main(args)
     tfails = String[]   # over a budget: red, unless the runner was cold
     sfails = String[]   # slower than a best: red, unless the runner was cold or the timing is unjudged
     efails = String[]   # the machine cannot judge: no verdict
-    moved = pieces_moved(measured, gitok("rev-parse", "$base:src") ? git("rev-parse", "$base:src") : "")
-    push!(notes, moved === nothing ? "test/block_groups.tsv: measured on src tree $(first(measured, 8)), which this repository does not hold" :
-                 "test/block_groups.tsv: measured on src tree $(measured[1:8]); $moved pieces of src changed since, at the change's base " *
-                 "(a change to src/ fails past $STALE_PIECES)")
+    # the map against this change (A30E5): fresh when it measured the change's own src tree; otherwise
+    # the pieces that moved since it at the base, a note, and the change's own pieces among them, the
+    # budget's count; a src file whose code the change leaves alone (comments, docstrings) alters none
+    head_src = git("rev-parse", "HEAD:src")
+    stale = measured == head_src ? Set{String}() : pieces_moved(measured, gitok("rev-parse", "$base:src") ? git("rev-parse", "$base:src") : "")
+    own = Set{String}()
+    code_changed = String[]
+    for f in changed
+        (startswith(f, "src/") && endswith(f, ".jl")) || continue
+        bt = gitok("cat-file", "-e", "$base:$f") ? git("show", "$base:$f") : ""
+        ht = isfile(joinpath(ROOT, f)) ? read(joinpath(ROOT, f), String) : ""
+        code_unchanged(bt, ht) && continue
+        push!(code_changed, f)
+        union!(own, change_pieces(f, bt, ht, git("diff", "-U0", base, "--", f)))
+    end
+    moved = stale === nothing ? nothing : length(intersect(stale, own))
+    push!(notes, stale === nothing ? "test/block_groups.tsv: measured on src tree $(first(measured, 8)), which this repository does not hold" :
+                 measured == head_src ? "test/block_groups.tsv: measured on this change's own src tree $(measured[1:8])" :
+                 "test/block_groups.tsv: measured on src tree $(measured[1:8]); $(length(stale)) pieces of src moved since, at the change's base; " *
+                 "the change alters $(length(own)), $moved of them among those (a change to src/ fails past $STALE_PIECES)")
     # a narrower change than the merge base's selects less; such a record is not one land.sh takes
     "--base" in args && push!(notes, "the change is taken from --base $(base[1:8]): dev/land.sh merge takes a record of the change from its merge base only")
     append!(fails, loosened)
@@ -827,8 +879,7 @@ function main(args)
     isempty(unmapped) || push!(fails, "no row in test/block_groups.tsv for $(join(unmapped, ", ")): add one naming the smoke groups and QA families that exercise it")
     append!(fails, tablefails)
     isempty(cases) || push!(notes, "the changed lowering-table entries run their generated cases: $(join(cases, ' '))")
-    head_texts = Dict(f => read(joinpath(ROOT, f), String) for f in changed
-                      if startswith(f, "src/") && endswith(f, ".jl") && isfile(joinpath(ROOT, f)))
+    head_texts = Dict(f => read(joinpath(ROOT, f), String) for f in code_changed if isfile(joinpath(ROOT, f)))
     append!(fails, stale_map(moved, measured, changed, head_texts, Dict(f => touched_lines(base, f) for f in keys(head_texts))))
 
     mkpath(joinpath(RECORD_DIR, "logs"))
