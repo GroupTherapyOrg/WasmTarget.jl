@@ -30,6 +30,22 @@ const LOCK_NEGATIVE_CASES = [
      "how === :median && return \"the median of \$src\"",
      "how === :median && return \"median of \$src\"",
      "a best's source loses its form (A20P20)"),
+    ("L197", "dev/loop_excuse.sh",
+     "return (c - m > t || m - c > t)",
+     "return 0",
+     "a hand excuse's numbers no longer held to its landing's steps (A25E2)"),
+    ("L197", "dev/loop_excuse.sh",
+     "        if (e2l <= target || own > target) exit",
+     "        exit",
+     "an excuse its steps measure is never written, so a hand line is still needed (A25E1)"),
+    ("L197", "dev/loop_excuse.sh",
+     "        if (e2l <= target || own > target) exit",
+     "        if (e2l <= target) exit",
+     "a wait no step measures is excused with no hand line (A25E1)"),
+    ("L197", "dev/land.sh",
+     "        ex=\$(bash dev/loop_excuse.sh write",
+     "        ex=\$(true",
+     "land no longer writes the previous landing's measured excuse (A25E1)"),
 ]
 
 @testset "lock negatives: each planted mutation fires its lock" begin
@@ -47,6 +63,10 @@ const LOCK_NEGATIVE_CASES = [
     end
     local locks = Base.invokelatest(getglobal, getglobal(M, :ParityRatchet), :LOCKS)
     lock_fn(id) = only(last(last(p)) for p in locks if startswith(first(p), id * "_"))
+    # L197 reads the landing machine's log (the main tree's dev/.loop), which this scratch clone, like a
+    # CI checkout, does not have: it runs as on CI, its behavior on fixed text the part its plants break
+    runlock(id) = id == "L197" ? withenv(() -> Base.invokelatest(lock_fn(id)), "GITHUB_ACTIONS" => "true") :
+                                 Base.invokelatest(lock_fn(id))
     for (id, path, old, new, why) in LOCK_NEGATIVE_CASES
         @testset "$id fires: $why" begin
             local f = joinpath(tmp, path)
@@ -54,7 +74,7 @@ const LOCK_NEGATIVE_CASES = [
             @test count(old, orig) == 1   # the plant's target is in this commit, once
             write(f, replace(orig, old => new; count = 1))
             local v = try
-                Base.invokelatest(lock_fn(id))
+                runlock(id)
             finally
                 write(f, orig)
             end
@@ -62,7 +82,7 @@ const LOCK_NEGATIVE_CASES = [
         end
     end
     @testset "restored: $id holds" for id in unique(first.(LOCK_NEGATIVE_CASES))
-        @test Base.invokelatest(lock_fn(id)) == 0
+        @test runlock(id) == 0
     end
     rm(tmp; recursive = true, force = true)
 end

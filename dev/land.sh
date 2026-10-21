@@ -42,6 +42,11 @@
 #       timing's state (L198). After a line judged red, a landing lands on a judged green run or
 #       carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (`merge` refuses any other). A
 #       worktree whose Manifest.toml names other WasmTarget extensions than Project.toml is refused.
+#       Before the gate, `land` writes the previous landing's excuse itself, into the landing's own tree,
+#       when that landing took longer than L197's target and the causes outside its change, measured
+#       from its steps, its gate runs' records and an earlier tree of it refused on L148 or L197 alone,
+#       bring it within the target (dev/loop_excuse.sh write, A25E1); a cause they cannot measure still
+#       needs its hand line, which L197 holds to the steps (dev/loop_excuse.sh check, A25E2).
 #
 # The landing log, the main tree's dev/.loop/landings.tsv (git-ignored; L197 reads it), one line
 # per landing, written by `merge` right after its push:
@@ -103,6 +108,7 @@ EXEMPT_AWK='/^(\+\+\+|---) / { next }
               sub(/[,;.]$/, "", t); if (sign == "-") rem[t]++; else add[t]++ } }
 END { for (t in rem) if (rem[t] > add[t]) bad = 1; print (bad ? "no" : "yes") }'
 LOG="$MAIN/dev/.loop/landings.tsv"
+STEPS="$MAIN/dev/.loop/steps.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
@@ -367,6 +373,23 @@ land)
         git commit -q --amend --no-edit
         echo "land: the landing log through $(tail -n 1 "$LOG" | cut -c22-29) carried in ${br}'s head, now $(git rev-parse --short HEAD)"
     fi
+    # the previous landing's excuse, written by land itself into the same head before the gate (A25E1):
+    # when it took longer than L197's target and its causes outside its change, measured from its steps,
+    # its gate runs' records and an earlier tree of it refused on L148 or L197 alone, bring it within the
+    # target (dev/loop_excuse.sh); a hand line stays for a cause they cannot measure
+    prev=$(tail -n 1 "$LOG" 2>/dev/null | cut -f2)
+    if [ ${#prev} -eq 40 ] && [ ! -e "dev/.loop/excuse/${prev:0:8}" ]; then
+        recs=()
+        for w in $(git worktree list --porcelain | sed -n 's/^worktree //p'); do
+            for f in "$w"/dev/.block/*-*.toml; do [ -f "$f" ] && recs+=("$f"); done
+        done
+        ex=$(bash dev/loop_excuse.sh write "$LOG" "$STEPS" "$prev" dev/.loop/excuse ${recs[@]+"${recs[@]}"})
+        if [ -n "$ex" ]; then
+            git add "dev/.loop/excuse/${prev:0:8}" && git commit -q --amend --no-edit
+            echo "land: ${prev:0:8}'s excuse, measured, carried in ${br}'s head, now $(git rev-parse --short HEAD): $ex"
+        fi
+    fi
+    step excuse
     out=$(julia --startup-file=no dev/block_runner.jl start 2>&1) || { echo "$out"; echo "land: this tree's warm runner did not start — refusing"; exit 1; }
     echo "$out" | tail -1
     step runner
@@ -459,8 +482,9 @@ land)
         esac
     fi
     rm -f "$glog"
+    # the steps before the hold is released: the next landing measures this one's excuse from them
+    printf '%s' "$steps" | awk -v h="$head" -F'\t' '{ print h "\t" $1 "\t" $2 }' >> "$STEPS"
     release
-    printf '%s' "$steps" | awk -v h="$head" -F'\t' '{ print h "\t" $1 "\t" $2 }' >> "$(dirname "$LOG")/steps.tsv"
     echo "land: steps $(printf '%s' "$steps" | awk -F'\t' '{ printf "%s%s %s s", (NR > 1 ? ", " : ""), $1, $2 }')"
     # the unjudged streak (L198): the log's last lines in a row whose timing is unjudged, newest first,
     # counted until one whose commit's tree has a green run with its timing judged recorded in any
