@@ -118,6 +118,7 @@ a Union that boxes its numbers is anyref; a concrete MemoryRef is its single-val
 is its concrete wasm type.
 parity(sdk/lib/_internal/wasm/common/typed_data.dart:2441 WasmI8ArrayBase): a typed-data view
 is an object, passed with its _data and _offsetInElements.
+precedent(dart: translateTypeOfParameter, translator.dart:2092): the one translation of a parameter's type, read by the signature and by every call and reader of the parameter.
 """
 function boundary_wasm_type(@nospecialize(T), mod::WasmModule, type_registry::TypeRegistry)::WasmValType
     T isa Union && needs_anyref_boxing(T) && return AnyRef

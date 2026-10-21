@@ -4171,7 +4171,7 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                     # are gone; we just don't merge a replaced arg)
                     if arg_idx <= length(target_info.arg_types)
                         expected_julia_type = target_info.arg_types[arg_idx]
-                        expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
+                        expected_wasm = boundary_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                         actual_julia_type = call_arg_types[arg_idx]
 
                         # Handle Nothing→ref conversion BEFORE type bridging.

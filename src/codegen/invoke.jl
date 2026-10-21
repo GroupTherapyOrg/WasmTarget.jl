@@ -205,7 +205,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
             param_type = param_types[arg_idx]
-            wasm_type = get_concrete_wasm_type(param_type, ctx.mod, ctx.type_registry; for_local=true)
+            # the parameter's one translation, the one its function's signature declares
+            wasm_type = boundary_wasm_type(param_type, ctx.mod, ctx.type_registry)
             # Emit the appropriate null/zero value based on the wasm type
             _nb = _ctx_builder(ctx, "compile_invoke")
             if wasm_type isa ConcreteRef
@@ -247,8 +248,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 local _sp_jt = value_type(ctx, arg)
                 if _sp_jt isa DataType && Base.issingletontype(_sp_jt)
                     local _sp_pt = param_types[arg_idx]
-                    local _sp_w = get_concrete_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
-                                                         ctx.mod, ctx.type_registry)
+                    local _sp_w = boundary_wasm_type(_sp_pt isa Type ? _sp_pt : _sp_jt,
+                                                     ctx.mod, ctx.type_registry)
                     local _spb = _ctx_builder(ctx, "compile_invoke")
                     if _sp_w isa ConcreteRef
                         ref_null!(_spb, Int64(_sp_w.type_idx))
@@ -265,7 +266,7 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                 expected_julia_type = param_types[arg_idx]
                 # Skip non-Type values (e.g., Vararg markers)
                 if expected_julia_type isa Type
-                    expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
+                    expected_wasm = boundary_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                     actual_julia_type = value_type(ctx, arg)
                     # F8 (census: dart wrap = 100% of expressions through convertType,
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
