@@ -1,6 +1,6 @@
 # The numeric lowering tables case themselves (dev/CHARTER.md C5): one smoke group per table, its
-# cases generated from the table's own keys, never from a copy of them. test/smoke.jl declares the
-# groups by name (_lazy_g) and includes this file only when it selects one: rc_groups builds them
+# cases generated from the table's own keys, never from a copy of them. test/smoke_corpus.jl declares the
+# groups by name (_lazy_g) and test/smoke.jl includes this file only when it selects one: rc_groups builds them
 # all, once, into its builder table entry, each case's inputs into smoke.jl's CASE_INPUTS. A key's case runs its
 # intrinsic over every Julia type whose register is the key's, each compiled once and run
 # differentially over its inputs (compare_julia_wasm_inputs, test/utils.jl).

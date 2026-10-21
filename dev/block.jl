@@ -118,7 +118,7 @@ const RATCHETED = ("load", "ratchet", "smoke-core", "probes")
 const STAGE_INPUTS = Dict(
     "load" => ["src/", "ext/", "Project.toml"],
     "ratchet" => ["src/", "ext/", "test/", "dev/", "docs/", "AGENTS.md", ".github/"],
-    "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl",
+    "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl",
                      "test/emission_fingerprint.jl", "test/registry_cases.jl"],
     "probes" => ["src/", "ext/", "test/probe_bytes.jl", "test/probe_corpus.jl"],
     "tlc" => ["dev/formal/"])
@@ -194,7 +194,7 @@ function qa_families(root = ROOT)::Vector{String}
 end
 
 # the test files a stage runs itself (a change to one is run by that stage)
-const STAGE_TESTS = ["test/smoke.jl", "test/utils.jl", "test/wasm_runner.jl", "test/trace_localize.jl",
+const STAGE_TESTS = ["test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/trace_localize.jl",
                      "test/emission_fingerprint.jl", "test/registry_cases.jl",
                      "test/probe_bytes.jl", "test/probe_corpus.jl", "test/parity_ratchet.jl", "test/builder_cases.jl"]
 
@@ -230,7 +230,17 @@ function hunk_lines(diff::AbstractString)::Vector{Int}
     end
     return out
 end
-touched_lines(base, path) = hunk_lines(git("diff", "-U0", base, "--", path))
+# a path's changed lines, read from the change's one diff with git's own rename and copy detection
+# (-M -C): a file moved or split out of another counts only the lines that differ from its source,
+# not all of its lines (a corpus split from the smoke driver touches the groups at its seams, not
+# every group); a path the diff does not name (unchanged, or renamed away) touches none
+const _CHANGE_DIFF = Dict{String,Vector{SubString{String}}}()
+function touched_lines(base, path)::Vector{Int}
+    secs = get!(() -> split(git("diff", "-U0", "-M", "-C", base), r"^diff --git "m; keepempty = false), _CHANGE_DIFF, base)
+    k = findfirst(s -> occursin("\n+++ b/" * path * "\n", s) ||
+                       (occursin("\n--- a/" * path * "\n", s) && occursin("\n+++ /dev/null\n", s)), secs)
+    return k === nothing ? Int[] : hunk_lines(secs[k])
+end
 file_lines(rel) = (p = joinpath(ROOT, rel); isfile(p) ? readlines(p) : String[])
 
 # the probes touched lines select: a line of test/probe_corpus.jl within a probe's definition (from its
@@ -251,10 +261,11 @@ touched_probes(base) = probes_touched(file_lines("test/probe_corpus.jl"), touche
 
 # the smoke groups touched lines of one smoke file select: a line inside a group's list (from its
 # `_g("name", Any[` / `_xf("name", Any[` line to the list's closing `])`, or the line alone for a
-# one-line group, `_g("name", gen())`) is that group's. In test/smoke.jl itself (`harness`), a line
-# between groups (a helper or a struct a case uses) is the next group's, and one before the first
-# group or after the last (the harness, which the core runs) none's; a case file smoke.jl includes
-# has no harness: a line in no group's list (its generators and helpers) is every group's it defines
+# one-line group, `_g("name", gen())`) is that group's. In the corpus, test/smoke_corpus.jl
+# (`harness`), a line between groups (a helper or a struct a case uses) is the next group's, and one
+# before the first group or after the last none's; any other case file smoke.jl includes has no
+# harness: a line in no group's list (its generators and helpers) is every group's it defines, and
+# test/smoke.jl itself, the driver the core runs, defines none
 function groups_touched(lines, hunks, harness::Bool)::Vector{String}
     starts = Tuple{Int,String}[]
     for (i, l) in enumerate(lines)
@@ -284,12 +295,14 @@ function touched_smoke_groups(base)::Vector{String}
     path = "test/smoke.jl"
     isfile(joinpath(ROOT, path)) || return String[]
     smk = read(joinpath(ROOT, path), String)
+    files = [path; ["test/" * m[1] for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk)]]
+    filter!(f -> isfile(joinpath(ROOT, f)), files)
     out = String[]
-    for m in eachmatch(r"^_lazy_(?:g|xf)\(\"([^\"]+)\", \"([^\"]+)\"\)"m, smk)
+    for file in files, m in eachmatch(r"^_lazy_(?:g|xf)\(\"([^\"]+)\", \"([^\"]+)\"\)"m, read(joinpath(ROOT, file), String))
         isempty(touched_lines(base, "test/" * m[2])) || push!(out, String(m[1]))
     end
-    for file in [path; ["test/" * m[1] for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smk)]]
-        isfile(joinpath(ROOT, file)) && append!(out, groups_touched(file_lines(file), touched_lines(base, file), file == path))
+    for file in files
+        append!(out, groups_touched(file_lines(file), touched_lines(base, file), file == "test/smoke_corpus.jl"))
     end
     return unique(out)
 end

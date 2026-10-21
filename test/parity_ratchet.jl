@@ -366,6 +366,8 @@ end
 # that silently parses nothing there is a check that silently passes or fails by platform.
 _text(path::String)::String = replace(read(path, String), "\r\n" => "\n")
 _lines(path::String)::Vector{String} = String.(split(chomp(_text(path)), '\n'))
+# the smoke cases as the locks read them: the driver, test/smoke.jl, and its corpus, test/smoke_corpus.jl
+_smoke_text()::String = _text(joinpath(ROOT, "test", "smoke.jl")) * "\n" * _text(joinpath(ROOT, "test", "smoke_corpus.jl"))
 
 # ---- dev/CHARTER.md support --------------------------------------------------
 const CHARTER_PATH = joinpath(ROOT, "dev", "CHARTER.md")
@@ -632,7 +634,7 @@ XFAIL_RUNTIME (a wrong value, a trap, or a result the harness cannot read back).
 is static; smoke's xfail lane measures every case and fails when the table disagrees.
 """
 function smoke_runtime_xfails()::Int
-    src = _text(joinpath(ROOT, "test", "smoke.jl"))
+    src = _smoke_text()
     m = match(r"const XFAIL_RUNTIME = Dict\{String,Symbol\}\((.*?)\n\)"s, src)
     m === nothing && error("R39: test/smoke.jl has no XFAIL_RUNTIME table")
     return count(l -> occursin(r"^\s*\"[^\"]+/[^\"]+\" => :(wrong|trap|unreadable),", l),
@@ -1317,7 +1319,7 @@ function _l190_check()::Int
     # the wiring
     local lanes = _text(joinpath(ROOT, "dev", "lanes.sh"))
     local utils = _text(joinpath(ROOT, "test", "utils.jl"))
-    local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+    local sm = _smoke_text()
     local ed = _text(joinpath(ROOT, "dev", "emission_diff.sh"))
     local code(f) = join(filter(l -> !startswith(lstrip(l), "#"), split(_text(joinpath(ROOT, ".github", "workflows", f)), '\n')), '\n')
     local fast, gate, eb = code("gate-fast.yml"), code("gate.yml"), code("emission-base.yml")
@@ -2390,7 +2392,7 @@ const LOCKS = [
             local undef_src = read(joinpath(CODEGEN, "undef.jl"), String)
             local types_src = read(joinpath(CODEGEN, "types.jl"), String)
             local structs_src = read(joinpath(CODEGEN, "structs.jl"), String)
-            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smk = _smoke_text()
             local undef_needles = (
                 (types_src, "local wasm_elem_type = undef_slot_storage(elem_type, get_concrete_wasm_type(elem_type, mod, registry))"),
                 (structs_src, "field_may_be_undef(T, fi) && (wasm_vt = undef_slot_storage(ft, wasm_vt))"),
@@ -2767,7 +2769,7 @@ const LOCKS = [
                         "is_runtime_vararg_tuple_type(packed_vararg) || continue",
                         "arg_types = (packed_vararg,)"]
             count(p -> !occursin(p, trim_src), required) +
-                (occursin("_g(\"capture_typed_invoke\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1)
+                (occursin("_g(\"capture_typed_invoke\"", _smoke_text()) ? 0 : 1)
         end),
     "L39_only_proven_dead_traps" => ("unsupported lowering rejects unless its Julia CFG block is proven unreachable; non-dominance is never treated as deadness",
         () -> begin
@@ -3546,7 +3548,7 @@ const LOCKS = [
             ctxs = read(joinpath(CODEGEN, "context.jl"), String)
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             loc = read(joinpath(ROOT, "test", "trace_localize.jl"), String)
-            smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            smoke = _smoke_text()
             lane = read(joinpath(ROOT, "test", "fuzz", "test_statements.jl"), String)
             required = [(stm, "local_set!(b, local_idx)\n                emit_statement_trace!(b, ctx, idx, local_idx, local_type)"),
                         (gen, "push!(ctx.translator.trace.probed[id], idx)"),
@@ -4222,7 +4224,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             # generated groups lazily and builds only the selected ones before main runs; every reader
             # of all cases builds them all first
             v += !occursin(r"^include\(joinpath\(@__DIR__, \"registry_cases.jl\"\)\)"m, smoke) &&
-                 count(r"^_lazy_(?:g|xf)\(\"registry_\w+\", \"registry_cases.jl\"\)$"m, smoke) == length(generated) + 2 &&
+                 count(r"^_lazy_(?:g|xf)\(\"registry_\w+\", \"registry_cases.jl\"\)$"m, _smoke_text()) == length(generated) + 2 &&
                  occursin("        haskey(LAZY_BUILDERS, file) || Base.include(@__MODULE__, joinpath(@__DIR__, file))\n", smoke) &&
                  occursin("abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())\nabspath(PROGRAM_FILE) == (@__FILE__) && main()", smoke) &&
                  occursin("LAZY_BUILDERS[\"registry_cases.jl\"] = rc_groups", rcs) ? 0 : 1
@@ -5059,7 +5061,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
         () -> begin
             local inv = read(joinpath(CODEGEN, "invoke.jl"), String)
             local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smoke = _smoke_text()
             local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
             local n = 0
             n += occursin("local target = get_function_by_mi(ctx.func_registry, mi)", inv) ? 0 : 1
@@ -5267,7 +5269,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
             local comp = read(joinpath(CODEGEN, "compile.jl"), String)
             local clo = read(joinpath(CODEGEN, "closures.jl"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smoke = _smoke_text()
             local v = 0
             # one function computes the set, called once (the fixpoint's round)
             v += abs(count_sites(r"\bclosed_world_classes\("; roots=[SRC], exclude_line=r"^function closed_world_classes\(|^\s*closed_world_classes\(codeinfos, entry_mis, nir_for\) ->") - 1)
@@ -5319,7 +5321,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
     "L177_one_match_rule" => ("one definition decides whether a match of Julia's is one signature, the MethodInstance a call at its types runs, _match_is_one_signature (trimcollect.jl): its intersection is one DataType and every static parameter it leaves a TypeVar is mentioned only where the argument is one value's dispatch type (a concrete class that is not a kind, or a Type{X}): a TypeVar left there Julia leaves at run time too (`h(x::Union{T,Nothing}) where T` at Nothing), one left at an abstract argument or a kind it fixes per value. The static signature's match, each candidate tuple's and each per-class candidate's (the dynamic call of a function) call it, and no other test of a match's spec_types or sparams exists in src. Its behavior: smoke's closure_type_parameter_at_kind (a match at the kind DataType facing Type{S} built a body whose static parameter rejected, native 8) and closure_union_nothing_erased (dev/AUDIT.md A9C6; dev/formal/Enrollment.tla NoTypeVarCheck; dev/CHARTER.md C1)",
         () -> begin
             local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smoke = _smoke_text()
             local v = abs(count_sites(r"spec_types isa"; roots=[SRC]) - 1)
             v += abs(count_sites(r"sparams[^\n]*isa TypeVar|isa TypeVar[^\n]*sparams"; roots=[SRC]) - 1)
             v += count("function _match_is_one_signature(m::Core.MethodMatch)::Bool", trim) == 1 ? 0 : 1
@@ -5333,7 +5335,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
         () -> begin
             local vals = read(joinpath(CODEGEN, "values.jl"), String)
             local blt = read(joinpath(CODEGEN, "builtins.jl"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smoke = _smoke_text()
             local v = count_sites(r"_erased_vararg_tuple_operand")
             v += abs(count_sites(r"source_class\(from_julia\) === nothing") - 2)
             v += occursin("source_class(@nospecialize(from_julia))::Union{DataType, Nothing} =", vals) ? 0 : 1
@@ -5378,7 +5380,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local flow = read(joinpath(CODEGEN, "flow.jl"), String)
             local structs = read(joinpath(CODEGEN, "structs.jl"), String)
             local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smoke = _smoke_text()
             local v = abs(count_sites(r"register_struct_type!\([^)]*TypeError\)"; roots=[CODEGEN]) - 1)
             v += abs(count_sites(r"_emit_typeerror_throw!\(") - 5)   # its definition, docstring and three callers
             v += count("type_element_kind(@nospecialize(P))::Union{Nothing, Type} =", trim) == 1 ? 0 : 1
@@ -5512,7 +5514,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += count("function loop_bounds(cfg::NirCFG)", ctxs) == 1 ? 0 : 1
             local m11 = read(joinpath(ROOT, "test", "m11_intrinsics_table.jl"), String)
             v += occursin("operator_intrinsic is the intrinsic Julia's method runs", m11) ? 0 : 1
-            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smk = _smoke_text()
             for c in ("_g(\"int128_extends\"", "_g(\"pointer_float_bytes\"", "_g(\"dispatch_slot_registers\"", "_xf(\"reduce_intrinsic_kind\"", "_xf(\"dispatch_slot_float16\"",
                       "_g(\"narrow_widening\"", "_g(\"conversion_target\"")
                 v += occursin(c, smk) ? 0 : 1
@@ -5591,7 +5593,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("nir_cfg is Julia's compute_basic_blocks", nui) ? 0 : 1
             v += occursin("the proven-dead proof sees a try body through the one CFG", nui) ? 0 : 1
-            v += occursin("_g(\"loop_backward_branch\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1
+            v += occursin("_g(\"loop_backward_branch\"", _smoke_text()) ? 0 : 1
             for f in ("MCProvenDeadNoCatchEdgeBroken.cfg", "MCDefiniteInitNoCatchEdgeBroken.cfg")
                 v += isfile(joinpath(ROOT, "dev", "formal", f)) ? 0 : 1
             end
@@ -5615,7 +5617,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("CC.singleton_type(Core.Typeof(callee)) !== nothing", nirs) ? 0 : 1
             local nui = read(joinpath(ROOT, "test", "nir_use_index.jl"), String)
             v += occursin("a call's constant callee has one representation", nui) ? 0 : 1
-            v += occursin("_g(\"constant_callees\"", read(joinpath(ROOT, "test", "smoke.jl"), String)) ? 0 : 1
+            v += occursin("_g(\"constant_callees\"", _smoke_text()) ? 0 : 1
             v
         end),
     "L183_one_as_checker" => ("a typeassert's run-time check is one function per (target, static type), as dart's as-check calls one checker per tested type (types.dart:763 AsCheckers.generateAsChecker, cached in `_asCheckers`, :758): as_checker! builds it on its first use in a codegen context of its own (its one statement `typeassert(x, T)`), with dart's shape: from the top type (anyref, types.dart:784) to the register of S ∩ T (:783), its body narrowing the argument to the static type's register, the one isa lowering over that type (Julia's emit_isa tests S ∩ T, which is why the key holds the static type), the one TypeError throw and the argument converted to S ∩ T's register (:1172-1173); the calling statement converts its operand to the top type; the module's registry caches it (`as_checkers`, the function and its parameter, or the rejection its body raised) and names it as dart does, \"<obj> as T\" (types.dart:1039); _lower_typeassert!'s run-time arm calls it and lowers no isa and allocates no local of its own; a check WT cannot lower rejects at each calling statement with the body's rejection (the checker's own copy leaves the ledger). Behavior: test/diagnostic_attribution.jl's 'an as-checker's rejection is its caller's' (x::Type{<:AbstractVector} over Any: one diagnostic, at the caller's statement) and 'one as-checker per (target, static type)' (two statements and two functions, one function), smoke as_checkers and typeassert_checks (dev/AUDIT.md A4E5; dev/CHARTER.md C1)",
@@ -5636,7 +5638,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin("as_checker = GeneratedConstruct(\"as-checker\", \"<obj> as \", \"\", true)", read(joinpath(CODEGEN, "diagnostics.jl"), String)) ? 0 : 1
             local da = read(joinpath(ROOT, "test", "diagnostic_attribution.jl"), String)
             v += occursin("an as-checker's rejection is its caller's", da) && occursin("one as-checker per (target, static type)", da) ? 0 : 1
-            local smk = read(joinpath(ROOT, "test", "smoke.jl"), String)
+            local smk = _smoke_text()
             v += occursin("_g(\"as_checkers\"", smk) && occursin("(\"empty_intersection_throws\"", smk) ? 0 : 1
             v
         end),
@@ -5954,7 +5956,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
     "L191_numeric_tables_generate_their_cases" => ("every key of the numeric lowering tables, INTRINSIC_BINOPS, INTRINSIC_UNOPS, INTRINSIC_CONVERSIONS, CHECKED_OPS, SHIFT_OPS, FMA_OPS and MISC_OPS, has generated differential cases in smoke, one per Julia type whose register is the key's, less RC_HELD's types (R42) (test/registry_cases.jl, one GROUPS group per table, enumerated from the tables themselves, never a copy of their keys; a key no Julia type reaches raises when smoke loads, naming it), a shift's per pair of shifted and amount types the intrinsic accepts; and the operator fallback's cases are asked of operator_intrinsic itself: its callees those it answers for some type among BUILTIN_LOWERINGS's keys (the call) and among every Core.Intrinsics intrinsic and Base binary operator (the reduce, a splat of two), a case per callee and type the consumer's rule answers (operator_intrinsic for the call, reduce_intrinsic for the reduce), and a loud case (an xfail) for the first type it answers `nothing` for where Julia answers. The blocking gate runs registry_sample, derived from those groups (Amendment 117-14: split, never exempt; the full groups are test/block_groups.tsv's matrix-only row, L194): the first generated case of each class, its table, its function's arity (a unary and a binary operation of one table, the operator fallback's call and reduce, are two kinds) and the register classes of the values it operates on (a narrow integer apart from a full one, a shift's amount beside its value, a conversion's target by its register), with that case's function and inputs, at most 60 (more raises when smoke loads); every generated case names its types. Each case is compiled once and run over its inputs (compare_julia_wasm_inputs): each type's boundaries and, for a narrow type, a dirty operand whose register holds junk above its width; a float travels as its bits and a float result is compared by its bits, an arithmetic NaN as a NaN (IEEE 754's sign bit operations and a bitcast by every bit). The class of silent wrong answers the reviews found by reading in 116d-2 and audit #16: A16E1 (a narrow sext, zext or sitofp source read with its junk), A16E3 (a sitofp to Float32 rounded twice) and 116d-2's operator kind swap; 116d-2's other, the Int128 sext of a UInt8, is a 128-bit conversion, which no generated case holds (smoke's int128_extends is its case); A16E4's arity, a splat of one or three elements where native throws, waits for the strict throw match (117b). Behavior: smoke's registry groups, each failing under a plant of a fix: normalise_narrow! deleted from emit_conversion!'s sext arm (the A16E1 fix) fails registry_conversions, sitofp to a Float32 converted through a Float64 (A16E3) fails registry_conversions, operator_intrinsic answering a float intrinsic for an integer (116d-2) fails registry_operators, a narrow shift amount read with its junk (the W6 fix reverted) fails registry_shift, and a key no type reaches added to INTRINSIC_UNOPS fails smoke's load (dev/CHARTER.md C5)",
         () -> begin
             local rc = _text(joinpath(ROOT, "test", "registry_cases.jl"))
-            local sm = _text(joinpath(ROOT, "test", "smoke.jl"))
+            local sm = _smoke_text()
             local v = 0
             for t in ("INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS", "CHECKED_OPS", "SHIFT_OPS", "FMA_OPS", "MISC_OPS")
                 v += occursin("keys(WasmTarget.$t)", rc) && occursin("_rc_unreached(:$t,", rc) ? 0 : 1
