@@ -31,6 +31,18 @@ The method:
    `Area:` paragraph per area with its findings, and a `Resolution:` for each finding (the
    commit that fixed it, or the MARCH item and ratchet that now carry it).
 
+### History: the plan the rebuild superseded (archived 2026-10-21 when dev/MARCH.md restarted at Phase 1)
+
+Phase 14 converted WT1 in place; the rebuild (WT2-DESIGN §E, PR #128) replaced it. Its rows, in short (full
+text: `git log -p -- dev/MARCH.md`, the commit that opened Phase 1):
+- 14.0 (C10 C0): the loop kept in minutes and proven by `dev/land.sh land`; carried as the rebuild's loop.
+- 14.1 (C4 C5 C6 C7): strict by construction on WT1, first its eleven silent catch-alls; WT2 starts at 0 stopgaps.
+- 14.2 (C1 C9): one source of truth on WT1 (R5's 58 re-guesses → the typed value channel); WT2 carries the type on every value.
+- 14.2b (C1 C2 C9): the nuke inventory of WT1's parallel paths; WT2 has none to nuke, WT1 leaves whole by legacy/'s rule.
+- 14.3 (C2 C3 C5 C6 C10): the audit-fix queues (120x, A22E9, 120x-2/3); their cases join the corpus as requirements.
+- 14.4 (all): clauses close as consequences with `Closes: C<n>` matrices; unchanged under the rebuild.
+- 14.5 (C0 C10): decisions Dale held (C10's sentence, the final gate); carried to the charter proposals.
+
 ## 2026-09-29 — audited through 7acc21c9 (4fc785d2~1..7acc21c9: batches 51–59)
 
 The first audit, done because none had been: 45 findings. Two were read as silent wrong
