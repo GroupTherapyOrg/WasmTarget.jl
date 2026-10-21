@@ -404,10 +404,12 @@ Init ==
 ----------------------------------------------------------------------------
 CeilingOpen == RoundCeiling = 0 \/ steps < RoundCeiling
 
-(* `collect_new_pairs!(S)`: compile S in a fresh partition, cut the output *)
-(* (LateCut), and merge the bodies not yet collected. A throw aborts the   *)
-(* plan (L78), or, in the SwallowFailures variant, the failing bodies are  *)
-(* dropped.                                                                *)
+(* `collect_new_pairs!(S)`: compile S in the compile's one partition, cut  *)
+(* the output (LateCut), and merge the bodies not yet collected (a body an *)
+(* earlier round inferred is served from the partition; which Widened      *)
+(* targets a call materializes stays the free choice Mat). A throw aborts  *)
+(* the plan (L78), or, in the SwallowFailures variant, the failing bodies  *)
+(* are dropped.                                                            *)
 Enroll(S) ==
     \E Mat \in SUBSET Widened :
     LET raw   == JuliaClosure(S, Mat) \ collected
@@ -443,9 +445,11 @@ ScanInvokes(m) ==
        IN  /\ invokeScanned' = invokeScanned \cup {m}
            /\ superseded' = IF Trim THEN superseded \cup (Originals(m) \ Roots) ELSE superseded
            /\ invokeSeen' = invokeSeen \cup proposals
-           \* the reason of every edge's target, collected already or not (PlannerWrites,
-           \* broken: only the targets this scan enrolls)
-           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN proposals ELSE targets)
+           \* the reason of every edge's target, collected already or not, and of each site's
+           \* original, Julia's own target before a retarget (a Widened original compile!
+           \* materialized stays collected, the dead body H9 pins: it has its reason too)
+           \* (PlannerWrites, broken: only the targets this scan enrolls)
+           /\ reasoned' = reasoned \cup (IF PlannerWrites THEN proposals ELSE targets \cup InvokeEdges[m])
            /\ narrowed' = (narrowed \ AppliedAt(m)) \cup Retyped(m)
            /\ Enroll(proposals)
     /\ UNCHANGED <<pruned, trimmedFor, dynSeen, dynRoots, fmaScanned, fmaRoots>>

@@ -94,9 +94,10 @@ function _hi_late_entry(n::Int64)::Int64
 end
 
 @testset "an import reached in a later collection round is cut, as the first round's are" begin
-    entry = WasmTarget.entry_method_instance(_hi_late_entry, (Int64,))
-    leaf = WasmTarget.entry_method_instance(_hi_late_import, (Int64,))
-    world = WasmTarget.collect_closed_world(Any[entry]; external_leaves=Set{Any}([leaf]))
+    interp = WasmTarget.WasmInterpreter(Base.RefValue(0))   # one compile's, as trim_compile_plan makes it
+    entry = WasmTarget.entry_method_instance(interp, _hi_late_entry, (Int64,))
+    leaf = WasmTarget.entry_method_instance(interp, _hi_late_import, (Int64,))
+    world = WasmTarget.collect_closed_world(interp, Any[entry]; external_leaves=Set{Any}([leaf]))
     collected = [ci.def isa Core.MethodInstance ? ci.def : ci.def.def
                  for ci in world.codeinfos[1:2:end] if ci isa Core.CodeInstance]
     late_caller = which(_hi_late_area, (_HiLateA,))

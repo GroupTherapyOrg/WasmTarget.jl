@@ -628,10 +628,10 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
             local _args(c) = _cv_ctx[_T] ? c.julia_params[2:end] : c.julia_params
             for _a in 1:length(_bs), _b in _a+1:length(_bs)
                 local _ma, _mb = _bs[_a].method, _bs[_b].method
-                (_ma !== _mb && wt_methods_ambiguous(_ma, _mb)) || continue
+                (_ma !== _mb && wt_methods_ambiguous(plan.interp, _ma, _mb)) || continue
                 local _ov = typeintersect(Tuple{_args(_bs[_a])...}, Tuple{_args(_bs[_b])...})
                 _ov === Union{} && continue
-                local _amb = ambiguous_class_tuple(_T, _ov, plan.classes)
+                local _amb = ambiguous_class_tuple(plan.interp, _T, _ov, plan.classes)
                 _amb === false && continue
                 throw(WasmCompileError(WasmDiagnostic(:unsupported_method, string(_T),
                     "a dynamic call of $(_T) reaches $(_ma) and $(_mb), which are ambiguous" *

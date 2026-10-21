@@ -14,7 +14,7 @@ _wt_oip_b(x::Int) = x * 2
     mi_a = only(fn[4] for fn in plan.functions if fn[3] == "a")
     ci, rt = WasmTarget.plan_ir(plan, mi_a)
     @test ci === plan.ir_cache[mi_a][1]                                   # served, not re-inferred
-    mi_b = WasmTarget.entry_method_instance(_wt_oip_b, (Int,))
+    mi_b = WasmTarget.entry_method_instance(plan.interp, _wt_oip_b, (Int,))
     @test_throws ErrorException WasmTarget.plan_ir(plan, mi_b)            # outside the world
     @test WasmTarget.plan_ir_or_nothing(plan, mi_b) === nothing           # a miss by design, no inference
     # every per-function fact the plan holds is keyed by MethodInstance, one key per function
@@ -43,12 +43,89 @@ end
     @test only(bodies) in plan.candidate_mis
 end
 
+# One compile infers in one cache partition, at one world (dev/AUDIT.md A18C5): its collection's
+# rounds, its return-type questions and its lookups all ask the compile's one interpreter, so a
+# function the compile infers has its CodeInstances under that interpreter's token alone, and the
+# next compile has a token of its own. Each collection pass once made a fresh token, and the
+# return-type questions asked the shared :wasm_target partition at another world.
+@noinline _wt_oip_c5g(x) = x + 1
+function _wt_oip_c5(n::Int64)
+    c = n
+    f = () -> (c = _wt_oip_c5g(c); nothing)
+    f(); f()
+    return c
+end
+@testset "one compile infers in one cache partition (A18C5)" begin
+    local owners(mi) = (o = Any[]; ci = isdefined(mi, :cache) ? mi.cache : nothing;
+                        while ci !== nothing; push!(o, ci.owner); ci = isdefined(ci, :next) ? ci.next : nothing; end; o)
+    local tokens() = Any[o for mi in Base.specializations(only(methods(_wt_oip_c5g))) if mi isa Core.MethodInstance
+                         for o in owners(mi) if o !== nothing]   # nothing: Julia's own cache
+    local plan = WasmTarget.trim_compile_plan(Any[(_wt_oip_c5, (Int64,), "c5")])
+    @test !isempty(tokens())
+    @test all(o -> o === plan.interp.cache_token, tokens())
+    local plan2 = WasmTarget.trim_compile_plan(Any[(_wt_oip_c5, (Int64,), "c5")])
+    @test plan2.interp.cache_token !== plan.interp.cache_token
+    @test all(o -> o === plan.interp.cache_token || o === plan2.interp.cache_token, tokens())
+    @test any(o -> o === plan2.interp.cache_token, tokens())
+end
+
+# A program's own types compile WT's type-taking methods once (dev/AUDIT.md A19X4): two programs
+# differing only in their struct types leave no specialization of the methods that take a
+# program's type or function @nospecialize (or as a key typed past it) that names the second
+# program's type or function, and the constructor of a function's context is no keyword call
+# typed by that function. Reading the one class list sorts nothing (A18C2): its reads print no
+# type's order key.
+for (S, f) in ((:_WtPinA, :_wt_pin_a), (:_WtPinB, :_wt_pin_b))
+    @eval begin
+        struct $S
+            a::Int64
+            b::Float64
+        end
+        # the tuple is stored where the optimizer cannot take it apart (an Any slot), so the program
+        # registers Tuple{$S, Int64}
+        $f(n::Int64) = (s = $S(n, 1.5); v = $S[s]; x = Any[s, n, (s, n)];
+                        Int64((x[3]::Tuple{$S,Int64})[1].b) + v[1].a + (x[1]::$S).a + length(v))
+    end
+end
+@testset "a program's own types compile WT's type-taking methods once (A19X4)" begin
+    local pinned = Any[WasmTarget.convert_type!, WasmTarget._narrow_ref!, WasmTarget.coerce_stack_top!,
+                       WasmTarget.emit_value_as!, WasmTarget._emit_value_wrap!, WasmTarget.register_tuple_type!,
+                       WasmTarget.registry_order_key]
+    # their keyword calls too: a keyword call's NamedTuple is typed by its values (A19X2)
+    local names = String[string(nameof(f)) for f in pinned]
+    local kwcalls = [m for m in methods(Core.kwcall) if any(n -> occursin("WasmTarget." * n * ")", string(m.sig)) ||
+                                                                 occursin("WasmTarget." * n * "}", string(m.sig)), names)]
+    @test length(kwcalls) >= 2   # convert_type!'s, coerce_stack_top!'s
+    local specs() = String[string(mi.specTypes) for m in vcat(Any[m for f in pinned for m in methods(f)], kwcalls)
+                           for mi in Base.specializations(m) if mi isa Core.MethodInstance]
+    local mentions(name) = filter(t -> occursin(name, t), specs())
+    @test WasmTarget.compile_multi(Any[(_wt_pin_a, (Int64,), "a")]) isa Vector{UInt8}
+    @test WasmTarget.compile_multi(Any[(_wt_pin_b, (Int64,), "b")]) isa Vector{UInt8}
+    @test isempty(mentions("_WtPinB"))
+    @test isempty(mentions("_wt_pin_b"))
+    # the one class list's reads sort nothing: no type's order key is printed reading it
+    local plan = WasmTarget.trim_compile_plan(Any[(_wt_pin_b, (Int64,), "b")])
+    local keys = Ref(0)
+    @eval WasmTarget type_order_key(T::DataType)::Tuple{String,String} =
+        ($(keys)[] += 1; invoke(type_order_key, Tuple{Any}, T))
+    try
+        for _ in 1:3
+            @test Base.invokelatest(WasmTarget.closed_world_class_list, plan.classes) === plan.classes.list
+            @test Base.invokelatest(WasmTarget.class_candidates, plan.classes) == Any[plan.classes.list; plan.classes.held_list]
+        end
+        @test keys[] == 0
+    finally
+        Base.delete_method(which(WasmTarget.type_order_key, Tuple{DataType}))
+    end
+    @test which(WasmTarget.type_order_key, Tuple{DataType}).sig == Tuple{typeof(WasmTarget.type_order_key), Any}
+end
+
 # An entry's MethodInstance is Julia's match, its static parameters' values included, also when
 # the program is compiled before any native call made that specialization (the empty-sparams
 # MethodInstance inferred `sizeof(T)` over an unknown T).
 _wt_oip_pe(x::T) where {T<:Integer} = sizeof(T) + x
 @testset "an entry's static parameters are Julia's" begin
-    mi = WasmTarget.entry_method_instance(_wt_oip_pe, (Int64,))
+    mi = WasmTarget.entry_method_instance(WasmTarget.WasmInterpreter(Base.RefValue(0)), _wt_oip_pe, (Int64,))
     @test mi.sparam_vals == Core.svec(Int64)
     @test WasmTarget.compile_multi(Any[(_wt_oip_pe, (Int64,), "pe")]) isa Vector{UInt8}
     @test _wt_oip_pe(3) == 11

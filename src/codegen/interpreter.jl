@@ -1348,11 +1348,11 @@ struct WasmInterpreter <: CC.AbstractInterpreter
     # the uncompressed optimized CodeInfo of every collected CodeInstance
     # here — the (CodeInstance, CodeInfo) pairs the plugin handoff consumes.
     codegen::IdDict{Core.CodeInstance, Core.CodeInfo}
-    # P5-trim: cache-partition token. The legacy pipeline shares :wasm_target
-    # for cross-compile CodeInstance reuse; collect_closed_world uses a FRESH
-    # per-collection token — a shared partition can hold CodeInstances
-    # inferred by earlier interps whose codegen CodeInfos were never stashed,
-    # tripping compile!'s `use_const_api || haskey(interp.codegen)` invariant.
+    # the cache-partition token (CC.cache_owner). A compile's one interpreter (trim_compile_plan)
+    # holds a fresh token, so its partition holds only what that interpreter inferred, each
+    # CodeInfo stashed in its `codegen`: a CodeInstance another interpreter cached there would
+    # trip compile!'s `use_const_api || haskey(interp.codegen)` invariant. get_wasm_interpreter's
+    # :wasm_target partition serves a person's inspection outside a compile.
     cache_token::Any
     # the host-layout reads of the specializations this interpreter has asked about
     # (ir_reads_host_layout), one memo per interpreter, so none outlives its compilation
@@ -1590,7 +1590,9 @@ end
 """
     get_wasm_interpreter() -> WasmInterpreter
 
-Create a WasmInterpreter with overlay method table for the current world age.
+Create a WasmInterpreter with overlay method table for the current world age, in the shared
+:wasm_target partition, for a person's inspection outside a compile (get_typed_ir's and
+infer_return_type's default). A compile asks only its own interpreter (trim_compile_plan).
 Must be called after all user functions are defined (so they're visible to inference).
 parity(quarantine: the WasmInterpreter WT runs Julia's inference with, above.)
 """

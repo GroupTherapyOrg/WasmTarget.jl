@@ -43,29 +43,30 @@ end
 
 # ----------------------------------------------------------------------------------------
 # THE consult for which methods Julia selects. Collection, planning and the vtable pre-pass
-# ask it, and only it: Julia's own matching in the method table WT compiles with, the
-# WasmInterpreter's overlay table at its world (get_wasm_interpreter). Base's own table at the
-# latest world is another table, which disagrees wherever an overlay replaces a method. A
-# statement's codegen reads the plan and asks no table and no inference (L152, L171).
+# ask it, and only it: Julia's own matching in the method table WT compiles with, the overlay
+# table of the compile's one WasmInterpreter at its world (trim_compile_plan makes it; the
+# ClosedWorld and the plan hold it). Base's own table at the latest world is another table, which
+# disagrees wherever an overlay replaces a method. A statement's codegen reads the plan and asks
+# no table and no inference (L152, L171).
 # ----------------------------------------------------------------------------------------
 
 """
-    wt_method_matches(sig; limit=-1) -> MethodLookupResult | nothing
+    wt_method_matches(interp, sig; limit=-1) -> MethodLookupResult | nothing
 
-Every method Julia's matching gives `sig` (`CC.findall`) in the WasmInterpreter's method table,
-the overlay table at its world, in that table's order: the overlay's matches (most specific
-first, a method a fully covering one makes unreachable left out), then, unless the last of them
-fully covers `sig`, the base table's matches no overlay signature contains, in the base table's
-order; `nothing` past `limit`. For a concrete `sig` the first match is the method a call runs (an
+Every method Julia's matching gives `sig` (`CC.findall`) in the method table of `interp`, the
+compile's one WasmInterpreter: its overlay table at its world, in that table's order: the
+overlay's matches (most specific first, a method a fully covering one makes unreachable left
+out), then, unless the last of them fully covers `sig`, the base table's matches no overlay
+signature contains, in the base table's order; `nothing` past `limit`. For a concrete `sig` the first match is the method a call runs (an
 overlay method that applies covers it).
 parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
 whole compilation consults.
 """
-wt_method_matches(@nospecialize(sig); limit::Int=-1)::Union{Nothing, CC.MethodLookupResult} =
-    CC.findall(sig, CC.method_table(get_wasm_interpreter()); limit)
+wt_method_matches(interp::WasmInterpreter, @nospecialize(sig); limit::Int=-1)::Union{Nothing, CC.MethodLookupResult} =
+    CC.findall(sig, CC.method_table(interp); limit)
 
 """
-    wt_method_which(sig) -> MethodMatch | nothing
+    wt_method_which(interp, sig) -> MethodMatch | nothing
 
 The method Julia's dispatch selects for `sig` in the same table (`CC.findsup`, the lookup
 `hasmethod`, `which` and `Base._which` make in Base's table): the overlay table's most specific
@@ -74,19 +75,19 @@ one covering method (none covers it, or the covering ones are ambiguous).
 parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
 whole compilation consults.
 """
-wt_method_which(@nospecialize(sig))::Union{Nothing, Core.MethodMatch} =
-    CC.findsup(sig, CC.method_table(get_wasm_interpreter()))[1]
+wt_method_which(interp::WasmInterpreter, @nospecialize(sig))::Union{Nothing, Core.MethodMatch} =
+    CC.findsup(sig, CC.method_table(interp))[1]
 
 """
-    wt_dispatch_mi(sig) -> MethodInstance | nothing
+    wt_dispatch_mi(interp, sig) -> MethodInstance | nothing
 
 The MethodInstance a call of signature `sig` runs: `wt_method_which`'s method, specialized at
 `sig` with the static parameters Julia's match computes.
 parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
 whole compilation consults.
 """
-function wt_dispatch_mi(@nospecialize(sig))::Union{Nothing, Core.MethodInstance}
-    local m = wt_method_which(sig)
+function wt_dispatch_mi(interp::WasmInterpreter, @nospecialize(sig))::Union{Nothing, Core.MethodInstance}
+    local m = wt_method_which(interp, sig)
     return m === nothing ? nothing : CC.specialize_method(m)
 end
 
@@ -152,7 +153,7 @@ function _candidate_product(choices::Vector{Vector{Any}}, @nospecialize(F), sig:
 end
 
 """
-    _wt_matches_with_ambiguous(sig) -> (Vector{MethodMatch}, Bool)
+    _wt_matches_with_ambiguous(interp, sig) -> (Vector{MethodMatch}, Bool)
 
 The consult's matching of `sig` with the ambiguous methods kept and the ambiguity reported, the
 query `Base.isambiguous` makes (`_methods_by_ftype` with include_ambiguous), merged across the
@@ -161,8 +162,8 @@ not fully cover `sig`, the base table's matches no overlay signature contains.
 parity(pkg/dart2wasm/lib/translator.dart:108 Translator.hierarchy): the one class hierarchy the
 whole compilation consults.
 """
-function _wt_matches_with_ambiguous(@nospecialize(sig))::Tuple{Vector{Core.MethodMatch},Bool}
-    local world = get_wasm_interpreter().world
+function _wt_matches_with_ambiguous(interp::WasmInterpreter, @nospecialize(sig))::Tuple{Vector{Core.MethodMatch},Bool}
+    local world = interp.world
     local lookup(mt) = (amb = Ref{Int32}(0);
         ms = Base._methods_by_ftype(sig, mt, -1, world, true, Ref{UInt}(typemin(UInt)), Ref{UInt}(typemax(UInt)), amb);
         (collect(Core.MethodMatch, ms::Vector), amb[] != 0))
@@ -174,7 +175,7 @@ function _wt_matches_with_ambiguous(@nospecialize(sig))::Tuple{Vector{Core.Metho
 end
 
 """
-    wt_methods_ambiguous(m1, m2) -> Bool
+    wt_methods_ambiguous(interp, m1, m2) -> Bool
 
 Whether two methods are ambiguous: some argument types both admit where neither is more specific
 and no other method resolves them. Julia's own algorithm (base/reflection.jl `isambiguous`, the
@@ -183,14 +184,14 @@ holds takes part as Julia's inference sees it (Base's isambiguous reads Base's t
 parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
 ambiguity; a dart closure has one body.)
 """
-function wt_methods_ambiguous(m1::Method, m2::Method)::Bool
+function wt_methods_ambiguous(interp::WasmInterpreter, m1::Method, m2::Method)::Bool
     m1 === m2 && return false
     local ti = typeintersect(m1.sig, m2.sig)
     ti === Union{} && return false
     function inner(ti)
         ti === Union{} && return false
         Base.has_bottom_parameter(ti) && return false
-        local ms, has_ambig = _wt_matches_with_ambiguous(ti)
+        local ms, has_ambig = _wt_matches_with_ambiguous(interp, ti)
         has_ambig || return false
         filter!(m -> !Base.has_bottom_parameter(m.spec_types), ms)
         # the ambiguity reported over the intersection involves both methods, or another pair
@@ -220,7 +221,7 @@ function wt_methods_ambiguous(m1::Method, m2::Method)::Bool
 end
 
 """
-    _apply_iterate_vararg_target_mi(node, arg_type) -> MethodInstance | nothing
+    _apply_iterate_vararg_target_mi(interp, node, arg_type) -> MethodInstance | nothing
 
 THE call edge of `Core._apply_iterate(iterate, f, t)` when `t` is a runtime-length
 Vararg tuple — the one splat shape calls.jl lowers to a DIRECT call
@@ -242,7 +243,7 @@ representable layout (`is_runtime_vararg_tuple_type`, structs.jl), and EXACTLY O
 method answers the open-ended signature. An arity-overloaded callee has no single static
 target and stays a loud reject at the call site.
 """
-function _apply_iterate_vararg_target_mi(node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
+function _apply_iterate_vararg_target_mi(interp::WasmInterpreter, node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
     (node.callee === Core._apply_iterate && length(node.operands) == 3) || return nothing
     local fref = node.operands[2]
     local f = nir_operand_callee(fref, arg_type(fref))
@@ -250,13 +251,13 @@ function _apply_iterate_vararg_target_mi(node::NirCall, arg_type)::Union{Core.Me
     local T = arg_type(node.operands[3])
     (T isa DataType && is_runtime_vararg_tuple_type(T)) || return nothing
     local sig = Tuple{Core.Typeof(f), Vararg{vararg_tuple_eltype(T)}}
-    local matches = wt_method_matches(sig)
+    local matches = wt_method_matches(interp, sig)
     (matches !== nothing && length(matches) == 1) || return nothing
     return CC.specialize_method(matches[1])
 end
 
 """
-    _invoke_in_world_target_mi(node, arg_type) -> MethodInstance | nothing
+    _invoke_in_world_target_mi(interp, node, arg_type) -> MethodInstance | nothing
 
 THE call edge of `Core.invoke_in_world(world, f, args...)`, which calls `f(args...)`: a
 closed world has one world, so the edge is that call's dispatch in the overlay table — the
@@ -267,19 +268,19 @@ rejects as a dynamic call); a call no one method covers is the dynamic call of `
 parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age,
 and a closed-world module has exactly one.)
 """
-function _invoke_in_world_target_mi(node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
+function _invoke_in_world_target_mi(interp::WasmInterpreter, node::NirCall, arg_type)::Union{Core.MethodInstance,Nothing}
     (length(node.operands) >= 2 && _nir_callee_object(node.callee) === Core.invoke_in_world) ||
         return nothing
     local f = nir_operand_callee(node.operands[2], arg_type(node.operands[2]))
     (f isa Function || f isa Type) || return nothing
     local arg_types = Any[arg_type(a) for a in @view node.operands[3:end]]
-    local matches = wt_method_matches(Tuple{Core.Typeof(f), arg_types...})
+    local matches = wt_method_matches(interp, Tuple{Core.Typeof(f), arg_types...})
     (matches !== nothing && length(matches) == 1 && matches[1].fully_covers) || return nothing
     return CC.specialize_method(matches[1])
 end
 
 """
-    _called_function(node, arg_type) -> (callee, operands)
+    _called_function(interp, node, arg_type) -> (callee, operands)
 
 The function a call statement calls and the operands it passes: its callee and its operands; for
 `Core.invoke_in_world(world, f, args...)` with a constant `f` that is no edge (no one method
@@ -292,12 +293,12 @@ never neither an edge nor a site
 parity(quarantine: Julia's world-age builtin `Core.invoke_in_world`; dart has no world age,
 and a closed-world module has exactly one.)
 """
-function _called_function(node::NirCall, arg_type)::Tuple{Any,Vector{NirNode}}
+function _called_function(interp::WasmInterpreter, node::NirCall, arg_type)::Tuple{Any,Vector{NirNode}}
     local callee = _nir_callee_object(node.callee)
     callee === Core.invoke_in_world || return (callee, node.operands)
     length(node.operands) >= 2 || return (nothing, NirNode[])
     local f = nir_operand_callee(node.operands[2], arg_type(node.operands[2]))
-    (!(f isa Function || f isa Type) || _invoke_in_world_target_mi(node, arg_type) !== nothing) && return (nothing, NirNode[])
+    (!(f isa Function || f isa Type) || _invoke_in_world_target_mi(interp, node, arg_type) !== nothing) && return (nothing, NirNode[])
     return (f, node.operands[3:end])
 end
 
@@ -355,15 +356,15 @@ roots (Completeness)
 parity(quarantine: Julia's trim collection follows these edges, typeinfer.jl:1477 collectinvokes!; dart's closed world comes from its TFA)
 """
 function _closed_world_edge(node::NirNode, src::Core.CodeInfo, slot_types::Vector{Type}, arg_type,
-                            interp)::Union{Tuple{Symbol,Core.MethodInstance},Nothing}
+                            interp::WasmInterpreter)::Union{Tuple{Symbol,Core.MethodInstance},Nothing}
     local kind, mi = :invoke, nothing
     local argextype(a) = value_type(a, slot_types, nothing)   # Julia's queue's operand type
     if node isa NirInvoke
         mi = node.mi
     elseif node isa NirCall
-        if (mi = _apply_iterate_vararg_target_mi(node, arg_type)) !== nothing
+        if (mi = _apply_iterate_vararg_target_mi(interp, node, arg_type)) !== nothing
             kind = :splat
-        elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing
+        elseif (mi = _invoke_in_world_target_mi(interp, node, arg_type)) !== nothing
             kind = :invoke_in_world
         elseif _nir_callee_object(node.callee) === Core.finalizer && 2 <= length(node.operands) <= 4
             kind = :finalizer
@@ -409,30 +410,43 @@ _CaptureTyping()::_CaptureTyping =
     _CaptureTyping(Dict{Tuple{Type,Symbol},Type}(), IdDict{Core.MethodInstance,Dict{Int,Type}}())
 
 """
-    _numeric_joins!(joins, src, nir, slot_types) -> Dict{Int,Type}
+    _rettype_question(interp) -> Function
+
+The box analyses' return-type question (their `rettype`): the return type of `f(::argtypes...)`,
+asked of the one inference entry (infer_return_type) with `interp`, the compile's one
+WasmInterpreter, so a join's answer comes from the cache partition and the world the collection
+infers in, never from another interpreter's.
+parity(quarantine: a return-type query to Julia's own inference; dart reads a member's return
+type off its Kernel FunctionNode.)
+"""
+_rettype_question(interp::WasmInterpreter)::Function =
+    (@nospecialize(f), argtypes::Tuple) -> infer_return_type(f, argtypes; interp)
+
+"""
+    _numeric_joins!(interp, joins, src, nir, slot_types) -> Dict{Int,Type}
 
 The numeric joins of one collected body (propagate_numeric_value_types over the boundary's
 types, the slot types typing its arguments), computed once per body and kept in `joins`, the
 collection's one memo (ClosedWorld's `numeric_joins`): they type the edges' operands here, and
 with the capture reads they are the plan's joins (`plan.joins`), which codegen reads. Their
-return-type questions go to the one inference entry (infer_return_type): collection asks
-Julia's inference, codegen does not (L152).
+return-type questions go to the one inference entry with the compile's interpreter `interp`
+(_rettype_question): collection asks Julia's inference, codegen does not (L152).
 parity(quarantine: Julia leaves a scalar-replaced `Core.Box` capture's numeric accumulator typed
 `Any`; dart types a captured variable by its declared type, closures.dart:1579
 translateTypeOfLocalVariable.)
 """
-_numeric_joins!(joins::IdDict{Core.CodeInfo,Dict{Int,Type}}, src::Core.CodeInfo,
+_numeric_joins!(interp::WasmInterpreter, joins::IdDict{Core.CodeInfo,Dict{Int,Type}}, src::Core.CodeInfo,
                 nir::Vector{NirStmt}, slot_types::Vector{Type})::Dict{Int,Type} =
     get!(() -> propagate_numeric_value_types(nir, nir; slot_types,
-                                             rettype=infer_return_type), joins, src)
+                                             rettype=_rettype_question(interp)), joins, src)
 
 # the operand typer `_closed_world_edge` reads in one body: an operand's call-site type, value_type
 # over the body's joins (`_body_joins`: numeric and captured-box), the ones codegen's call reads
 # parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
-function _edge_arg_type(src::Core.CodeInfo, mi::Core.MethodInstance, nir::Vector{NirStmt},
+function _edge_arg_type(interp::WasmInterpreter, src::Core.CodeInfo, mi::Core.MethodInstance, nir::Vector{NirStmt},
                         slot_types::Vector{Type}, joins::IdDict{Core.CodeInfo,Dict{Int,Type}},
                         capture::_CaptureTyping)::Function
-    local body = _body_joins(joins, capture, mi, src, nir, slot_types)
+    local body = _body_joins(interp, joins, capture, mi, src, nir, slot_types)
     return a -> value_type(a, slot_types, body)
 end
 
@@ -455,7 +469,8 @@ function _collected_pairs(codeinfos::Vector{Any})::Vector{Tuple{Core.CodeInstanc
 end
 
 """Return the targets of the collected bodies' edges (`_closed_world_edge`) missing from a
-collected world, each recorded in `seen`. Every edge's target has its reason recorded in
+collected world, each recorded in `seen`, every lookup and return type asked of `interp`, the
+compile's one WasmInterpreter. Every edge's target has its reason recorded in
 `reasons` (the first statement naming it), collected already or not, and the closure type of each
 `:invoke`'s target in `invoked_closures`: the walk is the collection's one walk of the edges, and
 the plan reads what it records. An explicit `:invoke` whose concrete call-site types select
@@ -468,18 +483,17 @@ formal(dev/formal/ClosedWorld.tla): every collected body has the reason the coll
 (ReasonsComplete), and no :invoke at the fixpoint calls a replacement the final world's typing
 does not select (RetargetsSound)
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)"""
-function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
+function _missing_explicit_invoke_mis(interp::WasmInterpreter, codeinfos::Vector{Any}, seen::Set{Any};
                                       numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}},
                                       capture::_CaptureTyping,
                                       reasons::IdDict{Core.MethodInstance,String},
                                       invoked_closures::Set{DataType},
                                       invoke_originals::IdDict{Core.CodeInfo,Dict{Int,Core.MethodInstance}})::Vector{Any}
     out = Any[]
-    interp = WasmInterpreter(Base.RefValue(0))
     for (host_ci, host_mi, src) in _collected_pairs(codeinfos)
         nir = build_nir(src)
         src_slot_types = nir_slot_types(src)
-        arg_type = _edge_arg_type(src, host_mi, nir, src_slot_types, numeric_joins, capture)
+        arg_type = _edge_arg_type(interp, src, host_mi, nir, src_slot_types, numeric_joins, capture)
         for (k, s) in enumerate(nir)
             local node = s.node
             local edge = _closed_world_edge(node, src, src_slot_types, arg_type, interp)
@@ -510,7 +524,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                         # closed-world compiler. An explicit invoke can retain
                         # Base's abstract Vararg MI even though the concrete
                         # call must dispatch to a Wasm overlay specialization.
-                        matches = wt_method_matches(ftype)
+                        matches = wt_method_matches(interp, ftype)
                         # The invoked method itself (or the overlay sharing its signature),
                         # specialized at the concrete types. An explicit
                         # `invoke(f, Tuple{Super}, x)` names a method that dispatch on x's
@@ -551,7 +565,7 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                                     for j in eachindex(arg_types)]
                                 canonical_ftype = Tuple{Core.Typeof(f), canonical_args...}
                                 if canonical_ftype != ftype
-                                    canonical_matches = wt_method_matches(canonical_ftype)
+                                    canonical_matches = wt_method_matches(interp, canonical_ftype)
                                     if canonical_matches !== nothing && !isempty(canonical_matches) &&
                                        canonical_matches[1].method === match.method
                                         ftype = canonical_ftype
@@ -579,6 +593,13 @@ function _missing_explicit_invoke_mis(codeinfos::Vector{Any}, seen::Set{Any};
                     get!(() -> Dict{Int,Core.MethodInstance}(), invoke_originals, src)[k] = original_mi
                     nir_retarget_invoke!(src, nir, k, mi)
                 end
+            end
+            # Julia's own target of a site the collector retargets keeps a reason too: compile!
+            # materializes a widened original inferred in the compile's partition, and it stays
+            # collected, dead code no live edge names (ClosedWorld.tla ReasonsComplete; MARCH 13.17 H9)
+            if kind === :invoke && original_mi isa Core.MethodInstance && original_mi !== mi
+                haskey(reasons, original_mi) || (reasons[original_mi] = _enrollment_text(
+                    "the call, Julia's target before the collector retargeted it,", host_ci, src, k, node))
             end
             mi isa Core.MethodInstance || continue
             haskey(reasons, mi) || (reasons[mi] = _enrollment_text(_EDGE_ENROLLMENT[kind], host_ci, src, k, node))
@@ -630,10 +651,12 @@ function throw_located_collection_failure(batch::Vector{Tuple{Any,String}}, err,
                             err, _raised_frames(bt, :collect_closed_world)))
 end
 
-# infer one root in a fresh partition, as collect_new_pairs! would (the failure path only)
+# infer one root alone, at the compile's world (the failure path only, once the compile has
+# failed), in a partition of its own: the compile's holds what the failed batch inferred, from
+# which a root could be served without inferring it again, and its failure would go unnamed
 # parity(quarantine: the re-inference throw_located_collection_failure names a failing root by; Julia's compile! names none of a batch's roots.)
-function _compile_root_alone(mi)::Nothing
-    local interp = WasmInterpreter(Base.RefValue(0))
+function _compile_root_alone(world::UInt, mi)::Nothing
+    local interp = WasmInterpreter(Base.RefValue(0); world)
     local ci = Any[]
     local wq = CC.CompilationQueue(; interp)
     local ilq = CC.CompilationQueue(; interp)
@@ -685,17 +708,18 @@ function _collection_rejection(kind::Symbol, why::String, ci, src::Core.CodeInfo
 end
 
 """
-    _capture_typing!(capture, codeinfos)
+    _capture_typing!(interp, capture, codeinfos)
 
 Type the captured variables of the world collected so far: the record (record_capture_contents)
 over every collected body, every body of a callable type read as one of its type's bodies
 (closure_bodies), and each body's captured-box reads (capture_read_types). It runs at the start
 of each collection round, before the round's edges are typed, so the round's typers read it; the
-last round's, over the final world, is the closed world's.
+last round's, over the final world, is the closed world's. Its return-type questions go to the
+compile's interpreter `interp` (_rettype_question).
 parity(closures.dart:1436 Capture.type): a captured variable's type comes from its declaration,
 the one type every read and write of it shares.
 """
-function _capture_typing!(capture::_CaptureTyping, codeinfos::Vector{Any})::Nothing
+function _capture_typing!(interp::WasmInterpreter, capture::_CaptureTyping, codeinfos::Vector{Any})::Nothing
     local pairs = _collected_pairs(codeinfos)
     local bodies_by_type = IdDict{Any,Vector{Tuple{Core.MethodInstance,Core.CodeInfo}}}()
     for (_, cmi, csrc) in pairs
@@ -706,19 +730,19 @@ function _capture_typing!(capture::_CaptureTyping, codeinfos::Vector{Any})::Noth
     end
     local closure_bodies = T -> get(bodies_by_type, T, Tuple{Core.MethodInstance,Core.CodeInfo}[])
     local nirs = IdDict{Core.CodeInfo,Vector{NirStmt}}(src => build_nir(src) for (_, _, src) in pairs)
+    local rettype = _rettype_question(interp)
     capture.record = record_capture_contents(Any[(nirs[csrc], nir_slot_types(csrc)) for (_, _, csrc) in pairs];
-                                             closure_bodies, rettype=infer_return_type)
+                                             closure_bodies, rettype)
     empty!(capture.joins)
     for (_, mi, src) in pairs
         capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record;
-                                               spectypes=nir_slot_types(src), closure_bodies,
-                                               rettype=infer_return_type)
+                                               spectypes=nir_slot_types(src), closure_bodies, rettype)
     end
     return nothing
 end
 
 """
-    _body_joins(numeric_joins, capture, mi, src, nir, slot_types) -> Dict{Int,Type}
+    _body_joins(interp, numeric_joins, capture, mi, src, nir, slot_types) -> Dict{Int,Type}
 
 One collected body's joins, the ones codegen applies (plan_joins): its numeric joins
 (_numeric_joins!) with its captured-box reads (the capture typing's), so every collection typer
@@ -728,10 +752,10 @@ next round types it.
 parity(pkg/dart2wasm/lib/translator.dart:119 Translator.inferredTypeMetadata): the type flow
 analysis's per-node types, one answer for every reader.
 """
-_body_joins(numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}}, capture::_CaptureTyping,
+_body_joins(interp::WasmInterpreter, numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}}, capture::_CaptureTyping,
             mi::Core.MethodInstance, src::Core.CodeInfo, nir::Vector{NirStmt},
             slot_types::Vector{Type})::Dict{Int,Type} =
-    merge(copy(_numeric_joins!(numeric_joins, src, nir, slot_types)),
+    merge(copy(_numeric_joins!(interp, numeric_joins, src, nir, slot_types)),
           get(capture.joins, mi, Dict{Int,Type}()))
 
 """
@@ -792,15 +816,16 @@ struct ClosedWorldClasses
     list::Vector{DataType}
     # `held` in type_order_key's order, sorted once with `list`: class_candidates' second part
     held_list::Vector{DataType}
-end
-
-# parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect): the one class list, sorted once, when the set is final
-function ClosedWorldClasses(runtime::Set{DataType}, held_types::Set{DataType})::ClosedWorldClasses
-    # ordered_by prints each class's key once (sort!'s `by` prints it at every comparison): the
-    # same stable order
-    local list = ordered_by(DataType[C for C in runtime if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))],
-                            type_order_key)
-    return ClosedWorldClasses(runtime, held_types, list, ordered_by(collect(held_types), type_order_key))
+    # parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect): the one class
+    # list, sorted once, when the set is final: the lists are derived here from the two sets, the
+    # only way to build one (no constructor takes lists a caller sorted)
+    function ClosedWorldClasses(runtime::Set{DataType}, held_types::Set{DataType})::ClosedWorldClasses
+        # ordered_by prints each class's key once (sort!'s `by` prints it at every comparison):
+        # the same stable order
+        local list = ordered_by(DataType[C for C in runtime if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))],
+                                type_order_key)
+        return new(runtime, held_types, list, ordered_by(collect(held_types), type_order_key))
+    end
 end
 
 """
@@ -1055,11 +1080,11 @@ instantiates (in its signatures or allocations), as dart builds dispatch rows on
 classes of its closed component; and for a callable constructed and called dynamically, every
 method Julia's matching gives the call's static signature, at its intersection (a method with
 static parameters at each tuple of candidates over the positions its static parameters
-mention).
+mention). Every lookup and return type is asked of `interp`, the compile's one WasmInterpreter.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
 its front end's whole-program type flow analysis.)
 """
-function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
+function _dynamic_dispatch_candidate_mis(interp::WasmInterpreter, codeinfos::Vector{Any}, seen::Set{Any};
                                          reasons::IdDict{Core.MethodInstance,String},
                                          classes::ClosedWorldClasses,
                                          nir_for::Function,
@@ -1119,7 +1144,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
         # A dynamic call's operands are typed as codegen's call reads them: by the body's joins,
         # its numeric joins and its captured-box reads (_body_joins), so a call erased by
         # Core.Box inference enrolls its exact MethodInstance before function indices are frozen.
-        local _call_type = let st = nir_slot_types(src), j = _body_joins(numeric_joins, capture, host_mi, src, nir, st)
+        local _call_type = let st = nir_slot_types(src), j = _body_joins(interp, numeric_joins, capture, host_mi, src, nir, st)
             a -> value_type(a, st, j)
         end
         # Optimized IR often folds `%new(closure, captures...)` into a constant
@@ -1179,7 +1204,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             # (a singleton-typed function argument arrives already resolved to its
             # instance — the NIR boundary's one callee resolution); the call an `invoke_in_world`
             # with no static edge makes is a dynamic call of its function (_called_function)
-            local g, cargs = _called_function(node, _call_type)
+            local g, cargs = _called_function(interp, node, _call_type)
             (g isa Function && !(g isa Core.Builtin) && !(g isa Core.IntrinsicFunction)) || continue
             isempty(cargs) && continue
             atypes = Any[]
@@ -1196,7 +1221,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             absp = Int[j for j in 1:length(atypes) if !_closed_world_exact_type(atypes[j])]
             if isempty(absp)
                 local ssig = Tuple{Core.Typeof(g), atypes...}
-                local selected = wt_method_which(ssig)
+                local selected = wt_method_which(interp, ssig)
                 selected === nothing && continue
                 local m = selected.method
                 (ssig <: m.sig && _match_is_one_signature(selected)) || continue
@@ -1233,7 +1258,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
                  target_type <: atypes[p]) || continue
                 spec = ntuple(j -> j == p ? target_type : atypes[j], length(atypes))
                 ssig = Tuple{Core.Typeof(g), spec...}
-                local selected = wt_method_which(ssig)
+                local selected = wt_method_which(interp, ssig)
                 if selected === nothing
                     # the call throws Julia's MethodError for this class: its args tuple, recorded
                     # for this callee (formal(dev/formal/ClassIdSwitch.tla): ThrowWhereJuliaThrows)
@@ -1277,11 +1302,11 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
         local _ech = Vector{Any}[dispatch_candidates(P, observed_classes) for P in ds]
         # Julia's matching of the call's static signature, asked once: a method whose signature
         # covers it leaves no tuple without a method
-        local _mms = wt_method_matches(Tuple{_T, ds...})
+        local _mms = wt_method_matches(interp, Tuple{_T, ds...})
         local _covered = _mms !== nothing && any(m -> Tuple{_T, ds...} <: m.method.sig, _mms)
         if !_covered
             for cs in _candidate_product(_ech, _T, ds, invocation_site[(_T, ds)])
-                local _none = wt_method_matches(Tuple{_T, cs...})
+                local _none = wt_method_matches(interp, Tuple{_T, cs...})
                 (_none === nothing || !isempty(_none)) && continue
                 local _rt = Any[something(type_element_kind(C), C) for C in cs]
                 all(t -> t isa DataType && isconcretetype(t), _rt) && _record_no_method!(no_method, _T, Tuple{_rt...})
@@ -1312,7 +1337,7 @@ function _dynamic_dispatch_candidate_mis(codeinfos::Vector{Any}, seen::Set{Any};
             local choices = [!mentions(p) ? Any[ds[p]] :
                              Any[C for C in dispatch_candidates(ds[p], observed_classes) if admits(C, p)] for p in eachindex(ds)]
             for cs in _candidate_product(choices, _T, ds, invocation_site[(_T, ds)])
-                local cms = wt_method_matches(Tuple{_T, cs...})
+                local cms = wt_method_matches(interp, Tuple{_T, cs...})
                 for cm in (cms === nothing ? () : cms)
                     (cm.method === mm.method && _match_is_one_signature(cm)) || continue
                     enroll_closure!(CC.specialize_method(cm.method, cm.spec_types, cm.sparams),
@@ -1338,15 +1363,16 @@ _record_no_method!(no_method::IdDict{DataType,Set{DataType}}, F::DataType, T::Da
     (push!(get!(() -> Set{DataType}(), no_method, F), T); nothing)
 
 """
-    _fused_multiply_add_mis(codeinfos, scanned) -> Vector{Any}
+    _fused_multiply_add_mis(interp, codeinfos, scanned) -> Vector{Any}
 
 The `Base.fma_emulated` MethodInstances that the collected bodies' `muladd_float` and
 `fma_float` intrinsic calls lower to (julia_numeric_tier.jl `FMA_OPS`), one per float type:
-Julia's own software fma, which rounds once.
+Julia's own software fma, which rounds once, as the consult of `interp`, the compile's one
+WasmInterpreter, selects it.
 parity(quarantine: WASM has no scalar FMA instruction, so the intrinsic's lowering is a call
 of Julia's software fma, which the closed world must hold.)
 """
-function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any})::Vector{Any}
+function _fused_multiply_add_mis(interp::WasmInterpreter, codeinfos::Vector{Any}, scanned::Base.IdSet{Any})::Vector{Any}
     types = Set{Type}()
     for (_, _, src) in _collected_pairs(codeinfos)
         src in scanned && continue
@@ -1359,7 +1385,7 @@ function _fused_multiply_add_mis(codeinfos::Vector{Any}, scanned::Base.IdSet{Any
             numeric_register(T) in (F32, F64) && push!(types, T)
         end
     end
-    return Any[wt_dispatch_mi(Tuple{typeof(Base.fma_emulated), T, T, T}) for T in types]
+    return Any[wt_dispatch_mi(interp, Tuple{typeof(Base.fma_emulated), T, T, T}) for T in types]
 end
 
 """
@@ -1371,7 +1397,8 @@ the one class set (`classes`, closed_world_classes: the classes a value may have
 `Type{X}` of each type object a value may be); the closure types an `:invoke` calls; per callable
 type, the args tuples it has no method for; the `Base.fma_emulated`
 MethodInstance it roots for each fma lowering, by signature; each body's numeric joins
-(_numeric_joins!); and the capture typing of its last round (_CaptureTyping).
+(_numeric_joins!); the capture typing of its last round (_CaptureTyping); and the compile's one
+WasmInterpreter, which inferred every body and answered every lookup and return type.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 struct ClosedWorld
@@ -1385,21 +1412,22 @@ struct ClosedWorld
     lowering_callees::Dict{Type,Core.MethodInstance} # each fma lowering's Base.fma_emulated, by signature
     numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}}  # each body's numeric joins (_numeric_joins!)
     capture::_CaptureTyping                          # the captured variables' types, the bodies' capture reads
+    interp::WasmInterpreter                          # the compile's one interpreter (trim_compile_plan)
 end
 
 """Cut the bodies of declared imports (external leaves) out of a collection before it merges:
 keep the code the entries reach over the closed world's edges (`_closed_world_edge`, the
 relation the collector enrolls by), never walking into or keeping an import's body. It runs at
 every merge, on Julia's first collection and on each later round's compile! output, and is the
-collection's only cut: a body an edge of a kept body names is kept, whatever its kind.
+collection's only cut: a body an edge of a kept body names is kept, whatever its kind. The
+edges are typed and resolved by `interp`, the compile's one WasmInterpreter.
 parity(quarantine: Julia's native fallback bodies of a declared import are inferred with its
 callers but are not the Wasm component's; dart's imports have no Dart body.)"""
-function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{Any},
+function _prune_external_leaf_subgraphs(interp::WasmInterpreter, codeinfos::Vector{Any}, entries::Vector{Any},
                                         external_leaves::Set{Any};
                                         numeric_joins::IdDict{Core.CodeInfo,Dict{Int,Type}},
                                         capture::_CaptureTyping)::Vector{Any}
     isempty(external_leaves) && return codeinfos
-    interp = WasmInterpreter(Base.RefValue(0))
     pairs = Dict{Any,Tuple{Any,Core.CodeInfo}}()
     for (ci, mi, src) in _collected_pairs(codeinfos)
         pairs[mi] = (ci, src)
@@ -1415,7 +1443,7 @@ function _prune_external_leaf_subgraphs(codeinfos::Vector{Any}, entries::Vector{
         pair === nothing && continue
         local pair_slot_types = nir_slot_types(pair[2])
         local pair_nir = build_nir(pair[2])
-        local arg_type = _edge_arg_type(pair[2], mi, pair_nir, pair_slot_types, numeric_joins, capture)
+        local arg_type = _edge_arg_type(interp, pair[2], mi, pair_nir, pair_slot_types, numeric_joins, capture)
         # every edge, of every kind the collector enrolls by: a kind missing here would cut a
         # body Julia's queue collected through it (1.13's `:new` of a closure, b107)
         for s in pair_nir
@@ -1450,10 +1478,12 @@ const _COMPILE_KW = :external_linkage in Base.kwarg_decl(first(methods(CC.compil
 # no live edge names stays collected as dead code (NoGarbage, MARCH 13.17 H9). Every dynamic
 # candidate is a dispatch root, collected first or not (RootsComplete).
 """
-    collect_closed_world(entries::Vector{Any}; verify::Bool=false) -> ClosedWorld
+    collect_closed_world(interp, entries::Vector{Any}; verify::Bool=false) -> ClosedWorld
 
 Collect the closed transitive callgraph for the given entry
-`MethodInstance`s under the WASM overlay interpreter. With `verify=true`,
+`MethodInstance`s under `interp`, the compile's one WasmInterpreter (its overlay table, its
+world, its one cache partition): every round's inference, every lookup and every return type
+the collection asks is asked of it. With `verify=true`,
 run the upstream trim verifier (throws `Core.TrimFailure` with
 source-located diagnostics when dynamic dispatch remains — the same
 "abstract inference unsupported" boundary WasmTarget's diagnostics guard,
@@ -1468,7 +1498,7 @@ Surfaced by Markdown.plain/show recursion over heterogeneous AST nodes.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from
 its front end's whole-program type flow analysis.)
 """
-function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
+function collect_closed_world(interp::WasmInterpreter, entries::Vector{Any}; verify::Bool=false,
                               external_leaves::Set{Any}=Set{Any}())::ClosedWorld
     local callable_types = Set{DataType}()
     local dynamic_roots = Set{Core.MethodInstance}()
@@ -1478,8 +1508,6 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     local lowering_callees = Dict{Type,Core.MethodInstance}()
     local numeric_joins = IdDict{Core.CodeInfo,Dict{Int,Type}}()
     local capture = _CaptureTyping()
-    # Fresh cache partition per collection: see cache_token in WasmInterpreter.
-    interp = WasmInterpreter(Base.RefValue(0))
     invokelatest_queue = CC.CompilationQueue(; interp)
     codeinfos = Any[]
     workqueue = CC.CompilationQueue(; interp)
@@ -1492,14 +1520,14 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         # alone, named with its reason
         (err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
         throw_located_collection_failure(Tuple{Any,String}[(e, "a compilation entry") for e in entries],
-                                         err, catch_backtrace(), _compile_root_alone)
+                                         err, catch_backtrace(), Base.Fix1(_compile_root_alone, interp.world))
     end
     # Imports are typed call-graph leaves. Julia inference may inspect their
     # native fallback bodies, but those bodies and their dependencies do not
     # belong to the Wasm component. Cut them before invoke completion and
     # dynamic-dispatch discovery so external implementation details can never
     # contaminate the closed world.
-    codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves; numeric_joins, capture)
+    codeinfos = _prune_external_leaf_subgraphs(interp, codeinfos, entries, external_leaves; numeric_joins, capture)
     # Julia's queue may leave an explicit invoke with an abstract callable slot
     # as an IR edge without materializing its body (e.g. Base.with_output_color's
     # `Function` argument). A closed world cannot defer that edge to codegen.
@@ -1524,24 +1552,23 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # Explicit invokes and dynamic-dispatch candidates form ONE reachability
     # problem. Either class can add IR containing edges of the other class, so
     # sequential fixpoints are insufficient. Iterate both collectors together
-    # until neither can add a MethodInstance; every collection uses a fresh
-    # interpreter/cache partition and only new pairs are merged.
+    # until neither can add a MethodInstance; every round infers with the compile's
+    # one interpreter, in its one cache partition, and only new pairs are merged.
     # each root's reason is the one its enrollment recorded (enrolled_by); a root with none is a
     # collector defect, raised here
     function collect_new_pairs!(mis)
         isempty(mis) && return false
         local batch = Tuple{Any,String}[]   # (resolved root, why it was enrolled)
-        fresh_interp = WasmInterpreter(Base.RefValue(0))
         fresh_ci = Any[]
-        fresh_wq = CC.CompilationQueue(; interp=fresh_interp)
-        fresh_ilq = CC.CompilationQueue(; interp=fresh_interp)
+        fresh_wq = CC.CompilationQueue(; interp)
+        fresh_ilq = CC.CompilationQueue(; interp)
         added = false
         for root_mi in mis
-            # Resolve in the partition's overlay method table. Reusing a native
+            # Resolve in the interpreter's overlay method table. Reusing a native
             # MethodInstance manufactures the wrong static-parameter environment
             # when an overlay or UnionAll match participates, even when its printed
             # `specTypes` happens to be identical.
-            matches = wt_method_matches(root_mi.specTypes)
+            matches = wt_method_matches(interp, root_mi.specTypes)
             (matches === nothing || isempty(matches)) &&
                 error("no Wasm overlay match for closed-world root $(root_mi.specTypes)")
             # the root's own method (or the overlay that shares its signature): an explicit
@@ -1582,13 +1609,13 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         catch err
             # an interrupt or exhausted memory is the process's, not a root's: never re-inferred
             (err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()
-            throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)
+            throw_located_collection_failure(batch, err, catch_backtrace(), Base.Fix1(_compile_root_alone, interp.world))
         end
         # Every compile! output is cut by the external leaves before it merges, exactly as the
         # first collection is (above): a later round's root may call a declared import, and
         # Julia's queue then infers the import's native fallback body with it. That body is
         # not the Wasm component's, and merged it would compile in the import's place.
-        fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)
+        fresh_ci = _prune_external_leaf_subgraphs(interp, fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)
         for (fci, mi, fsrc) in _collected_pairs(fresh_ci)
             mi_key(mi) in base_mi_keys && continue
             push!(base_mis, mi)
@@ -1603,9 +1630,9 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
     # the loop only adds: no collected body is ever dropped (dart's worklist only adds too)
     while true
         # the round's capture typing, over the world collected so far, before any typer reads it
-        _capture_typing!(capture, codeinfos)
+        _capture_typing!(interp, capture, codeinfos)
         changed = collect_new_pairs!(_missing_explicit_invoke_mis(
-            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,
+            interp, codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,
             invoke_originals))
 
         # one NIR per collected CodeInfo for this round's two walks (the class set, then the
@@ -1614,7 +1641,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
         local nir_cache = IdDict{Core.CodeInfo,Vector{NirStmt}}()
         local nir_for = src -> get!(() -> build_nir(src), nir_cache, src)
         classes = closed_world_classes(codeinfos, entries, nir_for)
-        extra = _dynamic_dispatch_candidate_mis(codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,
+        extra = _dynamic_dispatch_candidate_mis(interp, codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,
                                                 no_method, numeric_joins, capture)
         # Every candidate is a dispatch root, and its callable type a callable type, whether or
         # not its body is collected already: on 1.13 Julia's queue collects a closure body by
@@ -1630,7 +1657,7 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
             end
         end
         changed |= collect_new_pairs!(Any[mi for mi in extra if !(mi_key(mi) in base_mi_keys)])
-        local fma_roots = _fused_multiply_add_mis(codeinfos, fma_scanned)
+        local fma_roots = _fused_multiply_add_mis(interp, codeinfos, fma_scanned)
         for mi in fma_roots
             lowering_callees[mi.specTypes] = mi   # the lowering's callee, as rooted
             haskey(enrolled_by, mi) || (enrolled_by[mi] = "the Julia body of the fma/muladd intrinsic lowering")
@@ -1642,37 +1669,32 @@ function collect_closed_world(entries::Vector{Any}; verify::Bool=false,
 
     # WASMTARGET dynamic dispatch: discover every target admitted by the closed component.
     # It is compilation correctness and has no environment opt-out or arbitrary round/method ceiling.
-    # T1.1 step 1 (NON-PERTURBING collection): specializations reached only via `dynamic`
-    # calls (markdown plain/show over heterogeneous AST nodes, abstract-keyed Dict
-    # hash/isequal, …) are collected in a SEPARATE interpreter + collection, then only the
-    # NEW (CodeInstance, CodeInfo) pairs are MERGED into `codeinfos` (deduped by
-    # MethodInstance). The previous approach re-ran CC.compile! on the SHARED `interp`
-    # after the base pass, which perturbed base inference (re-collected already-present MIs
-    # with different IR → order-dependent codegen bugs in unrelated code). A fresh interp
-    # (distinct cache_owner) + merge leaves every base pair byte-identical, so enabling
-    # discovery cannot change how base functions compile (the COLLECTION layer). Registry
-    # isolation — candidates hidden from get_function's signature lookup, an :invoke still
-    # reaching one by its MethodInstance — is step 2 (FunctionInfo.is_candidate). With layers
-    # 1+2 in place, plus discovery yielding
-    # to for megamorphic (≥9-method) functions, the base pass is byte-identical
-    # whether or not discovery runs.
+    # Specializations reached only via `dynamic` calls (markdown plain/show over heterogeneous
+    # AST nodes, abstract-keyed Dict hash/isequal, …) are collected by a later round's compile!
+    # with the compile's one interpreter, as juliac collects with one interpreter per world
+    # (Compiler typeinfer.jl typeinf_ext_toplevel): a body an earlier round collected is served
+    # from the one cache partition, its CodeInstance and the CodeInfo the collection holds, never
+    # inferred again, and only the NEW (CodeInstance, CodeInfo) pairs are MERGED into
+    # `codeinfos` (deduped by MethodInstance), so discovery cannot change how a collected body
+    # compiles. Registry isolation — candidates hidden from get_function's signature lookup, an
+    # :invoke still reaching one by its MethodInstance — is FunctionInfo.is_candidate.
     if verify
         CC.verify_typeinf_trim(codeinfos, #= onlywarn =# false)
     end
     return ClosedWorld(codeinfos, dynamic_roots, callable_types, enrolled_by, classes, invoked_closures,
-                       no_method, lowering_callees, numeric_joins, capture)
+                       no_method, lowering_callees, numeric_joins, capture, interp)
 end
 
 """
-    entry_method_instance(f, arg_types::Tuple) -> MethodInstance
+    entry_method_instance(interp, f, arg_types::Tuple) -> MethodInstance
 
-Resolve the `MethodInstance` for `f(::arg_types...)` — the entry handle
-`collect_closed_world` consumes.
+Resolve the `MethodInstance` for `f(::arg_types...)` in the consult of `interp`, the compile's
+one WasmInterpreter — the entry handle `collect_closed_world` consumes.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
-function entry_method_instance(f, arg_types::Tuple)::Core.MethodInstance
+function entry_method_instance(interp::WasmInterpreter, f, arg_types::Tuple)::Core.MethodInstance
     tt = Tuple{Core.Typeof(f), arg_types...}
-    local m = wt_method_which(tt)
+    local m = wt_method_which(interp, tt)
     # no method: `which`'s error, the MethodError a call would throw
     m === nothing && throw(ErrorException(sprint(io -> (println(io, "Calling invoke(f, t, args...) would throw:");
                                                      Base.showerror(io, MethodError(f, arg_types))))))
@@ -1694,8 +1716,10 @@ MethodInstances compiled from a bespoke body (L133) with that body's generator; 
 type, the args tuples it has no method for, each sorted by type_order_key (the MethodError of a
 dynamic call reads its callee's, and the numbering takes every key and tuple); and the
 MethodInstance each lowering that calls a Julia function by name calls, keyed by its signature
-(`Base.fma_emulated` for the fma intrinsics); and each planned body's joins (plan_joins), its
-captured-box reads typed by the record of every captured variable, computed once in collection.
+(`Base.fma_emulated` for the fma intrinsics); each planned body's joins (plan_joins), its
+captured-box reads typed by the record of every captured variable, computed once in collection;
+and the compile's one WasmInterpreter, the consult the vtable pre-pass's ambiguity search asks
+(codegen asks it nothing, L152, L171).
 parity(pkg/dart2wasm/lib/translator.dart:115 Translator.directCallMetadata): the front end's
 per-node answers, which codegen reads and never recomputes.
 """
@@ -1713,6 +1737,7 @@ struct ClosedWorldPlan
     external_leaves::Vector{Any}   # (callable, argument types, MethodInstance) of each declared import
     joins::IdDict{Core.MethodInstance,Dict{Int,Type}}   # each planned body's joins (numeric, capture reads)
     roots::IdDict{Core.MethodInstance,String}           # each entry (a requested root) and its name
+    interp::WasmInterpreter        # the compile's one interpreter (trim_compile_plan), translator.dart:108 hierarchy
 end
 
 """
@@ -1781,7 +1806,10 @@ name or takes it too, when it takes its signature, as every other function does
 (plan_function_names!): one generic function's specializations given as entries without names are
 told apart by Julia's own identity, never by the order they are listed in. Which of the two forms
 an unnamed entry takes depends on the other entries (`f` alone, `f`'s signature beside another
-entry of `f` or a request for "f"), not on their order.
+entry of `f` or a request for "f"), not on their order. The compile's one WasmInterpreter is
+made here: a cache partition of its own (a fresh token: no CodeInstance another compile inferred
+is read, none it infers outlives the compile's plan) at the world the compile starts in. The
+entries, the collection, the plan and the vtable pre-pass ask it, and no other interpreter.
 
 Skipped (with a debug note): non-singleton callables (stateful closures —
 their call sites inline or carry the closure value; no module-level
@@ -1790,13 +1818,14 @@ function object.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::ClosedWorldPlan
+    local interp = WasmInterpreter(Base.RefValue(0))
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     entry_values = Dict{Any,Any}()     # explicit capturing-closure instances
     local requested = Set{String}(e[3] for e in entries_named if e[3] !== nothing)
     local unnamed = Tuple{Any,String}[]                 # (mi, its function's name)
     for (f, arg_types, name) in entries_named
-        mi = entry_method_instance(f, arg_types)
+        mi = entry_method_instance(interp, f, arg_types)
         push!(entry_mis, mi)
         name === nothing ? push!(unnamed, (mi, string(nameof(f)))) : (entry_keys[mi] = name)
         entry_values[mi] = f
@@ -1810,11 +1839,11 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     local external_leaves = Any[]   # (callable, argument types, MethodInstance) of each declared import
     for entry in external_entries
         f, arg_types = entry[1], entry[2]
-        local xmi = entry_method_instance(f, arg_types)
+        local xmi = entry_method_instance(interp, f, arg_types)
         push!(external_mis, xmi)
         push!(external_leaves, (f, Tuple(arg_types), xmi))
     end
-    local world = collect_closed_world(entry_mis; external_leaves=external_mis)
+    local world = collect_closed_world(interp, entry_mis; external_leaves=external_mis)
     return plan_closed_world(world, entry_keys, entry_values, external_leaves)
 end
 
@@ -1967,7 +1996,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             String["planning the closed world: the capture reads of $(mi)"],
             ErrorException("the collection's last round typed no capture reads for a planned body"),
             Base.StackTraces.StackFrame[]))
-        joins[mi] = _body_joins(numeric_joins, world.capture, mi, src, build_nir(src), nir_slot_types(src))
+        joins[mi] = _body_joins(world.interp, numeric_joins, world.capture, mi, src, build_nir(src), nir_slot_types(src))
         local gen = mi.def isa Method ? get(STANDALONE_INTRINSIC_BODIES, mi.def, nothing) : nothing
         gen === nothing || (bespoke[mi] = gen)
         # Only discovery ROOTS are selector candidates. Dependencies compiled
@@ -1984,7 +2013,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
         local winner = if length(mis) == 1
             only(mis)
         else
-            local match = wt_method_which(first(mis).specTypes)
+            local match = wt_method_which(world.interp, first(mis).specTypes)
             local w = match === nothing ? nothing : findfirst(m -> m.def === match.method, mis)
             w === nothing ? nothing : mis[w]
         end
@@ -2017,7 +2046,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     return ClosedWorldPlan(functions, ir_cache, candidate_mis, invoke_only,
                            world.callable_types, enrolled_as, world.classes,
                            bespoke, no_method, copy(world.lowering_callees), external_leaves,
-                           joins, IdDict{Core.MethodInstance,String}(entry_keys))
+                           joins, IdDict{Core.MethodInstance,String}(entry_keys), world.interp)
 end
 
 """

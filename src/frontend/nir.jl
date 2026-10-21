@@ -435,6 +435,35 @@ _nir_ssa_type(types::Vector{Type}, id::Int)::Type = (1 <= id <= length(types)) ?
 # parity(code_generator.dart:135 getStaticType): the same read from the built statement records.
 _nir_ssa_type(nir::Vector{NirStmt}, id::Int)::Type = (1 <= id <= length(nir)) ? nir[id].julia_type : Any
 
+"""
+    is_host_stream(mod, name) -> Bool
+
+Whether the global `mod.name` is one of the compiling session's standard streams: a `stdout`,
+`stderr` or `stdin` binding owned by Base or Core (Base.binding_module: a module that imports it,
+Main included, names the same binding), a binding of the process that compiles, never a value of
+the program it compiles. The boundary takes it as no binding (resolve_operand), so neither the collection nor
+codegen reads the compiler's own stream (its object, its class), and a read of one rejects at its
+statement (unbound_global_text).
+parity(quarantine: Julia's standard streams are bindings of the running session; a WT module has no
+console, and a stream of the compiling process is no value of the closed world.)
+"""
+is_host_stream(mod::Module, name::Symbol)::Bool =
+    (name === :stdout || name === :stderr || name === :stdin) && isdefined(mod, name) &&
+    (Base.binding_module(mod, name) === Base || Base.binding_module(mod, name) === Core)
+
+"""
+    unbound_global_text(mod, name) -> String
+
+Why a read of the global `mod.name`, which the boundary took as no binding, rejects: it is not
+defined in its module, or it is the compiling session's standard stream (is_host_stream).
+parity(quarantine: Julia's global bindings resolved at the boundary; dart's static field reads are
+resolved by the front end.)
+"""
+unbound_global_text(mod::Module, name::Symbol)::String =
+    is_host_stream(mod, name) ?
+        "GlobalRef $(GlobalRef(mod, name)) is the compiling session's standard stream: a WasmTarget module has no console" :
+        "GlobalRef $(GlobalRef(mod, name)) is not defined in its source module"
+
 """Resolve one IR operand (an Expr arg, a PhiNode value, a ReturnNode/GotoIfNot payload)
 into a NirNode. Total: the final `else` wraps anything unrecognized as NirLiteral rather
 than throwing. `types` supplies each SSA id's Julia type — the widened `ssavaluetypes`
@@ -450,7 +479,8 @@ function resolve_operand(x, types)::NirNode
     elseif x isa Core.SlotNumber
         return NirSlot(x.id)
     elseif x isa GlobalRef
-        bound = isdefined(x.mod, x.name)
+        # a standard stream of the compiling session is no binding of the program (is_host_stream)
+        bound = isdefined(x.mod, x.name) && !is_host_stream(x.mod, x.name)
         val = bound ? getfield(x.mod, x.name) : nothing
         constant = bound && isconst(x.mod, x.name)
         T = constant ? Core.Typeof(val) : bound ? Core.get_binding_type(x.mod, x.name) : Any

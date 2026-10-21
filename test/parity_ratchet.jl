@@ -2048,16 +2048,16 @@ const LOCKS = [
                         "@testset \"planning writes nothing into the collected world\" begin",
                         "@test world.enrolled_as == reasons",
                         "local why = get(enrolled_by, root_mi, nothing)\n            why === nothing && throw(WasmInternalError(",
-                        "CC.findall(sig, CC.method_table(get_wasm_interpreter()); limit)",
-                        "if (mi = _apply_iterate_vararg_target_mi(node, arg_type)) !== nothing",
-                        "elseif (mi = _invoke_in_world_target_mi(node, arg_type)) !== nothing",
+                        "CC.findall(sig, CC.method_table(interp); limit)",
+                        "if (mi = _apply_iterate_vararg_target_mi(interp, node, arg_type)) !== nothing",
+                        "elseif (mi = _invoke_in_world_target_mi(interp, node, arg_type)) !== nothing",
                         "kind = :finalizer", "kind = :cfunction", "kind = :new_function", "kind = :invoke_modify",
-                        "local matches = wt_method_matches(Tuple{Core.Typeof(f), arg_types...})",
+                        "local matches = wt_method_matches(interp, Tuple{Core.Typeof(f), arg_types...})",
                         "Explicit invokes and dynamic-dispatch candidates form ONE reachability",
                         "collect_new_pairs!",
                         "# the loop only adds: no collected body is ever dropped",
-                        "codeinfos = _prune_external_leaf_subgraphs(codeinfos, entries, external_leaves; numeric_joins, capture)",
-                        "fresh_ci = _prune_external_leaf_subgraphs(fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)",
+                        "codeinfos = _prune_external_leaf_subgraphs(interp, codeinfos, entries, external_leaves; numeric_joins, capture)",
+                        "fresh_ci = _prune_external_leaf_subgraphs(interp, fresh_ci, Any[first.(batch)...], external_leaves; numeric_joins, capture)",
                         "dynamic dispatch: discover every target admitted by the closed",
                         "has no environment opt-out or arbitrary round/method ceiling"]
             all_src = trim_src * tests_src
@@ -2264,7 +2264,7 @@ const LOCKS = [
             test_src = read(joinpath(ROOT, "test", "f3_box_capture_l2b_propagate.jl"), String)
             required = ["capture.record = record_capture_contents(",
                         "capture.joins[mi] = capture_read_types(nirs[src], nirs[src], capture.record;",
-                        "_body_joins(numeric_joins, capture, host_mi, src, nir, st)", "if isempty(absp)", "_closed_world_exact_type",
+                        "_body_joins(interp, numeric_joins, capture, host_mi, src, nir, st)", "if isempty(absp)", "_closed_world_exact_type",
                         "_canonical_type_object_arg", "canonical_matches[1].method === match.method",
                         "root_mi in dynamic_roots && push!(dynamic_roots, resolved_mi)",
                         "function get_exact_candidate", "all(_closed_world_exact_type, arg_types)",
@@ -2578,7 +2578,7 @@ const LOCKS = [
                         "entry.specTypes",
                         "target_type <: atypes[p]",
                         "ssig = Tuple{Core.Typeof(g), spec...}",
-                        "local selected = wt_method_which(ssig)",
+                        "local selected = wt_method_which(interp, ssig)",
                         "Base.array_subpadding",
                         "Core.bitcast(T, bits)",
                         "% TargetBits",
@@ -2597,12 +2597,12 @@ const LOCKS = [
             calls_src = read(joinpath(CODEGEN, "calls.jl"), String)
             interp_src = read(joinpath(CODEGEN, "interpreter.jl"), String)
             required = ["arg_types = Any[arg_type(a) for a in node.operands]",
-                        "local body = _body_joins(joins, capture, mi, src, nir, slot_types)\n    return a -> value_type(a, slot_types, body)",
-                        "local _call_type = let st = nir_slot_types(src), j = _body_joins(numeric_joins, capture, host_mi, src, nir, st)",
+                        "local body = _body_joins(interp, joins, capture, mi, src, nir, slot_types)\n    return a -> value_type(a, slot_types, body)",
+                        "local _call_type = let st = nir_slot_types(src), j = _body_joins(interp, numeric_joins, capture, host_mi, src, nir, st)",
                         "local argextype(a) = value_type(a, slot_types, nothing)   # Julia's queue's operand type",
                         "Tuple{argextype(node.operands[1]), argextype(node.operands[2])}",
                         "mi = CC.compileable_specialization_for_call(interp, Tuple{argextype(ops[2]),",
-                        "matches = wt_method_matches(ftype)",
+                        "matches = wt_method_matches(interp, ftype)",
                         "f isa Function || f isa Type",
                         "target.arg_types[(takes_closure ? 2 : 1):end]",
                         "Push arguments through the resolved target signature",
@@ -2623,7 +2623,7 @@ const LOCKS = [
             all_src = compile_src * context_src * types_src * values_src
             required = ["mutable_constant_globals", "module_init_functions",
                         "finalize_module_initializers!", "function_wasm_signature",
-                        "is not defined in its source module"]
+                        "unbound_global_text(node.mod, node.name); detail=val,"]
             forbidden = ["module_globals", "patched at runtime, so exact field values don't matter",
                          "If we can't evaluate, might be a type reference"]
             count(p -> !occursin(p, all_src), required) +
@@ -3335,13 +3335,21 @@ const LOCKS = [
             end
             n
         end),
-    "L120_one_inference_path" => ("every typed IR and every inferred return type WasmTarget consumes comes from the WasmInterpreter through ir.jl (get_typed_ir / infer_return_type) — Base.code_typed, code_typed_by_type, Core.Compiler.return_type / _return_type and Base.infer_return_type are called only inside ir.jl, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; box-capture joins once asked the native interpreter, which does not see the overlays; locked 2026-09-07)",
+    "L120_one_inference_path" => ("every typed IR and every inferred return type WasmTarget consumes comes from the WasmInterpreter through ir.jl (get_typed_ir / infer_return_type) — Base.code_typed, code_typed_by_type, Core.Compiler.return_type / _return_type and Base.infer_return_type are called only inside ir.jl, and get_typed_ir has no native-interpreter default (a standalone dump once differed from the closed-world plan's IR for the same function; box-capture joins once asked the native interpreter, which does not see the overlays; locked 2026-09-07); and one compile asks one interpreter, as dart's one Translator.hierarchy (translator.dart:108): src makes a WasmInterpreter outside interpreter.jl only in trim_compile_plan, the compile's one (a fresh cache token, the world the compile starts in), which the entries, every collection round's inference, its return-type questions (_rettype_question), its lookups (the consult) and the plan's vtable pre-pass ask (the ClosedWorld and the plan hold it), and in the failure path's re-inference of one root (_compile_root_alone, at the compile's world); get_wasm_interpreter(), the inspection interpreter, is asked only by ir.jl's defaults; its behavior: test/ir_one_inference_path.jl's 'one compile infers in one cache partition (A18C5)' (each collection pass once made a fresh partition, and the return-type questions asked the shared :wasm_target partition at another world, dev/AUDIT.md A18C5)",
         () -> begin
             n = count_sites(r"Base\.code_typed\(\w|code_typed_by_type\(|(?<![\w.])_?return_type\(\s*[^)]|Base\.infer_return_type\(|Compiler\.return_type\(|CC\.return_type\(";
                             roots=[SRC], exclude_files=["codegen/ir.jl"])
             ir = read(joinpath(CODEGEN, "ir.jl"), String)
             occursin("interp::WasmInterpreter=get_wasm_interpreter()", ir) || (n += 1)
             occursin("interp=nothing", ir) && (n += 1)
+            # one compile, one interpreter (A18C5): made in trim_compile_plan and the failure path alone
+            local trim = read(joinpath(CODEGEN, "trimcollect.jl"), String)
+            n += abs(count_sites(r"(?<![\w.])WasmInterpreter\("; roots=[SRC], exclude_files=["codegen/interpreter.jl"]) - 2)
+            n += occursin("::ClosedWorldPlan\n    local interp = WasmInterpreter(Base.RefValue(0))\n    entry_mis = Any[]\n", trim) ? 0 : 1
+            n += occursin("function _compile_root_alone(world::UInt, mi)::Nothing\n    local interp = WasmInterpreter(Base.RefValue(0); world)\n", trim) ? 0 : 1
+            n += count_sites(r"\bget_wasm_interpreter\("; roots=[SRC], exclude_files=["codegen/ir.jl", "codegen/interpreter.jl"])
+            n += occursin("@testset \"one compile infers in one cache partition (A18C5)\" begin",
+                          read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)) ? 0 : 1
             n
         end),
     "L107_one_debug_surface" => ("every WT_* debug switch is read in codegen/options.jl — dart TranslatorOptions shape; no scattered ENV reads (WT_VALIDATE among them, CompilerOptions.validate; locked 2026-09-02)",
@@ -3495,12 +3503,12 @@ const LOCKS = [
                         "reasons[cmi] = _enrollment_text(\"the dynamic call\", ci, src, sidx, node)",
                         "reasons[cmi] = _enrollment_text(\"the dispatch candidate for runtime class",
                         "reasons[cmi] = \"the body of the closure",
-                        "throw_located_collection_failure(batch, err, catch_backtrace(), _compile_root_alone)",
+                        "throw_located_collection_failure(batch, err, catch_backtrace(), Base.Fix1(_compile_root_alone, interp.world))",
                         "throw_located_collection_failure(Tuple{Any,String}[(e, \"a compilation entry\") for e in entries],",
                         "(err isa WasmInternalError || err isa InterruptException || err isa OutOfMemoryError) && rethrow()\n        throw_located_collection_failure(Tuple{Any,String}[",
                         "(e isa InterruptException || e isa OutOfMemoryError) && rethrow()\n            throw(WasmInternalError(",
-                        "_missing_explicit_invoke_mis(\n            codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,\n            invoke_originals))",
-                        "_dynamic_dispatch_candidate_mis(codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,"]
+                        "_missing_explicit_invoke_mis(\n            interp, codeinfos, invoke_seen; numeric_joins, capture, reasons=enrolled_by, invoked_closures,\n            invoke_originals))",
+                        "_dynamic_dispatch_candidate_mis(interp, codeinfos, seen_disp; reasons=enrolled_by, classes, nir_for,"]
             comp = read(joinpath(CODEGEN, "compile.jl"), String)
             # a failure outside any statement (planning the module, declaring a signature) is
             # located too: at the module's entries, or at the function and why it is there
@@ -5183,7 +5191,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                   (trim, "    holds_exceptions && foreach(observe_type!, LOWERING_INSTANTIATED_CLASSES)\n"),
                                   (comp, "    for _exn_T in LOWERING_INSTANTIATED_CLASSES\n"),
                                   (comp, "_reachable = _collect_reachable_ir_types(function_data, plan.bespoke, plan.classes)"),
-                                  (comp, "local _amb = ambiguous_class_tuple(_T, _ov, plan.classes)"),
+                                  (comp, "local _amb = ambiguous_class_tuple(plan.interp, _T, _ov, plan.classes)"),
                                   (clo, "local candidates = class_candidates(classes)"),
                                   (trim, "        local has, v = _collected_operand_value(node)\n        (has && !(v isa Expr)) || return\n        hold!(v)"),
                                   (trim, "(node0 isa NirLiteral || node0 isa NirGlobalRef) && observe_runtime_operand!(node0)"),
@@ -5609,6 +5617,20 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     @test WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, h))
                     @test !WasmTarget._is_host_declared_import(WasmTarget.imported_function(mod, 0))
                 """, hi) ? 0 : 1
+            v
+        end),
+    "L196_type_taking_methods_compile_once" => ("a compile of a program the process has not seen compiles WT's methods that take the program's types or functions once, not once per type or function a program has (dev/AUDIT.md A19X4): its behavior, test/ir_one_inference_path.jl's 'a program's own types compile WT's type-taking methods once (A19X4)': after two programs that differ only in their struct types, no specialization of convert_type!, _narrow_ref!, coerce_stack_top!, emit_value_as!, _emit_value_wrap!, register_tuple_type! or registry_order_key, nor of their keyword calls (a keyword call's NamedTuple is typed by its values, A19X2), names the second program's type or function; and reading the one class list (closed_world_class_list, class_candidates) prints no type's order key, the list being sorted once when the set is built (A18C2) (dev/CHARTER.md C10)",
+        () -> begin
+            local oip = read(joinpath(ROOT, "test", "ir_one_inference_path.jl"), String)
+            local v = 0
+            for needle in ("@testset \"a program's own types compile WT's type-taking methods once (A19X4)\" begin",
+                           "WasmTarget.emit_value_as!, WasmTarget._emit_value_wrap!, WasmTarget.register_tuple_type!,",
+                           "WasmTarget.registry_order_key]",
+                           "@test isempty(mentions(\"_WtPinB\"))",
+                           "@test isempty(mentions(\"_wt_pin_b\"))",
+                           "@test keys[] == 0")
+                v += occursin(needle, oip) ? 0 : 1
+            end
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every finding sits on a row: no finding ID in any clause's Planned text; every row it cites exists; each row but 13.17 names in its Clause column exactly the clauses whose Planned cites it (a row that names none, as 13.16 post-merge and 13.11 the merge, is cited by none); and every finding ID on 13.17 sits under a group label `<name> (C<n> …):` whose clauses each cite 13.17, as every clause citing 13.17 has a label. Audits then lengthen MARCH rows, not the charter (82 to 105 Planned IDs on 2026-10-07; A3P4; dev/CHARTER.md C0)",

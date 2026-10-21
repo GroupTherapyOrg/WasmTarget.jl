@@ -141,12 +141,13 @@ end
 _is_type_identity_param(@nospecialize(T))::Bool = is_pointer_egal_type_type(T)
 
 """
-    ambiguous_class_tuple(F, overlap, classes) -> Union{Bool, String, Tuple}
+    ambiguous_class_tuple(interp, F, overlap, classes) -> Union{Bool, String, Tuple}
 
 A tuple of candidates, one per argument of `overlap` (the argument types two methods both
 admit; a position's candidates are the one class set's, `classes`: the classes a value may have
 and the `Type{X}` of each type object a value may be, class_candidates), for which Julia's
-dispatch of callable type `F` is ambiguous (`wt_method_which` finds no one method), or false when
+dispatch of callable type `F` is ambiguous (`wt_method_which` in the consult of `interp`, the
+compile's one WasmInterpreter, finds no one method), or false when
 there is none; when WT does not enumerate the tuples, the reason (the overlap is not one tuple
 type, has a Vararg or a position with no candidate, or has more than _CANDIDATE_BOUND tuples),
 which the caller rejects with. A position's candidates are dispatch_candidates'. A numbered class
@@ -154,7 +155,7 @@ no value has is asked about by no search (formal(dev/formal/Enrollment.tla): Ask
 parity(quarantine: Julia selects among a callable's methods by specificity and raises for an
 ambiguity; a dart closure has one body.)
 """
-function ambiguous_class_tuple(@nospecialize(F), @nospecialize(overlap),
+function ambiguous_class_tuple(interp::WasmInterpreter, @nospecialize(F), @nospecialize(overlap),
                                classes::ClosedWorldClasses)::Union{Bool, String, Tuple}
     overlap isa DataType || return "the overlap $(overlap) is not one tuple type"
     any(P -> P isa Core.TypeofVararg, overlap.parameters) && return "the overlap $(overlap) has a Vararg"
@@ -166,7 +167,7 @@ function ambiguous_class_tuple(@nospecialize(F), @nospecialize(overlap),
     prod(length, choices; init=1) > _CANDIDATE_BOUND &&
         return "the overlap $(overlap) has more than $(_CANDIDATE_BOUND) candidate tuples"
     for cs in Iterators.product(choices...)
-        wt_method_which(Tuple{F, cs...}) === nothing && return cs
+        wt_method_which(interp, Tuple{F, cs...}) === nothing && return cs
     end
     return false
 end

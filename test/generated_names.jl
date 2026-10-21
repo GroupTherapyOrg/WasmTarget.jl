@@ -247,7 +247,7 @@ _gn_smoke_case(name) = only(c for (_, cs) in _GNSmoke.GROUPS for c in cs if c[1]
     local msg = sprint(showerror, err)
     @test occursin("two functions named _gn_res", msg) && occursin("generated_names.jl:", msg)
     # every other pair that prints alike is a defect: the same specialization planned twice
-    local two = _GN.entry_method_instance(_gn_two, (Int64,))
+    local two = _GN.entry_method_instance(_GN.WasmInterpreter(Base.RefValue(0)), _gn_two, (Int64,))
     err = try
         _GN.plan_function_names!(Any[(_gn_two, (Int64,), "", two), (_gn_two, (Int64,), "", two)], Dict{Any,String}(),
                                  Set{Core.MethodInstance}(), IdDict{Core.MethodInstance,String}())

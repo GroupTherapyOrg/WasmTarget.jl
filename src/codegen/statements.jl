@@ -608,7 +608,7 @@ function _compile_statement_located!(b::InstrBuilder, idx::Int, ctx::AbstractCom
         # methods on `b`. `bytes` stays empty for this branch (trailing common code appends after).
         local _gr = GlobalRef(node.mod, node.name)
         node.bound || record_unsupported!(ctx, :unsupported_global,
-            "GlobalRef $(_gr) is not defined in its source module"; idx=idx, detail=_gr,
+            unbound_global_text(node.mod, node.name); idx=idx, detail=_gr,
             soundness_fatal=true)
         val = node.value
         local _gv_b = _compile_value_b(NirLiteral(val), ctx)

@@ -274,6 +274,38 @@ end
     end
 end
 
+# a stream named through a module that imports it (Main's `stdout` is Base's binding)
+_wt_da_stdout_println() = println(stdout, 1)
+
+# A compile reads no stream of the compiling session (dev/AUDIT.md A20N3): the collection once
+# took Base.stdout's live object, so the closed world followed the compiler's own stream (a pipe in
+# a server, a file when run fresh) and the same program compiled differently. Under any stdout the
+# same rejection, of the same kind, at the same statement.
+@testset "diagnostics: a compile reads no stream of the compiling session (A20N3)" begin
+    local seen(e) = (e.diag.kind, e.diag.func_name, e.diag.construct, e.diag.stmt_idx, e.diag.stmt)
+    for (f, argtypes) in ((DiagAttrib.hostprint, (Int64,)), (DiagAttrib.hostprintln, (Int64,)),
+                          (DiagAttrib.shows, (Float64,)))
+        local plain = _first_diag(f, argtypes)
+        local nulled = redirect_stdout(() -> _first_diag(f, argtypes), devnull)
+        local p = Pipe()
+        Base.link_pipe!(p; reader_supports_async = true, writer_supports_async = true)
+        local drain = @async read(p.out, String)
+        local piped = try
+            redirect_stdout(() -> _first_diag(f, argtypes), p.in)
+        finally
+            close(p.in)
+        end
+        wait(drain)
+        @test plain !== nothing && nulled !== nothing && piped !== nothing
+        @test seen(plain) == seen(nulled) == seen(piped)
+    end
+    # the stream read through the module that defines the program, not through Base, rejects too,
+    # naming the stream
+    local e = _first_diag(_wt_da_stdout_println, ())
+    @test e !== nothing && e.diag.stmt_idx > 0
+    @test e !== nothing && occursin("the compiling session's standard stream", sprint(showerror, e))
+end
+
 @testset "diagnostics: a dynamic operator on operands of no one machine type rejects, never guesses a width (C6)" begin
     # The accumulator `s` carries Int64 then Float64; once the numeric-join VERIFY bans the
     # phi's Int64 seed the `+` sees (Any, Float64). The operator fallback once unboxed the Any
@@ -291,8 +323,9 @@ end
 @testset "diagnostics: a closed-world collection failure names the root and why it was enrolled" begin
     # the failed batch's roots are inferred again one at a time; the one that fails alone is
     # named with its enrollment reason, its own error and the frames it was raised through
-    mi_sin = WasmTarget.entry_method_instance(sin, (Float64,))
-    mi_cos = WasmTarget.entry_method_instance(cos, (Float64,))
+    interp = WasmTarget.WasmInterpreter(Base.RefValue(0))   # one compile's, as trim_compile_plan makes it
+    mi_sin = WasmTarget.entry_method_instance(interp, sin, (Float64,))
+    mi_cos = WasmTarget.entry_method_instance(interp, cos, (Float64,))
     batch = Tuple{Any,String}[(mi_sin, "the call `sin(x)` in f(::Float64) (statement %2 @ a.jl:3)"),
                               (mi_cos, "the dispatch candidate for runtime class Float64 of `cos(%4)` in g(::Any) (statement %5 @ b.jl:9)")]
     planted(mi) = mi === mi_cos ? error("planted inference failure") : nothing
@@ -306,8 +339,8 @@ end
     err2 = try WasmTarget.throw_located_collection_failure(batch, ErrorException("the batch failed"), Base.backtrace(), mi -> nothing) catch e; e end
     @test length(err2.frames) == 2 && occursin("the batch failed", sprint(showerror, err2))
     # real discovery records why: the dynamic `==` enrolls its candidates with its statement's line
-    entry = WasmTarget.entry_method_instance(DiagCollect.dyn_eq, (Int64,))
-    world = WasmTarget.collect_closed_world(Any[entry])
+    entry = WasmTarget.entry_method_instance(interp, DiagCollect.dyn_eq, (Int64,))
+    world = WasmTarget.collect_closed_world(interp, Any[entry])
     @test any(r -> occursin("dispatch candidate for runtime class", r) &&
                    occursin("diagnostic_attribution.jl:", r) && occursin("dyn_eq", r), values(world.enrolled_as))
 end
@@ -316,7 +349,7 @@ end
 # root's failure, and passes through; an ArgumentError raised by inference is located as any other
 # failure is, at the root that fails alone (dev/AUDIT.md A2C2)
 @testset "diagnostics: a collection failure passes the process's errors and locates an ArgumentError" begin
-    mi_sin = WasmTarget.entry_method_instance(sin, (Float64,))
+    mi_sin = WasmTarget.entry_method_instance(WasmTarget.WasmInterpreter(Base.RefValue(0)), sin, (Float64,))
     batch = Tuple{Any,String}[(mi_sin, "the call `sin(x)` in f(::Float64) (statement %2 @ a.jl:3)")]
     err = try
         WasmTarget.throw_located_collection_failure(batch, ArgumentError("the batch failed"), Base.backtrace(),
@@ -338,7 +371,7 @@ end
 # Compiler, the class of internal error an ArgumentError is) is named with why it was enrolled,
 # where it escaped unlocated before (dev/AUDIT.md A2C2)
 @testset "diagnostics: a failure of the first collection names its entry" begin
-    err = try WasmTarget.collect_closed_world(Any[Core.svec()]) catch e; e end
+    err = try WasmTarget.collect_closed_world(WasmTarget.WasmInterpreter(Base.RefValue(0)), Any[Core.svec()]) catch e; e end
     @test err isa WasmTarget.WasmInternalError
     msg = sprint(showerror, err)
     @test occursin("enrolled as a compilation entry", msg) && occursin("BoundsError", msg)
@@ -352,8 +385,9 @@ module DiagPlan
 plan_world(n::Int64) = (k = n; f = _pd(x -> x + k)[]; v = Any[n, "s"]; f(n)::Int64 + (v[1] == n ? 1 : 0) + length(string(n)))
 end
 @testset "planning writes nothing into the collected world" begin
-    entry = WasmTarget.entry_method_instance(DiagPlan.plan_world, (Int64,))
-    world = WasmTarget.collect_closed_world(Any[entry])
+    interp = WasmTarget.WasmInterpreter(Base.RefValue(0))   # one compile's, as trim_compile_plan makes it
+    entry = WasmTarget.entry_method_instance(interp, DiagPlan.plan_world, (Int64,))
+    world = WasmTarget.collect_closed_world(interp, Any[entry])
     local reasons = copy(world.enrolled_as)
     local joins = copy(world.numeric_joins)
     plan = WasmTarget.plan_closed_world(world, Dict{Any,String}(entry => "plan_world"),

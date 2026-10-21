@@ -25,7 +25,7 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
         # The binding was resolved once at the NIR boundary; an unbound one is the same
         # located reject the emission of this operand raises.
         val.bound || record_unsupported!(ctx, :unsupported_global,
-            "GlobalRef $(GlobalRef(val.mod, val.name)) is not defined in its source module";
+            unbound_global_text(val.mod, val.name);
             detail=GlobalRef(val.mod, val.name), soundness_fatal=true)
         return static_wasm_type(NirLiteral(val.value), ctx)
     end
@@ -1383,7 +1383,7 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # A GlobalRef operand — its binding was resolved ONCE at the NIR boundary.
         local val = GlobalRef(node.mod, node.name)   # the diagnostic's raw operand
         node.bound || record_unsupported!(ctx, :unsupported_global,
-            "GlobalRef $(val) is not defined in its source module"; detail=val,
+            unbound_global_text(node.mod, node.name); detail=val,
             soundness_fatal=true)
         actual_val = node.value
         if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&

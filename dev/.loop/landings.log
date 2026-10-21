@@ -32,3 +32,4 @@ landed_at	commit	author_at	land_start	gate_runs	gate_wall_s	land_wall_s	edit_to_
 2026-10-21T20:15:35Z	733f4785b4ecede527009c9e4e67b4863e80b599	2026-10-21T19:58:24Z	2026-10-21T20:14:40Z	1	46.9	55.4	1031.0	6	78	SLOWER calibration load@warm probes@warm ratchet@warm smoke-core@warm
 2026-10-21T20:29:32Z	21e36053c8f5cfdc7762770cb241bdfb72dc18b1	2026-10-21T20:19:29Z	2026-10-21T20:28:21Z	1	63.6	71.4	603.0	7	28	unjudged (past cap, factor 1.7)
 2026-10-21T20:33:00Z	82c16480d5926ed01f5e15d916d98f81b8960748	2026-10-21T20:31:39Z	2026-10-21T20:31:39Z	1	66.8	81.2	81.0	3	47	unjudged (budget ratchet 47.8 total 75.7 past cap, factor 3.13)
+2026-10-21T20:37:38Z	b104dfbb2eca327e5415e693c332546bf46002db	2026-10-21T19:44:00Z	2026-10-21T20:34:35Z	1	155.1	182.5	3218.0	5	214	unjudged (budget ratchet 34.0 past cap, factor 1.99)
