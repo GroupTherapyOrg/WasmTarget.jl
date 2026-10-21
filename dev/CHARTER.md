@@ -150,8 +150,10 @@ with the per-clause status. A clause is never closed by argument.
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
   charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
-  rows, and every finding sits on a row) `L201` (no clause of C0 to C8 without Planned text cites
-  a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a construction, with its
+  rows, never findings, every row naming its clauses; every finding the latest audit entry
+  leaves open sits on the row it names until a commit's `Fixes:` line names it) `L201` (no clause reads CLOSED citing no check; no clause of
+  C0 to C8 without Planned text cites a check test/parity_ratchet.jl's STRICT_KINDS does not
+  classify as a construction, with its
   precedent, whose lock only calls the check src registers beside its definition; every lock C0 and
   C4 to C8 cite is classified) `L202` (every closed sum or construction in src, an @enum, a `@closed` sum or a
   definition a construction names, carries its `precedent(<ecosystem>: <mechanism>)`) `L203`

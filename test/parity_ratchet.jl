@@ -256,10 +256,36 @@ _strict_kind(id::AbstractString, kinds::Dict{String,Tuple{Symbol,String}})::Symb
 
 # each check that a clause of STRICT_SCOPE with no Planned text (one the charter block reads CLOSED)
 # cites and that is not a construction, as "<clause> cites <check> (<kind>)"
+# why a clause is OPEN (none: CLOSED), given the ratchets' and the locks' counts by full id: a check it
+# cites that is missing, a ratchet (at 0 too, until it is a lock), a broken lock, a stopgap or behavior
+# check of a clause the standard classifies, its Planned text, and no check at all: a clause citing
+# nothing is never CLOSED, since "every check it cites holds" holds of none (A32S2)
+function clause_open_reasons(cid::AbstractString, body::AbstractString, ids::AbstractVector{<:AbstractString},
+                             current_m::AbstractDict{String,Int}, current_l::AbstractDict{String,Int})::Vector{String}
+    local byshort = Dict(_short_id(k) => k for k in vcat(collect(keys(current_m)), collect(keys(current_l))))
+    local open_ = String[]
+    isempty(ids) && push!(open_, "no check")
+    for i in ids
+        local k = get(byshort, i, nothing)
+        k === nothing && (push!(open_, "$i?"); continue)
+        haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
+        haskey(current_l, k) && current_l[k] != 0 && push!(open_, "$i BROKEN")
+    end
+    if cid in STRICT_SCOPE
+        for i in ids
+            local sk = startswith(i, "L") ? _strict_kind(i, STRICT_KINDS) : :construction
+            (sk === :stopgap || sk === :behavior) && push!(open_, "$i $sk")
+        end
+    end
+    occursin("Planned:", body) && push!(open_, "planned check")
+    return open_
+end
+
 function strict_violations(clauses, kinds::Dict{String,Tuple{Symbol,String}})::Vector{String}
     out = String[]
     for (cid, (body, ids)) in clauses
         (cid in STRICT_SCOPE && !occursin("Planned:", body)) || continue
+        isempty(ids) && push!(out, "$cid cites no check and has no Planned text: CLOSED on nothing")
         for i in ids
             local k = _strict_kind(i, kinds)
             k === :construction || push!(out, "$cid cites $i ($k)")
@@ -321,6 +347,7 @@ function strict_negatives_missed()::Vector{String}
         ("a stopgap in a clause with Planned text", plant("C5", " T. Checks: Planned: 13.1", ["L2", "R9"]), 0),
         ("constructions alone", plant("C6", " T. Checks: ", ["L1"]), 0),
         ("a clause outside the scope", plant("C9", " T. Checks: ", ["L2", "R9"]), 0),
+        ("a clause with no Planned text that cites nothing", plant("C4", " T. Checks: ", String[]), 1),
     ]
     local out = String[]
     for (what, cl, want) in cases
@@ -348,6 +375,16 @@ function strict_negatives_missed()::Vector{String}
     local other = strict_table_faults(plant("C4", " T.", ["L1"]), Dict{String,Tuple{Symbol,String}}("L1" => (:construction, "WasmValType"));
                                       lock=planted_lock, precedents=Dict("L1" => ("rust: newtype", "a struct")))
     length(other) == 1 || push!(out, "negative missed: a ConstructionLock naming another definition")
+    # the verdict: a clause whose Planned text is dropped and that cites no check stays OPEN; one citing
+    # a passing lock closes; one citing a broken lock or a ratchet stays OPEN (A32S2)
+    local m0 = Dict{String,Int}("R9_x" => 0)
+    local l0 = Dict{String,Int}("L1_x" => 0, "L2_x" => 1)
+    local dropped = replace(" T. Checks: none yet. Planned: 1.S.", "Planned:" => "")
+    (!isempty(clause_open_reasons("C9", dropped, String[], m0, l0)) &&
+     isempty(clause_open_reasons("C9", " T. Checks: ", ["L1"], m0, l0)) &&
+     !isempty(clause_open_reasons("C9", " T. Checks: ", ["L2"], m0, l0)) &&
+     !isempty(clause_open_reasons("C9", " T. Checks: ", ["R9"], m0, l0))) ||
+        push!(out, "negative missed: the clause verdict (a clause citing nothing reads CLOSED)")
     return out
 end
 
@@ -469,6 +506,76 @@ function audit_lines_negatives_missed()::Vector{String}
     local out = String[]
     for (what, entries, src, want) in cases
         length(audit_lines_missing(entries; touches_src=(a, b) -> src)) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
+# ---- L154's findings: an open finding sits on its row (dev/CHARTER.md C0, A32E3) ---------------------
+# the findings an audit entry's Resolution leaves open, each with the row it names: in each sentence or
+# `;` clause naming `on <row>` (a MARCH row 1.<x> or a ledger row D<n>), every finding ID it holds
+function open_findings(entry::AbstractString)::Vector{Tuple{String,String}}
+    local out = Tuple{String,String}[]
+    local i = findfirst("Resolution:", entry)
+    i === nothing && return out
+    for seg in split(entry[first(i):end], r"(?<=[;.])\s+")
+        local r = match(r"\bon (?:MARCH )?(1\.[A-Za-z0-9]+|D\d+)\b", seg)
+        r === nothing && continue
+        for f in eachmatch(r"\b(A\d+[A-Z]\d+)\b", seg)
+            push!(out, (String(f[1]), String(r[1])))
+        end
+    end
+    return out
+end
+
+# the faults: a finding not on the row its entry names, unless a later commit's `Fixes:` line names it,
+# and a row named that does not exist
+function findings_off_row(pairs::Vector{Tuple{String,String}}, rows::AbstractDict{String,String},
+                          fixed::AbstractSet{String})::Vector{String}
+    local out = String[]
+    for (f, r) in pairs
+        haskey(rows, r) || (push!(out, "$f is left open on $r, which is no row"); continue)
+        (occursin(Regex("\\b" * f * "\\b"), rows[r]) || f in fixed) ||
+            push!(out, "$f is left open on $r, which does not hold it, and no commit's Fixes: line names it")
+    end
+    return out
+end
+
+# the findings the latest dev/AUDIT.md entry leaves open, off their rows: the rows of dev/MARCH.md and
+# dev/LEDGER.md, the fixes the `Fixes:` lines of the commits after the entry's own (no history: a fault)
+function findings_off_row_here()::Vector{String}
+    local audit = joinpath(ROOT, "dev", "AUDIT.md")
+    isfile(audit) || return String[]
+    local entries = split(_text(audit), r"\n(?=## )")
+    length(entries) < 2 && return String[]
+    local rows = Dict{String,String}()
+    for f in ("MARCH.md", "LEDGER.md"), l in split(_text(joinpath(ROOT, "dev", f)), '\n')
+        local m = match(r"^\| (1\.[A-Za-z0-9]+|D\d+) \|", l)
+        m === nothing || (rows[String(m[1])] = String(l))
+    end
+    local fixed = Set{String}()
+    try
+        local c = readchomp(`git -C $ROOT log -1 --format=%H -- dev/AUDIT.md`)
+        for l in split(readchomp(`git -C $ROOT log $c..HEAD --format=%B`), '\n')
+            startswith(l, "Fixes:") && union!(fixed, String[x.match for x in eachmatch(r"\bA\d+[A-Z]\d+\b", l)])
+        end
+    catch
+        return ["no git history: the findings' fixes cannot be read"]
+    end
+    return findings_off_row(open_findings(last(entries)), rows, fixed)
+end
+
+# L154's negative test: planted entries, rows and fixes each answer as stated
+function findings_negatives_missed()::Vector{String}
+    local entry = "## e (a..b)\nA1B1 x.\n\nResolution: this entry and A9Z9's fix land as one. A1B1 and A1B2 are open on MARCH 1.S; A1B3 on 1.L, with A0B4; A1B5 on D3."
+    local rows = Dict("1.S" => "| 1.S | C0 | A1B1 A1B2 |", "1.L" => "| 1.L | C10 | A1B3 A0B4 |", "D3" => "| D3 | A1B5 |")
+    local cases = [("every finding on its row", rows, Set{String}(), 0),
+                   ("a finding off its row", merge(rows, Dict("1.S" => "| 1.S | C0 | A1B1 |")), Set{String}(), 1),
+                   ("a finding off its row that a commit fixes", merge(rows, Dict("1.S" => "| 1.S | C0 | A1B1 |")), Set(["A1B2"]), 0),
+                   ("a row that does not exist", Dict(k => v for (k, v) in rows if k != "D3"), Set{String}(), 1)]
+    local out = String[]
+    length(open_findings(entry)) == 5 || push!(out, "negative missed: the open findings read ($(length(open_findings(entry))) of 5)")
+    for (what, r, fx, want) in cases
+        length(findings_off_row(open_findings(entry), r, fx)) == want || push!(out, "negative missed: $what")
     end
     return out
 end
@@ -729,7 +836,7 @@ end
 # the locks that owe their always-run negative, exactly; R45 counts them, so the list only shrinks: a
 # lock leaves it in the commit that gives it its negative, and a lock added after it never joins it
 const NEGATIVE_OWED = Set{String}(split("""
-    L125 L126 L128 L129 L130 L148 L153 L154 L162 L163 L194 L195 L197 L198
+    L125 L126 L128 L129 L130 L148 L153 L162 L163 L194 L195 L197 L198
 """))
 
 # the faults of the lock table against NEGATIVE_OWED: a lock outside it with no always-run negative,
@@ -1921,7 +2028,7 @@ const LOCKS = [
             end
             v
         end),
-    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none. Audits then lengthen MARCH rows and their own entries, not the charter (A3P4; dev/CHARTER.md C0)",
+    "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none; and every finding the latest dev/AUDIT.md entry's Resolution leaves open on a row (a MARCH row 1.<x> or a ledger row D<n>) sits on that row, until a commit after the entry's own carries a `Fixes:` line naming it, and every row it names exists (A32E3). Audits then lengthen MARCH rows and their own entries, not the charter (A3P4). Behavior, run here: a planted entry's five open findings, read, and four planted rows and fixes answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local rx = r"\b(A\d+[A-Z]\d+|[BEHMPS]\d+)\b"
             local rowid = r"\b1\.[A-Z]\d*[a-z]?\b"
@@ -1952,7 +2059,9 @@ const LOCKS = [
             for (r, cs) in rows
                 cs == get(cites, r, Set{String}()) || (v += 1)
             end
-            v
+            local f = vcat(findings_off_row_here(), findings_negatives_missed())
+            foreach(x -> println("    ✗ ", x), f)
+            v + length(f)
         end),
     "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted, as dev/audit_window.sh counts it, the one program `dev/land.sh land` runs before its hold too (the march tip's last entry, or the landing's own when it adds the next one, as this lock judges the landing's rebased tree, the commits past it and the landing's own), so a landing into a full window refuses in its preflight, naming the audit to wait for, never after a gate run, and the entry that empties a full window lands (A31E1) (run here on a scratch repository: five commits past the entry fit, a sixth or the landing's own beyond five fills it, and in a full window a landing adding the next entry fits where one adding none is refused); and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips; intent: every change is read against the charter soon after it lands (Dale 2026-09-30); band: at most 5 commits behind the head, its edge (dev/CHARTER.md C0)",
         () -> begin
@@ -2157,23 +2266,7 @@ function run(; update::Bool=(get(ENV, "WT_RATCHET_UPDATE", "0") == "1"))
     for (cid, (body, ids)) in charter_clauses()
         title = strip(first(split(body, "."; limit=2)))
         title = replace(title, "*" => "")
-        open_ = String[]
-        for i in ids
-            k = get(byshort, i, nothing)
-            k === nothing && (push!(open_, "$i?"); continue)
-            # a cited ratchet keeps its clause open until it is a lock: "reached 0 and been
-            # converted to a lock" (dev/CHARTER.md), not merely at 0
-            haskey(current_m, k) && push!(open_, current_m[k] > 0 ? "$i=$(current_m[k])" : "$i (at 0, not yet a lock)")
-            haskey(current_l, k) && current_l[k] != 0 && push!(open_, "$i BROKEN")
-        end
-        # a stopgap or behavior check a clause on the compiler cites is named beside its planned check (L201)
-        if cid in STRICT_SCOPE
-            for i in ids
-                local _sk = startswith(i, "L") ? _strict_kind(i, STRICT_KINDS) : :construction
-                (_sk === :stopgap || _sk === :behavior) && push!(open_, "$i $_sk")
-            end
-        end
-        occursin("Planned:", body) && push!(open_, "planned check")
+        open_ = clause_open_reasons(cid, body, ids, current_m, current_l)
         println(rpad(cid, 4), rpad(first(title, 42), 44), isempty(open_) ? "CLOSED" : "OPEN  " * join(open_, " "))
     end
     if update
