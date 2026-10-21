@@ -6,7 +6,8 @@
 #       (`--onto` from <old-base> when the branch was cut from rewritten or dropped
 #       history) → strip transcript links from the rebased messages → the blocking gate,
 #       `bash dev/gate.sh --block`, which records its verdict for the rebased head. No push.
-#   dev/land.sh merge <branch>
+#   dev/land.sh merge <branch>   (land's internal step, never a landing path of its own: it runs only
+#       inside a landing whose shell holds the hold, LAND_HOLDER its pid; any other call refuses, A21E5)
 #       refuses unless the blocking gate's records of the branch head's tree (dev/.block/<tree>-<n>.toml,
 #       one per run, in any of the repository's worktrees) hold no red one (a red run stands) and
 #       the last one is green, of exactly that commit, made on a clean tree, judging the change
@@ -69,7 +70,7 @@ OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " 
 owed_lifted() { git show "$1:dev/MARCH.md" 2>/dev/null | grep '^| 13\.' | grep -q "${2:0:8}"; }
 now() { perl -MTime::HiRes=time -e 'printf "%.1f\n", time'; }
 iso() { perl -MPOSIX=strftime -e 'print strftime("%Y-%m-%dT%H:%M:%SZ", gmtime($ARGV[0])), "\n"' "${1%.*}"; }
-cmd=${1:?usage: dev/land.sh prepare|merge <branch> [old-base] | land}
+cmd=${1:?usage: dev/land.sh land (in the worktree of the branch) | prepare <branch> [old-base]}
 if [ "$cmd" = land ]; then
     br=$(git symbolic-ref --short -q HEAD) || { echo "land: HEAD is detached: run it on the batch's branch — refusing"; exit 1; }
 else
@@ -119,6 +120,11 @@ prepare)
     echo "prepared $br @ $(git rev-parse --short HEAD): dev/land.sh merge $br lands it"
     ;;
 merge)
+    # land's internal step (A21E5): the one landing path is `land`, which holds the hold and passes its
+    # pid; a call from anywhere else, or one whose landing no longer holds the hold, refuses
+    holder=$(cut -d' ' -f1 "$HOLD" 2>/dev/null || true)
+    [ -n "${LAND_HOLDER:-}" ] && [ "$holder" = "$LAND_HOLDER" ] && kill -0 "$holder" 2>/dev/null ||
+        { echo "dev/land.sh merge is the internal step of 'bash dev/land.sh land', which the branch's worktree runs — refusing"; exit 1; }
     m_start=$(now)
     head=$(git -C "$MAIN" rev-parse --verify -q "$br^{commit}") || { echo "no branch $br — refusing"; exit 1; }
     tree=$(git -C "$MAIN" rev-parse "$head^{tree}")
@@ -227,8 +233,9 @@ land)
     [ "$want" = "$have" ] ||
         { echo "land: Manifest.toml's WasmTarget extensions ($have) are not Project.toml's ($want): julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
     step preflight
-    # the hold: one landing at a time, and while it exists no other agent's Julia job starts (bin/jlrun
-    # reads it); created only if absent, with this shell's pid, removed only by it
+    # the hold, the machine's one (the agents' scheduler reads this file alone, and the orchestrator's
+    # hold is this file with owner 0): one landing at a time, and while it exists no other agent's
+    # Julia job starts; created only if absent, with this shell's pid, removed only by it
     mkdir -p "$(dirname "$HOLD")"
     release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"; return 0; }
     trap release EXIT
@@ -336,7 +343,7 @@ land)
         *) echo "land: the gate exited $st with no verdict — not landed"; exit "$st" ;;
         esac
     done
-    LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")
