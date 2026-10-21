@@ -22,17 +22,15 @@ end
 
 The concrete struct types WT does not lay out by their fields: a Tuple (register_tuple_type!),
 an Array (the Vector and Matrix wrappers, register_vector_type! / register_matrix_type!), a
-Memory and a MemoryRef (a raw wasm array, and its single-value ref struct), `nothing` (the
-null, `ref null none`), and `CodeUnits{UInt8,String}` (the String's byte array itself).
+Memory and a MemoryRef (a raw wasm array, and its single-value ref struct), and `nothing` (the
+null, `ref null none`).
 
 parity(quarantine: Julia's Array, Memory and MemoryRef are structs over runtime-managed
-storage, and CodeUnits of a String is that String's bytes; dart's List and typed-data classes
-are dart classes whose storage its runtime supplies.)
+storage; dart's List classes are dart classes whose storage its runtime supplies.)
 """
 function has_dedicated_representation(T::DataType)::Bool
     return T <: Tuple || T <: Array || T <: Core.GenericMemory || T <: Core.GenericMemoryRef ||
-           T === Nothing ||
-           is_string_codeunits(T)
+           T === Nothing
 end
 
 """
@@ -669,10 +667,6 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, @nospecia
         elseif ft === Nothing
             # `nothing`'s one form, the null (julia_to_wasm_type)
             NoneRef
-        elseif is_string_codeunits(ft)
-            # a String's CodeUnits is the String's byte array, as its values are held
-            # (get_concrete_wasm_type); a class struct here trapped building the tuple (A8C4)
-            ConcreteRef(get_string_array_type!(mod, registry), true)
         elseif isconcretetype(ft) && isstructtype(ft) && !(ft <: Tuple)
             # Nested struct - register and use concrete ref
             nested_info = register_struct_type!(mod, registry, ft)

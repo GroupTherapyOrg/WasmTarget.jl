@@ -1509,7 +1509,7 @@ _g("constant_identity", Any[
 ])
 # A concrete struct is laid out by its fields whatever it subtypes (dev/MARCH.md 13.4): a
 # Diagonal, a Symmetric, a UnitRange and a Complex are ordinary structs; only the types with a
-# dedicated representation (Array, Memory, MemoryRef, String, Symbol, Tuple, CodeUnits) are
+# dedicated representation (Array, Memory, MemoryRef, String, Symbol, Tuple) are
 # not. Until 13.4 an AbstractArray other than a Vector took the Matrix layout
 # ([:ref, :size]) at whichever route registered it first, so `D.diag` was not lowerable, and a
 # Number struct was an erased structref in locals. A constructor call never becomes a bare
@@ -1722,8 +1722,9 @@ _xf("shared_bare_arrays", Any[
     # isa over an abstract type narrowed to its one concrete member (Julia's emit_isa) is the
     # same read (A4E1 c)
     ("narrowed_isa_either", (x::Int64) -> _sm_mx(x) isa AbstractVector{Int64} ? 1 : 2, Int64(3)),
-    # a String's CodeUnits is the String's byte array, Memory{UInt8}'s array type (dev/AUDIT.md
-    # A5B2: both trapped, illegal cast, where native answers 2)
+    # a String's CodeUnits beside a Memory{UInt8}, its class read and tested (dev/AUDIT.md A5B2:
+    # held as the String's byte array, Memory{UInt8}'s array type, both trapped, illegal cast,
+    # where native answers 2)
     ("codeunits_isa_memory", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; v[n - 2] isa Memory{UInt8} ? 1 : 2), Int64(3)),
     ("codeunits_isa_codeunits", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; v[n - 1] isa Base.CodeUnits{UInt8,String} ? 1 : 2), Int64(3)),
     ("codeunits_typeof", (n::Int64) -> (v = Any[codeunits("ab"), Memory{UInt8}(undef, 2)]; typeof(v[n - 2]) === Memory{UInt8} ? 1 : 2), Int64(3)),
@@ -2262,7 +2263,8 @@ _g("class_test_any_order", Any[
     # a closure value is not its captured-fields struct: its header's classId is its class
     # (dev/AUDIT.md A7E2: native 16, wasm 26)
     ("closure_isa_own_type", (n::Int64) -> (k = n; c = x -> x + k; g = _sm_dh(c)[]; (g isa typeof(c) ? 10 : 20) + g(n)::Int64), Int64(3)),
-    # a closure row taking a String's CodeUnits, a bare array (A7C2: it never matched, native 1, wasm 2)
+    # a closure row taking a String's CodeUnits (A7C2: held as a bare array it never matched,
+    # native 1, wasm 2)
     ("closure_codeunits_row", (n::Int64) -> (k = n; h(x::Base.CodeUnits{UInt8,String}) = 1 + 0k; h(x) = 2 + 0k; f = _sm_dh(h)[]; f(_sm_dh(codeunits("ab"))[])::Int64), Int64(3)),
     ("isa_before_sharer", (n::Int64) -> _sm_mkpb(n)[1] isa _SmPA ? 1 : 2, Int64(3)),
     ("isa_both_orders", (n::Int64) -> (a = _sm_mkpa(n)[1] isa _SmPB ? 10 : 20; a + (_sm_mkpb(n)[1] isa _SmPA ? 1 : 2)), Int64(3)),
@@ -2411,18 +2413,30 @@ _g("method_error", Any[
     ("bool_union_split", (n::Int64) -> (x = n > 0 ? n : (n < -5); try; _sm_me_q(x)::Int64; catch e; (e isa MethodError && e.args === (false,)) ? -1 : -2; end), Int64(-1)),
     ("class_switch_caught", (n::Int64) -> (v = Any[n, "s", Int32(2), 0x01, 'c', 1.5]; s = _sm_me_5(v[1])::Int64 + _sm_me_5(v[2])::Int64 + _sm_me_5(v[3])::Int64 + _sm_me_5(v[4])::Int64 + _sm_me_5(v[5])::Int64; try; _sm_me_5(v[n])::Int64; catch e; (e isa MethodError && e.args === (1.5,)) ? s + 100 : s; end), Int64(6)),
 ])
-# a String's CodeUnits is the String's byte array wherever it is held: a tuple field, a struct
-# field, any value narrowed to a method's parameter (A8C4: a tuple field laid out as a class
-# struct trapped, and the narrowing read it as a String; native 100, wasm trap)
+# a String's CodeUnits is a struct holding its String (Base's `struct CodeUnits{T,S}; s::S; end`),
+# as dart's typed-data views are classes holding their buffer, wherever it is held: a tuple field,
+# a struct field, any value narrowed to a method's parameter, its index, length, sum and `.s`
+# (A8E4: it was held as the String's byte array; A8C4: a tuple field laid out as a class struct
+# trapped then, and the narrowing read it as a String; native 100, wasm trap)
 _sm_cu_q(::Base.CodeUnits{UInt8,String}) = 100
 _sm_cu_q(::Vector{Int64}) = 1
 _sm_cu_q(::Int64) = 2
 _sm_cu_q(::Float64) = 3
 struct _SmCU; c::Base.CodeUnits{UInt8,String}; n::Int64; end
+@noinline _sm_cu_of(x::Int64) = codeunits(x > 0 ? "hello" : "hey")
 _g("codeunits_values", Any[
     ("selector_codeunits", (n::Int64) -> (v = Any[codeunits("ab"), [n], n, 1.0]; _sm_cu_q(v[1])::Int64), Int64(3)),
     ("selector_each_class", (n::Int64) -> (v = Any[codeunits("ab"), [n], n, 1.0]; _sm_cu_q(v[n - 1])::Int64 + 10 * _sm_cu_q(v[n])::Int64 + 100 * _sm_cu_q(v[n + 1])::Int64), Int64(2)),
     ("struct_field_codeunits", (n::Int64) -> (v = Any[_SmCU(codeunits("abc"), n)]; length((v[1]::_SmCU).c) + n), Int64(3)),
+    ("index", (x::Int64) -> Int64(_sm_cu_of(1)[x]), Int64(2)),
+    ("length", (x::Int64) -> length(_sm_cu_of(x)), Int64(-1)),
+    ("sum", (x::Int64) -> Int64(sum(_sm_cu_of(x))), Int64(1)),
+    ("in_tuple", (x::Int64) -> (t = (_sm_cu_of(1), x); Int64(t[1][t[2]])), Int64(3)),
+    ("in_struct", (x::Int64) -> (s = _SmCU(_sm_cu_of(1), x); Int64(s.c[s.n])), Int64(1)),
+    ("erased", (x::Int64) -> (v = Any[_sm_cu_of(1), x]; c = v[1]::Base.CodeUnits{UInt8,String}; Int64(c[x])), Int64(2)),
+    ("erased_typeof", (x::Int64) -> (v = Any[_sm_cu_of(1), x]; typeof(v[1]) === Base.CodeUnits{UInt8,String} ? 1 : 2), Int64(1)),
+    ("erased_isa", (x::Int64) -> (v = Any[_sm_cu_of(1), x]; v[1] isa Base.CodeUnits ? 1 : 2), Int64(1)),
+    ("string_field", (x::Int64) -> ncodeunits(_sm_cu_of(x).s), Int64(1)),
 ])
 # a tuple built at run time from a value of any class: its type is known only at run time, so
 # it rejects at its statement (it raised a WasmInternalError registering the abstract `Tuple`)

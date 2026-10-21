@@ -2433,7 +2433,7 @@ end
 """The i32 answer to `isa(x, check_type)` for a value of static type `static_type` in
 `local_idx` that is not a numbered class (not `\$JlBase`): a Julia type object, tested by
 emit_type_object_test! (X's identity for a pointer-unique `Type{X}`, else its kind among those the
-static type admits, a TypeVar first), or a bare array (a Memory, a SimpleVector, a String's CodeUnits) the static type admits,
+static type admits, a TypeVar first), or a bare array (a Memory, a SimpleVector) the static type admits,
 tested by its array type; `0` when it is none under `check_type`. When a bare-array class under
 `check_type` shares its wasm array with one that is not and that the value may be
 (`Memory{Int64}`/`Memory{UInt64}` under `AbstractVector{Int64}`), no test can tell them apart and

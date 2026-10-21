@@ -313,9 +313,9 @@ function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
             local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
             if _to_is_sarr && !_from_is_sarr && !(from_julia isa Type && is_bare_array_class(from_julia))
                 # any string-ish ref → its data array: narrow to $JlString, read data
-                # (an externref source crosses the boundary first). A String's CodeUnits or a
-                # Memory{UInt8} held as any value is the byte array itself, cast by the ref→ref
-                # arms below (A8C4: read as a String's data, it trapped where native answers 100)
+                # (an externref source crosses the boundary first). A Memory{UInt8} held as any
+                # value is the byte array itself, cast by the ref→ref arms below (A8C4: read as a
+                # String's data, it trapped where native answers 100)
                 _fh === :extern && any_convert_extern!(b)
                 _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
                 struct_get!(b, UInt32(_ssi), UInt32(2))

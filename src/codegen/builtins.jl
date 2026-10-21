@@ -1608,36 +1608,20 @@ end
 """
     is_bare_array_class(C) -> Bool
 
-Whether a value of class `C` is a bare wasm array, with no class header: a Memory, a
-SimpleVector, or the CodeUnits of a String, which is the String's byte array
-(julia_to_wasm_type). The one answer every class read asks (bare_array_partition, isa, the
-closure rows, the candidate switch, the vtable pre-pass).
+Whether a value of class `C` is a bare wasm array, with no class header: a Memory or a
+SimpleVector. The one answer every class read asks (bare_array_partition, isa, the closure rows,
+the candidate switch, the vtable pre-pass).
 parity(quarantine: Julia's Memory and SimpleVector are values WT keeps as bare wasm arrays;
 dart's lists are classed objects holding their array, the root MARCH 13.17 A3S2 ports.)
 """
 is_bare_array_class(@nospecialize(C))::Bool =
-    C isa DataType && ((C <: GenericMemory && isconcretetype(C)) || C === Core.SimpleVector ||
-                       is_string_codeunits(C))
-
-"""
-    is_string_codeunits(T) -> Bool
-
-Whether `T` is Base's `CodeUnits{UInt8,String}`, which WT represents as the String's byte array
-(julia_to_wasm_type, `%new`, getfield, has_dedicated_representation): the one test of it, by
-Base's typename.
-parity(quarantine: a String's CodeUnits is Julia's view of the String's bytes; WT holds it as
-the byte array, as dart's String holds its WasmArray.)
-"""
-is_string_codeunits(@nospecialize(T))::Bool =
-    T isa DataType && T.name === Base.CodeUnits.body.body.name &&
-    T.parameters[1] === UInt8 && T.parameters[2] === String
+    C isa DataType && ((C <: GenericMemory && isconcretetype(C)) || C === Core.SimpleVector)
 
 """
     bare_array_partition(mod, registry, T) -> (told, shared, all)
 
 The numbered classes a value of static type `T` may be (every one when `T` is `nothing`)
-that are bare wasm arrays — a Memory, a SimpleVector, a String's CodeUnits — each with its
-array type (`all`),
+that are bare wasm arrays — a Memory, a SimpleVector — each with its array type (`all`),
 partitioned by whether a test tells it apart: `told` holds each class whose array type no
 other of them is, which `ref.test` answers;
 `shared` the classes whose array type another of
@@ -1657,8 +1641,6 @@ function bare_array_partition(mod::WasmModule, reg::TypeRegistry, @nospecialize(
         if C === Core.SimpleVector
             reg.jl_svec_idx === nothing && error("SimpleVector is numbered without its array type")
             push!(all, (C, reg.jl_svec_idx))
-        elseif !(C <: GenericMemory)          # a String's CodeUnits
-            push!(all, (C, get_string_array_type!(mod, reg)))
         else
             push!(all, (C, get_array_type!(mod, reg, eltype(C))))
         end
@@ -2227,16 +2209,6 @@ function _lower_getfield_general!(b, fb, ctx, call, idx, args)::Union{InstrBuild
                 register_reachable_type!(ctx.mod, ctx.type_registry, obj_type)
             end
 
-            # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the
-            # byte array — getfield(cu, :s) is the array itself. Runs before the
-            # `:ref`/1 read, which is an Array's first field, and the generic struct_get path.
-            if is_string_codeunits(obj_type)
-                local _cu_field0 = nir_const(field_ref)
-                if _cu_field0 === :s || _cu_field0 === 1   # the one field, by name or index
-                    emit_value!(fb, obj_arg, ctx, static_wasm_type(obj_arg, ctx))
-                    return append_builder!(b, fb)
-                end
-            end
             if field_sym === :ref || field_sym === 1
                 # :ref is the pair (data, off0): off0 is snapshotted into this read's offset
                 # local (allocate_memoryref_offset_locals!), then the data array is pushed.

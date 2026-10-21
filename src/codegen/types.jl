@@ -3082,10 +3082,6 @@ function get_concrete_wasm_type(T, mod::WasmModule, registry::TypeRegistry; for_
             end
         end
         return StructRef
-    elseif is_string_codeunits(T)
-        # P6-trim: CodeUnits{UInt8,String} ≡ the byte array (identity wrapper).
-        type_idx = get_string_array_type!(mod, registry)
-        return ConcreteRef(type_idx, true)
     elseif memoryref_eltype(T) !== nothing
         # MemoryRef{T} / GenericMemoryRef maps to array type for element T
         # IMPORTANT: Check BEFORE AbstractArray since MemoryRef <: AbstractArray

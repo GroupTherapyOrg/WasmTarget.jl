@@ -936,24 +936,15 @@ function compile_new!(b::InstrBuilder, node::NirNew, idx::Int, ctx::AbstractComp
     end
     struct_type = node.T
 
-    # P6-trim: CodeUnits{UInt8,String} is an identity wrapper over the byte
-    # array (same representation contract as Memory) — %new(CodeUnits, s)
-    # compiles to s itself. Trim-collected string internals construct these.
-    if is_string_codeunits(struct_type) && length(field_values) >= 1
-        emit_value!(b, field_values[1], ctx,
-                    ConcreteRef(UInt32(get_string_array_type!(ctx.mod, ctx.type_registry)), true))
-        return b
-    end
-
     # Special case: Vector{T} construction
     # Vector is now a struct with (ref, size) fields to support setfield!(v, :size, ...)
     # The %new(Vector{T}, memref, size_tuple) creates a struct with both fields
     if struct_type <: Array && length(field_values) >= 1
         # field_values[1] is the MemoryRef (which is actually our array)
         # field_values[2] is the size tuple (Tuple{Int64})
-        # Register the vector type if not already done
+        # Register the Array's wrapper (a Vector's or a Matrix's layout) if not already done
         if !haskey(ctx.type_registry.structs, struct_type)
-            register_vector_type!(ctx.mod, ctx.type_registry, struct_type)
+            register_array_wrapper!(ctx.mod, ctx.type_registry, struct_type)
         end
         vec_info = ctx.type_registry.structs[struct_type]
 
