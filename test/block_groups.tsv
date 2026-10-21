@@ -50,84 +50,55 @@ measured	4d1b79e71333b92ee9d17decb7c10e7ea818f842
 probes	string_lpad fc_types_equal_pow fc_hrtime_elapsed fc_memhash_dict_string throw_inexacterror string_findfirst string_uppercase fc_object_id fc_task_rand fc_string_to_symbol checked_add_i8 string_startswith fc_memchr_findfirst_char i32_div i32_rem i32_lt i32_le f32_add f32_sub f32_div f32_le f64_min f32_min f64_max f32_max not_int count_ones sqrt_f64 ceil_f64 sitofp_i16_f64 uitofp_u32_f64 fptosi_f32_i32_unsafe fptoui_f64_u64_unsafe int128_mul checked_add muladd_f64 string_occursin fc_symbol_to_string fc_pchar_to_string_ptrlen union_field const_dict
 core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs registry_foreign exceptions float32_fastmath constant_callees
 matrix-only	registry_binops registry_unops registry_conversions registry_checked registry_shift registry_fma registry_misc registry_operators registry_operators_rejected entered_paths
-src/WasmTarget.jl	-	host_imports.jl	-
+src/WasmTarget.jl	-	-	-
 src/bridge.jl	-	-	-
-src/builder/instr_builder.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
-src/builder/instr_ir.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	host_imports.jl	-
-src/builder/instructions.jl	isomorphic_recursive_classes captured_variables abstract_receivers recursive_types	host_imports.jl	-
+src/builder/instr_builder.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	-	-
+src/builder/instr_ir.jl	memoryref_offset simplevector_values captured_variables closed_world_edges	-	-
+src/builder/instructions.jl	isomorphic_recursive_classes captured_variables abstract_receivers recursive_types	-	-
 src/builder/source_map.jl	-	-	-
-src/builder/types.jl	memoryref_offset	host_imports.jl	-
-src/builder/validator.jl	-	host_imports.jl	-
-src/builder/writer.jl	-	host_imports.jl	-
-src/codegen/box_capture.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
-src/codegen/builtins.jl	builtins_invoked long_constants varargs memoryref_field memoryref_offset simplevector_values closed_world_reflection registry_sample narrow_primitive	m11_intrinsics_table.jl	-
-src/codegen/calls.jl	builtins_invoked kind_isa reduce_intrinsic_arity varargs inlined_captor unionall_constructor registry_sample narrow_primitive	m11_intrinsics_table.jl f3_box_capture_l2b_propagate.jl	-
-src/codegen/closures.jl	closed_world_edges	host_imports.jl	-
-src/codegen/compile.jl	exception_stack	diagnostics_sink.jl host_imports.jl	-
-src/codegen/context.jl	-	ir_one_inference_path.jl f3_box_capture_l2b_propagate.jl	-
+src/builder/types.jl	memoryref_offset	-	-
+src/builder/validator.jl	-	-	-
+src/builder/writer.jl	-	-	-
+src/codegen/box_capture.jl	-	-	-
+src/codegen/builtins.jl	builtins_invoked long_constants varargs memoryref_field memoryref_offset simplevector_values closed_world_reflection registry_sample narrow_primitive	-	-
+src/codegen/calls.jl	builtins_invoked kind_isa reduce_intrinsic_arity varargs inlined_captor unionall_constructor registry_sample narrow_primitive	-	-
+src/codegen/closures.jl	closed_world_edges	-	-
+src/codegen/compile.jl	exception_stack	-	-
+src/codegen/context.jl	-	-	-
 src/codegen/diagnostics.jl	-	-	-
 src/codegen/dispatch.jl	sizeof_values	-	-
-src/codegen/flow.jl	closed_world_reflection filtered_fold	wrong_value_locator.jl	-
-src/codegen/generate.jl	-	host_imports.jl nir_use_index.jl	-
+src/codegen/flow.jl	closed_world_reflection filtered_fold	-	-
+src/codegen/generate.jl	-	-	-
 src/codegen/helpers.jl	-	-	-
 src/codegen/int128.jl	show_type seeded_random registry_sample narrow_primitive	-	-
 src/codegen/int_key_map.jl	invoke_in_world	-	-
-src/codegen/interpreter.jl	dicts builtins_invoked immutable_objectid show_type	reinterpret_array_semantics.jl	-
+src/codegen/interpreter.jl	dicts builtins_invoked immutable_objectid show_type	-	-
 src/codegen/intrinsics_table.jl	intrinsics_int immutable_objectid foreign_calls conversions registry_sample narrow_primitive	-	-
-src/codegen/invoke.jl	-	ir_one_inference_path.jl	-
+src/codegen/invoke.jl	-	-	-
 src/codegen/ir.jl	-	-	-
 src/codegen/julia_numeric_tier.jl	conversions show_type seeded_random registry_sample narrow_primitive	-	-
 src/codegen/options.jl	-	-	-
 src/codegen/selector_table.jl	memoryref_offset	-	-
-src/codegen/stackified.jl	-	reinterpret_array_semantics.jl	-
-src/codegen/statements.jl	foreign_calls loop_backward_branch show_type	wrong_value_locator.jl	-
+src/codegen/stackified.jl	-	-	-
+src/codegen/statements.jl	foreign_calls loop_backward_branch show_type	-	-
 src/codegen/strings.jl	-	-	-
 src/codegen/structs.jl	isomorphic_recursive_classes memoryref_offset vector_growth_offsets	-	-
-src/codegen/trimcollect.jl	type_object_rows one_consult	ir_one_inference_path.jl generated_names.jl	exceptions constant_callees
-src/codegen/types.jl	kind_isa foreign_calls invoke_in_world	f3_box_capture_l2b_propagate.jl	-
+src/codegen/trimcollect.jl	type_object_rows one_consult	-	exceptions constant_callees
+src/codegen/types.jl	kind_isa foreign_calls invoke_in_world	-	-
 src/codegen/undef.jl	-	-	-
 src/codegen/unions.jl	-	-	-
 src/codegen/values.jl	memoryref_offset closed_world_edges	-	-
-src/frontend/nir.jl	method_error_value invoke_in_world	nir_use_index.jl host_imports.jl	-
+src/frontend/nir.jl	method_error_value invoke_in_world	-	-
 ext/	struct_by_structure	-	-
 test/block_impact.jl	-	-	-
-# module_builder_validation.jl: 29.333 s recorded, past 20.0 s on its own: the full matrix runs it
-# diagnostic_attribution.jl: 24.231 s recorded, past 20.0 s on its own: the full matrix runs it
-# source_maps.jl: 39.348 s recorded, past 20.0 s on its own: the full matrix runs it
-# dispatch_method_error.jl: 57.098 s recorded, past 20.0 s on its own: the full matrix runs it
-# real_bottom_exceptions.jl: 33.49 s recorded, past 20.0 s on its own: the full matrix runs it
-# no_fabricated_values.jl: 23.811 s recorded, past 20.0 s on its own: the full matrix runs it
-# src/WasmTarget.jl: 6 of its pieces its locks' QA families run past 20.0 s
 # src/builder/instr_builder.jl: 2 of its pieces the groups run past 25.0 s
-# src/builder/instr_builder.jl: 25 of its pieces its locks' QA families run past 20.0 s
 # src/builder/instr_ir.jl: 4 of its pieces the groups run past 25.0 s
-# src/builder/instr_ir.jl: 23 of its pieces its locks' QA families run past 20.0 s
-# src/builder/instructions.jl: 13 of its pieces its locks' QA families run past 20.0 s
-# src/builder/source_map.jl: 19 of its pieces its locks' QA families run past 20.0 s
-# src/builder/types.jl: 1 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/builtins.jl: 10 of its pieces the groups run past 25.0 s
-# src/codegen/builtins.jl: 81 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/calls.jl: 19 of its pieces the groups run past 25.0 s
-# src/codegen/calls.jl: 52 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/closures.jl: 3 of its pieces the groups run past 25.0 s
-# src/codegen/closures.jl: 8 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/compile.jl: 5 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/diagnostics.jl: 31 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/generate.jl: 5 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/int128.jl: 2 of its pieces the groups run past 25.0 s
 # src/codegen/interpreter.jl: 10 of its pieces the groups run past 25.0 s
-# src/codegen/interpreter.jl: 2 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/intrinsics_table.jl: 17 of its pieces the groups run past 25.0 s
-# src/codegen/invoke.jl: 1 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/ir.jl: 4 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/julia_numeric_tier.jl: 8 of its pieces the groups run past 25.0 s
 # src/codegen/statements.jl: 23 of its pieces the groups run past 25.0 s
-# src/codegen/statements.jl: 20 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/strings.jl: 3 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/structs.jl: 37 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/trimcollect.jl: 6 of its pieces its locks' QA families run past 20.0 s
 # src/codegen/types.jl: 4 of its pieces the groups run past 25.0 s
-# src/codegen/types.jl: 18 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/undef.jl: 13 of its pieces its locks' QA families run past 20.0 s
-# src/codegen/values.jl: 56 of its pieces its locks' QA families run past 20.0 s
-# src/frontend/nir.jl: 5 of its pieces its locks' QA families run past 20.0 s

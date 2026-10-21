@@ -10,7 +10,6 @@ Order of work (Dale, "go", 2026-10-21): rebuild WasmTarget from dart2wasm's stru
 
 | # | Clause | Work | Exit |
 |---|---|---|---|
-| 1.A2b | - | WT1-only test infrastructure deleted (its QA families, fuzz, sidecar, registry coverage, the emission-diff check); dev/lanes.sh, the workflows and test/runtests.jl re-pointed; the process locks' needles follow | the gate green, WT1 still the root compiler |
 | 1.A2c | C6 C10 | the switch: WT1 → `legacy/` (WasmTargetLegacy, own project, frozen, on the closure matrix only); root `src/` = the Rejection sum and the `compile` entry rejecting `Unported`; the driver's derived ladder (no xfail table: loud only through a stub or Julia's verifier); the gate never runs WT1 | the gate green on an empty compiler, its wall stated against the base's |
 | 1.A3 | C2 | `include_dart`, `@parity`, `@quarantine`, `@unported`, the registry, load-time totality (L210 L211 L212) | each lock negative-tested: a plant fails precompile |
 | 1.A4 | C2 C7 | dev/skeleton.jl (a lexer cross-checked against dart-format indentation) + dev/skeleton_scope.toml + generated src/wasm_builder/** | package load + skeleton precompile ≤ 15 s at factor ≤ 1.5 (intent: the gate under a minute) |

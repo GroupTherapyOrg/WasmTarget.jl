@@ -48,7 +48,7 @@ anchor in `src/` has a row.)
 | Storage-relative pointers | `_storage_relative_pointer_is_closed`, `_trace_memmove_ptr` (statements.jl) | StoragePointer |
 | Dead-statement proof | `stmt_is_proven_unreachable` (generate.jl) over the one CFG, `nir_cfg` (nir.jl: Julia's compute_basic_blocks, an Enter's catch edge included) | ProvenDead |
 | Definite initialization of a partial `%new` | `_definitely_initializes_in_nir` (statements.jl), its successors the one CFG's (`nir_cfg`) | DefiniteInit |
-| Native sidecar protocol | test/sidecar | Sidecar |
+| Native sidecar protocol | — (WT1's test/sidecar retired with the rebuild; re-ported with the host imports, dev/MARCH.md 1.F) | Sidecar |
 | Captured-variable types | `record_capture_contents` (a write through any operand carrying the captor joins its box, a constant included, a nested captor's field the field it was built from), `capture_read_types` (box_capture.jl) | CaptureType |
 | `#undef` in a pointer slot | `pointer_slot`, `field_may_be_undef`, `undef_slot`, `pointer_slot_admits_nothing`, `undef_slot_storage` (read by `get_array_type!`, types.jl, and `_struct_fields!`, structs.jl), `undef_value_global!`, `emit_undef!`, `emit_is_undef!`, `emit_is_unset!`, `emit_undef_read_check!`, `emit_slots_undef_check!`, `emit_new_slots!`, `_emit_field_undef_check!` (undef.jl), `emit_constant_slots!` (a constant's slots, values.jl), read by memorynew, memoryrefget, memoryref_isassigned, the slot unset, a Box's contents read (builtins.jl), a partial `%new` (statements.jl), a field read by a run-time name, isdefined and a splat's copy (calls.jl) | Undef |
 | External-leaf cut at every merge (ClosedWorld's ExternalLeaves, LeavesNeverCollected) | `_prune_external_leaf_subgraphs` (trimcollect.jl) | ClosedWorld |

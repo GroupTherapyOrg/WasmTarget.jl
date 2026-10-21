@@ -1,4 +1,4 @@
-# Probe corpus definition (shared by test/probe_bytes.jl and test/registry_coverage.jl)
+# Probe corpus definition (test/probe_bytes.jl's)
 # Each case is a (f, argtypes) pair compiled with an explicit export name.
 
 const CASES = Vector{Pair{String,Tuple}}()   # name => (f, argtypes::Tuple)

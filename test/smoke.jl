@@ -21,7 +21,6 @@ const SMOKE_T_START = time()
 using WasmTarget
 include(joinpath(@__DIR__, "utils.jl"))
 include(joinpath(@__DIR__, "trace_localize.jl"))   # a WRONG answer's first divergent statement
-include(joinpath(@__DIR__, "emission_fingerprint.jl"))   # the emission-diff check's head side
 
 const FILTER = lowercase.(ARGS)
 const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
@@ -101,7 +100,7 @@ const CASE_INPUTS = Dict{String,Vector{Tuple}}()
 # name, its entry in GROUPS or XFAIL empty, and built when a run selects it: _build! includes the
 # file that builds it (once) and fills the entry from the file's builder (LAZY_BUILDERS[file], a
 # Dict of every group it builds). An unselected lazy group costs no include and no compile. A
-# reader of every case (registry coverage, the emission base, block_impact) builds them all first.
+# reader of every case (test/block_impact.jl) builds them all first.
 const LAZY_FILE = Dict{String,String}()       # a lazy group => the file in test/ that builds it
 const LAZY_BUILDERS = Dict{String,Function}()  # a file => its builder, set by the file
 const LAZY_BUILT = Set{String}()
@@ -209,11 +208,6 @@ function main()
     npass = 0; nfail = 0; nerr = 0
     failures = String[]
     ngroups = 0
-    # the emission-diff check's head side: each case's bodies, and which a passing run entered
-    local edir = get(ENV, "WT_EMISSION_DIR", "")
-    local rec = isempty(edir) ? nothing :
-        EmissionFingerprint.recorder(edir, SMOKE_PART[1], SMOKE_PART[2];
-                                     run_driver=WasmRunner.run_driver_batch, merge_js=WasmRunner.host_runtime_merge_js)
     for (group, cases) in _selected(_smoke_part(GROUPS))
         ngroups += 1
         local tg = time()
@@ -222,13 +216,11 @@ function main()
             _only(group, name) || continue
             tag = "$group/$name"
             local tc = time()
-            rec === nothing || (EMITTED_MODULES[] = Any[])
-            local passed = false
             try
                 r = haskey(CASE_INPUTS, tag) ? compare_julia_wasm_inputs(f, CASE_INPUTS[tag]; admit=_rc_admit) :
                     isempty(args) ? compare_julia_wasm(f) : compare_julia_wasm(f, args...)
                 if r.pass
-                    npass += 1; passed = true
+                    npass += 1
                 else
                     nfail += 1
                     haskey(CASE_INPUTS, tag) && (args = r.input)   # a generated case: its first wrong input
@@ -240,15 +232,6 @@ function main()
                 nerr += 1; push!(failures, "ERROR $tag  $(_smoke_error_text(e))")
             end
             push!(case_secs, time() - tc)
-            if rec !== nothing
-                try
-                    EmissionFingerprint.record!(rec, tag, passed, EmissionFingerprint.case_hash(f, Tuple(map(typeof, case[3:end]))),
-                                                EMITTED_MODULES[])
-                catch e
-                    nerr += 1; push!(failures, "ERROR $tag  (its emission fingerprint) $(_smoke_error_text(e))")
-                end
-                EMITTED_MODULES[] = nothing
-            end
         end
         _smoke_time("group $group", tg)
     end
@@ -299,7 +282,7 @@ function main()
     exit((nfail + nerr + length(xf_mismatch)) == 0 ? 0 : 1)
 end
 # main() runs when smoke.jl is the program, the lazy groups it selects built first (a statement of
-# their own: main runs in the world their cases are defined in); test/registry_coverage.jl includes
+# their own: main runs in the world their cases are defined in); test/block_impact.jl includes
 # it for GROUPS only
 abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())
 abspath(PROGRAM_FILE) == (@__FILE__) && main()

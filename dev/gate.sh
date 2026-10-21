@@ -89,7 +89,7 @@ api gh run view "$id" --json jobs --jq '.jobs[] | [(if any(.steps[]?; .conclusio
   awk -F'\t' -v B="$budget" '{ v = $1 == "success" ? "ok  " : $1 == "failure" ? "FAIL" : "--  ";
                  past = ($3 != "" && $3 + 0 >= B * 60) ? sprintf("  PAST THE %d-MINUTE BUDGET", B) : "";
                  printf "  %s %-16s %6s  %s%s\n", v, $2, ($3 == "" ? "" : $3 "s"), ($1 == "success" ? "" : $1), past
-                 if ($2 != "coverage-merge" && $2 != "emission-plan" && $2 != "emission" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
+                 if ($2 != "closure" && $3 != "" && $3 + 0 > slow) { slow = $3 + 0; slowest = $2 } }
                END { if (slowest != "") printf "gate: slowest lane job %s %d s of the budget %d min (%d s)%s\n",
                        slowest, slow, B, B * 60, (slow >= B * 60 ? ", PAST IT" : "") }'
 conclusion=$(api gh run view "$id" --json conclusion --jq .conclusion)

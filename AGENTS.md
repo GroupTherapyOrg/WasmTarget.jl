@@ -71,9 +71,8 @@ L206 generates this list from the ledger: every requirement an agent must honour
 | locks, ratchets, the ledger, charter status | `julia --project=. test/parity_ratchet.jl` |
 | differential smoke | `julia --project=. test/smoke.jl [group]` |
 | byte-identity probes | `julia --project=. test/probe_bytes.jl` |
-| lowering-registry coverage | `julia --project=. test/registry_coverage.jl` |
 | model checking | `bash dev/formal/run_tlc.sh` |
-| one family | `WT_PHASE="<name>" julia --project=. test/runtests.jl` |
+| one QA family | `WT_QA_ONLY="<file>.jl" julia --project=. test/runtests.jl` |
 
 `bash dev/land.sh land` in a batch's worktree rebases, gates and lands its branch (L197) by `merge`,
 never while the last closure matrix is red (local full matrix: `bash dev/lanes.sh`, L153, L162).

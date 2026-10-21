@@ -53,12 +53,8 @@ jobs:
   test:
     if: >-
       ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
-    # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default.
-    # Every slice is an independently bounded job. The single serial `all` slice (lanes +
-    # every shard + fuzz on one runner) ran 94 min on macOS at 3d67b2aa and passed the
-    # 110-min bound on march/batch-9 as the smoke corpus grew, so ubuntu and macOS are
-    # sliced like Windows: the inner-loop lanes, the codegen shards (four on ubuntu; two
-    # on macOS, whose runners GitHub caps at five concurrent jobs), and the fuzz pass.
+    # A hung worker must SELF-KILL, not sit on GitHub's 6-hour default: every slice is an
+    # independently bounded job, the inner-loop lanes and the suite (test/runtests.jl's QA families).
     timeout-minutes: ${{ matrix.target.os == 'windows-latest' && 70 || 110 }}
     name: Julia ${{ matrix.version }} - ${{ matrix.target.os }} - ${{ matrix.target.slice }}
     runs-on: ${{ matrix.target.os }}
@@ -70,24 +66,11 @@ jobs:
           # ~1.13.0-0 admits prereleases (rc) until 1.13.0 final lands
           - '~1.13.0-0'
         target:
-          - { os: ubuntu-latest, slice: lanes, shard: '', fuzz: '' }
-          - { os: ubuntu-latest, slice: shard-0, shard: '0,4', fuzz: '' }
-          - { os: ubuntu-latest, slice: shard-1, shard: '1,4', fuzz: '' }
-          - { os: ubuntu-latest, slice: shard-2, shard: '2,4', fuzz: '' }
-          - { os: ubuntu-latest, slice: shard-3, shard: '3,4', fuzz: '' }
-          - { os: ubuntu-latest, slice: fuzz, shard: '', fuzz: '1' }
-          - { os: macos-latest, slice: lanes, shard: '', fuzz: '' }
-          - { os: macos-latest, slice: shard-0, shard: '0,2', fuzz: '' }
-          - { os: macos-latest, slice: shard-1, shard: '1,2', fuzz: '' }
-          - { os: macos-latest, slice: fuzz, shard: '', fuzz: '1' }
-          # Each shard and the fuzz pass is its own job: the local orchestrator buffers
-          # child logs and blocks on the first process, which hid the responsible shard
-          # until job timeout.
-          - { os: windows-latest, slice: shard-0, shard: '0,4', fuzz: '' }
-          - { os: windows-latest, slice: shard-1, shard: '1,4', fuzz: '' }
-          - { os: windows-latest, slice: shard-2, shard: '2,4', fuzz: '' }
-          - { os: windows-latest, slice: shard-3, shard: '3,4', fuzz: '' }
-          - { os: windows-latest, slice: fuzz, shard: '', fuzz: '1' }
+          - { os: ubuntu-latest, slice: lanes, shard: '' }
+          - { os: ubuntu-latest, slice: suite, shard: '' }
+          - { os: macos-latest, slice: lanes, shard: '' }
+          - { os: macos-latest, slice: suite, shard: '' }
+          - { os: windows-latest, slice: suite, shard: '' }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -123,7 +106,6 @@ jobs:
       # anchor resolves). The ratchet runs in the lanes and in the Pkg.test shard its QA
       # family is dealt to (runtests.jl's _wt_qa).
       - name: Pinned dart2wasm sources
-        if: matrix.target.slice != 'fuzz'
         shell: bash
         run: bash dev/fetch_dart_sdk.sh
 
@@ -136,13 +118,12 @@ jobs:
         run: |
           julia --project=. test/smoke.jl
           julia --project=. test/parity_ratchet.jl
-          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; julia --project=. test/registry_coverage.jl; fi
+          if [ "${{ matrix.version }}" = "1.12" ]; then julia --project=. test/probe_bytes.jl; fi
 
       - name: Run tests
         if: matrix.target.slice != 'lanes'
         env:
           WT_SHARD: ${{ matrix.target.shard }}
-          WT_FUZZ: ${{ matrix.target.fuzz }}
           # wasm-tools validation of every compiled module (module bytes are
           # platform-independent, so Unix coverage validates the corpus;
           # Windows stays off to protect its 45-minute shard budget).

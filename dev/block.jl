@@ -124,7 +124,7 @@ const STAGE_INPUTS = Dict(
     "load" => ["src/", "ext/", "Project.toml"],
     "ratchet" => ["src/", "ext/", "test/", "dev/", "docs/", "AGENTS.md", ".github/"],
     "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl",
-                     "test/emission_fingerprint.jl", "test/registry_cases.jl"],
+                     "test/registry_cases.jl"],
     "probes" => ["src/", "ext/", "test/probe_bytes.jl", "test/probe_corpus.jl"],
     "tlc" => ["dev/formal/"])
 for k in ("smoke-batch", "smoke-1.13")
@@ -200,8 +200,7 @@ end
 
 # the test files a stage runs itself (a change to one is run by that stage)
 const STAGE_TESTS = ["test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/trace_localize.jl",
-                     "test/emission_fingerprint.jl", "test/registry_cases.jl",
-                     "test/probe_bytes.jl", "test/probe_corpus.jl", "test/parity_ratchet.jl", "test/builder_cases.jl"]
+                     "test/registry_cases.jl", "test/probe_bytes.jl", "test/probe_corpus.jl", "test/parity_ratchet.jl"]
 
 # what test/runtests.jl's changed lines run: a changed `_wt_qa_include` line its QA family, a changed
 # line inside a phase (from its `@pphase "name"` line to the next phase or the registration block's
@@ -798,8 +797,9 @@ function main(args)
     v113 = String[]
     for f in changed
         # a changed QA family runs itself, test/runtests.jl its changed families and phases, and a
-        # test file a stage runs is run by that stage; any other changed test file, like a changed
-        # src or ext file, is run by what its row names
+        # test file a stage runs is run by that stage; a test file the change deletes runs nothing;
+        # any other changed test file, like a changed src or ext file, is run by what its row names
+        startswith(f, "test/") && !ispath(joinpath(ROOT, f)) && continue
         if startswith(f, "test/") && endswith(f, ".jl")
             name = f[length("test/")+1:end]
             name in families && name != "parity_ratchet.jl" && (push!(tests, name); continue)

@@ -29,8 +29,8 @@ A reachable construct outside the supported surface rejects loudly and located
   BLAS/LAPACK/SuiteSparse binaries, the filesystem, sockets, host entropy and time do not
   become browser-safe because their Julia call sites are visible. Each needs an explicit host
   import, a pure-Julia overlay, or a separately built linear-memory sidecar module
-  (`test/sidecar/`, its ownership protocol modeled in `dev/formal/Sidecar.tla`). Existing
+  (its ownership protocol modeled in `dev/formal/Sidecar.tla`). Existing
   host JLL artifacts cannot be loaded by a browser.
 - **Evidence.** The differential corpus proves the signatures and compositions it tests, not
   all of Julia; package support is established by end-to-end differential cases through
-  ordinary package APIs (`test/fuzz/*_diff.jl`).
+  ordinary package APIs.
