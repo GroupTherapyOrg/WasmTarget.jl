@@ -1023,28 +1023,28 @@ function allocate_ssa_locals!(ctx::AbstractCompilationContext,
                 end
             end
 
-            # Fix When wasm_type is ExternRef but SSA is used in numeric context,
-            # type the local based on the Julia type inference to match the expected operand type.
-            # This handles dead code after UNREACHABLE and Any-typed struct fields used in comparisons.
+            # A value held as a host reference (externref: an abstract Function's value, a JS
+            # value) has no register: a branch on it or an intrinsic over it rejects at that
+            # statement, never a register chosen for it (correct or loud). Its local keeps its
+            # own translation.
             if wasm_type === ExternRef
                 for j in ssa_users(ctx, ssa_id)   # the statements that use the value
                     use_rec = nir[j]
                     use_node = use_rec.node
-                    # Check if used as GotoIfNot condition
                     if use_node isa NirGotoIfNot && use_node.cond isa NirSSA && use_node.cond.id == ssa_id
-                        wasm_type = I32
+                        record_unsupported!(ctx, :unsupported_type,
+                            "a branch on a value of type $(effective_type), held as a host reference (externref): no register holds a condition there";
+                            idx=j)
                         break
                     end
-                    # An operand of an intrinsic: the local's own translation, above, is the
-                    # externref here (no override assigns one), so a boolean operand is an i32
-                    # and an arithmetic or comparison operand an i64, without translating the
-                    # same type a second time.
                     if use_rec.slot == 0 && use_node isa NirCall && use_node.callee isa Core.IntrinsicFunction
                         fname = nameof(use_node.callee)
                         if (fname in _BOOL_OP_INTRINSICS || fname in _CMP_OP_INTRINSICS ||
                             fname in _NUMERIC_OP_INTRINSICS) &&
                            any(arg -> arg isa NirSSA && arg.id == ssa_id, use_node.operands)
-                            wasm_type = fname in _BOOL_OP_INTRINSICS ? I32 : I64
+                            record_unsupported!(ctx, :unsupported_type,
+                                "`$(fname)` on an operand of type $(effective_type), held as a host reference (externref): no register holds it";
+                                idx=j)
                             break
                         end
                     end

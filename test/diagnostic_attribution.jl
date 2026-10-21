@@ -29,6 +29,9 @@ module DiagAttrib
     @inline c6_mid(x::Int64) = x * 3 + 1
     c6_outer(x::Int64) = c6_mid(x) - 2
     bug_outer(x::Int64) = bug_helper(x) * 2
+    # an intrinsic over a value held as a host reference (an abstract Function's value)
+    @noinline hostfn(n::Int64) = (Function[sin, cos])[n]
+    extern_add(n::Int64) = (f = hostfn(n); (try; Core.Intrinsics.add_int(f, n); catch; -1; end) + Int64(f === sin))
 end
 
 _first_diag(f, argtypes) = try
@@ -85,6 +88,19 @@ end
     @test occursin("helper_uses_ccall", fr[1])
     @test occursin("mid", fr[2])
     @test occursin("outer2", fr[end])
+end
+
+@testset "diagnostics: an intrinsic over a value held as a host reference rejects at its statement" begin
+    # allocate_ssa_locals! gave such an SSA's local an i64 (or, for a boolean operand, an i32)
+    # register by default; it now rejects at the intrinsic's statement (correct or loud)
+    @test DiagAttrib.extern_add(1) == 0   # native: the intrinsic throws, the catch answers -1
+    e = _first_diag(DiagAttrib.extern_add, (Int64,))
+    @test e !== nothing
+    d = e.diag
+    @test d.stmt_idx > 0
+    @test occursin("held as a host reference", d.construct)
+    @test occursin("add_int", d.construct)
+    @test occursin("add_int", d.stmt)
 end
 
 @testset "diagnostics: a codegen bug (the internal tier) is located the same way" begin

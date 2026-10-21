@@ -1771,8 +1771,13 @@ _g("narrowed_union_arithmetic", Any[
     ("narrowed_uint64_rem", (n::Int64) -> (x = n > 0 ? UInt64(n) : nothing; x === nothing ? 0 : Int64(x % UInt64(3))), Int64(7)),
     ("narrowed_int32_mul", (n::Int64) -> (x = n > 0 ? Int32(n) : nothing; x === nothing ? 0 : Int64(x * Int32(5))), Int64(3)),
 ])
+# An intrinsic over a value held as a host reference (an abstract Function's value, externref) has
+# no register to run in: it rejects at its statement (native: the intrinsic throws, caught here).
+# Until this case its SSA local was given an i64 register by default (allocate_ssa_locals!).
+@noinline _sm_hostfn(n::Int64) = (Function[sin, cos])[n]
 _xf("erased_operand_arithmetic", Any[
     ("erased_div_any", (n::Int64) -> (v = Any[n, UInt64(7)]; div(v[1], 2) + Int64(div(v[2], UInt64(2)))), Int64(9)),
+    ("host_reference_add_int", (n::Int64) -> (f = _sm_hostfn(n); (try; Core.Intrinsics.add_int(f, n); catch; -1; end) + Int64(f === sin)), Int64(1)),
 ])
 _g("dynamic_enrollment", Any[
     ("closure_erased_argument", (n::Int64) -> (k = n; f = _sm_dh(s -> (s isa _SmEA ? 10 : 20) + k)[]; f(_SmEA(n)); f(_sm_dh(_SmEB(n))[])::Int64), Int64(3)),
