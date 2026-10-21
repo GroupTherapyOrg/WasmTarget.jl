@@ -4082,16 +4082,18 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                  "@@ -3 +2,0 @@\n") == [("src/t.jl", "T", "(A, B, :f)")]])
                 # a stale map fails a change to src/: more than STALE_PIECES pieces of src moved between the
                 # measured tree and the change's base, a measured tree unknown here, a changed line of code
-                # in no piece (a module's own line); a change to ext/ always; a change elsewhere never (A20C13)
+                # in no piece (a module's own line, when the parse keys it to no form); a change to ext/ always; a change elsewhere never (A20C13)
                 local mtab = "module M\nf(x) = 1\nend\n"
                 local ns, ni = Dict{String,String}(), Dict{String,Vector{Int}}()
-                v += count(!, [Base.invokelatest(getglobal(Bm, :STALE_PIECES)) == 8,
+                v += count(!, [getglobal(Bm, :STALE_PIECES) == 8,
                                isempty(g(:stale_map, 8, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1, 3]))),
                                occursin("9 pieces of src changed", only(g(:stale_map, 9, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1])))),
                                occursin("test/block_impact.jl", only(g(:stale_map, 9, "m", ["src/t.jl"], ns, ni))),
                                length(g(:stale_map, nothing, "m", ["src/t.jl"], ns, ni)) == 1,
-                               only(g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => mtab), Dict("src/t.jl" => [1, 2]))) ==
-                                   "src/t.jl:1 is a line of code in no piece of the map (dev/block.jl line_keys)",
+                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => mtab), Dict("src/t.jl" => [1, 2])) ==
+                                   (haskey(g(:line_keys, mtab, "src/t.jl"), 1) ? String[] :
+                                    ["src/t.jl:1 is a line of code in no piece of the map (dev/block.jl line_keys)"]),
+                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => "x = 1\n"), Dict("src/t.jl" => [1])) == String[],
                                length(g(:stale_map, 0, "m", ["ext/E.jl"], ns, ni)) == 1,
                                isempty(g(:stale_map, 99, "m", ["test/x.jl", "dev/MARCH.md"], ns, ni))])
                 # test/block_tables.tsv holds every entry of the tables it names, each numeric lowering
