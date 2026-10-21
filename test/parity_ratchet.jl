@@ -898,6 +898,7 @@ end
 # numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
 # that; and over the last 5 lines no MARCH row names (by the commit's first 8 hex digits, the row
 # stating a slower landing's cause), the upper median of edit_to_landed_s over its target at most 1
+const L197_JUDGED_FROM = 3     # the fewest lines in the window its median is judged over
 function l197_check(log::AbstractString, hist, march::AbstractString; head::AbstractString = "")
     bad = String[]
     rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
@@ -931,7 +932,8 @@ function l197_check(log::AbstractString, hist, march::AbstractString; head::Abst
     # the line of the commit being gated is never judged by its own gate: a landing's judgement after
     # its push runs on the landed head, whose line is already written
     window = last(filter(x -> !named(x[1]) && x[1] != head, ratios), 5)
-    if !isempty(window)
+    # judged once the window holds at least 3 lines: a median of fewer is one landing's own number
+    if length(window) >= L197_JUDGED_FROM
         s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
         med <= 1 || push!(bad, "the median edit to landed of the last $(length(window)) landings no dev/MARCH.md row names is $(round(med; digits = 2)) times its target ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): name each slower landing's cause in a row, by its commit's first 8 hex digits")
     end
@@ -4113,7 +4115,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             end
             v
         end),
-    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid: one landing at a time, and the agents' Julia scheduler starts no other job while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md without a `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation (CHARTER_AUTHORISED) whose clause holds every changed line (an edit changing only MARCH row numbers, L154's citations, exempt and named), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, the one landing path, which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: a log whose lines cover the history passes; a landing with no line, a slower median, a line out of order and an uncovered tip each fail; a slower landing a MARCH row names leaves the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
+    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid: one landing at a time, and the agents' Julia scheduler starts no other job while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md without a `Charter-change: <clause> authorised by Dale <date>` line naming a standing authorisation (CHARTER_AUTHORISED) whose clause holds every changed line (an edit changing only MARCH row numbers, L154's citations, exempt and named), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, the one landing path, which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing), and prints each step's wall and `LOOP <edit_to_landed_s> s`. Here: every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at; and over the last 5 lines no dev/MARCH.md row names (by the commit's first 8 hex digits, the row stating the slower landing's cause), once at least 3 such lines exist (L197_JUDGED_FROM: a median of fewer is one landing's own number, so an early landing is never hostage to a naming row; fewer are printed with the target, not judged), the median of edit_to_landed_s over its target is at most 1: 180 s for a landing whose range changes src/, ext/ or Project.toml, 90 s for any other, this lock's literals, never raised. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; a slower landing a MARCH row names, and the gated commit's own line, leave the window. Negative-tested: a planted slow line fires it (dev/CHARTER.md C10)",
         () -> begin
             local v = 0
             local land = read(joinpath(ROOT, "dev", "land.sh"), String)
@@ -4132,7 +4134,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
             v += occursin(raw"    built.exitcode == 0 || (println(stderr, \"block_runner: this tree's package does not load",
                           read(joinpath(ROOT, "dev", "block_runner.jl"), String)) ? 0 : 1
             # the targets are literals, never raised
-            v += occursin("const L197_TARGET_SRC = 180 ", rx) && occursin("const L197_TARGET_OTHER = 90 ", rx) ? 0 : 1
+            v += occursin("const L197_TARGET_SRC = 180 ", rx) && occursin("const L197_TARGET_OTHER = 90 ", rx) && occursin("const L197_JUDGED_FROM = 3 ", rx) ? 0 : 1
             v += occursin("\ndev/.loop/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
             try
                 # behavior on fixed text: three commits, the second landing two
@@ -4149,13 +4151,24 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                 local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6") * "\n" *
                               ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
                 local partial = L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n"
+                # four commits: the median judged over three lines (0.83 for b, c and d at 40 s or 340 s)
+                local hist4 = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n\nC dddddddd44 $(t0 + 600)\n1\t0\tdev/x.md\n")
+                local three = (lc, ld) -> L197_COLUMNS * "\n" * ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5") * "\n" *
+                                          ln("cccccccc33", lc, "2026-10-21T14:06:40Z", "1", "1") * "\n" * ln("dddddddd44", ld, "2026-10-21T14:10:00Z", "1", "1") * "\n"
+                local good3 = three("2026-10-21T14:07:20Z", "2026-10-21T14:10:40Z")
+                local slow3 = three("2026-10-21T14:12:20Z", "2026-10-21T14:15:40Z")
+                local oneslow3 = three("2026-10-21T14:12:20Z", "2026-10-21T14:10:40Z")
                 v += count(!, [isempty(first(l197_check(good, hist, ""))),
                                length(last(l197_check(good, hist, ""))) == 2,
-                               !isempty(first(l197_check(slow, hist, ""))),
-                               # a slower landing a MARCH row names leaves the window: the other is the median
-                               isempty(first(l197_check(slow, hist, "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |"))),
+                               # fewer than 3 lines in the window: not judged, a slower one included
+                               isempty(first(l197_check(slow, hist, ""))),
+                               isempty(first(l197_check(good3, hist4, ""))), length(last(l197_check(good3, hist4, ""))) == 3,
+                               # two of three slower: the median slower, failed; one of three: passed
+                               !isempty(first(l197_check(slow3, hist4, ""))), isempty(first(l197_check(oneslow3, hist4, ""))),
+                               # a slower landing a MARCH row names leaves the window (then two lines: not judged)
+                               isempty(first(l197_check(slow3, hist4, "| 13.99 | C10 | cccccccc33 was slower: its runner was cold | x |"))),
                                # the gated commit's own line is out of its own window
-                               isempty(first(l197_check(slow, hist, ""; head = "cccccccc33"))),
+                               isempty(first(l197_check(slow3, hist4, ""; head = "dddddddd44"))),
                                !isempty(first(l197_check(gap, hist, ""))),
                                !isempty(first(l197_check(order, hist, ""))),
                                !isempty(first(l197_check(partial, hist, ""))),
@@ -4181,7 +4194,8 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                                                        head = readchomp(`git -C $ROOT rev-parse HEAD`))
                         foreach(b -> println("    ✗ L197: ", b), bad)
                         println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
-                                isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))
+                                isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "),
+                                length(window) < L197_JUDGED_FROM ? " (edit to landed over its target, $L197_TARGET_SRC s src or $L197_TARGET_OTHER s other: fewer than $L197_JUDGED_FROM lines, not judged)" : "")
                         v += length(bad)
                     end
                 end
