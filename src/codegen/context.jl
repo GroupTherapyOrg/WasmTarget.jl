@@ -6,6 +6,7 @@
 Abstract supertype for compilation contexts.
 CompilationContext is the sole function-compilation context.
 parity(pkg/dart2wasm/lib/code_generator.dart:28 CodeGenerator)
+precedent(dart: abstract class CodeGenerator, code_generator.dart:28)
 """
 abstract type AbstractCompilationContext end
 

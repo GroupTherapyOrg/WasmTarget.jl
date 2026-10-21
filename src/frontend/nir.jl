@@ -49,6 +49,7 @@ export NirNode, NirStmt, NirSSA, NirArgument, NirSlot, NirGlobalRef, NirLiteral,
 # ============================================================================
 
 # parity(pkg/kernel/lib/src/ast/misc.dart:57 TreeNode): the root of the node kinds codegen consumes.
+# precedent(dart: abstract class TreeNode with a class per node kind, misc.dart:57)
 abstract type NirNode end
 
 """A use of an SSA-defined value. `julia_type` is Julia inference's own answer for that

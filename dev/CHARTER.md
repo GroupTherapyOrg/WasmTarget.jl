@@ -194,7 +194,9 @@ with the per-clause status. A clause is never closed by argument.
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
   method, field or switch for it; a closed sum matched exhaustively when the package loads; the
   builder refusing at the emitting line), each check naming the definition that is its
-  construction. A check that finds the wrong choice at gate time (a
+  construction, the precedent it follows (another language's mechanism: Rust, dart, wasm, …) and
+  how Julia's differs; a construction with no precedent anywhere is an invention, which waits for
+  Dale. A check that finds the wrong choice at gate time (a
   scan of WT's source, an allowlist of exceptions, a ratchet at 0 or not, or a test that must
   reach it) is a stopgap, which keeps its clause OPEN with the Planned construction that
   retires it; the differential lanes stay the soundness gate and close no clause. Calling a check, a clause or a
@@ -204,7 +206,10 @@ with the per-clause status. A clause is never closed by argument.
   charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
   rows, and every finding sits on a row) `L201` (no clause of C1 to C8 without Planned text cites
   a check test/parity_ratchet.jl's STRICT_KINDS does not classify as a construction naming a
-  definition src holds; every lock C4 to C8 cite is classified).
+  definition src holds, with its precedent, whose lock reads no src text; every lock C4 to C8 cite
+  is classified) `L202` (every closed sum or construction in src, an @enum, an abstract type or a
+  definition a construction names, carries its `precedent(<ecosystem>: <mechanism>)`) `L203`
+  (each audit entry over src carries its `stopgap in disguise:` and `precedent:` lines).
 
 ## Rules that keep the goal from drifting
 

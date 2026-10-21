@@ -11,6 +11,7 @@ export NumType, RefType, ConcreteRef, NonNullAbstractRef, FuncType, StructType, 
     NumType
 
 Numeric types in WebAssembly.
+precedent(dart: enum NumTypeKind, type.dart:82)
 """
 @enum NumType::UInt8 begin
     I32 = 0x7F  # i32
@@ -23,6 +24,7 @@ end
     RefType
 
 Reference types in WebAssembly (including WasmGC extensions).
+precedent(wasm: the abstract heap types of the binary format; dart: HeapType's abstract heap types, type.dart:299)
 """
 @enum RefType::UInt8 begin
     FuncRef = 0x70    # funcref
@@ -82,6 +84,7 @@ const WasmValType = Union{NumType, RefType, ConcreteRef, NonNullAbstractRef}
 A packed storage type, i8 or i16, which exists only in memory: a struct field's or an array
 element's type, read and written as its unpacked i32.
 parity(pkg/wasm_builder/lib/src/ir/type.dart:1370 PackedType)
+precedent(dart: enum PackedTypeKind, type.dart:1367)
 """
 @enum PackedType::UInt8 begin
     I8 = 0x78   # i8

@@ -30,7 +30,7 @@ const VOID_BLOCK = VoidBlock()
 const BlockTypeArg = Union{VoidBlock, WasmValType, Int}
 
 # parity-region(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
-abstract type WasmInstr end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction)
+abstract type WasmInstr end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:11 Instruction) precedent(dart: abstract class Instruction with a subclass per instruction, instruction.dart:11)
 
 # ── numeric / const ──────────────────────────────────────────────────────────────
 struct I32Const <: WasmInstr; value::Int64; end  # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:3053 I32Const)
