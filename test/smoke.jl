@@ -2727,6 +2727,16 @@ _xf("unionall_array_values", Any[
     ("vector_unionall_field", (x::Int64) -> length(_ft_uvec(x).v), Int64(1)),
     ("vector_unionall_field_sum", (x::Int64) -> Float64(sum(_ft_uvec(x).v)), Int64(1)),
 ])
+# an array's element storage is the one field rule's (translate_storage_type), as dart's
+# arrayTypeForDartType takes translateStorageType: an array of Union{} elements (a `map` whose
+# function always throws, an undef Vector{Union{}}) holds the bottom reference, where it was an Int64
+# array by a default; an 8- or 16-bit integer element is packed
+_g("array_element_storage", Any[
+    ("union_bottom_elements_map", (x::Int64) -> length(map(_ -> throw(ArgumentError("no")), fill(x, 0))) + x, Int64(3)),
+    ("union_bottom_elements_undef", (x::Int64) -> length(Vector{Union{}}(undef, x)), Int64(3)),
+    ("packed_int16_elements", (x::Int64) -> (v = Int16[x, -x, 3]; Int64(v[2]) + Int64(sum(v))), Int64(5)),
+    ("packed_uint8_elements", (x::Int64) -> (v = UInt8[0xff, UInt8(x)]; Int64(v[1]) + Int64(v[2])), Int64(5)),
+])
 # a closure called dynamically in another function than the one that builds it: every closure the
 # program builds is enrolled at every arity a dynamic call makes, so its object has the entry, and an
 # entry returning a closure gives it that closure's own vtable (dev/AUDIT.md A11E1: its object held a

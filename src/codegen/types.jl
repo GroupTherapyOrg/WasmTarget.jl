@@ -1983,7 +1983,12 @@ translator.dart:344 builtinTypes.)
     packed_array_storage(T) === nothing ? nothing : T <: Signed
 
 """
-Get or create an array type for a given element type.
+Get or create an array type for a given element type: its element's storage is the one field
+rule's (translate_storage_type), as dart's arrayTypeForDartType takes translateStorageType's
+answer (an array of Union{} elements holds the bottom reference, (ref null none)), but for an 8- or
+16-bit integer, which is packed (packed_array_storage, the one packing table, whose signedness the
+loads read); a UInt8 array is the String's i8 array type, the same type by add_type!. A pointer
+element that admits `nothing` is held in the any hierarchy, beside `#undef` (undef_slot_storage).
 
 parity(translator.dart:1205 arrayTypeForDartType): one cached array type per element type.
 """
@@ -1991,38 +1996,16 @@ function get_array_type!(mod::WasmModule, registry::TypeRegistry, elem_type::Typ
     if haskey(registry.arrays, elem_type)
         return registry.arrays[elem_type]
     end
-
-    # (gap 56af911c52b2): Vector{Union{}} — `map` with an
-    # always-throwing closure infers eltype Union{}. Such an array can only
-    # ever be EMPTY (Union{} has no values), so the element representation is
-    # arbitrary; use Int64 so the JS boundary and accessors have a concrete
-    # layout instead of trapping with a type-incompatibility.
-    if elem_type === Union{}
-        type_idx = get_array_type!(mod, registry, Int64)
-        registry.arrays[elem_type] = type_idx
-        return type_idx
-    end
-
-    # Wasm GC's packed storage is the canonical representation for Julia's 8- and
-    # 16-bit integer arrays. UInt8 shares the exact i8 array type with String so
-    # array.copy remains type-correct. Loads select get_s/get_u from Julia signedness.
     local packed = packed_array_storage(elem_type)
-    if elem_type === UInt8
-        type_idx = get_string_array_type!(mod, registry)
-        registry.arrays[elem_type] = type_idx
-        return type_idx
-    elseif packed !== nothing
+    if packed !== nothing
         type_idx = add_array_type!(mod, packed, true)
         registry.arrays[elem_type] = type_idx
         return type_idx
     end
-
-    # The element's storage type is the one translator's answer; an element type that reaches
-    # this array again finds it pending (finish_pending!).
+    # an element type that reaches this array again finds it pending (finish_pending!)
     local id = begin_pending!(registry, :arrays, elem_type)
     registry.arrays[elem_type] = id
-    # a pointer element that admits `nothing` is held in the any hierarchy, beside `#undef`
-    local wasm_elem_type = undef_slot_storage(elem_type, get_concrete_wasm_type(elem_type, mod, registry))
+    local wasm_elem_type = undef_slot_storage(elem_type, translate_storage_type(mod, registry, elem_type))
     return finish_pending!(mod, registry, id, ArrayType(FieldType(wasm_elem_type, true)))  # mutable arrays
 end
 
