@@ -1,15 +1,16 @@
 ------------------------------- MODULE MCUndef -------------------------------
-(* Four slots, one of each kind, every sequence of four operations: stores *)
+(* Five slots, one of each kind, every sequence of four operations: stores *)
 (* of `nothing` (where the kind admits it) and of an object, unsets,        *)
 (* isassigned and reads. MCEnc is the code's encoding; each Broken          *)
 (* instance swaps in one wrong encoding.                                    *)
 EXTENDS Undef
-MCSlots == {"s1", "s2", "s3", "s4"}
-MCKind == [s \in MCSlots |-> CASE s = "s1" -> "ref" [] s = "s2" -> "union" [] s = "s3" -> "any" [] OTHER -> "inline"]
-Ref == [undef |-> "null", check |-> TRUE, held |-> "own"]
-Sentinel == [undef |-> "sentinel", check |-> TRUE, held |-> "any"]
-Inline == [undef |-> "none", check |-> FALSE, held |-> "own"]
-MCEnc == [k \in Kinds |-> CASE k = "ref" -> Ref [] k = "inline" -> Inline [] OTHER -> Sentinel]
+MCSlots == {"s1", "s2", "s3", "s4", "s5"}
+MCKind == [s \in MCSlots |-> CASE s = "s1" -> "ref" [] s = "s2" -> "union" [] s = "s3" -> "any"
+                                [] s = "s4" -> "inline" [] OTHER -> "inlineptr"]
+Ref == [undef |-> "null", pointer |-> TRUE, check |-> TRUE, held |-> "own"]
+Sentinel == [undef |-> "sentinel", pointer |-> TRUE, check |-> TRUE, held |-> "any"]
+Inline == [undef |-> "none", pointer |-> FALSE, check |-> FALSE, held |-> "own"]
+MCEnc == [k \in Kinds |-> CASE k \in {"ref", "inlineptr"} -> Ref [] k = "inline" -> Inline [] OTHER -> Sentinel]
 \* an Any slot's #undef its null, the null `nothing` is
 MCEncAnyAsNull == [MCEnc EXCEPT !["any"] = Ref]
 \* a Union{Nothing,S} slot held as S's nullable reference, its #undef the null
@@ -22,4 +23,7 @@ MCEncRefUnchecked == [MCEnc EXCEPT !["ref"] = [Ref EXCEPT !.check = FALSE]]
 MCEncAnyUnchecked == [MCEnc EXCEPT !["any"] = [Sentinel EXCEPT !.check = FALSE]]
 \* an inline isbits union's null (its `nothing`) tested as #undef
 MCEncInlineChecked == [MCEnc EXCEPT !["inline"] = Ref]
+\* an inline struct with a pointer field taken for no pointer (pointer_slot by allocatedinline
+\* alone): its null, `#undef`, answered assigned and read unchecked
+MCEncInlinePointer == [MCEnc EXCEPT !["inlineptr"] = [Ref EXCEPT !.pointer = FALSE]]
 =============================================================================

@@ -2014,6 +2014,12 @@ mutable struct _SmUD; x::Union{Nothing,String}; _SmUD(x) = new(x); end
 # `Core.tuple(v...)` out of line, a throw beside it: Julia infers the splat nothrow, so a try around a
 # call of a callee doing only that is dropped and the native UndefRefError escapes it
 @noinline _sm_utup(v::Vector{String}, n::Int64) = (n > 100 && throw(ArgumentError("n")); ncodeunits(Core.tuple(v...)[n - 2]))
+# An immutable struct with a pointer field is stored inline by Julia (jl_datatype_isinlinealloc),
+# its `#undef` a NULL first pointer (typed_load's null_pointer_check of first_ptr, cgutils.cpp:2270;
+# jl_field_isdefined, datatype.c:2293); WT holds it in its own nullable reference, whose null is
+# `#undef`
+struct _SmUP; s::String; end
+mutable struct _SmUF; a::Int64; p::Some{String}; _SmUF() = new(1); end
 _g("undef_slots", Any[
     ("isassigned_stored_nothing", (n::Int64) -> (v = Vector{Any}(undef, 2); v[1] = nothing; v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
     ("isassigned_unset", (n::Int64) -> (v = Vector{Any}(undef, 2); v[2] = n; isassigned(v, 1) ? 1 : 2), Int64(3)),
@@ -2057,6 +2063,26 @@ _g("undef_slots", Any[
     # a field `new` always sets is defined, its null `nothing` (isdefined_tfunc, jl_f_isdefined)
     ("union_field_set_isdefined", (n::Int64) -> (m = _SmUD(n > 0 ? nothing : "a"); isdefined(m, :x) ? 1 : 2), Int64(3)),
     ("runtime_name_unset_throws", (n::Int64) -> (m = _SmUR(); s = n > 0 ? :b : :a; try; getfield(m, s); 1; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    # an inline struct with a pointer field (Some{String}, a struct holding a String,
+    # Tuple{Int64,String}) is `#undef` until stored: isassigned is false and a read throws
+    # UndefRefError (dev/AUDIT.md A18B1, measured on 0bc84e05: isassigned of an unset slot answered
+    # 11, native 21, isdefined of an unset field 1, native 2, a grown slot 11, native 12, a splat's
+    # length 5, native -1, and every read of an unset slot or field trapped on the null, native -1;
+    # on 52c0a9bd isassigned answered as native, the reads trapped too)
+    ("inline_ptr_some_isassigned", (n::Int64) -> (v = Vector{Some{String}}(undef, 2); v[2] = Some("a"); (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("inline_ptr_some_unset_read_throws", (n::Int64) -> (v = Vector{Some{String}}(undef, 2); v[2] = Some("ab"); try; _sm_ulen(v[n - 2].value); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_some_set_read", (n::Int64) -> (v = Vector{Some{String}}(undef, 2); v[2] = Some("ab"); try; _sm_ulen(v[n - 1].value); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_struct_isassigned", (n::Int64) -> (v = Vector{_SmUP}(undef, 2); v[2] = _SmUP("a"); (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("inline_ptr_struct_unset_read_throws", (n::Int64) -> (v = Vector{_SmUP}(undef, 2); v[2] = _SmUP("ab"); try; _sm_ulen(v[n - 2].s); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_tuple_isassigned", (n::Int64) -> (v = Vector{Tuple{Int64,String}}(undef, 2); v[2] = (n, "a"); (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("inline_ptr_tuple_unset_read_throws", (n::Int64) -> (v = Vector{Tuple{Int64,String}}(undef, 2); v[2] = (n, "ab"); try; _sm_ulen(v[n - 2][2]); catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_union_nothing_unset", (n::Int64) -> (v = Vector{Union{Nothing,Some{String}}}(undef, 2); v[2] = nothing; (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2) + (v[n - 1] === nothing ? 100 : 200)), Int64(3)),
+    ("inline_ptr_union_unset_read_throws", (n::Int64) -> (v = Vector{Union{Nothing,Some{String}}}(undef, 2); v[2] = nothing; try; v[n - 2] === nothing ? 1 : 2; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_field_isdefined", (n::Int64) -> (m = _SmUF(); isdefined(m, :p) ? 1 : 2 + 0n), Int64(3)),
+    ("inline_ptr_field_unset_read_throws", (n::Int64) -> (m = _SmUF(); try; _sm_ulen(m.p.value) + n; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
+    ("inline_ptr_field_set", (n::Int64) -> (m = _SmUF(); m.p = Some("abc"); (isdefined(m, :p) ? 10 : 20) + _sm_ulen(m.p.value)), Int64(3)),
+    ("inline_ptr_grown_unset", (n::Int64) -> (v = [Some("a"), Some("b")]; resize!(v, 1); resize!(v, 2); (isassigned(v, n - 2) ? 10 : 20) + (isassigned(v, 2) ? 1 : 2)), Int64(3)),
+    ("inline_ptr_splat_unset_throws", (n::Int64) -> (v = Vector{Some{String}}(undef, 2); v[2] = Some("a"); try; length([v...]) + n; catch e; e isa UndefRefError ? -1 : -2; end), Int64(3)),
 ])
 # A MemoryRef passed through `inferencebarrier`: memoryrefget and memoryrefset! read the element
 # type from the reference's own type (memoryref_eltype, never a guessed Int32 element, A17E1), and

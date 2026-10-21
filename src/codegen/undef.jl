@@ -48,12 +48,20 @@ pointer_slot_admits_nothing(@nospecialize(T))::Bool =
 """
     pointer_slot(T) -> Bool
 
-Whether a slot of the Julia type `T` is a pointer, which Julia's `undef` leaves NULL: `T` is not
-allocated inline (an isbits value or an isbits union, whose slot is its bits and is never
-`#undef`, though WT may hold an isbits union in a nullable box whose null is `nothing`).
-parity(quarantine: as undef_slot.)
+Whether a slot of the Julia type `T` can be `#undef`, a pointer Julia's `undef` leaves NULL:
+`T` is not allocated inline (its slot is the pointer), or it is allocated inline with a pointer
+in it, an immutable struct with a pointer field (Some{String}, Tuple{Int64,String}: not
+Base.datatype_pointerfree, its layout's first_ptr >= 0), whose `#undef` is its first pointer
+NULL (typed_load's null_pointer_check of extract_first_ptr, cgutils.cpp:2270; jl_field_isdefined
+tests layout->first_ptr, datatype.c:2293). WT holds such a struct in its own nullable reference,
+which holds no `nothing`, so its null is that `#undef`. A pointer-free inline slot (an isbits
+value or an isbits union) is its bits and is never `#undef`, though WT may hold an isbits union
+in a nullable box whose null is `nothing`.
+parity(quarantine: as undef_slot; dart has no inline struct, so Julia's first_ptr rule decides
+which slots can be `#undef`.)
 """
-pointer_slot(@nospecialize(T))::Bool = T isa Type && !Base.allocatedinline(T)
+pointer_slot(@nospecialize(T))::Bool =
+    T isa Type && (!Base.allocatedinline(T) || (T isa DataType && !Base.datatype_pointerfree(T)))
 
 """
     undef_slot_storage(T, w) -> WasmValType
@@ -141,7 +149,7 @@ function emit_is_unset!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospe
                         w::WasmValType)::InstrBuilder
     _wt_is_ref(w) || error("a slot of $(julia_type) held in $(w) is no reference and has no `#undef`")
     if !pointer_slot(julia_type)
-        drop!(b); i32_const!(b, 0)   # an inline slot is always assigned
+        drop!(b); i32_const!(b, 0)   # a pointer-free inline slot is always assigned
     elseif undef_slot(julia_type, w)
         emit_is_undef!(b, ctx.mod, ctx.type_registry, x -> allocate_local!(ctx, x))
     else
@@ -156,7 +164,7 @@ end
 `[ref w] -> [ref w]`: a read of a pointer slot of `julia_type` held in the reference type `w`
 throws Julia's UndefRefError when the slot holds `#undef` (emit_is_unset!; null_pointer_check,
 cgutils.cpp:1633), and leaves the value otherwise; a slot that is no pointer (pointer_slot) is
-read as it is, as Julia checks no inline slot.
+read as it is, as Julia checks no pointer-free inline slot.
 parity(quarantine: as undef_slot.)
 """
 function emit_undef_read_check!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(julia_type),
