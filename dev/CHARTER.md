@@ -120,7 +120,8 @@ with the per-clause status. A clause is never closed by argument.
   those the locks cite as behavior for what it changes), TLC for the models it touches, side by
   side, each stage and the whole run on a budget, an evidence record per tree, the landing on
   that record alone, never while the last landed head's matrix is red)
-  `L195` (its timing ratchet: a stage more than 15% and 0.3 s slower than its best fails, unless
+  `L195` (its timing ratchet: a stage more than 1.5 times and 0.3 s slower than its best fails, one
+  past 15% inside that band a note, unless
   the commit declares a correctness fix with its MARCH row; the budgets are targets red only past
   twice them, and a
   machine more than 1.5 times slower than its best leaves the timing unjudged, never a scaled

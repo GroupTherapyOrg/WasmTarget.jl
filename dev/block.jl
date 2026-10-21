@@ -59,7 +59,7 @@
 # Budgets and a timing ratchet (dev/timing_best.toml): the whole run's target `total` seconds of
 # wall and each stage's its own budget, each a target whose band is BUDGET_BAND times it (a wall
 # over the budget a note, past the band red); a stage whose work is fixed (load, ratchet,
-# smoke-core, the probe core) more than 15% AND more than 0.3 s slower than its best fails. Times
+# smoke-core, the probe core) more than 1.5 times AND 0.3 s slower than its best fails (past 15%, a note). Times
 # are scaled by the machine's speed while the stages ran (calibrate!, below): a stage's wall over
 # the factor by which a fixed piece of work, timed throughout the run, was slower than its best.
 # A stage that does more work or waits longer is slower; a busier machine is not. The budgets and
@@ -108,8 +108,12 @@ const MAP_PATH = joinpath(ROOT, "test", "block_groups.tsv")
 const TABLES_PATH = joinpath(ROOT, "test", "block_tables.tsv")
 const RECORD_DIR = joinpath(ROOT, "dev", ".block")
 const PROBE_CHUNK = 60
-# a stage this much slower than its best fails: more than 15% AND more than 0.3 s (RULES, Dale 2026-10-20)
-const SLOWER_FRACTION = 0.15
+# a stage slower than its best: its target 15% (SLOWER_TARGET), a note past it; its band 1.5 times its
+# best (SLOWER_FRACTION) AND 0.3 s, red only past that (intent: catch a real regression of the gate's
+# cost, never the stage's own noise: a ratchet stage at 23.7 s against a 20.4 s best flapped red and
+# green at factor 1.0, audit 31; L205)
+const SLOWER_TARGET = 0.15
+const SLOWER_FRACTION = 0.5
 const SLOWER_SECONDS = 0.3
 # a machine more than this many times slower than its best, measured while the stages ran, gives
 # no verdict: its times say nothing of the change's, and no budget is scaled to pass it (A19P5)
@@ -744,6 +748,8 @@ run_verdict(fails, tfails, efails, cold) =
 timing_failures(tfails, sfails, capped, cold) = cold || capped ? String[] : vcat(tfails, sfails)
 # a stage's scaled time slower than its best by more than 15% and more than 0.3 s
 slower(scaled, best) = !isnan(best) && scaled > best * (1 + SLOWER_FRACTION) && scaled - best > SLOWER_SECONDS
+# whether a stage is past its target and inside its band: a note, never a failure
+over_target(scaled, best) = !isnan(best) && scaled > best * (1 + SLOWER_TARGET) && scaled - best > SLOWER_SECONDS && !slower(scaled, best)
 # the timing a change is judged by, against its base's (L195 runs it): every budget and best the base
 # holds is still held, a budget no higher, a best no higher once both are put at one calibration (a
 # best is held as best / calibration; the update rounds a best to 0.01 s); the problems, if any
@@ -1026,8 +1032,10 @@ function main(args)
             if name in exempt_stages
                 push!(notes, "$name: slower, $why: declared a $exempt")
             else
-                push!(sfails, "$name: more than 15% and 0.3 s slower than its best: $why"); v = capped ? "UNJUDGED" : "SLOWER"
+                push!(sfails, "$name: more than 1.5 times and 0.3 s slower than its best: $why"); v = capped ? "UNJUDGED" : "SLOWER"
             end
+        elseif name in RATCHETED && ok && fixed && over_target(scaled, bw)
+            push!(notes, "$name: more than 15% slower than its best, inside its band of 1.5 times: $(fmt(scaled)) s at the machine's best speed against its best $(fmt(bw)) s")
         end
         res[name] = Dict{String,Any}("command" => command, "env" => get(own_of, name, String[]), "exit" => exitcode, "wall" => round(wall; digits = 2),
                                      "scaled" => round(scaled; digits = 2), "cpu" => round(cpu; digits = 2), "verdict" => v,

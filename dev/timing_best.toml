@@ -6,8 +6,8 @@
 # or made faster first; `<stage>@warm` is a stage's budget under
 # the warm runner (`--warm`), where it has one. [best]: each ratcheted stage's best wall
 # seconds at the machine's best speed, and `calibration`, the best seconds of dev/block.jl's fixed
-# piece of work (a run's lower quartile); a stage more than 15% AND more than 0.3 s slower than its
-# best fails. [best_cpu]: the CPU seconds of the runs that set each best, for the record.
+# piece of work (a run's lower quartile); a stage more than 1.5 times AND more than 0.3 s slower than
+# its best fails, one past 15% inside that band a note (dev/block.jl SLOWER_FRACTION, SLOWER_TARGET). [best_cpu]: the CPU seconds of the runs that set each best, for the record.
 # [best_from]: where each best came from, its records (dev/.block/<tree>-<n>.toml), the commit they
 # ran on and their machine factors (A20P20). `WT_TIMING_UPDATE=1 bash dev/gate.sh --block` runs the
 # gate three times and lowers each best to the median of the three (raising only a stage the
