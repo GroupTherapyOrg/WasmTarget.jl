@@ -2629,6 +2629,48 @@ _xf("closed_world_edge_rejects", Any[
     # operator, which the edge enrolls
     ("atomic_modify_operator", (n::Int64) -> (a = _SmAtom(n); @atomic a.v _sm_atom_op n; @atomic a.v), Int64(3)),
 ])
+# ---- one `nothing` (C1): `nothing` has one form, the null, in every position — a struct, tuple or
+# closure field of type Nothing, a value, an element (a struct field was an i32 placeholder, a tuple
+# field the Nothing singleton's struct, a value the null: dev/AUDIT.md A11C10); a null read from a
+# value is `nothing` by one rule (A12E7: typeof and a dynamic call of an `Any` holding nothing).
+# @noinline keeps each struct and tuple from being scalar-replaced away.
+struct _OnField; a::Int64; n::Nothing; end
+mutable struct _OnMut; n::Nothing; k::Int64; end
+struct _OnUnion; u::Union{Nothing,_PU}; end
+@noinline _on_field(x::Int64) = _OnField(x, nothing)
+@noinline _on_tuple(x::Int64) = (x, nothing)
+@noinline _on_any(x::Int64) = (v = Any[x]; x > 0 || (v[1] = nothing); v[1])
+@noinline _on_cls(::Nothing) = 7
+@noinline _on_cls(::Int64) = 11
+@noinline _on_ucls(w::_OnUnion) = w.u === nothing ? 3 : w.u.v
+@noinline _on_ucls(::Int64) = 5
+@noinline _on_xr(f, y) = f(y)
+@noinline _on_sw(f, y) = f === nothing ? -y : y + 1
+_g("one_nothing", Any[
+    ("struct_field_egal", (x::Int64) -> (s = _on_field(x); Int64(s.n === nothing) + s.a), Int64(3)),
+    ("struct_field_isa", (x::Int64) -> (_on_field(x).n isa Nothing ? 10 : 20) + x, Int64(2)),
+    ("struct_field_erased_egal", (x::Int64) -> (v = Any[_on_field(x)]; v[1] === _on_field(x) ? 1 : 2), Int64(3)),
+    ("struct_field_erased_typeof", (x::Int64) -> (v = Any[_on_field(x), x]; typeof(v[1]) === _OnField ? 1 : 2), Int64(1)),
+    ("mutable_field_set", (x::Int64) -> (m = _OnMut(nothing, x); m.n = nothing; m.n === nothing ? m.k : -m.k), Int64(6)),
+    ("tuple_field_egal", (x::Int64) -> (t = _on_tuple(x); t[2] === nothing ? t[1] : -t[1]), Int64(4)),
+    ("tuple_field_erased", (x::Int64) -> (v = Any[_on_tuple(x), x]; t = v[1]::Tuple{Int64,Nothing}; t[2] === nothing ? t[1] : -t[1]), Int64(4)),
+    ("tuple_struct_egal", (x::Int64) -> (v = Any[_on_tuple(x), _on_field(x)]; v[1] === v[2] ? 1 : 2), Int64(3)),
+    ("tuple_erased_typeof", (x::Int64) -> (v = Any[_on_tuple(x), x]; typeof(v[1]) === Tuple{Int64,Nothing} ? 1 : 2), Int64(1)),
+    ("value_typeof_any_nothing", (x::Int64) -> (typeof(_on_any(x)) === Nothing ? 1 : 2), Int64(-1)),
+    ("value_typeof_any_int", (x::Int64) -> (typeof(_on_any(x)) === Nothing ? 1 : 2), Int64(3)),
+    ("value_isa_any_nothing", (x::Int64) -> (_on_any(x) isa Nothing ? 1 : 2), Int64(-1)),
+    ("dynamic_call_nothing", (x::Int64) -> _on_cls(_on_any(x)), Int64(-2)),
+    ("dynamic_call_int", (x::Int64) -> _on_cls(_on_any(x)), Int64(3)),
+    ("union_field_capture", (x::Int64) -> (w = _OnUnion(x > 0 ? _PU(x) : nothing); g = () -> (w.u === nothing ? -1 : w.u.v); g()), Int64(-1)),
+    ("union_field_dynamic", (x::Int64) -> (v = Any[_OnUnion(x > 0 ? _PU(x) : nothing), x]; _on_ucls(v[1])), Int64(-4)),
+    ("capture_nothing", (x::Int64) -> (n = _on_field(x).n; g = () -> (n === nothing ? x : -x); g()), Int64(3)),
+    ("vector_of_nothing_field", (x::Int64) -> (v = [_on_field(i) for i in 1:x]; sum(s -> s.a, v)), Int64(4)),
+    ("vector_nothing_element", (x::Int64) -> (v = fill(nothing, x); v[2] === nothing ? length(v) : -1), Int64(3)),
+    # a dynamic call's class switch has a row for Nothing, whose parameter is the null (it bailed
+    # the switch to an unresolved call when that parameter was no longer an i32)
+    ("switch_row_nothing_untaken", (n::Int64) -> (k = n; fs = Any[x -> x * k]; _on_xr(fs[1], n)::Int64), Int64(3)),
+    ("switch_row_nothing_taken", (n::Int64) -> (v = Any[nothing, 1]; _on_sw(v[n - 2], n)::Int64), Int64(3)),
+])
 
 # Base paths the short cases compile but never run: a Float64 sort long enough for its quick sort
 # (keys spread) and its radix sort (two passes over keys 4000 ulps apart), and the errors a zero-textwidth pad and

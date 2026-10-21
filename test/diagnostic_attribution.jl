@@ -218,7 +218,7 @@ end
     @test b.instrs[end] isa WasmTarget.InstrIR.RefAsNonNull
 end
 
-@testset "the funnel: nothing at every nullable reference of the any hierarchy is its null (A16E2, Coercion.tla NothingIsNull)" begin
+@testset "the funnel: nothing has one form, the null (A11C10, A16E2, Coercion.tla OneNothing, NothingIsNull)" begin
     ci, _ = WasmTarget.get_typed_ir(identity, (Float64,))
     mk() = begin
         ctx = WasmTarget.CompilationContext(WasmTarget.nir_body(ci), (Float64,), Float64, WasmTarget.WasmModule(), WasmTarget.TypeRegistry();
@@ -226,34 +226,41 @@ end
         ctx.current_stmt_idx = 1
         ctx, WasmTarget._ctx_builder(ctx, "nothing_is_null")
     end
-    # a field's i32 placeholder, bound for anyref, eqref and structref: dropped, the sink's null
-    for to in (WasmTarget.AnyRef, WasmTarget.EqRef, WasmTarget.StructRef)
+    sink(ctx, to) = to === :struct ? WasmTarget.ConcreteRef(UInt32(WasmTarget.add_struct_type!(ctx.mod, WasmTarget.FieldType[])), true) : to
+    # the null's own type, (ref null none), at anyref, eqref, structref and a nullable struct: an
+    # upcast, nothing emitted
+    for to in (WasmTarget.AnyRef, WasmTarget.EqRef, WasmTarget.StructRef, :struct)
         ctx, b = mk()
-        WasmTarget.i32_const!(b, 0)
-        WasmTarget.convert_type!(b, WasmTarget.I32, to, ctx; from_julia=Nothing)
-        @test b.instrs[end] isa WasmTarget.InstrIR.RefNullAbstract && b.instrs[end - 1] isa WasmTarget.InstrIR.Drop
-        @test !any(i -> i isa WasmTarget.InstrIR.StructNew, b.instrs)   # never boxed
+        local target = sink(ctx, to)
+        WasmTarget.ref_null!(b, WasmTarget.NoneRef)
+        local n = length(b.instrs)
+        WasmTarget.convert_type!(b, WasmTarget.NoneRef, target, ctx; from_julia=Nothing)
+        @test length(b.instrs) == n
     end
-    # a non-null singleton struct (a tuple field's `nothing`) bound for anyref: its null, never kept
-    ctx, b = mk()
-    local st = WasmTarget.add_struct_type!(ctx.mod, WasmTarget.FieldType[])
-    WasmTarget.struct_new!(b, st)
-    WasmTarget.convert_type!(b, WasmTarget.ConcreteRef(UInt32(st), false), WasmTarget.AnyRef, ctx; from_julia=Nothing)
-    @test b.instrs[end] isa WasmTarget.InstrIR.RefNullAbstract
-    # one already in a nullable reference the sink admits is that null: an upcast, nothing emitted
-    ctx, b = mk()
-    local st2 = WasmTarget.add_struct_type!(ctx.mod, WasmTarget.FieldType[])
-    WasmTarget.ref_null!(b, Int64(st2))
-    local n = length(b.instrs)
-    WasmTarget.convert_type!(b, WasmTarget.ConcreteRef(UInt32(st2), true), WasmTarget.AnyRef, ctx; from_julia=Nothing)
-    @test length(b.instrs) == n
-    # a nothing held in a reference (its null) bound for its i32 placeholder is never unboxed, which
-    # traps on the null: dropped for the placeholder (Coercion.tla NothingNeverCast)
-    ctx, b = mk()
-    WasmTarget.ref_null!(b, WasmTarget.AnyRef)
-    WasmTarget.convert_type!(b, WasmTarget.AnyRef, WasmTarget.I32, ctx; from_julia=Nothing)
-    @test b.instrs[end] isa WasmTarget.InstrIR.I32Const && b.instrs[end - 1] isa WasmTarget.InstrIR.Drop
-    @test !any(i -> i isa WasmTarget.InstrIR.RefCastConcrete, b.instrs)
+    # one held in a wider reference (anyref) bound for eqref, structref or a nullable struct:
+    # dropped, the sink's own null, never cast or boxed
+    for to in (WasmTarget.EqRef, WasmTarget.StructRef, :struct)
+        ctx, b = mk()
+        local target = sink(ctx, to)
+        WasmTarget.ref_null!(b, WasmTarget.AnyRef)
+        WasmTarget.convert_type!(b, WasmTarget.AnyRef, target, ctx; from_julia=Nothing)
+        @test b.instrs[end] isa (target isa WasmTarget.ConcreteRef ? WasmTarget.InstrIR.RefNullConcrete :
+                                                                       WasmTarget.InstrIR.RefNullAbstract)
+        @test b.instrs[end - 1] isa WasmTarget.InstrIR.Drop
+        @test !any(i -> i isa WasmTarget.InstrIR.StructNew || i isa WasmTarget.InstrIR.RefCastConcrete ||
+                        i isa WasmTarget.InstrIR.RefCastAbstract, b.instrs)
+    end
+    # a numeric register or a non-null reference holds no nothing: a located rejection, never a
+    # placeholder 0 (a field's i32), never the null made non-null (Coercion.tla NothingNeverCast)
+    for (from, to, push) in ((WasmTarget.AnyRef, WasmTarget.I32, b -> WasmTarget.ref_null!(b, WasmTarget.AnyRef)),
+                             (WasmTarget.NoneRef, WasmTarget.I64, b -> WasmTarget.ref_null!(b, WasmTarget.NoneRef)),
+                             (WasmTarget.I32, WasmTarget.AnyRef, b -> WasmTarget.i32_const!(b, 0)),
+                             (WasmTarget.AnyRef, WasmTarget.NonNullAbstractRef(UInt8(WasmTarget.AnyRef)),
+                              b -> WasmTarget.ref_null!(b, WasmTarget.AnyRef)))
+        ctx, b = mk()
+        push(b)
+        @test_throws WasmTarget.WasmCompileError WasmTarget.convert_type!(b, from, to, ctx; from_julia=Nothing)
+    end
 end
 
 @testset "diagnostics: the 5-field constructor still builds a located-less report" begin

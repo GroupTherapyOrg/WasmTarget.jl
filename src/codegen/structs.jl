@@ -23,7 +23,7 @@ end
 The concrete struct types WT does not lay out by their fields: a Tuple (register_tuple_type!),
 an Array (the Vector and Matrix wrappers, register_vector_type! / register_matrix_type!), a
 Memory and a MemoryRef (a raw wasm array, and its single-value ref struct), `nothing` (the
-null of its type), and `CodeUnits{UInt8,String}` (the String's byte array itself).
+null, `ref null none`), and `CodeUnits{UInt8,String}` (the String's byte array itself).
 
 parity(quarantine: Julia's Array, Memory and MemoryRef are structs over runtime-managed
 storage, and CodeUnits of a String is that String's bytes; dart's List and typed-data classes
@@ -420,8 +420,8 @@ function _struct_fields!(mod::WasmModule, registry::TypeRegistry, T::DataType)::
         elseif ft === Float64
             wasm_vt = F64
         elseif ft === Nothing
-            # Nothing is a singleton type — no data, represent as i32 placeholder
-            wasm_vt = I32
+            # `nothing`'s one form, the null (julia_to_wasm_type)
+            wasm_vt = NoneRef
         elseif _julia_int_width(ft) == 128
             # 128-bit integers are WasmGC {lo,hi} structs, not wasm
             # primitives. register_tuple_type! already maps Int128/UInt128 tuple
@@ -667,10 +667,8 @@ function register_tuple_type!(mod::WasmModule, registry::TypeRegistry, @nospecia
             int128_info = register_int128_type!(mod, registry, ft)
             ConcreteRef(int128_info.wasm_type_idx, true)
         elseif ft === Nothing
-            # Julia's one `nothing`, the module's Nothing singleton (get_nothing_global!): a
-            # Nothing class struct here was a type no value has, and building the tuple cast the
-            # singleton to it and trapped (dev/AUDIT.md A11, c4)
-            ConcreteRef(get_nothing_box_type!(mod, registry), true)
+            # `nothing`'s one form, the null (julia_to_wasm_type)
+            NoneRef
         elseif is_string_codeunits(ft)
             # a String's CodeUnits is the String's byte array, as its values are held
             # (get_concrete_wasm_type); a class struct here trapped building the tuple (A8C4)

@@ -74,6 +74,7 @@
 2.2	2.0	nested_captor
 5.2	6.6	numerics
 7.2	7.4	one_consult
+11.5	12.0	one_nothing
 12.0	8.7	one_type_reader
 50.5	44.0	overlays
 2.3	5.5	phi_union

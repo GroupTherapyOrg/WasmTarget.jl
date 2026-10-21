@@ -74,6 +74,19 @@ function is_ref_type_or_union(T::Type)::Bool
 end
 
 """
+    is_null_nothing(T) -> Bool
+
+Whether a value of static type `T` that is the null denotes `nothing`: whether `T` admits Nothing
+(Nothing is a subtype of it). `nothing`'s one form is the null (julia_to_wasm_type), and a pointer
+slot's `#undef` is never the null where its type admits `nothing` (undef.jl), so a null read from a
+value is `nothing` exactly when its type admits it. The one rule emit_class_id!, typeof, isa, `===`,
+the closure entry and trampoline, the slot rules (pointer_slot_admits_nothing) and the reference's
+nullability (derive_nullability) read.
+parity(translator.dart:1068 isPotentiallyNullable)
+"""
+is_null_nothing(@nospecialize(T))::Bool = T isa Type && Nothing <: T
+
+"""
 Check if a value represents `nothing` (literal or GlobalRef to nothing).
 
 parity(quarantine: Julia IR spells the null value three ways — the literal `nothing`, a

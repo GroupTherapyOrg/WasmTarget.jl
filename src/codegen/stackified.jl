@@ -561,15 +561,13 @@ function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
                     ref_null!(pvb, Int64(local_wasm_type.type_idx))
                 elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
                        local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
-                       local_wasm_type === EqRef
-                    ref_null!(pvb, local_wasm_type)
-                elseif phi_julia isa DataType && isconcretetype(phi_julia) && phi_julia !== Nothing
+                       local_wasm_type === EqRef || local_wasm_type === NoneRef
+                    ref_null!(pvb, local_wasm_type)   # (a Nothing-typed phi's local is (ref null none))
+                elseif phi_julia isa DataType && isconcretetype(phi_julia)
                     # `nothing` on an edge of a numeric phi of another type: Julia's phi is
                     # undefined on this edge (see _emit_phi_edge_guarded_unbox!); it keeps
                     # its local's content, never a zero standing for `nothing`.
                     local_get!(pvb, local_idx)
-                elseif phi_julia === Nothing && local_wasm_type === I32
-                    i32_const!(pvb, 0)   # a Nothing-typed phi: the zero-width singleton
                 else
                     emit_phi_failure!(pvb, "`nothing` edge into a $(local_wasm_type) phi of type $(phi_julia)";
                                       idx=phi_idx)

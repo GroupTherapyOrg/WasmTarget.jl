@@ -37,7 +37,7 @@ anchor in `src/` has a row.)
 | Selector table and dispatch guards | `build_dispatch_tables`, `emit_dispatch_wrappers!` (dispatch.jl), `fill_selector_table_elements!`, `_fit!` (selector_table.jl) | ClassIdDispatch |
 | Closed-world collection | `collect_closed_world`, `collect_new_pairs!`, `_missing_explicit_invoke_mis` (every edge's reason recorded, ReasonsComplete; each retarget recomputed every round from Julia's MethodInstance, RetargetsSound), `_dynamic_dispatch_candidate_mis`, `_closed_world_edge`, `_called_function` (an invoke_in_world no one method covers is a dynamic site, WorldSites), `_prune_external_leaf_subgraphs`, `plan_closed_world` (reads the world, writes none of it) (trimcollect.jl) | ClosedWorld |
 | Closure layout | `register_closure_type!` (structs.jl), `build_closure_vtable!` (closures.jl) | ClosureLayout |
-| Coercion funnel | `convert_type!` (the one widening check, read through `source_class`; `nothing` at every nullable reference of the any hierarchy its null, and never unboxed or cast), `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
+| Coercion funnel | `convert_type!` (the one widening check, read through `source_class`; `nothing`'s one form the null, `ref null none`: at a nullable reference an upcast or the sink's null, never boxed, cast or unboxed, and in no numeric register or non-null reference), `_narrow_ref!`'s runtime-length tuple arm (values.jl) | Coercion |
 | Constant interning | `ensure_constant_global!` (types.jl) | Constants |
 | Call consult chain | `compile_call!` (calls.jl) | ConsultChain |
 | Fatal/trap resolution | `record_unsupported!` (diagnostics.jl) | Diagnostics |

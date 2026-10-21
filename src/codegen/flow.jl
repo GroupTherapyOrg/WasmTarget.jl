@@ -28,10 +28,9 @@ Used to check compatibility before storing to a phi local.
 parity(quarantine: Julia's IR carries phi nodes, whose incoming values WT stores at each edge; dart's kernel tree has none.)
 """
 function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType, Nothing}
-    # Handle GlobalRef to nothing (e.g., Compiler.nothing, Base.nothing)
-    # These compile to i32_const 0 just like literal nothing
+    # A GlobalRef to nothing (Compiler.nothing, Base.nothing) is the null, as the literal is
     if val isa NirGlobalRef && val.name === :nothing
-        return I32
+        return NoneRef
     end
     if val isa NirSSA
         # If the SSA has a local allocated, return the local's actual Wasm type.
@@ -90,9 +89,9 @@ function get_phi_edge_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::
         return get_phi_edge_wasm_type(NirLiteral(val.value), ctx)
     elseif val isa NirLiteral
         lit = val.value
-        # Handle nothing literal - compile_value(nothing) emits i32_const 0
+        # the nothing literal is the null (ref.null none)
         if lit === nothing
-            return I32
+            return NoneRef
         elseif numeric_register(typeof(lit)) !== nothing
             return numeric_register(typeof(lit))   # a number in one register: the one width rule
         elseif lit isa Symbol || lit isa String
