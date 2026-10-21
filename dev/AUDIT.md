@@ -2852,3 +2852,96 @@ records: 20f41493 446 s, judged, its gate 90.3 s and its ratchet stage 7.5 s. Th
 
 Resolution: this entry and A31E1's fix land as one commit. A32S1, A32S2 and A32E3 are open on MARCH 1.S; A32E1 and A32E2
 on 1.L, with the live process findings A28E1, A30E1 and A31E2; A32E4 on 1.A2c.
+
+## 2026-10-21 — audited through c1c74a43 (20f41493..c1c74a43: WT1's test tree retired, entry 32, L197 on a landing's own time, the timing band, c1c74a43)
+
+The thirty-third audit covers e1b70c75 (1.A2b: WT1's test infrastructure leaves, 124 files and 32,927 lines: 53 QA
+families, the fuzz pass, registry coverage, the sidecar and the emission-diff check; the lanes are ratchet, formal,
+smoke on 1.12 and 1.13, probes and the suite), 33ca8afa (entry 32 and land's own-tree preflight count, A31E1; its
+author's), f9e3d277 (L197 judges a landing's own_s, from its change's first red gate run to its push less its hold
+wait, queue_wait_s the rest; the excuse writer deleted; the audit window read again on the rebased head, A30E1),
+f9d5e820 (the timing ratchet's band: SLOWER only past 1.5 times a best and 0.3 s, a note past 15%; L128 caps
+AGENTS.md's hand-written lines at 60 beside L206's generated block; `Charter-change: C10 authorised by Dale
+2026-10-21`) and c1c74a43 (a clause citing no check reads OPEN, the verdict in one function, clause_open_reasons, and L201 refusing a scoped clause with no Planned text that cites nothing, A32S2; L154 reads the latest entry's Resolution and holds every finding it leaves open `on <row>` on that row until a `Fixes:` line names it, A32E3; R45 13; `Charter-change: C0 authorised by Dale 2026-10-21`). No wrong answer. Each landed head's record is green. A31E1 is fixed (33ca8afa;
+e1b70c75 landed as the fifth past 9eb30016 and entry 32 as the sixth, the case the fix admits). A30E1 is fixed in
+intent by f9e3d277 (no excuse leaves L197's window; the writer and its stuck-debt class, A32E2's second half, are
+gone), with A33E3 on how own_s counts. A32E2's flapping ratchet is ruled by f9d5e820's band. No red flag: no commit
+claims strictness or closure. Two rulings recorded; findings A33E1-A33E8 and A33S1. A32S2 and A32E3 are fixed as c1c74a43 states.
+
+Area: builder — empty by diff: `git diff 20f41493..c1c74a43 --stat` names no file under src/ or ext/.
+
+Area: collection and planning — empty by diff, as above.
+
+Area: emission and diagnostics — empty by diff, as above.
+
+Area: enforcement and prose — every hunk of e1b70c75 (the workflows, .gitignore, AGENTS.md, dev/MARCH.md,
+dev/PARITY_MASTER.md, dev/block.jl, dev/emission_diff.sh, dev/formal/README.md, dev/gate.sh, dev/lanes.sh,
+test/block_groups.tsv, test/runtests.jl and the deleted files), f9e3d277 (dev/land.sh, dev/loop_excuse.sh,
+test/lock_negatives.jl, test/parity_ratchet.jl), f9d5e820 (dev/CHARTER.md, dev/LEDGER.md, dev/block.jl,
+dev/timing_best.toml, test/parity_ratchet.jl), c1c74a43, the landing log and the gate records in every worktree.
+(A33E1, medium, a weakened check) e1b70c75 carries a dev/block.jl line its message never names, added by an amend
+with --no-edit after its red first run (record 8cf9cd7d-1): `startswith(f, "test/") && !ispath(joinpath(ROOT, f)) &&
+continue`, so a test file the change deletes selects nothing, where before it had no block_groups row and the gate
+refused it. What still catches a deletion: test/smoke_corpus.jl and test/probe_corpus.jl, which locks read
+(_smoke_text, parity_ratchet.jl:93; the probe corpus, :1160), fail the ratchet loudly when gone. What does not:
+test/lock_negatives.jl deleted with its include (runtests.jl:54) takes its 33 plants silently, since L207 counts only a
+negative inside parity_ratchet.jl ("a negative in test/lock_negatives.jl ... counts for nothing", :706) and R45 counts
+only NEGATIVE_OWED; and no lock counts the corpus's cases, so a case removed from it, or a test file deleted with its
+include, passes the gate. The fix: the gate treats a deleted test file or a removed smoke case as a change that names
+its reason (its ledger or plan row), and L207 owes each NEGATIVE_OWED lock's plant until it lives in the ratchet.
+(A33E2, low) A commit's message describes every change it makes; e1b70c75's amend hid one. (A33E3, medium) The
+runner's 20-minute idle stop races `land`: on 33ca8afa's first tree (record d2f0a99e-1) land found the runner alive,
+the runner stopped ("idle 20 min, stopping", its server.log) before the smoke stage reached it, and "no server" read
+as three failed checks, so the tree's red record stands for a machine fault; the gate's own rule calls a runner that
+did not state its state no verdict, yet the stage's exit 2 counted as a failed check. The construction: the runner
+refuses to stop while a hold names its worktree, and a stage that reached no server is no verdict, never red (loop4's
+(7)). (A33E4, medium, intent band) own_s measures the lead's ordering and other landings' faults, not a landing's own
+mechanics. f9e3d277's own_s, 2364 s, runs from its first red run (record fa27dc40-1, 22:40Z, red on L198's needle and
+on L148, the window c77c0ba4 filled during its hold) through a second red of its own (294d669e-1, 22:52Z) and then about
+25 minutes waiting for its slot behind entry 32, 1.A2a and 1.A2b, which the lead ordered ahead; only its hold wait is
+subtracted (land.sh: the earliest red record of the same author time, author and subject, whatever failed it).
+f9d5e820's own_s, 1664 s, starts at a red on the probes stage's timing alone (096293338-1, 22:53Z, 24.5 s against its
+9.9-s best, a stage its change does not touch) and passes a red on L197 alone (515aaae6-1, 23:12Z, the window's median
+past its band on other landings' times): neither red was its change's. The construction: own time is the sum of the
+change's own gate runs and the spans after a red whose failed checks are its own, the slot waits after them queue
+time, and a red on L148, L197 or a timing alone the queue's. (A33E5, low) own_s finds a change's reds by author time,
+author and subject over every worktree's git-ignored records: a lane's records leave with its worktree (dev/lane.sh
+stop removes it) and a reworded subject unlinks them, so own_s also undercounts. (A33E6, low) f9d5e820 changes what
+L128 measures: AGENTS.md was at most 90 lines in all, and is now at most 60 hand-written lines beside L206's generated
+block, which grows one line per live requirement, so the file has no bound; the band's words in D25 changed with it,
+under a C10 authorisation. Rulings recorded: the timing ratchet's 1.5-times band (f9d5e820, authorised) and the
+excuse for c77c0ba4, which stands for 33ca8afa's landing alone (the lead). Kaimon: f9d5e820 measured its ratchet in a
+warm Kaimon session; e1b70c75 cites fresh runs (`test/parity_ratchet.jl`, smoke numerics, lock negatives 31 of 31) after
+the Kaimon rule (22:40Z) where the warm session answers the same; f9e3d277 ran no Julia (bash mirrors), committed
+before it. Requirements: e1b70c75 retires D9's, D10's and D12's last live behavior checks with WT1's families while
+WT1 ships (A32E4's class); f9e3d277's own time is held by L197 on fixed texts; no lock fired inside its band.
+
+stopgap in disguise: (A33S1, medium, red flag class) L202 cannot see an open type called a closed sum. It recognises
+a closed sum only by its spelling, an @enum or a `@closed` macro, so `abstract type Rejection end` with five subtypes
+and a docstring calling it "A closed sum" (1.A2c's first draft, 2658e1db, not landed, sent back by the lead to become a
+concrete Union with construction_check(Val(:Rejection))) would have passed: the word "closed" on a type any module may
+subtype, the class A30S1 named. The check is reflection, not a text scan: when the package loads, walk
+`names(WasmTarget; all = true)` and each submodule's for every abstract type (`isabstracttype`), and refuse the load
+unless it is a registered construction (a `construction_check(::Val{name})` method exists, `hasmethod`) or a mirror of a
+dart abstract class whose binding's docstring (Base.Docs, read by reflection) carries its `parity(<file>.dart:<line>
+<Symbol>)` anchor; a closed sum is then a Union or an @enum by its type, never by its comment.
+precedent: dart's `sealed class` against its open `abstract class` (the analyzer knows the subtypes of the first only);
+Rust's enum against a trait; Julia's abstract types are open by language, so a closed sum must be a Union of concrete
+types or an @enum, and the load-time walk is how WT refuses the open spelling.
+
+c1c74a43, item (d): the verdict. Verified on c1c74a43's tree: clause_open_reasons (parity_ratchet.jl:263) reads a
+clause citing no check OPEN, "no check" (:267), and run() prints it; strict_violations refuses a scoped clause with no
+Planned text and no check, "CLOSED on nothing" (:288); the negatives plant the dropped Planned text, a passing lock, a
+broken lock and a ratchet (:378-386). Judged: the verdict is a gate-time rule over the charter's parsed text, a
+stopgap of C0's own kind, classified so, and claims no construction; its precedent, a match on an empty enum proving
+nothing, is apt. (A33E7, low) The empty-clause rule is written twice, in clause_open_reasons and in strict_violations:
+one fact, two sources. The construction would be the parsed clause's own type refusing an empty check list when the
+charter is read, so the verdict and L201 read one fact. (A33E8, low) L154's Resolution reader (open_findings, :516)
+takes each finding ID it sees, so a range written "A30E1-A30E6" holds only its two ends to their row; entries have
+written ranges since entry 25. This entry names each ID.
+
+Landing times (edit to landed; own, queue): e1b70c75 920 s; 33ca8afa 1065 s (two reds: d2f0a99e-1 the runner, A33E3;
+fee8b6a4-1 its own plant); f9e3d277 2447 s (2364, 83); f9d5e820 1864 s (1664, 200); c1c74a43 656 s (60.1, 595.9), unjudged past the cap at factor 2.11.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A33E1, A33E2, A33E3, A33E4, A33E5, A33E6, A33E7
+and A33E8 are open on MARCH 1.L; A33S1 on 1.A2c, whose commit lands its check.
