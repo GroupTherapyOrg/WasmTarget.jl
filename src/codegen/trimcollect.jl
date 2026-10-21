@@ -788,6 +788,19 @@ once, whose concrete (allocated) classes every selector's targets range over
 struct ClosedWorldClasses
     runtime::Set{DataType}   # every concrete class a value may have
     held::Set{DataType}      # the Type{X} of each type object a value may be
+    # the one class list (closed_world_class_list), sorted once when the set is final
+    list::Vector{DataType}
+    # `held` in type_order_key's order, sorted once with `list`: class_candidates' second part
+    held_list::Vector{DataType}
+end
+
+# parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect): the one class list, sorted once, when the set is final
+function ClosedWorldClasses(runtime::Set{DataType}, held_types::Set{DataType})::ClosedWorldClasses
+    # ordered_by prints each class's key once (sort!'s `by` prints it at every comparison): the
+    # same stable order
+    local list = ordered_by(DataType[C for C in runtime if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))],
+                            type_order_key)
+    return ClosedWorldClasses(runtime, held_types, list, ordered_by(collect(held_types), type_order_key))
 end
 
 """
@@ -795,12 +808,11 @@ end
 
 The classes of the one set a dispatch row can test (a concrete struct or primitive class), in
 type_order_key's order: the candidates of an argument position, the classes a MethodError's args
-tuple ranges over, and the classes the numbering must number.
+tuple ranges over, and the classes the numbering must number. Sorted once, when the set is
+built (ClosedWorldClasses); every reader reads that one list.
 parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect): the one class list.
 """
-closed_world_class_list(classes::ClosedWorldClasses)::Vector{DataType} =
-    sort!(DataType[C for C in classes.runtime if isconcretetype(C) && (isstructtype(C) || isprimitivetype(C))];
-          by=type_order_key)
+closed_world_class_list(classes::ClosedWorldClasses)::Vector{DataType} = classes.list
 
 """
     class_candidates(classes) -> Vector{Any}
@@ -808,11 +820,10 @@ closed_world_class_list(classes::ClosedWorldClasses)::Vector{DataType} =
 Every candidate a dispatch position may take from the one set: its classes
 (closed_world_class_list), then the `Type{X}` of each type object a value may be, each in
 type_order_key's order (formal(dev/formal/Enrollment.tla): a type object is no numbered class,
-StaticOnly).
+StaticOnly). Both lists are sorted once, when the set is built (ClosedWorldClasses).
 parity(pkg/dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect): the one class list.
 """
-class_candidates(classes::ClosedWorldClasses)::Vector{Any} =
-    Any[closed_world_class_list(classes); sort!(collect(classes.held); by=type_order_key)]
+class_candidates(classes::ClosedWorldClasses)::Vector{Any} = Any[classes.list; classes.held_list]
 
 """
     closed_world_classes(codeinfos, entry_mis, nir_for) -> ClosedWorldClasses
@@ -1988,7 +1999,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     # each callee's no-method tuples, in one deterministic order; a planned callable with a
     # vtable whose dynamic call the collector enrolled no tuple for has its (empty) record too
     local no_method = IdDict{DataType,Vector{DataType}}(
-        F => sort!(collect(Ts); by=type_order_key) for (F, Ts) in world.no_method)
+        F => ordered_by(collect(Ts), type_order_key) for (F, Ts) in world.no_method)
     for F in planned_callables
         haskey(no_method, F) || (no_method[F] = DataType[])
     end

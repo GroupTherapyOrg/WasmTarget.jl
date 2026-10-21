@@ -1187,10 +1187,10 @@ ordered_type_constants(registry::TypeRegistry)::Vector{<:Pair} =
 """
     registry_order_key(registry) -> (T -> type_order_key(T))
 
-The type order key of this compile's registry walks, each type printed once per registry: every
-ordered walk of a registry map reads it instead of printing the key once per walk. The
-collector's class list and candidates (closed_world_class_list, class_candidates, trimcollect.jl)
-print their own keys, once per call (dev/MARCH.md 13.17, A18C2).
+The type order key of this compile's registry, each type printed once: every ordered walk of a
+registry map reads it, so the registry's walks print a type at most once instead of once per walk.
+The collector runs before the registry exists and prints with type_order_key itself: once per
+class each round of its fixpoint, when it sorts that round's class set (ClosedWorldClasses).
 parity(quarantine: the program-derived order key for identity-hashed keys, see type_order_key.)
 """
 registry_order_key(registry::TypeRegistry)::Function =
