@@ -55,7 +55,7 @@
 # holds a landing: the last closure matrix's verdict is read, never waited for. The one
 # final full gate before PR #122 merges is `bash dev/gate.sh` on the exact merge head.
 set -euo pipefail
-MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
+MARCH=${WT_MARCH_BRANCH:-wt2}
 # the main tree: the worktree holding the march branch (the one `merge` fast-forwards), whichever
 # worktree this runs in
 MAIN=$(git worktree list --porcelain | awk -v b="branch refs/heads/$MARCH" '/^worktree / { w = substr($0, 10) } $0 == b && m == "" { m = w } END { print m }')

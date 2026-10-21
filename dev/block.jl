@@ -94,7 +94,7 @@
 # stands, whatever runs after it) and the last one is green, of exactly that commit (A19P2).
 #
 #   bash dev/gate.sh --block [--warm] [--base <rev>]   # the change = <rev> (default: the merge base
-#                                             # with $WT_MARCH_BRANCH, wt-p0-strict-hygiene) .. the tree
+#                                             # with $WT_MARCH_BRANCH, wt2) .. the tree
 
 # TOML is loaded where it is used (main), so test/parity_ratchet.jl can include this file for its
 # decisions (L195) in an environment that does not declare it
@@ -148,7 +148,7 @@ function change_base(args)::String
         i < length(args) || error("block: --base needs a revision")
         return git("rev-parse", "--verify", args[i+1] * "^{commit}")
     end
-    march = get(ENV, "WT_MARCH_BRANCH", "wt-p0-strict-hygiene")
+    march = get(ENV, "WT_MARCH_BRANCH", "wt2")
     gitok("rev-parse", "--verify", "-q", march) || error("block: no branch $march to take the change from (pass --base <rev>)")
     return git("merge-base", "HEAD", march)
 end

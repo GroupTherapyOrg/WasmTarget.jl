@@ -4678,13 +4678,13 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     local mt = nothing; local cur = ""
                     for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
                         startswith(l, "worktree ") && (cur = l[10:end])
-                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                        l == "branch refs/heads/wt2" && (mt = cur)
                     end
                     if mt === nothing
-                        println("    ✗ L197: no worktree holds wt-p0-strict-hygiene, so there is no landing log to read")
+                        println("    ✗ L197: no worktree holds wt2, so there is no landing log to read")
                         v += 1
                     else
-                        local tip = readchomp(`git -C $ROOT rev-parse wt-p0-strict-hygiene`)
+                        local tip = readchomp(`git -C $ROOT rev-parse wt2`)
                         local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
                         local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
                         local exfiles = l197_excuses(ROOT)
@@ -4792,7 +4792,7 @@ _printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
                     local mt = nothing; local cur = ""
                     for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
                         startswith(l, "worktree ") && (cur = l[10:end])
-                        l == "branch refs/heads/wt-p0-strict-hygiene" && (mt = cur)
+                        l == "branch refs/heads/wt2" && (mt = cur)
                     end
                     local logp = mt === nothing ? "" : joinpath(mt, "dev", ".loop", "landings.tsv")
                     local bad = isfile(logp) ? l198_check(read(logp, String)) : String[]
