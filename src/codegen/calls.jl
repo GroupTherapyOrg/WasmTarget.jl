@@ -2859,7 +2859,7 @@ function as_checker!(ctx::AbstractCompilationContext, target::Type,
     # it stays in the static type's); none when S ∩ T is empty (the check always throws)
     local results = R === Union{} ? WasmValType[] : R === Nothing ? WasmValType[operand] :
                     copy(cctx.wasm_results)
-    local name = generated_function_name(:as_checker, string(target))
+    local name = generated_function_name(:as_checker, julia_type_text(ctx.type_registry.names, string(target), target))
     local cb = InstrBuilder(WasmValType[AnyRef], results; func_name=name, mod=ctx.mod,
                             locals=cctx.locals)
     local result = try

@@ -357,7 +357,7 @@ end
     local reasons = copy(world.enrolled_as)
     local joins = copy(world.numeric_joins)
     plan = WasmTarget.plan_closed_world(world, Dict{Any,String}(entry => "plan_world"),
-                                        Dict{Any,Any}(entry => DiagPlan.plan_world), Any[])
+                                        Dict{Any,Any}(entry => DiagPlan.plan_world), Any[], WasmTarget.JuliaNames())
     @test world.enrolled_as == reasons
     @test keys(world.numeric_joins) == keys(joins) && all(k -> world.numeric_joins[k] === joins[k], keys(joins))
     # and every planned function's reason is the one the collection recorded

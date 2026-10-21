@@ -266,6 +266,8 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     ensure_provenance_imports!(mod, translator.export_namer)
     trace === nothing || ensure_trace_imports!(mod)
     type_registry = TypeRegistry()
+    # the names the plan printed its functions with, read by every later name (JuliaNames)
+    type_registry.names = plan.names
     recover_module_handles!(type_registry, mod)
     func_registry = FunctionRegistry(; log=options.log_registry)
 

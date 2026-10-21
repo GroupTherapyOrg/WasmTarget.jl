@@ -502,7 +502,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     mod4 = WasmTarget.WasmModule()
     WasmTarget.ensure_provenance_imports!(mod4)
     pre4 = _wt_empty_function!(mod4, "pre")
-    local inner4 = WasmTarget.julia_function_name(WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
+    local inner4 = WasmTarget.julia_function_name(WasmTarget.JuliaNames(), WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
     @test inner4 == "_wt_c1_inner(::Int64) @ $(@__MODULE__)"
     WasmTarget.add_export!(mod4, inner4, 0, pre4)
     err = try; WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")]; existing_module=mod4, options=WasmTarget.options_from_env()); nothing; catch e; e; end
@@ -569,7 +569,7 @@ _wt_c1_outer(n::Int64) = _wt_c1_inner(n) + 1
     end
     # a root binding, and an invoke binding's target, name a root of the plan, never another planned
     # function by its signature (dev/AUDIT.md A19C6)
-    inner = WasmTarget.julia_function_name(WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
+    inner = WasmTarget.julia_function_name(WasmTarget.JuliaNames(), WasmTarget.entry_method_instance(_wt_c1_inner, (Int64,)))
     err = try
         WasmTarget.compile_module(Any[(_wt_c1_outer, (Int64,), "outer")];
             root_bindings=Dict(inner => WasmTarget.RootBindings()), options=WasmTarget.options_from_env())

@@ -222,7 +222,8 @@ end
     _class_names(registry) -> Vector{Union{Nothing,String}}
 
 The name of every class the compile numbered, `[id + 1]` for classId `id`: `string(T)` as Julia
-prints it (the text serialize_type_ids writes), `nothing` for an id no class has. A source map
+prints it (the text serialize_type_ids writes), a lowered closure type by its identity, as the
+module's own names print it (julia_type_text), `nothing` for an id no class has. A source map
 carries them (add_minified_class_names!) so an escaped exception's `minified:Class<id>` names its
 type.
 parity(pkg/dart2wasm/lib/compile.dart:617 classNames): one name per classId, `translator.classes[classId].cls?.name` (:621)
@@ -234,7 +235,7 @@ function _class_names(registry::TypeRegistry)::Vector{Union{Nothing,String}}
             push!(names, nothing)
         end
         names[id + 1] === nothing || error("classId $id numbers both $(names[id + 1]) and $T")
-        names[id + 1] = string(T)
+        names[id + 1] = julia_type_text(registry.names, string(T), T)   # a closure by its identity
     end
     return names
 end

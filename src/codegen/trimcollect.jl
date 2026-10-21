@@ -758,6 +758,29 @@ const LOWERING_INSTANTIATED_CLASSES = (ErrorException, ArgumentError, OverflowEr
                                        AssertionError, UndefVarError, UndefRefError, FieldError, String)
 
 """
+    JuliaNames()
+
+The names one compile prints, each worked out once: every lowered closure type's identity, by its
+TypeName (closure_identity), the top-level closure types of each module scanned, by (module,
+file, line) in the order lowering made them (their ordinals), and each specialization's signature
+as Julia prints it, by its MethodInstance (_specialization_signature). Made by trim_compile_plan, held by the
+plan and, from the compile's setup, by its TypeRegistry, so a function's name, a generated function's
+subject and the source map's class names read one identity.
+parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+"""
+struct JuliaNames
+    closures::IdDict{Core.TypeName,String}
+    toplevel::Dict{Tuple{Module,Symbol,Int32},Vector{Core.TypeName}}
+    scanned::Set{Module}
+    signatures::IdDict{Core.MethodInstance,String}
+end
+
+# parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+JuliaNames()::JuliaNames =
+    JuliaNames(IdDict{Core.TypeName,String}(), Dict{Tuple{Module,Symbol,Int32},Vector{Core.TypeName}}(), Set{Module}(),
+               IdDict{Core.MethodInstance,String}())
+
+"""
 The classes a value of the closed world may have, one set (closed_world_classes): every concrete
 class a value of the collected program may have but one (below), by one statement rule and its
 roots: the class
@@ -1713,6 +1736,7 @@ struct ClosedWorldPlan
     external_leaves::Vector{Any}   # (callable, argument types, MethodInstance) of each declared import
     joins::IdDict{Core.MethodInstance,Dict{Int,Type}}   # each planned body's joins (numeric, capture reads)
     roots::IdDict{Core.MethodInstance,String}           # each entry (a requested root) and its name
+    names::JuliaNames                                    # the names the compile prints (closure identities)
 end
 
 """
@@ -1790,6 +1814,8 @@ function object.
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[])::ClosedWorldPlan
+    # the names this compile prints, each worked out once (JuliaNames), held by the plan
+    local jn = JuliaNames()
     entry_mis = Any[]
     entry_keys = Dict{Any, String}()   # mi → requested name
     entry_values = Dict{Any,Any}()     # explicit capturing-closure instances
@@ -1804,7 +1830,7 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
     for (mi, fname) in unnamed
         haskey(entry_keys, mi) && continue   # the same entry, given with its name too
         local takers = Set{Any}(m for (m, n) in unnamed if n == fname)
-        entry_keys[mi] = (fname in requested || length(takers) > 1) ? julia_function_name(mi) : fname
+        entry_keys[mi] = (fname in requested || length(takers) > 1) ? julia_function_name(jn, mi) : fname
     end
     external_mis = Set{Any}()
     local external_leaves = Any[]   # (callable, argument types, MethodInstance) of each declared import
@@ -1815,20 +1841,20 @@ function trim_compile_plan(entries_named::Vector; external_entries::Vector=Any[]
         push!(external_leaves, (f, Tuple(arg_types), xmi))
     end
     local world = collect_closed_world(entry_mis; external_leaves=external_mis)
-    return plan_closed_world(world, entry_keys, entry_values, external_leaves)
+    return plan_closed_world(world, entry_keys, entry_values, external_leaves, jn)
 end
 
 """
-    plan_closed_world(world, entry_keys, entry_values, external_leaves) -> ClosedWorldPlan
+    plan_closed_world(world, entry_keys, entry_values, external_leaves, jn) -> ClosedWorldPlan
 
 The compile inputs (ClosedWorldPlan) one collected closed world yields, its entries named by
 `entry_keys` (MethodInstance => requested name) with their values `entry_values`, and the declared
-imports `external_leaves`. It reads the world and writes none of it: every reason, joins memo and
+imports `external_leaves`, its names printed through `jn` (JuliaNames). It reads the world and writes none of it: every reason, joins memo and
 record stays the collection's (formal(dev/formal/ClosedWorld.tla): ReasonsComplete).
 parity(quarantine: Julia's trim collection (juliac --trim) is the closed world; dart's comes from its front end's whole-program type flow analysis.)
 """
 function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, entry_values::Dict{Any,Any},
-                           external_leaves::Vector{Any})::ClosedWorldPlan
+                           external_leaves::Vector{Any}, jn::JuliaNames)::ClosedWorldPlan
     codeinfos = world.codeinfos
 
     functions = Any[]
@@ -1862,8 +1888,6 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     # method with `invoke(f, Tuple{Super}, x)` — so (f, arg_types) does not name a function.
     seen_mis = Set{Tuple{Any, Any}}()          # (mi.def, mi.specTypes)
     mis_by_sig = Dict{Tuple{Any, Any}, Vector{Any}}()
-    # each planned function's signature as Julia prints it, printed once per plan (julia_function_name)
-    local signatures = IdDict{Core.MethodInstance,String}()
     # each planned body's joins, read by codegen (numeric_local_joins): its numeric joins and its
     # capture reads, each computed once in collection (ClosedWorld's numeric_joins, capture)
     local joins = IdDict{Core.MethodInstance,Dict{Int,Type}}()
@@ -1957,7 +1981,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
         push!(seen_mis, (mi.def, mi.specTypes))
         push!(get!(() -> Any[], mis_by_sig, (f, arg_types)), mi)
         # named once every function is planned (plan_function_names!); until then, by its signature
-        name = get(() -> get!(() -> julia_function_name(mi), signatures, mi), entry_keys, mi)
+        name = get(() -> julia_function_name(jn, mi), entry_keys, mi)
         push!(functions, (f, arg_types, name, mi))
         (f isa DataType && is_closure_type(f)) && push!(planned_callables, f)
         (f isa Function && typeof(f) in world.callable_types) && push!(planned_callables, typeof(f))
@@ -1992,7 +2016,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
             m === winner || push!(invoke_only, m)
         end
     end
-    plan_function_names!(functions, entry_keys, invoke_only, signatures)
+    plan_function_names!(functions, entry_keys, invoke_only, jn)
     # every planned function says why it is in the closed world; one that cannot is a
     # collector defect, raised here rather than guessed at when a later failure names it
     for fn in functions
@@ -2017,7 +2041,7 @@ function plan_closed_world(world::ClosedWorld, entry_keys::Dict{Any,String}, ent
     return ClosedWorldPlan(functions, ir_cache, candidate_mis, invoke_only,
                            world.callable_types, enrolled_as, world.classes,
                            bespoke, no_method, copy(world.lowering_callees), external_leaves,
-                           joins, IdDict{Core.MethodInstance,String}(entry_keys))
+                           joins, IdDict{Core.MethodInstance,String}(entry_keys), jn)
 end
 
 """
@@ -2028,25 +2052,253 @@ parity(quarantine: multiple dispatch — a specialization is (method, specTypes)
 """
 module JuliaNameContext end
 
+# whether `T` is a type Julia's lowering made for a local function or a function expression: a
+# Function whose name is a gensym by Julia's own predicate (Base.isgensym, base/show.jl, which
+# errorshow uses to print "anonymous"), never a named function's own singleton type (Base._isself:
+# a keyword body `#f#3` is a function)
+# parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+_lowered_closure_type(@nospecialize(T))::Bool =
+    T isa DataType && T <: Function && Base.isgensym(T.name.name) && !Base._isself(Base.unwrap_unionall(T.name.wrapper))
+
+# a closure type's call methods (the one consult, over its wrapper)
+# parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+function _closure_call_methods(tn::Core.TypeName)::Vector{Method}
+    local matches = wt_method_matches(Tuple{Base.unwrap_unionall(tn.wrapper), Vararg{Any}})
+    matches === nothing && return Method[]
+    return Method[m.method for m in matches
+                  if (local u = Base.unwrap_unionall(Base.unwrap_unionall(m.method.sig).parameters[1]); u isa DataType && u.name === tn)]
+end
+
+# the lowered closure types `code` names in module `mod`, by TypeName, in code order (a closure's
+# binding read as a statement, `GlobalRef(mod, #…)`, or the type object itself)
+# parity(pkg/dart2wasm/lib/closures.dart:1742 _visitLambda): a lambda's index is its place in the member body's pre-order walk
+function _closure_types_in(code::Vector{Any}, mod::Module)::Vector{Core.TypeName}
+    local out = Core.TypeName[]
+    local walk(@nospecialize(x)) = begin
+        local v = x isa GlobalRef ? (x.mod === mod && isdefinedglobal(mod, x.name) ? getglobal(mod, x.name) : nothing) :
+                  x isa QuoteNode ? x.value : x
+        v isa UnionAll && (v = Base.unwrap_unionall(v))
+        (_lowered_closure_type(v) && !(v.name in out)) && push!(out, v.name)
+        x isa Expr && foreach(walk, x.args)
+    end
+    foreach(walk, code)
+    return out
+end
+
+"""
+    closure_identity(names, tn) -> String
+
+A lowered closure type's identity, a function of the program, as dart identifies a lambda by its
+enclosing member and its index in a pre-order walk of the member's body (closures.dart:1327
+Lambda.index, :1742 _visitLambda): the method that defines it, directly or inside another closure
+of its body, and its place in the pre-order walk of the closures that method's lowered code defines
+(each closure followed by the closures its own call methods define). Printed in Julia's own shape
+with lowering's counter replaced: a local function `h` in `f(::Int64)` is `#h#f(::Int64)##0`
+(Julia's `#h#f##<n>`), a function expression there `#f(::Int64)##<k>` (Julia's `#f##<n>#f##<m>`).
+A closure made outside any method's body (Julia's `#<n>#<m>`, `#h#h##<n>` for a named one, or
+`#h#<n>` for a named one inside a top-level function expression) by the file basename and line of the outermost such
+expression and its place in the pre-order walk of that line's closures (`#smoke.jl:1783##1`, dart's
+`at \$location` with the directory dropped): the outermost ones in the order of their counters,
+which is their source order because lowering makes one line's closures in source order, whatever
+the counter's value. A closure no method's lowered code defines, and no line
+holds, is a defect, raised.
+parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances, so a name holding it follows the session; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda, :1742 _visitLambda.)
+"""
+function closure_identity(jn::JuliaNames, tn::Core.TypeName)::String
+    local known = get(jn.closures, tn, nothing)
+    known === nothing || return known
+    local s = String(tn.name)
+    local inner = let named = match(r"^#([^#\d][^#]*)#(?:\d+$|[^#])", s)
+        # a named local function: `#h#f##<n>` or `#h#<n>`; an anonymous one starts `#<parent>##` or `#<n>#`
+        (named === nothing || occursin(r"^#[^#]+##", s)) ? "" : named.captures[1] * "#"
+    end
+    # a closure no method defines is made outside a function's body, directly or inside such a closure
+    local id = _toplevel_closure_name(s) ? nothing : _method_closure_identity(jn, tn, inner)
+    id === nothing && (id = _toplevel_closure_identity(jn, tn, inner))
+    jn.closures[tn] = id
+    return id
+end
+
+# the closures a method's lowered code defines in pre-order: each closure type its code names, then
+# the closures its call methods define (dart's pre-order walk of a member's body)
+# parity(pkg/dart2wasm/lib/closures.dart:1742 _visitLambda): a lambda's index is its place in the member body's pre-order walk
+function _closures_under(m::Method, mod::Module, out::Vector{Core.TypeName})::Vector{Core.TypeName}
+    m.source === nothing && return out
+    for t in _closure_types_in(Base.uncompressed_ast(m).code, mod)
+        t in out && continue
+        push!(out, t)
+        for cm in sort!(_closure_call_methods(t); by = x -> (x.line, String(x.file)))
+            _closures_under(cm, mod, out)
+        end
+    end
+    return out
+end
+
+# the identity of a closure a method defines: that method (a function the typename names), and the
+# closure's place in the pre-order walk of the closures it defines; nothing when no method defines it
+# parity(pkg/dart2wasm/lib/closures.dart:1327 Lambda): enclosingMember and index
+function _method_closure_identity(jn::JuliaNames, tn::Core.TypeName, inner::String)::Union{Nothing,String}
+    local mod, s = tn.module, String(tn.name)
+    local segs = unique(filter(x -> !isempty(x) && !all(isdigit, x), split(s, '#')))
+    for g in reverse(segs)   # the outermost name last in the typename: the defining function
+        local sym = Symbol(g)
+        isdefinedglobal(mod, sym) || continue
+        local f = getglobal(mod, sym)
+        (f isa Function || f isa Type) || continue   # a function, or a constructor's type
+        for m in methods(f)
+            local k = findfirst(==(tn), _closures_under(m, mod, Core.TypeName[]))
+            k === nothing || return string("#", inner, _julia_signature_text(jn, m, m.sig), "##", k - 1)
+        end
+    end
+    return nothing
+end
+
+# whether a typename is lowering's for a closure made outside a function's body: `#<n>#<m>`, or
+# `#<name>#<n>` for a named one (a top-level `let`, or a function expression's body)
+# parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+_toplevel_closure_name(s::String)::Bool = occursin(r"^#\d+#\d+$", s) || occursin(r"^#[^#]+#\d+$", s)
+
+# whether a typename is lowering's `#h#h##<n>`: a local function `h` made outside a function's body
+# (lowering names it by itself in its parent's place), or one a method `h` defines
+# parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+_self_named_closure_name(s::String)::Bool = (local m = match(r"^#([^#]+)#([^#]+)##\d+$", s); m !== nothing && m[1] == m[2])
+
+# a closure type's place in its file: its first call method's file and line
+# parity(pkg/dart2wasm/lib/functions.dart:377 getLambdaFunctionName): a lambda's location
+function _closure_location(tn::Core.TypeName)::Union{Nothing,Tuple{Symbol,Int32}}
+    local ms = sort!(_closure_call_methods(tn); by = m -> (m.line, String(m.file)))
+    return isempty(ms) ? nothing : (first(ms).file, Int32(first(ms).line))
+end
+
+# the module's closures made outside a function's body, by (module, file, line): at each line, the
+# outermost ones (no other closure of the module defines them) in the order lowering made them (the
+# counter their typename ends with: lowering makes one line's closures in source order, so the
+# counters' order is the source order, though not their values), each followed by the closures it
+# defines in pre-order; scanned once per module
+# parity(pkg/dart2wasm/lib/closures.dart:1742 _visitLambda): the lambdas of one scope, in pre-order
+function _toplevel_closures!(jn::JuliaNames, mod::Module)::Nothing
+    mod in jn.scanned && return nothing
+    local found = Dict{Tuple{Symbol,Int32},Vector{Core.TypeName}}()
+    for n in names(mod; all=true)
+        local ns = String(n)
+        ((_toplevel_closure_name(ns) || _self_named_closure_name(ns)) && isdefinedglobal(mod, n)) || continue
+        local v = getglobal(mod, n)
+        v isa UnionAll && (v = Base.unwrap_unionall(v))
+        _lowered_closure_type(v) || continue
+        # `#h#h##<n>` a method `h` defines is that method's
+        (_self_named_closure_name(ns) && _method_closure_identity(jn, v.name, "") !== nothing) && continue
+        local fl = _closure_location(v.name)
+        fl === nothing || push!(get!(() -> Core.TypeName[], found, fl), v.name)
+    end
+    local counter(t::Core.TypeName) = (local ts = String(t.name); parse(Int, ts[findlast('#', ts) + 1:end]))
+    # every closure some closure's call method defines (inside a function expression's body)
+    local nested = Set{Core.TypeName}()
+    local under = Dict{Core.TypeName,Vector{Core.TypeName}}()
+    for v in values(found), t in v
+        local seq = Core.TypeName[]
+        for cm in sort!(_closure_call_methods(t); by = x -> (x.line, String(x.file)))
+            _closures_under(cm, mod, seq)
+        end
+        under[t] = seq
+        union!(nested, seq)
+    end
+    for (fl, v) in found
+        local seq = Core.TypeName[]
+        for t in sort!(filter(t -> !(t in nested), v); by=counter)
+            push!(seq, t)
+            foreach(x -> (x in seq) || push!(seq, x), under[t])
+        end
+        isempty(seq) || (jn.toplevel[(mod, fl[1], fl[2])] = seq)
+    end
+    push!(jn.scanned, mod)
+    return nothing
+end
+
+# the identity of a closure lowering made outside a function's body: the line of the outermost
+# function expression that defines it, and its place in the pre-order walk of that line's closures
+# parity(pkg/dart2wasm/lib/functions.dart:377 getLambdaFunctionName): `closure at` its location
+function _toplevel_closure_identity(jn::JuliaNames, tn::Core.TypeName, inner::String)::String
+    local mod, s = tn.module, String(tn.name)
+    _toplevel_closures!(jn, mod)
+    for ((m, file, line), seq) in jn.toplevel
+        m === mod || continue
+        local k = findfirst(==(tn), seq)
+        k === nothing || return string("#", inner, basename(String(file)), ":", line, "##", k - 1)
+    end
+    throw(WasmInternalError(s, 0, "", String["naming the closure type $(mod).$(s)"],
+        ErrorException("no method's lowered code defines the closure type $(mod).$(s), and no line of its module's closures holds it"), Base.StackTraces.StackFrame[]))
+end
+
+"""
+    callable_short_name(names, T) -> String
+
+A callable type's short name, as dart names a closure's trampoline by its closure's short name
+(translator.dart:1461 makeTrampoline): a lowered closure type's identity (closure_identity), any
+other callable type's name (`nameof`).
+parity(pkg/dart2wasm/lib/translator.dart:1461 makeTrampoline)
+"""
+function callable_short_name(jn::JuliaNames, @nospecialize(T::Type))::String
+    local u = Base.unwrap_unionall(T)
+    return _lowered_closure_type(u) ? closure_identity(jn, u.name) : string(nameof(T))
+end
+
+"""
+    julia_type_text(names, text, T) -> String
+
+`text`, which Julia printed for a type or a signature holding `T`, with every lowered closure type
+`T` holds printed by its identity (closure_identity) in place of lowering's counter: the token
+Julia prints for its typename, `var"#h#f##4"`, becomes `var"#h#f(::Int64)##0"`.
+parity(quarantine: Julia's lowering names a closure type by a per-module counter its session advances; dart identifies a lambda by its enclosing member and pre-order index, closures.dart:1327 Lambda.)
+"""
+function julia_type_text(jn::JuliaNames, text::String, @nospecialize(T))::String
+    local found = Core.TypeName[]
+    local walk(@nospecialize(x)) = begin
+        if x isa Union
+            foreach(walk, Base.uniontypes(x))
+        elseif x isa UnionAll
+            walk(x.var.lb); walk(x.var.ub); walk(x.body)
+        elseif x isa Core.TypeofVararg
+            isdefined(x, :T) && walk(x.T)
+        elseif x isa DataType
+            (_lowered_closure_type(x) && !(x.name in found)) && push!(found, x.name)
+            foreach(walk, x.parameters)
+        end
+    end
+    walk(T)
+    for tn in found
+        local token = "var\"" * Base.escape_raw_string(string(tn.name)) * "\""
+        text = replace(text, token => "var\"" * Base.escape_raw_string(closure_identity(jn, tn)) * "\"")
+    end
+    return text
+end
+
 """
     julia_function_name(mi) -> String
 
 A compiled function's name: its specialization as Julia prints a MethodInstance (show_mi: the call
 form over its specTypes, argument types only, the function qualified as Julia qualifies it, unless
 exported from its module or Main's), then ` @ ` and its method's module, as a stack frame prints a
-method's module (`f(::Int64) @ Main._GNA`, `Base.throw_boundserror(::Array{Int64, 1},
-::Tuple{Int64}) @ Base`, `(::Main.var"#h#2"{Int64})(::Int64) @ Main`), independent of what else
-the plan holds (_julia_signature_text). Two functions print alike only when both are printed
-unqualified (each its module's export or Main's own) and their methods of one signature are
-defined in one module, a limit plan_function_names! refuses naming both. A closure type's gensym
-counter (`#h#2`) and a redefined type's `@world(...)` are Julia's own identity of the type, which
-follow the order code is lowered and loaded in.
+method's module (`Main._GNA.f(::Int64) @ Main._GNA` for an `f` that `_GNA` does not export,
+`Base.throw_boundserror(::Array{Int64, 1}, ::Tuple{Int64}) @ Base`,
+`(::Main.var"#h#f(::Int64)##0"{Int64})(::Int64) @ Main`), independent of
+what else the plan holds (_julia_signature_text). A closure type prints by its defining method and
+its place there (closure_identity), never lowering's counter, so no code lowered earlier in a
+session renames it. Two functions print alike only when both are printed unqualified (each its
+module's export or Main's own) and their methods of one signature are defined in one module, a
+limit plan_function_names! refuses naming both. A redefined type's `@world(...)` is Julia's own
+identity of the type, which follows the order code is loaded in.
 parity(quarantine: multiple dispatch — a specialization is (method, specTypes): dart's Namer
 suffixes a repeated name with a counter (namer.dart:45) because Dart has no overloading, where one
 Julia generic function has many specializations, each with the identity Julia prints.)
 """
-julia_function_name(mi::Core.MethodInstance)::String =
-    string(_julia_signature_text(mi.def::Method, mi.specTypes), " @ ", (mi.def::Method).module)
+julia_function_name(jn::JuliaNames, mi::Core.MethodInstance)::String =
+    string(_specialization_signature(jn, mi), " @ ", (mi.def::Method).module)
+
+# a specialization's signature as Julia prints it (_julia_signature_text over its specTypes),
+# printed once per compile (JuliaNames)
+# parity(quarantine: multiple dispatch — a specialization is (method, specTypes): its name is the text Julia prints for that pair.)
+_specialization_signature(jn::JuliaNames, mi::Core.MethodInstance)::String =
+    get!(() -> _julia_signature_text(jn, mi.def::Method, mi.specTypes), jn.signatures, mi)
 
 """
     invoke_only_function_name(mi) -> String
@@ -2056,9 +2308,9 @@ specTypes another collected method covers too: its signature, then ` [<its metho
 signature>]`, then its method's module (`_sm_oc(::Int64) [_sm_oc(::Integer)] @ Main`).
 parity(quarantine: multiple dispatch — a specialization is (method, specTypes): two methods covering one specTypes are told apart by the method's own signature.)
 """
-function invoke_only_function_name(mi::Core.MethodInstance)::String
+function invoke_only_function_name(jn::JuliaNames, mi::Core.MethodInstance)::String
     local m = mi.def::Method
-    return string(_julia_signature_text(m, mi.specTypes), " [", _julia_signature_text(m, m.sig), "] @ ", m.module)
+    return string(_specialization_signature(jn, mi), " [", _julia_signature_text(jn, m, m.sig), "] @ ", m.module)
 end
 
 """
@@ -2074,7 +2326,7 @@ define their types. Every value it prints that is not a type is printed by Base'
 rejected, never let decide a name (_user_shown_in_signature).
 parity(quarantine: multiple dispatch — a specialization is (method, specTypes): its name is the text Julia prints for that pair; a user-defined show of a type or a type parameter would make that text user code's.)
 """
-function _julia_signature_text(m::Method, @nospecialize(sig::Type))::String
+function _julia_signature_text(jn::JuliaNames, m::Method, @nospecialize(sig::Type))::String
     local shown = _user_shown_in_signature(sig)
     if shown !== nothing
         # named without calling the user's show
@@ -2088,9 +2340,10 @@ function _julia_signature_text(m::Method, @nospecialize(sig::Type))::String
             "its name, the signature Julia prints, would be that code's text", nothing,
             "method $(m.name) in $(m.module), $(m.file):$(m.line)")))
     end
-    return sprint(io -> Base.show_tuple_as_call(
+    # a lowered closure type printed by its identity, never lowering's counter (julia_type_text)
+    return julia_type_text(jn, sprint(io -> Base.show_tuple_as_call(
         IOContext(io, :module => JuliaNameContext, :compact => false, :limit => false, :color => false), m.name, sig;
-        qualified=true))
+        qualified=true)), sig)
 end
 
 """
@@ -2224,11 +2477,11 @@ function _user_shown_in_type(@nospecialize(T))::Union{Nothing,Some}
 end
 
 """
-    plan_function_names!(functions, entry_keys, invoke_only, signatures)
+    plan_function_names!(functions, entry_keys, invoke_only, jn)
 
 Name every planned function once, in place: an entry its requested name (entry_keys), any other
-function its signature (julia_function_name, read from `signatures`, the plan's one print of
-each). Two methods can cover one specialization's specTypes, the one Julia's dispatch selects for
+function its signature (julia_function_name, each specialization's signature printed once per
+compile, JuliaNames). Two methods can cover one specialization's specTypes, the one Julia's dispatch selects for
 them and one reached only by its explicit `invoke`: which is which is the plan's one answer,
 `invoke_only` (the one consult, wt_method_which, asked once per `(f, arg_types)`), so the selected
 one keeps the signature and each invoke-only function takes ` [<its method's declared
@@ -2243,13 +2496,12 @@ function by its member (functions.dart:171 getFunctionName) and an export throug
 counter (namer.dart:45), which Julia's identity of a specialization replaces.)
 """
 function plan_function_names!(functions::Vector{Any}, entry_keys::Dict{Any,String},
-                              invoke_only::Set{Core.MethodInstance},
-                              signatures::IdDict{Core.MethodInstance,String})::Nothing
+                              invoke_only::Set{Core.MethodInstance}, jn::JuliaNames)::Nothing
     local owner = Dict{String,Core.MethodInstance}()
     for (i, fn) in enumerate(functions)
         local mi = fn[4]::Core.MethodInstance
         local name = get(entry_keys, mi) do
-            mi in invoke_only ? invoke_only_function_name(mi) : get!(() -> julia_function_name(mi), signatures, mi)
+            mi in invoke_only ? invoke_only_function_name(jn, mi) : julia_function_name(jn, mi)
         end
         local prior = get(owner, name, nothing)
         if prior !== nothing

@@ -661,6 +661,9 @@ mutable struct TypeRegistry
     handles::ModuleHandles
     # each type's order key, printed once per compile (registry_order_key)
     order_keys::IdDict{Type, Tuple{String,String}}
+    # the names the compile prints (JuliaNames: closure identities), the plan's from the compile's
+    # setup, read by a generated function's subject and the source map's class names
+    names::JuliaNames
 end
 
 # parity(translator.dart:470 Translator): the constructor that starts a compile with every
@@ -695,7 +698,8 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     nothing, nothing,                                   # undef_global, undef_struct_idx
     PendingTypes(),                                     # types being registered
     ModuleHandles(),                                    # the module's handles
-    IdDict{Type, Tuple{String,String}}()                # order keys
+    IdDict{Type, Tuple{String,String}}(),               # order keys
+    JuliaNames()                                        # the names, the plan's from setup
 )
 
 """
@@ -1294,13 +1298,13 @@ function serialize_type_ids(registry::TypeRegistry)::Dict{String, Any}
     result = Dict{String, Any}()
     ids = Dict{String, Int32}()
     for (T, id) in ordered_pairs(registry.type_ids, registry_order_key(registry))
-        ids[string(T)] = id
+        ids[julia_type_text(registry.names, string(T), T)] = id
     end
     result["type_ids"] = ids
 
     ranges = Dict{String, Any}()
     for (T, (low, high)) in ordered_pairs(registry.type_ranges, registry_order_key(registry))
-        ranges[string(T)] = Dict("low" => low, "high" => high)
+        ranges[julia_type_text(registry.names, string(T), T)] = Dict("low" => low, "high" => high)
     end
     result["type_ranges"] = ranges
     return result
@@ -1320,10 +1324,10 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     structs = Dict{String, Any}[]
     for (T, info) in registered_structs(registry)
         push!(structs, Dict{String, Any}(
-            "julia_type" => string(T),
+            "julia_type" => julia_type_text(registry.names, string(T), T),
             "wasm_type_idx" => Int(info.wasm_type_idx),
             "field_names" => [string(f) for f in info.field_names],
-            "field_types" => [string(f) for f in info.field_types],
+            "field_types" => [julia_type_text(registry.names, string(f), f) for f in info.field_types],
             "field_offset" => Int(info.field_offset),
         ))
     end
@@ -1332,7 +1336,7 @@ function serialize_type_registry(registry::TypeRegistry)::Dict{String, Any}
     # Array types
     arrays = Dict{String, Int}()
     for (T, idx) in ordered_pairs(registry.arrays, registry_order_key(registry))
-        arrays[string(T)] = Int(idx)
+        arrays[julia_type_text(registry.names, string(T), T)] = Int(idx)
     end
     result["arrays"] = arrays
 

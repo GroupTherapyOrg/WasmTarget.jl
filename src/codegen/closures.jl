@@ -337,7 +337,7 @@ function _closure_trampoline!(mod::WasmModule, registry::TypeRegistry, closure_t
     end
     end_block!(tb)   # the function frame's own end
     tramp_idx = add_function!(mod, tb;
-                              name=generated_function_name(:closure_trampoline, string(nameof(closure_type))))
+                              name=generated_function_name(:closure_trampoline, callable_short_name(registry.names, closure_type)))
     declare_funcs!(mod, UInt32[tramp_idx])
     return tramp_idx
 end
@@ -551,7 +551,7 @@ function _closure_dispatch_trampoline!(mod::WasmModule, registry::TypeRegistry, 
     _emit_trampoline_methoderror!(tb, mod, registry, closure_type, arity, no_method, itmp)
     end_block!(tb)
     tramp_idx = add_function!(mod, tb;
-                              name=generated_function_name(:closure_dispatching_trampoline, string(nameof(closure_type))))
+                              name=generated_function_name(:closure_dispatching_trampoline, callable_short_name(registry.names, closure_type)))
     declare_funcs!(mod, UInt32[tramp_idx])
     return tramp_idx
 end

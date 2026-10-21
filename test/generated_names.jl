@@ -233,6 +233,10 @@ _gn_smoke_case(name) = only(c for (_, cs) in _GNSmoke.GROUPS for c in cs if c[1]
     local hnames = sort!([f.name for f in mr.functions if occursin(r"^\(::(?:\w+\.)*var\"#h#", f.name) &&
                           occursin("(::Int64)", f.name) && !endswith(f.name, " (export)")])
     local T = only(unique(match(r"^\(::((?:\w+\.)*var\"[^\"]*\")", n).captures[1] for n in hnames))
+    # the closure, defined in the body of smoke's case function expression, outside any method, named
+    # by that expression's line in smoke.jl and its place there (the expression 0, h 1), never
+    # lowering's counter (dev/AUDIT.md A19E8)
+    @test occursin(r"^(?:\w+\.)*var\"#h#smoke\.jl:\d+##1\"$", T)
     @test hnames == sort!(["(::$(T){Int64})(::Int64) @ $S", "(::$(T){Int64})(::Int64) [(::$(T))(::Integer)] @ $S"])
     @test run_i64(mr, "rows") == rows(rows_arg) == 12
     # two generic functions of one name in two modules: each named with its module, compiled, and
@@ -250,7 +254,7 @@ _gn_smoke_case(name) = only(c for (_, cs) in _GNSmoke.GROUPS for c in cs if c[1]
     local two = _GN.entry_method_instance(_gn_two, (Int64,))
     err = try
         _GN.plan_function_names!(Any[(_gn_two, (Int64,), "", two), (_gn_two, (Int64,), "", two)], Dict{Any,String}(),
-                                 Set{Core.MethodInstance}(), IdDict{Core.MethodInstance,String}())
+                                 Set{Core.MethodInstance}(), _GN.JuliaNames())
         nothing
     catch e
         e
@@ -262,8 +266,8 @@ end
 # visible from the printing module, Main by default, so a `using` in Main once renamed every
 # function whose signature names that module's type. The name is printed from a fixed module
 # (JuliaNameContext): the same compile before and after `using` answers the same names. (A
-# closure type's gensym, `var"#h#2"`, is Julia's identity of the type and follows the load order:
-# code lowered earlier in a session renames it, and the bytes with it.)
+# closure type prints by its defining method and its place there, never lowering's counter: below,
+# "a closure type is named by its parent method and its place there".)
 Core.eval(Main, :(module _GNSession; struct GNPoint; x::Int64; end; export GNPoint; end))
 @noinline _gn_session_x(p) = p.x + 1
 _gn_session(n::Int64) = _gn_session_x(Main._GNSession.GNPoint(n))
@@ -319,4 +323,65 @@ _gn_signed(n::Int64) = _gn_signed_x(Val(_GN_SIGNED_3), n)
         msg = sprint(showerror, err)
         @test occursin("defined outside Base and Core prints", msg) && occursin(type_named, msg) && !occursin(users, msg)
     end
+end
+
+# A closure type is named by the method that defines it and its place there, as dart names a lambda
+# by its enclosing member and its pre-order index (closures.dart:1327 Lambda), never by lowering's
+# counter, which the session advances: a closure Julia names `#h#f##0` is `#h#<f's method>##0`
+# however many closures the module lowered before it; one defined outside any method by its file's
+# basename, its line and its place there (dev/AUDIT.md A19E8). The program is source text, so a
+# child process can compile exactly it after lowering other closures in the module first.
+const _GN_CLO_SRC = """
+module _GNClo
+@noinline f(x::Int64) = (@noinline h(y::Int64) = y + x; h)
+@noinline f(x::Float64) = (@noinline h(y::Float64) = y * x; g = @noinline (z::Float64) -> z - x; (h, g))
+const top = let k = 3
+    @noinline (y::Int64) -> y + k
+end
+const two = let k = 2; (@noinline((y::Int64) -> y + k), @noinline((y::Int64) -> y * k)) end
+const loc = let k = 4; @noinline loc(y::Int64) = y - k; loc end
+use(n::Int64) = f(n)(n) + Int64(round(f(Float64(n))[1](2.0) + f(Float64(n))[2](1.0))) + top(n) + two[1](n) + two[2](n) + loc(n)
+end
+"""
+_gn_clo_names() = sort!([f.name for f in _GN.compile_module(Any[(Main._GNClo.use, (Int64,), "use")];
+                                                            options=_GN.options_from_env()).functions
+                         if occursin("var\"#", f.name)])
+@testset "a closure type is named by its parent method and its place there" begin
+    isdefined(Main, :_GNClo) || include_string(Main, _GN_CLO_SRC, "gn_closures.jl")
+    @test Main._GNClo.use(3) == 6 + 4 + 6 + 5 + 6 - 1
+    local first = _gn_clo_names()
+    local M = "Main._GNClo"
+    # each closure by its defining method and its place: h in f(::Int64), h and the function
+    # expression in f(::Float64), and the top-level one by its file's basename and line
+    @test "(::$M.var\"#h#$M.f(::Int64)##0\"{Int64})(::Int64) @ $M" in first
+    @test "(::$M.var\"#h#$M.f(::Float64)##0\"{Float64})(::Float64) @ $M" in first
+    @test "(::$M.var\"#$M.f(::Float64)##1\"{Float64})(::Float64) @ $M" in first
+    @test "(::$M.var\"#gn_closures.jl:5##0\"{Int64})(::Int64) @ $M" in first
+    # two closures on one line, by their place there (the order lowering makes them, source order)
+    @test "(::$M.var\"#gn_closures.jl:7##0\"{Int64})(::Int64) @ $M" in first
+    @test "(::$M.var\"#gn_closures.jl:7##1\"{Int64})(::Int64) @ $M" in first
+    # a local function outside any method (lowering's `#loc#loc##<n>`), by its line
+    @test "(::$M.var\"#loc#gn_closures.jl:8##0\"{Int64})(::Int64) @ $M" in first
+    @test !any(n -> occursin(r"##\d+#|#\d+#\d+\"", n), first)   # no lowering counter left
+    # (a) the parent defined again in this session: lowering gives the closure another counter, the
+    # name stays
+    Core.eval(Main._GNClo, :(@noinline f(x::Int64) = (@noinline h(y::Int64) = y + x; h)))
+    @test _gn_clo_names() == first
+    # (b) another process, whose module lowers other closures first (on the module's own line, so no
+    # line moves: an `h` in another method of f, a function expression, a top-level closure, a top-level
+    # local function named loc), compiles
+    # the same names
+    local src2 = replace(_GN_CLO_SRC, "module _GNClo\n" =>
+                         "module _GNClo; f(x::String) = (h(y) = y; h); g(x::String) = (z -> z); const pre = (z -> z); " *
+                         "const pre2 = let; loc(z) = z; loc end\n")
+    local script = tempname() * ".jl"
+    write(script, """
+        using WasmTarget
+        include_string(Main, $(repr(src2)), "gn_closures.jl")
+        names = sort!([f.name for f in WasmTarget.compile_module(Any[(Main._GNClo.use, (Int64,), "use")];
+                        options=WasmTarget.options_from_env()).functions if occursin("var\\"#", f.name)])
+        foreach(println, names)
+        """)
+    local other = readlines(`$(Base.julia_cmd()) --startup-file=no --project=$(dirname(@__DIR__)) $script`)
+    @test other == first
 end
