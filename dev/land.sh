@@ -12,11 +12,12 @@
 #       one per run, in any of the repository's worktrees) hold no red one (a red run stands) and
 #       the last one is green, of exactly that commit, made on a clean tree, judging the change
 #       from the head's merge base with the march branch,
-#       and the main tree is clean; refuses while the full matrix on the last landed head (its
-#       gate.yml run) is red, its red being the next item, and lands with a WARNING, written into
-#       the record, while that run has not finished or there is none; then fast-forwards the march
-#       branch to it from the main tree, pushes it, and pushes the head to march/<branch-leaf>,
-#       where gate.yml runs the full matrix on it, non-blocking; appends the landing's line to the
+#       and the main tree is clean; refuses while the last closure matrix (gate.yml's newest run on
+#       a dispatch, a gate/** push or a march/** head carrying `Closes: C<n>`) is red, its red the
+#       next item, naming it, and lands with a WARNING, written into the record, while that run has
+#       not finished or there is none; then fast-forwards the march branch to it from the main tree,
+#       pushes it, and pushes the head to march/<branch-leaf>, where gate.yml runs the full matrix
+#       when its commit carries `Closes: C<n>`, non-blocking; appends the landing's line to the
 #       landing log (below).
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
@@ -50,7 +51,7 @@
 # the record's (judged, or unjudged when the machine was past the gate's factor cap).
 #
 # The landing's gate is the blocking gate on this machine (dev/CHARTER.md C10, L194); no CI run
-# holds a landing: the matrix's verdict on the last landed head is read, never waited for. The one
+# holds a landing: the last closure matrix's verdict is read, never waited for. The one
 # final full gate before PR #122 merges is `bash dev/gate.sh` on the exact merge head.
 set -euo pipefail
 MARCH=${WT_MARCH_BRANCH:-wt-p0-strict-hygiene}
@@ -195,29 +196,38 @@ merge)
             echo "the last landing's timing is red ($owed) and $rec's is $timing: a judged green run lands next, or a landing whose dev/MARCH.md names ${owed%% *} (a fix, or a Timing: correctness fix row) — refusing"; exit 1
         fi
     fi
-    # the full matrix on the last landed head: gate.yml's newest run of it on a march/** or gate/** push
-    # (by name, not --workflow, which finds only a workflow on the default branch; a gate.yml not yet
-    # parsed is named by its path), read three times at most, never waited for
-    command -v gh >/dev/null || { echo "land: needs the GitHub CLI (gh) to read the matrix on the last landed head — refusing"; exit 1; }
+    # the last closure matrix (the full matrix runs only at clause closure, Dale 2026-10-21): gate.yml's
+    # newest run on a dispatch, a gate/** push, or a march/** push whose head commit carries a
+    # `Closes: C<n>` line (read from the commit itself, not the run's name), by workflow name, not
+    # --workflow, which finds only a workflow on the default branch (a gate.yml not yet parsed is named
+    # by its path), read three times at most, never waited for
+    command -v gh >/dev/null || { echo "land: needs the GitHub CLI (gh) to read the last closure matrix — refusing"; exit 1; }
     prev=$(git -C "$MAIN" rev-parse "$MARCH")
-    matrix=""
+    runs=""
     for k in 1 2 3; do
-        matrix=$(gh run list --commit "$prev" --limit 50 --json databaseId,status,conclusion,workflowName,event,headBranch \
-            --jq '[.[] | select(.event == "push" and ((.headBranch | startswith("march/")) or (.headBranch | startswith("gate/")))
+        runs=$(gh run list --limit 200 --json databaseId,status,conclusion,workflowName,event,headBranch,headSha \
+            --jq '[.[] | select((.event == "workflow_dispatch" or (.event == "push" and ((.headBranch | startswith("march/")) or (.headBranch | startswith("gate/")))))
                                 and (.workflowName == "Gate" or .workflowName == ".github/workflows/gate.yml"))]
-                  | sort_by(.databaseId) | last | if . == null then "none::" else "\(.status):\(.conclusion // ""):\(.databaseId)" end' 2>/dev/null) && break
-        matrix=""; [ $k -lt 3 ] && sleep $((k * 10))
+                  | sort_by(.databaseId) | reverse | .[] | "\(.status):\(.conclusion // ""):\(.databaseId):\(.headSha):\(.event):\(.headBranch)"' 2>/dev/null) && break
+        runs=""; [ $k -lt 3 ] && sleep $((k * 10))
     done
-    [ -n "$matrix" ] || { echo "land: the GitHub API gives no runs of ${prev:0:8}: the matrix's verdict on the last landed head is unknown — refusing"; exit 1; }
-    IFS=: read -r mstatus mconclusion mrun <<<"$matrix"
+    [ -n "$runs" ] || { echo "land: the GitHub API gives no gate.yml runs: the last closure matrix's verdict is unknown — refusing"; exit 1; }
+    matrix="none:::"
+    while IFS=: read -r rs rc rid rsha rev rbr; do
+        if [ "$rev" = workflow_dispatch ] || [ "${rbr#gate/}" != "$rbr" ] ||
+           git -C "$MAIN" log -1 --format=%B "$rsha" 2>/dev/null | grep -qE '^Closes: C[0-9]+'; then
+            matrix="$rs:$rc:$rid:${rsha:0:8}"; break
+        fi
+    done <<<"$runs"
+    IFS=: read -r mstatus mconclusion mrun msha <<<"$matrix"
     warning=""
     case "$mstatus:$mconclusion" in
-    completed:success) echo "the full matrix on the last landed head ${prev:0:8}: green (run $mrun)" ;;
+    completed:success) echo "the last closure matrix: green (gate.yml run $mrun on $msha)" ;;
     completed:failure | completed:timed_out | completed:startup_failure)
-        echo "a red matrix on ${prev:0:8} is the next item (gate.yml run $mrun, $mconclusion): fix it first — refusing"; exit 1 ;;
-    none:*) warning="no gate.yml run of the last landed head ${prev:0:8}: its matrix has no verdict" ;;
-    completed:*) warning="the full matrix on the last landed head ${prev:0:8} has no verdict (gate.yml run $mrun, $mconclusion)" ;;
-    *) warning="the full matrix on the last landed head ${prev:0:8} is not finished (gate.yml run $mrun, $mstatus)" ;;
+        echo "the last closure matrix is red, the next item (gate.yml run $mrun on $msha, $mconclusion): fix it first — refusing"; exit 1 ;;
+    none:*) warning="no closure matrix has run (no gate.yml run named Gate closure): no verdict" ;;
+    completed:*) warning="the last closure matrix has no verdict (gate.yml run $mrun on $msha, $mconclusion)" ;;
+    *) warning="the last closure matrix is not finished (gate.yml run $mrun on $msha, $mstatus)" ;;
     esac
     if [ -n "$warning" ]; then
         echo "WARNING: $warning"
@@ -364,6 +374,17 @@ land)
         *) echo "land: the gate exited $st with no verdict — not landed"; exit "$st" ;;
         esac
     done
+    # a commit that says `Closes: C<n>` (the full matrix's trigger, gate.yml) lands only on a gate whose
+    # ratchet reads C<n> CLOSED on this tree
+    closes=$(git log --format=%B "$tip..HEAD" | sed -n 's/^Closes: \(C[0-9][0-9]*\)$/\1/p' | sort -u)
+    if [ -n "$closes" ]; then
+        crec=$(sed -n 's/^BLOCK .*→ \(dev\/\.block\/.*\.toml\)$/\1/p' "$glog"); rlog="$(sed -n 's/^logs = "\(.*\)"$/\1/p' "$crec")/ratchet.log"
+        for c in $closes; do
+            grep -qE "^$c +.* CLOSED( |$)" "$rlog" 2>/dev/null ||
+                { echo "land: a commit says 'Closes: $c', but this gate's ratchet ($rlog) does not read $c CLOSED — refusing"; exit 1; }
+        done
+        echo "land: Closes: $(echo $closes): the ratchet reads each CLOSED; the full matrix runs on this landing's push"
+    fi
     LAND_HOLDER=$$ LAND_START=$l_start LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)

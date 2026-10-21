@@ -19,3 +19,14 @@ if [ -z "${WT_HOOK_FILTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
     echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
     exit 1
 fi
+# a `Closes: C<n>` line runs the full matrix (gate.yml: large-scale runs only when a full clause is
+# closed out, Dale 2026-10-21): only on a tree whose ratchet reads C<n> CLOSED (the working tree the
+# commit is made from; `dev/land.sh land` checks the landed tree's gate record again)
+closes=$(sed -n 's/^Closes: \(C[0-9][0-9]*\)$/\1/p' "$msg")
+if [ -z "${WT_HOOK_FILTER:-}" ] && [ -n "$closes" ]; then
+    status=$(julia --startup-file=no -O0 --project=. test/parity_ratchet.jl 2>&1 || true)
+    for c in $closes; do
+        printf '%s\n' "$status" | grep -qE "^$c +.* CLOSED( |$)" ||
+            { echo "commit refused: 'Closes: $c', but the ratchet does not read $c CLOSED on this tree" >&2; exit 1; }
+    done
+fi

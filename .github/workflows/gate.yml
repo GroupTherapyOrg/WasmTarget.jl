@@ -4,10 +4,15 @@ name: Gate
 # [--part i/N]`, so the commands are the script's: `julia` 1.12 and `julia +1.13` (juliaup, as
 # the script calls them), Node from ci.yml's node-version, wasm-tools, Java 17 for TLC. The
 # first red job cancels the rest (fail-fast), as the script stops at the first red lane.
-# It runs on every landed head: `dev/land.sh merge` pushes the head it lands to march/<name>
-# (the only workflow a march/** push runs; ci.yml and formal.yml run on main and the pull
-# request), and its red is the next batch's first item, never a landing's gate (that is `bash
-# dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
+# It runs at clause closure only (Dale, 2026-10-21: large-scale runs happen only when a full clause
+# is closed out): on a march/** push whose head commit carries a `Closes: C<n>` line (the commit that
+# closes clause n; dev/hooks/commit-msg and `dev/land.sh land` refuse that line unless the ratchet
+# reads C<n> CLOSED on its tree), on a gate/** push and on workflow_dispatch; every other push runs
+# the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/land.sh
+# land` pushes each landed head to march/<name> (the only workflow a march/** push runs; ci.yml and
+# formal.yml run on main and the pull request), refuses while the last closure matrix (the newest
+# run named "Gate closure") is red, its red the next item, and is never gated by it (a landing's
+# gate is `bash dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
 # verdict: the one final full gate before PR #122 merges is that run on the exact merge head.
 # The parts are sized from measured job times (each lane's
 # work under ~12 min on ubuntu-latest): smoke in 2 parts per version, registry coverage in 2 (and
@@ -32,6 +37,10 @@ on:
     branches: ['gate/**', 'march/**']
   workflow_dispatch:
 
+# the run's name says whether this run is a closure matrix ("Gate closure", what `dev/land.sh land`
+# reads) or a push that runs nothing but the `closure` job
+run-name: "${{ (github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(github.event.head_commit.message, 'Closes: C')) && 'Gate closure' || 'Gate (no closure)' }}"
+
 # Only the newest push per branch runs; a superseded run is cancelled.
 concurrency:
   group: gate-${{ github.ref }}
@@ -46,7 +55,28 @@ defaults:
     shell: bash
 
 jobs:
+  # the full matrix runs only at clause closure: a dispatch, a gate/** push, or a march/** push whose
+  # head commit carries a `Closes: C<n>` line; any other push stops here and says so
+  closure:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          MSG: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$EVENT" != push ] || [ "${REF#refs/heads/gate/}" != "$REF" ] || printf '%s\n' "$MSG" | grep -qE '^Closes: C[0-9]+'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "the full matrix runs ($EVENT, $REF)"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "no Closes: C<n> line on the pushed head: the full matrix runs at clause closure only"
+          fi
+
   lane:
+    needs: closure
+    if: needs.closure.outputs.run == 'true'
     name: ${{ matrix.lane }}${{ matrix.part != '' && format(' {0}', matrix.part) || '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20   # the budget B (header): a slow lane and a hung one are cut at it, red
@@ -219,6 +249,8 @@ jobs:
   # are published as its base file (90 days), which the next landed head's run reads. A red plan
   # (a base no run published) cancels no lane: the lanes' verdict on the landed head stands
   emission-plan:
+    needs: closure
+    if: needs.closure.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20   # the budget B
     steps:
