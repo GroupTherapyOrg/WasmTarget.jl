@@ -1580,9 +1580,43 @@ const LOCKS = [
         () -> count_unanchored_definitions()),
     "R35_detached_docstrings" => ("bare string literals among top-level statements in src: docstrings a comment line cut off from their definition (Julia then attaches them to nothing — a `# formal(…)` line between docstring and function did this repeatedly) or prose with no definition under it (dev/CHARTER.md C9). Terminal state 0: a docstring sits directly on its definition, with any anchor inside it",
         () -> count_detached_docstrings()),
-    "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently). Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
-        () -> count_sites(r"@test_skip\b|@test_broken\b"; roots=[joinpath(ROOT, "test")],
-                          exclude_files=["parity_ratchet.jl"])),
+    "R36_hidden_test_failures" => ("@test_skip / @test_broken in test/ — a known failure no gate reports, where a regression can hide (dev/CHARTER.md C5: wrong choices cannot land silently); and a native stack exhaustion a test runs, which Julia on Windows does not reliably detect on a task's stack, so the process dies and the shard's failures go unreported (dev/AUDIT.md A20X4: no task hosting one, `schedule(Task(` or `fetch(schedule(`, and a deep self-recursion `f(n) = n == 0 ? 0 : 1 + f(n - 1)`, or a one-line definition reaching it, called with 10^6 or more, and a definition whose body makes such a call, or any definition reaching that one, called at all, only inside a definition, a body WT compiles, never in a statement a test runs; the native oracle raises StackOverflowError instead). Terminal state 0: each becomes a passing test, a located rejection asserted with @test_throws, or a tracked open item with its reproducer",
+        () -> begin
+            local n = count_sites(r"@test_skip\b|@test_broken\b"; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+            n += count_sites(r"schedule\(Task\(|fetch\(schedule\(|_wt_own_task"; roots=[joinpath(ROOT, "test")], exclude_files=["parity_ratchet.jl"])
+            local files = [joinpath(d, f) for (d, _, fs) in walkdir(joinpath(ROOT, "test")) for f in fs if endswith(f, ".jl") && f != "parity_ratchet.jl"]
+            local recs = Set{String}()
+            for p in files, l in _file_lines(p)
+                local m = match(r"(\w+)\(n(?:::Int64)?\) = n == 0 \? 0 : 1 \+ (\w+)\(n - 1\)", l)
+                (m !== nothing && m[1] == m[2]) && push!(recs, m[1])
+            end
+            # the one-line definitions that reach a deep recursion: by their argument (a call of a
+            # recursion or of one of these, `deep`), or whatever their argument (a body holding a call
+            # of one with 10^6 or more, or a call of one of these, `exhausting`), to a fixpoint
+            local defrx = r"^\s*(?:@noinline\s+)?([\w.]+)\([^)]*\)(?:::\w+)?\s*=[^=](.*)$"
+            local defs = Tuple{String,String}[]
+            for p in files, l in _file_lines(p)
+                local m = match(defrx, l)
+                (m === nothing || _iscomment(l)) || push!(defs, (String(m[1]), String(m[2])))
+            end
+            local calls(body, fs, big) = any(f -> occursin(Regex("\\b" * f * "\\(" * big * "|invokelatest\\(" * f * ", " * big), body), fs)
+            local deep = copy(recs); local exhausting = Set{String}()
+            while true
+                local before = length(deep) + length(exhausting)
+                for (f, body) in defs
+                    f in recs && continue
+                    calls(body, deep, "") && push!(deep, f)
+                    (calls(body, deep, "10\\^[6-9]") || calls(body, exhausting, "")) && push!(exhausting, f)
+                end
+                length(deep) + length(exhausting) == before && break
+            end
+            for p in files, l in _file_lines(p)
+                _iscomment(l) && continue
+                occursin(defrx, l) && continue   # a definition's body: a body WT compiles
+                n += count(f -> calls(l, Set([f]), "10\\^[6-9]"), deep) + count(f -> calls(l, Set([f]), ""), exhausting)
+            end
+            n
+        end),
     "R34_silent_catches" => ("catch clauses in src that swallow a failure — no rethrow/throw/error and no located diagnostic (dev/CHARTER.md C6: correct or loud, never a silent default). Terminal state 0: a handler that must not throw (the diagnostic path itself) moves to an exact per-site allowlist with its reason",
         () -> count_silent_catches()),
     "L65_no_codegen_byte_shells" => ("codegen helpers expose only builder-native emission; dead byte-vector adapter APIs are deleted, and no codegen definition takes a module's bytes: the host runtime is generated from the compile's record of the module's imports (host_runtime_js(imports)), never read back from its bytes (until 2026-10-21 host_runtime_js(bytes) read them through a reader in the builder; dev/AUDIT.md A19B1)",
