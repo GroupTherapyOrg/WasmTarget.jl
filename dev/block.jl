@@ -641,11 +641,14 @@ function timing_against_base(timing, base_timing, exempt_stages = String[])::Vec
 end
 const STAGE_NAMES = ("load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tlc")
 # the commit's declared correctness fix: the MARCH row its `Timing:` line cites, which the change
-# adds (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`: an existing row exempts nothing) and
-# which names the stages the fix leaves slower; the exemption's text and those stages (A19P7)
-function timing_exemption(msg::AbstractString, march_diff::AbstractString)::Tuple{String,Vector{String}}
+# adds (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`) under a number the base's MARCH does not
+# have (an existing row, edited, exempts nothing, A20P26) and which names the stages the fix leaves
+# slower; the exemption's text and those stages (A19P7)
+function timing_exemption(msg::AbstractString, march_diff::AbstractString, base_march::AbstractString)::Tuple{String,Vector{String}}
     m = match(r"^Timing: correctness fix \(MARCH (13\.[0-9]+)\)"m, msg)
     m === nothing && return ("", String[])
+    occursin(Regex("^\\| " * replace(m[1], "." => "\\.") * " \\|", "m"), base_march) &&
+        error("block: the commit's Timing line cites MARCH $(m[1]), a row the base already has: an edited row exempts nothing; the exemption is a new row")
     row = match(Regex("^\\+\\| " * replace(m[1], "." => "\\.") * " \\|(.*)\$", "m"), march_diff)
     row === nothing && error("block: the commit's Timing line cites MARCH $(m[1]), a row this change does not add to dev/MARCH.md")
     stages = [s for s in STAGE_NAMES if occursin(Regex("(?<![a-z0-9.-])" * replace(s, "." => "\\.") * "(?![a-z0-9.-])"), row[1])]
@@ -705,7 +708,8 @@ function main(args)
     # a Timing line the change does not back with its own MARCH row is a failure of the change
     exempt_problem = ""
     exempt, exempt_stages = try
-        timing_exemption(msg, git("diff", "$base..HEAD", "--", "dev/MARCH.md"))
+        timing_exemption(msg, git("diff", "$base..HEAD", "--", "dev/MARCH.md"),
+                         gitok("cat-file", "-e", "$base:dev/MARCH.md") ? git("show", "$base:dev/MARCH.md") : "")
     catch err
         exempt_problem = sprint(showerror, err)
         ("", String[])

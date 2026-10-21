@@ -1,0 +1,50 @@
+# Lock negatives: each case plants one mutation in a scratch checkout of this commit, runs the one lock
+# that guards it there, sees it fire, and restores the file; then every lock the cases name holds again
+# on the restored checkout. A lock counts only once it fires when broken (AGENTS.md), and the check
+# lives in the tree, run by the blocking gate's tests stage whenever this file changes.
+using Test
+
+const _LN_ROOT = normpath(joinpath(@__DIR__, ".."))
+
+# (lock, path, planted text, its replacement, what the plant breaks)
+const LOCK_NEGATIVE_CASES = [
+    ("L195", "dev/block.jl",
+     "    occursin(Regex(\"^\\\\| \" * replace(m[1], \".\" => \"\\\\.\") * \" \\\\|\", \"m\"), base_march) &&",
+     "    false &&",
+     "a Timing line citing a row the base already has exempts again (A20P26)"),
+]
+
+@testset "lock negatives: each planted mutation fires its lock" begin
+    local tmp = mktempdir()
+    local head = readchomp(`git -C $_LN_ROOT rev-parse HEAD`)
+    run(`git clone -q --shared --no-checkout $_LN_ROOT $tmp`)
+    run(`git -C $tmp checkout -q --detach $head`)
+    local was = get(ENV, "WT_RATCHET_INCLUDED", nothing)
+    ENV["WT_RATCHET_INCLUDED"] = "1"
+    local M = Module(:LockNegatives)
+    try
+        Base.include(M, joinpath(tmp, "test", "parity_ratchet.jl"))
+    finally
+        was === nothing ? delete!(ENV, "WT_RATCHET_INCLUDED") : (ENV["WT_RATCHET_INCLUDED"] = was)
+    end
+    local locks = Base.invokelatest(getglobal, getglobal(M, :ParityRatchet), :LOCKS)
+    lock_fn(id) = only(last(last(p)) for p in locks if startswith(first(p), id * "_"))
+    for (id, path, old, new, why) in LOCK_NEGATIVE_CASES
+        @testset "$id fires: $why" begin
+            local f = joinpath(tmp, path)
+            local orig = read(f, String)
+            @test count(old, orig) == 1   # the plant's target is in this commit, once
+            write(f, replace(orig, old => new; count = 1))
+            local v = try
+                Base.invokelatest(lock_fn(id))
+            finally
+                write(f, orig)
+            end
+            @test v > 0
+        end
+    end
+    @testset "restored: $id holds" for id in unique(first.(LOCK_NEGATIVE_CASES))
+        @test Base.invokelatest(lock_fn(id)) == 0
+    end
+    rm(tmp; recursive = true, force = true)
+end
