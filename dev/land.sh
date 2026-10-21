@@ -21,7 +21,9 @@
 #       the landing log (below).
 #   dev/land.sh land
 #       the self-serve landing, run by a batch's agent in its worktree on its branch (L197): refuses
-#       a dirty tree; refuses, before the hold, when L148's audit window is full (the march tip's last
+#       a dirty tree; refuses a worktree with no live Kaimon session (dev/kaimon_session.sh: every lane
+#       develops in one, its worktree made by dev/lane.sh), printing the call that starts it; refuses,
+#       before the hold, when L148's audit window is full (the march tip's last
 #       audit entry, or this landing's own when it adds the next one, the commits past it and this
 #       landing's, at most 5: dev/audit_window.sh, the
 #       ratchet's own program), naming the audit to wait for; holds the machine and the landing (dev/.block/HOLD in the main tree, its pid:
@@ -306,6 +308,10 @@ land)
     have=$([ -f Manifest.toml ] && awk '/^ *\[deps\.WasmTarget\.extensions\]/ { f = 1; next } /^ *\[/ { f = 0 } f && NF { print $1 }' Manifest.toml | sort | tr '\n' ' ' || true)
     [ "$want" = "$have" ] ||
         { echo "land: Manifest.toml's WasmTarget extensions ($have) are not Project.toml's ($want): julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
+    # every lane develops in a live Kaimon session (dev/kaimon_session.sh; dev/lane.sh makes the lane's
+    # worktree a Kaimon project): a worktree with none refuses here, in a second, printing the call that
+    # starts one (a CI checkout runs none)
+    ks=$(bash dev/kaimon_session.sh "$W") || { echo "land: $ks — refusing"; exit 1; }
     # L148's audit window, read by the ratchet's own program (dev/audit_window.sh) before the hold: the
     # march tip's last audit entry, the commits past its audited-through commit and this landing's,
     # at most 5; a full window refuses here, in a second, never after a gate run its ratchet refuses

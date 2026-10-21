@@ -43,7 +43,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D31** Run Julia only through the landing gate or a held slot; never saturate the machine.
 - **D32** WT compiles the strict subset Julia's verifier defines; outside it, a located rejection.
 - **D38** Each lock calls its own <name>_negatives_missed(), run by the ratchet stage in every gate.
-- **D39** Develop in a live Kaimon session per worktree: the typed IR, methods and profiles at hand.
+- **D39** Start a lane with bash dev/lane.sh start <name>; develop in its live Kaimon session.
 <!-- ledger:end -->
 
 ## How to work
