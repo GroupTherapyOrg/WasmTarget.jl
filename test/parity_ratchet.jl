@@ -136,17 +136,47 @@ pointers, so it is short, everything it names exists, and it carries no status v
 (dates, phase names, "currently"/"as of"/"remaining" — status lives in dev/MARCH.md and in
 this harness's output, where it is measured instead of remembered).
 """
+# AGENTS.md's size (A33E6): its hand-written lines, the ledger block's two markers among them, at most
+# AGENTS_HAND_CAP; the block at most one line per live requirement of dev/LEDGER.md; so the whole at
+# most AGENTS_HAND_CAP plus one line per live requirement, a bound that grows with the ledger and still
+# shows a stale or duplicated row
+const AGENTS_HAND_CAP = 60
+function agents_size_faults(lines::AbstractVector{<:AbstractString}, live::Int)::Vector{String}
+    local out = String[]
+    local b = findfirst(==(AGENTS_LEDGER_BEGIN), lines)
+    local e = findfirst(==(AGENTS_LEDGER_END), lines)
+    local block = (b === nothing || e === nothing || e < b) ? 0 : e - b - 1
+    local hand = length(lines) - block
+    hand <= AGENTS_HAND_CAP || push!(out, "AGENTS.md has $hand hand-written lines (cap $AGENTS_HAND_CAP)")
+    block <= live || push!(out, "AGENTS.md's ledger block has $block lines for $live live requirements: one line each")
+    length(lines) <= AGENTS_HAND_CAP + live ||
+        push!(out, "AGENTS.md has $(length(lines)) lines, past $AGENTS_HAND_CAP plus one per live requirement ($live)")
+    return out
+end
+
+# L128's negative test: planted files each answer as stated
+function agents_size_negatives_missed()::Vector{String}
+    local file(h, n) = vcat(fill("h", h), n < 0 ? String[] : vcat([AGENTS_LEDGER_BEGIN], ["- **D$i** r" for i in 1:n], [AGENTS_LEDGER_END]))
+    local cases = [("the hand-written cap with one line per requirement", file(58, 5), 5, 0),
+                   ("one hand-written line too many", file(59, 5), 5, 2),
+                   ("a duplicated requirement line", file(50, 6), 5, 1),
+                   ("no block, past the cap", file(61, -1), 5, 1),
+                   ("the bound growing with the ledger", file(40, 30), 30, 0)]
+    local out = String[]
+    for (what, lines, live, want) in cases
+        length(agents_size_faults(lines, live)) == want || push!(out, "negative missed: $what")
+    end
+    return out
+end
+
 function agents_md_violations()::Vector{String}
     v = String[]
     isfile(joinpath(ROOT, "CLAUDE.md")) && push!(v, "CLAUDE.md exists — AGENTS.md is the one instructions file")
     path = joinpath(ROOT, "AGENTS.md")
     isfile(path) || return push!(v, "AGENTS.md is missing")
     lines = _lines(path)
-    # the generated ledger block (L206) grows one line per live requirement; the hand-written rest is capped
-    local b = findfirst(==(AGENTS_LEDGER_BEGIN), lines)
-    local e = findfirst(==(AGENTS_LEDGER_END), lines)
-    local hand = (b === nothing || e === nothing || e < b) ? length(lines) : length(lines) - (e - b + 1)
-    hand <= 60 || push!(v, "AGENTS.md has $hand lines outside its ledger block (cap 60)")
+    local live = count(ledger_live, first(ledger_rows(isfile(LEDGER_PATH) ? _text(LEDGER_PATH) : "")))
+    append!(v, agents_size_faults(lines, live))
     for (i, l) in enumerate(lines)
         length(l) <= 100 || push!(v, "AGENTS.md:$i is $(length(l)) chars (cap 100)")
         for m in eachmatch(r"\b20\d\d-\d\d\b|\bPhase \d+|\b(?:currently|as of|remaining|so far|recently|TODO|FIXME)\b"i, l)
@@ -897,7 +927,7 @@ end
 # the locks that owe their always-run negative, exactly; R45 counts them, so the list only shrinks: a
 # lock leaves it in the commit that gives it its negative, and a lock added after it never joins it
 const NEGATIVE_OWED = Set{String}(split("""
-    L125 L126 L128 L129 L130 L148 L153 L162 L163 L194 L195 L197 L198
+    L125 L126 L129 L130 L148 L153 L162 L163 L194 L195 L197 L198
 """))
 
 # the faults of the lock table against NEGATIVE_OWED: a lock outside it with no always-run negative,
@@ -1130,8 +1160,8 @@ const LOCKS = [
             uncited = count(h -> h ∉ Set(cited), have)
             missing_ + dup + uncited
         end),
-    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 60 hand-written lines outside the ledger block L206 generates (one line per live requirement of dev/LEDGER.md), every line at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions; intent: every agent reads AGENTS.md whole and finds nothing stale or bloated (Dale 2026-09-22); band: at most 60 hand-written lines and 100 chars a line, the caps the band's edge; the ledger block grows with the requirements, a line each, so leanness never fights the ledger (dev/CHARTER.md C0)",
-        () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
+    "L128_agents_md_current_and_lean" => ("AGENTS.md is the ONE agent-instructions file (no CLAUDE.md), at most 60 hand-written lines (the ledger block's markers among them), its ledger block (L206) at most one line per live requirement of dev/LEDGER.md, so the whole at most 60 plus one line per live requirement, a bound that grows with the ledger and still shows a stale or duplicated row (A33E6), every line at most 100 chars, names only paths, checks and WT_* switches that exist, pins the oracle commit dev/PARITY_MASTER.md pins, and carries no status vocabulary (dates, phase names, currently/as of/remaining) — status is measured here and planned in dev/MARCH.md, never remembered in the instructions; intent: every agent reads AGENTS.md whole and finds nothing stale or bloated (Dale 2026-09-22); band: at most 60 hand-written lines, 60 plus one per live requirement in all, and 100 chars a line, the caps the band's edge; the ledger block grows with the requirements, a line each, so leanness never fights the ledger. Behavior, run here: five planted files answer as stated (dev/CHARTER.md C0)",
+        () -> (v = vcat(agents_md_violations(), agents_size_negatives_missed()); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
     "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** push, a push of the march branch (dev/land.sh's MARCH, wt2) or workflow_dispatch: `dev/land.sh merge` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #128 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",

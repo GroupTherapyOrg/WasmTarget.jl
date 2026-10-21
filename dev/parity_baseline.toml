@@ -3,4 +3,4 @@
 # Tighten via: WT_RATCHET_UPDATE=1 julia --project=. test/parity_ratchet.jl
 
 [metrics]
-R45_locks_owing_negatives = 13
+R45_locks_owing_negatives = 12
