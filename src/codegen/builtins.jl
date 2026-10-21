@@ -986,13 +986,13 @@ function _lower_memoryrefget!(b, fb, ctx, call, idx, args, callee)::Union{Nothin
         return append_builder!(b, fb)
     end
 
-    # Nothing-typed memory — always returns nothing (i32.const 0).
-    # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push 0.
+    # Nothing-typed memory — always returns nothing, the null (ref.null none).
+    # Consume the [array_ref, i32_index] stack pair from memoryrefnew, then push it.
     if elem_type === Nothing
         emit_memoryref!(fb, ctx, ref_arg)
         drop!(fb)  # drop i32_index
         drop!(fb)  # drop array_ref
-        i32_const!(fb, 0)
+        ref_null!(fb, NoneRef)
         return append_builder!(b, fb)
     end
 
@@ -1402,16 +1402,12 @@ function _lower_tuple!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Inst
                 emit_value!(_tupb, arg, ctx, struct_type_def.fields[_mr_fi].valtype)
                 continue
             end
-            # a `nothing` field holds Julia's one `nothing`, the module's Nothing singleton
-            # (compiled bare it pushed a numeric no conversion could type: a WasmInternalError,
-            # A11 c4)
+            # a `nothing` field holds the null, `nothing`'s one form, at the field's type
             if is_nothing_value(arg, ctx)
                 local _nf = fi + Int(info.field_offset)
                 (struct_type_def isa StructType && _nf <= length(struct_type_def.fields)) ||
                     error("tuple field $fi has no physical Wasm type")
-                local _ng = get_nothing_global!(ctx.mod, ctx.type_registry)
-                global_get!(_tupb, _ng)
-                coerce_stack_top!(_tupb, struct_type_def.fields[_nf].valtype, ctx; from_julia=Nothing)
+                emit_value!(_tupb, NirLiteral(nothing), ctx, unpacked(struct_type_def.fields[_nf].valtype))
                 continue
             end
             # (Typed): the first-byte const scans + LOCAL_GET LEB decodes are
@@ -1528,7 +1524,7 @@ function _lower_typeof!(b, fb, ctx, call, idx, args, callee)::Union{Nothing, Ins
         # parity(code_generator.dart:2258 visitInstanceGet): a potentially-null receiver's
         # `runtimeType` branches on null (`br_on_null`) to the Null type literal; `nothing`
         # is the null ref, so its type is Nothing, never a classId read through a null.
-        local nullable = arg_type !== nothing && Nothing <: arg_type
+        local nullable = is_null_nothing(arg_type)
         local done, isnull
         if nullable
             haskey(ctx.type_registry.type_constant_globals, Nothing) ||
@@ -1679,24 +1675,25 @@ end
 The classId of the erased value on the stack, whose static type is `T`: a classed value's
 header field (emit_typeof!), or, for a Memory or a SimpleVector (a bare wasm array with no
 header), the id of the one closed-world class whose array type it is (bare_array_partition);
-for a null `nothing` where the static type admits Nothing, Nothing's id.
+for a null where the static type admits Nothing (is_null_nothing, the one rule), Nothing's id.
 A closure of any class is its object (maybe_wrap_closure!), whose header names its class.
 parity(code_generator.dart:6076 loadClassId)
 """
-emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T); arrays::Bool=true)::InstrBuilder =
+emit_class_id!(b::InstrBuilder, ctx::AbstractCompilationContext, T::Type; arrays::Bool=true)::InstrBuilder =
     emit_class_id!(b, ctx.mod, ctx.type_registry, w -> allocate_local!(ctx, w), T; arrays)
 # parity(code_generator.dart:6076 loadClassId): the same read in a function a module builds
 # with no compilation context (a selector caller), its scratch declared through `alloc`
 function emit_class_id!(b::InstrBuilder, mod::WasmModule, reg::TypeRegistry, alloc::Function,
-                        @nospecialize(T); arrays::Bool)::InstrBuilder
+                        T::Type; arrays::Bool)::InstrBuilder
     local base_idx = reg.base_struct_idx
     base_idx === nothing && throw(ArgumentError("a class read needs the class base struct"))
     local bare = arrays ? bare_array_partition(mod, reg, T).told : Tuple{Type,UInt32}[]
-    # `nothing` may be the null reference, which has no header: its class is Nothing's, read
-    # before the header as dart branches on null before loadClassId (A11E2: the read trapped
-    # where Julia throws a MethodError)
-    local nid = get_type_id(reg, Nothing)
-    local nullable = nid > 0 && (T === nothing || Nothing <: T)
+    # `nothing` is the null reference, which has no header: its class is Nothing's, read before
+    # the header as dart branches on null before loadClassId (A11E2: the read trapped where Julia
+    # throws a MethodError), wherever the static type admits it (is_null_nothing, the one rule)
+    local nullable = is_null_nothing(T)
+    local nid = nullable ? get_type_id(reg, Nothing) : Int32(0)
+    nullable && nid <= 0 && error("Nothing is not numbered, so a null of $(T) has no class to read")
     isempty(bare) && !nullable && return emit_typeof!(b, base_idx)
     local v = alloc(AnyRef)
     local_set!(b, v)

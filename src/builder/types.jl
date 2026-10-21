@@ -33,6 +33,8 @@ Reference types in WebAssembly (including WasmGC extensions).
     StructRef = 0x6B  # structref (WasmGC)
     ArrayRef = 0x6A   # arrayref (WasmGC)
     ExnRef = 0x69     # exnref (exception handling)
+    NoneRef = 0x71    # nullref, (ref null none): the bottom of the any hierarchy (WasmGC)
+    # precedent(wasm: the none abstract heap type 0x71, the GC proposal's bottom of the any hierarchy; dart: NoneHeapType, type.dart:636)
 end
 
 """
@@ -239,7 +241,7 @@ function _wt_defined_type(idx::Integer, types::Vector{CompositeType})::Composite
 end
 
 # An abstract heap type's code (the RefType enum's byte) as its kind; a code WT does not model
-# (none, noextern, nofunc, noexn) is :unknown.
+# (noextern, nofunc, noexn) is :unknown.
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:361 HeapType.deserialize)
 function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
     byte == UInt8(AnyRef)    ? :any    :
@@ -247,20 +249,21 @@ function _wt_heap_kind_of_byte(byte::UInt8)::Symbol
     byte == UInt8(StructRef) ? :struct :
     byte == UInt8(ArrayRef)  ? :array  :
     byte == UInt8(I31Ref)    ? :i31    :
+    byte == UInt8(NoneRef)   ? :none   :
     byte == UInt8(ExternRef) ? :extern :
     byte == UInt8(FuncRef)   ? :func   :
     byte == UInt8(ExnRef)    ? :exn    : :unknown
 end
 
-# The top of a heap kind's hierarchy: any (eq, struct, array, i31 and the defined structs and
-# arrays), func (the defined function types), extern or exn; the four share no supertype.
+# The top of a heap kind's hierarchy: any (eq, struct, array, i31, none and the defined structs
+# and arrays), func (the defined function types), extern or exn; the four share no supertype.
 # parity(pkg/wasm_builder/lib/src/ir/type.dart:348 HeapType.topType)
 function _wt_hierarchy_top(kind::Symbol)::Symbol
     (kind === :func || kind === :concrete_func) ? :func :
     kind === :extern ? :extern :
     kind === :exn    ? :exn    :
     (kind === :any || kind === :eq || kind === :struct || kind === :array ||
-     kind === :i31 || kind === :concrete_struct || kind === :concrete_array) ? :any :
+     kind === :i31 || kind === :none || kind === :concrete_struct || kind === :concrete_array) ? :any :
     :unknown
 end
 
@@ -316,7 +319,9 @@ it: a numeric type only as itself; a reference type when its nullability allows 
 one is never a subtype of a non-null one) and its heap type is a subtype of the other's. A
 defined type walks its declared supertype chain, then its abstract super (struct, array or func),
 so two distinct function types are unrelated, as are a function type and any type outside the
-func hierarchy; any > eq > {struct, array, i31}; extern, func and exn each their own top.
+func hierarchy; any > eq > {struct, array, i31}; none is below every heap type of the any
+hierarchy, the defined structs and arrays too (type.dart:636 NoneHeapType.isSubtypeOf), and only
+none is below none; extern, func and exn each their own top.
 `types` is the module's type list (WasmModule.types).
 parity(pkg/wasm_builder/lib/src/ir/type.dart:236 RefType.isSubtypeOf)
 """
@@ -327,6 +332,9 @@ function wasm_subtype(a::WasmValType, b::WasmValType, types::Vector{CompositeTyp
     local ka = _wt_heap_kind(a, types)
     local kb = _wt_heap_kind(b, types)
     (ka === :unknown || kb === :unknown) && return false
+    # the bottom of the any hierarchy: below every heap type of it, and only itself below it
+    ka === :none && return _wt_hierarchy_top(kb) === :any
+    kb === :none && return false
     # a defined target: a defined type on the source's declared chain
     if kb === :concrete_struct || kb === :concrete_array || kb === :concrete_func
         (ka === :concrete_struct || ka === :concrete_array || ka === :concrete_func) || return false

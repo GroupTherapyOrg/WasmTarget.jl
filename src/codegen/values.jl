@@ -15,12 +15,11 @@ test/parity_ratchet.jl; every remaining caller of this function is a pre-emit de
 parity(code_generator.dart:124 translateType) of dartTypeOf (:129).
 """
 function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmValType
-    # Handle GlobalRef by resolving it and recursively determining type
-    # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
-    # GlobalRef to struct instance emits struct_new
+    # Handle GlobalRef by resolving it and recursively determining type: `nothing` is the null
+    # (ref.null none); a GlobalRef to a struct instance emits struct_new
     if val isa NirGlobalRef
         if val.name === :nothing
-            return I32
+            return NoneRef
         end
         # The binding was resolved once at the NIR boundary; an unbound one is the same
         # located reject the emission of this operand raises.
@@ -88,9 +87,9 @@ function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmVa
     elseif val isa NirLiteral
         # Literal value
         lit = val.value
-        # Handle nothing specially - compile_value(nothing) produces i32_const 0
+        # `nothing` is the null: ref.null none, the type of its one form
         if lit === nothing
-            return I32
+            return NoneRef
         elseif lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
             # D-001: an IR reference type carried as a literal VALUE is a literal struct,
             # not an IR ref.
@@ -200,40 +199,25 @@ check.
     boundaries need (dart2wasm throws here; Julia widens).
 
 Returns `b`.
-formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at every nullable reference of the any hierarchy is its null, never boxed (NothingIsNull), and a nothing held in a reference is never unboxed or cast, its placeholder (boxed for a non-null reference) taken instead (NothingNeverCast); upcasts emit nothing but a nothing's null; only inexpressible pairs reject
+formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing`'s one form is the null, which no numeric register and no non-null reference holds (OneNothing); at a nullable reference it is an upcast or the sink's null, never boxed or cast (NothingIsNull), never unboxed or made non-null (NothingNeverCast); upcasts emit nothing; only inexpressible pairs and a nothing outside its one form reject
 parity(translator.dart:1597 convertType)
 """
 function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
                        ctx::AbstractCompilationContext;
                        @nospecialize(from_julia::Union{Type,Nothing}))::Union{Nothing,InstrBuilder}
     local _mod = ctx.mod
-    # `nothing` meeting a nullable reference of the any hierarchy (a Union{T,Nothing}'s box or
-    # struct, anyref, eqref, structref) is its null, whichever position's form it arrives in (a
-    # field's i32 placeholder, a tuple field's singleton, a box): never boxed, never cast, so the
-    # one null test reads it; one already in a nullable reference the sink admits is that null
-    if from_julia === Nothing && from != to && _wt_is_ref(to) && _wt_ref_nullable(to) &&
-       _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
-       !(_wt_is_ref(from) && _wt_ref_nullable(from) && wasm_subtype(from, to, _mod.types))
+    # `nothing` has one form, the null (ref.null none, dart's Null class, translator.dart:1072): a
+    # nullable reference holds it as an upcast where the source is a subtype of it, else as its own
+    # null (the value dropped, never boxed or cast); a numeric register and a non-null reference
+    # hold no nothing, so such a pair rejects (formal: OneNothing, NothingIsNull, NothingNeverCast)
+    if from_julia === Nothing
+        (_wt_is_ref(from) && _wt_is_ref(to) && _wt_ref_nullable(to)) ||
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a nothing has no $(_wt_is_ref(from) ? to : from) representation: its one form is the null, " *
+                "which no numeric register and no non-null reference holds"; detail=from_julia)
+        wasm_subtype(from, to, _mod.types) && return b
         drop!(b)
         to isa ConcreteRef ? ref_null!(b, Int64(to.type_idx)) : ref_null!(b, to)
-        return b
-    end
-    # a `nothing` held in a reference (the null it is there) bound for its i32 placeholder or a
-    # non-null reference of the any hierarchy is never unboxed or cast, which traps on the null: its
-    # placeholder, boxed under Nothing's class for a reference its box is; any other sink holds no
-    # nothing (formal: NothingNeverCast)
-    if from_julia === Nothing && _wt_is_ref(from) && from != to &&
-       (!_wt_is_ref(to) || (!_wt_ref_nullable(to) && _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
-                            !wasm_subtype(from, to, _mod.types)))
-        (to === I32 || _wt_is_ref(to)) || return emit_unsupported_stub!(ctx, b, :unsupported_type,
-            "a nothing has no $(to) representation"; detail=from_julia)
-        drop!(b)
-        emit_value!(b, NirLiteral(nothing), ctx, I32)   # the constant `nothing`, its i32 placeholder
-        to === I32 && return b
-        local nbox = emit_classid_box!(b, ctx, I32, Nothing)
-        wasm_subtype(ConcreteRef(UInt32(nbox), false), to, _mod.types) ||
-            return emit_unsupported_stub!(ctx, b, :unsupported_type,
-                "a nothing has no $(to) representation: its box is no $(to)"; detail=from_julia)
         return b
     end
     # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
@@ -1208,25 +1192,8 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
             if def isa NirPi
                 pi_type = value_type(ctx, node)
                 if pi_type === Nothing
-                    # PiNode narrowed to Nothing - emit appropriate null/zero value
-                    # Nothing maps to I32 in Wasm, so emit i32.const 0 as default.
-                    # For Union{Nothing, T} where T is a ref type, emit ref.null instead.
-                    emitted_nothing = false
-                    if def.value isa NirSSA
-                        underlying_type = value_type(ctx, def.value)
-                        # For Union{Nothing, T}, emit ref.null $T
-                        if underlying_type !== Nothing && underlying_type !== Any
-                            wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
-                            if wasm_type isa ConcreteRef
-                                ref_null!(b, Int64(wasm_type.type_idx))
-                                emitted_nothing = true
-                            end
-                        end
-                    end
-                    if !emitted_nothing
-                        # Nothing is i32(0) as placeholder — this is what the callee expects
-                        i32_const!(b, 0)
-                    end
+                    # a PiNode narrowed to Nothing is `nothing`, the null (ref.null none)
+                    ref_null!(b, NoneRef)
                 else
                     # Non-Nothing PiNode without local: re-emit the underlying value.
                     # Can't assume it's on the stack since block boundaries clear the stack.
@@ -1424,8 +1391,9 @@ function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::Instr
         # NirLiteral — a constant operand. Everything below is the constant chain.
         val = node.value
         if val === nothing
-            # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
-            i32_const!(b, 0)
+            # parity(constants.dart:605 visitNullConstant): the null constant
+            # is `ref.null none`, a subtype of every nullable reference of the any hierarchy
+            ref_null!(b, NoneRef)
             return b
         end
         if val isa Bool

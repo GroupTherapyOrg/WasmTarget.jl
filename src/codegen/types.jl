@@ -213,9 +213,11 @@ function julia_to_wasm_type(::Type{T})::WasmValType where T
         # 128-bit integers are represented as WasmGC structs with two i64 fields
         return StructRef
     elseif T === Nothing
-        # Nothing has no Wasm representation - handled specially
-        # Return I32 as a placeholder (functions returning Nothing don't actually return)
-        return I32
+        # `nothing`'s one form is the null, in every position (a value, a local, a parameter, a
+        # field, an element): dart translates the Null class to `ref null none` (translator.dart:1072).
+        # A function returning Nothing returns no value (compile.jl), as dart's `void` result.
+        # precedent(dart: translateStorageType's Null class, RefType.none(nullable: true), translator.dart:1072)
+        return NoneRef
     elseif T === Any
         # Any can hold any value - map to anyref for internal polymorphism
         # anyref supports ref.cast/ref.test/br_on_cast (externref does not)
@@ -574,9 +576,8 @@ mutable struct TypeRegistry
     base_struct_idx::Union{Nothing, UInt32}    # $JlTop = {classId:i32}
     object_struct_idx::Union{Nothing, UInt32}  # $JlObject <: Top = {classId, identityHash}
     identity_counter_global::Union{Nothing, UInt32}
-    # BoxedNothing struct type and singleton global
-    nothing_box_idx::Union{Nothing, UInt32}   # Struct type: (struct (field $typeId i32))
-    nothing_global_idx::Union{Nothing, UInt32}  # Singleton global holding BoxedNothing instance
+    # dart's dummy context: the one global holding an empty struct's object
+    dummy_struct_global::Union{Nothing, UInt32}
     # Type lookup table — typeId (i32) → DataType struct ref
     type_lookup_array_idx::Union{Nothing, UInt32}  # Array type: (array (mut (ref null $JlDataType)))
     type_lookup_global::Union{Nothing, UInt32}  # Global holding the lookup array
@@ -670,7 +671,7 @@ TypeRegistry()::TypeRegistry = TypeRegistry(
     Dict{WasmValType, UInt32}(),
     IdDict{Type, UInt32}(), Dict{Core.TypeName, UInt32}(),
     Dict{Type, Int32}(), Dict{Type, Tuple{Int32, Int32}}(),
-    nothing, nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
+    nothing, nothing, nothing, nothing, nothing, nothing, Int32(0),
     nothing, nothing, nothing, nothing, nothing, nothing, nothing,
     nothing,  # unicode_property_func_idx
     nothing,  # egal_func_idx
@@ -986,7 +987,7 @@ function assign_type_ids!(registry::TypeRegistry; extra_concrete_types::Union{No
     extra_concrete_types !== nothing && union!(concrete_types, extra_concrete_types)
 
     # Also include primitive numeric types that may need boxing/dispatch
-    # Include Nothing for BoxedNothing typeId
+    # Nothing is numbered: a null that denotes `nothing` has its class (typeof, dispatch)
     # parity(class_info.dart:864 ClassIdNumbering._number): String + Symbol are CLASSED now — they join the hierarchy so
     # `isa AbstractString` becomes the same dense-range check as everything else.
     for T in (Bool, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
@@ -2270,39 +2271,19 @@ function get_box_type!(mod::WasmModule, registry::TypeRegistry, contents_wasm_ty
 end
 
 """
-Get or create the BoxedNothing struct type.
-BoxedNothing has only typeId:i32 (no value field) — a singleton type.
-parity(quarantine: Julia's nothing boxed as a classed value where an Any slot needs a class; dart's null is ref.null (dev/MARCH.md 13.4, one representation of nothing).)
-"""
-function get_nothing_box_type!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    if registry.nothing_box_idx !== nothing
-        return registry.nothing_box_idx
-    end
-    # BoxedNothing: just typeId field (no value)
-    fields = [FieldType(I32, false)]
-    base = get_base_struct_type!(mod, registry)
-    type_idx = UInt32(add_type!(mod, StructType(fields, base)))
-    registry.nothing_box_idx = type_idx
-    return type_idx
-end
+    dummy_struct_global!(mod, registry) -> global index
 
+dart's dummy context: an immutable global holding the one object of an empty struct, the context
+a closure object holds when its function takes none (a function used as a value), defined on first
+use and kept on the registry (one compile's). It is never Julia's `nothing`, which is the null.
+parity(pkg/dart2wasm/lib/translator.dart:3841 dummyStructGlobal)
+precedent(dart: dummyStructGlobal, translator.dart:3841)
 """
-Get or create a singleton global holding the BoxedNothing instance.
-Returns the global index. The global is initialized with struct.new \$BoxedNothing(typeId).
-parity(quarantine: Julia's nothing boxed as a classed value where an Any slot needs a class; dart's null is ref.null (dev/MARCH.md 13.4, one representation of nothing).)
-"""
-function get_nothing_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
-    if registry.nothing_global_idx !== nothing
-        return registry.nothing_global_idx
-    end
-    box_type = get_nothing_box_type!(mod, registry)
-    # Create init expr: i32.const <typeId> → struct.new BoxedNothing (without END)
-    global_idx = define_global!(mod, ConcreteRef(box_type, false), false) do b
-        emit_type_id!(b, registry, Nothing)
-        struct_new!(b, box_type)
-    end
-    registry.nothing_global_idx = global_idx
-    return global_idx
+function dummy_struct_global!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.dummy_struct_global === nothing || return registry.dummy_struct_global
+    local t = UInt32(add_type!(mod, StructType(FieldType[], nothing)))
+    registry.dummy_struct_global = define_global!(init -> struct_new!(init, t), mod, ConcreteRef(t, false), false)
+    return registry.dummy_struct_global
 end
 
 """
@@ -2974,7 +2955,7 @@ single source consumers migrate onto as those rework.
 parity(translator.dart:1068 isPotentiallyNullable): the nullability of a translated type.
 """
 derive_nullability(@nospecialize(T))::Bool =
-    T === Any || T === Nothing || (T isa Union && Nothing <: T) || !(T isa DataType)
+    is_null_nothing(T) || !(T isa DataType)
 
 """
     translate_external_type(T, mod, registry) -> WasmValType

@@ -298,9 +298,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
     for nt in (I32, I64, F32, F64)
         get_numeric_box_type!(mod, type_registry, nt)
     end
-    # Pre-register BoxedNothing type
-    get_nothing_box_type!(mod, type_registry)
-
     # a root binding and an invoke binding's target name a root of the plan (its entries, by the
     # names trim_compile_plan gave them), never another planned function
     requested_names = Set{String}(values(plan.roots))
@@ -475,9 +472,6 @@ function _compile_closed_world_plan(plan::ClosedWorldPlan;
 
     # Assign DFS type IDs (the closed world = registered + reachable)
     assign_type_ids!(type_registry; extra_concrete_types=_reachable)
-
-    # Create BoxedNothing singleton global (after type IDs assigned)
-    get_nothing_global!(mod, type_registry)
 
     # Create DataType globals for ALL types with DFS IDs + type lookup table
     ensure_all_type_globals!(mod, type_registry)

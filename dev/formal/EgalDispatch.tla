@@ -168,8 +168,8 @@ FillLays(num) == num \ MutableCallables
 \* ClosureByIdentity: never, the code before batch 96)
 U(v) == IF ~ClosureByIdentity /\ IsObject(v) /\ (UnwrapFirst \/ Ctx(v) # "dummy") THEN Ctx(v)
         ELSE Ref(v)
-\* the classId of a classed reference after arm 3 (the dummy context is the `nothing` object)
-UClass(v) == IF U(v) = "dummy" THEN "Nothing" ELSE Class(v)
+\* the dummy context is dart's dummy struct, an empty struct with no class header, never `nothing`
+\* (a classId read of it traps)
 
 B(p) == IF p THEN "T" ELSE "F"   \* an answer: "T", "F", or "trap"
 
@@ -180,10 +180,11 @@ Runtime(bd, a, b) ==
     ELSE IF ~ClosureByIdentity /\ IsCtx(U(a)) /\ CtxClass(U(a)) \in bd.clo  \* 5. closures
          THEN B(CtxClass(U(b)) = CtxClass(U(a)) /\ CtxFields(U(a)) = CtxFields(U(b)))
     ELSE IF IsCtx(U(a)) \/ IsCtx(U(b)) THEN "F"                        \* 6. a context is not classed
-    ELSE IF UClass(a) # UClass(b) THEN "F"                              \*    classIds differ
-    ELSE IF UClass(a) \notin bd.cls THEN "F"                            \*    an identity class
-    ELSE IF UClass(a) \in SingletonClasses THEN "T"
-    ELSE IF UClass(a) \in ClosureClasses THEN "trap"   \* _emit_egal_class! casts an object to its context
+    ELSE IF U(a) = "dummy" \/ U(b) = "dummy" THEN "trap"               \*    the dummy has no classId
+    ELSE IF Class(a) # Class(b) THEN "F"                                \*    classIds differ
+    ELSE IF Class(a) \notin bd.cls THEN "F"                             \*    an identity class
+    ELSE IF Class(a) \in SingletonClasses THEN "T"
+    ELSE IF Class(a) \in ClosureClasses THEN "trap"   \* _emit_egal_class! casts an object to its context
     ELSE B(SameClass(a, b))
 
 \* ---- emit_egal!'s static arms ----

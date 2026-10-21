@@ -47,7 +47,7 @@ it NULL) whose type admits `nothing` beside `#undef`.
 parity(quarantine: as undef_slot.)
 """
 pointer_slot_admits_nothing(@nospecialize(T))::Bool =
-    pointer_slot(T) && T !== Nothing && Nothing <: T
+    pointer_slot(T) && T !== Nothing && is_null_nothing(T)
 
 """
     pointer_slot(T) -> Bool

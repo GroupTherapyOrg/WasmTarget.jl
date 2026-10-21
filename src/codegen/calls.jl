@@ -1645,35 +1645,10 @@ function _emit_fields_egal!(b::InstrBuilder, mod::WasmModule, registry::TypeRegi
 end
 
 """
-    _emit_is_nothing!(b, registry, l) -> b
-
-Push whether the anyref in local `l` is `nothing`: a null reference, or a classed value whose
-classId is `Nothing`'s (the boxed-nothing singleton, or a boxed `Nothing` register value).
-parity(intrinsics.dart:2974 MemberIntrinsic.identical): its null arm (`br_on_null`), with
-Julia's `nothing` carried either as null or as the Nothing class.
-"""
-function _emit_is_nothing!(b::InstrBuilder, registry::TypeRegistry, l::Integer)::InstrBuilder
-    local top = registry.base_struct_idx
-    local_get!(b, l); ref_is_null!(b)
-    if_!(b; results=WasmValType[I32])
-    i32_const!(b, 1)
-    else_!(b)
-    local_get!(b, l); ref_test!(b, Int64(top), false)
-    if_!(b; results=WasmValType[I32])
-    local_get!(b, l); emit_typeof!(b, top)
-    i32_const!(b, Int64(ensure_type_id!(registry, Nothing))); num!(b, Opcode.I32_EQ)
-    else_!(b)
-    i32_const!(b, 0)
-    end_block!(b)
-    end_block!(b)
-    return b
-end
-
-"""
     get_egal_function!(mod, registry) -> UInt32
 
 The ONE runtime egal function `(anyref, anyref) -> i32`, built once per module on first use.
-In order: `nothing` (null, or the Nothing class) against `nothing`; reference identity; type
+In order: `nothing` (the null) against `nothing`; reference identity; type
 objects (a Union or UnionAll compared by its two fields, a DataType or TypeVar by identity);
 SimpleVector element by element; closures, a closure object read as its context unless that is
 the shared dummy context, and two contexts of one immutable closure type compared field by
@@ -1733,12 +1708,11 @@ function _egal_body(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Inst
     local ret!(emit) = (if_!(b); emit(); return_!(b); end_block!(b))
     local egal_call!() = call!(b, fidx)
 
-    # nothing: null or the Nothing class, on either side
+    # `nothing`, the null, on either side: the other must be the null too
     local_get!(b, 0); ref_is_null!(b)
-    ret!(() -> (local_get!(b, 1); ref_is_null!(b); if_!(b; results=WasmValType[I32]); i32_const!(b, 1); else_!(b);
-                _emit_is_nothing!(b, registry, 1); end_block!(b)))
+    ret!(() -> (local_get!(b, 1); ref_is_null!(b)))
     local_get!(b, 1); ref_is_null!(b)
-    ret!(() -> _emit_is_nothing!(b, registry, 0))
+    ret!(() -> i32_const!(b, 0))
     # identity
     local_get!(b, 0); ref_test!(b, EqRef, false)
     local_get!(b, 1); ref_test!(b, EqRef, false)
@@ -1824,7 +1798,7 @@ function _egal_body(mod::WasmModule, registry::TypeRegistry, fidx::UInt32)::Inst
                             registry.structs[C].field_offset == 1]
     if cb !== nothing || !isempty(closures)
         if cb !== nothing
-            local ng = get_nothing_global!(mod, registry)
+            local ng = dummy_struct_global!(mod, registry)
             local cx = alloc(AnyRef)
             for l in (0, 1)   # a closure object is its context, unless that is the dummy
                 local_get!(b, l); ref_test!(b, Int64(cb), false)
@@ -2062,16 +2036,15 @@ function emit_egal!(b::InstrBuilder, ctx::AbstractCompilationContext, x::NirNode
         local w = _egal_rep(T1, mod, reg)
         _emit_egal_same!(bld, mod, reg, alloc, T1, pusher(x, w, T1), w, pusher(y, w, T1), w, Any[])
     elseif T1 === Nothing || T2 === Nothing
+        # `nothing` is the null: the other operand is `nothing` exactly when its type admits Nothing
+        # (is_null_nothing, the one rule) and it is the null; a numeric register holds none
         local other, OT = T1 === Nothing ? (y, T2) : (x, T1)
         local w = static_wasm_type(other, ctx)
-        local inner = OT isa Union ? get_nullable_inner_type(OT) : nothing
-        if w isa ConcreteRef && inner isa DataType && is_struct_type(inner)
-            # Union{Nothing,S} of a struct S: null is the only nothing
-            emit_value_as!(bld, other, ctx, w, OT)
+        if is_null_nothing(OT) && _wt_is_ref(w)
+            emit_value!(bld, other, ctx, w)
             ref_is_null!(bld)
         else
-            local l = _egal_local!(bld, alloc, pusher(other, AnyRef, concrete(OT) ? OT : nothing), AnyRef)
-            _emit_is_nothing!(bld, reg, l)
+            i32_const!(bld, 0)
         end
     else
         pusher(x, AnyRef, concrete(T1) ? T1 : nothing)()
@@ -2157,34 +2130,15 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
     # boxed AnyRef discriminated by classId, so isa flows through the AnyRef path below
     # (emit_isa_class_header!, its header's classId).
     if check_type === Nothing
-        # isa(x, Nothing), the value on the stack: a numeric register holds no nothing (0); a
-        # value of any class reads `===`'s one nothing test; a nullable single representation's
-        # only nothing is its null
-        local isa_val_wasm = nothing
-        if value_arg isa NirSSA
-            local isa_local_idx = get(ctx.ssa_locals, value_arg.id, nothing)
-            # Fix: isa_local_idx includes n_params, but ctx.locals only has non-param locals
-            if isa_local_idx !== nothing
-                local local_offset = isa_local_idx - ctx.n_params
-                if local_offset >= 0 && local_offset < length(ctx.locals)
-                    isa_val_wasm = ctx.locals[local_offset + 1]
-                end
-            end
-        end
+        # isa(x, Nothing), the value on the stack: `nothing` is the null, so a value whose type
+        # admits Nothing (is_null_nothing, the one rule) is nothing exactly when it is the null; a
+        # numeric register, or a value whose type admits no Nothing, holds none
         local _isa_top = isempty(bld.v.stack) ? nothing : bld.v.stack[end]
-        if isa_val_wasm !== nothing && (isa_val_wasm === I64 || isa_val_wasm === I32 || isa_val_wasm === F64 || isa_val_wasm === F32)
-            # Numeric value on stack — can never be Nothing. Drop + push false.
+        if (_isa_top === nothing || _wt_is_ref(_isa_top)) && is_null_nothing(val_jt)
+            ref_is_null!(bld)
+        else
             drop!(bld)
             i32_const!(bld, 0)
-        elseif _isa_top isa RefType && _wt_hierarchy_top(_wt_heap_kind(_isa_top, ctx.mod.types)) === :any
-            # a value of any class: the one nothing test, `===`'s (_emit_is_nothing!), a null or
-            # a value of Nothing's class
-            local _isa_l = allocate_local!(ctx, AnyRef)
-            local_set!(bld, _isa_l)
-            _emit_is_nothing!(bld, ctx.type_registry, _isa_l)
-        else
-            # a nullable single representation (Union{Nothing,T}'s): null is its only nothing
-            ref_is_null!(bld)
         end
     elseif check_type isa Type && is_runtime_vararg_tuple_type(val_jt)
         # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), E concrete,
@@ -2314,7 +2268,7 @@ function _compile_call_isa(args, fb::InstrBuilder, ctx::AbstractCompilationConte
             else
                 _isa_reject!(bld, ctx, "isa(x, $(check_type)): $(check_type) has no runtime test for a $(isa2_val_wasm) value")
             end
-        elseif val_jt isa Union && Nothing <: val_jt && Base.typesplit(val_jt, Nothing) <: check_type
+        elseif val_jt isa Union && is_null_nothing(val_jt) && Base.typesplit(val_jt, Nothing) <: check_type
             # x::Union{Nothing, S} with S <: T: isa(x, T) is exactly "x is not the null nothing"
             ref_is_null!(bld)
             num!(bld, Opcode.I32_EQZ)  # negate: 1->0, 0->1
@@ -2631,7 +2585,8 @@ function _try_inline_typeid_dispatch(ctx::AbstractCompilationContext, called_fun
         is_bare_array_class(Tc) &&
             Tc in bare_array_partition(ctx.mod, ctx.type_registry, call_arg_types[dpos]).shared && return nothing
         cw = _function_type(ctx.mod, c.wasm_idx).params[dpos]
-        (cw isa ConcreteRef || cw in (I32, I64, F32, F64)) || return nothing
+        # (Nothing's parameter is (ref null none): its row's value is the null, landed by the funnel)
+        (cw isa ConcreteRef || cw in (I32, I64, F32, F64) || cw === NoneRef) || return nothing
         tid = ensure_type_id!(ctx.type_registry, Tc)
         tid > 0 || return nothing
         push!(branches, (tid, cw, c))
@@ -4165,38 +4120,17 @@ function compile_call!(b::InstrBuilder, node::NirCall, idx::Int, ctx::AbstractCo
                 # Push arguments with type checking
                 for (arg_idx, arg) in enumerate(args)
                     local _cab = _compile_value_b(arg, ctx)
-                    local _cab_merged = false
-                    # Check if arg type matches expected param type (the merge happens
-                    # AFTER the phantom/numeric-replacement decisions — the pop! surgeries
-                    # are gone; we just don't merge a replaced arg)
+                    # Check if arg type matches expected param type
                     if arg_idx <= length(target_info.arg_types)
                         expected_julia_type = target_info.arg_types[arg_idx]
                         expected_wasm = get_concrete_wasm_type(expected_julia_type, ctx.mod, ctx.type_registry)
                         actual_julia_type = call_arg_types[arg_idx]
 
-                        # Handle Nothing→ref conversion BEFORE type bridging.
-                        # compile_value emits i32_const 0 for Nothing,
-                        # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
-                        # otherwise bridging tries any_convert_extern on an i32 value.
-                        # NOTE: Type{T} no longer needs this — it now emits global.get (DataType ref).
-                        _is_phantom = actual_julia_type === Nothing
-                        if _is_phantom && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
-                            # the Nothing emission is exactly one i32.const 0 (ir/-kind test)
-                            if length(_cab.instrs) == 1 && _cab.instrs[1] isa InstrIR.I32Const
-                                if expected_wasm isa ConcreteRef
-                                    ref_null!(fb, Int64(expected_wasm.type_idx))
-                                else
-                                    ref_null!(fb, expected_wasm)
-                                end
-                                _cab_merged = true   # the phantom replaced the arg
-                            end
-                        end
-
                         # F8 (twin of the invoke collapse): the bridging chain IS
                         # one convertType call (dart code_generator.dart:879) reading the
-                        # tracked emission type off the builder stack; the phantom arm above
-                        # already left the expected type there.
-                        _cab_merged || (append_builder!(fb, _cab); _cab_merged = true)
+                        # tracked emission type off the builder stack (a nothing is the null,
+                        # ref.null none, which the funnel lands on a nullable parameter)
+                        append_builder!(fb, _cab)
                         coerce_stack_top!(fb, expected_wasm, ctx;
                                           from_julia=(actual_julia_type isa Type && isconcretetype(actual_julia_type)) ? actual_julia_type : nothing)
                     end

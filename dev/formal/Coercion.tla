@@ -30,7 +30,10 @@
 (*    heap kind the real function distinguishes: the four numerics; the       *)
 (*    abstract GC kinds any/eq/struct/array/i31; the extern, func and exn      *)
 (*    hierarchies; two concrete structs S2 <: S1 <: struct; one concrete      *)
-(*    array; the four numeric box structs (the boxing arm's targets); and the  *)
+(*    array; the four numeric box structs (the boxing arm's targets); the      *)
+(*    `none` heap type, the bottom of the any hierarchy, whose nullable       *)
+(*    reference (ref null none) is the type of `nothing`'s one form, the null; *)
+(*    and the                                                                  *)
 (*    classed string Str and its byte array StrArr (the string arms); a fixed  *)
 (*    tuple Tf (an NTuple{k,E}) and the runtime-length tuple Tv               *)
 (*    (Tuple{Vararg{E}}), whose arms build Tv from Tf. Each ref               *)
@@ -49,7 +52,10 @@
 (*    funnel reads from it (source_class): "none" (not stated), "class" (a     *)
 (*    concrete type, the value's class), "nothing" (Nothing, a class too) and  *)
 (*    "notclass" (an abstract type: the runtime-length tuple's own type, or a  *)
-(*    sink's type a caller gave in its place, the A7E4 shape). Boxing needs a  *)
+(*    sink's type a caller gave in its place, the A7E4 shape). A value whose  *)
+(*    source type is Nothing is `nothing`, which has one form, the null (dart: *)
+(*    the Null class is `ref null none` in every position, translator.dart:   *)
+(*    1072): a register or a non-null reference holds none. Boxing needs a     *)
 (*    class; so does a representation another class's layout shares (Tv: its  *)
 (*    widening to a top type passes only for another class's struct).        *)
 (*  - The runtime-length tuple's widening check lives in this funnel alone:   *)
@@ -71,14 +77,15 @@ CONSTANTS
     TrustStatedSource,      \* Broken: the widening check passes any stated source type, so a
                             \* sink's abstract type given as the source's lets the runtime-length
                             \* tuple reach a top type (A7E4)
-    CastNothing,            \* Broken: `nothing` reaching a nullable single representation is
-                            \* converted as a value (boxed, or cast), not made its null
+    CastNothing,            \* Broken: `nothing` reaching a nullable reference it is no subtype of
+                            \* is converted as a value (cast), not made the sink's null
     NothingNullOnlyConcrete,\* Broken: `nothing` is made null only at a nullable concrete sink; at
                             \* an abstract one (anyref, eqref, structref) it is boxed under
                             \* Nothing's class, a value no null test reads as `nothing`
-    UnboxNothing            \* Broken: a `nothing` held in a reference (its null) bound for its
-                            \* i32 placeholder or a non-null reference is unboxed or cast as a value:
-                            \* the cast of the null traps
+    UnboxNothing,           \* Broken: a `nothing` held in a reference (its null) bound for a
+                            \* non-null reference is made non-null as a value: the null traps
+    NothingPlaceholder      \* Broken: a `nothing` bound for an i32 is its placeholder 0, a second
+                            \* form beside the null (a Nothing field held as i32, A11C10)
 
 NumKinds == {"i32", "i64", "f32", "f64"}
 
@@ -86,7 +93,7 @@ NumKinds == {"i32", "i64", "f32", "f64"}
 SrcKinds == {"none", "class", "nothing", "notclass"}
 SrcClass(c) == c \in {"class", "nothing"}
 
-Kinds == {"any", "eq", "struct", "array", "i31", "extern", "func", "exn",
+Kinds == {"any", "eq", "struct", "array", "i31", "none", "extern", "func", "exn",
           "S1", "S2", "A1", "Bi32", "Bi64", "Bf32", "Bf64", "Str", "StrArr", "Tf", "Tv"}
 
 \* every type is a record [k, n]; numerics carry n = FALSE (they are never nullable)
@@ -118,7 +125,8 @@ AbsKind(k) == IF k \in ConcreteStructs THEN "struct"
               ELSE IF k \in ConcreteArrays THEN "array"
               ELSE k
 
-\* wasm_subtype(a, b) — values.jl:309, dart RefType.isSubtypeOf + DefType.isSubtypeOf.
+\* wasm_subtype(a, b) — builder/types.jl, dart RefType.isSubtypeOf + DefType.isSubtypeOf (and
+\* NoneHeapType.isSubtypeOf, type.dart:636: none is below every heap type of the any hierarchy).
 \* This is the GROUND TRUTH the claims are checked against (the wasm type system).
 Sub(a, b) ==
     IF a = b THEN TRUE
@@ -126,6 +134,7 @@ Sub(a, b) ==
     ELSE IF a.n /\ ~b.n THEN FALSE
     ELSE IF Hier(a.k) # Hier(b.k) THEN FALSE
     ELSE IF Hier(a.k) # "any" THEN TRUE            \* extern<:extern, func<:func; exn only if equal kinds
+    ELSE IF a.k = "none" THEN TRUE                 \* none is the bottom of the any hierarchy
     ELSE IF b.k \in Concrete THEN a.k \in Concrete /\ ChainReaches(a.k, b.k)
     ELSE IF b.k = "any" THEN TRUE
     ELSE IF b.k = "eq" THEN AbsKind(a.k) # "any"
@@ -155,8 +164,8 @@ DropNull(t) == IF IsRef(t) THEN Ref(t.k, FALSE) ELSE t
 \*                           runtime-length tuple: (ref null? Tf) → (ref Tv)
 \*   <<"tuple_narrow", n>>   the narrowing to the runtime-length tuple (_narrow_ref!): the
 \*                           value is Tv, or an NTuple built into it: any-hierarchy → (ref null? Tv)
-\*   <<"drop_null", k>>      drop the value, ref.null of the nullable concrete k: any → (ref null k)
-\*   <<"drop_placeholder">>  drop the value, `nothing`'s placeholder i32.const 0: any → i32
+\*   <<"drop_null", k>>      drop the value, ref.null of the nullable k: any → (ref null k)
+\*   <<"drop_placeholder">>  drop the value, a placeholder i32.const 0 (Broken instances only): any → i32
 INVALID == [k |-> "INVALID", n |-> FALSE]   \* an opcode whose operand is outside its hierarchy: not valid wasm
 
 \* Every cast-family op (ref.cast, the unbox cast, the string data cast) casts WITHIN
@@ -240,22 +249,24 @@ Top == {"any", "eq", "struct", "extern"}
 
 RECURSIVE Emit(_, _, _)
 Emit(from, to, conc) ==
-    \* `nothing` meeting a nullable reference of the any hierarchy is its null, whatever form it
-    \* came in (a field's i32 placeholder, a tuple field's non-null singleton, a box): never
-    \* boxed, never cast; one already in a nullable reference the sink admits is that null (an
-    \* upcast, which emits nothing)
-    IF conc = "nothing" /\ ~CastNothing /\ IsRef(to) /\ to.n /\ Hier(to.k) = "any" /\
-       (IF NothingNullOnlyConcrete THEN to.k \in Concrete /\ ~(IsRef(from) /\ from.k \in Concrete /\ Sub(from, to))
-        ELSE ~(IsRef(from) /\ from.n /\ Sub(from, to)))
-    THEN <<<<"drop_null", to.k>>>>
-    \* a `nothing` held in a reference (the null it is there) bound for its i32 placeholder or a
-    \* non-null reference: never unboxed or cast, its placeholder, boxed under Nothing's class for
-    \* a reference its box is (the box arm); any other register or reference holds no nothing
-    ELSE IF conc = "nothing" /\ ~UnboxNothing /\ IsRef(from) /\ from # to /\
-            (IsNum(to) \/ (~to.n /\ Hier(to.k) = "any" /\ ~Sub(from, to)))
-    THEN IF to.k = "i32" THEN <<<<"drop_placeholder">>>>
-         ELSE IF IsRef(to) /\ Sub(Ref("Bi32", FALSE), to) THEN <<<<"drop_placeholder">>, <<"box", "Bi32">>>>
-         ELSE REJECT
+    \* `nothing` has one form, the null: bound for a nullable reference it is that null, an upcast
+    \* (nothing emitted) where the source is a subtype of the sink, else the sink's own null
+    \* (dropped, never boxed or cast); a register or a non-null reference holds no nothing, so the
+    \* funnel rejects the pair (each Broken flag restores one wrong arm)
+    IF conc = "nothing" THEN
+        IF IsNum(to) THEN
+            IF NothingPlaceholder /\ to.k = "i32" /\ IsRef(from) THEN <<<<"drop_placeholder">>>>
+            ELSE REJECT
+        ELSE IF IsNum(from) THEN REJECT
+        ELSE IF ~to.n THEN
+            IF UnboxNothing /\ from.n /\ Hier(from.k) = "any" /\ Sub(DropNull(from), to) THEN <<<<"as_non_null">>>>
+            ELSE REJECT
+        ELSE IF Sub(from, to) THEN << >>
+        ELSE IF CastNothing /\ Hier(from.k) = "any" /\ Hier(to.k) = "any" /\ to.k # "Tv"
+             THEN <<<<"cast", to.k, TRUE>>>>
+        ELSE IF NothingNullOnlyConcrete /\ to.k \in {"any", "eq", "struct"}
+             THEN <<<<"drop_placeholder">>, <<"box", "Bi32">>>>
+        ELSE <<<<"drop_null", to.k>>>>
     ELSE IF IsNum(from) /\ IsRef(to) THEN
         IF ~SrcClass(conc) THEN REJECT
         ELSE IF AbsKind(to.k) \in {"array", "i31"} THEN REJECT   \* a box is a struct
@@ -313,7 +324,6 @@ NoRedundantCastOK(f, t, c, out) == out = REJECT
     \/ ~(IsRef(f) /\ IsRef(t) /\ Sub(f, t))
     \/ f.k = "StrArr" \/ t.k = "StrArr"
     \/ out = << >>
-    \/ (c = "nothing" /\ out = <<<<"drop_null", t.k>>>>)   \* a nothing is its null, the one exception
 
 \* A value of a type whose values may be a fixed tuple (an NTuple, or any value) is never cast
 \* to the runtime-length tuple, a struct an NTuple is not: the cast traps (A9E4, A10E4).
@@ -334,8 +344,8 @@ RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
     \/ (IsRef(f) /\ IsNum(t) /\ Hier(f.k) # "any" /\ f.k # "extern")   \* unboxing a func/exn ref
     \/ (IsRef(f) /\ f.k = "Tv" /\ t.k \in Top /\ ~SrcClass(c))   \* its class is known only at run time
     \/ (t.k = "Tv" /\ (IsNum(f) \/ f.k \in Concrete \ {"Tf", "Tv"}))       \* only an NTuple of its element converts
-    \/ (c = "nothing" /\ IsRef(f) /\ IsNum(t) /\ t.k # "i32")               \* a nothing has no other register
-    \/ (c = "nothing" /\ IsRef(t) /\ ~t.n /\ ~Sub(Ref("Bi32", FALSE), t))   \* nor a non-null reference its box is not
+    \/ (c = "nothing" /\ (IsNum(f) \/ IsNum(t) \/ ~t.n))   \* a nothing's one form is the null: no register
+                                                        \* and no non-null reference holds it
 
 \* A runtime-length tuple's representation reaches a slot of any class only as another class's
 \* struct whose class the source type states: an abstract source type (the sink's, A7E4) or none
@@ -343,19 +353,20 @@ RejectsOnlyInexpressibleOK(f, t, c, out) == out # REJECT
 NoUnclassedWideningOK(f, t, c, out) == out = REJECT \/
     ~(IsRef(f) /\ f.k = "Tv" /\ IsRef(t) /\ t.k \in Top /\ ~SrcClass(c))
 
-\* `nothing` bound for any nullable reference of the any hierarchy (a nullable single
-\* representation, anyref, eqref, structref) is its null: never boxed, never cast, so the one
+\* `nothing` bound for a nullable reference is its null: never boxed and never cast, so the one
 \* null test (`isa(x, Nothing)`, `x === nothing`) reads it.
-NothingIsNullOK(f, t, c, out) == out = REJECT \/
-    ~(c = "nothing" /\ IsRef(t) /\ t.n /\ Hier(t.k) = "any" /\ ~(IsRef(f) /\ f.n /\ Sub(f, t))) \/
+NothingIsNullOK(f, t, c, out) == out = REJECT \/ ~(c = "nothing" /\ IsRef(t) /\ t.n) \/
     \A i \in 1..Len(out) : out[i][1] \notin {"box", "cast", "unbox"}
 
-\* `nothing` held in a reference is its null there: bound for a register or a reference of the any
-\* hierarchy it is never unboxed, cast to a non-null type or made non-null (each traps on the
-\* null); it is dropped for its placeholder.
-NothingNeverCastOK(f, t, c, out) == out = REJECT \/ out = << >> \/
-    ~(c = "nothing" /\ IsRef(f) /\ (IsNum(t) \/ Hier(t.k) = "any")) \/
-    ~(out[1][1] = "unbox" \/ out[1][1] = "as_non_null" \/ (out[1][1] = "cast" /\ ~out[1][3]))
+\* `nothing` held in a reference is its null there: it is never unboxed, made non-null or cast to a
+\* non-null type (each traps on the null).
+NothingNeverCastOK(f, t, c, out) == out = REJECT \/ ~(c = "nothing" /\ IsRef(f)) \/
+    \A i \in 1..Len(out) : ~(out[i][1] = "unbox" \/ out[i][1] = "as_non_null" \/
+                             (out[i][1] = "cast" /\ ~out[i][3]))
+
+\* `nothing` has one form: whatever the funnel admits holds it in a reference on both sides, never
+\* in a register (no placeholder beside the null).
+OneNothingOK(f, t, c, out) == out = REJECT \/ c # "nothing" \/ (IsRef(f) /\ IsRef(t))
 
 \* one state per triple: the triple and the funnel's emission for it
 Init == last \in {<<tr[1], tr[2], tr[3], Emit(tr[1], tr[2], tr[3])>> : tr \in Triples}
@@ -372,4 +383,5 @@ NoTupleCast == NoTupleCastOK(last[1], last[2], last[3], last[4])
 NoUnclassedWidening == NoUnclassedWideningOK(last[1], last[2], last[3], last[4])
 NothingIsNull == NothingIsNullOK(last[1], last[2], last[3], last[4])
 NothingNeverCast == NothingNeverCastOK(last[1], last[2], last[3], last[4])
+OneNothing == OneNothingOK(last[1], last[2], last[3], last[4])
 =============================================================================

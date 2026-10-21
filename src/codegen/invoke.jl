@@ -193,8 +193,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                             (def isa NirPi && def.typ === Nothing)
                         end)
 
-        # Also check if param_types expects Nothing (Union dispatch to different signatures)
-        # This handles the case where the arg is a phi value but param expects Nothing (i32)
+        # Also check if param_types expects Nothing (Union dispatch to different signatures):
+        # the argument of a Nothing parameter is `nothing`, its one value
         if !is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             param_type = param_types[arg_idx]
             if param_type === Nothing
@@ -205,35 +205,17 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
         if is_nothing_arg && param_types !== nothing && arg_idx <= length(param_types)
             # Get the parameter type from the method signature
             param_type = param_types[arg_idx]
-            wasm_type = get_concrete_wasm_type(param_type, ctx.mod, ctx.type_registry; for_local=true)
-            # Emit the appropriate null/zero value based on the wasm type
+            # the parameter's representation in the callee's signature (a signature position)
+            wasm_type = get_concrete_wasm_type(param_type, ctx.mod, ctx.type_registry)
+            # `nothing` at the parameter's representation: its null (a register holds no nothing,
+            # and the funnel rejects such a parameter at its statement)
             _nb = _ctx_builder(ctx, "compile_invoke")
-            if wasm_type isa ConcreteRef
-                ref_null!(_nb, Int64(wasm_type.type_idx))
-            elseif wasm_type === ExternRef
-                ref_null!(_nb, ExternRef)
-            elseif wasm_type === AnyRef
-                ref_null!(_nb, AnyRef)
-            elseif wasm_type === StructRef
-                ref_null!(_nb, StructRef)
-            elseif wasm_type === ArrayRef
-                ref_null!(_nb, ArrayRef)
-            elseif wasm_type === I64
-                i64_const!(_nb, 0)
-            elseif wasm_type === F32
-                f32_const!(_nb, 0.0)
-            elseif wasm_type === F64
-                f64_const!(_nb, 0.0)
-            else
-                # I32 or other — push i32(0)
-                i32_const!(_nb, 0)
-            end
+            emit_value!(_nb, NirLiteral(nothing), ctx, wasm_type)
             append_builder!(fb, _nb)
         elseif is_nothing_arg
-            # Nothing arg without param_types — emit ref.null anyref as safe default
-            # Use anyref (not externref) for internal polymorphic positions
+            # a nothing argument with no parameter types: the null at the top type
             _nb2 = _ctx_builder(ctx, "compile_invoke")
-            ref_null!(_nb2, AnyRef)
+            emit_value!(_nb2, NirLiteral(nothing), ctx, AnyRef)
             append_builder!(fb, _nb2)
         else
             local _ab = _compile_value_b(arg, ctx)
@@ -259,8 +241,6 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     end
                 end
             end
-            # (the arg merges below — AFTER the Nothing-phantom decision, which
-            # previously popped the just-appended bytes back off)
             if param_types !== nothing && arg_idx <= length(param_types)
                 expected_julia_type = param_types[arg_idx]
                 # Skip non-Type values (e.g., Vararg markers)
@@ -271,27 +251,8 @@ function compile_invoke!(b::InstrBuilder, node::NirInvoke, idx::Int, ctx::Abstra
                     # code_generator.dart:879): the whole inline coercion ladder — 14 arms
                     # re-implementing convertType — is ONE funnel call. The emission's own
                     # tracked type (dart carries the type with the value) refines `actual`;
-                    # the old ssa_locals re-lookup died with the ladder.
-
-                    # Handle Nothing→ref conversion.
-                    # compile_value emits i32_const 0 for Nothing,
-                    # but ref-typed params need ref.null. Must fix BEFORE bridging runs,
-                    # otherwise bridging tries conversions on an i32 value.
-                    # NOTE: Type{T} no longer needs this — it now emits global.get (DataType ref).
-                    _is_phantom = actual_julia_type === Nothing
-                    if _is_phantom && (expected_wasm isa ConcreteRef || expected_wasm === ExternRef || expected_wasm === StructRef || expected_wasm === AnyRef)
-                        # the Nothing emission is exactly one i32.const 0 (ir/-kind test —
-                        # the pop-two-bytes surgery is gone; we just don't merge the arg)
-                        if length(_ab.instrs) == 1 && _ab.instrs[1] isa InstrIR.I32Const
-                            if expected_wasm isa ConcreteRef
-                                ref_null!(fb, Int64(expected_wasm.type_idx))
-                            else
-                                ref_null!(fb, expected_wasm)
-                            end
-                            _ab_merged = true   # the phantom replaced the arg emission
-                        end
-                    end
-                    # merge the arg (unless the phantom replaced it) BEFORE the coercion
+                    # the old ssa_locals re-lookup died with the ladder. A nothing is the null
+                    # (ref.null none), which the funnel lands on a nullable parameter.
                     _ab_merged || (append_builder!(fb, _ab); _ab_merged = true)
 
                     coerce_stack_top!(fb, expected_wasm, ctx;
