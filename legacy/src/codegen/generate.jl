@@ -205,7 +205,7 @@ function check_existing_module(mod::WasmModule, source_map_url::Union{Nothing,St
         "(WT_BUILDER_TRACE): construct it with WasmModule(; builder_trace)"))
     (_stack_trace_func_idx(mod) === nothing && !isempty(mod.functions)) &&
         throw(ArgumentError("existing_module defines functions before the imports every module WasmTarget " *
-                            "compiles has: call WasmTarget.ensure_provenance_imports!(mod) right after creating it"))
+                            "compiles has: call WasmTargetLegacy.ensure_provenance_imports!(mod) right after creating it"))
     for name in ("\$exc_top", "\$import_tops")
         local g = findfirst(x -> x.name == name, mod.globals)
         g === nothing || throw(ArgumentError(
@@ -229,7 +229,7 @@ function _refuse_tags_without_wt_tag(mod::WasmModule)::Nothing
     any(x -> x.kind == 0x04 && x.name == "wasmtarget.exception", mod.exports) && return nothing
     isempty(mod.tags) || throw(ArgumentError(
         "the module defines $(length(mod.tags)) tag(s) and exports none as wasmtarget.exception: " *
-        "call WasmTarget.ensure_provenance_imports!(mod) right after creating it, before defining a tag"))
+        "call WasmTargetLegacy.ensure_provenance_imports!(mod) right after creating it, before defining a tag"))
     return nothing
 end
 
@@ -246,7 +246,7 @@ function _refuse_late_host_imports_open(mod::WasmModule)::Nothing
         "the host-declared import $(host.module_name).$(host.field_name) needs the " *
         "imported count wasmtarget.host_imports_open, which must precede the module's defined global " *
         "$(defined - 1)$(mod.globals[defined].name === nothing ? "" : " ($(mod.globals[defined].name))"): " *
-        "call WasmTarget.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
+        "call WasmTargetLegacy.ensure_host_imports_open!(mod) after declaring the host imports and before defining any global"))
     return nothing
 end
 
@@ -500,7 +500,7 @@ function host_glue_js()::String
            "const runtime = { $(runtime) }; const glued = {}; " *
            "const once = (o, m, f, v) => { let read = false; Object.defineProperty(o, f, { enumerable: true, get: () => { " *
            "if (read) throw new Error('the glued import ' + m + '.' + f + ' was read twice: a glued import object serves " *
-           "one instance, and the host calls its own function, never the glued one (WasmTarget.host_glue_js)'); " *
+           "one instance, and the host calls its own function, never the glued one (WasmTargetLegacy.host_glue_js)'); " *
            "read = true; return v; } }); }; " *
            "for (const [m, fs] of Object.entries(importObject)) { glued[m] = Object.assign({}, fs); " *
            "for (const [f, fn] of Object.entries(fs)) { " *

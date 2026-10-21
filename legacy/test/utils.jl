@@ -175,7 +175,7 @@ macro test_compile(func_call)
         arg_types = map(typeof, args)
 
         # 3. Compile to Wasm
-        wasm_bytes = WasmTarget.compile(f, Tuple(arg_types))
+        wasm_bytes = WasmTargetLegacy.compile(f, Tuple(arg_types))
 
         # 4. Run in Node
         actual = run_wasm(wasm_bytes, string(nameof(f)), args...)
@@ -204,13 +204,13 @@ end
 
 # the index of the global named `name` in `mod` (as the name section names it), or nothing: a
 # test reads a module's globals as a host reads them, by their names
-_global_by_name(mod::WasmTarget.WasmModule, name::String)::Union{Nothing,Int} =
+_global_by_name(mod::WasmTargetLegacy.WasmModule, name::String)::Union{Nothing,Int} =
     (i = findfirst(g -> g.name == name, mod.globals); i === nothing ? nothing : i - 1)
 
 # a module as wasm-tools prints it, its name section stripped so every index is a number
-_printed_lines(mod::WasmTarget.WasmModule)::Vector{String} =
+_printed_lines(mod::WasmTargetLegacy.WasmModule)::Vector{String} =
     String[strip(l) for l in split(read(pipeline(pipeline(`wasm-tools strip --all`;
-        stdin=IOBuffer(WasmTarget.to_bytes(mod))), `wasm-tools print`), String), '\n')]
+        stdin=IOBuffer(WasmTargetLegacy.to_bytes(mod))), `wasm-tools print`), String), '\n')]
 
 """
     unsaved_host_import_calls(mod) -> Int
@@ -224,9 +224,9 @@ call leaves a re-entrant export to take a stale top, and an unrestored one leave
 callee's. Which imports are host-declared is the compiler's own rule (_is_host_declared_import).
 Read from the module's code as wasm-tools prints it (L156).
 """
-function unsaved_host_import_calls(mod::WasmTarget.WasmModule)::Int
+function unsaved_host_import_calls(mod::WasmTargetLegacy.WasmModule)::Int
     local funcs = mod.imports
-    local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTarget._is_host_declared_import(imp))
+    local host = Set(i - 1 for (i, imp) in enumerate(funcs) if WasmTargetLegacy._is_host_declared_import(imp))
     local count = _global_by_name(mod, "\$host_imports_open")
     local tops = _global_by_name(mod, "\$import_tops")
     local top = _global_by_name(mod, "\$exc_top")
@@ -254,9 +254,9 @@ each export entry (a function named "<name> (export)") a `try`, a `try_table` or
 (the entry is a prologue that passes every escape untouched, emit_export_entry!). Read from the
 module's code as wasm-tools prints it (L156).
 """
-function wasm_boundary_sites(mod::WasmTarget.WasmModule)::Int
+function wasm_boundary_sites(mod::WasmTargetLegacy.WasmModule)::Int
     local count = _global_by_name(mod, "\$host_imports_open")
-    local entries = Set(WasmTarget.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
+    local entries = Set(WasmTargetLegacy.num_imported_funcs(mod) + i - 1 for (i, f) in enumerate(mod.functions)
                         if endswith(f.name, " (export)"))
     local n = 0
     local in_entry = false
@@ -300,7 +300,7 @@ const bytes = fs.readFileSync('$(escape_string(wasm_path))');
 async function validate() {
     try {
         const importObject = $(WasmRunner.module_runtime_js(wasm_bytes));
-        const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+        const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTargetLegacy.host_glue_js()))(importObject), { builtins: ['js-string'] });
         console.log("VALID");
         process.exit(0);
     } catch (e) {
@@ -366,7 +366,7 @@ function compare_julia_wasm(f, args...; optimize::Bool=false)
         (e isa ErrorException && occursin("unserializable result", e.msg)) || rethrow()
         w = typed_result_wrapper(f, typeof(expected))
         w === nothing && rethrow()
-        wbytes, wmap = WasmTarget.compile_with_sourcemap(w, arg_types; optimize=optimize)
+        wbytes, wmap = WasmTargetLegacy.compile_with_sourcemap(w, arg_types; optimize=optimize)
         run_wasm_with_imports(wbytes, string(nameof(w)), imports, args...; source_map=wmap)
     end
 
@@ -390,13 +390,13 @@ _emitted!(bytes, fname, inputs::Vector{String}, meta::NamedTuple) =
 # emission-diff check's base side compiles with it too, and dev/emission_diff.sh hashes it into
 # the cached base's key.
 function _emission_compile(f, arg_types::Tuple; optimize::Bool)
-    local r = WasmTarget._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url="module.wasm.map",
+    local r = WasmTargetLegacy._compile(Any[(f, arg_types, string(nameof(f)))]; source_map_url="module.wasm.map",
                                   optimize, return_registries=true)
     local tr, fr, _ = r.registries
     local specs = Dict{Int,String}(Int(info.wasm_idx) => (info.mi === nothing ? string(info.func_ref, info.arg_types) :
                                                           string(info.mi.specTypes)) for (_, info) in fr.functions)
     return r.bytes, something(r.source_map),
-           (specs=specs, classes=WasmTarget._class_names(tr), top=tr.base_struct_idx === nothing ? -1 : Int(tr.base_struct_idx))
+           (specs=specs, classes=WasmTargetLegacy._class_names(tr), top=tr.base_struct_idx === nothing ? -1 : Int(tr.base_struct_idx))
 end
 
 # a host value of a number or Bool as a JS argument: an integer exactly (a 64-bit one a BigInt of
@@ -638,7 +638,7 @@ r = compare_julia_wasm_manual(s -> Int32(length(s)), (Int32(5),), Int32(5))
 function compare_julia_wasm_manual(f, args::Tuple, expected)
     # 1. Compile to Wasm
     arg_types = Tuple(map(typeof, args))
-    bytes = WasmTarget.compile(f, arg_types)
+    bytes = WasmTargetLegacy.compile(f, arg_types)
 
     # 2. Run in Node.js (no host imports)
     func_name = string(nameof(f))
@@ -879,7 +879,7 @@ function _generate_bridge_driver(bytes::Vector{UInt8}, func_name, args, arg_type
     lines = String[]
     push!(lines, "  try {")
     push!(lines, "    const importObject = $(WasmRunner.module_runtime_js(bytes));")
-    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTargetLegacy.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
     # Marshal each argument
@@ -1002,7 +1002,7 @@ function compare_julia_wasm_vec(f, args...; optimize::Bool=false)
     end
 
     # 4. Compile (with optional binaryen optimization)
-    bytes = WasmTarget.compile_multi(func_list; optimize=optimize)
+    bytes = WasmTargetLegacy.compile_multi(func_list; optimize=optimize)
 
     # 5. Generate bridge-aware driver and run via the persistent pool
     func_name = string(nameof(f))
@@ -1076,7 +1076,7 @@ function _generate_sidecar_bridge_driver(bytes::Vector{UInt8}, sidecar_bytes::Ve
     push!(lines, "    const sidecarInst = await WebAssembly.instantiate(sidecarBytes, {});")
     push!(lines, "    const importObject = $(WasmRunner.module_runtime_js(bytes));")
     push!(lines, "    importObject['$(sidecar_module_name)'] = sidecarInst.instance.exports;")
-    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });")
+    push!(lines, "    const wasmModule = await WebAssembly.instantiate(bytes, ($(WasmTargetLegacy.host_glue_js()))(importObject), { builtins: ['js-string'] });")
     push!(lines, "    const e = wasmModule.instance.exports;")
 
     call_args = String[]
@@ -1159,7 +1159,7 @@ Robust differential check for `f` over scalar args (Int/Float/Bool/Char) whose
 RETURN is ANY bridge-supported type — `String`, structs, `Vector`, tuples, nested
 combos — not just the scalars/`_bv_` vectors `compare_julia_wasm`/`_vec` handle.
 
-Uses the in-package bit-exact `WasmTarget.Bridge` (`descriptor` → `WALK_JS` →
+Uses the in-package bit-exact `WasmTargetLegacy.Bridge` (`descriptor` → `WALK_JS` →
 `tree_matches`), i.e. the SAME transport Snapshot.jl and the differential fuzzer
 use. This is what lets real island cells (which return strings/HTML/structs) be
 exercised directly in WT's own unit suite instead of only in downstream CI: the
@@ -1174,7 +1174,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     rt = rettype === nothing ?
         Core.Compiler.widenconst(Base.code_typed(f, Tuple(arg_types))[1][2]) : rettype
     rt === Union{} && (rt = Int64)
-    dp = WasmTarget.Bridge.descriptor(rt)
+    dp = WasmTargetLegacy.Bridge.descriptor(rt)
     dp === nothing && error("compare_julia_wasm_bridge: return type $rt is outside the bridge universe")
     desc, accs = dp
     # Anonymous fns (e.g. PI island cells extracted as `function (n::Int64,) … end`)
@@ -1182,16 +1182,16 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
     fname = name === nothing ? string(nameof(f)) : name
     func_list = Any[(f, Tuple(arg_types), fname)]
     append!(func_list, accs)
-    bytes = WasmTarget.compile_multi(func_list; validate=true, optimize=optimize)
+    bytes = WasmTargetLegacy.compile_multi(func_list; validate=true, optimize=optimize)
     inputs_js = "[[" * join((format_js_arg(a) for a in args), ", ") * "]]"
     driver = """
     const inputs = $(inputs_js);
     const importObject = $(WasmRunner.module_runtime_js(bytes));
-    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTargetLegacy.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
     const desc = $(JSON.json(desc));
-    $(WasmTarget.Bridge.WALK_JS)
+    $(WasmTargetLegacy.Bridge.WALK_JS)
     return inputs.map(args => {
         try { return { ok: walk(desc, f(...args)) }; }
         catch (e) { return { trap: String(e && e.message || e) }; }
@@ -1208,7 +1208,7 @@ function compare_julia_wasm_bridge(f, args...; rettype=nothing, name=nothing, op
                 actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
-    pass = nat[1] && WasmTarget.Bridge.tree_matches(desc, nat[2], walked)
+    pass = nat[1] && WasmTargetLegacy.Bridge.tree_matches(desc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
             actual=walked, wasm_size=length(bytes))
 end
@@ -1230,38 +1230,38 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
     rt = rettype === nothing ?
         Core.Compiler.widenconst(Base.code_typed(f, Tuple(arg_types))[1][2]) : rettype
     rt === Union{} && (rt = Int64)
-    rp = WasmTarget.Bridge.descriptor(rt)
+    rp = WasmTargetLegacy.Bridge.descriptor(rt)
     rp === nothing && error("compare_julia_wasm_bridge_args: return type $rt outside the bridge universe")
     rdesc, raccs = rp
     accs = Any[]; names = Set{String}()
     for (fn_, at_, nm_) in raccs
-        WasmTarget.Bridge._acc!(accs, names, nm_, fn_, at_)
+        WasmTargetLegacy.Bridge._acc!(accs, names, nm_, fn_, at_)
     end
     adescs = Any[]
     for T in arg_types
-        ap = WasmTarget.Bridge.arg_descriptor(T)
+        ap = WasmTargetLegacy.Bridge.arg_descriptor(T)
         ap === nothing && error("compare_julia_wasm_bridge_args: arg type $T outside the bridge universe")
         ad, aaccs = ap
         for (fn_, at_, nm_) in aaccs
-            WasmTarget.Bridge._acc!(accs, names, nm_, fn_, at_)
+            WasmTargetLegacy.Bridge._acc!(accs, names, nm_, fn_, at_)
         end
         push!(adescs, ad)
     end
     fname = name === nothing ? string(nameof(f)) : name
     funcs = Any[(f, Tuple(arg_types), fname)]
     append!(funcs, accs)
-    bytes = WasmTarget.compile_multi(funcs; validate=true, optimize=optimize)
-    enc = Any[WasmTarget.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
+    bytes = WasmTargetLegacy.compile_multi(funcs; validate=true, optimize=optimize)
+    enc = Any[WasmTargetLegacy.Bridge.value_to_tree(adescs[j], args[j]) for j in eachindex(adescs)]
     driver = """
     const importObject = $(WasmRunner.module_runtime_js(bytes));
-    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTarget.host_glue_js()))(importObject), { builtins: ['js-string'] });
+    const { instance } = await WebAssembly.instantiate(bytes, ($(WasmTargetLegacy.host_glue_js()))(importObject), { builtins: ['js-string'] });
     const ex = instance.exports;
     const f = ex['$fname'];
     const adescs = $(JSON.json(adescs));
     const rdesc = $(JSON.json(rdesc));
     const input = $(JSON.json(enc));
-    $(WasmTarget.Bridge.WALK_JS)
-    $(WasmTarget.Bridge.BUILD_JS)
+    $(WasmTargetLegacy.Bridge.WALK_JS)
+    $(WasmTargetLegacy.Bridge.BUILD_JS)
     try {
         const args = input.map((t, j) => build(adescs[j], t));
         return [{ ok: walk(rdesc, f(...args)) }];
@@ -1278,7 +1278,7 @@ function compare_julia_wasm_bridge_args(f, args...; rettype=nothing, name=nothin
                 actual="trap: " * string(get(r, "trap", "?")), wasm_size=length(bytes))
     end
     walked = r["ok"]
-    pass = nat[1] && WasmTarget.Bridge.tree_matches(rdesc, nat[2], walked)
+    pass = nat[1] && WasmTargetLegacy.Bridge.tree_matches(rdesc, nat[2], walked)
     return (pass=pass, expected=(nat[1] ? nat[2] : :throw),
             actual=walked, wasm_size=length(bytes))
 end

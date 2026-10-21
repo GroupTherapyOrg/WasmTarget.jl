@@ -1,5 +1,5 @@
 # ============================================================================
-# WasmTarget.Bridge — type-directed, BIT-EXACT value transport across the
+# WasmTargetLegacy.Bridge — type-directed, BIT-EXACT value transport across the
 # JS↔wasm boundary
 # ============================================================================
 #

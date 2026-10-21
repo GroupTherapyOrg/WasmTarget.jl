@@ -17,7 +17,7 @@
 
 module InstrIR
 
-using ..WasmTarget: WasmValType
+using ..WasmTargetLegacy: WasmValType
 
 # The void block type: a frame with no inputs and no outputs (encoded 0x40).
 # parity(pkg/wasm_builder/lib/src/ir/instruction.dart:642 BeginNoEffectBlock)

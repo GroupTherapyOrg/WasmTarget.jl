@@ -17,7 +17,8 @@ name: Gate
 # The parts are sized from measured job times (each lane's work under ~12 min on ubuntu-latest):
 # smoke in 2 parts per version, TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
 # deals the instances round-robin, and at 5 the two largest, ExceptionStackDeep and
-# ExceptionStackValueIdentityBroken, land apart), the suite (test/runtests.jl's QA families) whole.
+# ExceptionStackValueIdentityBroken, land apart), the suite (test/runtests.jl's QA families) whole,
+# WT1's smoke (legacy/test/smoke.jl, the agreement oracle) in 2 parts per version.
 # The budget B = 20 minutes per lane job (L162; Dale 2026-10-09, the gate "~15-20 min"): the lane
 # job's timeout, so a lane past it is cut and red and fail-fast cancels the rest; dev/gate.sh
 # reads B from here and names a job past it. B is lowered, never raised: a lane past it is split
@@ -87,6 +88,10 @@ jobs:
           - { lane: smoke-1.13, part: '1/2' }
           - { lane: probes, part: '' }
           - { lane: suite, part: '' }
+          - { lane: legacy, part: '0/2' }
+          - { lane: legacy, part: '1/2' }
+          - { lane: legacy-1.13, part: '0/2' }
+          - { lane: legacy-1.13, part: '1/2' }
           - { lane: formal, part: '2/5' }
           - { lane: formal, part: '3/5' }
           - { lane: formal, part: '4/5' }
@@ -121,7 +126,7 @@ jobs:
           channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
           [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
           channel 1.12 && "$J" default 1.12
-          if [ "${{ matrix.lane }}" = smoke-1.13 ]; then channel 1.13; fi
+          if [ "${{ matrix.lane }}" = smoke-1.13 ] || [ "${{ matrix.lane }}" = legacy-1.13 ]; then channel 1.13; fi
           echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
 
       # one cache per kind of job and runner CPU model: the suite job precompiles Pkg.test's
@@ -135,7 +140,7 @@ jobs:
       - uses: julia-actions/cache@v2
         if: matrix.lane != 'formal'
         with:
-          cache-name: gate-${{ matrix.lane == 'suite' && 'suite' || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes') }}-${{ steps.cpu.outputs.model }}
+          cache-name: gate-${{ matrix.lane == 'suite' && 'suite' || (startsWith(matrix.lane, 'legacy') && matrix.lane || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes')) }}-${{ steps.cpu.outputs.model }}
           include-matrix: false
 
       - name: Install wasm-tools
@@ -149,7 +154,7 @@ jobs:
         if: matrix.lane != 'formal'
         env:
           JULIA_PKG_PRECOMPILE_AUTO: '0'
-        run: ${{ matrix.lane == 'smoke-1.13' && 'julia +1.13' || 'julia' }} --project=. -e 'using Pkg; Pkg.instantiate()'
+        run: ${{ (matrix.lane == 'smoke-1.13' || matrix.lane == 'legacy-1.13') && 'julia +1.13' || 'julia' }} --project=${{ startsWith(matrix.lane, 'legacy') && 'legacy' || '.' }} -e 'using Pkg; Pkg.instantiate()'
 
       # the dart-lang/sdk files src/ cites, for L132 (the ratchet lane, and the suite shard the
       # ratchet's family is dealt to)

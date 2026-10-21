@@ -1,4 +1,4 @@
-# WasmTargetLinearAlgebraExt — LinearAlgebra stdlib integration (overlays).
+# WasmTargetLegacyLinearAlgebraExt — LinearAlgebra stdlib integration (overlays).
 #
 # The VECTOR value-level surface that lowers from LinearAlgebra's GENERIC
 # (pure-Julia) methods — norm/normalize/cross and INTEGER dot — needs no
@@ -18,14 +18,14 @@
 # (Ill-conditioned long vectors with heavy cancellation can exceed rtol — a
 # per-op conditioning matter, not a method error; downstream geometry is
 # well-conditioned.)
-module WasmTargetLinearAlgebraExt
+module WasmTargetLegacyLinearAlgebraExt
 
-using WasmTarget
+using WasmTargetLegacy
 using LinearAlgebra: LinearAlgebra
 using Base.Experimental: @overlay
 
 # parity(quarantine: BLAS dot: Julia's method calls BLAS dot through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.dot(x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}} =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.dot(x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}} =
     invoke(LinearAlgebra.dot, Tuple{AbstractArray,AbstractArray}, x, y)
 
 # Float vectors dispatch `norm2` to BLAS nrm2, whose raw pointer ABI is outside
@@ -33,11 +33,11 @@ using Base.Experimental: @overlay
 # reference implementation (including zero/Inf/underflow handling), so retain
 # the library semantics without admitting an FFI escape.
 # parity(quarantine: BLAS nrm2: Julia's method calls BLAS nrm2 through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.norm(x::Array{T,N}) where {T<:Union{Float32,Float64},N} =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.norm(x::Array{T,N}) where {T<:Union{Float32,Float64},N} =
     isempty(x) ? zero(T) : LinearAlgebra.generic_norm2(x)
 
 # parity(quarantine: BLAS nrm2: Julia's method calls BLAS nrm2 through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.norm(
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.norm(
         x::Array{T,N}, p::Real) where {T<:Union{Float32,Float64},N}
     isempty(x) && return zero(T)
     LinearAlgebra.norm_recursive_check(x)
@@ -58,7 +58,7 @@ end
 # mul! straight back to BLAS), so the kernel is written out. Verified vs native
 # 40/40 (matmul) and 40/40 (matvec).
 # parity(quarantine: BLAS gemm: Julia's method calls BLAS gemm through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, B::Matrix{T}) where {T<:Union{Float32,Float64}}
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, B::Matrix{T}) where {T<:Union{Float32,Float64}}
     mA, nA = size(A)
     nA == size(B, 1) || throw(DimensionMismatch("matmul"))
     nB = size(B, 2)
@@ -70,7 +70,7 @@ end
 end
 
 # parity(quarantine: BLAS gemv: Julia's method calls BLAS gemv through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, x::Vector{T}) where {T<:Union{Float32,Float64}}
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:*(A::Matrix{T}, x::Vector{T}) where {T<:Union{Float32,Float64}}
     mA, nA = size(A)
     nA == length(x) || throw(DimensionMismatch("matvec"))
     y = zeros(T, mA)
@@ -82,7 +82,7 @@ end
 
 # in-place mul! — C/y are written, then returned (BLAS gemm!/gemv! otherwise).
 # parity(quarantine: BLAS gemm: Julia's method calls BLAS gemm through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(C::Matrix{Float64}, A::Matrix{Float64}, B::Matrix{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.mul!(C::Matrix{Float64}, A::Matrix{Float64}, B::Matrix{Float64})
     mA = size(A, 1); nA = size(A, 2); nB = size(B, 2)
     @inbounds for j in 1:nB, i in 1:mA
         s = 0.0; for k in 1:nA; s += A[i, k] * B[k, j]; end; C[i, j] = s
@@ -90,21 +90,21 @@ end
     C
 end
 # parity(quarantine: BLAS gemv: Julia's method calls BLAS gemv through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.mul!(y::Vector{Float64}, A::Matrix{Float64}, x::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.mul!(y::Vector{Float64}, A::Matrix{Float64}, x::Vector{Float64})
     mA = size(A, 1); nA = size(A, 2)
     @inbounds for i in 1:mA; s = 0.0; for j in 1:nA; s += A[i, j] * x[j]; end; y[i] = s; end
     y
 end
 # axpy!/axpby! (BLAS) — y += a·x  /  y = a·x + b·y
 # parity(quarantine: BLAS axpy: Julia's method calls BLAS axpy through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpy!(
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.axpy!(
         a::T, x::Vector{T}, y::Vector{T}) where {T<:Union{Float32,Float64}}
     length(x) == length(y) || throw(DimensionMismatch("axpy!"))
     @inbounds for i in eachindex(x); y[i] += a * x[i]; end
     y
 end
 # parity(quarantine: BLAS axpby: Julia's method calls BLAS axpby through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.axpby!(
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.axpby!(
         a::T, x::Vector{T}, b::T, y::Vector{T}) where {T<:Union{Float32,Float64}}
     length(x) == length(y) || throw(DimensionMismatch("axpby!"))
     @inbounds for i in eachindex(x); y[i] = a * x[i] + b * y[i]; end
@@ -118,11 +118,11 @@ end
 # (oracle rtol 1e-9). Verified vs native 40/40 each. (inv/`\`/cholesky/eigen/svd
 # need more than an LU reroute.)
 # parity(quarantine: LAPACK getrf: Julia's method calls LAPACK getrf through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.det(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.det(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
     LinearAlgebra.det(LinearAlgebra.generic_lufact!(copy(A)))
 
 # parity(quarantine: LAPACK getrf: Julia's method calls LAPACK getrf through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.logdet(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.logdet(A::Matrix{T}) where {T<:Union{Float32,Float64}} =
     LinearAlgebra.logdet(LinearAlgebra.generic_lufact!(copy(A)))
 
 # ── DECOMPOSITIONS: hand-rolled, WT-compilable textbook algorithms ──────────
@@ -208,14 +208,14 @@ function _wt_jacobi_eigvals(A::Matrix{Float64})
 end
 
 # parity(quarantine: LAPACK getri: Julia's method calls LAPACK getri through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE Base.inv(A::Matrix{Float64}) = _wt_lu_inv(A)
 # parity(quarantine: LAPACK getrs: Julia's method calls LAPACK getrs through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE Base.:\(A::Matrix{Float64}, b::Vector{Float64}) = _wt_lu_solve(A, b)
 # parity(quarantine: LAPACK gesdd: Julia's method calls LAPACK gesdd through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.svdvals(A::Matrix{Float64}) = _wt_osj_svdvals(A)
 
 # parity(quarantine: LAPACK gesdd: Julia's method calls LAPACK gesdd through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.opnorm(
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.opnorm(
         A::Matrix{Float64}, p::Real=2)
     if p == 2
         values = _wt_osj_svdvals(A)
@@ -280,13 +280,13 @@ function _wt_osj_svd(A0::Matrix{Float64})
     tr ? LinearAlgebra.SVD(V, S, permutedims(U)) : LinearAlgebra.SVD(U, S, permutedims(V))
 end
 # parity(quarantine: LAPACK gesdd: Julia's method calls LAPACK gesdd through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.svd(A::Matrix{Float64}; full::Bool=false, alg=nothing)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.svd(A::Matrix{Float64}; full::Bool=false, alg=nothing)
     _wt_osj_svd(A)
 end
 # pinv = V·Σ⁺·Uᵀ off our one-sided-Jacobi SVD, with native's default
 # rtol = min(size)·eps thresholding of the singular values.
 # parity(quarantine: LAPACK gesdd: Julia's method calls LAPACK gesdd through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.pinv(A::Matrix{Float64};
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.pinv(A::Matrix{Float64};
         atol::Real = 0.0,
         rtol::Real = (eps(Float64) * min(size(A, 1), size(A, 2))) * (atol == 0.0 ? 1.0 : 0.0))
     F = _wt_osj_svd(A); U = F.U; S = F.S; Vt = F.Vt; k = length(S)
@@ -296,16 +296,16 @@ end
     permutedims(Vt) * (LinearAlgebra.Diagonal(sinv) * permutedims(U))
 end
 # parity(quarantine: LAPACK syevr: Julia's method calls LAPACK syevr through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.eigvals(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
     _wt_jacobi_eigvals(_wt_sym_to_dense(A))
 end
 # eigmax/eigmin use the eigvals(A, k:k) RANGE form natively (not the plain
 # eigvals above) → overlay directly off the Jacobi spectrum (ascending).
 # parity(quarantine: LAPACK syevr: Julia's method calls LAPACK syevr through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmax(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.eigmax(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
     last(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
 # parity(quarantine: LAPACK syevr: Julia's method calls LAPACK syevr through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.eigmin(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}) =
     first(_wt_jacobi_eigvals(_wt_sym_to_dense(A)))
 
 # full symmetric eigendecomposition: Jacobi, accumulating the rotation matrix V.
@@ -338,7 +338,7 @@ function _wt_jacobi_eigen(A::Matrix{Float64})
     (d, V)
 end
 # parity(quarantine: LAPACK syevr: Julia's method calls LAPACK syevr through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.eigen(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.eigen(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}; sortby=nothing)
     d, V = _wt_jacobi_eigen(_wt_sym_to_dense(A))
     LinearAlgebra.Eigen(d, V)
 end
@@ -348,10 +348,10 @@ end
 # real LU object; powers det/logdet already). cholesky(A) → a Cholesky built from
 # the hand-rolled upper factor. Verified via lu(A)\b, det(lu(A)), cholesky(A)\b.
 # parity(quarantine: LAPACK getrf: Julia's method calls LAPACK getrf through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.lu(A::Matrix{Float64}; check::Bool=true, allowsingular::Bool=false) =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.lu(A::Matrix{Float64}; check::Bool=true, allowsingular::Bool=false) =
     LinearAlgebra.generic_lufact!(copy(A); check=check, allowsingular=allowsingular)
 # parity(quarantine: LAPACK getrs: Julia's method calls LAPACK getrs through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(F::LinearAlgebra.LU{Float64,Matrix{Float64}}, b::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:\(F::LinearAlgebra.LU{Float64,Matrix{Float64}}, b::Vector{Float64})
     LU = F.factors; n = size(LU, 1)
     y = b[F.p]
     @inbounds for i in 1:n; s = y[i]; for j in 1:i-1; s -= LU[i, j]*y[j]; end; y[i] = s; end
@@ -371,10 +371,10 @@ function _wt_chol_upper(A::Matrix{Float64})
     U
 end
 # parity(quarantine: LAPACK potrf: Julia's method calls LAPACK potrf through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE LinearAlgebra.cholesky(A::Matrix{Float64}; check::Bool=true) =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE LinearAlgebra.cholesky(A::Matrix{Float64}; check::Bool=true) =
     LinearAlgebra.Cholesky(_wt_chol_upper(A), 'U', 0)
 # parity(quarantine: LAPACK potrs: Julia's method calls LAPACK potrs through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:\(C::LinearAlgebra.Cholesky{Float64,Matrix{Float64}}, b::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:\(C::LinearAlgebra.Cholesky{Float64,Matrix{Float64}}, b::Vector{Float64})
     U = C.factors; n = size(U, 1)
     y = similar(b)   # solve Uᵀy = b (forward; Uᵀ lower)
     @inbounds for i in 1:n; s = b[i]; for k in 1:i-1; s -= U[k, i]*y[k]; end; y[i] = s / U[i, i]; end
@@ -387,16 +387,16 @@ end
 # (silent-fail). Symmetric reuses densify + the matvec overlay; triangular is a
 # direct hand-rolled product respecting the stored triangle.
 # parity(quarantine: BLAS symv: Julia's method calls BLAS symv through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE Base.:*(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}, x::Vector{Float64}) =
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE Base.:*(A::LinearAlgebra.Symmetric{Float64,Matrix{Float64}}, x::Vector{Float64}) =
     _wt_sym_to_dense(A) * x
 # parity(quarantine: BLAS trmv: Julia's method calls BLAS trmv through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:*(U::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
     P = parent(U); n = size(P, 1); y = zeros(Float64, n)
     @inbounds for i in 1:n; s = 0.0; for j in i:n; s += P[i, j] * x[j]; end; y[i] = s; end
     y
 end
 # parity(quarantine: BLAS trmv: Julia's method calls BLAS trmv through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.:*(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.:*(L::LinearAlgebra.LowerTriangular{Float64,Matrix{Float64}}, x::Vector{Float64})
     P = parent(L); n = size(P, 1); y = zeros(Float64, n)
     @inbounds for i in 1:n; s = 0.0; for j in 1:i; s += P[i, j] * x[j]; end; y[i] = s; end
     y
@@ -409,7 +409,7 @@ end
 
 # ldiv!(U, b): upper-triangular solve U x = b by back-substitution (mutates b).
 # parity(quarantine: LAPACK trtrs: Julia's method calls LAPACK trtrs through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.ldiv!(A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, b::Vector{Float64})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.ldiv!(A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}}, b::Vector{Float64})
     M = parent(A); n = length(b)
     @inbounds for i in n:-1:1
         s = b[i]
@@ -422,7 +422,7 @@ end
 # rdiv!(B, U): solve X U = B (mutates B) — column-forward substitution, since
 # U is upper-triangular: X[:,j] = (B[:,j] - Σ_{k<j} X[:,k] U[k,j]) / U[j,j].
 # parity(quarantine: BLAS trsm: Julia's method calls BLAS trsm through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.rdiv!(B::Matrix{Float64}, A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.rdiv!(B::Matrix{Float64}, A::LinearAlgebra.UpperTriangular{Float64,Matrix{Float64}})
     U = parent(A); m, n = size(B)
     @inbounds for j in 1:n
         for k in 1:j-1
@@ -438,7 +438,7 @@ end
 # copytrito!(B, A, uplo): copy the `uplo` triangle (incl. diagonal) of A into B,
 # leaving the rest of B untouched. Native routes through a LAPACK lacpy ccall.
 # parity(quarantine: LAPACK lacpy: Julia's method calls LAPACK lacpy through libblastrampoline; WT has no FFI.)
-@overlay WasmTarget.WASM_METHOD_TABLE function LinearAlgebra.copytrito!(B::Matrix{Float64}, A::Matrix{Float64}, uplo::AbstractChar)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function LinearAlgebra.copytrito!(B::Matrix{Float64}, A::Matrix{Float64}, uplo::AbstractChar)
     m, n = size(A)
     if uplo == 'U'
         @inbounds for j in 1:n, i in 1:min(j, m); B[i, j] = A[i, j]; end

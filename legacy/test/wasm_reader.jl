@@ -2,7 +2,7 @@
 # Deserializer serves dart's tools and tests (pkg/wasm_builder: bin/wasm2wat.dart:61,
 # test/ir_test.dart:171, test/wasm_read_write_test.dart:39) and never the path from a compile to
 # its runtime. The compile generates a module's runtime from its own record of the imports it
-# added (WasmTarget.host_runtime_js); a harness that holds only a module's bytes reads them back
+# added (WasmTargetLegacy.host_runtime_js); a harness that holds only a module's bytes reads them back
 # here, as a host reads a module's imports with WebAssembly.Module.imports.
 #
 # Every read is bounds-checked and every malformed module refused by name, never read past or
@@ -14,7 +14,7 @@
 # ValueType/RefType/HeapType.deserialize accept them (type.dart:67, :256, :361), mutability 0 or 1.
 module WasmReader
 
-import WasmTarget
+import WasmTargetLegacy
 
 export module_function_imports, module_runtime_js
 
@@ -179,10 +179,10 @@ end
 """
     module_runtime_js(bytes) -> String
 
-The runtime of the module `bytes` as its compile generates it (WasmTarget.host_runtime_js over its
+The runtime of the module `bytes` as its compile generates it (WasmTargetLegacy.host_runtime_js over its
 function-import record), the record read back from the bytes: for a harness that holds the bytes
-alone (the compile hands its own runtime back beside them, WasmTarget.compile_with_runtime).
+alone (the compile hands its own runtime back beside them, WasmTargetLegacy.compile_with_runtime).
 """
-module_runtime_js(bytes::Vector{UInt8})::String = WasmTarget.host_runtime_js(module_function_imports(bytes))
+module_runtime_js(bytes::Vector{UInt8})::String = WasmTargetLegacy.host_runtime_js(module_function_imports(bytes))
 
 end # module WasmReader

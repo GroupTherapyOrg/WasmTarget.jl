@@ -1,4 +1,4 @@
-# WasmTargetStaticArraysExt — StaticArrays (SVector) support.
+# WasmTargetLegacyStaticArraysExt — StaticArrays (SVector) support.
 #
 # SVector{N,T} === SArray{Tuple{N},T,1,N} is NOT a heap array: it is a struct
 # wrapping a single field `data::NTuple{L,T}`, laid out by that field like every
@@ -22,13 +22,13 @@
 # (all N ≥ 1, including the degenerate single-element vector) — construction
 # (positional / tuple / converting-eltype), getindex, iterate/destructure,
 # arithmetic and broadcast. SMatrix / MArray are future scope.
-module WasmTargetStaticArraysExt
+module WasmTargetLegacyStaticArraysExt
 
-using WasmTarget
+using WasmTargetLegacy
 using StaticArrays: StaticArrays, SArray
 using Base.Experimental: @overlay
 
-const WMT = WasmTarget.WASM_METHOD_TABLE
+const WMT = WasmTargetLegacy.WASM_METHOD_TABLE
 
 # For an already-concrete SArray, construct_type is the identity — return it so WT
 # infers the result type (instead of Any) and the normal inner ctor takes over.

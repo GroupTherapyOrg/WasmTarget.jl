@@ -109,8 +109,10 @@ function unconsumed_files_outside_src()::Vector{String}
         ".gitignore", ".gitattributes", "release-please-config.json",
         ".release-please-manifest.json", "docs/Project.toml", "docs/input.css"])
     # directories a loader walks, each with the files that loader consumes: run_tlc.sh (the
-    # models and their instances), the docs site's file routing, Pkg's [extensions], GitHub Actions. Anything else in them is consumed by nothing.
-    walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$")
+    # models and their instances), the docs site's file routing, Pkg's [extensions], GitHub Actions,
+    # and Pkg's loading of legacy/, WT1 as its own package (its module file, its [extensions]). Anything else in them is consumed by nothing.
+    walked = ("dev/formal/" => r"\.(tla|cfg)$", "docs/src/" => r"", "ext/" => r"\.jl$", ".github/workflows/" => r"\.ya?ml$",
+              "legacy/" => r"")
     not_consumers = Set(["dev/MARCH.md", "dev/HISTORY.md", "CHANGELOG.md"])
     files = String.(split(readchomp(Cmd(`git ls-files`; dir=ROOT)), '\n'))
     texts = Dict(f => _text(joinpath(ROOT, f)) for f in files
@@ -214,8 +216,9 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L154" => (:stopgap, ""), "L201" => (:stopgap, ""), "L202" => (:stopgap, ""), "L203" => (:stopgap, ""),
     # the ledger's (L204 to L207): each reads the ledger, the charter, the plan, AGENTS.md or this file
     "L204" => (:stopgap, ""), "L205" => (:stopgap, ""), "L206" => (:stopgap, ""), "L207" => (:stopgap, ""),
-    # C4 to C8 cite no lock yet: WT1's are on each clause's Legacy line, and the rebuild's arrive
-    # with their constructions (dev/MARCH.md 1.A3 to 1.A9)
+    # the rebuild's first constructions (dev/MARCH.md 1.A2c): the rejections a closed sum (C6), and
+    # no open abstract type passing for a closed one (C5, A33S1); C4, C7 and C8's arrive with theirs
+    "L218" => (:construction, "Rejection"), "L219" => (:construction, "check_no_open_abstract"),
 )
 
 
@@ -223,7 +226,12 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
 # <anchor>]`: Rust's sealed enums and exhaustive match, dart's sealed classes and switches, wasm's
 # types), and how Julia's differs; L201 refuses a construction without both, and a precedent for any
 # other entry. A construction with no precedent anywhere is an invention and waits for Dale.
-const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}()
+const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
+    "L218" => ("rust: enum + exhaustive match; dart: sealed class + exhaustive switch",
+               "a Union of concrete structs that subtype nothing, its every kind handled and nothing else, checked when the package loads, since Julia checks no match at compile time"),
+    "L219" => ("dart: sealed class against abstract class; rust: enum against trait",
+               "Julia's abstract types are open by language, so an abstract type that is neither a registered construction nor a dart abstract class's mirror refuses the package's load"),
+)
 
 # whether a precedent reads `<ecosystem>: <mechanism>`, the ecosystem lowercase
 strict_precedent_ok(p::AbstractString)::Bool = occursin(r"^[a-z][a-z0-9+_-]*: \S", p)
@@ -238,7 +246,47 @@ struct ConstructionLock
 end
 function (c::ConstructionLock)()::Int
     local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
-    return Base.invokelatest(getfield(wt, :construction_check), Val(c.definition))
+    local n = Base.invokelatest(getfield(wt, :construction_check), Val(c.definition))
+    local missed = construction_negatives_missed(wt, c.definition)
+    foreach(x -> println("    ✗ ", x), missed)
+    return n + length(missed)
+end
+
+# a construction's always-run negative (L207): plants its src check must refuse, each run through
+# that check, and the definitions it must pass; a construction with no plants here is a fault
+function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{String}
+    local out = String[]
+    local V = getfield(wt, :ConstructionViolation)
+    local refuses(f) = try; Base.invokelatest(f); false; catch e; e isa V; end
+    local passes(f) = try; Base.invokelatest(f) == 0; catch; false; end
+    if definition === :Rejection
+        local closed = getfield(wt, :check_closed_sum)
+        local m = Module(:RejectionPlant)
+        Core.eval(m, quote
+            struct A; end; struct B; end; abstract type Open end; struct C <: Open; end
+            h(::A) = 1; h(::B) = 2
+            g(::A) = 1; g(::B) = 2; g(::Int) = 3
+            k(::A) = 1; k(::C) = 2
+            only_a(::A) = 1
+        end)
+        passes(() -> closed(Union{m.A, m.B}, m.h)) || push!(out, "negative missed: a closed sum with every kind handled fails its check")
+        refuses(() -> closed(Union{m.A, m.B}, m.only_a)) || push!(out, "negative missed: a kind with no handler passes")
+        refuses(() -> closed(Union{m.A, m.B}, m.g)) || push!(out, "negative missed: a handler for a type outside the sum passes")
+        refuses(() -> closed(Union{m.A, m.C}, m.k)) || push!(out, "negative missed: a kind subtyping an open abstract type passes")
+        refuses(() -> closed(m.A, m.h)) || push!(out, "negative missed: a sum that is no Union passes")
+    elseif definition === :check_no_open_abstract
+        local noopen = getfield(wt, :check_no_open_abstract)
+        local bad = Module(:OpenPlant); Core.eval(bad, :(abstract type Bad end))
+        local good = Module(:MirrorPlant)
+        Core.eval(good, :(Core.@doc "parity(ir/types.dart:12 ValueType) the dart class" abstract type Good end))
+        local sub = Module(:SubPlant); Core.eval(sub, Expr(:toplevel, :(module Sub; abstract type Hidden end; end)))
+        refuses(() -> noopen(bad)) || push!(out, "negative missed: an open abstract type passes")
+        passes(() -> noopen(good)) || push!(out, "negative missed: a dart abstract class's mirror with its parity anchor fails")
+        refuses(() -> noopen(sub)) || push!(out, "negative missed: an open abstract type in a submodule passes")
+    else
+        push!(out, "the construction $definition has no plants in construction_negatives_missed")
+    end
+    return out
 end
 
 # the thunk of lock `id` in LOCKS, or nothing
@@ -533,8 +581,10 @@ function findings_off_row(pairs::Vector{Tuple{String,String}}, rows::AbstractDic
                           fixed::AbstractSet{String})::Vector{String}
     local out = String[]
     for (f, r) in pairs
+        # a finding a commit fixes is closed, its row free to leave with it
+        f in fixed && continue
         haskey(rows, r) || (push!(out, "$f is left open on $r, which is no row"); continue)
-        (occursin(Regex("\\b" * f * "\\b"), rows[r]) || f in fixed) ||
+        occursin(Regex("\\b" * f * "\\b"), rows[r]) ||
             push!(out, "$f is left open on $r, which does not hold it, and no commit's Fixes: line names it")
     end
     return out
@@ -571,7 +621,8 @@ function findings_negatives_missed()::Vector{String}
     local cases = [("every finding on its row", rows, Set{String}(), 0),
                    ("a finding off its row", merge(rows, Dict("1.S" => "| 1.S | C0 | A1B1 |")), Set{String}(), 1),
                    ("a finding off its row that a commit fixes", merge(rows, Dict("1.S" => "| 1.S | C0 | A1B1 |")), Set(["A1B2"]), 0),
-                   ("a row that does not exist", Dict(k => v for (k, v) in rows if k != "D3"), Set{String}(), 1)]
+                   ("a row that does not exist", Dict(k => v for (k, v) in rows if k != "D3"), Set{String}(), 1),
+                   ("a fixed finding whose row left with it", Dict(k => v for (k, v) in rows if k != "D3"), Set(["A1B5"]), 0)]
     local out = String[]
     length(open_findings(entry)) == 5 || push!(out, "negative missed: the open findings read ($(length(open_findings(entry))) of 5)")
     for (what, r, fx, want) in cases
@@ -784,6 +835,16 @@ function ratchet_source()::Tuple{Dict{String,String},Dict{String,String},Dict{St
             local e = findnext(==("end"), lines, k)
             e === nothing && break
             defs[m[1]] = join(lines[k:e], '\n')
+            k = e + 1
+            continue
+        end
+        # a callable struct's call method is a function of its type's name: a ConstructionLock in the
+        # table calls what `function (c::ConstructionLock)()` calls
+        local cm = match(r"^function \(\w+::(\w+)\)\(", lines[k])
+        if cm !== nothing
+            local e = findnext(==("end"), lines, k)
+            e === nothing && break
+            defs[cm[1]] = join(lines[k:e], '\n')
             k = e + 1
             continue
         end
@@ -1073,7 +1134,7 @@ const LOCKS = [
         () -> (v = agents_md_violations(); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
-    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), and smoke on Julia 1.13. No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** push, a push of the march branch (dev/land.sh's MARCH, wt2) or workflow_dispatch: `dev/land.sh merge` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #128 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** push, a push of the march branch (dev/land.sh's MARCH, wt2) or workflow_dispatch: `dev/land.sh merge` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #128 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
@@ -1094,7 +1155,7 @@ const LOCKS = [
             local whole = parts -> parts == [""] || (all(p -> occursin(r"^[0-9]+/[1-9][0-9]*$", p), parts) &&
                 length(unique(map(p -> split(p, '/')[2], parts))) == 1 &&
                 sort(map(p -> parse(Int, split(p, '/')[1]), parts)) == collect(0:parse(Int, split(parts[1], '/')[2]) - 1))
-            local matrix_ok = length(runs) == 6 && keys(jobs) == runs && all(whole, values(jobs))
+            local matrix_ok = length(runs) == 8 && keys(jobs) == runs && all(whole, values(jobs))
             # the closure predicate (A23E4, A23E6): a dispatch or schedule, a gate/** push, or a pushed head
             # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
             # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
@@ -1183,7 +1244,11 @@ const LOCKS = [
                       # (in every job that installs Julia)
                       count("      - name: Julia (juliaup)\n", gate) >= 1 &&
                           count(raw"          channel 1.12 && \"$J\" default 1.12" * "\n", gate) == count("      - name: Julia (juliaup)\n", gate),
-                      occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ]; then channel 1.13; fi", gate),
+                      occursin(raw"          if [ \"${{ matrix.lane }}\" = smoke-1.13 ] || [ \"${{ matrix.lane }}\" = legacy-1.13 ]; then channel 1.13; fi", gate),
+                      # ... and WT1's smoke, the agreement oracle legacy/'s deletion rule reads, on both versions
+                      occursin(join([raw"    bg \"$d/l113\" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl",
+                                     raw"    lane legacy julia --project=legacy legacy/test/smoke.jl",
+                                     raw"    join_bg \"$d/l113\""], '\n'), gated),
                       # ... CI's Node major, read from ci.yml's node-version ...
                       # (every job's: a job of its own Node passed while another kept the line)
                       let majors = count("      - name: CI's Node major\n", gate),
@@ -1278,7 +1343,7 @@ const LOCKS = [
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
             v
         end),
-    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, about a minute of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (exactly test/registry_cases.jl's generated groups, whose blocking sample is registry_sample, Amendment 117-14, split, never exempt, and entered_paths, which exists for the matrix-only emission-diff check; none in the core, never registry_sample; the non-blocking matrix runs them), the generated groups built only when a run selects one (smoke.jl's lazy declarations: a run selecting none never includes test/registry_cases.jl, and every reader of all cases builds them first); the probe core of that file (a cover of every piece of src any probe runs, test/block_impact.jl) with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names (the cover of the file's pieces by the QA families the locks cite as behavior, test/block_impact.jl), so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a target of wall, never scaled (a machine more than 1.5 times slower than its best leaves the timing ratchet unjudged, never the checks or the budgets, L195); intent: the gate takes about a minute, so a landing takes minutes (Dale 2026-10-21: a 61-s run is no failure of an under-a-minute goal); band: a wall over its budget is a note, red only past BUDGET_BAND (2) times it, the whole run past 120 s; a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate, and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types, as the export namer src/codegen/trimcollect.jl does, names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; every line of code of a src file is in a piece (a definition's, keyed by its line so two methods of one name are two, each line of a multi-line `const` its own, any other form's, dev/AUDIT.md A20C12 = A19C1), and a change to a numeric lowering table's entry runs the generated cases that case it, read from test/block_tables.tsv (test/block_impact.jl --tables: every entry of each table a generator cases, by its key's text, an entry with no row failing the gate, and an entry of a table no generator cases failing it, naming the table, dev/AUDIT.md A22E3; a const is a lowering table by its registration in dev/block.jl's LOWERING_TABLES, exactly the consts of src declared as a Dict or IdDict of emitter values, never by its shape, so a planted const of `key => value` lines under another name fails nothing, dev/AUDIT.md A26E3), the matrix-only group's named cases alone (WT_SMOKE_CASES, a name no selected case has refused) (dev/AUDIT.md A20C12: the F32_COPYSIGN → F32_MIN plant in intrinsics_table.jl selects registry_binops/copysign_float_Float32 and fails); a body no native run executes, an overlay or a bespoke one, counts as run by each probe and case whose plan compiles it (block_impact's planned_lines); the row of every file holding a numeric lowering table, and of calls.jl and int128.jl, which hold their lowering, names registry_sample and narrow_primitive, so a fix's revert there runs its witness at the gate (dev/AUDIT.md A20P12); the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree test/block_impact.jl measured, and a change to src/ fails when that map is stale for it (more than STALE_PIECES = 8 of the pieces the change alters, keyed on its base's text, are pieces that moved between the measured tree and the change's base, whose map rows the selection may misread, the count and the re-record command printed; how far the base moved is a note, so a change in code no other landing moved passes however stale the map; a src file whose code the change leaves alone, Julia's own parse of both texts with line numbers and docstrings dropped being one expression, alters no piece, so a change of comments and docstrings alone passes; a map measured on the change's own src tree, a change carrying its re-recorded map, is fresh; A30E5; the re-record a measurement off the landing path landing as its own commit, incremental from the sets the last measurement saved in the main tree's dev/.block/impact_sets.tsv (test/block_impact.jl --pieces: only the probes, groups and QA families whose saved lines touch a src file that moved, and any the sets lack, measured again), in full when none are saved; a measured tree this repository does not hold; a changed line of code in no piece), as does any change to ext/, which no map measures (dev/AUDIT.md A20C13); what the selection still cannot see is stated in test/block_groups.tsv's header, A19C1's (a)-(g) each closed or open (dev/AUDIT.md A20C14); a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family or phase`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) green otherwise (exit 0, 1, 3), a run whose warm runner was cold (its first request, or the first after a revise) red only for a failing check and otherwise green with `timing = \"unjudged\"` (neither its budgets nor its bests judged: `dev/land.sh land` judges them by a warm run of the landed tree right after the landing, L198). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the last closure matrix is not red: it reads gate.yml's newest run on a dispatch, a gate/** push or a push of the march branch whose head commit carries `Closes: C<n>` (read from the commit, `gh run list`), names it, refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check (dev/CHARTER.md C10)",
+    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, about a minute of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load; the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (none in the core; the non-blocking matrix runs them); the probe core of that file with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names, so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a target of wall, never scaled (a machine more than 1.5 times slower than its best leaves the timing ratchet unjudged, never the checks or the budgets, L195); intent: the gate takes about a minute, so a landing takes minutes (Dale 2026-10-21: a 61-s run is no failure of an under-a-minute goal); band: a wall over its budget is a note, red only past BUDGET_BAND (2) times it, the whole run past 120 s; a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate (a test file the change deletes runs nothing), and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; every line of code of a src file is in a piece (a definition's, keyed by its line so two methods of one name are two, each line of a multi-line `const` its own, any other form's, dev/AUDIT.md A20C12 = A19C1); the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree the map was written for, and a change to src/ fails when that map is stale for it (more than STALE_PIECES = 8 of the pieces the change alters, keyed on its base's text, are pieces that moved between the measured tree and the change's base, whose map rows the selection may misread, the count and the re-record command printed; how far the base moved is a note, so a change in code no other landing moved passes however stale the map; a src file whose code the change leaves alone, Julia's own parse of both texts with line numbers and docstrings dropped being one expression, alters no piece, so a change of comments and docstrings alone passes; a map measured on the change's own src tree, a change carrying its re-recorded map, is fresh; A30E5; the rebuild's map written by hand, its `measured` row the change's own src tree, until WasmTarget lowers code a measurement can cover (dev/MARCH.md 1.D); a measured tree this repository does not hold; a changed line of code in no piece), as does any change to ext/ but its deletion, which no map measures (dev/AUDIT.md A20C13); a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) green otherwise (exit 0, 1, 3), a run whose warm runner was cold (its first request, or the first after a revise) red only for a failing check and otherwise green with `timing = \"unjudged\"` (neither its budgets nor its bests judged: `dev/land.sh land` judges them by a warm run of the landed tree right after the landing, L198). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the last closure matrix is not red: it reads gate.yml's newest run on a dispatch, a gate/** push or a push of the march branch whose head commit carries `Closes: C<n>` (read from the commit, `gh run list`), names it, refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check; and `dev/land.sh land` refuses a change to legacy/ but its deletion whole, WT1 frozen as the agreement oracle (dev/MARCH.md 1.G) (dev/CHARTER.md C10)",
         () -> begin
             local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
             local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
@@ -1300,11 +1365,10 @@ const LOCKS = [
                          raw"    probe_env(c) = stage_env(Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
                          raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, stage_env(Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
                          raw"    smokeenv = stage_env(Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
-                         raw"    batch = unique(vcat(setdiff(unique(vcat(mapped, newgroups)), core, matrix), case_groups))",
+                         raw"    batch = unique(setdiff(unique(vcat(mapped, newgroups)), core, matrix))",
                          raw"            append!(out, last.(spans))",
                          raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
-                         raw"    cases, tablefails = table_cases(touched_table_entries(base, changed), read_tables())",
-                         raw"    append!(fails, stale_map(moved, measured, changed, head_texts, Dict(f => touched_lines(base, f) for f in keys(head_texts))))",
+                         raw"    append!(fails, stale_map(moved, measured, filter(f -> !startswith(f, \"ext/\") || ispath(joinpath(ROOT, f)), changed), head_texts,",
                          raw"    stale = measured == head_src ? Set{String}() : pieces_moved(measured, gitok(\"rev-parse\", \"$base:src\") ? git(\"rev-parse\", \"$base:src\") : \"\")",
                          raw"        union!(own, change_pieces(f, bt, ht, git(\"diff\", \"-U0\", base, \"--\", f)))",
                          raw"    moved = stale === nothing ? nothing : length(intersect(stale, own))",
@@ -1339,7 +1403,7 @@ const LOCKS = [
             # no budget is scaled to pass: the scaled time is the ratchet's alone (A19P5)
             v += occursin(r"scaled <= b|total / factor <= tb|not blocking", blk) ? 1 : 0
             # the map: every src file has a row, every group and probe exists
-            # smoke's groups: smoke.jl's, its lazy ones (registry_cases.jl's) and those of the case files it includes
+            # smoke's groups: smoke.jl's and those of the case files it includes
             local smoke_all = join([smoke; [read(joinpath(ROOT, "test", m[1]), String)
                                             for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smoke)]], '\n')
             local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smoke_all))
@@ -1363,44 +1427,9 @@ const LOCKS = [
                 end
             end
             v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
-            # the matrix-only row: exactly the generated registry groups (Amendment 117-14) and
-            # entered_paths (it exists for the matrix-only emission-diff check, L190), none in the
-            # core, never the sample; the gate drops them from every stage
-            local rcs = read(joinpath(ROOT, "test", "registry_cases.jl"), String)
-            local generated = Set(String(m[1]) for m in eachmatch(r"^    \"(registry_\w+)\" => _rc_\w+,$"m, rcs))
-            occursin("    RC_GROUPS[\"registry_operators_rejected\"] = RC_OPERATOR_REJECTS\n", rcs) && push!(generated, "registry_operators_rejected")
-            local mo = get(rows, "matrix-only", String[])
-            v += !isempty(generated) && Set(mo) == union(generated, ["entered_paths"]) && length(mo) == length(generated) + 1 &&
-                 isempty(intersect(mo, get(rows, "core", String[]))) && !("registry_sample" in mo) ? 0 : 1
-            # a run that selects no lazy group never includes registry_cases.jl: smoke.jl declares the
-            # generated groups lazily and builds only the selected ones before main runs; every reader
-            # of all cases builds them all first
-            v += !occursin(r"^include\(joinpath\(@__DIR__, \"registry_cases.jl\"\)\)"m, smoke) &&
-                 count(r"^_lazy_(?:g|xf)\(\"registry_\w+\", \"registry_cases.jl\"\)$"m, _smoke_text()) == length(generated) + 2 &&
-                 occursin("        haskey(LAZY_BUILDERS, file) || Base.include(@__MODULE__, joinpath(@__DIR__, file))\n", smoke) &&
-                 occursin("abspath(PROGRAM_FILE) == (@__FILE__) && _build!(_selected_lazy())\nabspath(PROGRAM_FILE) == (@__FILE__) && main()", smoke) &&
-                 occursin("LAZY_BUILDERS[\"registry_cases.jl\"] = rc_groups", rcs) ? 0 : 1
-            v += occursin("_build!(collect(keys(LAZY_FILE)))", read(joinpath(ROOT, "test", "block_impact.jl"), String)) ? 0 : 1
-            v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = unique(vcat(setdiff(unique(vcat(mapped, newgroups)), core, matrix), case_groups))", blk) &&
+            v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = unique(setdiff(unique(vcat(mapped, newgroups)), core, matrix))", blk) &&
                  occursin("            append!(f[1] == \"core\" ? core : f[1] == \"probes\" ? probes : matrix, names(f[2]))", blk) ? 0 : 1
             v += count(l -> startswith(l, "measured\t"), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) == 1 ? 0 : 1
-            v += any(l -> occursin(r"^src/codegen/trimcollect\.jl\t[^\t]*\t[^\t]*\t[a-z_]", l), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) ? 0 : 1
-            # every file holding a numeric lowering table, and the two holding their lowering (calls.jl's
-            # shifts and counts, int128.jl's 128-bit route), runs registry_sample and narrow_primitive
-            # when it changes, so a fix's revert there is red at the gate (dev/AUDIT.md A20P12)
-            local tables = Set{String}(["src/codegen/calls.jl", "src/codegen/int128.jl"])
-            for (dir, _, fs) in walkdir(SRC), f in fs
-                endswith(f, ".jl") || continue
-                occursin(r"^const (?:INTRINSIC_\w+|CHECKED_OPS|SHIFT_OPS|FMA_OPS|MISC_OPS|INT128_OPS|BUILTIN_LOWERINGS)\b"m,
-                         read(joinpath(dir, f), String)) && push!(tables, "src/" * replace(relpath(joinpath(dir, f), SRC), '\\' => '/'))
-            end
-            for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
-                local f = split(l, '\t')
-                (length(f) >= 2 && f[1] in tables) || continue
-                delete!(tables, f[1])
-                v += ("registry_sample" in split(f[2]) && "narrow_primitive" in split(f[2])) ? 0 : 1
-            end
-            v += length(tables)   # a table's file with no row of its own
             for (k, gs) in rows
                 v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
             end
@@ -1464,47 +1493,6 @@ const LOCKS = [
                 local tab = "x = 1\nconst MISC_OPS = Dict(\n    (A, B, :f) => g(1),   # c\n    (A, B, :h) =>\n        g(2),\n)\n"
                 v += count(!, [g(:line_keys, tab, "src/t.jl")[3] == "src/t.jl:3", g(:line_keys, tab, "src/t.jl")[1] == "src/t.jl:L1#0",
                                g(:line_keys, "f(x) = 1\nf(x::Int) = 2\n", "src/t.jl")[2] == "src/t.jl:f@2#0"])
-                # a changed lowering-table entry, by its key, over its lines (A20C12)
-                local tab2 = replace(tab, "g(1)" => "g(9)")
-                v += count(!, [g(:table_entries_touched, "src/t.jl", tab, tab2, "@@ -3 +3 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :f)")],
-                               g(:table_entries_touched, "src/t.jl", tab, tab, "@@ -5 +5 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :h)")],
-                               isempty(g(:table_entries_touched, "src/t.jl", tab, tab, "@@ -1 +1 @@\n")),
-                               # a deleted entry, on the base's side alone
-                               g(:table_entries_touched, "src/t.jl", tab, replace(tab, "    (A, B, :f) => g(1),   # c\n" => ""),
-                                 "@@ -3 +2,0 @@\n") == [("src/t.jl", "MISC_OPS", "(A, B, :f)")]])
-                # a lowering table is one by its registration (LOWERING_TABLES), never by its shape: a
-                # planted const of `key => value` lines under another name keys no entry and its change
-                # fails nothing, while the same lines under a registered name key their entries and an
-                # uncased one fails, naming the table (dev/AUDIT.md A26E3)
-                local ntab = "const _INTS = Dict{Type,Tuple{Int,Bool}}(\n    Int8 => (8, true),\n    Bool => (1, false),\n)\n"
-                local rtab = replace(ntab, "const _INTS" => "const INT128_OPS")
-                local nent = g(:table_entries_touched, "src/t.jl", ntab, replace(ntab, "(1, false)" => "(1, true)"), "@@ -3 +3 @@\n")
-                local rent = g(:table_entries_touched, "src/t.jl", rtab, replace(rtab, "(1, false)" => "(1, true)"), "@@ -3 +3 @@\n")
-                local rfail = g(:table_cases, rent, Dict{Tuple{String,String,String},Vector{String}}())
-                v += count(!, [isempty(g(:table_entry_keys, ntab, "src/t.jl")), isempty(nent),
-                               g(:table_cases, nent, Dict{Tuple{String,String,String},Vector{String}}()) == (String[], String[]),
-                               rent == [("src/t.jl", "INT128_OPS", "Bool")],
-                               length(rfail[2]) == 1 && occursin("no generator cases the table INT128_OPS", only(rfail[2]))])
-                # the registration is exactly the consts of src declared as a Dict or IdDict whose values are
-                # emitters (Function, BinOpEmit, UnOpEmit, ConvEmit) over more than one line, each named once
-                local declared = String[]
-                for (d, _, fs) in walkdir(SRC), f in fs
-                    endswith(f, ".jl") || continue
-                    for l in _file_lines(joinpath(d, f))
-                        local m = match(r"^const (\w+) = (?:Id)?Dict\{.*,(?:Function|BinOpEmit|UnOpEmit|ConvEmit)\}\($", l)
-                        m === nothing || push!(declared, String(m[1]))
-                    end
-                end
-                local registered = collect(String, getglobal(Bm, :LOWERING_TABLES))
-                v += allunique(registered) && sort(declared) == sort(registered) ? 0 : 1
-                # a changed entry runs its rows' cases; an entry of a cased table with no row, and an entry
-                # of a table no generator cases, fail, naming the table (A20C12, A22E3)
-                local trs = Dict(("src/t.jl", "T", "(A, B, :f)") => ["g/c1", "g/c2"], ("src/t.jl", "T", "(A, B, :h)") => ["g/c1"])
-                local tc1 = g(:table_cases, [("src/t.jl", "T", "(A, B, :f)"), ("src/t.jl", "T", "(A, B, :h)")], trs)
-                local tc2 = g(:table_cases, [("src/t.jl", "T", "(A, B, :k)"), ("src/u.jl", "INT128_OPS", ":add_int")], trs)
-                v += count(!, [tc1 == (["g/c1", "g/c2"], String[]), isempty(tc2[1]), length(tc2[2]) == 2,
-                               occursin("re-record it with test/block_impact.jl --tables", tc2[2][1]),
-                               occursin("no generator cases the table INT128_OPS", tc2[2][2])])
                 # a stale map fails a change to src/: more than STALE_PIECES pieces of src moved between the
                 # measured tree and the change's base, a measured tree unknown here, a changed line of code
                 # in no piece (a module's own line, when the parse keys it to no form); a change to ext/ always; a change elsewhere never (A20C13)
@@ -1513,7 +1501,7 @@ const LOCKS = [
                 v += count(!, [getglobal(Bm, :STALE_PIECES) == 8,
                                isempty(g(:stale_map, 8, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1, 3]))),
                                occursin("9 of the pieces it alters moved", only(g(:stale_map, 9, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1])))),
-                               occursin("test/block_impact.jl --pieces", only(g(:stale_map, 9, "m", ["src/t.jl"], ns, ni))),
+                               occursin("git rev-parse HEAD:src", only(g(:stale_map, 9, "m", ["src/t.jl"], ns, ni))),
                                length(g(:stale_map, nothing, "m", ["src/t.jl"], ns, ni)) == 1,
                                g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => mtab), Dict("src/t.jl" => [1, 2])) ==
                                    (haskey(g(:line_keys, mtab, "src/t.jl"), 1) ? String[] :
@@ -1530,6 +1518,19 @@ const LOCKS = [
                                first(g(:red_kind, ["ratchet"], "L194_x 1 ❌ b\nL197_y 1 ❌ b\n")) == "own",
                                first(g(:red_kind, ["ratchet", "tests"], "L197_y 1 ❌ b\n")) == "own",
                                first(g(:red_kind, ["ratchet"], "")) == "own"])
+                # a removed test file or corpus case is named in the message, never silent (A33E1)
+                local sc = "_g(\"num\", Any[\n    (\"add\", f, 1),\n    (\"mul\", f, 2),\n])\n_c(\"p1\", f, (Int,))\n"
+                local none_ = Dict{String,Set{String}}()
+                local lost = Dict("test/smoke_corpus.jl" => Set(["num/mul"]))
+                v += count(!, [isempty(g(:probes_touched, String[], [0], String[], [0])),   # a file emptied whole: its hunk at line 0
+                               g(:corpus_case_keys, sc) == Set(["num/add", "num/mul", "p1"]),
+                               g(:unnamed_removals, "x", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
+                               isempty(g(:unnamed_removals, "x\nRemoves-test: test/lock_negatives.jl — its plants move into the ratchet\n", ["test/lock_negatives.jl"], none_)),
+                               g(:unnamed_removals, "Removes-test: test/lock_negatives.jl — \n", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
+                               g(:unnamed_removals, "x", String[], lost) == ["test/smoke_corpus.jl:num/mul"],
+                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/mul — WT1-only\n", String[], lost)),
+                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — the legacy lane runs them\n", String[], lost)),
+                               g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/add — another case\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"]])
                 # the budget counts the change's own pieces among the stale ones (A30E5): a change of comments
                 # and docstrings alone alters no piece (Julia's parse, docstrings and line numbers dropped, is
                 # unchanged), a code change alters the base's pieces its hunks touch, an added file none
@@ -1542,16 +1543,6 @@ const LOCKS = [
                                g(:change_pieces, "src/t.jl", d0, replace(d0, "g(x) = 2" => "g(x) = 3"), "@@ -3 +3 @@\n") == Set(["src/t.jl:g@3#0"]),
                                isempty(g(:change_pieces, "src/t.jl", d0, replace(d0, "\"doc\"" => "\"new doc\""), "@@ -1 +1 @@\n")),
                                isempty(g(:change_pieces, "src/t.jl", "", d0, "@@ -0,0 +1,3 @@\n"))])
-                # test/block_tables.tsv holds every entry of the tables it names, each numeric lowering
-                # table a generator cases, and no other (an entry with no row would select nothing)
-                local trows = Set(k for k in keys(Base.invokelatest(getglobal(Bm, :read_tables))))
-                local tfiles = unique(first.(collect(trows)))
-                local want = Set{Tuple{String,String,String}}()
-                for f in tfiles, (_, (t, k)) in g(:table_entry_keys, read(joinpath(ROOT, f), String), f)
-                    any(r -> r[1] == f && r[2] == t, trows) && push!(want, (f, t, k))
-                end
-                v += trows == want && Set(r[2] for r in trows) == Set(["INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS",
-                     "CHECKED_OPS", "SHIFT_OPS", "FMA_OPS", "MISC_OPS"]) ? 0 : 1
             catch err
                 println("    ✗ dev/block.jl does not load for its environment rule: ", sprint(showerror, err))
                 v += 1
@@ -1563,6 +1554,7 @@ const LOCKS = [
                          raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
                          raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' \"$rec\")) — refusing\"; exit 1; }",
                          raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
+                         raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git ls-tree -d \"$tip\" legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
                          raw"    bash dev/gate.sh --block"]
                 v += occursin(line, land) ? 0 : 1
             end
@@ -2249,6 +2241,10 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
+    "L218_rejections_a_closed_sum" => ("the rejections are a closed sum by construction (dev/MARCH.md 1.A2c, Dale 2026-10-21: strict means the wrong choice cannot be written): src/julia/reject.jl's `Rejection` is a `Union` of five concrete structs (Unported, Unquarantined, OutsideSubset, InvalidModule, Internal) that subtype nothing, so no module adds a kind without editing that line, and every kind has its `_reason` and no other type has one; construction_check(::Val{:Rejection}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed: a kind with no handler, a handler outside the sum, a kind under an open abstract type and a sum that is no Union each refused, a sum fully handled passed) (dev/CHARTER.md C6)",
+        ConstructionLock(:Rejection)),
+    "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose docstring carries `parity(<file>.dart:<line> <Symbol>)`, so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
+        ConstructionLock(:check_no_open_abstract)),
     "L207_every_negative_runs_every_gate" => ("every lock's negative runs in every gate, inside this file (Dale 2026-10-21, after test/lock_negatives.jl's L195 plant rotted unseen until a landing touched that file): a lock calls, directly or through functions of this file, a function named `<name>_negatives_missed` that plants fixed text its own logic must answer, so the ratchet stage runs it on every landing; a negative in a family the gate's selection may skip counts for nothing. Every lock outside NEGATIVE_OWED has one; NEGATIVE_OWED lists exactly the locks that owe theirs, none with one and none that is no lock, and R45 counts it, so the list only shrinks and a new lock never joins it. Behavior, run here: four planted tables and four planted sources answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local defs, thunks, calls = ratchet_source()

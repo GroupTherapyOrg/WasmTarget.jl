@@ -57,7 +57,7 @@ const SOCK = joinpath(DIR, "sock")
 const ENVDIR = joinpath(ROOT, "dev", "runner_env")
 const RESTART = 75
 const IDLE_MIN = 20
-const PRELOAD = ("Test", "Random", "SHA", "LinearAlgebra", "Statistics", "Dates", "JSON")
+const PRELOAD = ("Test", "Random", "SHA", "LinearAlgebra", "Statistics", "Dates")
 const REFUSED = ("WT_PROBE_RECORD", "WT_RATCHET_UPDATE", "WT_RECORD_TIMES")
 
 # the git blob of this file as it is on disk: the version a server runs and a client expects

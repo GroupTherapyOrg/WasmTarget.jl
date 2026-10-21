@@ -11,13 +11,14 @@
 #   bash dev/lanes.sh --fast     # ratchet + smoke only: the inner loop, never a push
 #
 # The default run is the full matrix's set of lanes (AGENTS.md, L153), which dev/gate.sh runs on
-# CI's runners: it adds the byte probes, the models, smoke on Julia 1.13 and the Pkg.test suite
-# (test/runtests.jl's QA families) as two concurrent shards (WT_SHARD=0,2 and 1,2).
+# CI's runners: it adds the byte probes, the models, smoke on Julia 1.13, the Pkg.test suite
+# (test/runtests.jl's QA families) as two concurrent shards (WT_SHARD=0,2 and 1,2), and WT1's smoke
+# over the one corpus on both versions, the agreement oracle legacy/'s deletion rule reads.
 #   bash dev/lanes.sh --all      # also the deep TLC instances (run_tlc.sh DEEP, ~10 min locally)
 #   bash dev/lanes.sh --lane <name> [--part i/N]   # exactly one lane of the default run, with
 #       its own checks (a skip still prints FAIL and exits red): ratchet, formal, smoke-1.13,
-#       smoke, probes or suite; --part i/N (0 <= i < N) runs part i of the smokes
-#       (WT_SMOKE_PART), formal (TLC_SHARD) or the suite (WT_SHARD=i,N). Each job of
+#       smoke, probes, suite, legacy or legacy-1.13; --part i/N (0 <= i < N) runs part i of the
+#       smokes, WT1's among them (WT_SMOKE_PART), formal (TLC_SHARD) or the suite (WT_SHARD=i,N). Each job of
 #       .github/workflows/gate.yml (dev/gate.sh) runs one; every other lane is a no-op.
 #
 # No lane of the default run is skipped green (A12P6): a default `julia` that is not 1.12
@@ -39,7 +40,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 if [ -n "$only" ]; then
-  case " ratchet formal smoke-1.13 smoke probes suite " in
+  case " ratchet formal smoke-1.13 smoke probes suite legacy legacy-1.13 " in
     *" $only "*) ;; *) echo "lanes.sh: no lane $only" >&2; exit 2 ;;
   esac
   [ $fast -eq 0 ] || { echo "lanes.sh: --lane runs one lane of the default run, not of --fast" >&2; exit 2; }
@@ -50,10 +51,10 @@ if [ -n "$part" ]; then
   case "$only" in
     # a part prints each group's seconds (WT_SMOKE_TIMES), the durations test/smoke_times.tsv
     # records and test/smoke.jl deals the parts by
-    smoke|smoke-1.13) export WT_SMOKE_PART="$part" WT_SMOKE_TIMES=1 ;;
+    smoke|smoke-1.13|legacy|legacy-1.13) export WT_SMOKE_PART="$part" WT_SMOKE_TIMES=1 ;;
     formal) export TLC_SHARD="$part" ;;
     suite) ;;
-    *) echo "lanes.sh: --part needs --lane smoke, smoke-1.13, formal or suite" >&2; exit 2 ;;
+    *) echo "lanes.sh: --part needs --lane smoke, smoke-1.13, legacy, legacy-1.13, formal or suite" >&2; exit 2 ;;
   esac
 fi
 # the lane runs: every lane of the default run, or the one --lane names
@@ -144,5 +145,18 @@ if [ $fast -eq 0 ]; then
   stop
   # every test family CI runs: two concurrent shards (suite() above)
   lane suite suite
+  stop
+  # WT1, the agreement oracle: its smoke over the one corpus on both versions, side by side
+  # (dev/MARCH.md 1.G; legacy/'s deletion rule reads its PASS set beside the rebuild's, 1.F)
+  if ! want legacy && ! want legacy-1.13; then :
+  elif [ "$JULIA" != "julia" ]; then
+    printf '  FAIL legacy         (the gate runs on the default julia, not %s)\n' "$JULIA"; fail=1
+  elif julia +1.13 -e 'exit(0)' >/dev/null 2>&1; then
+    bg "$d/l113" lane legacy-1.13 julia +1.13 --project=legacy legacy/test/smoke.jl
+    lane legacy julia --project=legacy legacy/test/smoke.jl
+    join_bg "$d/l113"
+  else
+    printf '  FAIL legacy-1.13    (julia +1.13 is not installed: juliaup add 1.13)\n'; fail=1
+  fi
 fi
 [ $fail -eq 0 ] && echo "LANES green" || { echo "LANES red"; exit 1; }

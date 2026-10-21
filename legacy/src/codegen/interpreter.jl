@@ -1445,7 +1445,7 @@ end
 #     `copy(::Memory{UInt8})` — take this path and left
 #     `pointerref($(QuoteNode(Ptr{DataTypeLayout}(0x0000000128c43628))), 1, 1)`
 #     — a live host address baked as a literal IR operand — in the typed IR
-#     (`WasmTarget.get_typed_ir`). Refusing `:semi_concrete_eval` outright
+#     (`WasmTargetLegacy.get_typed_ir`). Refusing `:semi_concrete_eval` outright
 #     (independent of the eligibility predicate that reached it) closes this;
 #     `:concrete_eval` alone never has the failure mode because it never
 #     exposes intermediate pointer arithmetic, only the callee's final value.

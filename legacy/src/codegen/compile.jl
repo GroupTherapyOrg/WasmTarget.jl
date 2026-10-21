@@ -867,7 +867,7 @@ _module_entries_label(entries::Vector)::String =
     compile_module(functions::Vector; options) -> WasmModule
 
 Compile multiple Julia functions into a single WebAssembly module, unserialized: the closed-world
-compile the one compile entry (`_compile`, src/WasmTarget.jl) calls. It is internal to that
+compile the one compile entry (`_compile`, src/WasmTargetLegacy.jl) calls. It is internal to that
 entry, which passes the options it read and the caller's diagnostics ledger; it reads no options
 itself (`options` is required: a test inspecting the module it returns passes them) and, called
 directly, routes no ledger. A compile a caller runs goes through an exported entry

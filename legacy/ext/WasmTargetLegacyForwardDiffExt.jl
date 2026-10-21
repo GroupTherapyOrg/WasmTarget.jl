@@ -1,4 +1,4 @@
-# WasmTargetForwardDiffExt — ForwardDiff.jl integration (first SciML library).
+# WasmTargetLegacyForwardDiffExt — ForwardDiff.jl integration (first SciML library).
 #
 # Forward-mode automatic differentiation in the browser: ship a frozen wasm
 # module that computes EXACT gradients/Jacobians of a Julia function, no host,
@@ -25,14 +25,14 @@
 # read back partial 1, looping over components with definite for-loops (no
 # chunk machinery, no `Val(N)` lift, no `@generated`). Verified differentially
 # against native ForwardDiff in test/fuzz/forwarddiff_diff.jl.
-module WasmTargetForwardDiffExt
+module WasmTargetLegacyForwardDiffExt
 
-using WasmTarget
+using WasmTargetLegacy
 using ForwardDiff: ForwardDiff
 using ForwardDiff: Dual, Tag, partials
 using Base.Experimental: @overlay
 
-const WMT = WasmTarget.WASM_METHOD_TABLE
+const WMT = WasmTargetLegacy.WASM_METHOD_TABLE
 
 # Seed a Dual vector for the i-th unit direction (component i gets partial 1.0,
 # the rest 0.0) — exactly the `derivative` seed, one direction at a time.

@@ -1,4 +1,4 @@
-# WasmTargetDatesExt — Dates stdlib integration.
+# WasmTargetLegacyDatesExt — Dates stdlib integration.
 #
 # The VALUE layer (Date/DateTime construction, period arithmetic, accessors,
 # date subtraction, parsing with a DateFormat, period conversions,
@@ -12,9 +12,9 @@
 # now()/today() are NOT overlaid here: they need a host-time import wired by
 # the embedding pipeline (compile_multi's import_stubs, e.g. "Date"/"now" →
 # JS Date.now), and wall-clock reads are host-dependent by nature.
-module WasmTargetDatesExt
+module WasmTargetLegacyDatesExt
 
-using WasmTarget
+using WasmTargetLegacy
 using Dates: Dates, Month, Year
 using Base.Experimental: @overlay
 
@@ -43,7 +43,7 @@ const _WT_DAYS_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 # Julia's string of a Date/DateTime is print_to_string(d), which WT's print_to_string overlay
 # answers with string(d), itself (dev/MARCH.md 13.10). These write Julia's ISO text.
 # parity(quarantine: WT's print_to_string overlay answers print_to_string(x) with string(x), which is print_to_string(x) for a value with no string method of its own.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.string(d::Dates.Date)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.string(d::Dates.Date)
     y = Int64(Dates.year(d))
     m = Int64(Dates.month(d))
     dd = Int64(Dates.day(d))
@@ -52,7 +52,7 @@ const _WT_DAYS_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     return sign * _wt_zpad(ya, 4) * "-" * _wt_zpad(m, 2) * "-" * _wt_zpad(dd, 2)
 end
 # parity(quarantine: WT's print_to_string overlay answers print_to_string(x) with string(x), which is print_to_string(x) for a value with no string method of its own.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Base.string(dt::Dates.DateTime)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Base.string(dt::Dates.DateTime)
     y = Int64(Dates.year(dt))
     m = Int64(Dates.month(dt))
     dd = Int64(Dates.day(dt))
@@ -71,23 +71,23 @@ end
 # predicates) by the run-time day number, a heterogeneous getfield WT does not lower. These
 # step by the day-of-week arithmetic instead.
 # parity(quarantine: Julia's adjusters index Dates.ISDAYOFWEEK, a NamedTuple of day predicates, by a run-time day number, namedtuple.jl:165; WT does not lower a run-time getfield of a heterogeneous tuple.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Dates.tonext(dt::Dates.TimeType, dow::Int; same::Bool = false)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Dates.tonext(dt::Dates.TimeType, dow::Int; same::Bool = false)
     start = same ? dt : dt + Dates.Day(1)
     start + Dates.Day(mod(dow - Dates.dayofweek(start), 7))
 end
 # parity(quarantine: Julia's adjusters index Dates.ISDAYOFWEEK, a NamedTuple of day predicates, by a run-time day number, namedtuple.jl:165; WT does not lower a run-time getfield of a heterogeneous tuple.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Dates.toprev(dt::Dates.TimeType, dow::Int; same::Bool = false)
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Dates.toprev(dt::Dates.TimeType, dow::Int; same::Bool = false)
     start = same ? dt : dt - Dates.Day(1)
     start - Dates.Day(mod(Dates.dayofweek(start) - dow, 7))
 end
 # parity(quarantine: Julia's adjusters index Dates.ISDAYOFWEEK, a NamedTuple of day predicates, by a run-time day number, namedtuple.jl:165; WT does not lower a run-time getfield of a heterogeneous tuple.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Dates.tofirst(dt::Dates.TimeType, dow::Int;
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Dates.tofirst(dt::Dates.TimeType, dow::Int;
                                                              of::Union{Type{Year}, Type{Month}} = Month)
     base = of === Dates.Month ? Dates.firstdayofmonth(dt) : Dates.firstdayofyear(dt)
     base + Dates.Day(mod(dow - Dates.dayofweek(base), 7))
 end
 # parity(quarantine: Julia's adjusters index Dates.ISDAYOFWEEK, a NamedTuple of day predicates, by a run-time day number, namedtuple.jl:165; WT does not lower a run-time getfield of a heterogeneous tuple.)
-@overlay WasmTarget.WASM_METHOD_TABLE function Dates.tolast(dt::Dates.TimeType, dow::Int;
+@overlay WasmTargetLegacy.WASM_METHOD_TABLE function Dates.tolast(dt::Dates.TimeType, dow::Int;
                                                             of::Union{Type{Year}, Type{Month}} = Month)
     base = of === Dates.Month ? Dates.lastdayofmonth(dt) : Dates.lastdayofyear(dt)
     base - Dates.Day(mod(Dates.dayofweek(base) - dow, 7))

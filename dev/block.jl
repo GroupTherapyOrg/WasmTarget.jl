@@ -14,9 +14,7 @@
 #   smoke-core  test/smoke.jl on test/block_groups.tsv's fixed `core` groups
 #   smoke-batch test/smoke.jl on the groups the changed files map to there, then the groups whose
 #               lines the change touches in test/smoke.jl and the case files it includes (the
-#               batch's own cases), then the generated cases of each lowering-table entry the change
-#               touches (test/block_tables.tsv, WT_SMOKE_CASES; an entry with none fails, and so
-#               does a changed entry of a table no generator cases, naming the table) (A20C12, A22E3).
+#               batch's own cases).
 #               A change to src/ fails when the map is stale: more than STALE_PIECES pieces of src
 #               changed between the tree test/block_groups.tsv measured and the change's base (the
 #               count and the re-record command printed), a measured tree this repository does not
@@ -29,17 +27,15 @@
 #               against is Julia's own; dev/block_jit.jl lowers LLVM's level for WasmTarget's and
 #               the compiler's own code only: at -O0 for the whole process three bit-exact cases
 #               answer otherwise)
-#   probes      test/probe_bytes.jl on the probe core (test/block_groups.tsv's `probes`: a cover of
-#               every src function any probe runs, test/block_impact.jl) and the probes the change
-#               touches, PROBE_CHUNK to a process (-O0: a probe is a hash of the module's bytes, no
-#               Julia answer, and all 225 are byte-identical at -O0); under --warm, through the runner,
+#   probes      test/probe_bytes.jl on the probe core (test/block_groups.tsv's `probes`) and the
+#               probes the change touches, PROBE_CHUNK to a process (-O0: a probe is a hash of the
+#               module's bytes, no Julia answer); under --warm, through the runner,
 #               whose reset gives each request a fresh process's Main (its binding table and lowering
 #               counter, which the closure names in the bytes are drawn from)
 #   tests       test/runtests.jl on the QA families and phases the change selects (WT_QA_ONLY),
 #               each as the shard it is dealt to runs it: every changed QA family, the families and
 #               phases whose lines test/runtests.jl's change touches, and the QA families the row of
-#               each changed file names in test/block_groups.tsv (of the families a lock cites as
-#               its behavior, the cover of the file's pieces they run, test/block_impact.jl)
+#               each changed file names in test/block_groups.tsv
 #   tlc         dev/formal/run_tlc.sh on the instances of the models the change touches (their
 #               deep instances stay with the full run, run_tlc.sh's TLC_FAST list)
 #
@@ -105,7 +101,6 @@ const TOML_ID = Base.PkgId(Base.UUID("fa267f1f-6049-4f14-aa54-33bafae1ed76"), "T
 const ROOT = normpath(joinpath(@__DIR__, ".."))
 const BEST_PATH = joinpath(ROOT, "dev", "timing_best.toml")
 const MAP_PATH = joinpath(ROOT, "test", "block_groups.tsv")
-const TABLES_PATH = joinpath(ROOT, "test", "block_tables.tsv")
 const RECORD_DIR = joinpath(ROOT, "dev", ".block")
 const PROBE_CHUNK = 60
 # a stage slower than its best: its target 15% (SLOWER_TARGET), a note past it; its band 1.5 times its
@@ -125,16 +120,15 @@ const BUDGET_BAND = 2
 const RATCHETED = ("load", "ratchet", "smoke-core", "probes")
 # each stage's own code: a change to one of these paths runs that stage's code anew
 const STAGE_INPUTS = Dict(
-    "load" => ["src/", "ext/", "Project.toml"],
-    "ratchet" => ["src/", "ext/", "test/", "dev/", "docs/", "AGENTS.md", ".github/"],
-    "smoke-core" => ["src/", "ext/", "test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/runner.mjs", "test/trace_localize.jl",
-                     "test/registry_cases.jl"],
-    "probes" => ["src/", "ext/", "test/probe_bytes.jl", "test/probe_corpus.jl"],
+    "load" => ["src/", "Project.toml"],
+    "ratchet" => ["src/", "test/", "dev/", "docs/", "AGENTS.md", ".github/"],
+    "smoke-core" => ["src/", "test/smoke.jl", "test/smoke_corpus.jl"],
+    "probes" => ["src/", "test/probe_bytes.jl", "test/probe_corpus.jl"],
     "tlc" => ["dev/formal/"])
 for k in ("smoke-batch", "smoke-1.13")
     STAGE_INPUTS[k] = STAGE_INPUTS["smoke-core"]
 end
-STAGE_INPUTS["tests"] = ["src/", "ext/", "test/"]
+STAGE_INPUTS["tests"] = ["src/", "test/"]
 
 git(args...) = readchomp(Cmd(`git -C $ROOT $args`))
 gitok(args...) = success(Cmd(`git -C $ROOT $args`))
@@ -143,7 +137,7 @@ gitok(args...) = success(Cmd(`git -C $ROOT $args`))
 # a caller's WT_RATCHET_INCLUDED would make the ratchet exit 0 having run no lock, WT_SMOKE_PART
 # would cut the core to one part, WT_RATCHET_UPDATE would rewrite the baseline and turn a missing
 # key into a pass; the record lists the variables removed and each stage's own
-const OWN_VARS = ("WT_SMOKE_TIMES", "WT_SMOKE_EXACT", "WT_SMOKE_CASES", "WT_PROBE_ONLY", "WT_QA_ONLY", "TLC_ONLY", "TLC_WORKERS")
+const OWN_VARS = ("WT_SMOKE_TIMES", "WT_SMOKE_EXACT", "WT_PROBE_ONLY", "WT_QA_ONLY", "TLC_ONLY", "TLC_WORKERS")
 foreign_var(k) = any(p -> startswith(k, p), ("WT_", "TLC_", "WASMTARGET_"))
 function stage_env(own::AbstractDict = Dict{String,String}())
     all(k -> k in OWN_VARS, keys(own)) || error("block: $(join(setdiff(keys(own), OWN_VARS), ", ")) is not one of the gate's own variables")
@@ -170,7 +164,7 @@ changed_files(base) = sort(unique(vcat(split(git("diff", "--name-only", base), '
 # runs: the non-blocking matrix runs them, a sample of them runs here), then
 # `<path or dir/><TAB><groups><TAB><QA families><TAB><1.13 groups>` rows
 function read_map()
-    core = String[]; probes = String[]; matrix = String[]; measured = ""
+    core = String[]; probes = String[]; matrix = String[]; measured = ""; probes_row = false
     rows = Pair{String,Tuple{Vector{String},Vector{String},Vector{String}}}[]
     for (n, l) in enumerate(eachline(MAP_PATH))
         (isempty(strip(l)) || startswith(l, '#')) && continue
@@ -182,20 +176,21 @@ function read_map()
         elseif f[1] in ("core", "probes", "matrix-only")
             length(f) == 2 || error("test/block_groups.tsv:$n: not \"$(f[1])<TAB><names>\": $l")
             append!(f[1] == "core" ? core : f[1] == "probes" ? probes : matrix, names(f[2]))
+            f[1] == "probes" && (probes_row = true)
         else
             length(f) == 4 || error("test/block_groups.tsv:$n: not \"<path><TAB><groups><TAB><QA families><TAB><1.13 groups>\": $l")
             push!(rows, String(f[1]) => (names(f[2]), names(f[3]), names(f[4])))
         end
     end
     isempty(core) && error("test/block_groups.tsv has no core row")
-    isempty(probes) && error("test/block_groups.tsv has no probes row")
-    isempty(measured) && error("test/block_groups.tsv has no measured row (the src tree test/block_impact.jl measured)")
+    probes_row || error("test/block_groups.tsv has no probes row (`probes<TAB>-` while the corpus has none)")
+    isempty(measured) && error("test/block_groups.tsv has no measured row (the src tree the map was written for)")
     isempty(intersect(core, matrix)) || error("test/block_groups.tsv: the core runs a matrix-only group, $(join(intersect(core, matrix), ", "))")
     return core, probes, matrix, rows, measured
 end
 
 # the QA families test/runtests.jl deals, by the name its `_wt_qa` takes (`_wt_qa_include("<name>")`;
-# a joinpath under test/ by its relative path); test/block_impact.jl measures them by this list too
+# a joinpath under test/ by its relative path)
 function qa_families(root = ROOT)::Vector{String}
     rt = read(joinpath(root, "test", "runtests.jl"), String)
     return [m[1] !== nothing ? String(m[1]) : String(m[2]) * "/" * String(m[3])
@@ -203,8 +198,7 @@ function qa_families(root = ROOT)::Vector{String}
 end
 
 # the test files a stage runs itself (a change to one is run by that stage)
-const STAGE_TESTS = ["test/smoke.jl", "test/smoke_corpus.jl", "test/utils.jl", "test/wasm_runner.jl", "test/trace_localize.jl",
-                     "test/registry_cases.jl", "test/probe_bytes.jl", "test/probe_corpus.jl", "test/parity_ratchet.jl"]
+const STAGE_TESTS = ["test/smoke.jl", "test/smoke_corpus.jl", "test/probe_bytes.jl", "test/probe_corpus.jl", "test/parity_ratchet.jl"]
 
 # what test/runtests.jl's changed lines run: a changed `_wt_qa_include` line its QA family, a changed
 # line inside a phase (from its `@pphase "name"` line to the next phase or the registration block's
@@ -213,7 +207,7 @@ function runtests_touched(lines, hunks)::Vector{String}
     stop = something(findfirst(l -> startswith(l, "end  # end of phase-registration block"), lines), length(lines))
     out = String[]
     for h in hunks
-        h <= length(lines) || continue
+        1 <= h <= length(lines) || continue
         m = match(r"_wt_qa_include\((?:\"([^\"]+)\"|joinpath\(@__DIR__, \"([^\"]+)\", \"([^\"]+)\"\))\)", lines[h])
         if m !== nothing
             push!(out, m[1] !== nothing ? String(m[1]) : String(m[2]) * "/" * String(m[3]))
@@ -260,7 +254,7 @@ function probes_touched(corpus, corpus_hunks, baseline, baseline_hunks)::Vector{
         k === nothing || push!(out, match(r"^_c\(\"([^\"]+)\"", corpus[k])[1])
     end
     for h in baseline_hunks
-        h <= length(baseline) && !isempty(baseline[h]) && push!(out, first(split(baseline[h], '\t')))
+        1 <= h <= length(baseline) && !isempty(baseline[h]) && push!(out, first(split(baseline[h], '\t')))
     end
     return unique(out)
 end
@@ -297,8 +291,8 @@ function groups_touched(lines, hunks, harness::Bool)::Vector{String}
     return unique(out)
 end
 # the groups a change to test/smoke.jl, the case files it includes and the files its lazy groups are
-# built from (`_lazy_g("<group>", "<file>")`: test/registry_cases.jl's generated groups, every one of
-# them touched by a change to that file; the matrix-only ones then dropped by the caller) selects
+# built from (`_lazy_g("<group>", "<file>")`, every one of them touched by a change to that file; the
+# matrix-only ones then dropped by the caller) selects
 function touched_smoke_groups(base)::Vector{String}
     path = "test/smoke.jl"
     isfile(joinpath(ROOT, path)) || return String[]
@@ -367,7 +361,7 @@ end
 # two methods of one name are two pieces (A19C1 (c)); a `const` over more than
 # one line (a lowering table) each line its own key, `<rel>:<line>`, so an entry's coverage is its
 # own; any other form (a struct, a macro call, a `using`) `<rel>:L<first line>#<k>` — so no line of
-# code is outside a piece (A20C12). test/block_impact.jl's unit of measure, and the gate's
+# code is outside a piece (A20C12). The map's unit of measure, and the gate's
 function line_keys(text::AbstractString, rel::AbstractString)::Dict{Int,String}
     out = Dict{Int,String}()
     function walk(args, stop)
@@ -395,128 +389,6 @@ function line_keys(text::AbstractString, rel::AbstractString)::Dict{Int,String}
     return out
 end
 
-# the lowering tables of src, registered by name: each `const` mapping what a lowering matches to its
-# emitter (a Dict or IdDict whose values are Function, BinOpEmit, UnOpEmit or ConvEmit: the numeric
-# tables test/registry_cases.jl generates cases for, INT128_OPS's 128-bit route, FOREIGN_LOWERINGS'
-# foreigncalls and STANDALONE_INTRINSIC_BODIES, whose entries a comprehension makes). A const is a
-# lowering table by this registration, never by its shape: another const of `key => value` lines,
-# bridge.jl's _INTS, holds no entry the gate cases (dev/AUDIT.md A26E3); L194 holds the registration
-# to exactly the consts of src declared with an emitter value type
-const LOWERING_TABLES = ("INTRINSIC_BINOPS", "INTRINSIC_UNOPS", "INTRINSIC_CONVERSIONS", "CHECKED_OPS", "SHIFT_OPS",
-                         "FMA_OPS", "MISC_OPS", "INT128_OPS", "FOREIGN_LOWERINGS", "STANDALONE_INTRINSIC_BODIES")
-
-# line => (table, entry key's text) for each line of a lowering table's literal in a src file's text:
-# a registered table's `const NAME = Dict…(…)` over more than one line (LOWERING_TABLES), each
-# `key => value` entry's lines, over as many lines as its parse needs (the key's text as Julia
-# prints its parse) (A20C12, A26E3)
-function table_entry_keys(text::AbstractString, rel::AbstractString)::Dict{Int,Tuple{String,String}}
-    out = Dict{Int,Tuple{String,String}}()
-    lines = split(text, '\n')
-    parsed = Meta.parseall(text; filename = rel).args
-    items = [(parsed[i].line, parsed[i+1]) for i in 1:length(parsed)-1 if parsed[i] isa LineNumberNode]
-    for (k, (l, ex)) in enumerate(items)
-        last = k < length(items) ? items[k+1][1] - 1 : length(lines)
-        (ex isa Expr && ex.head === :const && ex.args[1] isa Expr && ex.args[1].head === :(=) && last > l) || continue
-        name = string(ex.args[1].args[1])
-        name in LOWERING_TABLES || continue
-        x = l + 1
-        while x <= last
-            t = strip(lines[x])
-            (isempty(t) || startswith(t, "#")) && (x += 1; continue)
-            # the entry starting here, over as many lines as its parse needs, a trailing comment and
-            # comma dropped
-            entry(a, b) = rstrip(replace(join(strip.(lines[a:b]), '\n'), r"\s+#[^\"\n]*$" => ""), ',')
-            j = x
-            e = Meta.parse(entry(x, j); raise = false)
-            while e isa Expr && e.head === :incomplete && j < last
-                j += 1
-                e = Meta.parse(entry(x, j); raise = false)
-            end
-            # an entry's trailing comma before a comment parses as a one-tuple
-            (e isa Expr && e.head === :tuple && length(e.args) == 1) && (e = e.args[1])
-            if e isa Expr && e.head === :call && length(e.args) == 3 && e.args[1] === :(=>)
-                for y in x:j
-                    out[y] = (name, string(e.args[2]))
-                end
-            end
-            x = j + 1
-        end
-    end
-    return out
-end
-
-# test/block_tables.tsv: `<file><TAB><table><TAB><entry key's text><TAB><group/case ...>`, the
-# generated cases that case each lowering-table entry (test/block_impact.jl --tables writes it)
-function read_tables()::Dict{Tuple{String,String,String},Vector{String}}
-    out = Dict{Tuple{String,String,String},Vector{String}}()
-    isfile(TABLES_PATH) || error("block: test/block_tables.tsv is missing (test/block_impact.jl --tables writes it)")
-    for (n, l) in enumerate(eachline(TABLES_PATH))
-        (isempty(l) || startswith(l, "#")) && continue
-        f = split(l, '\t')
-        length(f) == 4 || error("test/block_tables.tsv:$n: not \"<file>\t<table>\t<key>\t<cases>\": $l")
-        out[(String(f[1]), String(f[2]), String(f[3]))] = String.(split(f[4]))
-    end
-    return out
-end
-
-# the old-side and new-side line numbers a diff's hunks change (`git diff -U0`)
-function hunk_sides(diff::AbstractString)::Tuple{Vector{Int},Vector{Int}}
-    old = Int[]; new = Int[]
-    for m in eachmatch(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"m, diff)
-        a = parse(Int, m[1]); na = m[2] === nothing ? 1 : parse(Int, m[2])
-        b = parse(Int, m[3]); nb = m[4] === nothing ? 1 : parse(Int, m[4])
-        append!(old, a:a+na-1); append!(new, b:b+nb-1)
-    end
-    return old, new
-end
-
-# the lowering-table entries a change touches, (file, table, key text): each changed line of a
-# table's literal, on the head's side and, for a deleted or changed line, the base's (a decision
-# over text, L194 runs it on fixed texts)
-function table_entries_touched(rel, base_text, head_text, diff)::Vector{Tuple{String,String,String}}
-    old, new = hunk_sides(diff)
-    out = Tuple{String,String,String}[]
-    for (text, ls) in ((base_text, old), (head_text, new))
-        keys_of = table_entry_keys(text, rel)
-        for x in ls
-            haskey(keys_of, x) && push!(out, (rel, keys_of[x]...))
-        end
-    end
-    return unique(out)
-end
-function touched_table_entries(base, changed)::Vector{Tuple{String,String,String}}
-    out = Tuple{String,String,String}[]
-    for f in changed
-        (startswith(f, "src/") && endswith(f, ".jl")) || continue
-        base_text = gitok("cat-file", "-e", "$base:$f") ? git("show", "$base:$f") : ""
-        head_text = isfile(joinpath(ROOT, f)) ? read(joinpath(ROOT, f), String) : ""
-        append!(out, table_entries_touched(f, base_text, head_text, git("diff", "-U0", base, "--", f)))
-    end
-    return unique(out)
-end
-
-# the generated cases the changed table entries run, and the failures: an entry of a table
-# test/block_tables.tsv cases with no row of its own, and an entry of a table it cases nowhere (a
-# registered lowering table, LOWERING_TABLES: a change to it that runs no case is a change no stage
-# checks, A22E3, A26E3), each naming its table (a decision over text, L194 runs it on fixed inputs)
-function table_cases(entries, tables::AbstractDict)::Tuple{Vector{String},Vector{String}}
-    cases = String[]; fails = String[]
-    known = Set((f, t) for (f, t, _) in keys(tables))
-    for e in entries
-        c = get(tables, e, nothing)
-        if c !== nothing
-            append!(cases, c)
-        elseif (e[1], e[2]) in known
-            push!(fails, "the entry $(e[3]) of $(e[2]) ($(e[1])) has no generated case in test/block_tables.tsv: " *
-                         "re-record it with test/block_impact.jl --tables")
-        else
-            push!(fails, "the entry $(e[3]) of $(e[2]) ($(e[1])) changed, and no generator cases the table $(e[2]): the change runs " *
-                         "no case of it. Give $(e[2]) a generator in test/registry_cases.jl and its rows with test/block_impact.jl --tables (A22E3)")
-        end
-    end
-    return unique(cases), fails
-end
-
 # whether a src file's change is comments and docstrings alone (A30E5): Julia's own parse of both
 # texts (Meta.parseall), line numbers and docstrings dropped, is one expression; a text that does not
 # parse is changed (a decision over text, L194 runs it on fixed texts)
@@ -533,7 +405,7 @@ drop_docs(e::Expr) =
     Expr(e.head, Any[drop_docs(a) for a in e.args if !(a isa LineNumberNode)]...)
 
 # the pieces of src that moved since test/block_groups.tsv was measured (its `measured` row, the src
-# tree test/block_impact.jl ran), at `now` (the change's base's src tree): the pieces that differ
+# tree the map was written for), at `now` (the change's base's src tree): the pieces that differ
 # between the two trees, keyed on `now`'s text, a removed file one piece, a file whose code did not
 # change (code_unchanged) none; nothing when the measured tree is unknown here
 function pieces_moved(measured, now)::Union{Nothing,Set{String}}
@@ -572,12 +444,10 @@ end
 # alters are pieces that moved since the map was measured, the pieces whose map rows the selection may
 # misread; how far the base moved is a note, a change in code no other landing moved passes however
 # stale the map, a change of comments and docstrings alone alters no piece, and a map measured on the
-# change's own src tree (a change carrying its re-recorded map) is fresh. The map is re-recorded off
-# the landing path, at JLRUN_PRIO=5 (A20C13): incrementally from the sets the last measurement saved
-# in the main tree (test/block_impact.jl --pieces, which measures again only what touches the src
-# files that moved, minutes), or in full (about 34 minutes), which saves the sets there
+# change's own src tree (a change carrying its re-recorded map) is fresh. The rebuild's map is written
+# by hand until WasmTarget lowers code a measurement can cover (dev/MARCH.md 1.D): every case runs
+# the one entry, which the core covers
 const STALE_PIECES = 8
-const SETS_PATH = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".block", "impact_sets.tsv")
 # every red run's line, in the main tree's git-ignored dev/.loop, which a worktree's removal does not
 # delete (A33E5): `dev/land.sh land` counts a change's own reds from it (A33E4)
 const RED_HISTORY = joinpath(dirname(readchomp(`git -C $ROOT rev-parse --path-format=absolute --git-common-dir`)), "dev", ".loop", "reds.tsv")
@@ -592,9 +462,8 @@ function red_kind(checks_failed::AbstractVector, ratchet_log::AbstractString)::T
         return ("queue", "ratchet on " * join(locks, " ") * " alone")
     return ("own", join(checks_failed, " ") * (isempty(locks) ? "" : " (" * join(locks, " ") * ")"))
 end
-const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_impact.info\" --project=. test/block_impact.jl --pieces $SETS_PATH " *
-                 "(off the landing path, at JLRUN_PRIO=5; test/block_groups.tsv lands as its own commit; with no sets saved there, the full " *
-                 "measurement: the same command with $SETS_PATH alone in place of --pieces and its path)"
+const RERECORD = "write test/block_groups.tsv's rows for the change and its measured row the change's own src tree " *
+                 "(`git rev-parse HEAD:src` once committed; dev/MARCH.md 1.D brings the rebuild's measurement)"
 
 # a stale map fails a change it cannot judge (a decision over text, L194 runs it on fixed inputs):
 # for a change to src/, `moved` (the change's own pieces among those pieces_moved finds at its base)
@@ -603,7 +472,7 @@ const RERECORD = "julia --code-coverage=@src --code-coverage=\"\$TMPDIR/block_im
 function stale_map(moved::Union{Nothing,Int}, measured, changed, head_texts::AbstractDict, touched::AbstractDict)::Vector{String}
     fails = String[]
     exts = filter(f -> startswith(f, "ext/"), changed)
-    isempty(exts) || push!(fails, "ext/ is measured by no map (test/block_impact.jl measures src/): $(join(exts, ", ")) cannot be judged here")
+    isempty(exts) || push!(fails, "ext/ is measured by no map (the map covers src/): $(join(exts, ", ")) cannot be judged here")
     any(f -> startswith(f, "src/"), changed) || return fails
     if moved === nothing
         push!(fails, "test/block_groups.tsv measured src tree $(first(measured, 8)), which this repository does not hold: re-record it: $RERECORD")
@@ -783,6 +652,43 @@ function timing_against_base(timing, base_timing, exempt_stages = String[])::Vec
     end
     return out
 end
+# A change that deletes a test file or removes a case of the smoke or probe corpus says so (dev/AUDIT.md
+# A33E1): its message names each with a `Removes-test: <what> — <reason>` line, <what> a path, a case
+# (`test/smoke_corpus.jl:<group>/<case>`, `test/probe_corpus.jl:<probe>`) or every case a corpus
+# loses (`<corpus>:*`), the reason never empty; an unnamed removal fails the gate, so a deleted test,
+# a dropped case or a dropped plant file is never silent.
+const CORPORA = ("test/smoke_corpus.jl", "test/probe_corpus.jl")
+# the case keys of a corpus text: a smoke case `<group>/<case>` (a `("name", …)` line under its
+# `_g`/`_xf`/`_lazy_g`/`_lazy_xf` group), a probe `<name>` (a `_c("name", …)` line)
+function corpus_case_keys(text::AbstractString)::Set{String}
+    local keys = Set{String}()
+    local group = ""
+    for l in eachline(IOBuffer(text))
+        local p = match(r"^\s*_c\(\s*\"([^\"]+)\"", l)
+        p === nothing || (push!(keys, p[1]); continue)
+        local g = match(r"^\s*_(?:lazy_)?(?:g|xf)\(\s*\"([^\"]+)\"", l)
+        g === nothing || (group = g[1]; continue)
+        local c = match(r"^\s*\(\s*\"([^\"]+)\"\s*,", l)
+        c === nothing || isempty(group) || push!(keys, group * "/" * c[1])
+    end
+    return keys
+end
+# the removals a message does not name: `deleted` the test files the change deletes, `cases` each
+# corpus's removed case keys (corpus => keys)
+function unnamed_removals(msg::AbstractString, deleted::AbstractVector{<:AbstractString},
+                          cases::AbstractDict{String,<:AbstractSet{String}})::Vector{String}
+    local named = Set{String}()
+    for m in eachmatch(r"^Removes-test: (\S+) (?:—|--) \S.*$"m, msg)
+        push!(named, m[1])
+    end
+    local out = String[f for f in deleted if !(f in named)]
+    for (corpus, ks) in cases, k in sort!(collect(ks))
+        local what = corpus * ":" * k
+        what in named || (corpus * ":*") in named || corpus in named || push!(out, what)
+    end
+    return out
+end
+
 const STAGE_NAMES = ("load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tlc")
 # the commit's declared correctness fix: the MARCH row its `Timing:` line cites, which the change
 # adds (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md`) under a number the base's MARCH does not
@@ -833,16 +739,10 @@ function main(args)
         append!(mapped, row[1]); append!(tests, row[2]); append!(v113, row[3])
     end
     tests = unique(tests)
-    # a changed lowering-table entry runs the generated cases that case it, whatever group holds
-    # them (test/block_tables.tsv, A20C12); an entry with none fails, as does an entry of a table no
-    # generator cases (A22E3)
-    cases, tablefails = table_cases(touched_table_entries(base, changed), read_tables())
-    case_groups = unique([String(first(split(c, '/'))) for c in cases])
-    # a matrix-only group runs in the non-blocking matrix alone, never in a stage here, but for the
-    # cases a changed table entry names
+    # a matrix-only group runs in the non-blocking matrix alone, never in a stage here
     touched = touched_smoke_groups(base)
     newgroups = setdiff(touched, matrix)
-    batch = unique(vcat(setdiff(unique(vcat(mapped, newgroups)), core, matrix), case_groups))
+    batch = unique(setdiff(unique(vcat(mapped, newgroups)), core, matrix))
     # on 1.13: the batch's own cases, and the groups a changed file's version-dependent output needs
     smoke113 = setdiff(unique(vcat(newgroups, v113)), matrix)
     probes = unique(vcat(probe_core, touched_probes(base)))
@@ -902,10 +802,15 @@ function main(args)
     isempty(exempt_problem) || push!(fails, exempt_problem)
     isempty(base_text) && push!(notes, "timing: the base has no dev/timing_best.toml to hold this one to")
     isempty(unmapped) || push!(fails, "no row in test/block_groups.tsv for $(join(unmapped, ", ")): add one naming the smoke groups and QA families that exercise it")
-    append!(fails, tablefails)
-    isempty(cases) || push!(notes, "the changed lowering-table entries run their generated cases: $(join(cases, ' '))")
+    # a removed test or case is named in the message (A33E1)
+    local removed_cases = Dict{String,Set{String}}(
+        c => setdiff(corpus_case_keys(git("show", "$base:$c")), corpus_case_keys(isfile(joinpath(ROOT, c)) ? read(joinpath(ROOT, c), String) : ""))
+        for c in CORPORA if gitok("cat-file", "-e", "$base:$c"))
+    local unnamed = unnamed_removals(msg, [f for f in changed if startswith(f, "test/") && !ispath(joinpath(ROOT, f))], removed_cases)
+    isempty(unnamed) || push!(fails, "the change removes $(join(unnamed, ", ")) and its message does not name them: add `Removes-test: <what> — <reason>` for each (A33E1)")
     head_texts = Dict(f => read(joinpath(ROOT, f), String) for f in code_changed if isfile(joinpath(ROOT, f)))
-    append!(fails, stale_map(moved, measured, changed, head_texts, Dict(f => touched_lines(base, f) for f in keys(head_texts))))
+    append!(fails, stale_map(moved, measured, filter(f -> !startswith(f, "ext/") || ispath(joinpath(ROOT, f)), changed), head_texts,
+                             Dict(f => touched_lines(base, f) for f in keys(head_texts))))
 
     mkpath(joinpath(RECORD_DIR, "logs"))
     logdir = mktempdir(joinpath(RECORD_DIR, "logs"); prefix = tree[1:12] * "-", cleanup = false)
@@ -931,8 +836,7 @@ function main(args)
     removed = sort([k for k in keys(ENV) if foreign_var(k)])
     isempty(removed) || push!(notes, "env: the caller's $(join(removed, ", ")) removed from every stage")
     smokeenv = stage_env(Dict("WT_SMOKE_TIMES" => "1", "WT_SMOKE_EXACT" => "1"))
-    # the batch's own: a changed table entry's cases alone of the groups they name (WT_SMOKE_CASES)
-    batchenv = stage_env(Dict("WT_SMOKE_TIMES" => "1", "WT_SMOKE_EXACT" => "1", "WT_SMOKE_CASES" => join(cases, ' ')))
+    batchenv = smokeenv
     launch!(s) = (push!(stages, s); push!(tasks, start!(s)); s)
     # --warm: this tree's runner (dev/block_runner.jl), versioned with the tree and named in the record
     # by its blob; a runner from outside the tree is not one the record can name
@@ -1070,8 +974,9 @@ function main(args)
         startswith(s.name, "smoke") || continue
         ls = readlines(s.log)
         summary = lastline(s.log, r"^smoke: ")
-        m = match(r"^smoke: (\d+) passed, (\d+) wrong, (\d+) errored", summary)
-        ok = s.exit == 0 && m !== nothing && parse(Int, m[1]) > 0
+        m = match(r"^smoke: (\d+) passed, (\d+) wrong, (\d+) errored(?:, (\d+) loud)?", summary)
+        # a run of no case is no verdict: some case passed or rejected loud (the rebuild's ladder)
+        ok = s.exit == 0 && m !== nothing && parse(Int, m[1]) + (m[4] === nothing ? 0 : parse(Int, m[4])) > 0
         bad = filter(l -> occursin(r"^\s+(WRONG|ERROR|XFAIL OUTCOME)|^smoke: no group", l), ls)
         detail = m === nothing ? "exit $(s.exit), no verdict line (log $(s.log))" : summary * (isempty(bad) ? "" : " | " * join(first(bad, 4), " | "))
         if s.name == "smoke-core"

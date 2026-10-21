@@ -41,11 +41,11 @@ const RC_HELD = Dict{DataType,String}(
                "(eq_int of two Float16s differing above bit 16 answers false; sext_int(Int32, x) does not " *
                "extend bit 15), and fma over Float16 raises an unlocated codegen error: dev/MARCH.md 13.1",
 )
-const RC_REGISTERS = (WasmTarget.I32, WasmTarget.I64, WasmTarget.F32, WasmTarget.F64)
+const RC_REGISTERS = (WasmTargetLegacy.I32, WasmTargetLegacy.I64, WasmTargetLegacy.F32, WasmTargetLegacy.F64)
 const RC_CLASS = Dict{String,Tuple}()   # a generated case's class (_rc_class_key), by "group/case"
 const RC_ENTRY = Dict{String,Tuple{Symbol,Any}}()   # the lowering table and key a generated case cases, by "group/case"
 
-_rc_register(T) = WasmTarget.julia_to_wasm_type(T)
+_rc_register(T) = WasmTargetLegacy.julia_to_wasm_type(T)
 _rc_carrier(T) = T <: AbstractFloat ? Base.uinttype(T) : T
 _rc_unsigned(T) = T === Bool ? Bool : T <: AbstractFloat ? Base.uinttype(T) : unsigned(T)
 _rc_dirtyable(T) = T in (Int8, UInt8, Int16, UInt16, Float16)
@@ -150,8 +150,8 @@ end
 # a type's register class: the register julia_to_wasm_type gives it, an integer narrower than its
 # register apart (it rides with junk above its width, the class W2, W6 and W7 lived in); a register
 # named as itself
-_rc_class(x) = x isa DataType ? (_rc_register(x) in (WasmTarget.I32, WasmTarget.I64) &&
-                                 8 * sizeof(x) < (_rc_register(x) === WasmTarget.I64 ? 64 : 32) ?
+_rc_class(x) = x isa DataType ? (_rc_register(x) in (WasmTargetLegacy.I32, WasmTargetLegacy.I64) &&
+                                 8 * sizeof(x) < (_rc_register(x) === WasmTargetLegacy.I64 ? 64 : 32) ?
                                  "narrow " * string(_rc_register(x)) : string(_rc_register(x))) : string(x)
 
 _rc_accepts(f, args...) = try f(args...); true catch; false end
@@ -191,7 +191,7 @@ _rc_undefined(op::Symbol, x, y) = _rc_undefined_division(op, x, y) || _rc_fast_u
 # ---- INTRINSIC_BINOPS: (register, register, op) => op(x::T, y::T) ----
 function _rc_binops()
     local g = Any[]
-    for key in sort!(collect(keys(WasmTarget.INTRINSIC_BINOPS)); by=string)
+    for key in sort!(collect(keys(WasmTargetLegacy.INTRINSIC_BINOPS)); by=string)
         local (wl, wr, op) = key
         local fn = getfield(Core.Intrinsics, op)
         local ts = [T for T in _rc_types_of(wl) if _rc_register(T) === wr && _rc_accepts(fn, _rc_sample(T), _rc_sample(T))]
@@ -217,7 +217,7 @@ end
 # ---- INTRINSIC_UNOPS: (register, op) => op(x::T) ----
 function _rc_unops()
     local g = Any[]
-    for key in sort!(collect(keys(WasmTarget.INTRINSIC_UNOPS)); by=string)
+    for key in sort!(collect(keys(WasmTargetLegacy.INTRINSIC_UNOPS)); by=string)
         local (w, op) = key
         local fn = getfield(Core.Intrinsics, op)
         local ts = [T for T in _rc_types_of(w) if _rc_accepts(fn, _rc_sample(T))]
@@ -249,16 +249,16 @@ function _rc_in_range(op::Symbol, D, x)
 end
 function _rc_conversions()
     local g = Any[]
-    local ops = sort!(unique!([k[3] for k in keys(WasmTarget.INTRINSIC_CONVERSIONS)]))
+    local ops = sort!(unique!([k[3] for k in keys(WasmTargetLegacy.INTRINSIC_CONVERSIONS)]))
     local reached = Set{Any}()
     for op in ops
         local fn = getfield(Core.Intrinsics, op)
-        local keyed = Set((k[1], k[2]) for k in keys(WasmTarget.INTRINSIC_CONVERSIONS) if k[3] === op)
+        local keyed = Set((k[1], k[2]) for k in keys(WasmTargetLegacy.INTRINSIC_CONVERSIONS) if k[3] === op)
         for S in RC_TYPES, D in RC_TYPES
             (haskey(RC_HELD, S) || haskey(RC_HELD, D)) && continue
             local rs, rd = _rc_register(S), _rc_register(D)
-            local arm = (op in (:sext_int, :zext_int, :trunc_int) && rs in (WasmTarget.I32, WasmTarget.I64) &&
-                         rd in (WasmTarget.I32, WasmTarget.I64)) || (op === :bitcast && rs === rd)
+            local arm = (op in (:sext_int, :zext_int, :trunc_int) && rs in (WasmTargetLegacy.I32, WasmTargetLegacy.I64) &&
+                         rd in (WasmTargetLegacy.I32, WasmTargetLegacy.I64)) || (op === :bitcast && rs === rd)
             ((rs, rd) in keyed || arm) || continue
             _rc_accepts(fn, D, _rc_sample(S)) || continue
             (rs, rd) in keyed && push!(reached, (rs, rd, op))
@@ -275,7 +275,7 @@ function _rc_conversions()
                       entry=(rs, rd) in keyed ? (:INTRINSIC_CONVERSIONS, (rs, rd, op)) : nothing)
         end
     end
-    for key in keys(WasmTarget.INTRINSIC_CONVERSIONS)
+    for key in keys(WasmTargetLegacy.INTRINSIC_CONVERSIONS)
         key in reached || _rc_unreached(:INTRINSIC_CONVERSIONS, key)
     end
     return g
@@ -285,7 +285,7 @@ end
 _rc_reg_types() = [T for T in RC_TYPES if !haskey(RC_HELD, T) && _rc_register(T) in RC_REGISTERS]
 function _rc_checked()
     local g = Any[]
-    for op in sort!(collect(keys(WasmTarget.CHECKED_OPS)))
+    for op in sort!(collect(keys(WasmTargetLegacy.CHECKED_OPS)))
         local fn = getfield(Core.Intrinsics, op)
         local ts = [T for T in _rc_reg_types() if T <: Integer && T !== Bool && _rc_accepts(fn, one(T), one(T))]
         isempty(ts) && _rc_unreached(:CHECKED_OPS, op)
@@ -324,7 +324,7 @@ end
 function _rc_shift()
     local g = Any[]
     local ints = [T for T in _rc_reg_types() if T <: Integer && T !== Bool]
-    for op in sort!(collect(keys(WasmTarget.SHIFT_OPS)))
+    for op in sort!(collect(keys(WasmTargetLegacy.SHIFT_OPS)))
         local fn = getfield(Core.Intrinsics, op)
         local found = false
         for T in ints, U in ints
@@ -340,7 +340,7 @@ function _rc_shift()
 end
 function _rc_fma()
     local g = Any[]
-    for op in sort!(collect(keys(WasmTarget.FMA_OPS)))
+    for op in sort!(collect(keys(WasmTargetLegacy.FMA_OPS)))
         local fn = getfield(Core.Intrinsics, op)
         if op === :have_fma
             local ts = [T for T in _rc_reg_types() if T <: AbstractFloat && _rc_accepts(fn, T)]
@@ -369,7 +369,7 @@ function _rc_fma()
 end
 function _rc_misc()
     local g = Any[]
-    for op in sort!(collect(keys(WasmTarget.MISC_OPS)))
+    for op in sort!(collect(keys(WasmTargetLegacy.MISC_OPS)))
         local fn = getfield(Core.Intrinsics, op)
         local found = false
         for T in _rc_reg_types()
@@ -425,7 +425,7 @@ function _rc_operators()
     local g = Any[]
     local types = [T for T in RC_TYPES if !haskey(RC_HELD, T)]
     # the call: s = f(s, b), n times
-    local calls = sort!(Any[f for f in keys(WasmTarget.BUILTIN_LOWERINGS) if _rc_answers(WasmTarget.operator_intrinsic, f, types)]; by=string)
+    local calls = sort!(Any[f for f in keys(WasmTargetLegacy.BUILTIN_LOWERINGS) if _rc_answers(WasmTargetLegacy.operator_intrinsic, f, types)]; by=string)
     isempty(calls) && error("registry_cases: operator_intrinsic answers for no BUILTIN_LOWERINGS key")
     for f in calls
         local nothing_seen = false
@@ -435,7 +435,7 @@ function _rc_operators()
             local fc = @eval (n::Int64, a::$C, b::$C) -> _rc_out((s = _rc_in($T, a); foreach(i -> (s = $fx(s, _rc_in($T, b))), 1:n); s)::$T)
             local cs = Tuple[(_rc_c(a),) for a in _rc_values(T)]
             local inputs = _rc_product(Tuple[(Int64(1),), (Int64(2),)], cs, cs)
-            if WasmTarget.operator_intrinsic(f, T) !== nothing
+            if WasmTargetLegacy.operator_intrinsic(f, T) !== nothing
                 _rc_case!(g, "registry_operators", "call_$(_rc_fname(f))_$(T)", fc, inputs; types=(T,), entry=nothing)
             elseif !nothing_seen
                 nothing_seen = true
@@ -444,7 +444,7 @@ function _rc_operators()
         end
     end
     # the reduce: f(v...) over a vector of two
-    local reduced = Any[f for f in _rc_operator_candidates() if _rc_answers(WasmTarget.operator_intrinsic, f, types)]
+    local reduced = Any[f for f in _rc_operator_candidates() if _rc_answers(WasmTargetLegacy.operator_intrinsic, f, types)]
     isempty(reduced) && error("registry_cases: operator_intrinsic answers for no candidate")
     for f in sort!(reduced; by=string)
         local nothing_seen = false
@@ -455,7 +455,7 @@ function _rc_operators()
             local cs = Tuple[(_rc_c(a),) for a in _rc_values(T)]
             local inputs = _rc_product(cs, cs)
             _rc_accepts(f, _rc_in(T, inputs[end][1]), _rc_in(T, inputs[end][2])) || continue
-            if WasmTarget.reduce_intrinsic(f, T) !== nothing
+            if WasmTargetLegacy.reduce_intrinsic(f, T) !== nothing
                 _rc_case!(g, "registry_operators", "splat2_$(_rc_fname(f))_$(T)", fr, inputs; types=(T,), entry=nothing)
             elseif !nothing_seen
                 nothing_seen = true

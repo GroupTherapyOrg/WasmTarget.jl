@@ -1,4 +1,4 @@
-# WasmTargetSimpleDiffEqExt — SimpleDiffEq (+ SciMLBase) integration: the first
+# WasmTargetLegacySimpleDiffEqExt — SimpleDiffEq (+ SciMLBase) integration: the first
 # TRUE SciML-org library. Solve ODEs in a frozen wasm module — Lorenz, pendulum,
 # predator-prey — bit-identical to native, no host, no Julia runtime.
 #
@@ -30,16 +30,16 @@
 #
 # `ODESolution` is `<:AbstractArray` (an AbstractVectorOfArray) and a struct of its
 # fields (.u/.t/.interp/…), laid out by them like every concrete struct.
-module WasmTargetSimpleDiffEqExt
+module WasmTargetLegacySimpleDiffEqExt
 
-using WasmTarget
+using WasmTargetLegacy
 using SimpleDiffEq: SimpleDiffEq, LoopEuler, LoopRK4, SimpleEuler, SimpleRK4, SimpleTsit5
 using SciMLBase: SciMLBase
 using DiffEqBase: DiffEqBase
 using LinearAlgebra: LinearAlgebra
 using Base.Experimental: @overlay
 
-const WMT = WasmTarget.WASM_METHOD_TABLE
+const WMT = WasmTargetLegacy.WASM_METHOD_TABLE
 const SB = SciMLBase
 
 # Fixed-step explicit solvers supported (adaptive SimpleATsit5 diverges — its

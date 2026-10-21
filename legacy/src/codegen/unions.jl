@@ -85,7 +85,7 @@ function is_nothing_value(val::NirNode, ctx)::Bool
     if val isa NirLiteral && val.value === nothing
         return true
     end
-    # GlobalRef to nothing (e.g., WasmTarget.nothing or Core.nothing)
+    # GlobalRef to nothing (e.g., WasmTargetLegacy.nothing or Core.nothing)
     if val isa NirGlobalRef && val.name === :nothing
         return true
     end

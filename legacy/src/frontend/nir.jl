@@ -20,7 +20,7 @@
 # on a CALLEE's CodeInfo (the definite-initialization proof in statements.jl does exactly
 # that), where no context exists at all.
 #
-# Include order: this file loads immediately after codegen/ir.jl (src/WasmTarget.jl), BEFORE
+# Include order: this file loads immediately after codegen/ir.jl (src/WasmTargetLegacy.jl), BEFORE
 # codegen/types.jl (WasmValType) and codegen/context.jl (AbstractCompilationContext) exist.
 #
 # Quarantine tier (Julia-only; no dart Kernel equivalent, so no dart anchor): NirBoundscheck

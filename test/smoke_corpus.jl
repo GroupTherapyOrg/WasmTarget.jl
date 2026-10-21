@@ -566,15 +566,6 @@ _g("builtins", Any[
 ])
 const _SMOKE_GLOBAL_VEC = [10, 20, 30]
 
-# BUILTIN_LOWERINGS reached from an :invoke: the closed-world metadata operations Julia
-# leaves as an :invoke of their @noinline overlay; compile_invoke! selects the entry by the
-# invoked function's identity.
-@noinline _sm_visible_from_main(tn::Core.TypeName)::Bool =
-    WasmTarget._closed_world_isvisible(tn.name, tn.module, Main)
-_g("builtins_invoked", Any[
-    ("closed_world_type_bounds", (x::Int64) -> WasmTarget._closed_world_type_bounds(Int.name) === nothing ? x : -x, Int64(3)),  # _closed_world_type_bounds
-    ("closed_world_isvisible", (x::Int64) -> _sm_visible_from_main(Int.name) ? x : -x, Int64(3)),                            # _closed_world_isvisible
-])
 # Arithmetic whose operands are results of an erased (Vector{Any}) closure call: Julia
 # types each result `::Any`, so `+`/`-`/`*` runs on two Any values and rejects located at
 # `dynamic (%a + %b)::Any`.
@@ -2482,17 +2473,3 @@ _g("entered_paths", Any[
     ("lpad_rpad_zero_width", (n::Int64) -> (try; ncodeunits(lpad(string(n), 6, "\u0301")) * 100 + ncodeunits(rpad("x", n, '\u0301')); catch; -1; end), Int64(4)),
     ("operator_embedded_nul", (x::Int64) -> (try; Int64(Base._isoperator(string(Char(x), Char(0)))); catch; -1; end), Int64(0x2b)),
 ])
-
-# the numeric lowering tables' generated groups, last in GROUPS: built from test/registry_cases.jl
-# when a run selects one (_build!); registry_sample is the blocking gate's (Amendment 117-14)
-_lazy_g("registry_foreign", "registry_cases.jl")
-_lazy_g("registry_binops", "registry_cases.jl")
-_lazy_g("registry_unops", "registry_cases.jl")
-_lazy_g("registry_conversions", "registry_cases.jl")
-_lazy_g("registry_checked", "registry_cases.jl")
-_lazy_g("registry_shift", "registry_cases.jl")
-_lazy_g("registry_fma", "registry_cases.jl")
-_lazy_g("registry_misc", "registry_cases.jl")
-_lazy_g("registry_operators", "registry_cases.jl")
-_lazy_xf("registry_operators_rejected", "registry_cases.jl")
-_lazy_g("registry_sample", "registry_cases.jl")

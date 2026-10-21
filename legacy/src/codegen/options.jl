@@ -7,7 +7,7 @@
 # `verifyTypeChecks`, `watchPoints: List<int>`). WasmTarget instead had 17
 # scattered `ENV["WT_..."]` reads across src/. This file is the single typed
 # replacement: one struct, one env-parsing function, read once by the compile's one entry
-# (_compile, src/WasmTarget.jl) alone into its Translator — read from there, ENV read from
+# (_compile, src/WasmTargetLegacy.jl) alone into its Translator — read from there, ENV read from
 # nowhere else in src (L158).
 # ============================================================================
 

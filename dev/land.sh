@@ -31,6 +31,7 @@
 #       rebases the branch onto the march tip (dev/parity_baseline.toml merged by
 #       dev/merge_baseline.py, any other conflict stops the landing, naming the files); refuses a
 #       branch more than one commit ahead of the tip (one landing is one commit, A24E1); refuses a
+#       change to legacy/ but its deletion whole (WT1 frozen as the agreement oracle); refuses a
 #       commit with no `Charter:` line, or one that changes dev/CHARTER.md other than exactly as
 #       the maintainer authorised it (its `Charter-change: C<a> C<b> … authorised by Dale <date>` line,
 #       the change's parent and new blobs listed with those clauses and date in the main tree's
@@ -384,6 +385,12 @@ land)
     ahead=$(git rev-list --count "$tip..HEAD")
     [ "$ahead" -eq 1 ] ||
         { echo "land: $br is $ahead commits ahead of $MARCH ${tip:0:8}: one landing is one commit, its own tree gated (A24E1) — land them one at a time — refusing"; exit 1; }
+    # legacy/ is frozen (dev/MARCH.md 1.G): WT1 is the agreement oracle as it was moved there, never
+    # edited; the one change it takes is its deletion, whole, by its rule (1.F); the commit that
+    # creates it (the march tip holding none) is the move itself
+    if [ -n "$(git diff --name-only "$tip" HEAD -- legacy/)" ] && [ -n "$(git ls-tree -d "$tip" legacy)" ] && [ -n "$(git ls-tree -d HEAD legacy)" ]; then
+        echo "land: $br changes legacy/ ($(git diff --name-only "$tip" HEAD -- legacy/ | head -3 | tr '\n' ' ')…): legacy/ is frozen, its one change its deletion whole (dev/MARCH.md 1.G) — refusing"; exit 1
+    fi
     # L148's window again on the rebased head: a landing that took the hold while this one waited may
     # have filled it since the preflight; the same program on this tree, before the gate
     if ! win=$(bash dev/audit_window.sh "$W"); then

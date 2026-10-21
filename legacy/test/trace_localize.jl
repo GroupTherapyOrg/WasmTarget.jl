@@ -1,6 +1,6 @@
 # Locate a wrong value at the first statement whose value differs between Julia and wasm.
 #
-# `first_divergence(f, args...)` compiles `f` traced (WasmTarget.compile_with_statement_trace:
+# `first_divergence(f, args...)` compiles `f` traced (WasmTargetLegacy.compile_with_statement_trace:
 # every function compiled from Julia IR reports its entry, and each statement of a traced type
 # its value after the store) and runs it in Node. It runs the SAME IR natively: each traced
 # function's typed CodeInfo, as WT compiled it, becomes an OpaqueClosure with the same probes,
@@ -15,7 +15,7 @@
 # collector's choice: the runs agree, and WT's IR already answers differently from Julia).
 module TraceLocalize
 
-using WasmTarget
+using WasmTargetLegacy
 using ..WasmRunner
 const CC = Core.Compiler
 
@@ -80,7 +80,7 @@ function _traced_closure(trace, id::Int, ids::IdDict{Any,Int})
     end
     for i in 1:n
         local T = CC.widenconst(ir.stmts[i][:type])
-        haskey(WasmTarget.TRACED_STATEMENT_TYPES, T) || continue
+        haskey(WasmTargetLegacy.TRACED_STATEMENT_TYPES, T) || continue
         local st = ir.stmts[i][:stmt]
         # no statement may follow a block's terminator (an `enter` ends its block as a goto
         # does) or sit among its phis; an exception region's Upsilon and PhiC nodes carry
@@ -138,7 +138,7 @@ return [{ trace, outcome }];
 # the wasm run's events, and how the call ended
 function wasm_trace(bytes::Vector{UInt8}, fname::String, js_args::String)
     local src = replace(_TRACE_JS, "FNAME" => repr(fname), "ARGS" => js_args,
-                        "HOST_MERGE" => WasmRunner.host_runtime_merge_js(bytes), "HOST_ESCAPE" => WasmTarget.host_escape_js())
+                        "HOST_MERGE" => WasmRunner.host_runtime_merge_js(bytes), "HOST_ESCAPE" => WasmTargetLegacy.host_escape_js())
     local status, results = WasmRunner.run_driver_batch(bytes, src; ninputs=1)
     status === :error && error("the traced module did not run: $(results)")
     local r = results[1]
@@ -156,7 +156,7 @@ function _event_text(trace, e::Event)::String
 end
 
 _frames(trace, e::Event)::Vector{String} =
-    e[1] == 1 ? WasmTarget.stmt_frames(trace.codes[e[2]].debuginfo, e[3]) : String[]
+    e[1] == 1 ? WasmTargetLegacy.stmt_frames(trace.codes[e[2]].debuginfo, e[3]) : String[]
 
 """
     first_divergence(f, args...; js_args) -> NamedTuple
@@ -167,7 +167,7 @@ format_js_arg of each); `summary` is the report printed on a wrong answer.
 """
 function first_divergence(f, args...; js_args::String)
     local argtypes = Tuple(map(typeof, args))
-    local bytes, trace = WasmTarget.compile_with_statement_trace(f, argtypes)
+    local bytes, trace = WasmTargetLegacy.compile_with_statement_trace(f, argtypes)
     local nevents, nres = native_trace(trace, f, args)
     local jres = try (:ok, f(args...)) catch e; (:throw, e) end
     local ir_matches_julia = isequal(nres, jres)

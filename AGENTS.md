@@ -55,8 +55,11 @@ L206 generates this list from the ledger: every requirement an agent must honour
   native-vs-wasm differential execution for soundness.
 - Install the hook: `cp dev/hooks/commit-msg "$(git rev-parse --git-common-dir)/hooks/"`. A new
   lowering-registry entry arrives with a case; no new silent `catch`.
-- Report evidence, the command and its output, never a claim. Measure: dump the IR
-  (`WasmTarget.get_typed_ir`) or a module (`WT_PROBE_DUMP=<probe>:<path>`, then `wasm-tools print`).
+- Report evidence, the command and its output, never a claim. Measure: Julia's typed IR
+  (`code_typed`, `Base.code_ircode`) and a module (`wasm-tools print`).
+- `src/` mirrors dart2wasm's `lib/` and wasm_builder's `lib/src/` file for file; `src/julia/` holds
+  what Julia forces. `legacy/` is WT1, the agreement oracle until its deletion rule (dev/MARCH.md
+  1.F): never edit it.
 - Work in a worktree under `../.worktrees/`; never `git stash`, never `git checkout <file>` over
   unstaged work. An audit (`dev/AUDIT.md`) reads its range in four areas: builder; collection and
   planning; emission and diagnostics; enforcement and prose.

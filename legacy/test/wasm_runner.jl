@@ -19,17 +19,17 @@
 module WasmRunner
 
 using JSON   # Base64 stdlib isn't on the Pkg.test path; `bytes2hex` is in Base.
-import WasmTarget
+import WasmTargetLegacy
 include(joinpath(@__DIR__, "wasm_reader.jl")); using .WasmReader: module_runtime_js
 
-# The WT imports module `bytes` holds, answered by its runtime (WasmTarget.host_runtime_js over the
+# The WT imports module `bytes` holds, answered by its runtime (WasmTargetLegacy.host_runtime_js over the
 # module's import record, read back from the bytes: module_runtime_js), beside what a test's own importObject answers — its answers win — then the glue
-# (WasmTarget.host_glue_js): the count of open host-declared import calls, imported by a module that
+# (WasmTargetLegacy.host_glue_js): the count of open host-declared import calls, imported by a module that
 # has one, and each host-declared import wrapped to keep it.
 host_runtime_merge_js(bytes::Vector{UInt8})::String =
     "for (const [m, fs] of Object.entries($(module_runtime_js(bytes)))) " *
     "importObject[m] = Object.assign({}, fs, importObject[m] || {}); " *
-    "{ const glued = ($(WasmTarget.host_glue_js()))(importObject); " *
+    "{ const glued = ($(WasmTargetLegacy.host_glue_js()))(importObject); " *
     "for (const m of Object.keys(glued)) importObject[m] = glued[m]; }"
 
 export get_pool, run_driver, run_wasm_single, run_driver_batch, shutdown_pool!, enc_wasm, NODE, escaped_class_name
@@ -221,7 +221,7 @@ const enc = (key,value) => {
 Instantiate `bytes`, call `fname(js_args)` once, and return the JSON-decoded
 result. `js_args` is a JS argument string (e.g. `BigInt("5"), 3`). `import_js`
 is a JS statement defining `const importObject = {…}`. With the module's
-`source_map` (WasmTarget.compile_with_sourcemap), a trap's message names the Julia
+`source_map` (WasmTargetLegacy.compile_with_sourcemap), a trap's message names the Julia
 statement of each wasm frame it unwound through (`located_frames`). An escaped Julia exception
 is `(:trap, "uncaught Julia exception <type>")`, its type named through the map's class names
 (escaped_class_name), and its frames those of its throw.
@@ -241,7 +241,7 @@ function run_wasm_single(bytes::Vector{UInt8}, fname::AbstractString, js_args::A
     let v;
     try { v = f($js_args); }
     // an escaped Julia exception answers its class and the stack captured at its throw
-    catch (e) { return [($(WasmTarget.host_escape_js()))(instance.exports, e)]; }
+    catch (e) { return [($(WasmTargetLegacy.host_escape_js()))(instance.exports, e)]; }
     // an export with no result answers `undefined`, which is Julia's `nothing`
     if (v === undefined) return [{ ok: null }];
     try { return [{ ok: JSON.parse(JSON.stringify(v, enc)) }]; }
@@ -266,15 +266,15 @@ end
     escaped_class_name(cls, source_map) -> String
 
 The type of an escaped Julia exception, from the class the host read (`minified:Class<id>`,
-WasmTarget.host_escape_js): with the module's source map, the class's name from its class-name
-table (WasmTarget.minified_class_names), as dart's tooling deobfuscates a minified build's
+WasmTargetLegacy.host_escape_js): with the module's source map, the class's name from its class-name
+table (WasmTargetLegacy.minified_class_names), as dart's tooling deobfuscates a minified build's
 `minified:Class<id>`; without one, dart's text itself. A map that names no such class raises.
 """
 function escaped_class_name(cls::AbstractString, source_map::Union{Nothing,AbstractString})::String
     source_map === nothing && return String(cls)
     local m = match(r"^minified:Class(\d+)$", cls)
     m === nothing && error("an escaped exception's class reads `$cls`, not minified:Class<id>")
-    local names = WasmTarget.minified_class_names(String(source_map))
+    local names = WasmTargetLegacy.minified_class_names(String(source_map))
     names === nothing && error("the source map carries no class names, so `$cls` cannot be named")
     local id = parse(Int, m.captures[1])
     (id + 1 <= length(names) && names[id + 1] !== nothing) ||
@@ -344,7 +344,7 @@ Each wasm frame of a JS `stack`, innermost first, as the Julia statement its off
 the statement's inline chain, or, outside its statements, the function's definition — or, at
 an offset nothing maps, the frame's function by its name (the name section's, which V8 prints)
 and why: "`<name>`: <construct>" for a function the compiler generated
-(WasmTarget.generated_function_construct); "`<name>`: a statement with no source location in
+(WasmTargetLegacy.generated_function_construct); "`<name>`: a statement with no source location in
 Julia's IR" inside a function compiled from Julia IR, which the map marks (every other byte of
 it maps to its statement or its definition, so a segment starts inside its body); and
 "`<name>`: a function not compiled from Julia IR" for one no segment starts in, a function the
@@ -371,7 +371,7 @@ function located_frames(stack::AbstractString, source_map::AbstractString, bytes
             (fname === nothing || isempty(fname) || occursin(r"^wasm-function\[\d+\]$", fname)) &&
                 error("a trap's frame, function $(m.captures[2]) at 0x$(m.captures[3]), has no name: " *
                       "every function is named where it is defined (L157)\n$stack")
-            local construct = WasmTarget.generated_function_construct(fname)
+            local construct = WasmTargetLegacy.generated_function_construct(fname)
             local e = findfirst(r -> offset in r, entries)
             e === nothing && error("a trap's frame at 0x$(m.captures[3]) lies in no function body of the module\n$stack")
             construct !== nothing ? "`$fname`: $construct" :

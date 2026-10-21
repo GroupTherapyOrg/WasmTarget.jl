@@ -74,16 +74,19 @@ with the per-clause status. A clause is never closed by argument.
   lanes, never first by an hour-long run. Every lowering-registry entry is exercised by a lane
   case; a new entry without one fails; no known failure hides behind a skipped test or a
   missing wasm runtime.
+  `L219` (no open hierarchy passes for a closed one: every abstract type in src a registered
+  construction or a dart abstract class's mirror, refused at load otherwise).
   Legacy (retired with the switch): L16 L94 L134 L155 R33 R36 L190 L191 L192 R42 R43 R44.
   Planned: dev/MARCH.md 1.A8, 1.D — closed sums matched exhaustively at load, the lowering on
   the typed stack.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain innermost-first.
+  `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load).
   Legacy (retired with the switch): L8 L15 L18 L19 L37 L38 L39 L48 L51 L58 L60 L63 L64 L66 L71
   L72 L73 L75 L76 L78 L79 L85 L89 L90 L93 L96 L101 L118 L119 L127 L135 L139 L146 L147 L156 R34
   R39.
-  Planned: dev/MARCH.md 1.A2c, 1.A7, 1.D — rejections a closed sum, every unported path a
-  located rejection, the smoke ladder derived from them.
+  Planned: dev/MARCH.md 1.A7, 1.D, 1.Q — every unported path a located rejection, the smoke
+  ladder derived from them, and no case going from passing back to loud.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
   the disagreement alarm.
@@ -132,7 +135,8 @@ with the per-clause status. A clause is never closed by argument.
   never tens of minutes) `L198` (each landing records
   whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
   Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
-  Planned: dev/MARCH.md 1.A2c — the gate re-pointed at the rebuild's compiler.
+  Planned: dev/MARCH.md 1.Q — the gate records each case's derived outcome, and a landing never
+  turns a passing case loud.
 - **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C0
   to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
