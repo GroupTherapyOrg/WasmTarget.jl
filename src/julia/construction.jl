@@ -4,27 +4,114 @@
 # it (`construction_check`, src/julia/parity.jl), so no lock of a construction reads text.
 
 """
-    check_closed_sum(sum, handler) -> Int
+    MATCHES
 
-The check of a closed sum: `sum` a `Union` of concrete structs that subtype nothing (so no module
-outside this line can add a kind), `handler` a function with a method for every kind and for no
-other type. Throws a `ConstructionViolation` naming the first fault.
+Every `@exhaustive` match, by its module, its sum's name, the kinds its arms name and its line, in
+load order; `check_closed` checks each against its sum when the package loads.
 """
-@quarantine "dart's analyzer checks a sealed class's switches and Rust's compiler an enum's matches; Julia checks neither" Base.uniontypes function check_closed_sum(@nospecialize(sum), handler::Function)::Int
-    local name = string(sum)
-    sum isa Union || throw(ConstructionViolation(name, "not a Union of its kinds"))
-    local kinds = Base.uniontypes(sum)
-    for T in kinds
-        isconcretetype(T) || throw(ConstructionViolation(name, "the kind $T is not concrete"))
-        supertype(T) === Any || throw(ConstructionViolation(name, "the kind $T subtypes $(supertype(T)), an open hierarchy"))
-        hasmethod(handler, Tuple{T}) || throw(ConstructionViolation(name, "the kind $T has no $(nameof(handler)) method"))
+@quarantine "Julia keeps no record of a match; @exhaustive records each where it is written" Base.Vector const MATCHES = Vector{Tuple{Module,Symbol,Vector{Symbol},String}}()
+
+# the arms of an @exhaustive match, (kind, binder or nothing, body), or a refusal at its line
+@quarantine "a match's arms are Julia pairs, read from the parsed expression" Base.Meta.isexpr function _arms(arms, source::LineNumberNode)::Vector{Tuple{Symbol,Union{Symbol,Nothing},Any}}
+    local refuse(why) = throw(ConstructionViolation("@exhaustive", "$(_at(source)): $why"))
+    Meta.isexpr(arms, :block) || refuse("the arms are a begin ... end block of `Kind => body` or `(v::Kind) => body`")
+    local out = Tuple{Symbol,Union{Symbol,Nothing},Any}[]
+    for a in arms.args
+        a isa LineNumberNode && continue
+        Meta.isexpr(a, :call, 3) && a.args[1] === :(=>) || refuse("an arm reads `Kind => body` or `(v::Kind) => body`, not $a")
+        local pat, body = a.args[2], a.args[3]
+        if pat isa Symbol
+            pat === :_ && refuse("a wildcard arm `_` matches kinds by omission; name each kind")
+            push!(out, (pat, nothing, body))
+        elseif Meta.isexpr(pat, :(::), 2) && pat.args[1] isa Symbol && pat.args[2] isa Symbol
+            push!(out, (pat.args[2], pat.args[1], body))
+        else
+            refuse("the pattern $pat is not a kind or `v::Kind` (an untyped binder is a wildcard)")
+        end
     end
-    for m in methods(handler)
-        local sig = Base.unwrap_unionall(m.sig)
-        length(sig.parameters) == 2 && sig.parameters[2] in kinds ||
-            throw(ConstructionViolation(name, "$(nameof(handler)) has a method for $(sig), no kind of the sum"))
+    return out
+end
+
+"""
+    @exhaustive v::Sum begin
+        (k::Kind1) => body1
+        Kind2 => body2
     end
+
+A match over the closed sum `Sum`: one arm for each of its kinds and no other, no wildcard; a
+missing, extra, repeated or wildcard arm refuses the load at this line, and the load checks every
+match against its sum again. Each arm binds its value, narrowed to its kind, when it names a
+binder; `v` is asserted to be a `Sum`.
+
+precedent(rust: match, its missing arm error E0004; dart: switch over a sealed class). Julia's
+differs: it has no match statement and checks no exhaustiveness, so the macro checks the arms
+against the sum's kinds where it is written and expands into a chain of isa tests.
+"""
+@quarantine "Julia has no match statement and no exhaustiveness check; a macro checks each match" Base.esc macro exhaustive(subject, arms)
+    local refuse(why) = throw(ConstructionViolation("@exhaustive", "$(_at(__source__)): $why"))
+    Meta.isexpr(subject, :(::), 2) && subject.args[2] isa Symbol || refuse("the subject reads `value::Sum`")
+    local sum = subject.args[2]
+    (__module__, sum) in CLOSED_SUMS || refuse("$sum is not a @closed sum defined above the match")
+    local kinds = Symbol[nameof(T) for T in Base.uniontypes(getglobal(__module__, sum))]
+    local as = _arms(arms, __source__)
+    local named = Symbol[k for (k, _, _) in as]
+    for k in named
+        k in kinds || refuse("$k is no kind of $sum ($(join(kinds, ", ")))")
+        count(==(k), named) == 1 || refuse("the kind $k has two arms")
+    end
+    for k in kinds
+        k in named || refuse("the kind $k of $sum has no arm")
+    end
+    push!(MATCHES, (__module__, sum, named, _at(__source__)))
+    local v = gensym(:subject)
+    local arm(k, b, body) = b === nothing ? body : Expr(:let, Expr(:(=), b, v), body)
+    local chain = arm(as[end]...)
+    for (k, b, body) in reverse(as[1:end-1])
+        chain = Expr(:if, Expr(:call, :isa, v, k), arm(k, b, body), chain)
+    end
+    return esc(Expr(:let, Expr(:(=), v, Expr(:(::), subject.args[1], sum)), chain))
+end
+
+"""
+    check_closed(mod) -> Int
+
+The closed sums' check: every `Union` binding `mod` defines is a `@closed` sum, each sum's kinds
+are concrete structs that subtype nothing, and every `@exhaustive` match names exactly its sum's
+kinds. Throws a `ConstructionViolation` listing the rest.
+"""
+@quarantine "the closed sums' totality, by reflection when the package loads" Base.uniontypes function check_closed(mod::Module)::Int
+    local out = String[]
+    for sub in _modules(mod), n in names(sub; all = true)
+        (startswith(string(n), '#') || !isdefined(sub, n) || which(sub, n) !== sub) && continue
+        local b = getglobal(sub, n)
+        b isa Union || continue
+        (sub, n) in CLOSED_SUMS || (push!(out, "$sub.$n is a Union no @closed declares"); continue)
+        for T in Base.uniontypes(b)
+            (isconcretetype(T) && supertype(T) === Any) || push!(out, "$sub.$n's kind $T is not a concrete type that subtypes nothing")
+        end
+    end
+    for (m, sum, named, at) in MATCHES
+        _within(m, mod) || continue
+        local kinds = Symbol[nameof(T) for T in Base.uniontypes(getglobal(m, sum))]
+        sort(named) == sort(kinds) || push!(out, "the match at $at names $(join(named, ", ")), not $sum's kinds $(join(kinds, ", "))")
+    end
+    isempty(out) || throw(ConstructionViolation("closed", join(out, "; ")))
     return 0
+end
+@quarantine "the closed sums' assertion, run when the package loads" Base.Val construction_check(::Val{:closed})::Int = check_closed(@__MODULE__)
+
+"""
+    check_sum_matched(mod, sum) -> Int
+
+A named closed sum's check: `sum` in `mod` is a `@closed` sum, an `@exhaustive` match over it exists,
+and every match over a sum of `mod` names exactly its kinds (`check_closed`). Throws a
+`ConstructionViolation` naming the fault.
+"""
+@quarantine "a sum's closure and its match are asserted when the package loads" Core.throw function check_sum_matched(mod::Module, sum::Symbol)::Int
+    (mod, sum) in CLOSED_SUMS || throw(ConstructionViolation(string(sum), "$sum is not a @closed sum"))
+    any(m -> m[1] === mod && m[2] === sum, MATCHES) ||
+        throw(ConstructionViolation(string(sum), "no @exhaustive match over $sum gives each kind its arm"))
+    return check_closed(mod)
 end
 
 """
@@ -48,7 +135,7 @@ its abstract types are open by language, so the refusal runs when the package lo
             b !== mod && parentmodule(b) === mod && check_no_open_abstract(b)
         elseif u isa DataType && isabstracttype(u) && parentmodule(u) === mod && nameof(u) === n
             hasmethod(construction_check, Tuple{Val{n}}) && continue
-            any(e -> e isa ParityEntry && e.mod === mod && n in e.names, REGISTRY) && continue
+            any(e -> e isa ParityEntry && e.declares && e.mod === mod && n in e.names, REGISTRY) && continue
             throw(ConstructionViolation("check_no_open_abstract",
                 "$mod.$n is an abstract type that is neither a registered construction nor a dart abstract class's mirror carrying @parity"))
         end

@@ -17,12 +17,16 @@ include("julia/packages.jl")
 
 # The load-time checks that need every definition to exist, so the package does not load otherwise:
 # the file map, the anchors and the quarantine (src/julia/parity.jl), no abstract type that is
-# neither a registered construction nor a dart abstract class's mirror (A33S1), the strict subset's
-# typestate (src/julia/subset.jl), and the anchors resolved at the pin.
+# neither a registered construction nor a dart abstract class's mirror (A33S1), every Union a
+# @closed sum matched exhaustively, the strict subset's typestate (src/julia/subset.jl), the typed
+# signatures and fields, and the anchors resolved at the pin.
 construction_check(Val(:include_dart))
 construction_check(Val(:parity))
 construction_check(Val(:quarantine))
 construction_check(Val(:check_no_open_abstract))
+construction_check(Val(:closed))
+construction_check(Val(:check_typed_signatures))
+construction_check(Val(:check_typed_fields))
 construction_check(Val(:ClosedWorld))
 check_closed_world_makers()   # a stopgap read of lowered code (L224), run at load all the same
 construction_check(Val(:NirValue))

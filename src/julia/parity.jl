@@ -24,10 +24,12 @@ let defs = quote
     @quarantine "the refusal's text, Julia's error display" Base.showerror Base.showerror(io::IO, e::ConstructionViolation) = print(io, "WasmTarget: construction ", e.definition, " broken: ", e.what)
 
     """
-        ParityEntry(mod, anchor, ported, names, file, first, last, worlds, pid, methods)
+        ParityEntry(mod, anchor, ported, declares, names, file, first, last, worlds, pid, methods)
 
     A definition `@parity` checked: `anchor` the dart definition it copies, `ported` false for an
-    `@unported` stub, `names` the bindings it defines in `mod`, `file` lines `first` to `last` its
+    `@unported` stub, `declares` true for a type declaration (a struct, an abstract or primitive
+    type, an enum or a closed sum: the class itself, never one of its constructors or members),
+    `names` the bindings it defines in `mod`, `file` lines `first` to `last` its
     text, `worlds` the world ages its evaluation spanned in the process `pid`, and `methods` the
     methods that evaluation made, matched when the package has loaded (`_attribute!`).
     """
@@ -35,6 +37,7 @@ let defs = quote
         mod::Module
         anchor::String
         ported::Bool
+        declares::Bool
         names::Vector{Symbol}
         file::Symbol
         first::Int
@@ -64,6 +67,53 @@ let defs = quote
         methods::Vector{Method}
     end
 
+    @quarantine "the macros' refusals name the line they stand on, Julia's LineNumberNode" Core.LineNumberNode _at(source::LineNumberNode)::String = string(something(source.file, :none), ":", source.line)
+
+    """
+        CLOSED_SUMS
+
+    Every `@closed` sum, by its module and name, in load order; `check_closed` reads it.
+    """
+    @quarantine "Julia keeps no list of the Unions a module means as closed; @closed builds it" Base.Vector const CLOSED_SUMS = Vector{Tuple{Module,Symbol}}()
+
+    # the name of the sum `@closed` marks, or a refusal at its line: `const X = Union{K1, K2, ...}`,
+    # two kinds or more, each a concrete type defined above it that subtypes nothing, so no other
+    # module can add a kind
+    @quarantine "a closed sum's kinds are checked where it is written; Julia checks no sealed hierarchy" Base.supertype function _closed_sum(mod::Module, def, source::LineNumberNode)::Symbol
+        refuse(why) = throw(ConstructionViolation("@closed", "$(_at(source)): $why"))
+        Meta.isexpr(def, :const) && Meta.isexpr(def.args[1], :(=)) && def.args[1].args[1] isa Symbol ||
+            refuse("@closed marks a `const X = Union{...}`")
+        local rhs = def.args[1].args[2]
+        Meta.isexpr(rhs, :curly) && rhs.args[1] === :Union && length(rhs.args) >= 3 ||
+            refuse("a closed sum is a Union of two kinds or more")
+        for k in rhs.args[2:end]
+            k isa Symbol && isdefined(mod, k) || refuse("the kind $k is not a type defined above the sum")
+            # a sealed class's sealed subclass: a closed sum whose kinds are this sum's too
+            (mod, k) in CLOSED_SUMS && continue
+            local T = getglobal(mod, k)
+            T isa DataType && isconcretetype(T) || refuse("the kind $k is not a concrete type")
+            supertype(T) === Any || refuse("the kind $k subtypes $(supertype(T)), an open hierarchy")
+        end
+        return def.args[1].args[1]
+    end
+
+    """
+        @closed(const X = Union{K1, K2, ...})
+
+    Declares a closed sum: its kinds concrete structs that subtype nothing, so no module adds a kind
+    without editing this line; every `Union` binding WasmTarget defines carries it, and a match over
+    it is `@exhaustive`.
+
+    precedent(rust: enum; dart: sealed class, its subclasses in its own library). Julia's differs: a
+    `Union` of concrete types is closed by its type, but Julia marks no Union as a sum, so the macro
+    checks the kinds where it is written and the load refuses a Union binding without it.
+    """
+    @quarantine "Julia has no sealed classes or enums of structs; a macro marks a Union as a closed sum" Base.esc macro closed(def)
+        local n = _closed_sum(__module__, def, __source__)
+        return esc(Expr(:block, Expr(:macrocall, GlobalRef(Core, Symbol("@__doc__")), __source__, def),
+                        Expr(:call, GlobalRef(Base, :push!), GlobalRef(@__MODULE__, :CLOSED_SUMS), Expr(:tuple, __module__, QuoteNode(n))), nothing))
+    end
+
     """
         RegistryEntry
 
@@ -72,7 +122,7 @@ let defs = quote
 
     precedent(rust: enum; dart: sealed class). Julia's differs: a `Union` of concrete types.
     """
-    @quarantine "a closed sum is a Union in Julia, which has no sealed classes" Core.Union const RegistryEntry = Union{ParityEntry, QuarantineEntry}
+    @quarantine "a closed sum is a Union in Julia, which has no sealed classes" Core.Union @closed const RegistryEntry = Union{ParityEntry, QuarantineEntry}
 
     """
         REGISTRY
@@ -107,8 +157,6 @@ let defs = quote
     # whether `file` lies in the directory `dir` (both absolute)
     @quarantine "a source file's place is its path" Base.startswith _inside(file::AbstractString, dir::AbstractString)::Bool = startswith(normpath(file), joinpath(normpath(dir), ""))
 
-    @quarantine "the macros' refusals name the line they stand on, Julia's LineNumberNode" Core.LineNumberNode _at(source::LineNumberNode)::String = string(something(source.file, :none), ":", source.line)
-
     # the module and its submodules
     @quarantine "a module's methods are found by their module, Julia's reflection" Base.parentmodule function _within(m::Module, root::Module)::Bool
         while true
@@ -139,12 +187,12 @@ let defs = quote
 
     # the bindings a definition creates in its module and the Julia name the anchor's rule judges, or
     # a refusal naming its line: function (long, short, `function f end`), macro, struct, abstract and
-    # primitive type, const, @enum and module, under @inline or @noinline
+    # primitive type, const, @enum and module, under @inline, @noinline or @closed
     @quarantine "Julia's definition forms, read from the parsed expression" Base.Meta.isexpr function _defines(def, source::LineNumberNode)::Tuple{Vector{Symbol},Symbol}
         refuse() = throw(ConstructionViolation("the definition forms",
             "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, module)"))
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
-        if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"))
+        if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@closed"))
             return _defines(def.args[end], source)
         elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@enum")
             local head = def.args[3]
@@ -399,13 +447,13 @@ end
     return def
 end
 
-# whether a top-level statement of a port declares a type: a struct, abstract or primitive type or
-# @enum behind @parity, which the first pass evaluates
+# whether a top-level statement of a port declares a type: a struct, abstract or primitive type,
+# @enum or @closed sum behind @parity, which the first pass evaluates
 @quarantine "Julia needs a type to exist before a signature names it; a declaration is read by its head" Base.Meta.isexpr function _is_declaration(st)::Bool
     local def = _marked_definition(st)
     def === nothing && return false
     return Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
-           (Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@enum"))
+           (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
 end
 
 # the names a declaration's supertype and field types mention, each with the module path it is
@@ -432,6 +480,8 @@ end
         end
     elseif Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive)
         Meta.isexpr(def.args[1], :(<:)) && walk(def.args[1].args[2])
+    elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@closed")
+        walk(def.args[end].args[1].args[2])   # the sum's kinds
     end
     return out
 end
@@ -443,8 +493,8 @@ Loads the ports of those dart files, each its path under the sdk's pkg/ (`_jl_pa
 module (`DART_MODULES`): the only way a file of src/ outside src/julia loads, called once with every
 port. The paths must be in `DART_FILES`; when the package has loaded, the files it loaded are
 exactly the directory's (`check_include_dart`). It loads in two passes: first every file's type
-declarations (struct, abstract and primitive type, @enum behind @parity), each after the
-declarations its supertype and field types name, then every other definition, file by file in
+declarations (struct, abstract and primitive type, @enum and @closed sum behind @parity), each
+after the declarations its supertype, field types or kinds name, then every other definition, file by file in
 DART_FILES order; two declarations that need each other refuse the load.
 
 precedent(dart: `part`/`part of` naming each file, and a library's declarations resolved before
@@ -708,6 +758,64 @@ end
     return member(x, m) ? nothing : "line $ln does not declare $x.$m"
 end
 
+# the dart class `name`'s declaration line in `lines`, or 0
+@quarantine "a dart class is found by its declaration at column 0, dart's formatted source" Base.match function _class_line(lines::Vector{String}, name::AbstractString)::Int
+    for (i, l) in enumerate(lines)
+        local d = match(DART_DECL_RX, l)
+        d !== nothing && d[1] == name && occursin(r"\bclass\b", l) && return i
+    end
+    return 0
+end
+
+# the classes a dart class declaration at line `ln` extends, implements or mixes in, read up to the
+# body's `{`, type arguments dropped
+@quarantine "dart's supertypes follow extends, implements and with in the class header" Base.eachmatch function _dart_supers(lines::Vector{String}, ln::Int)::Vector{String}
+    local head = ""
+    for j in ln:min(length(lines), ln + 8)
+        head *= " " * lines[j]
+        occursin('{', lines[j]) && break
+    end
+    head = replace(head, r"<[^<>]*>" => "", r"<[^<>]*>" => "")
+    local m = match(r"\b(?:extends|implements|with)\b(.*?)(?:\{|$)", head)
+    m === nothing && return String[]
+    return String[x.match for x in eachmatch(r"[A-Za-z_$][\w$]*", m[1]) if !(x.match in ("extends", "implements", "with"))]
+end
+
+# whether the dart class at line `ln` is reachable from a sealed class through its supertypes: a kind
+# of a sealed sum, its subclasses then the sum's too; `find(name)` gives a class declared in another
+# file as `(lines, line)`, or nothing
+@quarantine "WasmTarget compiles a closed world: the pinned sdk holds every subclass" Base.occursin function _sealed_ancestor(lines::Vector{String}, ln::Int, find::Function, depth::Int = 0)::Bool
+    depth > 16 && return false
+    for sup in _dart_supers(lines, ln)
+        local i = _class_line(lines, sup)
+        local where_ = i == 0 ? find(sup) : (lines, i)
+        where_ === nothing && continue
+        local ls, k = where_
+        occursin(r"^(?:(?:abstract|base|final|interface|mixin)\s+)*sealed\s+class\b", ls[k]) && return true
+        _sealed_ancestor(ls, k, find, depth + 1) && return true
+    end
+    return false
+end
+
+# why a mirror's form disagrees with the dart declaration at line `ln`, or nothing: a dart `sealed`
+# class is a `@closed` sum of its subclasses (its kinds closed by the type), never an open abstract
+# type or a struct; a `@closed` sum mirrors a sealed class, or an abstract class that is a kind of a
+# sealed sum (reachable from one through its supertypes), whose subclasses the closed world holds
+# (A34S4; the lead's ruling (a), 2026-10-22); `find` as _sealed_ancestor's
+@quarantine "dart's sealed modifier closes a hierarchy, which Julia spells as a closed Union, not an abstract type" Base.occursin function _form_fault(lines::Vector{String}, ln::Int, def, find::Function = _ -> nothing)::Union{String,Nothing}
+    ln <= length(lines) || return nothing
+    local sealed = occursin(r"^(?:(?:abstract|base|final|interface|mixin)\s+)*sealed\s+class\b", lines[ln])
+    local closed = _is_macro(def, Symbol("@closed"))
+    local typedecl = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract)
+    sealed && typedecl && return "dart's line $ln declares a sealed class, whose mirror is a @closed sum of its subclasses, not an open type"
+    if closed && !sealed
+        local abstract_ = occursin(r"^(?:(?:base|interface|mixin)\s+)*abstract\s+(?:(?:base|interface|mixin)\s+)*class\b", lines[ln])
+        abstract_ && _sealed_ancestor(lines, ln, find) && return nothing
+        return "a @closed sum mirrors a dart sealed class or an abstract kind of one; line $ln declares neither"
+    end
+    return nothing
+end
+
 # why an anchor does not resolve in the checkout `sdk`, or nothing when it does
 @quarantine "the pinned dart file is read where the anchor is checked" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
     local a = match(ANCHOR_RX, anchor)
@@ -750,6 +858,22 @@ end
     return check_anchors_resolve(@__MODULE__, sdk)
 end
 
+# how many inner constructors a struct's body defines: the function definitions in it named for the
+# struct
+@quarantine "Julia gives a struct with no inner constructor its default ones, which a port must not lean on" Base.Meta.isexpr function _inner_constructors(def::Expr, name::Symbol)::Int
+    local n = 0
+    for st in def.args[3].args
+        Meta.isexpr(st, :macrocall) && st.args[1] == GlobalRef(Core, Symbol("@doc")) && (st = st.args[end])
+        (Meta.isexpr(st, :function) || Meta.isexpr(st, :(=))) || continue
+        local c = _call(st.args[1])
+        c === nothing && continue
+        local f = c.args[1]
+        local g = Meta.isexpr(f, :curly) ? f.args[1] : f
+        g === name && (n += 1)
+    end
+    return n
+end
+
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
 # include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin
@@ -767,13 +891,36 @@ end
     local ported = !_is_macro(def, Symbol("@unported"))
     ported || (def = _unported(anchor, def.args[end], source))
     local names, name = _defines(def, source)
+    if ported && Meta.isexpr(def, :struct)
+        local n = _inner_constructors(def, name)
+        n == 1 || refuse("a ported struct defines exactly one inner constructor, not $n: dart's constructors are its outer functions over it, and Julia's default constructors stand for none")
+    end
     local admitted = _admitted_names(m[3])
     name in admitted || refuse("the Julia name $name is not the rule's for $(m[3]): $(join(admitted, ", "))")
-    # WasmTarget's own anchors resolve at the pin where its checkout exists (L213)
+    # WasmTarget's own anchors resolve at the pin where its checkout exists (L213), and a dart class's
+    # mirror has its form: a sealed class a @closed sum, any other class a struct or abstract type
     local sdk = own ? _pin_sdk() : nothing
     local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
     fault === nothing || refuse("the anchor does not resolve at the pin: $fault")
-    return (ParityEntry(mod, anchor, ported, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
+    if sdk !== nothing
+        local lines = get!(() -> readlines(joinpath(sdk, "pkg", m[1])), _PIN_LINES, joinpath(sdk, "pkg", m[1]))
+        local pkgdir = m[1][1:findfirst('/', m[1])]   # the package of the anchor's file, dart2wasm/ or wasm_builder/
+        local find(name) = begin
+            for d in DART_FILES
+                startswith(d, pkgdir) || continue
+                local p = joinpath(sdk, "pkg", d)
+                local ls = get!(() -> readlines(p), _PIN_LINES, p)
+                local i = _class_line(ls, name)
+                i == 0 || return (ls, i)
+            end
+            nothing
+        end
+        local why = _form_fault(lines, parse(Int, m[2]), def, find)
+        why === nothing || refuse(why)
+    end
+    local declares = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
+        (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
+    return (ParityEntry(mod, anchor, ported, declares, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
 end
 
 """
@@ -937,3 +1084,105 @@ checked where it was written: a qualified name that resolves and that the defini
     return 0
 end
 @quarantine "the quarantine's assertion, run when the package loads" Base.Val construction_check(::Val{:quarantine})::Int = check_quarantine(@__MODULE__, SRC)
+
+# ---- typed signatures and fields (L214, L215) -----------------------------------------------------
+# A ported dart definition is typed as dart types it: every parameter of its methods declared, no
+# field holding Any, a field `nothing` may hold only where dart declares it `T?`. A quarantined
+# definition is exempt: it carries a Julia API's own types (Julia's trim inference returns an untyped
+# Vector{Any}), the named heterogeneous seam the charter allows (C4).
+
+# whether a type mentions Any: itself, a member of a Union, a parameter of a parametric type
+@quarantine "Julia's types nest Any in Unions, parameters and Varargs, found by reflection" Base.unwrap_unionall function _mentions_any(@nospecialize(T))::Bool
+    T === Any && return true
+    T isa Union && return any(_mentions_any, Base.uniontypes(T))
+    T isa UnionAll && return _mentions_any(Base.unwrap_unionall(T))
+    T isa Core.TypeofVararg && return !isdefined(T, :T) || _mentions_any(T.T)
+    T isa DataType && return any(p -> (p isa Type || p isa Core.TypeofVararg) && _mentions_any(p), T.parameters)
+    return false
+end
+
+"""
+    check_typed_signatures(mod) -> Int
+
+The typed signatures' check: every method of a ported `@parity` definition of `mod` (not an
+`@unported` stub) declares each parameter, none untyped (`Any`), an unbounded type variable or a
+bare `Vararg` (a ported struct's one inner constructor among them, @parity refusing Julia's default
+constructors where it is written); throws a `ConstructionViolation` listing the rest.
+
+precedent(typescript: noImplicitAny; dart: the always_specify_types lint). Julia's differs: an
+untyped parameter is `Any`, which Julia accepts, so the load reads each method's signature.
+"""
+@quarantine "Julia accepts an untyped parameter as Any; the load reads every ported signature" Base.unwrap_unionall function check_typed_signatures(mod::Module)::Int
+    local out = String[]
+    _attribute!(mod)
+    for e in REGISTRY
+        e isa ParityEntry && _within(e.mod, mod) && e.ported || continue
+        for m in e.methods
+            (!startswith(string(m.name), '#') && m.name !== :kwcall) || continue
+            local ps = Base.unwrap_unionall(m.sig).parameters
+            for i in 2:length(ps)
+                local p = ps[i]
+                local why = p === Any ? "is untyped (Any)" :
+                    p isa TypeVar && p.ub === Any ? "is an unbounded type variable" :
+                    p isa Core.TypeofVararg && (!isdefined(p, :T) || p.T === Any) ? "is a bare Vararg" : nothing
+                why === nothing || push!(out, "$(basename(string(m.file))):$(m.line) $(m.name)'s parameter $(i - 1) $why ($(e.anchor))")
+            end
+        end
+    end
+    isempty(out) || throw(ConstructionViolation("check_typed_signatures", join(out, "; ")))
+    return 0
+end
+@quarantine "the typed signatures' assertion, run when the package loads" Base.Val construction_check(::Val{:check_typed_signatures})::Int = check_typed_signatures(@__MODULE__)
+
+# why the dart class at `anchor` does not declare `field` (a Julia field name) nullable, or nothing
+# when it does: a member at column 2 of the class's body declaring the field whose snake name it is,
+# its type ending in `?`
+@quarantine "dart's sound null safety marks a nullable field T?; Julia reads the pinned class body" Base.readlines function _dart_nullable(sdk::String, anchor::String, field::Symbol)::Union{String,Nothing}
+    local a = match(ANCHOR_RX, anchor)
+    local path = joinpath(sdk, "pkg", a[1])
+    isfile(path) || return "the pin has no pkg/$(a[1])"
+    local lines = get!(() -> readlines(path), _PIN_LINES, path)
+    for j in parse(Int, a[2])+1:length(lines)
+        local l = lines[j]
+        startswith(l, "}") && break
+        startswith(l, "  ") && !startswith(l, "   ") || continue
+        for d in eachmatch(r"([^\s(]+)\s+([A-Za-z_$][\w$]*)\s*(?:;|=(?![=>]))", l)
+            snake(d[2]) == string(field) || continue
+            return endswith(d[1], "?") ? nothing : "dart declares $(d[2]) as $(d[1]), not nullable (line $j)"
+        end
+    end
+    return "the dart class declares no field $(field)"
+end
+
+"""
+    check_typed_fields(mod, sdk) -> Int
+
+The typed fields' check: no field of a struct a `@parity` definition of `mod` declares holds `Any`,
+anywhere in its type; a field that may hold `nothing` is one the dart class declares `T?`, read from
+`sdk`, the pinned checkout, when there is one. Throws a `ConstructionViolation` listing the rest.
+
+precedent(typescript: strictNullChecks; dart: sound null safety). Julia's differs: a field may hold
+Any or nothing by its declared type alone, so the load reads each field type and the pinned class.
+"""
+@quarantine "Julia's field types may hold Any or nothing; the load reads every ported struct" Base.fieldtypes function check_typed_fields(mod::Module, sdk::Union{String,Nothing})::Int
+    local out = String[]
+    for e in REGISTRY
+        e isa ParityEntry && e.declares && _within(e.mod, mod) || continue
+        for n in e.names
+            isdefined(e.mod, n) || continue
+            local T = Base.unwrap_unionall(getglobal(e.mod, n))
+            T isa DataType && isstructtype(T) && !isabstracttype(T) || continue
+            for (f, F) in zip(fieldnames(T), fieldtypes(T))
+                _mentions_any(F) && push!(out, "$n.$f holds Any ($F; $(e.anchor))")
+                if F isa Union && Nothing <: F && sdk !== nothing
+                    local why = _dart_nullable(sdk, e.anchor, f)
+                    why === nothing || push!(out, "$n.$f may hold nothing, but $why ($(e.anchor))")
+                end
+            end
+        end
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_typed_fields", join(out, "; ")))
+    return 0
+end
+@quarantine "the typed fields' assertion, run when the package loads" Base.Val construction_check(::Val{:check_typed_fields})::Int = check_typed_fields(@__MODULE__, _pin_sdk())

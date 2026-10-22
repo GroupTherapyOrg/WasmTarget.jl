@@ -257,6 +257,9 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     # NIR's closed sums (C5, dev/MARCH.md 1.A10): src/julia/nir.jl
     "L221" => (:construction, "NirStmt"), "L222" => (:construction, "NirValue"),
     "L213" => (:construction, "check_anchors_resolve"),
+    # the closed sums matched exhaustively (C5) and the typed signatures and fields (C4)
+    "L217" => (:construction, "closed"), "L214" => (:construction, "check_typed_signatures"),
+    "L215" => (:construction, "check_typed_fields"),
 )
 
 
@@ -274,13 +277,19 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
     "L211" => ("rust: the deny missing_docs lint, every item documented or the crate does not build",
                "nothing in Julia requires a definition to say where it comes from, so @parity checks the anchor and the name where it is written and the totality check refuses, by reflection over the method table and the bindings, any definition outside src/julia no @parity spans when the package loads"),
     "L221" => ("rust: enum + exhaustive match; dart: sealed class + exhaustive switch",
-               "a Union of concrete structs, one per form of Julia's optimized IR, that subtype nothing, each handled by stmt_form and nothing else, checked when the package loads, since Julia checks no match at compile time"),
+               "a Union of concrete structs, one per form of Julia's optimized IR, that subtype nothing, @closed, stmt_form an @exhaustive match over it, checked where it is written and when the package loads, since Julia checks no match at compile time"),
     "L222" => ("rust: enum + exhaustive match; dart: sealed class + exhaustive switch",
-               "a Union of the four concrete operand forms of Julia's optimized IR, a literal held as Julia's own Core.Const, each handled by value_form and nothing else, checked when the package loads"),
+               "a Union of the four concrete operand forms of Julia's optimized IR, a literal held as Julia's own Core.Const, @closed, value_form an @exhaustive match over it, checked where it is written and when the package loads"),
     "L220" => ("rust: typestate with a private constructor, the value made by one function of its module",
                "Julia has no private constructors, so ClosedWorld's sole constructor takes a token only subset.jl holds, and both constructors' method tables are checked by reflection when the package loads"),
     "L213" => ("dart: the analyzer resolves every identifier to its declaration or the program does not compile; rust: rustdoc denies broken intra-doc links",
                "nothing in Julia resolves a name in another language's source, so @parity reads the pinned dart line where the anchor is written and the load checks every anchor, both where the pinned checkout exists, and the lock requires the checkout"),
+    "L217" => ("rust: enum + match, its missing arm error E0004; dart: sealed class + exhaustive switch",
+               "Julia has neither a match statement nor an exhaustiveness check, and marks no Union as a sum: @closed checks a sum's kinds where it is written, @exhaustive checks a match's arms against them there, and the load refuses a Union binding without @closed and re-checks every match"),
+    "L214" => ("typescript: noImplicitAny; dart: the always_specify_types lint",
+               "Julia accepts an untyped parameter as Any, so the load reads every method signature of each ported @parity definition"),
+    "L215" => ("typescript: strictNullChecks; dart: sound null safety",
+               "Julia's field types may hold Any or nothing by declaration alone, so the load reads each ported struct's field types, and a field holding nothing against the pinned dart class's T? where the checkout exists"),
     "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
                "Julia has no keyword marking Julia-only code, so @quarantine checks the necessity and resolves the Julia API where it is written and the totality check refuses any src/julia definition no @quarantine spans when the package loads"),
 )
@@ -311,22 +320,8 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
     local V = getfield(wt, :ConstructionViolation)
     local refuses(f) = try; Base.invokelatest(f); false; catch e; e isa V; end
     local passes(f) = try; Base.invokelatest(f) == 0; catch; false; end
-    if definition in (:Rejection, :NirStmt, :NirValue)
-        # each is check_closed_sum over its sum and handler: the plants are the check's
-        local closed = getfield(wt, :check_closed_sum)
-        local m = Module(:RejectionPlant)
-        Core.eval(m, quote
-            struct A; end; struct B; end; abstract type Open end; struct C <: Open; end
-            h(::A) = 1; h(::B) = 2
-            g(::A) = 1; g(::B) = 2; g(::Int) = 3
-            k(::A) = 1; k(::C) = 2
-            only_a(::A) = 1
-        end)
-        passes(() -> closed(Union{m.A, m.B}, m.h)) || push!(out, "negative missed: a closed sum with every kind handled fails its check")
-        refuses(() -> closed(Union{m.A, m.B}, m.only_a)) || push!(out, "negative missed: a kind with no handler passes")
-        refuses(() -> closed(Union{m.A, m.B}, m.g)) || push!(out, "negative missed: a handler for a type outside the sum passes")
-        refuses(() -> closed(Union{m.A, m.C}, m.k)) || push!(out, "negative missed: a kind subtyping an open abstract type passes")
-        refuses(() -> closed(m.A, m.h)) || push!(out, "negative missed: a sum that is no Union passes")
+    if definition in (:Rejection, :NirStmt, :NirValue, :closed, :check_typed_signatures, :check_typed_fields)
+        append!(out, sum_negatives_missed(wt, definition, refuses, passes))
     elseif definition === :check_no_open_abstract
         local noopen = getfield(wt, :check_no_open_abstract)
         local bad = Module(:OpenPlant); Core.eval(bad, :(abstract type Bad end))
@@ -339,6 +334,23 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         local doc = Module(:DocPlant)
         Core.eval(doc, :(Core.@doc "parity(wasm_builder/lib/src/ir/type.dart:12 ValueType) the dart class" abstract type ValueType end))
         refuses(() -> noopen(doc)) || push!(out, "negative missed: a docstring naming a parity anchor exempts an open abstract type")
+        # A34S4's sealed half: a dart sealed class's mirror is a @closed sum, never an open abstract type
+        local form(line, def) = Base.invokelatest(getfield(wt, :_form_fault), [line], 1, def) === nothing
+        form("sealed class ElementSegment implements Serializable {}", :(abstract type ElementSegment end)) &&
+            push!(out, "negative missed: an open abstract type mirrors a dart sealed class")
+        form("sealed class ElementSegment implements Serializable {}", :(@closed const ElementSegment = Union{A, B})) ||
+            push!(out, "negative missed: a @closed sum mirroring a dart sealed class is refused")
+        form("abstract class ValueType {", :(@closed const ValueType = Union{A, B})) &&
+            push!(out, "negative missed: a @closed sum mirrors a dart class that is not sealed")
+        form("abstract class ValueType {", :(abstract type ValueType end)) || push!(out, "negative missed: an abstract dart class's mirror is refused")
+        # ruling (a): an abstract kind of a sealed sum, directly or through another, is a @closed sum
+        # of its subclasses; an abstract class with no sealed ancestor, or a concrete kind, is not
+        local hier = ["sealed class R {}", "abstract class D extends R {}", "abstract class Q {}",
+                      "abstract class E extends D {}", "class F extends R {}"]
+        local hform(ln) = Base.invokelatest(getfield(wt, :_form_fault), hier, ln, :(@closed const X = Union{A, B})) === nothing
+        (hform(2) && hform(4)) || push!(out, "negative missed: a @closed sum at an abstract kind of a sealed sum is refused")
+        hform(3) && push!(out, "negative missed: a @closed sum at an abstract class with no sealed ancestor passes")
+        hform(5) && push!(out, "negative missed: a @closed sum at a concrete kind of a sealed sum passes")
         refuses(() -> noopen(sub)) || push!(out, "negative missed: an open abstract type in a submodule passes")
         local par = Module(:ParamPlant); Core.eval(par, :(abstract type Open{T} end))
         refuses(() -> noopen(par)) || push!(out, "negative missed: a parametric open abstract type (a UnionAll binding) passes")
@@ -427,16 +439,16 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local files = mktempdir()
         local file(name, code) = (local p = joinpath(files, name); write(p, code); p)
         local a = file("a.jl", "@parity \"dart2wasm/lib/translator.dart:1 Translator.useB\" use_b(b::B)::Int = 1\n")
-        local b = file("b.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C end\n")
+        local b = file("b.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    C() = new()\nend\n")
         local fwd = plant(:ForwardPlant)
         passes(() -> (two(Tuple{Module,String}[(fwd, a), (fwd, b)]); Base.invokelatest(() -> fwd.use_b(fwd.B(fwd.C())))) == 1 ? 0 : 1) ||
             push!(out, "negative missed: a method naming a type a later file declares does not load")
-        local cyc = file("c.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    b::B\nend\n")
+        local cyc = file("c.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    b::B\n    C(b::B) = new(b)\nend\n")
         refuses(() -> two(Tuple{Module,String}[(plant(:CyclePlant), cyc)])) || push!(out, "negative missed: two declarations that need each other load")
         local pkg = plant(:PackagePlant)
         Core.eval(pkg, :(module IR; import WasmTarget: @parity, @unported; end))
-        local outer = file("o.jl", "@parity \"wasm_builder/lib/src/builder/instructions.dart:1 TryTableCatch\" struct TryTableCatch\n    ir::IR.TryTableCatch\nend\n")
-        local inner = file("i.jl", "@parity \"wasm_builder/lib/src/ir/instruction.dart:1 TryTableCatch\" struct TryTableCatch end\n")
+        local outer = file("o.jl", "@parity \"wasm_builder/lib/src/builder/instructions.dart:1 TryTableCatch\" struct TryTableCatch\n    ir::IR.TryTableCatch\n    TryTableCatch(ir::IR.TryTableCatch) = new(ir)\nend\n")
+        local inner = file("i.jl", "@parity \"wasm_builder/lib/src/ir/instruction.dart:1 TryTableCatch\" struct TryTableCatch\n    TryTableCatch() = new()\nend\n")
         passes(() -> (two(Tuple{Module,String}[(pkg, outer), (pkg.IR, inner)]); Base.invokelatest(() -> fieldtype(pkg.TryTableCatch, 1) === pkg.IR.TryTableCatch) ? 0 : 1)) ||
             push!(out, "negative missed: one name in a package and its prefixed library's module does not load in both")
         rm(files; recursive = true)
@@ -447,7 +459,7 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
     elseif definition === :parity
         local m = plant(:ParityPlant)
         Base.include_string(m, """
-            @parity "dart2wasm/lib/translator.dart:10 Translator" struct Translator end
+            @parity "dart2wasm/lib/translator.dart:10 Translator" struct Translator; Translator() = new(); end
             @parity "dart2wasm/lib/translator.dart:20 Translator.translateType" @unported function translate_type(t::Translator, n::Int) end
             @parity "dart2wasm/lib/translator.dart:30 Translator.isStruct" is_struct(t::Translator)::Bool = (local f = () -> true; f())
             """, "/plant/src/translator.jl")
@@ -462,15 +474,15 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         Base.include_string(root, "const ROOT = 1\n", "/plant/src/WasmTarget.jl")
         refuses(() -> getfield(wt, :check_parity)(root, "/plant/src")) || push!(out, "negative missed: a binding no definition marks passes")
         refused_load("@parity \"dart2wasm/lib/dart2wasm.dart:1 main\" main() = 0", "/plant/src/x.jl") || push!(out, "negative missed: an anchor outside the pin table loads")
-        refused_load("@parity \"dart2wasm/lib/translator.dart Translator\" struct Translator end", "/plant/src/x.jl") || push!(out, "negative missed: an anchor with no line loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart Translator\" struct Translator; Translator() = new(); end", "/plant/src/x.jl") || push!(out, "negative missed: an anchor with no line loads")
         refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator.translateType\" translateType(x::Int) = x", "/plant/src/x.jl") || push!(out, "negative missed: a name not the rule's loads")
-        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator end", joinpath(src, "julia", "plant.jl")) || push!(out, "negative missed: @parity in src/julia loads")
-        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator end", joinpath(src, "plant.jl")) || push!(out, "negative missed: @parity in a src file include_dart did not load loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator; Translator() = new(); end", joinpath(src, "julia", "plant.jl")) || push!(out, "negative missed: @parity in src/julia loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator; Translator() = new(); end", joinpath(src, "plant.jl")) || push!(out, "negative missed: @parity in a src file include_dart did not load loads")
         refused_load("@unported f(x::Int) = nothing", "/plant/src/x.jl") || push!(out, "negative missed: @unported outside @parity loads")
         refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator.foo\" @unported foo(x::Int) = x", "/plant/src/x.jl") || push!(out, "negative missed: an @unported stub with a body loads")
         # identity: a Base method written on the line of a marked definition is made by no definition
         local sameline = plant(:SameLinePlant)
-        Base.include_string(sameline, "@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator end; Base.length(t::Translator) = 0\n", "/plant/src/translator.jl")
+        Base.include_string(sameline, "@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator; Translator() = new(); end; Base.length(t::Translator) = 0\n", "/plant/src/translator.jl")
         refuses(() -> getfield(wt, :check_parity)(sameline, "/plant/src")) || push!(out, "negative missed: a method on a marked definition's line, made by none, passes")
         # @enum: the methods Julia writes for a registered enum are its; an unregistered one refuses
         local enum = plant(:EnumPlant)
@@ -482,7 +494,7 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         # names: a dart keyword name is var"<name>", Object's toString and hashCode are Base.show and Base.hash
         local keyword = plant(:KeywordPlant)
         Base.include_string(keyword, "@parity \"wasm_builder/lib/src/builder/exports.dart:1 ExportsBuilder.export\" var\"export\"(x::Int) = x\n" *
-            "@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator end\n" *
+            "@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator; Translator() = new(); end\n" *
             "@parity \"dart2wasm/lib/translator.dart:2 Translator.toString\" Base.show(io::IO, t::Translator) = print(io, 0)\n" *
             "@parity \"dart2wasm/lib/translator.dart:3 Translator.hashCode\" Base.hash(t::Translator, h::UInt) = h\n", "/plant/src/x.jl")
         refused_load("@parity \"wasm_builder/lib/src/builder/exports.dart:1 ExportsBuilder.export\" export_(x::Int) = x", "/plant/src/x.jl") ||
@@ -555,6 +567,99 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local body = plant(:ModuleBodyPlant)
         Base.include_string(body, "@quarantine \"a type\" Core.DataType struct T end\n@quarantine \"a module\" Core.Module module Sub\nimport ..T\nBase.length(x::T) = 0\nend\n", "/plant/src/julia/q.jl")
         refuses(() -> getfield(wt, :check_quarantine)(body, "/plant/src")) || push!(out, "negative missed: an unmarked method in a marked module's body passes")
+    end
+    return out
+end
+
+# the closed sums', the exhaustive matches' and the typed definitions' plants (src/julia/construction.jl
+# and parity.jl): fixed source each macro or check must refuse or pass, loaded into fresh modules
+function sum_negatives_missed(wt::Module, definition::Symbol, refuses::Function, passes::Function)::Vector{String}
+    local out = String[]
+    local V = getfield(wt, :ConstructionViolation)
+    local plant(code, file = "/plant/src/julia/sums.jl") = begin
+        local m = Module(:SumPlant)
+        Core.eval(m, Meta.parse("import WasmTarget: @parity, @quarantine, @unported, @closed, @exhaustive"))
+        Base.include_string(m, code, file)
+        m
+    end
+    local refused_load(code, file = "/plant/src/julia/sums.jl") = try
+        plant(code, file); false
+    catch e
+        while e isa LoadError; e = e.error; end
+        e isa V
+    end
+    local kinds = "struct A; x::Int; end\nstruct B; end\nstruct C; end\n"
+    if definition in (:Rejection, :NirStmt, :NirValue)
+        # each is a @closed sum with its @exhaustive match: the plants are @closed's
+        local good = plant(kinds * "@closed const S = Union{A, B}\n")
+        Base.invokelatest(() -> (good, :S) in getfield(wt, :CLOSED_SUMS)) || push!(out, "negative missed: a @closed sum is not recorded")
+        refused_load("abstract type Open end\nstruct D <: Open end\n" * kinds * "@closed const S = Union{A, D}\n") || push!(out, "negative missed: a kind subtyping an open abstract type passes")
+        refused_load("abstract type Open end\nstruct D <: Open end\n@closed const S = Union{Open, D}\n") || push!(out, "negative missed: an abstract kind passes")
+        refused_load(kinds * "@closed const S = Union{A, Undefined}\n") || push!(out, "negative missed: an undefined kind passes")
+        refused_load(kinds * "@closed const S = A\n") || push!(out, "negative missed: a sum that is no Union passes")
+        refused_load(kinds * "@closed const S = Union{A}\n") || push!(out, "negative missed: a sum of one kind passes")
+    elseif definition === :closed
+        local sum = kinds * "@closed const S = Union{A, B, C}\n"
+        local good = plant(sum * "f(s::S) = @exhaustive s::S begin\n (a::A) => a.x\n B => -1\n C => -2\nend\n")
+        (Base.invokelatest(() -> (good.f(good.A(7)), good.f(good.B()), good.f(good.C()))) == (7, -1, -2)) ||
+            push!(out, "negative missed: an exhaustive match does not take each kind's arm")
+        passes(() -> getfield(wt, :check_closed)(good)) || push!(out, "negative missed: a closed sum with its exhaustive match fails")
+        refused_load(sum * "f(s::S) = @exhaustive s::S begin\n A => 1\n B => 2\nend\n") || push!(out, "negative missed: a match missing an arm loads")
+        refused_load(sum * "f(s::S) = @exhaustive s::S begin\n A => 1\n B => 2\n C => 3\n _ => 4\nend\n") || push!(out, "negative missed: a wildcard arm loads")
+        refused_load(sum * "f(s::S) = @exhaustive s::S begin\n A => 1\n B => 2\n x => 3\nend\n") || push!(out, "negative missed: an arm naming no kind loads")
+        refused_load(sum * "f(s::S) = @exhaustive s::S begin\n A => 1\n B => 2\n C => 3\n A => 4\nend\n") || push!(out, "negative missed: a kind with two arms loads")
+        refused_load(sum * "f(s::S) = @exhaustive s::S begin\n (a) => 1\nend\n") || push!(out, "negative missed: an untyped binder loads")
+        refused_load(kinds * "const U = Union{A, B}\nf(s::U) = @exhaustive s::U begin\n A => 1\n B => 2\nend\n") || push!(out, "negative missed: a match over an unclosed Union loads")
+        local nested_ok = try
+            local nested = plant(kinds * "@closed const In = Union{A, B}\n@closed const Out = Union{In, C}\ng(s::Out) = @exhaustive s::Out begin\n A => 1\n B => 2\n C => 3\nend\n")
+            Base.invokelatest(() -> (nested.g(nested.B()), nested.g(nested.C()))) == (2, 3)
+        catch
+            false
+        end
+        nested_ok || push!(out, "negative missed: a closed sum holding a sealed subclass's closed sum does not match its leaves")
+        local open_ = plant(kinds * "const U = Union{A, B}\n")
+        refuses(() -> getfield(wt, :check_closed)(open_)) || push!(out, "negative missed: a Union binding no @closed declares passes")
+        local stale = plant(sum)
+        Base.invokelatest(() -> push!(getfield(wt, :MATCHES), (stale, :S, [:A, :B], "plant:1")))
+        refuses(() -> getfield(wt, :check_closed)(stale)) || push!(out, "negative missed: a recorded match short of its sum's kinds passes")
+    elseif definition === :check_typed_signatures
+        local f = "/plant/src/translator.jl"
+        local check = getfield(wt, :check_typed_signatures)
+        local typed = plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t::Int, v::Vector{Int}) = t\n" *
+                            "@parity \"dart2wasm/lib/translator.dart:20 Translator.isStruct\" @unported function is_struct(t) end\n", f)
+        passes(() -> check(typed)) || push!(out, "negative missed: a ported method with every parameter typed fails")
+        (try; plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n    n::Int\nend\n", f); false; catch e; while e isa LoadError; e = e.error; end; e isa V; end) ||
+            push!(out, "negative missed: a ported struct leaning on Julia's default constructors loads")
+        (try; plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n    n::Int\n    Translator(n::Int) = new(n)\n    Translator() = new(0)\nend\n", f); false; catch e; while e isa LoadError; e = e.error; end; e isa V; end) ||
+            push!(out, "negative missed: a ported struct with two inner constructors loads")
+        passes(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n    n::Int\n    Translator(n::Int) = new(n)\nend\n", f))) ||
+            push!(out, "negative missed: a ported struct with its one typed inner constructor fails")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n    n::Int\n    Translator(n) = new(n)\nend\n", f))) ||
+            push!(out, "negative missed: an untyped constructor written in a struct's body passes")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t, v::Int) = t\n", f))) ||
+            push!(out, "negative missed: an untyped parameter passes")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t::T) where {T} = t\n", f))) ||
+            push!(out, "negative missed: an unbounded type variable passes")
+        refuses(() -> check(plant("@parity \"dart2wasm/lib/translator.dart:10 Translator.translateType\" translate_type(t::Int, rest...) = t\n", f))) ||
+            push!(out, "negative missed: a bare Vararg passes")
+    else
+        local check = getfield(wt, :check_typed_fields)
+        local f = "/plant/src/translator.jl"
+        local sdk = mktempdir()
+        mkpath(joinpath(sdk, "pkg", "dart2wasm", "lib"))
+        write(joinpath(sdk, "pkg", "dart2wasm", "lib", "translator.dart"), "class Translator {\n  final int? maybeCount;\n  final int count;\n}\n")
+        local struct_(fields) = plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n$fields\n    Translator(x...) = new(x...)\nend\n", f)
+        passes(() -> check(struct_("    maybe_count::Union{Nothing,Int}\n    count::Int"), sdk)) || push!(out, "negative missed: typed fields, the nullable one dart's T?, fail")
+        refuses(() -> check(struct_("    count::Any"), sdk)) || push!(out, "negative missed: a field holding Any passes")
+        refuses(() -> check(struct_("    count::Vector{Any}"), sdk)) || push!(out, "negative missed: a field holding Any as a parameter passes")
+        refuses(() -> check(struct_("    count::Union{Nothing,Int}"), sdk)) || push!(out, "negative missed: a field holding nothing that dart declares non-nullable passes")
+        refuses(() -> check(struct_("    other::Union{Nothing,Int}"), sdk)) || push!(out, "negative missed: a nullable field dart does not declare passes")
+        # the class's own entry alone: an outer constructor anchored at another dart line names the type too
+        write(joinpath(sdk, "pkg", "dart2wasm", "lib", "translator.dart"), "class Translator {\n  final int? maybeCount;\n  final int count;\n  Translator(this.maybeCount, this.count);\n}\n")
+        local withctor = plant("@parity \"dart2wasm/lib/translator.dart:1 Translator\" struct Translator\n    maybe_count::Union{Nothing,Int}\n    count::Int\n    Translator(x...) = new(x...)\nend\n" *
+                               "@parity \"dart2wasm/lib/translator.dart:4 Translator\" Translator(count::Int) = Translator(nothing, count)\n", f)
+        passes(() -> check(withctor, sdk)) || push!(out, "negative missed: a struct's fields are read against its constructor's anchor, not its class's")
+        rm(sdk; recursive = true)
     end
     return out
 end
@@ -2650,13 +2755,13 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L218_rejections_a_closed_sum" => ("the rejections are a closed sum by construction (dev/MARCH.md 1.A2c, Dale 2026-10-21: strict means the wrong choice cannot be written): src/julia/reject.jl's `Rejection` is a `Union` of five concrete structs (Unported, Unquarantined, OutsideSubset, InvalidModule, Internal) that subtype nothing, so no module adds a kind without editing that line, and every kind has its `_reason` and no other type has one; construction_check(::Val{:Rejection}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed: a kind with no handler, a handler outside the sum, a kind under an open abstract type and a sum that is no Union each refused, a sum fully handled passed) (dev/CHARTER.md C6)",
+    "L218_rejections_a_closed_sum" => ("the rejections are a closed sum by construction (dev/MARCH.md 1.A2c, Dale 2026-10-21: strict means the wrong choice cannot be written): src/julia/reject.jl's `Rejection` is a `@closed` `Union` of five concrete structs (Unported, Unquarantined, OutsideSubset, InvalidModule, Internal) that subtype nothing, so no module adds a kind without editing that line, and `_reason` is an `@exhaustive` match over it, one arm per kind; construction_check(::Val{:Rejection}) asserts both when WasmTarget loads, then every match over the package's sums (check_sum_matched), and this lock only calls it, with its plants (sum_negatives_missed: a kind under an open abstract type, an abstract kind, an undefined kind, a sum of one kind and a sum that is no Union each refused by @closed, a sum of concrete kinds recorded) (dev/CHARTER.md C6)",
         ConstructionLock(:Rejection)),
     "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose definition carries `@parity` (an entry of the registry naming it, src/julia/parity.jl), so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
         ConstructionLock(:check_no_open_abstract)),
-    "L221_nir_statements_a_closed_sum" => ("NIR's statements are a closed sum of Julia's optimized IR forms by construction (dev/MARCH.md 1.A10; ledger D3: Julia's IR is the ground truth, never re-guessed): src/julia/nir.jl's `NirStmt` is a `Union` of one concrete struct per statement form of Julia's optimized IR (call, invoke, new, foreigncall, boundscheck, the GC preservation pair, leave, pop_exception, the_exception, loopinfo, throw_undef_if_not, cfunction, invoke_modify, goto, gotoifnot, return, unreachable, phi, pi, enter, upsilon, phic, nothing, a GlobalRef read), each holding Julia's own operands, that subtype nothing, every kind handled by stmt_form and no other type; construction_check(::Val{:NirStmt}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed: a kind with no handler, a handler outside the sum, a kind under an open abstract type and a sum that is no Union each refused, a sum fully handled passed) (dev/CHARTER.md C5)",
+    "L221_nir_statements_a_closed_sum" => ("NIR's statements are a closed sum of Julia's optimized IR forms by construction (dev/MARCH.md 1.A10; ledger D3: Julia's IR is the ground truth, never re-guessed): src/julia/nir.jl's `NirStmt` is a `Union` of one concrete struct per statement form of Julia's optimized IR (call, invoke, new, foreigncall, boundscheck, the GC preservation pair, leave, pop_exception, the_exception, loopinfo, throw_undef_if_not, cfunction, invoke_modify, goto, gotoifnot, return, unreachable, phi, pi, enter, upsilon, phic, nothing, a GlobalRef read), each holding Julia's own operands, that subtype nothing, `@closed`, and `stmt_form` an `@exhaustive` match over it, one arm per kind; construction_check(::Val{:NirStmt}) asserts both when WasmTarget loads, then every match over the package's sums (check_sum_matched), and this lock only calls it, with its plants (sum_negatives_missed, as L218's: a kind under an open abstract type, an abstract kind, an undefined kind, a sum of one kind and a sum that is no Union each refused by @closed, a sum of concrete kinds recorded) (dev/CHARTER.md C5)",
         ConstructionLock(:NirStmt)),
-    "L222_nir_operands_a_closed_sum" => ("NIR's operands are a closed sum of Julia's optimized IR operand forms by construction (dev/MARCH.md 1.A10): src/julia/nir.jl's `NirValue` is a `Union` of NirSSA, NirArgument, NirGlobal and NirConst, a literal held as Julia's own `Core.Const`, that subtype nothing, every kind handled by value_form and no other type; construction_check(::Val{:NirValue}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed, as L221's) (dev/CHARTER.md C5)",
+    "L222_nir_operands_a_closed_sum" => ("NIR's operands are a closed sum of Julia's optimized IR operand forms by construction (dev/MARCH.md 1.A10): src/julia/nir.jl's `NirValue` is a `Union` of NirSSA, NirArgument, NirGlobal and NirConst, a literal held as Julia's own `Core.Const`, that subtype nothing, `@closed`, and `value_form` an `@exhaustive` match over it; construction_check(::Val{:NirValue}) asserts both when WasmTarget loads (check_sum_matched), and this lock only calls it, with its plants (sum_negatives_missed, as L218's) (dev/CHARTER.md C5)",
         ConstructionLock(:NirValue)),
     "L220_closed_world_typestate" => ("every stage after the strict subset's check takes the ClosedWorld Julia's trim verifier accepted, by construction (dev/MARCH.md 1.A7, ledger D32): src/julia/subset.jl's ClosedWorld has one constructor method, which takes the token _SubsetToken, and the token one constructor method, both defined in subset.jl, so compile's next stage, compile_world, takes a ClosedWorld only a holder of the token makes; construction_check(::Val{:ClosedWorld}) asserts it when WasmTarget loads (check_sole_constructor, by reflection over both method tables), and this lock only calls it, with its plants (construction_negatives_missed: a second constructor, a constructor taking no token, a constructor defined in another file and a token with a second constructor each refused, a sole constructor taking the file's token passed). Who may call the constructor is no construction in Julia, which has no module privacy: L224 reads it, a stopgap (dev/CHARTER.md C6)",
         ConstructionLock(:ClosedWorld)),
@@ -2676,6 +2781,12 @@ const LOCKS = [
         ConstructionLock(:quarantine)),
     "L213_anchors_resolve" => ("every anchor resolves at the pin (Dale: dart2wasm the structural oracle through and through, dev/LEDGER.md D1): the dart line an @parity anchor names declares its symbol at the commit dev/PARITY_MASTER.md pins, read from the checkout of dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; CI fetches it): `X` a top-level declaration at column 0 or X's unnamed constructor in its body, `X.m` a member at column 2 of X's body, a bare `m` a member of an unnamed extension; where the checkout exists @parity refuses an anchor that does not resolve at the definition's line, the load checks every anchor of WasmTarget, and construction_check(::Val{:check_anchors_resolve}) requires the checkout, so this lock, which only calls it, fails without one; with its plants (an anchor moved a line, one in another declaration's body, at a comment, past the end and a member's line read as its class each refused; every declaration form resolving; a planted checkout's HEAD read; PIN the pinned commit) (dev/CHARTER.md C2)",
         ConstructionLock(:check_anchors_resolve)),
+    "L217_closed_sums_matched_exhaustively" => ("every Union WasmTarget binds is a @closed sum and every match over one is @exhaustive (Dale: \"we don't allow certain broken wasm patterns\", closed sums and an exhaustive match, dev/LEDGER.md D8): `@closed const X = Union{...}` refuses, where it is written, a sum of fewer than two kinds or a kind that is not a concrete type defined above it subtyping nothing; `@exhaustive v::X begin (k::K) => ... end` refuses a sum not @closed above it and a missing, extra, repeated, wildcard `_` or untyped-binder arm, and expands into an isa chain over the asserted subject; when WasmTarget loads construction_check(::Val{:closed}) refuses a Union binding no @closed declares and re-checks every recorded match against its sum (check_closed), and this lock only calls it, with its plants (an unclosed Union binding, a stale match record and each refused arm form; an exhaustive match taking each kind's arm) (dev/CHARTER.md C5)",
+        ConstructionLock(:closed)),
+    "L214_typed_signatures" => ("every method of a ported @parity definition declares each parameter (Dale: strict means the wrong choice cannot be written, dev/LEDGER.md D6): none untyped (Any), an unbounded type variable or a bare Vararg, read from each method's signature in the method table when WasmTarget loads; an @unported stub and a quarantined definition (a Julia API's own types, the charter's named seam) are exempt; construction_check(::Val{:check_typed_signatures}) asserts it, and this lock only calls it, with its plants (an untyped parameter, an unbounded type variable and a bare Vararg each refused; a typed method and an untyped stub passed) (dev/CHARTER.md C4)",
+        ConstructionLock(:check_typed_signatures)),
+    "L215_typed_fields" => ("no field of a ported @parity struct holds Any, and a field holds nothing only where the dart class declares it T? (Dale: one source of truth, the field's type dart's, dev/LEDGER.md D5): read from each struct's field types when WasmTarget loads, the nullable fields against the pinned dart class where the checkout exists; a quarantined struct carries a Julia API's types, the charter's named seam; construction_check(::Val{:check_typed_fields}) asserts it, and this lock only calls it, with its plants (a field of Any, one of Vector{Any}, a nullable field dart declares non-nullable and one dart does not declare each refused; typed fields with dart's T? passed) (dev/CHARTER.md C4)",
+        ConstructionLock(:check_typed_fields)),
     "L207_every_negative_runs_every_gate" => ("every lock's negative runs in every gate, inside this file (Dale 2026-10-21, after test/lock_negatives.jl's L195 plant rotted unseen until a landing touched that file): a lock calls, directly or through functions of this file, a function named `<name>_negatives_missed` that plants fixed text its own logic must answer, so the ratchet stage runs it on every landing; a negative in a family the gate's selection may skip counts for nothing. Every lock outside NEGATIVE_OWED has one; NEGATIVE_OWED lists exactly the locks that owe theirs, none with one and none that is no lock, and R45 counts it, so the list only shrinks and a new lock never joins it. Behavior, run here: four planted tables and four planted sources answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local defs, thunks, calls = ratchet_source()

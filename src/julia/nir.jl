@@ -33,18 +33,23 @@ end
 
 An operand of a NIR statement: `NirSSA`, `NirArgument`, `NirGlobal` or `NirConst`, the four forms an
 operand of Julia's optimized IR takes. A closed sum by construction: a `Union` of concrete structs that
-subtype nothing, each handled by `value_form` and nothing else, checked when the package loads
+subtype nothing, `@closed`, and `value_form` its `@exhaustive` match, checked when the package loads
 (`construction_check(::Val{:NirValue})`).
 
 precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs: a
 `Union` of concrete types, its exhaustiveness checked when the package loads.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union const NirValue = Union{NirSSA, NirArgument, NirGlobal, NirConst}
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirValue = Union{NirSSA, NirArgument, NirGlobal, NirConst}
 
-@quarantine "the operand sum's handler, one method per kind" Core.String value_form(::NirSSA)::String = "ssa"
-@quarantine "the operand sum's handler, one method per kind" Core.String value_form(::NirArgument)::String = "argument"
-@quarantine "the operand sum's handler, one method per kind" Core.String value_form(::NirGlobal)::String = "global"
-@quarantine "the operand sum's handler, one method per kind" Core.String value_form(::NirConst)::String = "literal"
+# an operand's form, one arm per kind (dart's switch over a sealed class)
+@quarantine "the operand sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function value_form(v::NirValue)::String
+    @exhaustive v::NirValue begin
+        NirSSA => "ssa"
+        NirArgument => "argument"
+        NirGlobal => "global"
+        NirConst => "literal"
+    end
+end
 
 # ---- the statement kinds, one per form of Julia's optimized IR ----------------------------------
 """`Expr(:call, f, args...)`: a call Julia's optimizer left; `args` its operands, the callee first."""
@@ -155,45 +160,50 @@ end
     NirStmt
 
 A NIR statement: one kind per form of Julia's optimized IR, holding Julia's own operands. A closed sum
-by construction: a `Union` of concrete structs that subtype nothing, each handled by `stmt_form` and
-nothing else, checked when the package loads (`construction_check(::Val{:NirStmt})`); a form Julia adds
-is an edit of this line, and its `stmt_form` is then owed at load.
+by construction: a `@closed` `Union` of concrete structs that subtype nothing, `stmt_form` its
+`@exhaustive` match, checked when the package loads (`construction_check(::Val{:NirStmt})`); a form
+Julia adds is an edit of this line, and every match over it then owes its arm at load.
 
 precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch, kernel_nodes.dart's
 node kinds). Julia's differs: a `Union` of concrete types, its exhaustiveness checked when the package
 loads.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union const NirStmt = Union{
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const NirStmt = Union{
     NirCall, NirInvoke, NirNew, NirForeignCall, NirBoundscheck, NirGCPreserveBegin, NirGCPreserveEnd,
     NirLeave, NirPopException, NirTheException, NirLoopInfo, NirThrowUndefIfNot, NirCFunction,
     NirInvokeModify, NirGoto, NirGotoIfNot, NirReturn, NirUnreachable, NirPhi, NirPi, NirEnter,
     NirUpsilon, NirPhiC, NirNothing, NirGlobalRead}
 
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirCall)::String = "call"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirInvoke)::String = "invoke"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirNew)::String = "new"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirForeignCall)::String = "foreigncall"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirBoundscheck)::String = "boundscheck"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirGCPreserveBegin)::String = "gc_preserve_begin"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirGCPreserveEnd)::String = "gc_preserve_end"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirLeave)::String = "leave"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirPopException)::String = "pop_exception"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirTheException)::String = "the_exception"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirLoopInfo)::String = "loopinfo"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirThrowUndefIfNot)::String = "throw_undef_if_not"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirCFunction)::String = "cfunction"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirInvokeModify)::String = "invoke_modify"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirGoto)::String = "goto"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirGotoIfNot)::String = "gotoifnot"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirReturn)::String = "return"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirUnreachable)::String = "unreachable"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirPhi)::String = "phi"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirPi)::String = "pi"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirEnter)::String = "enter"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirUpsilon)::String = "upsilon"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirPhiC)::String = "phic"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirNothing)::String = "nothing"
-@quarantine "the statement sum's handler, one method per kind" Core.String stmt_form(::NirGlobalRead)::String = "global"
+# a statement's form, one arm per kind (dart's switch over a sealed class)
+@quarantine "the statement sum's one match, an exhaustive switch where dart switches over a sealed class" Core.String function stmt_form(st::NirStmt)::String
+    @exhaustive st::NirStmt begin
+        NirCall => "call"
+        NirInvoke => "invoke"
+        NirNew => "new"
+        NirForeignCall => "foreigncall"
+        NirBoundscheck => "boundscheck"
+        NirGCPreserveBegin => "gc_preserve_begin"
+        NirGCPreserveEnd => "gc_preserve_end"
+        NirLeave => "leave"
+        NirPopException => "pop_exception"
+        NirTheException => "the_exception"
+        NirLoopInfo => "loopinfo"
+        NirThrowUndefIfNot => "throw_undef_if_not"
+        NirCFunction => "cfunction"
+        NirInvokeModify => "invoke_modify"
+        NirGoto => "goto"
+        NirGotoIfNot => "gotoifnot"
+        NirReturn => "return"
+        NirUnreachable => "unreachable"
+        NirPhi => "phi"
+        NirPi => "pi"
+        NirEnter => "enter"
+        NirUpsilon => "upsilon"
+        NirPhiC => "phic"
+        NirNothing => "nothing"
+        NirGlobalRead => "global"
+    end
+end
 
 """
     NirBody
@@ -308,5 +318,5 @@ census rejects with `Unquarantined`, located at the compile `at` names.
 end
 
 # the two closed sums' assertions, run when the package loads
-@quarantine "the operand sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirValue})::Int = check_closed_sum(NirValue, value_form)
-@quarantine "the statement sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirStmt})::Int = check_closed_sum(NirStmt, stmt_form)
+@quarantine "the operand sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirValue})::Int = check_sum_matched(@__MODULE__, :NirValue)
+@quarantine "the statement sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirStmt})::Int = check_sum_matched(@__MODULE__, :NirStmt)

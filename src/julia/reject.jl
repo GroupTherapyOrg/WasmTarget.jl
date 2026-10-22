@@ -37,15 +37,15 @@ written: the dart definition it mirrors, or the Julia-only row it implements), `
 (Julia's own trim verifier rejects the program), `InvalidModule` and `Internal` (a defect of
 WasmTarget itself).
 
-A closed sum by construction: a `Union` of five concrete structs that subtype nothing, so no other
-module can add a kind; a sixth kind is an edit of this line, and its `_reason` is then owed at load
-(`construction_check(::Val{:Rejection})`, below).
+A closed sum by construction: a `@closed` `Union` of five concrete structs that subtype nothing,
+so no other module can add a kind; a sixth kind is an edit of this line, and every `@exhaustive`
+match over it, `_reason` first, then refuses the load until it has the sixth arm.
 
 precedent(rust: enum + exhaustive match; dart: sealed class + exhaustive switch). Julia's differs:
 a `Union` of concrete types where Rust declares an enum and dart a sealed hierarchy, and its
 exhaustiveness checked when the package loads, since Julia checks no match at compile time.
 """
-@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union const Rejection = Union{Unported, Unquarantined, OutsideSubset, InvalidModule, Internal}
+@quarantine "a closed sum is a Union in Julia, which has no sealed classes or enums" Core.Union @closed const Rejection = Union{Unported, Unquarantined, OutsideSubset, InvalidModule, Internal}
 
 """
     RejectionError(rejection, at)
@@ -58,11 +58,16 @@ and argument types; the statement and its inline chain once code is generated, d
     at::String
 end
 
-@quarantine "the sum's handler, one method per kind, dispatch where dart switches" Base.string _reason(r::Unported)::String = "unported: the dart definition $(r.anchor)"
-@quarantine "the sum's handler, one method per kind, dispatch where dart switches" Base.string _reason(r::Unquarantined)::String = "unported: the Julia-only definition $(r.row)"
-@quarantine "the sum's handler, one method per kind, dispatch where dart switches" Base.string _reason(r::OutsideSubset)::String = "outside the strict subset: $(r.reason)"
-@quarantine "the sum's handler, one method per kind, dispatch where dart switches" Base.string _reason(r::InvalidModule)::String = "invalid module at $(r.site)"
-@quarantine "the sum's handler, one method per kind, dispatch where dart switches" Base.string _reason(r::Internal)::String = "internal error at $(r.site)"
+# why a rejection stops the compile: one arm per kind (dart's switch over a sealed class)
+@quarantine "the sum's one match, an exhaustive switch where dart switches over a sealed class" Base.string function _reason(r::Rejection)::String
+    @exhaustive r::Rejection begin
+        (u::Unported) => "unported: the dart definition $(u.anchor)"
+        (q::Unquarantined) => "unported: the Julia-only definition $(q.row)"
+        (o::OutsideSubset) => "outside the strict subset: $(o.reason)"
+        (i::InvalidModule) => "invalid module at $(i.site)"
+        (n::Internal) => "internal error at $(n.site)"
+    end
+end
 
 @quarantine "the rejection's text, Julia's error display" Base.showerror Base.showerror(io::IO, e::RejectionError) = print(io, "WasmTarget rejects ", e.at, ": ", _reason(e.rejection))
 
@@ -73,7 +78,8 @@ Stop the compile `at` names with `rejection`.
 """
 @quarantine "a rejection stops the compile by throwing, where dart throws at the site" Core.throw reject!(r::Rejection, at::String)::Union{} = throw(RejectionError(r, at))
 
-# The sum's load-time check: every kind concrete, subtyping nothing, handled by `_reason`, and
-# `_reason` defined for the kinds alone. A violation refuses the package's load.
-@quarantine "the closed sum's assertion, run when the package loads" Base.Val construction_check(::Val{:Rejection})::Int = check_closed_sum(Rejection, _reason)
+# The sum's load-time check: Rejection is a @closed sum (its kinds concrete, subtyping nothing),
+# `_reason` an @exhaustive match over it, and every match over it names every kind (check_closed).
+# A violation refuses the package's load.
+@quarantine "the closed sum's assertion, run when the package loads" Base.Val construction_check(::Val{:Rejection})::Int = check_sum_matched(@__MODULE__, :Rejection)
 construction_check(Val(:Rejection))

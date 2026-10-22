@@ -72,8 +72,12 @@ with the per-clause status. A clause is never closed by argument.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.
+  `L214` (every parameter of a ported definition's methods declared, checked at load) `L215` (no
+  field of a ported struct holds `Any`, and one holds `nothing` only where dart declares it `T?`,
+  checked at load).
   Legacy (retired with the switch): L9 L35 L49 L74 L136 R17 R30 R31.
-  Planned: dev/MARCH.md 1.A8 — typed signatures and no `Any` field, checked when the package loads.
+  Planned: dev/MARCH.md 1.B, 1.D — every emitted value typed at its emission and a constant's
+  static type the type its emission pushes, on the typed builder and the typed stack.
 - **C5 · Wrong choices cannot land.** The Rust analogy: a wrong implementation is rejected at
   the edit site (load-time typing, the enforcing builder, a closed sum matched exhaustively when
   the package loads; a lock that scans is a stopgap, C0) or by the minute-scale
@@ -81,12 +85,13 @@ with the per-clause status. A clause is never closed by argument.
   case; a new entry without one fails; no known failure hides behind a skipped test or a
   missing wasm runtime.
   `L219` (no open hierarchy passes for a closed one: every abstract type in src a registered
-  construction or a dart abstract class's mirror, refused at load otherwise).
+  construction or a dart abstract class's mirror, refused at load otherwise) `L217` (every Union
+  a `@closed` sum, every match over one `@exhaustive`, its arms checked where it is written and
+  again at load).
   `L221` `L222` (NIR's statements and operands closed sums of Julia's optimized IR forms, each
   kind handled, checked at load).
   Legacy (retired with the switch): L16 L94 L134 L155 R33 R36 L190 L191 L192 R42 R43 R44.
-  Planned: dev/MARCH.md 1.A8, 1.D — closed sums matched exhaustively at load, the lowering on
-  the typed stack.
+  Planned: dev/MARCH.md 1.D — the lowering on the typed stack.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain innermost-first.
   `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load).
