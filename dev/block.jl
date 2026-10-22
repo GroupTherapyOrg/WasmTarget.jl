@@ -866,7 +866,10 @@ function main(args)
     runner_blob = isempty(runner) ? "" : git("hash-object", "dev/block_runner.jl")
     # under the runner every stage holds its own best and budget, `<stage>@warm`
     bestkey(name) = !isempty(runner) ? name * "@warm" : name
-    ld = launch!(Stage("load", setenv(`$jl --project=. -e 'using WasmTarget; print(VERSION)'`, stage_env()), logf("load")))
+    # the load holds Julia's own answer that the package image was saved: a precompile error (a method
+    # overwritten, A36S3's second `_within`) loads the package from source with exit 0, every later
+    # load building it again, so every run read cold and its timing was never judged
+    ld = launch!(Stage("load", setenv(`$jl --project=. -e 'using WasmTarget; Base.isprecompiled(Base.PkgId(WasmTarget)) || error("load: Julia saved no package image for WasmTarget (a precompile error above), so every load compiles it from source"); print(VERSION)'`, stage_env()), logf("load")))
     rat = launch!(Stage("ratchet", setenv(`$jl -O0 --project=. test/parity_ratchet.jl`, stage_env()), logf("ratchet")))
     probe_env(c) = stage_env(Dict("WT_PROBE_ONLY" => join(c, ' ')))
     # the QA families and phases the change selects, run as test/runtests.jl runs them in their shard

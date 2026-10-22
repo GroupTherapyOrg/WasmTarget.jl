@@ -100,16 +100,6 @@ end
     return x === token
 end
 
-# whether `mod` is `root` or a module inside it, by its chain of parents
-@quarantine "a module's place is its chain of parents, Julia's own record of nesting" Base.parentmodule function _within(mod::Module, root::Module)::Bool
-    while true
-        mod === root && return true
-        local p = parentmodule(mod)
-        p === mod && return false
-        mod = p
-    end
-end
-
 """
     check_sole_maker(root, T, token, makers, checks) -> Int
 
