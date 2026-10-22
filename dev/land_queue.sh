@@ -3,8 +3,9 @@
 # on each other in a cycle (ledger D13; precedent: bors and GitHub's merge queue, one ordered queue the
 # only source of truth for who lands next).
 #
-#   bash dev/land_queue.sh <queue> <hold> add <lane> <sha>   # appends `<lane> <sha>`, or updates the
-#                                                            # lane's sha in place (a lane is queued once)
+#   bash dev/land_queue.sh <queue> <hold> add <lane> <sha> [front]   # appends `<lane> <sha>`, or updates
+#                                                            # the lane's sha in place (a lane is queued once);
+#                                                            # `front`: at the head (an audit entry, A35E1)
 #   bash dev/land_queue.sh <queue> <hold> may <lane>         # exit 0 when the queue is empty or <lane>
 #                                                            # heads it, else 1, saying who is ahead
 #   bash dev/land_queue.sh <queue> <hold> head               # the head line, or nothing
@@ -51,7 +52,9 @@ settle() {
 case "$cmd" in
 add)
     lane=${4:?lane}; sha=${5:?sha}
-    if awk -v l="$lane" '$1 == l { f = 1 } END { exit !f }' "$Q"; then
+    if [ "${6:-}" = front ]; then
+        { echo "$lane $sha"; awk -v l="$lane" '$1 != l' "$Q"; } > "$Q.new"; mv "$Q.new" "$Q"
+    elif awk -v l="$lane" '$1 == l { f = 1 } END { exit !f }' "$Q"; then
         awk -v l="$lane" -v s="$sha" '$1 == l { $2 = s } { print }' "$Q" > "$Q.new"; mv "$Q.new" "$Q"
     else
         echo "$lane $sha" >> "$Q"

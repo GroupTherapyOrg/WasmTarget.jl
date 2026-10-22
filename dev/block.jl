@@ -624,6 +624,19 @@ end
 # its missed budgets included: `dev/land.sh land` lands on it, judges a cold landing's timing by a
 # warm run right after, and prints the unjudged streak, L198); red when a budget or a best is missed
 # on a run neither cold nor past the cap; green otherwise
+# a stage that reached no runner server judged nothing (the server stopped, its idle stop, a crash): no
+# verdict, never a failed check (A35E3); `logs` holds each stage's name and its log's text (a decision over
+# text, L194 runs it on fixed inputs)
+function reclassify_no_server!(fails::Vector{String}, efails::Vector{String}, logs)::Nothing
+    for (name, text) in logs
+        occursin("block_runner: no server for", text) || continue
+        local k = startswith(name, "probes") ? "probes" : name
+        filter!(f -> !startswith(f, k * ":"), fails)
+        push!(efails, "$name: reached no runner server (julia --startup-file=no dev/block_runner.jl start): no verdict")
+    end
+    return nothing
+end
+
 run_verdict(fails, tfails, efails, cold) =
     !isempty(fails) ? "red" : !isempty(efails) ? "none" : cold ? "green" : !isempty(tfails) ? "red" : "green"
 # the timing failures a run is judged on: every budget and best missed, none on a cold run or one past
@@ -1055,6 +1068,7 @@ function main(args)
     capped && !cold && append!(notes, "timing unjudged, past the cap: " .* vcat(tfails, sfails))
     cold && append!(notes, "timing unjudged, the run was cold: " .* vcat(tfails, sfails))
     judged_tfails = timing_failures(tfails, sfails, capped, cold)
+    reclassify_no_server!(fails, efails, [(s.name, isfile(s.log) ? read(s.log, String) : "") for s in stages])
     verdict = run_verdict(fails, judged_tfails, efails, cold)
     # the timing and why it is unjudged: a cold run, or a run past the cap with the budgets it missed
     # (each stage and its wall), a missed budget there the machine's by the cap's definition

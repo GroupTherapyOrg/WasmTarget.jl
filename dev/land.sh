@@ -133,6 +133,8 @@ STEPS="$MAIN/dev/.loop/steps.tsv"
 HOLD="$MAIN/dev/.block/HOLD"
 # the landing queue (dev/land_queue.sh; git-ignored): one total order of the lanes' landings
 QUEUE="$MAIN/dev/.loop/QUEUE"
+# a line in the queue's log (A35E2): a turn's end that the queue's order alone does not say
+qlog() { mkdir -p "$(dirname "$QUEUE")"; printf '%s %s\n' "$(iso "$(now)")" "$*" >> "$QUEUE.log"; }
 # the red history (dev/block.jl writes a line per red run; git-ignored, kept when a worktree goes) and
 # the change's own red seconds over it (A33E4): over the history's lines sorted by start, those of the
 # change (field 3, its author time, author and subject) from its author time to this land's start, each
@@ -324,26 +326,42 @@ merge)
     ;;
 wait)
     # queues this branch in the landing queue (dev/land_queue.sh) and lands it at its turn: blocks while
-    # another lane heads the queue, then runs `bash dev/land.sh land`; a lane's one watcher, never a loop
-    # on origin; a lane skipped as a stale head while it waits queues itself again, at the tail
+    # another lane heads the queue, then runs `bash dev/land.sh land` as its child and acts on its end
+    # (A35E1): a refusal before the hold (exit 4, 5 on a full audit window) pops the lane, logs it, and
+    # waits until the preflight passes (LAND_PREFLIGHT_ONLY=1) before queueing it again, so a refused
+    # head never holds the queue; any other end is the land's. A commit that adds the next audit entry
+    # goes to the head of the queue (it is what empties a full window). A lane skipped as a stale head
+    # while it waits queues itself again, at the tail.
     W=$(git rev-parse --show-toplevel)
     [ "$W" != "$MAIN" ] || { echo "wait: run it in the lane's worktree, not the main tree — refusing"; exit 1; }
     cd "$W"
-    bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)"
-    last=""; qs=$(now)
-    while ! qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br" 2>&1); do
-        case $qmsg in *"$br is not queued"*)
-            echo "wait: $br left the queue (a stale head skipped): queued again at the tail"
-            bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)" ;;
+    git fetch -q origin
+    front=""; git diff --quiet "$(git merge-base "origin/$MARCH" HEAD)" HEAD -- dev/AUDIT.md || front=front
+    while :; do
+        bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)" $front
+        last=""; qs=$(now)
+        while ! qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br" 2>&1); do
+            case $qmsg in *"$br is not queued"*)
+                echo "wait: $br left the queue (a stale head skipped): queued again at the tail"
+                bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)" ;;
+            esac
+            [ "$qmsg" = "$last" ] || { echo "wait: $qmsg"; last=$qmsg; }
+            sleep 5
+        done
+        echo "wait: $br heads the landing queue: landing"
+        # the wait for its turn, in the wait history (A34E3): never the change's own time
+        mkdir -p "$(dirname "$WAITS")"
+        printf '%s\t%s\t%s\tqueue\n' "$qs" "$(now)" "$(git log -1 --format='%at %ae %s' HEAD)" >> "$WAITS"
+        set +e; bash "$W/dev/land.sh" land; st=$?; set -e
+        case $st in
+        4|5) bash dev/land_queue.sh "$QUEUE" "$HOLD" pop "$br" >/dev/null 2>&1 || true
+             qlog "$br $(git rev-parse --short=8 HEAD) refused before the hold (exit $st$([ $st = 5 ] && echo ', the audit window full')): popped, queued again once its preflight passes"
+             echo "wait: $br refused before the hold (exit $st): out of the queue until its preflight passes"
+             until LAND_PREFLIGHT_ONLY=1 bash "$W/dev/land.sh" land >/dev/null 2>&1; do sleep 30; done
+             echo "wait: $br's preflight passes again: queued" ;;
+        *) exit "$st" ;;
         esac
-        [ "$qmsg" = "$last" ] || { echo "wait: $qmsg"; last=$qmsg; }
-        sleep 5
     done
-    echo "wait: $br heads the landing queue: landing"
-    # the wait for its turn, in the wait history (A34E3): never the change's own time
-    mkdir -p "$(dirname "$WAITS")"
-    printf '%s\t%s\t%s\tqueue\n' "$qs" "$(now)" "$(git log -1 --format='%at %ae %s' HEAD)" >> "$WAITS"
-    exec bash "$W/dev/land.sh" land
     ;;
 warm)
     # pre-warms this tree's runner right after a commit, outside any hold, so the landing's gate runs
@@ -374,18 +392,18 @@ land)
     step() { local t d; t=$(now); d=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$t" "$s0")
              steps="$steps$1"$'\t'"$d"$'\n'; s0=$t; last_step=$d; echo "land: step $1 $d s"; }
     W=$(git rev-parse --show-toplevel)
-    [ "$W" != "$MAIN" ] || { echo "land: run it in the batch's worktree, not the main tree — refusing"; exit 1; }
-    [ "$br" != "$MARCH" ] || { echo "land: $br is the march branch — refusing"; exit 1; }
+    [ "$W" != "$MAIN" ] || { echo "land: run it in the batch's worktree, not the main tree — refusing"; exit 4; }
+    [ "$br" != "$MARCH" ] || { echo "land: $br is the march branch — refusing"; exit 4; }
     cd "$W"
-    [ -z "$(git status --porcelain)" ] || { echo "land: $W has uncommitted or untracked files — refusing"; git status --short | awk 'NR <= 10'; exit 1; }
+    [ -z "$(git status --porcelain)" ] || { echo "land: $W has uncommitted or untracked files — refusing"; git status --short | awk 'NR <= 10'; exit 4; }
     # the worktree's untracked Manifest.toml resolved for this Project.toml: a stale one names extensions
     # WasmTarget no longer has, and a package image built over it fails (A20P23)
     mc=$(bash dev/manifest_check.sh "$W") ||
-        { echo "land: $mc: julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 1; }
+        { echo "land: $mc: julia --project=. -e 'using Pkg; Pkg.resolve()' — refusing"; exit 4; }
     # every lane develops in a live Kaimon session (dev/kaimon_session.sh; dev/lane.sh makes the lane's
     # worktree a Kaimon project): a worktree with none refuses here, in a second, printing the call that
     # starts one (a CI checkout runs none)
-    ks=$(bash dev/kaimon_session.sh "$W") || { echo "land: $ks — refusing"; exit 1; }
+    ks=$(bash dev/kaimon_session.sh "$W") || { echo "land: $ks — refusing"; exit 4; }
     # L148's audit window, read by the ratchet's own program (dev/audit_window.sh) before the hold: the
     # march tip's last audit entry, the commits past its audited-through commit and this landing's,
     # at most 5; a full window refuses here, in a second, never after a gate run its ratchet refuses
@@ -393,11 +411,14 @@ land)
     if ! win=$(bash dev/audit_window.sh "$W" "origin/$MARCH" "$(git rev-list --count --no-merges "origin/$MARCH..HEAD")" HEAD); then
         read -r wsha wcount wcap wentries <<<"$win"
         if [ "$wsha" = - ] || [ "$wcount" -le "$wcap" ]; then
-            echo "land: origin/$MARCH's dev/AUDIT.md names no audited-through commit its head holds ($win) — refusing"; exit 1
+            echo "land: origin/$MARCH's dev/AUDIT.md names no audited-through commit its head holds ($win) — refusing"; exit 4
         fi
-        echo "land: the audit window is full ($wcount commits past ${wsha:0:8}, this one included, at most $wcap: L148): wait for audit #$((wentries + 1)) — refusing"; exit 1
+        echo "land: the audit window is full ($wcount commits past ${wsha:0:8}, this one included, at most $wcap: L148): wait for audit #$((wentries + 1)) — refusing"; exit 5
     fi
     step preflight
+    # LAND_PREFLIGHT_ONLY=1: the preflight alone, its refusals exiting 4 (5 on a full audit window), 0
+    # when it passes; `land wait` polls it after a refusal before it queues the lane again (A35E1)
+    [ "${LAND_PREFLIGHT_ONLY:-}" != 1 ] || { echo "land: the preflight passes"; exit 0; }
     # the hold, the machine's one (the agents' scheduler reads this file alone, and the orchestrator's
     # hold is this file with owner 0): one landing at a time, and while it exists no other agent's
     # Julia job starts; created only if absent, with this shell's pid, removed only by it
@@ -405,7 +426,7 @@ land)
     # the landing queue (ledger D13): the hold goes only to the lane heading the queue, or to any lane
     # while it is empty; a lane queues itself with `bash dev/land.sh wait`, which lands it at its turn
     qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br") ||
-        { echo "land: $qmsg — refusing (\`bash dev/land.sh wait\` queues $br and lands it at its turn)"; exit 1; }
+        { echo "land: $qmsg — refusing (\`bash dev/land.sh wait\` queues $br and lands it at its turn)"; exit 4; }
     # the landing pops its own line from the queue whatever its end, its turn spent
     release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"
                 bash "$W/dev/land_queue.sh" "$QUEUE" "$HOLD" pop "$br" >/dev/null 2>&1 || true; return 0; }
@@ -446,6 +467,7 @@ land)
         if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ]; then
             echo "land: the rebase onto $MARCH ${tip:0:8} stopped on a conflict in:"
             git diff --name-only --diff-filter=U | sed 's/^/  /'
+            qlog "$br $(git rev-parse --short=8 HEAD) turn ended: the rebase onto $MARCH ${tip:0:8} stopped on a conflict in $(git diff --name-only --diff-filter=U | tr '\n' ' ')"
             git rebase --abort
             echo "land: $br is as it was: rebase it onto $MARCH, resolve, and land again"; exit 1
         fi
@@ -535,7 +557,8 @@ land)
                cold_green=1
            fi
            break ;;
-        1) echo "land: the gate is red and its record stands: fix it in a new commit, then land again"; exit 1 ;;
+        1) qlog "$br $(git rev-parse --short=8 HEAD) turn ended: the gate is red, its record $(sed -n 's/^BLOCK .*→ \(dev\/\.block\/.*\.toml\)$/\1/p' "$glog" | tail -1) standing"
+           echo "land: the gate is red and its record stands: fix it in a new commit, then land again"; exit 1 ;;
         3) if [ $busy_again -eq 0 ]; then
                busy_again=1; echo "land: no verdict: the gate once more after 20 s"; sleep 20
            else
