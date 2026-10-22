@@ -3036,3 +3036,73 @@ Landing times (edit to landed; own, queue): b3e0b602 2705 s (169.5, 2535.5); 3b3
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A34S1, A34S3 and A34S4 are open on
 MARCH 1.S. A34S2, A34E1, A34E2, A34E3, A34E4, A34E5, A34E6 and A34E7 are open on MARCH 1.L.
+
+## 2026-10-22 — audited through acee85e0 (30654e4b..acee85e0: entry 34, audit 34's four holes closed, src progress, warm gates, the landing queue)
+
+The thirty-fifth audit covers 3451859d (entry 34; its author's), 5582a4f1 (L219 unwraps a UnionAll; a lazy group is one
+key, `<group>/*`; `<corpus>:*` only when the corpus empties; the legacy freeze holds once any commit of the tip's
+history touched legacy/; Fixes: A34S1 A34S2 A34E1 A34E2; landed by the lead), 0d87ec4e (D40 and L208: the rebuild's src
+progress printed after every landing, dev/src_progress.sh; `Charter-change: C0 authorised by Dale 2026-10-21`),
+edf2327b (the runner stays up 120 idle minutes; a check counts warm only after a finished run; `land warm`; each
+landing's gate_state; the warm bests re-recorded by two median-of-three updates, A32E2) and acee85e0 (one landing
+queue, dev/land_queue.sh and the main tree's dev/.loop/QUEUE: the hold goes to the head or to anyone while it is empty,
+`land wait` lands a lane at its turn, a head that takes no free hold within 300 s is skipped; dev/manifest_check.sh).
+No wrong answer: the rebuild compiles nothing yet. Each landed head's record is green. A34S1, A34S2, A34E1 and A34E2
+are fixed as 5582a4f1 states; A34S1's fix measured in this lane's Kaimon session (e1d51284) on acee85e0's tree:
+`abstract type Open{T} end` in a module now refuses ("Main.Probe5.Open is an abstract type that is neither a
+registered construction nor a dart abstract class's mirror"). A32E2 is fixed by edf2327b's re-recorded bests (its
+message names the ID without a `Fixes:` line). A34S4 stays open, as 5582a4f1 says. One red flag: A35S1. Findings
+A35S1 and A35E1-A35E5.
+
+Area: builder — empty by diff: src/ holds no builder yet.
+
+Area: collection and planning — empty by diff.
+
+Area: emission and diagnostics — 5582a4f1's src/julia/construction.jl: check_no_open_abstract unwraps a UnionAll
+binding before it asks whether the type is abstract, so every abstract type a module binds is walked; its plants gain
+the parametric case.
+
+stopgap in disguise: L219 is a construction for the parametric case now; its docstring exemption is still a regex
+over text (A34S4, 1.A3). (A35S1, medium, red flag) 0d87ec4e's progress line counts text, and setup passes for
+building on it, the thing D40 forbids. dev/src_progress.sh counts `grep -rho 'parity(' src`: on acee85e0's tree its
+"5 parity( anchors under src/" are three `parity(quarantine: …)` comments (construction.jl:6, reject.jl:5,
+entry.jl:3) and two mentions of the anchor's form in a docstring and an error string (construction.jl:67, :83). Not one
+is a dart definition ported. The fix: the progress line counts dart anchors on definitions, `parity(<file>.dart:<line>
+<Symbol>)`, apart from quarantines and with prose excluded, read from the @parity registry once 1.A3 lands; until then
+it says "0 dart definitions ported".
+precedent: check_no_open_abstract, dart's sealed class against its open abstract class and Rust's enum against a
+trait, with Julia's parametric abstract types unwrapped as Julia binds them. The landing queue: bors and GitHub's merge
+queue, one total order, as its message names; it differs in running on one machine's files with a stale-head skip
+where bors has a CI timeout.
+
+Area: enforcement and prose — every hunk of 5582a4f1 (dev/MARCH.md, dev/block.jl, dev/land.sh, test/lock_negatives.jl,
+test/parity_ratchet.jl), 0d87ec4e (AGENTS.md, dev/CHARTER.md, dev/LEDGER.md, dev/land.sh, dev/src_progress.sh,
+test/parity_ratchet.jl), edf2327b (dev/block_runner.jl, dev/land.sh, dev/timing_best.toml, test/lock_negatives.jl,
+test/parity_ratchet.jl), acee85e0 (dev/LEDGER.md, dev/land.sh, dev/land_queue.sh, dev/lane.sh, dev/manifest_check.sh,
+test/lock_negatives.jl, test/parity_ratchet.jl), the landing log and the gate records. The queue, audited for
+wait-cycles and a dropped landing, as the lead asked. Sound: every read and write holds the queue's lock (a directory
+holding its owner's pid, taken over from a dead one); the head's clock restarts whenever the head changes or the hold
+is held, the orchestrator's owner-0 hold included, so a head waiting on a busy machine is never skipped; a lane is
+queued once; `may` and the hold's check read one file. (A35E1, medium, a wait-cycle back) `land`'s preflight refusals
+run before the queue's trap is set (land.sh, in `land`: the dirty tree, the Manifest, the Kaimon session and the audit
+window refuse with `exit 1` before `trap release EXIT`), and `wait` `exec`s `land`, so a head refused in its preflight
+is neither popped nor watched: it holds the head until the 300-s clock skips it. With the audit window full, every
+non-audit head is refused there, and the audit entry that would empty the window queues behind them all, so it lands
+only after each is skipped, about 300 s apiece: the wait-cycle the queue removes, returned as a stall. The fix: `wait`
+runs `land` as a child and acts on its exit (pops on a refusal it cannot outwait, re-queues on the audit window), and
+a commit that adds the next audit entry goes to the head, since every refused lane waits on it. (A35E2, low) A turn
+that ends after the trap (a red gate, a rebase conflict, a charter refusal) pops the lane by design, and nothing
+re-queues it, since its `wait` became `land`; the lane learns it only from that run's output. A refused landing's
+re-queue is the lane's to make, and no line in dev/.loop/QUEUE.log records it. (A35E3, low) A33E3's race is narrowed,
+not ended: edf2327b keeps the runner 120 idle minutes, so the idle stop now fires only after two idle hours, but a
+stage that reaches no server still counts as a failed check rather than no verdict, the second half of A33E3's fix.
+(A35E4, low) edf2327b carries a second, indented Co-Authored-By trailer, the third such (A32E1, A34E5). (A35E5, low)
+Kaimon: 5582a4f1 measured "in a fresh process" after the Kaimon rule; 0d87ec4e and edf2327b measured in their lanes'
+Kaimon sessions; acee85e0 replayed in bash. Requirements: D13 names the queue among its checks; D40 has its check
+(L208), whose count is A35S1's; no lock fired inside its band.
+
+Landing times (edit to landed; own, queue): 5582a4f1 195 s (37.7, 157.3); 0d87ec4e 2428 s (22.5, 2405.5); edf2327b
+4685 s (35.6, 4649.4); acee85e0 2563 s (33.3, 2529.7).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A35S1 is open on MARCH 1.S. A35E1,
+A35E2, A35E3, A35E4 and A35E5 are open on MARCH 1.L.
