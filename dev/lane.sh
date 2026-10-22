@@ -62,7 +62,7 @@ depot)
     # an existing lane's private depot and its Kaimon session's julia (a lane made before dev/depot.sh)
     [ -d "$WT" ] || { echo "lane: no worktree $WT — refusing"; exit 1; }
     JULIA_BIN=$(bash "$WT/dev/depot.sh" julia "$WT") projects add
-    echo "lane: $WT compiles into $WT/.wtd/depot; restart its Kaimon session to take the julia $WT/.wtd/julia"
+    echo "lane: $WT compiles into $WT/.wtd/depot; shut its Kaimon session down and start a new one to take the julia $WT/.wtd/julia (a restart keeps the old julia)"
     ;;
 stop)
     projects remove

@@ -1,0 +1,37 @@
+# dev/skeleton_scope.toml — the dart files of dart2wasm and wasm_builder at the pin that are out of the
+# rebuild's scope, each with its reason (dev/skeleton.jl reads it; dev/MARCH.md 1.A4). The in-scope files
+# are src/julia/parity.jl's DART_FILES, the one list; together the two name every dart file of both
+# packages, a key being the path under the sdk's pkg/.
+
+[out]
+"dart2wasm/lib/async.dart" = "tasks are out of scope: Julia's verifier rejects them (1.F)"
+"dart2wasm/lib/await_transformer.dart" = "tasks are out of scope: Julia's verifier rejects them (1.F)"
+"dart2wasm/lib/dart2wasm.dart" = "the command-line driver; WT is a library"
+"dart2wasm/lib/deferred_load/dependencies.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/deferred_load/devirtualization_oracle.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/deferred_load/dominators.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/deferred_load/import_set.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/deferred_load/partition.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/deferred_loading.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/dry_run.dart" = "WT's dry run is Julia's trim verifier (src/julia/subset.jl)"
+"dart2wasm/lib/factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
+"dart2wasm/lib/ffi_native_address_transformer.dart" = "dart:ffi; ccall is a quarantined host import (1.F)"
+"dart2wasm/lib/ffi_native_transformer.dart" = "dart:ffi; ccall is a quarantined host import (1.F)"
+"dart2wasm/lib/io_util.dart" = "the command-line driver; WT is a library"
+"dart2wasm/lib/js/callback_specializer.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
+"dart2wasm/lib/js/inline_expander.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
+"dart2wasm/lib/js/interop_specializer.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
+"dart2wasm/lib/js/interop_transformer.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
+"dart2wasm/lib/js/util.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
+"dart2wasm/lib/list_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
+"dart2wasm/lib/map_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
+"dart2wasm/lib/modules.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
+"dart2wasm/lib/option.dart" = "the command-line driver; WT is a library"
+"dart2wasm/lib/reference_extensions.dart" = "Kernel Reference tear-off and getter variants; a MethodInstance names one callable"
+"dart2wasm/lib/set_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
+"dart2wasm/lib/state_machine.dart" = "tasks are out of scope: Julia's verifier rejects them (1.F)"
+"dart2wasm/lib/sync_star.dart" = "tasks are out of scope: Julia's verifier rejects them (1.F)"
+"dart2wasm/lib/transformers.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
+"dart2wasm/lib/wasm_library_checks.dart" = "WT's dry run is Julia's trim verifier (src/julia/subset.jl)"
+"wasm_builder/lib/src/serialize/deserializer.dart" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
+"wasm_builder/lib/src/serialize/printer.dart" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"

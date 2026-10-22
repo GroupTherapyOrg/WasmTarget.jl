@@ -10,8 +10,10 @@
 #
 # Until legacy/ exists, src/ is still WT1's (1.A2c moves it), so the rebuild's src counts none and
 # every landing since the rebuild began (REBUILD_START) is a src-less one. An anchored definition is
-# an @parity entry, a ported one an entry that is no @unported stub; the in-scope total of dart
-# definitions is 1.A4's generator's to define; the line names it once it exists.
+# a dart definition an @parity entry names (several Julia definitions may name one: a struct and its
+# constructor), a ported one a definition some entry fills, no @unported stub; dev/skeleton.jl
+# anchors every in-scope definition of each dart file src loads (its `diff`), so the anchored count
+# is those files' total.
 # Intent: a status leads with src progress, so setup never passes for building. Band: from the
 # NOTE_AFTER-th consecutive landing that changes nothing under src/, a note, never a failure.
 set -euo pipefail
@@ -29,7 +31,7 @@ else
         . dev/depot.sh; wt_depot_export "$PWD"
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
             e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
-            println(length(e), " ", count(x -> x.ported, e))') ||
+            println(length(unique(x.anchor for x in e)), " ", length(unique(x.anchor for x in e if x.ported)))') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
         read -r anchored ported <<< "$counts"
         last=$(git log -1 --format=%H -- src)
@@ -38,7 +40,7 @@ else
     fi
     since=$(git rev-list --count --no-merges "$last"..HEAD)
 fi
-line="src: $ported of $anchored anchored dart definitions ported (the in-scope total: 1.A4's, not yet defined); $since landing(s) since src/ last changed"
+line="src: $ported of $anchored anchored dart definitions ported (every definition of each dart file src loads, dev/skeleton.jl); $since landing(s) since src/ last changed"
 [ $started -eq 1 ] || line="$line (the rebuild's src/ not started: WT1 holds src/ until 1.A2c)"
 echo "$line"
 if [ "$since" -ge "$NOTE_AFTER" ]; then

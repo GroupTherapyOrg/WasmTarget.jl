@@ -58,6 +58,10 @@ _wt_qa_include("late.jl")
 _wt_qa_include("depot_isolation.jl")
 # the closed world's classes in program order, each supertype chain Julia's (src/julia/classes.jl, 1.C)
 _wt_qa_include("classes.jl")
+# src/wasm_builder's byte writer and source map write the bytes and mappings the formats specify
+_wt_qa_include("wasm_builder/serializer.jl")
+# dart's `late final` field: assigned once, read after (src/julia/late.jl)
+_wt_qa_include("late.jl")
 # the charter's checks (dev/CHARTER.md): every lock at 0, every ratchet at most its baseline
 if _wt_qa("parity_ratchet.jl")
     _wt_ratchet_t0 = time()

@@ -16,3 +16,5 @@ dev/depot.sh	-	depot_isolation.jl	-
 src/	-	-	-
 src/julia/late.jl	-	late.jl	-
 src/julia/classes.jl	-	classes.jl	-
+src/julia/late.jl	-	late.jl	-
+src/wasm_builder/	-	wasm_builder/serializer.jl	-
