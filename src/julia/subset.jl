@@ -79,10 +79,14 @@ numbers them.
 end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
-# constructor method, both in this file, ClosedWorld's taking the token, and no method of WasmTarget
-# but check_subset names the token or makes either (A36S3)
+# constructor method, both in this file, ClosedWorld's taking the token (a construction, L220)
 @quarantine "the typestate's assertion, run when the package loads" Base.methods construction_check(::Val{:ClosedWorld})::Int =
-    check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
+    check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__)
+
+# no method of WasmTarget but check_subset names the token or makes either: read in every method's
+# lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module
+# privacy, so the wrong choice stays writable and this read finds it (A36S3, A37S1, A38)
+@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.uncompressed_ast check_closed_world_makers()::Int =
     check_sole_maker(Base.moduleroot(@__MODULE__), ClosedWorld, _SubsetToken, (only(methods(check_subset)),),
-                     (which(construction_check, Tuple{Val{:ClosedWorld}}),),
+                     (which(check_closed_world_makers, Tuple{}), which(construction_check, Tuple{Val{:ClosedWorld}})),
                      (joinpath(@__DIR__, "parity.jl"), joinpath(@__DIR__, "construction.jl")))

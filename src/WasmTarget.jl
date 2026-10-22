@@ -21,6 +21,7 @@ construction_check(Val(:parity))
 construction_check(Val(:quarantine))
 construction_check(Val(:check_no_open_abstract))
 construction_check(Val(:ClosedWorld))
+check_closed_world_makers()   # a stopgap read of lowered code (L224), run at load all the same
 construction_check(Val(:NirValue))
 construction_check(Val(:NirStmt))
 

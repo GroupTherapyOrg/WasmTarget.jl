@@ -91,7 +91,9 @@ with the per-clause status. A clause is never closed by argument.
   result; every rejection is attributed to its statement with the inline chain innermost-first.
   `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load).
   `L220` (the strict subset's typestate: every stage after Julia's trim verifier takes the
-  ClosedWorld only check_subset makes, its sole constructor checked at load).
+  ClosedWorld only a holder of its token makes, its sole constructor checked at load) `L224` (no
+  method of WasmTarget but check_subset makes one, a stopgap read of lowered code, Julia having no
+  module privacy).
   Legacy (retired with the switch): L8 L15 L18 L19 L37 L38 L39 L48 L51 L58 L60 L63 L64 L66 L71
   L72 L73 L75 L76 L78 L79 L85 L89 L90 L93 L96 L101 L118 L119 L127 L135 L139 L146 L147 L156 R34
   R39.

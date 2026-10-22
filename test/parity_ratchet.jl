@@ -253,7 +253,7 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     # the file map, the anchors and the quarantine (C2): src/julia/parity.jl
     "L210" => (:construction, "include_dart"), "L211" => (:construction, "parity"), "L212" => (:construction, "quarantine"),
     # the strict subset's typestate (C6, dev/MARCH.md 1.A7): src/julia/subset.jl
-    "L220" => (:construction, "ClosedWorld"),
+    "L220" => (:construction, "ClosedWorld"), "L224" => (:stopgap, ""),
     # NIR's closed sums (C5, dev/MARCH.md 1.A10): src/julia/nir.jl
     "L221" => (:construction, "NirStmt"), "L222" => (:construction, "NirValue"),
 )
@@ -353,37 +353,43 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         refuses(() -> sole(good.W, good.Tok, "/plant/src/julia/elsewhere.jl")) || push!(out, "negative missed: a constructor defined in another file passes")
         local tok2 = plant(base * "Tok(::Int) = Tok()\n")
         refuses(() -> sole(tok2.W, tok2.Tok, f)) || push!(out, "negative missed: a token with a second constructor passes")
-        # A36S3, A37S1: no method of the package but the maker's one method names the token or makes a W,
-        # read in lowered code; code a lowered read cannot see is refused outright
-        local maker = getfield(wt, :check_sole_maker)
-        local mk = base * "make(x::Int)::W = W(Tok(), x)\nuse(w::W)::Int = w isa W ? (w::W).x : 0\n"
-        local chk(p_) = maker(p_, p_.W, p_.Tok, (only(methods(p_.make)),), (), ())
-        local clean = plant(mk)
-        passes(() -> chk(clean)) || push!(out, "negative missed: a package whose maker alone makes a W, its other methods naming W as a type only, fails")
-        for (what, code) in [
-                ("a method beside the maker that calls the token and makes a W", "sneak()::W = W(Tok(), 1)\n"),
-                ("a method naming the token outside the maker", "tok() = Tok\n"),
-                ("a :splatnew of W made at run time", "spl() = Core.eval(@__MODULE__, Expr(:splatnew, W, (1,)))\n"),
-                ("a jl_new_struct foreigncall", "cc() = ccall(:jl_new_struct, Any, (Any, Any...), W, 1)\n"),
-                ("the token found by a computed name", "comp() = getfield(@__MODULE__, Symbol(\"To\", \"k\"))()\n"),
-                ("an @generated method", "@generated gen() = Expr(:new, W, 1)\n"),
-                ("an eval in the package's code", "ev() = Core.eval(@__MODULE__, :(1))\n")]
-            local p_ = try; plant(mk * code); catch; nothing; end
-            p_ === nothing && (push!(out, "negative plant failed to load: $what"); continue)
-            refuses(() -> chk(p_)) || push!(out, "negative missed: $what passes (A37S1)")
-        end
-        # the maker is its one Method, captured before a second method joins its function (A37S1)
-        local two = plant(mk)
-        local m1 = only(methods(two.make))
-        Base.include_string(two, "make(x::String)::W = W(Tok(), 2)\n", f)
-        refuses(() -> maker(two, two.W, two.Tok, (m1,), (), ())) || push!(out, "negative missed: a second method added to the maker's function passes (A37S1)")
-        # a :splatnew in lowered code, read directly
-        Base.invokelatest(getfield(wt, :_makes), Expr(:splatnew, clean.W, :t), clean.W, clean.Tok, Any[]) || push!(out, "negative missed: a :splatnew of W in lowered code is not read as making a W")
     elseif definition in (:include_dart, :parity, :quarantine)
         append!(out, parity_negatives_missed(wt, definition, refuses, passes))
     else
         push!(out, "the construction $definition has no plants in construction_negatives_missed")
     end
+    return out
+end
+
+# L224's negative: plants written as real methods, whose lowered code is what Julia produces, each
+# making a W or reaching the token by another road than the maker (A36S3, A37S1, A38), and a clean
+# package passed; the maker is its one Method, captured before a second method joins its function
+function closed_world_makers_negatives_missed(wt::Module)::Vector{String}
+    local out = String[]
+    local V = getfield(wt, :ConstructionViolation)
+    local maker = getfield(wt, :check_sole_maker)
+    local base = "struct Tok; Tok() = new(); end\nstruct W; x::Int; W(::Tok, x::Int) = new(x); end\nmake(x::Int)::W = W(Tok(), x)\nuse(w::W)::Int = w isa W ? (w::W).x : 0\n"
+    local plant(extra, defs) = (m = Module(:MakersPlant); Base.include_string(m, base * extra, "/plant/src/julia/makers.jl"); foreach(d -> Core.eval(m, d), defs); m)
+    local verdict(m, mk) = try; Base.invokelatest(maker, m, Base.invokelatest(getglobal, m, :W), Base.invokelatest(getglobal, m, :Tok), (mk,), (), ()); :passes; catch e; e isa V ? :refused : :other; end
+    local clean = plant("", Expr[])
+    verdict(clean, only(methods(Base.invokelatest(getglobal, clean, :make)))) === :passes || push!(out, "negative missed: the maker alone making a W, W named as a type elsewhere, fails")
+    for (what, extra, defs) in [
+            ("a call of the token and W beside the maker", "s() = W(Tok(), 1)\n", Expr[]),
+            ("M.W(M.Tok(), ...), lowered as getproperty", "a() = (@__MODULE__).W((@__MODULE__).Tok(), 1)\n", Expr[]),
+            ("getfield with literal names", "b() = getfield(@__MODULE__, :W)(getfield(@__MODULE__, :Tok)(), 1)\n", Expr[]),
+            ("eval splatted through _apply_iterate", "c() = Core.eval((@__MODULE__, :(W(Tok(), 1)))...)\n", Expr[]),
+            ("eval as invokelatest's argument", "d() = Base.invokelatest(Core.eval, @__MODULE__, :(W(Tok(), 1)))\n", Expr[]),
+            ("the token by a computed name", "e() = getfield(@__MODULE__, Symbol(\"To\", \"k\"))()\n", Expr[]),
+            ("a jl_new_struct foreigncall", "f() = ccall(:jl_new_struct, Any, (Any, Any...), W, 1)\n", Expr[]),
+            ("a real :new, its type in its own statement", "", [:(g() = $(Expr(:new, :W, 1)))]),
+            ("a real :splatnew", "", [:(h(t) = $(Expr(:splatnew, :W, :t)))])]
+        local m = plant(extra, defs)
+        verdict(m, only(methods(Base.invokelatest(getglobal, m, :make)))) === :refused || push!(out, "negative missed: $what passes")
+    end
+    local two = plant("", Expr[])
+    local m1 = only(methods(Base.invokelatest(getglobal, two, :make)))
+    Base.include_string(two, "make(x::String)::W = W(Tok(), 2)\n", "/plant/src/julia/makers.jl")
+    verdict(two, m1) === :refused || push!(out, "negative missed: a second method added to the maker's function passes")
     return out
 end
 
@@ -2549,8 +2555,16 @@ const LOCKS = [
         ConstructionLock(:NirStmt)),
     "L222_nir_operands_a_closed_sum" => ("NIR's operands are a closed sum of Julia's optimized IR operand forms by construction (dev/MARCH.md 1.A10): src/julia/nir.jl's `NirValue` is a `Union` of NirSSA, NirArgument, NirGlobal and NirConst, a literal held as Julia's own `Core.Const`, that subtype nothing, every kind handled by value_form and no other type; construction_check(::Val{:NirValue}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed, as L221's) (dev/CHARTER.md C5)",
         ConstructionLock(:NirValue)),
-    "L220_closed_world_typestate" => ("every stage after the strict subset's check takes the ClosedWorld Julia's trim verifier accepted, by construction (dev/MARCH.md 1.A7, ledger D32: the subset is Julia's verifier's, never bypassed): src/julia/subset.jl's ClosedWorld has one constructor method, which takes the token _SubsetToken, and the token one constructor method, both defined in subset.jl, so only check_subset makes a ClosedWorld and compile's next stage, compile_world, takes it; construction_check(::Val{:ClosedWorld}) asserts it when WasmTarget loads (check_sole_constructor, by reflection over both method tables; and check_sole_maker, reading every WasmTarget method's lowered code: no method but check_subset's one Method names the token, calls ClosedWorld or makes either with :new or :splatnew or through a jl_new_struct foreigncall, matched by identity, dev/AUDIT.md A36S3, A37S1; and outside the reflection files (parity.jl, construction.jl) no @generated method, eval, include or module lookup by a computed name, the code a lowered read cannot see, A37S1; package extensions lie outside the package's module and the claim; Julia has no module privacy, so the guarantee covers WasmTarget's own code, never a caller outside the package), and this lock only calls it, with its plants (construction_negatives_missed: a second constructor, a constructor taking no token, a constructor defined in another file and a token with a second constructor each refused, a sole constructor taking the file's token passed; a method beside the maker that makes a W and one that names the token each refused, the maker alone with W named as a type elsewhere passed) (dev/CHARTER.md C6)",
+    "L220_closed_world_typestate" => ("every stage after the strict subset's check takes the ClosedWorld Julia's trim verifier accepted, by construction (dev/MARCH.md 1.A7, ledger D32): src/julia/subset.jl's ClosedWorld has one constructor method, which takes the token _SubsetToken, and the token one constructor method, both defined in subset.jl, so compile's next stage, compile_world, takes a ClosedWorld only a holder of the token makes; construction_check(::Val{:ClosedWorld}) asserts it when WasmTarget loads (check_sole_constructor, by reflection over both method tables), and this lock only calls it, with its plants (construction_negatives_missed: a second constructor, a constructor taking no token, a constructor defined in another file and a token with a second constructor each refused, a sole constructor taking the file's token passed). Who may call the constructor is no construction in Julia, which has no module privacy: L224 reads it, a stopgap (dev/CHARTER.md C6)",
         ConstructionLock(:ClosedWorld)),
+    "L224_closed_world_makers" => ("no method of WasmTarget but check_subset names _SubsetToken or makes a ClosedWorld, read in every method's lowered code when the package loads (check_closed_world_makers, check_sole_maker: each operand resolved to its binding through SSA statements, getproperty and getfield of a module; a call of ClosedWorld, a :new or :splatnew of either, a jl_new_struct foreigncall; outside WasmTarget's reflection files, an @generated method, an eval, include_string or include in any operand position, or a module lookup by a computed name refuses the load; the maker matched as its one Method). A stopgap by its kind, never a construction: Julia has no module privacy, so the wrong choice stays writable and this read finds it, and package extensions lie outside it (dev/AUDIT.md A36S3, A37S1, A38). Behavior: closed_world_makers_negatives_missed plants ten roads past the maker as real methods, each refused, and a clean package passed (dev/CHARTER.md C6)",
+        () -> begin
+            local wt = Base.require(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget"))
+            local v = vcat(Base.invokelatest(getfield(wt, :check_closed_world_makers)) == 0 ? String[] : ["check_closed_world_makers is not 0"],
+                           closed_world_makers_negatives_missed(wt))
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
     "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\")` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): the path a key of the pin table DART_FILES, loaded once from src/<path>.jl, and when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed) (dev/CHARTER.md C2)",
         ConstructionLock(:include_dart)),
     "L211_anchor" => ("every definition outside src/julia carries `@parity \"<file>.dart:<line> <Symbol>\"`, the dart definition it copies at the pin (Dale: dart2wasm 1:1 through and through, dev/LEDGER.md D1): the macro refuses, at the definition's line, an anchor not of that form or whose file is no key of DART_FILES, a file in src/julia or one include_dart did not load, and a Julia name other than the one rule's (snake), and expands `@unported` into a body rejecting with the anchor; when WasmTarget has loaded, every method it defines outside src/julia lies in an @parity's span in its file and every binding it owns is a marked definition's, by reflection over the method table and the bindings; construction_check(::Val{:parity}) asserts it (check_parity), and this lock only calls it, with its plants (an unmarked method, an unmarked binding, an anchor outside the pin table or with no line, a name not the rule's, @parity in src/julia or in a file include_dart did not load, @unported outside @parity or with a body each refused; marked definitions passed and an @unported stub rejecting with its anchor; the snake rule) (dev/CHARTER.md C2)",

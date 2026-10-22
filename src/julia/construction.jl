@@ -85,22 +85,48 @@ by reflection over their method tables when the package loads.
     return 0
 end
 
-# whether a lowered statement, or any expression inside it, makes a `T` or names `token`: a GlobalRef
-# resolving to `token` anywhere, a call whose callee resolves to `T`, a `:new` or `:splatnew` of `T` or
-# `token`, or a foreigncall of Julia's runtime struct constructors (jl_new_struct, jl_new_structv,
-# jl_new_structt), which make any struct (naming `T` as a type, in an annotation or an `isa`, makes
-# nothing) (A36S3, A37S1)
-@quarantine "a lowered statement's references are its GlobalRefs, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.GlobalRef function _makes(x, T::DataType, token::DataType, code::Vector{Any})::Bool
-    local is(g, b) = (g isa GlobalRef && isdefined(g.mod, g.name) && getglobal(g.mod, g.name) === b) || g === b
-    if x isa GlobalRef
-        return is(x, token)
-    elseif x isa Expr
-        (x.head === :new || x.head === :splatnew) && !isempty(x.args) && (is(x.args[1], T) || is(x.args[1], token)) && return true
-        x.head === :call && !isempty(x.args) && is(_resolve(code, x.args[1]), T) && return true
-        x.head === :foreigncall && !isempty(x.args) && _ccall_name(x.args[1]) in (:jl_new_struct, :jl_new_structv, :jl_new_structt) && return true
-        return any(a -> _makes(a, T, token, code), x.args)
+# the binding a lowered operand refers to: a GlobalRef's value, an SSAValue's defining statement read the
+# same way, or `getproperty(M, :x)` / `getfield(M, :x)` of a module `M` read as `M.x`; `nothing` for
+# anything else (A38: lowering spells `M.x` as a getproperty call and puts each callee or type in its
+# own statement)
+@quarantine "lowered code refers to bindings by GlobalRef, SSAValue and module property, Julia's lowered IR" Core.GlobalRef function _binding(code::Vector{Any}, x, depth::Int=0)::Any
+    depth > 32 && return nothing
+    x isa Core.SSAValue && return _binding(code, code[x.id], depth + 1)
+    x isa GlobalRef && return isdefined(x.mod, x.name) ? getglobal(x.mod, x.name) : nothing
+    x isa Module && return x
+    if x isa Expr && x.head === :call && length(x.args) == 3 && x.args[3] isa QuoteNode && x.args[3].value isa Symbol
+        local f = _binding(code, x.args[1], depth + 1)
+        if f === getproperty || f === getfield || f === getglobal
+            local m = _binding(code, x.args[2], depth + 1)
+            m isa Module && isdefined(m, x.args[3].value) && return getglobal(m, x.args[3].value)
+        end
     end
-    return x === token
+    return nothing
+end
+
+# whether lowered `code` makes a `T` or reaches `token`: a statement whose binding is `token` (by
+# GlobalRef, `M.x` or getfield), a call whose callee's binding is `T`, a `:new` or `:splatnew` whose
+# type's binding is `T` or `token`, or a foreigncall of Julia's runtime struct constructors
+# (jl_new_struct, jl_new_structv, jl_new_structt) (A36S3, A37S1, A38); naming `T` as a type makes nothing
+@quarantine "a lowered body's makers are its bindings, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.SSAValue function _code_makes(code::Vector{Any}, T::DataType, token::DataType)::Bool
+    local walk(x) = if x isa Expr
+        if (x.head === :new || x.head === :splatnew) && !isempty(x.args)
+            local t = _binding(code, x.args[1])
+            (t === T || t === token) && return true
+        elseif x.head === :call && !isempty(x.args)
+            _binding(code, x.args[1]) === T && return true
+        elseif x.head === :foreigncall && !isempty(x.args)
+            _ccall_name(x.args[1]) in (:jl_new_struct, :jl_new_structv, :jl_new_structt) && return true
+        end
+        any(walk, x.args)
+    else
+        false
+    end
+    for st in code
+        _binding(code, st) === token && return true
+        walk(st) && return true
+    end
+    return false
 end
 
 # a foreigncall's function name in lowered code: a quoted symbol, or the first of a (name, library) tuple
@@ -108,40 +134,29 @@ end
     x isa QuoteNode && x.value isa Symbol && return x.value
     x isa Symbol && return x
     x isa Expr && x.head === :tuple && !isempty(x.args) && return _ccall_name(x.args[1])
-    x isa Expr && x.head === :call && length(x.args) >= 2 && return _ccall_name(x.args[2])   # tuple(name, lib) as a call
+    x isa Expr && x.head === :call && length(x.args) >= 2 && return _ccall_name(x.args[2])
     return :none
 end
 
-# a lowered operand's value as the statement that defines it: lowered code computes a callee in its own
-# statement and refers to it by SSAValue
-@quarantine "lowered code refers to an earlier statement's value by SSAValue, Julia's lowered IR" Core.SSAValue _resolve(code::Vector{Any}, x) = x isa Core.SSAValue ? code[x.id] : x
-
-# the name a lowered call's callee resolves to: a GlobalRef's name, or `n` of `getproperty(M, :n)`
-@quarantine "a lowered callee is a GlobalRef or a property of a module, Julia's lowered IR" Core.GlobalRef function _callee_name(code::Vector{Any}, f)::Symbol
-    local r = _resolve(code, f)
-    r isa GlobalRef && return r.name
-    r isa Symbol && return r
-    if r isa Expr && r.head === :call && length(r.args) >= 3 && _callee_name(code, r.args[1]) in (:getproperty, :getfield) && r.args[3] isa QuoteNode
-        return r.args[3].value isa Symbol ? r.args[3].value : :none
-    end
-    return :none
-end
-
-# whether a lowered statement escapes what a lowered-code read can see: a call of eval, include_string
-# or include (code made at run time), or a lookup in a module by a computed name (getfield, getglobal or
-# getproperty of a module with a name that is no literal symbol) (A37S1)
-@quarantine "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.eval function _escapes(x, code::Vector{Any})::Bool
-    x isa Expr || return false
-    if x.head === :call && !isempty(x.args)
-        local fname = _callee_name(code, x.args[1])
-        fname in (:eval, :include_string, :include) && return true
-        if fname in (:getfield, :getglobal, :getproperty) && length(x.args) >= 3
-            local m = _resolve(code, x.args[2])
-            local ismod = m isa Module || (m isa GlobalRef && isdefined(m.mod, m.name) && getglobal(m.mod, m.name) isa Module)
-            ismod && !(x.args[3] isa QuoteNode || x.args[3] isa Symbol) && return true
+# whether lowered `code` escapes what a read of it can see: any operand, callee or argument alike (a
+# splat lowers to Core._apply_iterate, invokelatest takes eval as an argument), whose binding is a
+# function named eval, include_string or include; or a getfield, getglobal or getproperty of a module
+# with a name that is no literal symbol (A37S1, A38)
+@quarantine "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.eval function _code_escapes(code::Vector{Any})::Bool
+    local evalish(b) = b isa Function && nameof(b) in (:eval, :include_string, :include)
+    local walk(x) = if x isa Expr
+        if x.head === :call && length(x.args) >= 3
+            local f = _binding(code, x.args[1])
+            if (f === getfield || f === getglobal || f === getproperty) && _binding(code, x.args[2]) isa Module &&
+               !(x.args[3] isa QuoteNode || x.args[3] isa Symbol)
+                return true
+            end
         end
+        any(a -> evalish(_binding(code, a)) || walk(a), x.args)
+    else
+        evalish(_binding(code, x))
     end
-    return any(a -> _escapes(a, code), x.args)
+    return any(walk, code)
 end
 
 """
@@ -176,8 +191,8 @@ loads; a caller outside the package can still reach the token, a limit of the la
         m in allowed && return
         isdefined(m, :source) || return   # no lowered source: a builtin's, naming nothing
         local code = Base.uncompressed_ast(m).code
-        any(st -> _makes(st, T, token, code), code) && push!(found, where_)
-        !in_reflection && any(st -> _escapes(st, code), code) && push!(escapes, where_)
+        _code_makes(code, T, token) && push!(found, where_)
+        !in_reflection && _code_escapes(code) && push!(escapes, where_)
     end
     isempty(found) || throw(ConstructionViolation(name, "made or its token named outside its makers: $(join(found, "; "))"))
     isempty(escapes) || throw(ConstructionViolation(name, "code a lowered read cannot see (@generated, eval, include, a module lookup by a computed name): $(join(escapes, "; "))"))
