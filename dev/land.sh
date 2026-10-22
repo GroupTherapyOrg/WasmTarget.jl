@@ -136,10 +136,18 @@ QUEUE="$MAIN/dev/.loop/QUEUE"
 # the red history (dev/block.jl writes a line per red run; git-ignored, kept when a worktree goes) and
 # the change's own red seconds over it (A33E4): over the history's lines sorted by start, those of the
 # change (field 3, its author time, author and subject) from its author time to this land's start, each
-# `own` line (field 4) its span to the next such line's start or the land's
+# `own` line (field 4) its span to the next such line's start or the land's, less every wait of the change
+# inside that span (A34E3): the wait history's spans (`land`'s wait for the hold, `wait`'s for its turn in
+# the queue), the waits file read first (ARGV[1]: start, end, the change), the sorted red history after
 REDS="$MAIN/dev/.loop/reds.tsv"
-OWN_RED_AWK='$3 == w && $1 + 0 >= au + 0 && $1 + 0 < ls + 0 { n++; s[n] = $1 + 0; k[n] = $4 }
-END { t = 0; for (i = 1; i <= n; i++) if (k[i] == "own") t += (i < n ? s[i + 1] : ls) - s[i]; printf "%.1f\n", t }'
+WAITS="$MAIN/dev/.loop/waits.tsv"
+OWN_RED_AWK='FILENAME == ARGV[1] { if ($3 == w) { m++; ws[m] = $1 + 0; we[m] = $2 + 0 } next }
+$3 == w && $1 + 0 >= au + 0 && $1 + 0 < ls + 0 { n++; s[n] = $1 + 0; k[n] = $4 }
+END { t = 0
+      for (i = 1; i <= n; i++) if (k[i] == "own") { a = s[i]; b = (i < n ? s[i + 1] : ls); d = b - a
+          for (j = 1; j <= m; j++) { lo = (ws[j] > a ? ws[j] : a); hi = (we[j] < b ? we[j] : b); if (hi > lo) d -= hi - lo }
+          t += d }
+      printf "%.1f\n", t }'
 # the landing log's last line, when its timing was judged red (SLOWER, OVER or FAILED, L198): its commit and timing
 OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) " " $11 }'
 # a red timing's debt (SLOWER, OVER) is lifted by the red landing's excuse file in the landing's own tree,
@@ -309,7 +317,7 @@ merge)
     own=$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1] - $ARGV[2] + $ARGV[3]' "$landed" "$start" "${LAND_HOLD_WAIT:-0}" "${LAND_OWN_RED:-0}")
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$(iso "$landed")" "$head" "$(iso "$author")" "$(iso "$start")" \
         "${LAND_GATE_RUNS:-0}" "${LAND_GATE_WALL:-0}" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$landed" "$start")" \
-        "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'printf "%.1f", $ARGV[0] - $ARGV[1]' "$e2l" "$own")" "${LAND_GATE_STATE:-fresh}" >> "$LOG"
+        "$e2l" "$files" "$ins" "$timing" "$own" "$(perl -e 'my $q = $ARGV[0] - $ARGV[1]; printf "%.1f", $q < 0 ? 0 : $q' "$e2l" "$own")" "${LAND_GATE_STATE:-fresh}" >> "$LOG"
     # the landing's one push is the march branch's, above: gate.yml runs the full matrix on it when its
     # head carries `Closes: C<n>` (no other ref is pushed, L153)
     echo "landed $br @ ${head:0:8} on $MARCH"
@@ -322,7 +330,7 @@ wait)
     [ "$W" != "$MAIN" ] || { echo "wait: run it in the lane's worktree, not the main tree — refusing"; exit 1; }
     cd "$W"
     bash dev/land_queue.sh "$QUEUE" "$HOLD" add "$br" "$(git rev-parse HEAD)"
-    last=""
+    last=""; qs=$(now)
     while ! qmsg=$(bash dev/land_queue.sh "$QUEUE" "$HOLD" may "$br" 2>&1); do
         case $qmsg in *"$br is not queued"*)
             echo "wait: $br left the queue (a stale head skipped): queued again at the tail"
@@ -332,6 +340,9 @@ wait)
         sleep 5
     done
     echo "wait: $br heads the landing queue: landing"
+    # the wait for its turn, in the wait history (A34E3): never the change's own time
+    mkdir -p "$(dirname "$WAITS")"
+    printf '%s\t%s\t%s\tqueue\n' "$qs" "$(now)" "$(git log -1 --format='%at %ae %s' HEAD)" >> "$WAITS"
     exec bash "$W/dev/land.sh" land
     ;;
 warm)
@@ -399,7 +410,7 @@ land)
     release() { [ "$(cut -d' ' -f1 "$HOLD" 2>/dev/null)" = "$$" ] && rm -f "$HOLD"
                 bash "$W/dev/land_queue.sh" "$QUEUE" "$HOLD" pop "$br" >/dev/null 2>&1 || true; return 0; }
     trap release EXIT
-    waited=0
+    waited=0; hs=$(now)
     until ( set -o noclobber; echo "$$ $(iso "$(now)") $br" > "$HOLD" ) 2>/dev/null; do
         owner=$(cut -d' ' -f1 "$HOLD" 2>/dev/null || true)
         if [ -n "$owner" ] && ! kill -0 "$owner" 2>/dev/null; then
@@ -409,8 +420,10 @@ land)
         waited=1; sleep 2
     done
     step hold
-    # the wait for another landing's hold: a queue wait, never the landing's own time (A30E1)
+    # the wait for another landing's hold: a queue wait, never the landing's own time (A30E1), its span in the
+    # wait history so a later attempt's own_s leaves it out too (A34E3)
     hold_wait=$last_step
+    printf '%s\t%s\t%s\thold\n' "$hs" "$(now)" "$(git log -1 --format='%at %ae %s' HEAD)" >> "$WAITS"
     git fetch -q origin
     tip=$(git rev-parse "$MARCH")
     git merge-base --is-ancestor "origin/$MARCH" "$tip" ||
@@ -570,7 +583,8 @@ land)
     # time, before this land: an `own` red counts from its start to the next attempt's (the fix), a
     # `queue` red (timing alone; the ratchet on L148 or L197 alone) counts as queue time
     want=$(git log -1 --format='%at %ae %s' HEAD)
-    own_red=$( { sort -t "$(printf '\t')" -k1,1n "$REDS" 2>/dev/null || true; } | awk -F'\t' -v w="$want" -v au="${want%% *}" -v ls="$l_start" "$OWN_RED_AWK")
+    touch "$WAITS"
+    own_red=$( { sort -t "$(printf '\t')" -k1,1n "$REDS" 2>/dev/null || true; } | awk -F'\t' -v w="$want" -v au="${want%% *}" -v ls="$l_start" "$OWN_RED_AWK" "$WAITS" -)
     LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_STATE=$gate_state LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
     step land
     head=$(git rev-parse HEAD)
