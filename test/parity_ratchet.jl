@@ -449,6 +449,16 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local fwdfn = Core.eval(Main, :(module ForwardFnPlant; import WasmTarget: @parity, @unported; end))
         passes(() -> (two(Tuple{Module,String}[(fwdfn, impl), (fwdfn, decl)]); Base.invokelatest(() -> fwdfn.serialize(fwdfn.C())) == 2 ? 0 : 1)) ||
             push!(out, "negative missed: a method an earlier file adds to a function a later file binds does not load")
+        # a package's member function defined only from its prefixed library (`WasmBuilder.f` in an ir
+        # file): declared in the package module, loaded, and counted as made by its marked definition
+        local host = Module(:PackageHostPlant)
+        Core.eval(host, Meta.parse("import WasmTarget: @parity, @quarantine, @unported"))
+        Base.include_string(host, "@quarantine \"a package\" Core.Module module PkgQ\nimport WasmTarget: @parity, @unported, @quarantine\n" *
+            "@quarantine \"a prefixed library\" Core.Module module IR\nimport WasmTarget: @parity, @unported\nimport ..PkgQ\nend\nend\n", "/plant/src/julia/pk.jl")
+        local pkgq = Base.invokelatest(getproperty, host, :PkgQ)
+        local irf = file("ir_member.jl", "@parity \"wasm_builder/lib/src/ir/types.dart:1 Types.serializeIr\" PkgQ.serialize_ir(x::Int)::Int = 1\n")
+        passes(() -> (two(Tuple{Module,String}[(pkgq.IR, irf)]); Base.invokelatest(() -> pkgq.serialize_ir(1)) == 1 ? Base.invokelatest(getfield(wt, :check_parity), pkgq, files) : 1)) ||
+            push!(out, "negative missed: a package member defined only from its prefixed library does not load or is counted unmarked")
         local cyc = file("c.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    b::B\n    C(b::B) = new(b)\nend\n")
         refuses(() -> two(Tuple{Module,String}[(plant(:CyclePlant), cyc)])) || push!(out, "negative missed: two declarations that need each other load")
         local pkg = plant(:PackagePlant)

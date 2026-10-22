@@ -486,16 +486,21 @@ end
     return out
 end
 
-# the function a top-level statement of a port binds by a marked definition, bare-named, or nothing:
-# the generic the loader declares before the second pass
-@quarantine "Julia needs a function to exist before another module adds a method to it; dart resolves a library's names first" Base.Meta.isexpr function _generic_name(st)::Union{Symbol,Nothing}
+# the function a top-level statement of a port defines by a marked definition, or nothing: the module
+# path it is qualified by (empty for a bare name; `WasmBuilder.f` from an ir file, a package's member
+# function owned by the package module) and its name, the generic the loader declares before the
+# second pass
+@quarantine "Julia needs a function to exist before another module adds a method to it; dart resolves a library's names first" Base.Meta.isexpr function _generic_name(st)::Union{Tuple{Any,Symbol},Nothing}
     local def = _marked_definition(st)
     def === nothing && return nothing
     Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline")) && (def = def.args[end])
     (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) || return nothing
     local c = _call(def.args[1])
     c === nothing && return nothing
-    return c.args[1] isa Symbol ? c.args[1] : nothing
+    local f = c.args[1]
+    f isa Symbol && return (nothing, f)
+    Meta.isexpr(f, :., 2) && f.args[2] isa QuoteNode && f.args[2].value isa Symbol && return (f.args[1], f.args[2].value)
+    return nothing
 end
 
 """
@@ -537,7 +542,7 @@ statements in order. Two declarations that need each other refuse the load, nami
 """
 @quarantine "Julia evaluates a file top to bottom; the type declarations of every file are evaluated first" Base.include function _load_two_pass!(units::Vector{Tuple{Module,String}})::Nothing
     local decls = Tuple{Module,String,Any,Symbol}[]
-    local generics = Tuple{Module,Symbol}[]
+    local generics = Tuple{Module,Tuple{Any,Symbol}}[]
     for (m, path) in units
         include_dependency(path; track_content = true)
         local top = Meta.parseall(read(path, String); filename = path)
@@ -580,8 +585,12 @@ statements in order. Two declarations that need each other refuse the load, nami
     # every function a marked definition binds exists before any body names it: a method another
     # module's file adds (`WasmBuilder.serialize(s, x::IR.RefType)`, dart's interface method
     # implemented elsewhere) loads whatever the file order; `function f end` makes no method
-    for (m, g) in generics
-        isdefined(m, g) || Core.eval(m, Expr(:function, g))
+    for (m, (q, g)) in generics
+        # a qualified name declares in the module it names, a package module of this one's root, never
+        # Base or Core (a method of their functions extends what exists)
+        local owner = q === nothing ? m : something(_resolve_name(m, q), nothing)
+        owner isa Module && owner !== Base && owner !== Core && _within(owner, Base.moduleroot(m)) || continue
+        isdefined(owner, g) || Core.eval(owner, Expr(:function, g))
     end
     for (m, path) in units
         Base.include(st -> _is_declaration(st) ? nothing : st, m, path)
@@ -1071,6 +1080,9 @@ end
             (startswith(string(n), '#') || n in (:eval, :include) || n === nameof(sub) || !isdefined(sub, n)) && continue
             (which(sub, n) === sub && !(n in named)) || continue
             local b = getglobal(sub, n)
+            # a package's member function, declared by the loader and defined from another of its
+            # modules (`WasmBuilder.f(...)` in an ir file): made by the marked definitions of its methods
+            b isa Function && any(m -> any(e -> m in e.methods, entries), methods(b)) && continue
             local files = b isa Function || b isa Type ? String[string(m.file) for m in methods(b) if m.module === sub] : String[]
             (isempty(files) || any(side, files)) && push!(out, "the binding $sub.$n carries neither @parity nor @quarantine")
         end
