@@ -156,7 +156,7 @@ jobs:
           JULIA_PKG_PRECOMPILE_AUTO: '0'
         run: ${{ (matrix.lane == 'smoke-1.13' || matrix.lane == 'legacy-1.13') && 'julia +1.13' || 'julia' }} --project=${{ startsWith(matrix.lane, 'legacy') && 'legacy' || '.' }} -e 'using Pkg; Pkg.instantiate()'
 
-      # the dart-lang/sdk files src/ cites, for L132 (the ratchet lane, and the suite shard the
+      # the dart-lang/sdk sources the anchors cite, for L213 (the ratchet lane, and the suite shard the
       # ratchet's family is dealt to)
       - name: Pinned dart2wasm sources
         if: matrix.lane == 'ratchet' || matrix.lane == 'suite'

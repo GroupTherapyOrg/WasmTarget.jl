@@ -56,12 +56,12 @@ with the per-clause status. A clause is never closed by argument.
   outside `src/julia/` carries `@parity`, its anchor, file and Julia name checked where it is
   written, every method and binding covered at load) `L212` (every `src/julia/` definition
   carries `@quarantine`, its Julia API resolved where it is written, every method and binding
-  covered at load).
+  covered at load) `L213` (every anchor's line declares its symbol at the pin, read from the
+  pinned checkout where the anchor is written and at load, the gate requiring the checkout).
   Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
   L84 L86 L88 L95 L110 L132 L149 R32 R40.
   Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.E — `src/` generated file for file from
-  the pinned SDK, the anchors resolved at the pin, the subset Julia's verifier's, dispatch by
-  signature in the quarantine.
+  the pinned SDK and never drifting from it, dispatch by signature in the quarantine.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
   approximated; Julia's own bodies compile instead of bespoke re-implementations.

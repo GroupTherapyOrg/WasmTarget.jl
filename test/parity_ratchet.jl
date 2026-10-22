@@ -256,6 +256,7 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L220" => (:construction, "ClosedWorld"), "L224" => (:stopgap, ""),
     # NIR's closed sums (C5, dev/MARCH.md 1.A10): src/julia/nir.jl
     "L221" => (:construction, "NirStmt"), "L222" => (:construction, "NirValue"),
+    "L213" => (:construction, "check_anchors_resolve"),
 )
 
 
@@ -278,6 +279,8 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
                "a Union of the four concrete operand forms of Julia's optimized IR, a literal held as Julia's own Core.Const, each handled by value_form and nothing else, checked when the package loads"),
     "L220" => ("rust: typestate with a private constructor, the value made by one function of its module",
                "Julia has no private constructors, so ClosedWorld's sole constructor takes a token only subset.jl holds, and both constructors' method tables are checked by reflection when the package loads"),
+    "L213" => ("dart: the analyzer resolves every identifier to its declaration or the program does not compile; rust: rustdoc denies broken intra-doc links",
+               "nothing in Julia resolves a name in another language's source, so @parity reads the pinned dart line where the anchor is written and the load checks every anchor, both where the pinned checkout exists, and the lock requires the checkout"),
     "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
                "Julia has no keyword marking Julia-only code, so @quarantine checks the necessity and resolves the Julia API where it is written and the totality check refuses any src/julia definition no @quarantine spans when the package loads"),
 )
@@ -353,7 +356,7 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         refuses(() -> sole(good.W, good.Tok, "/plant/src/julia/elsewhere.jl")) || push!(out, "negative missed: a constructor defined in another file passes")
         local tok2 = plant(base * "Tok(::Int) = Tok()\n")
         refuses(() -> sole(tok2.W, tok2.Tok, f)) || push!(out, "negative missed: a token with a second constructor passes")
-    elseif definition in (:include_dart, :parity, :quarantine)
+    elseif definition in (:include_dart, :parity, :quarantine, :check_anchors_resolve)
         append!(out, parity_negatives_missed(wt, definition, refuses, passes))
     else
         push!(out, "the construction $definition has no plants in construction_negatives_missed")
@@ -445,6 +448,50 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local snake(s) = Base.invokelatest(getfield(wt, :snake), s)
         (snake("toJSON") == "to_json" && snake("i32Const") == "i32_const" && snake("_translateType") == "_translate_type" && snake("HTMLParser") == "html_parser") ||
             push!(out, "negative missed: the snake rule")
+    elseif definition === :check_anchors_resolve
+        # a dart file at a planted pin: each declaration form, and lines that declare something else
+        local dart = """
+            class Translator {
+              Translator(this.x);
+              final int x;
+              int translateType(int t) => t;
+              bool get isStruct => true;
+              bool operator ==(Object o) => true;
+              Translator.named();
+            }
+
+            extension on Translator {
+              void helper() {}
+            }
+
+            // translateType, in a comment
+            int topLevel(int x) => x;
+            """
+        local lines = split(chomp(dart), '\n'; keepempty = true) .|> String
+        local declares(ln, s) = Base.invokelatest(getfield(wt, :_declares), lines, ln, s) === nothing
+        (declares(1, "Translator") && declares(2, "Translator") && declares(3, "Translator.x") && declares(4, "Translator.translateType") &&
+         declares(5, "Translator.isStruct") && declares(6, "Translator.==") && declares(7, "Translator.named") && declares(11, "helper") &&
+         declares(15, "topLevel")) || push!(out, "negative missed: a dart declaration form does not resolve")
+        declares(5, "Translator.translateType") && push!(out, "negative missed: an anchor moved a line resolves")
+        declares(11, "Translator.translateType") && push!(out, "negative missed: an anchor in another declaration's body resolves")
+        declares(14, "translateType") && push!(out, "negative missed: an anchor at a comment resolves")
+        declares(40, "topLevel") && push!(out, "negative missed: an anchor past the file's end resolves")
+        declares(4, "Translator") && push!(out, "negative missed: a member's line resolves as its class")
+        local sdk = mktempdir()
+        mkpath(joinpath(sdk, "pkg", "dart2wasm", "lib")); write(joinpath(sdk, "pkg", "dart2wasm", "lib", "translator.dart"), dart)
+        mkpath(joinpath(sdk, ".git")); write(joinpath(sdk, ".git", "HEAD"), "0123456789012345678901234567890123456789\n")
+        local good = plant(:ResolvePlant)
+        Base.include_string(good, "@parity \"dart2wasm/lib/translator.dart:4 Translator.translateType\" @unported function translate_type(t::Int) end\n", "/plant/src/translator.jl")
+        local moved = plant(:MovedPlant)
+        Base.include_string(moved, "@parity \"dart2wasm/lib/translator.dart:5 Translator.translateType\" @unported function translate_type(t::Int) end\n", "/plant/src/translator.jl")
+        local check = getfield(wt, :check_anchors_resolve)
+        passes(() -> check(good, sdk)) || push!(out, "negative missed: an anchor that resolves fails")
+        refuses(() -> check(moved, sdk)) || push!(out, "negative missed: an anchor moved a line passes the load's check")
+        Base.invokelatest(getfield(wt, :_head_commit), sdk) == "0123456789012345678901234567890123456789" ||
+            push!(out, "negative missed: a checkout's HEAD is misread")
+        rm(sdk; recursive = true)
+        local pm = match(r"\b([0-9a-f]{40})\b", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md")))
+        (pm !== nothing && pm.captures[1] == getfield(wt, :PIN)) || push!(out, "src/julia/parity.jl's PIN is not the commit dev/PARITY_MASTER.md pins")
     else
         local m = plant(:QuarantinePlant)
         Base.include_string(m, "@quarantine \"Julia's iteration\" Base.iterate f(x::Vector{Int}) = [y for y in x]\n", "/plant/src/julia/q.jl")
@@ -2571,6 +2618,8 @@ const LOCKS = [
         ConstructionLock(:parity)),
     "L212_quarantine" => ("every definition in src/julia carries `@quarantine \"<necessity>\" <Module.api>`, what Julia forces and dart lacks and the Julia API it relies on (Dale: the Julia compiler is the ground truth, dev/LEDGER.md D3): the macro refuses, at the definition's line, an empty necessity, an API that is not a qualified name or does not resolve, and a file under src/ outside src/julia; when WasmTarget has loaded, every method it defines in src/julia lies in a @quarantine's span and every binding it owns is a marked definition's, by reflection; the registry's own definitions carry it too, registered through the function the macro expands to; construction_check(::Val{:quarantine}) asserts it (check_quarantine), and this lock only calls it, with its plants (an unmarked src/julia method, an unresolvable or unqualified API, an empty necessity and @quarantine outside src/julia each refused, marked definitions passed) (dev/CHARTER.md C2)",
         ConstructionLock(:quarantine)),
+    "L213_anchors_resolve" => ("every anchor resolves at the pin (Dale: dart2wasm the structural oracle through and through, dev/LEDGER.md D1): the dart line an @parity anchor names declares its symbol at the commit dev/PARITY_MASTER.md pins, read from the checkout of dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; CI fetches it): `X` a top-level declaration at column 0 or X's unnamed constructor in its body, `X.m` a member at column 2 of X's body, a bare `m` a member of an unnamed extension; where the checkout exists @parity refuses an anchor that does not resolve at the definition's line, the load checks every anchor of WasmTarget, and construction_check(::Val{:check_anchors_resolve}) requires the checkout, so this lock, which only calls it, fails without one; with its plants (an anchor moved a line, one in another declaration's body, at a comment, past the end and a member's line read as its class each refused; every declaration form resolving; a planted checkout's HEAD read; PIN the pinned commit) (dev/CHARTER.md C2)",
+        ConstructionLock(:check_anchors_resolve)),
     "L207_every_negative_runs_every_gate" => ("every lock's negative runs in every gate, inside this file (Dale 2026-10-21, after test/lock_negatives.jl's L195 plant rotted unseen until a landing touched that file): a lock calls, directly or through functions of this file, a function named `<name>_negatives_missed` that plants fixed text its own logic must answer, so the ratchet stage runs it on every landing; a negative in a family the gate's selection may skip counts for nothing. Every lock outside NEGATIVE_OWED has one; NEGATIVE_OWED lists exactly the locks that owe theirs, none with one and none that is no lock, and R45 counts it, so the list only shrinks and a new lock never joins it. Behavior, run here: four planted tables and four planted sources answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local defs, thunks, calls = ratchet_source()

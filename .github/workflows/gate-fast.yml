@@ -110,7 +110,7 @@ jobs:
           JULIA_PKG_PRECOMPILE_AUTO: '0'
         run: ${{ matrix.lane == 'smoke-1.13' && 'julia +1.13' || 'julia' }} --project=. -e 'using Pkg; Pkg.instantiate()'
 
-      # the dart-lang/sdk files src/ cites, for L132 (the ratchet lane)
+      # the dart-lang/sdk sources the anchors cite, for L213 (the ratchet lane)
       - name: Pinned dart2wasm sources
         if: matrix.lane == 'ratchet'
         run: bash dev/fetch_dart_sdk.sh

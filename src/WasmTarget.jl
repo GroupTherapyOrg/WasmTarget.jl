@@ -14,8 +14,9 @@ include("julia/nir.jl")
 include("julia/entry.jl")
 
 # The load-time checks that need every definition to exist, so the package does not load otherwise:
-# the file map, the anchors and the quarantine (src/julia/parity.jl), then no abstract type that is
-# neither a registered construction nor a dart abstract class's mirror (A33S1).
+# the file map, the anchors and the quarantine (src/julia/parity.jl), no abstract type that is
+# neither a registered construction nor a dart abstract class's mirror (A33S1), the strict subset's
+# typestate (src/julia/subset.jl), and the anchors resolved at the pin.
 construction_check(Val(:include_dart))
 construction_check(Val(:parity))
 construction_check(Val(:quarantine))
@@ -24,5 +25,7 @@ construction_check(Val(:ClosedWorld))
 check_closed_world_makers()   # a stopgap read of lowered code (L224), run at load all the same
 construction_check(Val(:NirValue))
 construction_check(Val(:NirStmt))
+# every anchor resolves at the pin, where the pinned dart-lang/sdk checkout exists (L213)
+_pin_sdk() === nothing || construction_check(Val(:check_anchors_resolve))
 
 end # module

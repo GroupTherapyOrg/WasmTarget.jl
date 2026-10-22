@@ -291,6 +291,14 @@ end
 @quarantine "a source file is included by its absolute path, Julia's include unit" Base.joinpath _jl_path(dart::String)::String = joinpath(SRC, _jl_rel(dart))
 
 """
+    PIN
+
+The dart-lang/sdk commit every anchor cites (dev/PARITY_MASTER.md states it; the ratchet's L213
+holds the two equal). An anchor's file is its path under that checkout's pkg/.
+"""
+@quarantine "the oracle's commit, which the anchors' resolver reads the pinned sdk at" Base.String const PIN = "898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e"
+
+"""
     include_dart("<file>.dart")
 
 Loads the port of that dart file, its path under the sdk's pkg/ (`_jl_path`): the only way a file of src/ outside src/julia
@@ -402,13 +410,143 @@ end
     Meta.isexpr(ex, :macrocall) && (ex.args[1] === name || (Meta.isexpr(ex.args[1], :.) && ex.args[1].args[end] == QuoteNode(name)) ||
                                      (ex.args[1] isa GlobalRef && ex.args[1].name === name))
 
+# ---- the anchors resolve at the pin (L213) ----------------------------------------------------------
+# An anchor names a dart line; the line must declare the anchor's symbol at PIN, read from a checkout
+# of dart-lang/sdk at that commit in one place, ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh
+# makes it). Where the checkout exists, @parity refuses an anchor that does not resolve at its line
+# and the package's load checks every anchor; the ratchet's L213 requires the checkout.
+
+# an anchor's three parts: the key of its dart file, its line and its symbol
+@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer has a name" Base.Regex const ANCHOR_RX = r"^([\w/]+\.dart):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?)$"
+
+# the commit a git checkout's HEAD names, or nothing (no checkout, or a HEAD it cannot resolve)
+@quarantine "git records a checkout's commit in its HEAD file, which Julia reads without a git process" Base.read function _head_commit(dir::String)::Union{String,Nothing}
+    local git = joinpath(dir, ".git")
+    isdir(git) || return nothing
+    local head = strip(read(joinpath(git, "HEAD"), String))
+    startswith(head, "ref: ") || return String(head)
+    local ref = head[length("ref: ")+1:end]
+    isfile(joinpath(git, ref)) && return String(strip(read(joinpath(git, ref), String)))
+    local packed = joinpath(git, "packed-refs")
+    isfile(packed) || return nothing
+    for l in eachline(packed)
+        local f = split(l)
+        length(f) == 2 && f[2] == ref && return String(f[1])
+    end
+    return nothing
+end
+
+# the checkout of dart-lang/sdk at PIN, or nothing when there is none at the one path
+@quarantine "the oracle's checkout is the developer's, at one path under the home directory" Base.Filesystem.homedir function _pin_sdk()::Union{String,Nothing}
+    local dir = joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk")
+    return _head_commit(dir) == PIN ? dir : nothing
+end
+
+# the pinned files' lines, read once while the package loads and emptied before its image is saved
+@quarantine "Julia reads a file per call; the resolver reads each pinned file once" Base.Dict const _PIN_LINES = Dict{String,Vector{String}}()
+
+# a dart declaration that opens a body at column 0, and its name
+@quarantine "dart's declaration keywords, read from its formatted source" Base.Regex const DART_DECL_RX = r"^(?:(?:abstract|sealed|base|final|interface|mixin)\s+)*(?:class|mixin|enum|typedef|extension(?:\s+type)?)\s+([A-Za-z_$][\w$]*)"
+
+# the name of the declaration whose body holds line `i`: the nearest code line above it at column 0
+# (dart's formatter puts every top-level declaration there and its members at column 2); "" for an
+# unnamed `extension on T`, nothing for no declaration with a body
+@quarantine "dart's formatter fixes the columns, so a declaration's body is read from indentation" Base.match function _enclosing(lines::Vector{String}, i::Int)::Union{String,Nothing}
+    for j in i-1:-1:1
+        local l = lines[j]
+        (isempty(l) || l[1] in (' ', '}', '/', '@', '*', ')')) && continue
+        occursin(r"^extension\s+on\b", l) && return ""
+        local m = match(DART_DECL_RX, l)
+        return m === nothing ? nothing : String(m[1])
+    end
+    return nothing
+end
+
+# why line `ln` does not declare `symbol`, or nothing when it does: `X` a top-level declaration at
+# column 0 (a class, mixin, enum, typedef or extension named X, or a function or variable X), or X's
+# unnamed constructor at column 2 of X's body; `X.m` a member at column 2 of X's body (a method,
+# getter, setter, field, named constructor X.m or operator m); a bare `m` also a member of an unnamed
+# extension, which has no name to anchor by
+@quarantine "dart's analyzer resolves a name to its declaration; Julia reads the pinned line" Base.occursin function _declares(lines::Vector{String}, ln::Int, symbol::AbstractString)::Union{String,Nothing}
+    ln <= length(lines) || return "line $ln is past the file's end ($(length(lines)) lines)"
+    local l = lines[ln]
+    local s = lstrip(l)
+    local col = ncodeunits(l) - ncodeunits(s)
+    (startswith(s, "//") || startswith(s, "/*") || startswith(s, "*")) && return "line $ln is a comment"
+    local member(x, m) = occursin(Regex("(?<![\\w\$.])\\Q" * m * "\\E(?![\\w\$])\\s*(?:[(<=;,]|\$)"), s) ||
+        occursin(Regex("\\b(?:get|set)\\s+\\Q" * m * "\\E(?![\\w\$])"), s) ||
+        occursin(Regex("\\boperator\\s*\\Q" * m * "\\E\\s*\\("), s) ||
+        (x !== nothing && occursin(Regex("(?<![\\w\$])\\Q" * x * "." * m * "\\E(?![\\w\$])"), s))
+    local parts = split(symbol, '.'; limit = 2)
+    if length(parts) == 1
+        local x = parts[1]
+        if col == 0
+            local d = match(DART_DECL_RX, s)
+            d !== nothing && return d[1] == x ? nothing : "line $ln declares $(d[1]), not $x"
+            return occursin(Regex("(?<![\\w\$])\\Q" * x * "\\E(?![\\w\$])\\s*(?:[(<=;,]|\$)"), s) ? nothing : "line $ln does not declare $x"
+        end
+        col == 2 || return "line $ln is at column $col, no declaration's"
+        local enc = _enclosing(lines, ln)
+        enc == x && occursin(Regex("^(?:const\\s+|factory\\s+)?\\Q" * x * "\\E\\s*\\("), s) && return nothing
+        enc == "" && member(nothing, x) && return nothing
+        return "line $ln does not declare $x (a top-level declaration sits at column 0)"
+    end
+    local x, m = parts
+    col == 2 || return "line $ln is at column $col, not a member's 2"
+    local enc = _enclosing(lines, ln)
+    enc == x || return "line $ln is in the body of $(enc === nothing ? "no declaration" : enc == "" ? "an unnamed extension" : enc), not $x"
+    return member(x, m) ? nothing : "line $ln does not declare $x.$m"
+end
+
+# why an anchor does not resolve in the checkout `sdk`, or nothing when it does
+@quarantine "the pinned dart file is read where the anchor is checked" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
+    local a = match(ANCHOR_RX, anchor)
+    a === nothing && return "$(repr(anchor)) is no anchor"
+    local path = joinpath(sdk, "pkg", a[1])
+    isfile(path) || return "the pin has no pkg/$(a[1])"
+    local lines = get!(() -> readlines(path), _PIN_LINES, path)
+    return _declares(lines, parse(Int, a[2]), a[3])
+end
+
+"""
+    check_anchors_resolve(mod, sdk) -> Int
+
+The oracle's check: the anchor of every `@parity` definition of `mod` names a line that declares
+its symbol in `sdk`, a checkout of dart-lang/sdk at `PIN`; throws a `ConstructionViolation` listing
+each anchor that does not, with the reason.
+
+precedent(dart: the analyzer resolves every identifier to its declaration or the program does not
+compile; rust: rustdoc denies broken intra-doc links). Julia's differs: nothing resolves a name in
+another language's source, so the macro reads the pinned dart line where the anchor is written and
+the load checks every anchor, both where the pinned checkout exists.
+"""
+@quarantine "Julia resolves no name in dart's source; the anchors are read against the pinned files" Base.readlines function check_anchors_resolve(mod::Module, sdk::String)::Int
+    local out = String[]
+    for e in REGISTRY
+        e isa ParityEntry && e.mod === mod || continue
+        local f = _anchor_fault(sdk, e.anchor)
+        f === nothing || push!(out, "$(basename(string(e.file))):$(e.first) $(e.anchor): $f")
+    end
+    empty!(_PIN_LINES)
+    isempty(out) || throw(ConstructionViolation("check_anchors_resolve", join(out, "; ")))
+    return 0
+end
+# the oracle's assertion: run when the package loads where the pinned checkout exists
+# (src/WasmTarget.jl), and required by the ratchet's L213, which a missing checkout fails
+@quarantine "the oracle's assertion, run when the package loads" Base.invokelatest function construction_check(::Val{:check_anchors_resolve})::Int
+    local sdk = _pin_sdk()
+    sdk === nothing && throw(ConstructionViolation("check_anchors_resolve",
+        "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
+    return check_anchors_resolve(@__MODULE__, sdk)
+end
+
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
 # include_dart, in WasmTarget), the Julia name the rule admits
 @quarantine "the dart anchors are checked where they are written, as dart's analyzer would" Base.match function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
-    local m = match(r"^([\w/]+\.dart):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?)$", anchor)
+    local m = match(ANCHOR_RX, anchor)
     m === nothing && refuse("the anchor $(repr(anchor)) does not read \"<file>.dart:<line> <Symbol>\"")
     m[1] in DART_FILES || refuse("the anchor's file $(m[1]) is no file of the pin table DART_FILES")
     local file = string(something(source.file, :none))
@@ -420,6 +558,10 @@ end
     local names, name = _defines(def, source)
     local admitted = _admitted_names(m[3])
     name in admitted || refuse("the Julia name $name is not the rule's for $(m[3]): $(join(admitted, ", "))")
+    # WasmTarget's own anchors resolve at the pin where its checkout exists (L213)
+    local sdk = mod === (@__MODULE__) ? _pin_sdk() : nothing
+    local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
+    fault === nothing || refuse("the anchor does not resolve at the pin: $fault")
     return (ParityEntry(mod, anchor, ported, names, Symbol(file), source.line, _last_line(def, source.line)), def)
 end
 
@@ -428,7 +570,8 @@ end
 
 Marks a definition outside src/julia with the dart definition it copies at the pinned commit:
 the file a key of `DART_FILES`, the Julia name the one rule's for the symbol (`snake`), the file
-loaded by `include_dart`; any other form refuses the load at this line. `@parity "<anchor>"
+loaded by `include_dart`, and, where the pinned checkout exists, the anchor's line declaring its
+symbol at `PIN` (`check_anchors_resolve`); any other form refuses the load at this line. `@parity "<anchor>"
 @unported <definition>` stands for a definition not yet ported: its body rejects with the anchor.
 
 precedent(rust: the deny missing_docs lint, every item documented or the crate does not build).
