@@ -9,7 +9,7 @@ const _LN_ROOT = normpath(joinpath(@__DIR__, ".."))
 # (lock, path, planted text or a Regex matching it, its replacement, what the plant breaks)
 const LOCK_NEGATIVE_CASES = [
     ("L194", "dev/land.sh",
-     raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git ls-tree -d \"$tip\" legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
+     raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git log -1 --format=%H \"$tip\" -- legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
      "    if false; then",
      "an edit to legacy/ lands: WT1, the agreement oracle, is no longer frozen (dev/MARCH.md 1.G)"),
     ("L195", "dev/block.jl",

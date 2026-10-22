@@ -659,14 +659,17 @@ end
 # a dropped case or a dropped plant file is never silent.
 const CORPORA = ("test/smoke_corpus.jl", "test/probe_corpus.jl")
 # the case keys of a corpus text: a smoke case `<group>/<case>` (a `("name", …)` line under its
-# `_g`/`_xf`/`_lazy_g`/`_lazy_xf` group), a probe `<name>` (a `_c("name", …)` line)
+# `_g`/`_xf` group), a lazy group `<group>/*` (a `_lazy_g`/`_lazy_xf` line, its cases generated), a
+# probe `<name>` (a `_c("name", …)` line)
 function corpus_case_keys(text::AbstractString)::Set{String}
     local keys = Set{String}()
     local group = ""
     for l in eachline(IOBuffer(text))
         local p = match(r"^\s*_c\(\s*\"([^\"]+)\"", l)
         p === nothing || (push!(keys, p[1]); continue)
-        local g = match(r"^\s*_(?:lazy_)?(?:g|xf)\(\s*\"([^\"]+)\"", l)
+        local lz = match(r"^\s*_lazy_(?:g|xf)\(\s*\"([^\"]+)\"", l)   # a group its generator file builds: one key, `<group>/*`
+        lz === nothing || (push!(keys, lz[1] * "/*"); group = ""; continue)
+        local g = match(r"^\s*_(?:g|xf)\(\s*\"([^\"]+)\"", l)
         g === nothing || (group = g[1]; continue)
         local c = match(r"^\s*\(\s*\"([^\"]+)\"\s*,", l)
         c === nothing || isempty(group) || push!(keys, group * "/" * c[1])
@@ -674,9 +677,12 @@ function corpus_case_keys(text::AbstractString)::Set{String}
     return keys
 end
 # the removals a message does not name: `deleted` the test files the change deletes, `cases` each
-# corpus's removed case keys (corpus => keys)
+# corpus's removed case keys (corpus => keys), `emptied` the corpora the change leaves with no case or
+# deletes; `<corpus>:*` or the corpus's path names its cases only when it is emptied, so a blanket
+# never hides one dropped case among kept ones (audit 34)
 function unnamed_removals(msg::AbstractString, deleted::AbstractVector{<:AbstractString},
-                          cases::AbstractDict{String,<:AbstractSet{String}})::Vector{String}
+                          cases::AbstractDict{String,<:AbstractSet{String}},
+                          emptied::AbstractSet{String}=Set{String}())::Vector{String}
     local named = Set{String}()
     for m in eachmatch(r"^Removes-test: (\S+) (?:—|--) \S.*$"m, msg)
         push!(named, m[1])
@@ -684,7 +690,7 @@ function unnamed_removals(msg::AbstractString, deleted::AbstractVector{<:Abstrac
     local out = String[f for f in deleted if !(f in named)]
     for (corpus, ks) in cases, k in sort!(collect(ks))
         local what = corpus * ":" * k
-        what in named || (corpus * ":*") in named || corpus in named || push!(out, what)
+        what in named || (corpus in emptied && ((corpus * ":*") in named || corpus in named)) || push!(out, what)
     end
     return out
 end
@@ -806,7 +812,9 @@ function main(args)
     local removed_cases = Dict{String,Set{String}}(
         c => setdiff(corpus_case_keys(git("show", "$base:$c")), corpus_case_keys(isfile(joinpath(ROOT, c)) ? read(joinpath(ROOT, c), String) : ""))
         for c in CORPORA if gitok("cat-file", "-e", "$base:$c"))
-    local unnamed = unnamed_removals(msg, [f for f in changed if startswith(f, "test/") && !ispath(joinpath(ROOT, f))], removed_cases)
+    local emptied = Set{String}(c for c in CORPORA if gitok("cat-file", "-e", "$base:$c") &&
+                                isempty(corpus_case_keys(isfile(joinpath(ROOT, c)) ? read(joinpath(ROOT, c), String) : "")))
+    local unnamed = unnamed_removals(msg, [f for f in changed if startswith(f, "test/") && !ispath(joinpath(ROOT, f))], removed_cases, emptied)
     isempty(unnamed) || push!(fails, "the change removes $(join(unnamed, ", ")) and its message does not name them: add `Removes-test: <what> — <reason>` for each (A33E1)")
     head_texts = Dict(f => read(joinpath(ROOT, f), String) for f in code_changed if isfile(joinpath(ROOT, f)))
     append!(fails, stale_map(moved, measured, filter(f -> !startswith(f, "ext/") || ispath(joinpath(ROOT, f)), changed), head_texts,

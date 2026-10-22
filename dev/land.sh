@@ -387,8 +387,9 @@ land)
         { echo "land: $br is $ahead commits ahead of $MARCH ${tip:0:8}: one landing is one commit, its own tree gated (A24E1) — land them one at a time — refusing"; exit 1; }
     # legacy/ is frozen (dev/MARCH.md 1.G): WT1 is the agreement oracle as it was moved there, never
     # edited; the one change it takes is its deletion, whole, by its rule (1.F); the commit that
-    # creates it (the march tip holding none) is the move itself
-    if [ -n "$(git diff --name-only "$tip" HEAD -- legacy/)" ] && [ -n "$(git ls-tree -d "$tip" legacy)" ] && [ -n "$(git ls-tree -d HEAD legacy)" ]; then
+    # creates it (no commit of the march tip's history ever held it) is the move itself, and a
+    # deletion followed by a re-creation is refused (audit 34)
+    if [ -n "$(git diff --name-only "$tip" HEAD -- legacy/)" ] && [ -n "$(git log -1 --format=%H "$tip" -- legacy)" ] && [ -n "$(git ls-tree -d HEAD legacy)" ]; then
         echo "land: $br changes legacy/ ($(git diff --name-only "$tip" HEAD -- legacy/ | head -3 | tr '\n' ' ')…): legacy/ is frozen, its one change its deletion whole (dev/MARCH.md 1.G) — refusing"; exit 1
     fi
     # L148's window again on the rebased head: a landing that took the hold while this one waited may

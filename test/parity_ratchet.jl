@@ -313,6 +313,8 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         refuses(() -> noopen(bad)) || push!(out, "negative missed: an open abstract type passes")
         passes(() -> noopen(good)) || push!(out, "negative missed: a dart abstract class's mirror with its parity anchor fails")
         refuses(() -> noopen(sub)) || push!(out, "negative missed: an open abstract type in a submodule passes")
+        local par = Module(:ParamPlant); Core.eval(par, :(abstract type Open{T} end))
+        refuses(() -> noopen(par)) || push!(out, "negative missed: a parametric open abstract type (a UnionAll binding) passes")
     else
         push!(out, "the construction $definition has no plants in construction_negatives_missed")
     end
@@ -1554,12 +1556,15 @@ const LOCKS = [
                 local lost = Dict("test/smoke_corpus.jl" => Set(["num/mul"]))
                 v += count(!, [isempty(g(:probes_touched, String[], [0], String[], [0])),   # a file emptied whole: its hunk at line 0
                                g(:corpus_case_keys, sc) == Set(["num/add", "num/mul", "p1"]),
+                               g(:corpus_case_keys, "_lazy_g(\"reg\", \"gen.jl\")\n    (\"x\", f, 1),\n") == Set(["reg/*"]),   # a lazy group is one key (audit 34)
+                               g(:unnamed_removals, "x", String[], Dict("test/smoke_corpus.jl" => Set(["reg/*"]))) == ["test/smoke_corpus.jl:reg/*"],
                                g(:unnamed_removals, "x", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
                                isempty(g(:unnamed_removals, "x\nRemoves-test: test/lock_negatives.jl — its plants move into the ratchet\n", ["test/lock_negatives.jl"], none_)),
                                g(:unnamed_removals, "Removes-test: test/lock_negatives.jl — \n", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
                                g(:unnamed_removals, "x", String[], lost) == ["test/smoke_corpus.jl:num/mul"],
                                isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/mul — WT1-only\n", String[], lost)),
-                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — the legacy lane runs them\n", String[], lost)),
+                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — the legacy lane runs them\n", String[], lost, Set(["test/smoke_corpus.jl"]))),
+                               g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — a blanket over kept cases\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"],   # audit 34
                                g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/add — another case\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"]])
                 # the budget counts the change's own pieces among the stale ones (A30E5): a change of comments
                 # and docstrings alone alters no piece (Julia's parse, docstrings and line numbers dropped, is
@@ -1584,7 +1589,7 @@ const LOCKS = [
                          raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
                          raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' \"$rec\")) — refusing\"; exit 1; }",
                          raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
-                         raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git ls-tree -d \"$tip\" legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
+                         raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git log -1 --format=%H \"$tip\" -- legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
                          raw"    bash dev/gate.sh --block"]
                 v += occursin(line, land) ? 0 : 1
             end

@@ -74,9 +74,10 @@ function check_no_open_abstract(mod::Module)::Int
     for n in names(mod; all = true)
         isdefined(mod, n) || continue
         local b = getglobal(mod, n)
+        local u = b isa UnionAll ? Base.unwrap_unionall(b) : b   # `abstract type T{X} end` binds a UnionAll
         if b isa Module
             b !== mod && parentmodule(b) === mod && check_no_open_abstract(b)
-        elseif b isa DataType && isabstracttype(b) && parentmodule(b) === mod && nameof(b) === n
+        elseif u isa DataType && isabstracttype(u) && parentmodule(u) === mod && nameof(u) === n
             hasmethod(construction_check, Tuple{Val{n}}) && continue
             occursin(r"parity\([\w/]+\.dart:\d+ \w+\)", _docstring_text(mod, n)) && continue
             throw(ConstructionViolation("check_no_open_abstract",
