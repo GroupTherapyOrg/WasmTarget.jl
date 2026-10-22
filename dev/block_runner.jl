@@ -83,6 +83,10 @@ ready() = alive(pidof(joinpath(DIR, "ready"))) && ispath(SOCK)
 
 function start(launcher::Vector{String})
     mkpath(DIR)
+    # the server and its image build compile into this tree's private depot, as every gate stage does
+    # (dev/depot.sh, audit 37), however the runner was started
+    ENV["JULIA_DEPOT_PATH"] = readchomp(`bash $(joinpath(ROOT, "dev", "depot.sh")) path $ROOT`)
+    mkpath(joinpath(ROOT, ".wtd", "depot"))
     ready() && (println("block_runner: already serving $ROOT (pid $(pidof(joinpath(DIR, "ready"))))"); return 0)
     write(joinpath(DIR, "launcher"), join(launcher, '\n'))
     if !isfile(joinpath(ENVDIR, "Manifest.toml"))

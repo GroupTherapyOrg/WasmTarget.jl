@@ -86,6 +86,9 @@ MARCH=${WT_MARCH_BRANCH:-wt2}
 # worktree this runs in
 MAIN=$(git worktree list --porcelain | awk -v b="branch refs/heads/$MARCH" '/^worktree / { w = substr($0, 10) } $0 == b && m == "" { m = w } END { print m }')
 [ -n "$MAIN" ] || MAIN=$(git rev-parse --show-toplevel)
+# every Julia a landing starts, its gate's stages and its warm runner, compiles into this worktree's
+# private depot (dev/depot.sh, audit 37: shared images evicted each other and every gate ran cold)
+. "$(dirname "$0")/depot.sh"; wt_depot_export "$(git rev-parse --show-toplevel)"
 WT_WORKTREES=${WT_WORKTREES:-$(dirname "$MAIN")/.worktrees}
 # a dev/CHARTER.md change lands only as an exact change the maintainer authorised (A21E6): the main
 # tree's git-ignored charter_authorised, written after review and never by a landing commit, one line

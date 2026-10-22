@@ -131,6 +131,10 @@ const LOCK_NEGATIVE_CASES = [
     run(`git -C $tmp checkout -q --detach $head`)
     local was = get(ENV, "WT_RATCHET_INCLUDED", nothing)
     ENV["WT_RATCHET_INCLUDED"] = "1"
+    # a Julia a lock starts in the scratch checkout compiles into the scratch's own depot, never evicting
+    # the lane's image (dev/depot.sh, audit 37)
+    local was_depot = get(ENV, "JULIA_DEPOT_PATH", nothing)
+    ENV["JULIA_DEPOT_PATH"] = readchomp(`bash $(joinpath(_LN_ROOT, "dev", "depot.sh")) path $tmp`)
     local M = Module(:LockNegatives)
     try
         Base.include(M, joinpath(tmp, "test", "parity_ratchet.jl"))
@@ -160,5 +164,6 @@ const LOCK_NEGATIVE_CASES = [
     @testset "restored: $id holds" for id in unique(first.(LOCK_NEGATIVE_CASES))
         @test runlock(id) == 0
     end
+    was_depot === nothing ? delete!(ENV, "JULIA_DEPOT_PATH") : (ENV["JULIA_DEPOT_PATH"] = was_depot)
     rm(tmp; recursive = true, force = true)
 end

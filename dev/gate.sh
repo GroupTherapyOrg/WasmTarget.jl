@@ -31,6 +31,8 @@
 # re-gating the commit a branch already holds pushes it to gate/<name>-N, which starts cold.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+# every Julia the gate starts compiles into this worktree's private depot (dev/depot.sh, audit 37)
+. dev/depot.sh; wt_depot_export "$(pwd)"
 if [ "${1:-}" = --block ]; then shift; exec julia --startup-file=no dev/block.jl "$@"; fi
 command -v gh >/dev/null || { echo "gate: needs the GitHub CLI (gh)" >&2; exit 2; }
 # an API read, retried: three tries, 10 s then 30 s apart; its output, or nothing and status 1

@@ -12,8 +12,8 @@
 #
 # KAIMON_PROJECTS names another projects file (the lock's fixed cases use one).
 set -euo pipefail
-cmd=${1:?usage: dev/lane.sh start|stop <name>}
-name=${2:?usage: dev/lane.sh start|stop <name>}
+cmd=${1:?usage: dev/lane.sh start|stop|depot <name>}
+name=${2:?usage: dev/lane.sh start|stop|depot <name>}
 case "$name" in */* | .* | "") echo "lane: a lane's name is one path component: $name — refusing"; exit 1 ;; esac
 MARCH=${WT_MARCH_BRANCH:-wt2}
 # the main tree: the worktree holding the march branch, as dev/land.sh finds it
@@ -23,14 +23,14 @@ WT="$(dirname "$MAIN")/.worktrees/$name"
 PROJ=${KAIMON_PROJECTS:-$HOME/.config/kaimon/projects.json}
 # adds (add) or removes (remove) the worktree's entry in the projects file, keeping every other entry
 projects() {
-    python3 -I - "$1" "$PROJ" "$WT" <<'PY'
+    python3 -I - "$1" "$PROJ" "$WT" "${JULIA_BIN:-}" <<'PY'
 import json, os, sys
-op, path, wt = sys.argv[1], sys.argv[2], sys.argv[3]
+op, path, wt, jbin = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 d = json.load(open(path)) if os.path.exists(path) else {"projects": []}
 ps = [p for p in d.get("projects", []) if p.get("project_path") != wt]
 if op == "add":
     ps.append({"project_path": wt, "enabled": True,
-               "launch_config": {"threads": "4", "startup_file": False, "instantiate": "auto"}})
+               "launch_config": {"threads": "4", "startup_file": False, "instantiate": "auto", "julia_bin": jbin}})
 d["projects"] = ps
 os.makedirs(os.path.dirname(path), exist_ok=True)
 tmp = path + ".tmp"
@@ -53,9 +53,16 @@ start)
         mc=$(bash "$WT/dev/manifest_check.sh" "$WT") || { echo "lane: $mc after Pkg.resolve() — refusing"; exit 1; }
     fi
     printf '[WasmTarget]\nprecompile_workload = false\n' > "$WT/LocalPreferences.toml"
-    projects add
+    # the lane's Julia compiles into its private depot, its Kaimon session too (dev/depot.sh)
+    JULIA_BIN=$(bash "$WT/dev/depot.sh" julia "$WT") projects add
     echo "lane: $WT on $name from origin/$MARCH $(git -C "$WT" rev-parse --short HEAD), a Kaimon project in $PROJ"
     echo "lane: start its session: mcp__kaimon__start_session(project_path=\"$WT\", private=true)"
+    ;;
+depot)
+    # an existing lane's private depot and its Kaimon session's julia (a lane made before dev/depot.sh)
+    [ -d "$WT" ] || { echo "lane: no worktree $WT — refusing"; exit 1; }
+    JULIA_BIN=$(bash "$WT/dev/depot.sh" julia "$WT") projects add
+    echo "lane: $WT compiles into $WT/.wtd/depot; restart its Kaimon session to take the julia $WT/.wtd/julia"
     ;;
 stop)
     projects remove
