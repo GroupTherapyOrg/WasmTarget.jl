@@ -23,8 +23,12 @@ if [ $# -eq 3 ]; then
     anchored=$1; ported=$2; since=$3
 else
     if [ -d legacy ]; then
+        # the worktree's private depot (dev/depot.sh), never the shared compiled cache another tree can
+        # replace mid-run; and every entry of the package's modules (WasmBuilder, Dart2Wasm and theirs),
+        # not the root module's alone, where no port lives
+        . dev/depot.sh; wt_depot_export "$PWD"
         counts=$(julia --project=. --startup-file=no -e 'using WasmTarget
-            e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && x.mod === WasmTarget]
+            e = [x for x in WasmTarget.REGISTRY if x isa WasmTarget.ParityEntry && WasmTarget._within(x.mod, WasmTarget)]
             println(length(e), " ", count(x -> x.ported, e))') ||
             { echo "src: WasmTarget did not load, so its @parity registry gives no count"; exit 1; }
         read -r anchored ported <<< "$counts"

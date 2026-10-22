@@ -99,18 +99,26 @@ AUTHORISED="$MAIN/dev/.block/charter_authorised"
 CHANGE_SED='s/^Charter-change: \(C[0-9][0-9]*\( C[0-9][0-9]*\)*\) authorised by Dale \([0-9][0-9-]*\)$/\1 \3/p'
 # whether the authorisation file $1 lists the change $2 → $3 with exactly the clauses and date of $4
 # ("C<a> C<b> … <date>", its lines "<parent blob> <new blob> C<a> C<b> … <date>"), the clauses as a set;
-# or lists its content, `patch:<id> - C<a> … <date>` where <id> is $5, the change's `git patch-id
-# --stable` (the hunks' text, not where they sit), so a rebase that keeps the change keeps its
-# authorisation and only a changed hunk needs a new one
+# or lists its content, `content:<id> - C<a> … <date>` where <id> is $5, charter_content_id's hash of
+# the change's changed lines (whitespace kept, line numbers not), so a rebase that keeps the change
+# keeps its authorisation and a changed line, a moved space included, needs a new one; a content
+# authorisation admits one landing: `used:<id> <sha>`, written when it lands, spends it (A40E1)
 authorised() {
     local want o n rest
     want="$(printf '%s\n' ${4% *} | sort -u | tr '\n' ' ')${4##* }"
     [ -f "$1" ] || return 1
+    [ -n "${5:-}" ] && grep -q "^used:$5 " "$1" && return 1
     while read -r o n rest; do
-        { { [ "$o" = "$2" ] && [ "$n" = "$3" ]; } || { [ -n "${5:-}" ] && [ "$o" = "patch:$5" ] && [ "$n" = - ]; }; } &&
+        { { [ "$o" = "$2" ] && [ "$n" = "$3" ]; } || { [ -n "${5:-}" ] && [ "$o" = "content:$5" ] && [ "$n" = - ]; }; } &&
             [ "$(printf '%s\n' ${rest% *} | sort -u | tr '\n' ' ')${rest##* }" = "$want" ] && return 0
     done < "$1"
     return 1
+}
+# the content id of commit $1's dev/CHARTER.md change: a sha256 of its removed and added lines as
+# written, whitespace kept, hunk headers and line numbers left out (git patch-id drops whitespace,
+# so "L19 2" and "L192" would hash alike, A40E1)
+charter_content_id() {
+    git diff -U0 "$1^" "$1" -- dev/CHARTER.md | grep -E '^[+-]' | grep -vE '^(\+\+\+|---) ' | shasum -a 256 | cut -c1-40
 }
 # whether clause $1 is one of the clauses $2 ("C<a> C<b> …"); "-", outside any clause, never is
 clause_in() {
@@ -514,9 +522,10 @@ land)
         a=$(printf '%s\n' "$msg" | sed -n "$CHANGE_SED" | head -1)
         [ -n "$a" ] || { echo "land: $what changes dev/CHARTER.md with no 'Charter-change: C<n> … authorised by Dale <date>' line — refusing"; exit 1; }
         ob=$(git rev-parse "$h^:dev/CHARTER.md"); nb=$(git rev-parse "$h:dev/CHARTER.md")
-        pid=$(git diff "$h^" "$h" -- dev/CHARTER.md | git patch-id --stable | cut -d' ' -f1)
+        pid=$(charter_content_id "$h")
         authorised "$AUTHORISED" "$ob" "$nb" "$a" "$pid" ||
-            { echo "land: $what's dev/CHARTER.md change ($ob → $nb, patch $pid) is not one the maintainer authorised: after review, in the main tree: echo 'patch:$pid - $a' >> dev/.block/charter_authorised — refusing"; exit 1; }
+            { echo "land: $what's dev/CHARTER.md change ($ob → $nb, content $pid) is not one the maintainer authorised, or its content authorisation is spent: after review, in the main tree: echo 'content:$pid - $a' >> dev/.block/charter_authorised — refusing"; exit 1; }
+        SPEND="${SPEND:-} $pid"
         old=$(mktemp); new=$(mktemp)
         git show "$h^:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$old"; git show "$h:dev/CHARTER.md" | awk "$CLAUSE_AWK" > "$new"
         for c in $(git diff -U0 "$h^" "$h" -- dev/CHARTER.md | awk -v O="$old" -v N="$new" "$HUNK_AWK" | sort -u); do
@@ -617,6 +626,8 @@ land)
     touch "$WAITS"
     own_red=$( { sort -t "$(printf '\t')" -k1,1n "$REDS" 2>/dev/null || true; } | awk -F'\t' -v w="$want" -v au="${want%% *}" -v ls="$l_start" "$OWN_RED_AWK" "$WAITS" -)
     LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_STATE=$gate_state LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash "$W/dev/land.sh" merge "$br"
+    # a content authorisation admits one landing: the landed change spends it (A40E1)
+    for p in ${SPEND:-}; do printf 'used:%s %s\n' "$p" "$(git rev-parse HEAD)" >> "$AUTHORISED"; done
     step land
     head=$(git rev-parse HEAD)
     line=$(tail -1 "$LOG")
