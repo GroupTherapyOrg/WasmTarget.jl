@@ -17,9 +17,9 @@ a `RejectionError` naming it; nothing returns a module that was not built (dev/C
 end
 
 # the stages after the subset check take the ClosedWorld check_subset alone makes; dart's compile,
-# which runs them, is not ported yet
+# which runs them, is not ported yet: the rejection names its generated stub's anchor
 @quarantine "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.String function compile_world(world::ClosedWorld, at::String)::Vector{UInt8}
     local bodies = build_nir(world, at)
     local classes = closed_world_classes(bodies, at)
-    reject!(Unported("dart2wasm/lib/compile.dart:216 compile"), at)
+    reject!(Unported(anchor_of(Dart2Wasm.compile)), at)
 end
