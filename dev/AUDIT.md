@@ -2945,3 +2945,94 @@ fee8b6a4-1 its own plant); f9e3d277 2447 s (2364, 83); f9d5e820 1864 s (1664, 20
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A33E1, A33E2, A33E3, A33E4, A33E5, A33E6, A33E7
 and A33E8 are open on MARCH 1.L; A33S1 on 1.A2c, whose commit lands its check.
+
+## 2026-10-22 — audited through 30654e4b (c1c74a43..30654e4b: entry 33, Kaimon per lane, own_s from a red history, the switch to the rebuild, AGENTS.md bounded)
+
+The thirty-fourth audit covers 7b8a0c82 (entry 33; its author's), b3e0b602 (every lane in a live Kaimon session:
+dev/lane.sh makes the lane, `land` refuses a worktree with no live session, dev/kaimon_session.sh, D39), 3b3a0a0c (own_s
+counts only a change's own reds, read from the main tree's dev/.loop/reds.tsv, red_kind calling a red on timing, L148
+or L197 alone `queue`, A33E4, A33E5), 86105198 (1.A2c, the switch, landed by the lead: WT1 to legacy/ as
+WasmTargetLegacy; root src/ the rebuild, the Rejection closed sum and a compile entry rejecting Unported; L218
+check_closed_sum and L219 check_no_open_abstract, refused at load; ConstructionLock running the construction's plants;
+the Removes-test rule, A33E1; the legacy freeze; the smoke ladder derived from each compile; `Charter-change: C5 C6
+C10 authorised by Dale 2026-10-21`) and 30654e4b (L128 bounds AGENTS.md's whole, 60 lines plus one per live
+requirement, A33E6). No wrong answer: the rebuild compiles nothing yet, and every corpus case rejects loud (81 of the
+core, 995 of the corpus, 86105198's message). Each landed head's record is green. Fixed as their commits state: A32E4
+(WT1 left the root, the freeze with it), A33E1 in its first form, A33S1 in its first form, A33E4, A33E5 and A33E6.
+The lead wrote part of 86105198, so this entry audits it as any other change. Three red flags: A34S1, A34S2 and A34S4.
+Findings A34S1-A34S4 and A34E1-A34E7.
+
+Area: builder — empty by diff: the rebuild's src/ holds no builder yet; WT1's builder moved whole to legacy/src/builder
+(a rename, 0 lines changed in instr_builder.jl, instructions.jl, source_map.jl, types.jl, validator.jl and writer.jl).
+
+Area: collection and planning — empty by diff for the rebuild: WT1's collection moved whole to legacy/src.
+
+Area: emission and diagnostics — 86105198's src/julia/reject.jl and src/julia/entry.jl. compile(f, argtypes) rejects
+through reject!(Unported("compile.dart:216 compile"), at), its one path, typed `Union{}`: loud and located at the
+entry. (a) Rejection is a construction for what it states. It is a `const` Union of five concrete structs that
+subtype nothing, so no module adds a kind without editing that line, and RejectionError's field is typed Rejection.
+check_closed_sum, run when the package precompiles and again by ConstructionLock in every gate, refuses a kind with no
+`_reason`, a `_reason` method for any other type (a `_reason(::Any)` catch-all among them) and a kind under an abstract
+type, as its plants show. (A34S3, low) Its exhaustiveness covers `_reason` alone. The next function that matches on a
+Rejection kind is not checked until `@exhaustive` (1.A8) exists, so "exhaustive match" in its precedent holds for
+`_reason` and for no later match.
+
+stopgap in disguise: L219's check_no_open_abstract claims "no open hierarchy passes for a closed one" and lets two through,
+both measured in this lane's Kaimon session (e1d51284) on 86105198's tree. (A34S1, medium, red flag) A parametric
+abstract type passes: `abstract type Open{T} end` in a module reads 0, because its binding is a UnionAll
+and the walk takes only `b isa DataType`. (A34S4, medium, red flag) An open abstract type passes on a mention: a docstring "an open type; it
+only mentions parity(misc.dart:57 TreeNode)" reads 0, where the same type with no docstring is refused. The exemption
+is a regex over docstring text (`occursin(r"parity\([\w/]+\.dart:\d+ \w+\)", _docstring_text(mod, n))`): the docs
+are fetched by reflection, then read as text, so a comment exempts a type, the label A33S1 objected to. It also does
+not tell an open dart class from a sealed one: a mirror of a sealed class passes as an open abstract type. Its plants
+cover neither case. The construction: walk every abstract type through `Base.unwrap_unionall`, and exempt a mirror
+only by a registered `dart_mirror(::Type{T})` method naming its anchor, which L213 resolves at the pin to an
+`abstract class` declaration, never a sealed one. (A34S2, medium, red flag) The Removes-test rule does not see a lazy
+group. corpus_case_keys reads a case as a `("name", …)` line under a `_g`/`_xf` group, so a `_lazy_g("<group>",
+"<file>")` group's cases, generated from its file, have no keys. 86105198 removed ten of them from the corpus
+(registry_foreign, _binops, _unops, _conversions, _checked, _shift, _fma, _misc, _operators and _sample),
+with no Removes-test line for any, and its gate passed: the rule's guarantee, "a dropped case is never silent", is
+claimed where it does not hold. The fix: a lazy group is a key of its own (`<corpus>:<group>/*`), and a removed one is named. (A34E7, low)
+The move itself went undeclared: the ten groups went to legacy/test/smoke.jl, so nothing was lost, and the message's
+prose says WT1's registry groups moved, but no Removes-test line names them, as the rule asks of every removal.
+precedent: Rejection: Rust's enum with an exhaustive match, dart's sealed class with an exhaustive switch; Julia has
+no closed declaration, so a Union of concrete types, checked at load. check_no_open_abstract: dart's sealed class
+against its open abstract class, Rust's enum against a trait; Julia's abstract types are open by language. The
+legacy freeze and the Removes-test rule are gate rules with no ecosystem precedent named; each is a stopgap of C10's
+kind and claims no construction.
+
+Area: enforcement and prose — every hunk of b3e0b602 (dev/kaimon_session.sh, dev/lane.sh, dev/land.sh, dev/LEDGER.md,
+test/lock_negatives.jl, test/parity_ratchet.jl), 3b3a0a0c (dev/block.jl, dev/land.sh, test/lock_negatives.jl,
+test/parity_ratchet.jl), 86105198 (the workflows, AGENTS.md, Project.toml, dev/CHARTER.md, dev/LEDGER.md,
+dev/MARCH.md, dev/block.jl, dev/block_runner.jl, dev/land.sh, dev/lanes.sh, legacy/Project.toml,
+legacy/src/WasmTargetLegacy.jl and the renamed files' changed lines, src/, test/), 30654e4b, the landing log and the
+gate records. (c) ConstructionLock is sound: it calls the src check and then construction_negatives_missed, whose
+`else` arm reports a construction with no plants as a fault, so a ConstructionLock naming an unplanted definition is
+red; ratchet_source maps `function (c::ConstructionLock)()` to the name ConstructionLock so L207 reaches the plants
+through the lock table's text, and the run, not the text, decides. (f) is sound: probes_touched slices
+`corpus[1:min(h, length(corpus))]`, an empty slice at h = 0, and the baseline arm tests `1 <= h`, so a file emptied
+whole selects nothing. (A34E1, medium, (d)) A Removes-test line naming `<corpus>:*`, or the corpus path itself, admits
+the removal of any subset of its cases under one reason (`(corpus * ":*") in named || corpus in named`), whether the
+corpus loses one case or all; the gate prints no count. The fix: `<corpus>:*` only when the corpus loses every case,
+the count in the record. (A34E2, low, (e)) The legacy freeze has a two-landing bypass: land refuses a change to
+legacy/ only while both the march tip and the head hold it, so one landing that deletes legacy/ whole and a next that
+re-creates it edited both pass (the second is "the commit that creates it"). The fix: the creation exemption names its
+commit (86105198) and every later re-creation is refused. (A34E3, low) own_s still charges a slot wait after an own
+red: an own red counts from its start to the next attempt's start, and the next attempt starts when its slot comes, so
+the lead's ordering after a fixed red is own time. A timing red on a stage the change itself slows is `queue`, so a
+change's real cost to the gate counts nothing. 86105198's own_s, 45.9 s, leaves out its own red (record 0227b14e, the
+BoundsError), which ran before reds.tsv existed. (A34E4, low) The map (test/block_groups.tsv) is now written by hand,
+and its `measured` row names the switch's own src tree, which no measurement ran on, so the staleness budget reads a
+hand map as measured; harmless while src holds four files of stubs, not after 1.B. (A34E5, low) 3b3a0a0c carries a
+second, indented Co-Authored-By trailer, as bb2c2fee did (A32E1). (A34E6, low) Kaimon: 86105198 measured "each in a
+fresh process", after the Kaimon rule, where the warm session answers the same; b3e0b602, 3b3a0a0c and 30654e4b name
+bash mirrors or the Kaimon session. The Kaimon refusal itself holds: this entry's land runs with session e1d51284 live.
+Requirements: D39 has its check (b3e0b602); D9's rejection is a construction (L218); the smoke ladder counts loud as
+green, so the differential gate is vacuous until a path compiles (1.D), by design and stated. No lock fired inside its
+band.
+
+Landing times (edit to landed; own, queue): b3e0b602 2705 s (169.5, 2535.5); 3b3a0a0c 199 s (55.4, 143.6); 86105198
+2495 s (45.9, 2449.1); 30654e4b 2331 s (24.7, 2306.3).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A34S1, A34S3 and A34S4 are open on
+MARCH 1.S. A34S2, A34E1, A34E2, A34E3, A34E4, A34E5, A34E6 and A34E7 are open on MARCH 1.L.
