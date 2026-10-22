@@ -84,3 +84,56 @@ by reflection over their method tables when the package loads.
         throw(ConstructionViolation(name, "the token $(nameof(token)) has $(length(ts)) constructor methods, where its one is in $(basename(file)) alone"))
     return 0
 end
+
+# whether a lowered statement, or any expression inside it, makes a `T` or names `token`: a GlobalRef
+# resolving to `token` anywhere, a call whose callee resolves to `T`, or a `:new` of `T` or `token`
+# (naming `T` as a type, in an annotation or an `isa`, makes nothing)
+@quarantine "a lowered statement's references are its GlobalRefs, calls and :new forms, Julia's lowered IR" Core.GlobalRef function _makes(x, T::DataType, token::DataType)::Bool
+    local is(g, b) = (g isa GlobalRef && isdefined(g.mod, g.name) && getglobal(g.mod, g.name) === b) || g === b
+    if x isa GlobalRef
+        return is(x, token)
+    elseif x isa Expr
+        x.head === :new && !isempty(x.args) && (is(x.args[1], T) || is(x.args[1], token)) && return true
+        x.head === :call && !isempty(x.args) && is(x.args[1], T) && return true
+        return any(a -> _makes(a, T, token), x.args)
+    end
+    return x === token
+end
+
+# whether `mod` is `root` or a module inside it, by its chain of parents
+@quarantine "a module's place is its chain of parents, Julia's own record of nesting" Base.parentmodule function _within(mod::Module, root::Module)::Bool
+    while true
+        mod === root && return true
+        local p = parentmodule(mod)
+        p === mod && return false
+        mod = p
+    end
+end
+
+"""
+    check_sole_maker(root, T, token, makers, checks) -> Int
+
+The other half of a typestate's check (dev/AUDIT.md A36S3): no code in `root`, WasmTarget, makes a
+`T` but the methods `makers` names. Every method a module of `root` defines is read in its lowered
+form, and one that names `token` (a call of its constructor) or constructs `T` or `token` with
+`:new`, other than `T`'s and `token`'s own constructors and the `makers`, throws a
+`ConstructionViolation` naming it. `makers` holds the functions allowed to make a `T` and `checks` the
+methods that assert it (the construction's own check names the token), each matched by identity,
+never by name or line.
+
+precedent(rust: a private constructor, which no code outside its module can call). Julia's differs: it
+has no module privacy, so the guarantee holds for WasmTarget's own code, read when the package
+loads; a caller outside the package can still reach the token, a limit of the language, not a choice.
+"""
+@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.uncompressed_ast function check_sole_maker(root::Module, T::DataType, token::DataType, makers::Tuple, checks::Tuple)::Int
+    local name = string(nameof(T))
+    local allowed = Set{Method}(vcat(collect(methods(T)), collect(methods(token)), [m for f in makers for m in methods(f)], collect(Method, checks)))
+    local found = String[]
+    Base.visit(Core.methodtable) do m
+        (m isa Method && _within(m.module, root) && !(m in allowed)) || return
+        isdefined(m, :source) || return   # no lowered source: a builtin's, naming nothing
+        any(s -> _makes(s, T, token), Base.uncompressed_ast(m).code) && push!(found, "$(m.name) at $(m.file):$(m.line)")
+    end
+    isempty(found) || throw(ConstructionViolation(name, "made or its token named outside its makers: $(join(found, "; "))"))
+    return 0
+end
