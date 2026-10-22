@@ -3199,3 +3199,87 @@ Landing times (edit to landed; own, queue): 371373c2 186 s (100.2, 85.8); 0806bf
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A36S1, A36S2 and A36S3 are open on
 MARCH 1.S. A36E1 is open on MARCH 1.L.
+
+## 2026-10-22 — audited through 53ded292 (32b7e806..53ded292: entry 36, a refused head never holds the queue, one trailer, ClosedWorld's makers read in lowered code, NIR read once from the ClosedWorld)
+
+The thirty-seventh audit covers 676671c0 (entry 36; its author's), 4c0140a4 (9c: `land wait` runs `land` as its child,
+pops and re-queues a lane refused before the hold, exit 4, or on a full audit window, exit 5; a commit touching
+dev/AUDIT.md queues at the head; red turns and rebase conflicts logged in dev/.loop/QUEUE.log; a stage that reached no
+runner is no verdict; A35E1, A35E2, A35E3), f6ae4b7c (one Co-Authored-By trailer: the hook and CI refuse a second,
+L209; Fixes: A35E4; `Charter-change: C0 authorised by Dale 2026-10-21`), dbef1df6 (check_sole_maker reads every
+WasmTarget method's lowered code at load and refuses one that names the token, calls ClosedWorld or makes either with
+`:new`, other than the allowed methods; Fixes: A36S3; written by the lead) and 53ded292 (1.A10: src/julia/nir.jl reads every function of the ClosedWorld into NIR, its operands the closed sum
+NirValue and its statements the closed sum NirStmt, 25 kinds, each statement typed by Julia's ssavaluetypes or the
+CodeInstance's rettype; L221 and L222 ConstructionLocks over check_closed_sum; `Charter-change: C1 C3 C5 authorised by
+Dale 2026-10-22`). No wrong answer.
+Each landed head's record is green. A35E1, A35E2 and A35E3 are fixed as 4c0140a4 states. A retraction leads this
+entry. One red flag: A37S1. Findings A37S1, A37S2 and A37E1-A37E4.
+
+Retraction (the audit lane's error). A32E1, A34E5 and A35E4, and entry 36's remark on 0806bf56, were false. Each was
+read from `git show -s --format=%B <c>` followed in the same command by `git show --stat <c> | tail`, whose output
+reprints the whole message indented four spaces; its last line, the trailer, read as a second, indented trailer.
+Counted precisely, `git log -1 --format=%B <c> | grep -ciE '^[[:space:]]*co-authored-by'` reads 1 for bb2c2fee, 3b3a0a0c,
+edf2327b, 0806bf56, f9d5e820 and dbef1df6. f6ae4b7c therefore fixed a defect that did not exist, and its message's "each
+carried a second, indented Co-Authored-By line" repeats this lane's error; its hook rule and L209 are harmless and
+stand as a guard. The three IDs leave their rows with this entry. The lesson for this lane: a count is read with one
+command whose output is the count.
+
+Area: builder — empty by diff: src/wasm_builder/ does not exist on 53ded292.
+
+Area: collection and planning — 53ded292's src/julia/nir.jl: build_nir reads the ClosedWorld check_subset made, once,
+and _nir_stmt projects Julia's open statement forms onto the closed sum NirStmt with one ladder over Expr heads and node
+types, its last arm a located Unquarantined rejection; _nir_operand rejects every IR node form and an Expr as an
+operand and takes anything else as a literal, NirConst(Core.Const(x)), which is Julia's own rule for an operand of
+optimized IR (argextype: what is no SSAValue, Argument, GlobalRef, QuoteNode or IR node is a constant); a statement's
+type is Julia's (ssavaluetypes, or the CodeInstance's rettype for a one-statement body stored without them), and a type
+that is no Type rejects. The ladder is the one place an open Julia classification becomes a closed sum, as WT2-DESIGN's
+NIR is meant to be. (A37E4, low) NirConst holds a `Core.Const`, whose `val` is typed Any, so the operand sum carries an
+Any field by proxy, the kind of field 1.A8's L215 will refuse. dbef1df6's src/julia/subset.jl: construction_check(::Val{:ClosedWorld}) adds
+check_sole_maker over Base.moduleroot(WasmTarget), the makers (check_subset,) and the check's own method.
+
+Area: emission and diagnostics — dbef1df6's src/julia/construction.jl, check_sole_maker and _makes.
+
+stopgap in disguise: (A37S1, medium, red flag) check_sole_maker reads lowered IR, reflection at load, no source text:
+in its kind a construction, Julia's stand-in for Rust's privacy checker, which is itself a compiler pass over every
+item. Its coverage, though, is an enumerated set of IR forms, a GlobalRef to the token, a call whose callee resolves
+to ClosedWorld, a `:new` of either, and Julia has more ways to build a struct than it names. Measured in this lane's
+Kaimon session (e1d51284) on dbef1df6's tree, with check_sole_maker run on a probe module (a token `Tok`, a struct
+`W(::Tok, x)`, a maker `maker(x) = W(Tok(), x)`): a method calling `W(Tok(), 1)` is refused, as it should be, while
+five others pass at 0, and four of them, run, each return a W: `Expr(:splatnew, W, (1,))` (only `:new` is read), a
+`ccall(:jl_new_struct, Any, (Any, Any...), W, 1)` (a foreigncall's arguments are read only for the token), the token
+fetched as `getfield(@__MODULE__, Symbol("To", "k"))()` (no GlobalRef names it), an `@generated` body returning
+`Expr(:new, W, 1)` (a generator's code is not the method's lowered source); and a second method of the maker,
+`maker(x::String) = W(Tok(), 2)`, passes because the allowed set is every method of each maker function, taken from
+`methods(f)` when the check runs, so identity is matched against a set that grows with the function. The fix: read
+`:splatnew` and the foreigncalls jl_new_struct, jl_new_structv and jl_new_structt beside `:new`; refuse in WasmTarget's
+own code any `@generated` function, `eval`, `invokelatest` of a non-constant callee and `getfield`/`getglobal` of a
+module with a computed name (WasmTarget needs none); allow the maker by the one Method it is, captured beside its
+definition. The claim limited to WasmTarget's own code is honest and stated so; package extensions are modules outside
+Base.moduleroot(WasmTarget), so ext/ (re-ported in 1.F) falls outside it, which the claim should name.
+precedent: NirStmt and NirValue, Rust's enum with an exhaustive match and dart's sealed class with its switch (a
+Union of concrete structs checked at load, as Rejection); check_sole_maker, Rust's private constructor, enforced by the compiler at every caller; Julia has neither privacy nor a
+closed set of ways to construct, so a load-time read of the package's IR stands in, sound only for the forms it reads.
+
+Area: enforcement and prose — every hunk of 4c0140a4 (dev/land.sh, dev/land_queue.sh, dev/block.jl, test/lock_negatives.jl,
+test/parity_ratchet.jl), f6ae4b7c (dev/hooks/commit-msg, .github/workflows/ci.yml, dev/LEDGER.md, test/parity_ratchet.jl),
+dbef1df6's test/parity_ratchet.jl and dev/MARCH.md, the landing log, the queue's log and the gate records. 9c is sound
+where its message says: a refusal before the hold pops, logs and re-queues once the preflight passes, so a refused
+head no longer holds the queue. (A37S2, low) `front` is granted to any commit whose diff touches dev/AUDIT.md
+(`git diff --quiet <base> HEAD -- dev/AUDIT.md`), not to one that adds the next entry, so a lane that edits the audit
+log's preamble or an old entry jumps the queue; audit_window.sh's own-tree reading (HEAD's entries more than origin's)
+is the test the message states. (A37E1, low) A lane refused at its turn by the queue check itself (`may` lost to a
+stale skip between `wait`'s read and `land`'s) exits 4 like a preflight refusal, is popped, and re-queues at the tail,
+its place lost; and lanes refused by a full window re-enter in the order their 30-s polls happen to wake, not their
+order before. (A37E2, low) The trailer rule binds by the installed hook, and the shared hook
+(`$(git rev-parse --git-common-dir)/hooks/commit-msg`) differs from dev/hooks/commit-msg and holds no Co-Authored-By
+rule; `land` runs no hook on a landing commit; L209 tests the tracked file; CI's message-hygiene runs only at closure.
+A rule a lane's installed copy lacks binds no landing. (A37E3, low) Kaimon: dbef1df6 and f6ae4b7c measured "in fresh
+processes" and "by hand"; 4c0140a4 replayed in bash. 53ded292 measured in its lane's Kaimon session and on Julia 1.13.1. Requirements: D13's queue holds its turn order; L220
+gains its maker check; no lock fired inside its band.
+
+Landing times (edit to landed; own, queue): 4c0140a4 319 s (37.8, 281.2); f6ae4b7c 71 s (26.1, 44.9); dbef1df6 34 s (33.3, 0.7); 53ded292 642 s
+(32.2, 609.8), unjudged (cold).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A37S1 and A37S2 are open on MARCH
+1.S. A37E1, A37E2, A37E3 and A37E4 are open on
+MARCH 1.L.
