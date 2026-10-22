@@ -10,7 +10,7 @@ Each line is a row of the ledger, which holds Dale's words, the why and the chec
 L206 generates this list from the ledger: every requirement an agent must honour is here.
 
 <!-- ledger:begin -->
-- **D1** Copy dart2wasm's structure at the pinned commit; every src definition carries parity(...).
+- **D1** Copy dart2wasm's structure at the pin; every src definition carries @parity or @quarantine.
 - **D2** Green differential means sound, not dart-faithful; parity work is never cleanup.
 - **D3** When Julia's compiler answers a question, port its answer; never approximate it.
 - **D4** Where dart works around missing overloading, name by the MethodInstance signature.

@@ -228,7 +228,7 @@ _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === noth
 const STRICT_SCOPE = ("C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
 # The clauses whose every cited lock is classified (2026-10-21); C1 to C3 classify theirs before
 # they close, since L201 reads an unclassified lock in a clause with no Planned text as a violation.
-const STRICT_CLASSIFIED = ("C0", "C4", "C5", "C6", "C7", "C8")
+const STRICT_CLASSIFIED = ("C0", "C2", "C4", "C5", "C6", "C7", "C8")
 # Every lock a classified clause cites, by what decides it, and for a construction the definition in
 # src that is the construction. :construction: that definition makes the wrong choice inexpressible
 # through WT's interfaces, and its assertion lives in src beside it, the load-time check the definition
@@ -250,6 +250,8 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     # the rebuild's first constructions (dev/MARCH.md 1.A2c): the rejections a closed sum (C6), and
     # no open abstract type passing for a closed one (C5, A33S1); C4, C7 and C8's arrive with theirs
     "L218" => (:construction, "Rejection"), "L219" => (:construction, "check_no_open_abstract"),
+    # the file map, the anchors and the quarantine (C2): src/julia/parity.jl
+    "L210" => (:construction, "include_dart"), "L211" => (:construction, "parity"), "L212" => (:construction, "quarantine"),
 )
 
 
@@ -262,6 +264,12 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
                "a Union of concrete structs that subtype nothing, its every kind handled and nothing else, checked when the package loads, since Julia checks no match at compile time"),
     "L219" => ("dart: sealed class against abstract class; rust: enum against trait",
                "Julia's abstract types are open by language, so an abstract type that is neither a registered construction nor a dart abstract class's mirror refuses the package's load"),
+    "L210" => ("dart: part/part of, a library naming each file it holds; rust: mod, a crate's files reachable only through its declarations",
+               "Julia's include takes any path, so include_dart admits the pin table's files alone and the files it loaded are checked against the directory listing when the package loads"),
+    "L211" => ("rust: the deny missing_docs lint, every item documented or the crate does not build",
+               "nothing in Julia requires a definition to say where it comes from, so @parity checks the anchor and the name where it is written and the totality check refuses, by reflection over the method table and the bindings, any definition outside src/julia no @parity spans when the package loads"),
+    "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
+               "Julia has no keyword marking Julia-only code, so @quarantine checks the necessity and resolves the Julia API where it is written and the totality check refuses any src/julia definition no @quarantine spans when the package loads"),
 )
 
 # whether a precedent reads `<ecosystem>: <mechanism>`, the ecosystem lowercase
@@ -309,15 +317,87 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         local noopen = getfield(wt, :check_no_open_abstract)
         local bad = Module(:OpenPlant); Core.eval(bad, :(abstract type Bad end))
         local good = Module(:MirrorPlant)
-        Core.eval(good, :(Core.@doc "parity(ir/types.dart:12 ValueType) the dart class" abstract type Good end))
+        Core.eval(good, Meta.parse("import WasmTarget: @parity"))
+        Base.include_string(good, "@parity \"wasm_builder/lib/src/ir/type.dart:12 ValueType\" abstract type ValueType end", "/plant/src/wasm_builder/ir/type.jl")
         local sub = Module(:SubPlant); Core.eval(sub, Expr(:toplevel, :(module Sub; abstract type Hidden end; end)))
         refuses(() -> noopen(bad)) || push!(out, "negative missed: an open abstract type passes")
-        passes(() -> noopen(good)) || push!(out, "negative missed: a dart abstract class's mirror with its parity anchor fails")
+        passes(() -> noopen(good)) || push!(out, "negative missed: a dart abstract class's mirror carrying @parity fails")
+        local doc = Module(:DocPlant)
+        Core.eval(doc, :(Core.@doc "parity(wasm_builder/lib/src/ir/type.dart:12 ValueType) the dart class" abstract type ValueType end))
+        refuses(() -> noopen(doc)) || push!(out, "negative missed: a docstring naming a parity anchor exempts an open abstract type")
         refuses(() -> noopen(sub)) || push!(out, "negative missed: an open abstract type in a submodule passes")
         local par = Module(:ParamPlant); Core.eval(par, :(abstract type Open{T} end))
         refuses(() -> noopen(par)) || push!(out, "negative missed: a parametric open abstract type (a UnionAll binding) passes")
+    elseif definition in (:include_dart, :parity, :quarantine)
+        append!(out, parity_negatives_missed(wt, definition, refuses, passes))
     else
         push!(out, "the construction $definition has no plants in construction_negatives_missed")
+    end
+    return out
+end
+
+# the file map's, the anchors' and the quarantine's plants (src/julia/parity.jl): fixed source each
+# check or macro must refuse or pass, loaded into fresh modules under /plant/src (outside WT's src, so
+# only the plants' own rules apply) or, for the location rules, under WT's own src/julia and src/
+function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Function, passes::Function)::Vector{String}
+    local out = String[]
+    local V = getfield(wt, :ConstructionViolation)
+    local src = getfield(wt, :SRC)
+    local plant(name) = (m = Module(name); Core.eval(m, Meta.parse("import WasmTarget: @parity, @quarantine, @unported")); m)
+    # a load the macros refuse at its line: the LoadError Julia wraps the refusal in, unwrapped
+    local refused_load(code, file) = try
+        Base.include_string(plant(:LoadPlant), code, file); false
+    catch e
+        while e isa LoadError; e = e.error; end
+        e isa V
+    end
+    if definition === :include_dart
+        local dir = mktempdir()
+        mkpath(joinpath(dir, "julia")); mkpath(joinpath(dir, "wasm_builder", "ir"))
+        foreach(f -> write(joinpath(dir, f), "\n"), ("translator.jl", "WasmTarget.jl", joinpath("julia", "x.jl"), joinpath("wasm_builder", "ir", "type.jl")))
+        local check = getfield(wt, :check_include_dart)
+        passes(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart"])) || push!(out, "negative missed: the directory's files, each included, fail")
+        refuses(() -> check(dir, ["dart2wasm/lib/translator.dart"])) || push!(out, "negative missed: a file loaded other than by include_dart passes")
+        refuses(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart", "dart2wasm/lib/types.dart"])) || push!(out, "negative missed: an included dart file with no source passes")
+        refuses(() -> getfield(wt, :include_dart)("dart2wasm/lib/dart2wasm.dart")) || push!(out, "negative missed: a dart file outside the pin table includes")
+        rm(dir; recursive = true)
+    elseif definition === :parity
+        local m = plant(:ParityPlant)
+        Base.include_string(m, """
+            @parity "dart2wasm/lib/translator.dart:10 Translator" struct Translator end
+            @parity "dart2wasm/lib/translator.dart:20 Translator.translateType" @unported function translate_type(t::Translator, n::Int) end
+            @parity "dart2wasm/lib/translator.dart:30 Translator.isStruct" is_struct(t::Translator)::Bool = (local f = () -> true; f())
+            """, "/plant/src/translator.jl")
+        passes(() -> getfield(wt, :check_parity)(m, "/plant/src")) || push!(out, "negative missed: definitions each carrying @parity fail")
+        local stub = try; Base.invokelatest(() -> m.translate_type(m.Translator(), 1)); nothing; catch e; e; end
+        (stub isa getfield(wt, :RejectionError) && Base.invokelatest(==, stub.rejection, Base.invokelatest(getfield(wt, :Unported), "dart2wasm/lib/translator.dart:20 Translator.translateType"))) ||
+            push!(out, "negative missed: an @unported stub does not reject with its @parity's anchor")
+        local bare = plant(:BarePlant)
+        Base.include_string(bare, "@parity \"dart2wasm/lib/types.dart:5 isNullable\" is_nullable(x::Int) = x\nhelper(x::Int) = x\n", "/plant/src/types.jl")
+        refuses(() -> getfield(wt, :check_parity)(bare, "/plant/src")) || push!(out, "negative missed: a method with no @parity passes")
+        local root = plant(:RootPlant)
+        Base.include_string(root, "const ROOT = 1\n", "/plant/src/WasmTarget.jl")
+        refuses(() -> getfield(wt, :check_parity)(root, "/plant/src")) || push!(out, "negative missed: a binding no definition marks passes")
+        refused_load("@parity \"dart2wasm/lib/dart2wasm.dart:1 main\" main() = 0", "/plant/src/x.jl") || push!(out, "negative missed: an anchor outside the pin table loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart Translator\" struct Translator end", "/plant/src/x.jl") || push!(out, "negative missed: an anchor with no line loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator.translateType\" translateType(x::Int) = x", "/plant/src/x.jl") || push!(out, "negative missed: a name not the rule's loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator end", joinpath(src, "julia", "plant.jl")) || push!(out, "negative missed: @parity in src/julia loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator\" struct Translator end", joinpath(src, "plant.jl")) || push!(out, "negative missed: @parity in a src file include_dart did not load loads")
+        refused_load("@unported f(x::Int) = nothing", "/plant/src/x.jl") || push!(out, "negative missed: @unported outside @parity loads")
+        refused_load("@parity \"dart2wasm/lib/translator.dart:9 Translator.foo\" @unported foo(x::Int) = x", "/plant/src/x.jl") || push!(out, "negative missed: an @unported stub with a body loads")
+        local snake(s) = Base.invokelatest(getfield(wt, :snake), s)
+        (snake("toJSON") == "to_json" && snake("i32Const") == "i32_const" && snake("_translateType") == "_translate_type" && snake("HTMLParser") == "html_parser") ||
+            push!(out, "negative missed: the snake rule")
+    else
+        local m = plant(:QuarantinePlant)
+        Base.include_string(m, "@quarantine \"Julia's iteration\" Base.iterate f(x::Vector{Int}) = [y for y in x]\n", "/plant/src/julia/q.jl")
+        passes(() -> getfield(wt, :check_quarantine)(m, "/plant/src")) || push!(out, "negative missed: definitions each carrying @quarantine fail")
+        Base.include_string(m, "g(x::Int) = x\n", "/plant/src/julia/r.jl")
+        refuses(() -> getfield(wt, :check_quarantine)(m, "/plant/src")) || push!(out, "negative missed: a src/julia method with no @quarantine passes")
+        refused_load("@quarantine \"why\" Base.no_such_api h(x::Int) = x", "/plant/src/julia/q.jl") || push!(out, "negative missed: an API that does not resolve loads")
+        refused_load("@quarantine \"why\" push! h(x::Int) = x", "/plant/src/julia/q.jl") || push!(out, "negative missed: an unqualified API loads")
+        refused_load("@quarantine \" \" Base.push! h(x::Int) = x", "/plant/src/julia/q.jl") || push!(out, "negative missed: an empty necessity loads")
+        refused_load("@quarantine \"why\" Base.push! h(x::Int) = x", joinpath(src, "plant.jl")) || push!(out, "negative missed: @quarantine outside src/julia loads")
     end
     return out
 end
@@ -499,7 +579,7 @@ end
 function precedent_missing(path::AbstractString, lines::AbstractVector{<:AbstractString},
                            names::AbstractVector{<:AbstractString})::Vector{String}
     local out = String[]
-    local named = [Regex("^\\s*(?:@inline\\s+)*(?:function|macro|struct|mutable struct|const)\\s+\\Q" * n * "\\E(?![\\w!])") for n in names]
+    local named = [Regex("^\\s*(?:@quarantine\\s+\"[^\"]*\"\\s+\\S+\\s+|@parity\\s+\"[^\"]*\"\\s+)?(?:@inline\\s+)*(?:function|macro|struct|mutable struct|const)\\s+\\Q" * n * "\\E(?![\\w!])") for n in names]
     for (i, l) in enumerate(lines)
         local m = match(r"^\s*(?:@enum\s+(\w+)|@closed\s+(?:abstract type\s+|(?:mutable\s+)?struct\s+|const\s+)?(\w+))", l)
         local name = m === nothing ? nothing : something(m[1], m[2])
@@ -671,9 +751,9 @@ src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_
 # L208's negative test: four src-less landings print no note, five print it, the line keeps its form
 function src_progress_negatives_missed()::Vector{String}
     local out = String[]
-    occursin("note:", src_progress("10", "4")) && push!(out, "negative missed: four src-less landings printed the note")
-    occursin("note:", src_progress("10", "5")) || push!(out, "negative missed: five src-less landings printed no note")
-    startswith(src_progress("10", "0"), "src: 10 parity( anchors under src/") || push!(out, "negative missed: the line's form")
+    occursin("note:", src_progress("10", "2", "4")) && push!(out, "negative missed: four src-less landings printed the note")
+    occursin("note:", src_progress("10", "2", "5")) || push!(out, "negative missed: five src-less landings printed no note")
+    startswith(src_progress("10", "2", "0"), "src: 2 of 10 anchored dart definitions ported") || push!(out, "negative missed: the line's form")
     return out
 end
 
@@ -2378,8 +2458,14 @@ const LOCKS = [
         end),
     "L218_rejections_a_closed_sum" => ("the rejections are a closed sum by construction (dev/MARCH.md 1.A2c, Dale 2026-10-21: strict means the wrong choice cannot be written): src/julia/reject.jl's `Rejection` is a `Union` of five concrete structs (Unported, Unquarantined, OutsideSubset, InvalidModule, Internal) that subtype nothing, so no module adds a kind without editing that line, and every kind has its `_reason` and no other type has one; construction_check(::Val{:Rejection}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed: a kind with no handler, a handler outside the sum, a kind under an open abstract type and a sum that is no Union each refused, a sum fully handled passed) (dev/CHARTER.md C6)",
         ConstructionLock(:Rejection)),
-    "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose docstring carries `parity(<file>.dart:<line> <Symbol>)`, so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
+    "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose definition carries `@parity` (an entry of the registry naming it, src/julia/parity.jl), so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
         ConstructionLock(:check_no_open_abstract)),
+    "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\")` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): the path a key of the pin table DART_FILES, loaded once from src/<path>.jl, and when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed) (dev/CHARTER.md C2)",
+        ConstructionLock(:include_dart)),
+    "L211_anchor" => ("every definition outside src/julia carries `@parity \"<file>.dart:<line> <Symbol>\"`, the dart definition it copies at the pin (Dale: dart2wasm 1:1 through and through, dev/LEDGER.md D1): the macro refuses, at the definition's line, an anchor not of that form or whose file is no key of DART_FILES, a file in src/julia or one include_dart did not load, and a Julia name other than the one rule's (snake), and expands `@unported` into a body rejecting with the anchor; when WasmTarget has loaded, every method it defines outside src/julia lies in an @parity's span in its file and every binding it owns is a marked definition's, by reflection over the method table and the bindings; construction_check(::Val{:parity}) asserts it (check_parity), and this lock only calls it, with its plants (an unmarked method, an unmarked binding, an anchor outside the pin table or with no line, a name not the rule's, @parity in src/julia or in a file include_dart did not load, @unported outside @parity or with a body each refused; marked definitions passed and an @unported stub rejecting with its anchor; the snake rule) (dev/CHARTER.md C2)",
+        ConstructionLock(:parity)),
+    "L212_quarantine" => ("every definition in src/julia carries `@quarantine \"<necessity>\" <Module.api>`, what Julia forces and dart lacks and the Julia API it relies on (Dale: the Julia compiler is the ground truth, dev/LEDGER.md D3): the macro refuses, at the definition's line, an empty necessity, an API that is not a qualified name or does not resolve, and a file under src/ outside src/julia; when WasmTarget has loaded, every method it defines in src/julia lies in a @quarantine's span and every binding it owns is a marked definition's, by reflection; the registry's own definitions carry it too, registered through the function the macro expands to; construction_check(::Val{:quarantine}) asserts it (check_quarantine), and this lock only calls it, with its plants (an unmarked src/julia method, an unresolvable or unqualified API, an empty necessity and @quarantine outside src/julia each refused, marked definitions passed) (dev/CHARTER.md C2)",
+        ConstructionLock(:quarantine)),
     "L207_every_negative_runs_every_gate" => ("every lock's negative runs in every gate, inside this file (Dale 2026-10-21, after test/lock_negatives.jl's L195 plant rotted unseen until a landing touched that file): a lock calls, directly or through functions of this file, a function named `<name>_negatives_missed` that plants fixed text its own logic must answer, so the ratchet stage runs it on every landing; a negative in a family the gate's selection may skip counts for nothing. Every lock outside NEGATIVE_OWED has one; NEGATIVE_OWED lists exactly the locks that owe theirs, none with one and none that is no lock, and R45 counts it, so the list only shrinks and a new lock never joins it. Behavior, run here: four planted tables and four planted sources answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local defs, thunks, calls = ratchet_source()
@@ -2389,7 +2475,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/land.sh land` runs dev/src_progress.sh after every landing, which prints the parity( anchors under src/ (1.A3 defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/land.sh land` runs dev/src_progress.sh after every landing, which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
             local o = src_progress()

@@ -10,7 +10,7 @@ supported surface ends.
 dart-lang/sdk **`898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e`** — the compiler in
 `pkg/dart2wasm/lib/`, the builder in `pkg/wasm_builder/lib/src/`
 (<https://github.com/dart-lang/sdk/tree/898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e/pkg/dart2wasm>).
-Every `parity(<file>.dart:<line> <Symbol>)` anchor in `src/` cites a line at this commit, and
+Every `@parity "<file>.dart:<line> <Symbol>"` anchor in `src/` cites a line at this commit, and
 `AGENTS.md` pins the same hash (L128 compares the two). Moving the pin re-audits every anchor.
 
 dart2wasm is a structural oracle, not a feature checklist: Julia and Dart have different

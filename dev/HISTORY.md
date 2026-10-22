@@ -1,9 +1,6 @@
 # WasmTarget history
 
-The archive of completed work, one short entry per campaign. It is not a plan: what counts
-as done is `dev/CHARTER.md`, the open work is `dev/MARCH.md`, and the measured state is the
-output of `test/parity_ratchet.jl`. Plans, ledgers, intermediate counts and resume notes
-live in Git history, never here.
+The archive of completed work, one short entry per campaign. It is not a plan: what counts as done is `dev/CHARTER.md`, the open work is `dev/MARCH.md`, and the measured state is the output of `test/parity_ratchet.jl`. Plans, ledgers, intermediate counts and resume notes live in Git history, never here.
 
 ## Typed builder and cleanup campaigns
 
@@ -155,6 +152,9 @@ it was never measured. That audit produced `dev/CHARTER.md`, the definition of d
 - One table per construct: the operator table and the conversion table, one width rule, one operand table, one loop-bounds definition (L180). One CFG, Julia's own (nir_cfg: compute_basic_blocks over the NIR), read by the stackifier (its blocks, edges and jump targets), the trampolines, the loop bounds, the proven-dead and definite-initialization proofs and the stub reset; one dominator computation, Julia's naive_idoms (L181). A constant callee is its object, resolved once at the boundary, a capture-holding one's self in its own field (L182); one as-checker per (target, static type), its rejection each caller's (L183). One owner of a compile's state, its Translator and its module's registries (R40 locked at 0); a host's module checked at the entry, before collection; the `optimize_ir` keyword removed (public API); A13E5 found resolved.
 - Audit #16's fixes: one widening rule into any register and every conversion target resolved once (L180); `nothing` null at every nullable reference of the any hierarchy (L178); a retarget recomputed every round (L40); a nested captor joins its box. Audit #17's: a captor's write through any operand joins its box; a primitive's width its own bits (L180); one storage-pointer rule, E5 (L143); no ENV read outside the options (L158); `#undef` distinct from `nothing` in a pointer slot, every reference read checked, A17E1 and A12E1 closed (L63, Undef.tla).
 - One export namer: a compiled function is named by its Julia identity (show_spec_sig; of two methods over one specialization the less specific adds its own signature, by `morespecific`), each export name taken once or refused, never a counter, and a link_roots hook's exports requested and made once (L184); one query for the import at a function index (L185); the host runtime generated from each module's imports (L150).
+
+## Phase 1 — the rebuild (PR #128, 2026-10-21 …)
+- The file map, the anchors and the quarantine: a file of src/ outside src/julia loads only through `include_dart` from the pin table, every definition there carries `@parity` and every src/julia definition `@quarantine`, each checked where it is written and every method and binding covered when the package loads (L210, L211, L212).
 
 ## Why the archive was consolidated
 Old campaign files read as current; finished work is locked in `test/parity_ratchet.jl`, history in Git.

@@ -1,31 +1,7 @@
 # The constructions' load-time checks (dev/CHARTER.md C0, L201): a construction makes the wrong
 # choice inexpressible through WasmTarget's interfaces, and what Julia's compiler cannot check
 # itself, its assertion, runs here when the package loads; the ratchet's ConstructionLock only calls
-# it, so no lock of a construction reads text.
-#
-# parity(quarantine: dart's analyzer checks a sealed class's switches and a class's abstract members
-# at compile time, and Rust's compiler an enum's matches; Julia checks neither, so each construction
-# asserts its own at load, Rust's `const _: () = assert!(..)` beside the item)
-
-"""
-    construction_check(::Val{definition}) -> Int
-
-The load-time check of the construction `definition` names, defined beside that definition; 0 when
-it holds, and it throws, refusing the load, when it does not. `ConstructionLock(definition)` in
-test/parity_ratchet.jl only calls it.
-"""
-function construction_check end
-
-"""
-    ConstructionViolation(definition, what)
-
-A construction's load-time check failed: `definition` names the construction and `what` the fault.
-"""
-struct ConstructionViolation <: Exception
-    definition::String
-    what::String
-end
-Base.showerror(io::IO, e::ConstructionViolation) = print(io, "WasmTarget: construction ", e.definition, " broken: ", e.what)
+# it (`construction_check`, src/julia/parity.jl), so no lock of a construction reads text.
 
 """
     check_closed_sum(sum, handler) -> Int
@@ -34,7 +10,7 @@ The check of a closed sum: `sum` a `Union` of concrete structs that subtype noth
 outside this line can add a kind), `handler` a function with a method for every kind and for no
 other type. Throws a `ConstructionViolation` naming the first fault.
 """
-function check_closed_sum(@nospecialize(sum), handler::Function)::Int
+@quarantine "dart's analyzer checks a sealed class's switches and Rust's compiler an enum's matches; Julia checks neither" Base.uniontypes function check_closed_sum(@nospecialize(sum), handler::Function)::Int
     local name = string(sum)
     sum isa Union || throw(ConstructionViolation(name, "not a Union of its kinds"))
     local kinds = Base.uniontypes(sum)
@@ -51,26 +27,19 @@ function check_closed_sum(@nospecialize(sum), handler::Function)::Int
     return 0
 end
 
-# the text of a binding's docstrings in `mod`, "" when it has none
-function _docstring_text(mod::Module, n::Symbol)::String
-    local md = get(Base.Docs.meta(mod), Base.Docs.Binding(mod, n), nothing)
-    md === nothing && return ""
-    return join((join(string.(d.text)) for d in values(md.docs)), "\n")
-end
-
 """
     check_no_open_abstract(mod) -> Int
 
 No open hierarchy in WasmTarget passes for a closed one (dev/AUDIT.md A33S1): every abstract type
 `mod` or a submodule of it defines is a registered construction (`construction_check(::Val{name})`
-has a method) or mirrors a dart abstract class, its docstring carrying the
-`parity(<file>.dart:<line> <Symbol>)` anchor. A closed sum is then a `Union` or an `@enum` by its
-type, never by its comment. Throws a `ConstructionViolation` naming the first other abstract type.
+has a method) or mirrors a dart abstract class, its definition carrying `@parity` (an entry of
+`REGISTRY` naming it). A closed sum is then a `Union` or an `@enum` by its type, never by its
+comment. Throws a `ConstructionViolation` naming the first other abstract type.
 
 precedent(dart: sealed class against abstract class; rust: enum against trait). Julia's differs:
 its abstract types are open by language, so the refusal runs when the package loads.
 """
-function check_no_open_abstract(mod::Module)::Int
+@quarantine "Julia's abstract types are open by language; dart's sealed classes and Rust's enums are not" Base.isabstracttype function check_no_open_abstract(mod::Module)::Int
     for n in names(mod; all = true)
         isdefined(mod, n) || continue
         local b = getglobal(mod, n)
@@ -79,10 +48,12 @@ function check_no_open_abstract(mod::Module)::Int
             b !== mod && parentmodule(b) === mod && check_no_open_abstract(b)
         elseif u isa DataType && isabstracttype(u) && parentmodule(u) === mod && nameof(u) === n
             hasmethod(construction_check, Tuple{Val{n}}) && continue
-            occursin(r"parity\([\w/]+\.dart:\d+ \w+\)", _docstring_text(mod, n)) && continue
+            any(e -> e isa ParityEntry && e.mod === mod && n in e.names, REGISTRY) && continue
             throw(ConstructionViolation("check_no_open_abstract",
-                "$mod.$n is an abstract type that is neither a registered construction nor a dart abstract class's mirror with its parity(...) anchor"))
+                "$mod.$n is an abstract type that is neither a registered construction nor a dart abstract class's mirror carrying @parity"))
         end
     end
     return 0
 end
+# checked last, when every definition exists (src/WasmTarget.jl calls it after every include)
+@quarantine "the open-hierarchy refusal's assertion, run when the package loads" Base.isabstracttype construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)

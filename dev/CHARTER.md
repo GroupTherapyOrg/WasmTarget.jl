@@ -46,16 +46,22 @@ with the per-clause status. A clause is never closed by argument.
   L178 L179 L180 L181 L182 L183 L184 L185.
   Planned: dev/MARCH.md 1.A9, 1.A10, 1.C — two translators the only Type-to-wasm methods, NIR
   Julia's one inference, the type chain computed once on the translator.
-- **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries a
-  `parity(<file>.dart:<line> <Symbol>)` anchor to dart-lang/sdk `898a1e4b` that names the
-  structure it copies, or a `parity(quarantine: <reason>)` naming the Julia-only necessity
-  that forces it. Nothing else may exist: a mechanism dart does not have and Julia does not
-  force is a defect even when every test passes.
+- **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries an
+  `@parity "<file>.dart:<line> <Symbol>"` anchor to dart-lang/sdk `898a1e4b` that names the
+  structure it copies, or, in `src/julia/`, an `@quarantine "<necessity>" <Julia API>` naming the
+  Julia-only necessity that forces it and the Julia API it relies on. Nothing else may exist: a
+  mechanism dart does not have and Julia does not force is a defect even when every test passes.
+  `L210` (a file of `src/` outside `src/julia/` loads only through `include_dart` from the pin
+  table, and the files it loaded are the directory's, checked at load) `L211` (every definition
+  outside `src/julia/` carries `@parity`, its anchor, file and Julia name checked where it is
+  written, every method and binding covered at load) `L212` (every `src/julia/` definition
+  carries `@quarantine`, its Julia API resolved where it is written, every method and binding
+  covered at load).
   Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
   L84 L86 L88 L95 L110 L132 L149 R32 R40.
-  Planned: dev/MARCH.md 1.A3, 1.A4, 1.A5, 1.A6, 1.A7, 1.E — `src/` generated file for file from
-  the pinned SDK, every definition anchored at load, the anchors resolved at the pin, the
-  subset Julia's verifier's, dispatch by signature in the quarantine.
+  Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.A7, 1.E — `src/` generated file for file from
+  the pinned SDK, the anchors resolved at the pin, the subset Julia's verifier's, dispatch by
+  signature in the quarantine.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
   approximated; Julia's own bodies compile instead of bespoke re-implementations.
