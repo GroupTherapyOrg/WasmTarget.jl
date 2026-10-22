@@ -8,6 +8,8 @@
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
 # ported code rejects where dart throws (src/julia/reject.jl)
 import ..reject!, ..Internal, ..Unported
+# dart's `late final` fields (src/julia/late.jl)
+import ..Late
 @quarantine "dart's builder and serializer import ir under the prefix ir; a prefix is a module in Julia" Core.Module module IR
 import ...@parity, ...@unported, ...@closed, ...@exhaustive
 import ..WasmBuilder
@@ -16,6 +18,8 @@ end
 
 @quarantine "Julia has no per-file namespace; dart's dart2wasm package is a module" Core.Module module Dart2Wasm
 import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
+# dart's `late final` fields (src/julia/late.jl)
+import ..Late
 import ..WasmBuilder
 @quarantine "dart2wasm imports util.dart under the prefix util; a prefix is a module in Julia" Core.Module module Util
 import ...@parity, ...@unported, ...@closed, ...@exhaustive

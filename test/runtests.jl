@@ -52,6 +52,8 @@ end
 
 # each ported lock fires on its planted mutation, in a scratch checkout of this commit
 _wt_qa_include("lock_negatives.jl")
+# dart's late final field: assigned once or initialized on first read, its anchor on an unassigned read (src/julia/late.jl)
+_wt_qa_include("late.jl")
 # two worktrees loading alternately each keep their compiled image, in their private depots (dev/depot.sh)
 _wt_qa_include("depot_isolation.jl")
 # the closed world's classes in program order, each supertype chain Julia's (src/julia/classes.jl, 1.C)
