@@ -3283,3 +3283,86 @@ Landing times (edit to landed; own, queue): 4c0140a4 319 s (37.8, 281.2); f6ae4b
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A37S1 and A37S2 are open on MARCH
 1.S. A37E1, A37E2, A37E3 and A37E4 are open on
 MARCH 1.L.
+
+## 2026-10-22 — audited through 97ed7e3a (53ded292..97ed7e3a: entry 37, one _within and a red load without an image, the ClosedWorld check widened, private depots, L220 and L224 split)
+
+The thirty-eighth audit covers 4f1ecde9 (entry 37; its author's), 1abb9261 (one `_within`; the load stage asserts
+Base.isprecompiled, red unless Julia saved the package image), 29602959 (check_sole_maker reads `:splatnew` and the
+jl_new_struct foreigncalls, resolves a call's callee through its SSA statement, allows the maker as its one Method, and
+refuses an @generated method, eval, include_string, include and a computed module lookup outside parity.jl and
+construction.jl; Fixes: A37S1; written by the lead), ea466c71 (a private depot per worktree, dev/depot.sh, dev/lane.sh
+depot, test/depot_isolation.jl) and 97ed7e3a (L220 stays a construction for the sole constructor that takes the token; who calls it is L224,
+a stopgap cited by C6 and run at load, its read resolving operands through SSA statements and module getproperty and
+getfield, eval caught in any operand position, its plants real methods; `Charter-change: C6 authorised by Dale
+2026-10-22`; written by the lead, in answer to this entry's draft). No wrong answer. Each landed head's record is green. Every finding
+below rests on one exact command, quoted. Two corrections lead. One red flag, A38S1, which 97ed7e3a answers in the range. Findings A38S1, A38S2, A38E1 and A38E2.
+
+Corrections (the audit lane's). (1) After entry 37 landed, this lane told the lead that every gate ran cold because
+twelve worktrees evicted each other's images in a shared depot. That was wrong. The exact commands, on wt2-audit at
+4f1ecde9: `grep -n "function _within" src/julia/*.jl` printed construction.jl:104 and parity.jl:455, and
+`julia --project=. --startup-file=no -e 'using WasmTarget'` printed "WARNING: Method definition _within(Module, Module)
+in module WasmTarget at …/parity.jl:455 overwritten" and "ERROR: Method overwriting is not permitted during Module
+precompilation": no image was saved, so every load rebuilt it. The loader's "wrong source" rejections were its normal
+lookup by path, and the shared depot held 9 images under its cap of 10. loop4 found the cause; 1abb9261 fixes it.
+(2) ea466c71's message and dev/depot.sh's header state the retracted cause ("each tree's image evicted another's").
+Private depots are harmless isolation, and test/depot_isolation.jl measures what they do, but the premise is this
+lane's error, and 1abb9261 had measured the real cause before ea466c71 landed. Measured after both, on wt2-audit with
+its private depot, twice: `.wtd/julia --project=. --startup-file=no -e '@time using WasmTarget;
+println(Base.isprecompiled(Base.PkgId(Base.UUID("9f3a1415-1112-405b-ae89-c61daf9872bd"), "WasmTarget")))'` printed
+0.011 s and true, then 0.009 s and true.
+
+Area: builder — empty by diff.
+
+Area: collection and planning — 29602959's src/julia/subset.jl: the maker is `only(methods(check_subset))`, so a
+second check_subset method refuses the load and a second method of any maker is no maker (A37S1's fifth case, fixed).
+
+Area: emission and diagnostics — 29602959's src/julia/construction.jl: _makes, _ccall_name, _resolve, _callee_name and
+_escapes.
+
+stopgap in disguise: (A38S1, medium, red flag) check_sole_maker still lets five forms build a ClosedWorld, and its new
+`:splatnew` arm cannot fire on real lowered code. Measured in this lane's Kaimon session (e1d51284) on a probe module
+(`struct Tok`, `struct W; W(::Tok, x::Int) = new(x); end`, `maker(x::Int) = W(Tok(), x)`), each checked with
+`WasmTarget.check_sole_maker(P, P.W, P.Tok, (only(methods(P.maker)),), (), ())` and then run: `(@__MODULE__).W((@__MODULE__).Tok(), 1)`,
+`getfield(@__MODULE__, :W)(getfield(@__MODULE__, :Tok)(), 1)`, `Core.eval((@__MODULE__, :(W(Tok(), 1)))...)`,
+`Base.invokelatest(Core.eval, @__MODULE__, :(W(Tok(), 1)))` and `$(Expr(:splatnew, :W, :((1,))))` each read 0 and
+each returned a W. The causes. Lowered code spells `M.x` as a getproperty call, never a GlobalRef, so the natural
+`WasmTarget.ClosedWorld(WasmTarget._SubsetToken(), …)` is not seen; a callee that is an SSA value of a getfield is
+resolved to an Expr that `is` does not match; eval in an argument position (Core._apply_iterate for a splat,
+invokelatest) is not read, since _escapes reads the callee only. And `:new` and `:splatnew` take their type through a
+statement of its own: `Base.uncompressed_ast(only(methods(P2.sneak_new))).code` reads `Any[:(Main.P2.W), :(%new(%1,
+1)), :(return %2)]`, while the arm tests `is(x.args[1], T)` with no `_resolve`, so no lowered `:new` or `:splatnew` is
+ever seen; that arm was dead in dbef1df6 as well. L220's plants pass regardless: the `:splatnew` plant
+(parity_ratchet.jl:366) is refused only because it calls Core.eval, an escape, and the "read directly" plant (:380)
+hands _makes a hand-built `Expr(:splatnew, clean.W, :t)` with the type inline, a shape lowering never makes. The fix:
+resolve every SSA operand (the `:new` and `:splatnew` type, the callee, getproperty and getfield chains to the binding
+they name); read eval, include_string and include in any argument position; write each plant as a real method whose
+lowered code the walk reads. 97ed7e3a answers it inside the range, and honestly: L220 claims only what reflection
+makes true (one constructor, taking the token, both in subset.jl), and the caller read is L224, a stopgap, so C6's
+status reads "L224 stopgap". Re-measured in this lane's new Kaimon session (3e431c53, DEPOT_PATH[1] the worktree's
+private depot) on 97ed7e3a's tree, with the same probe and call: the module-qualified form, the splatted eval and the
+`:splatnew` each read "refused". (A38S2, medium) L224 still misses a local variable. `sneak() = (T = W; t = Tok;
+T(t(), 1))` reads 0 and returns a W; `Base.uncompressed_ast(only(methods(P3.sneak))).code` reads `_3 = Main.P3.W`,
+`_2 = Main.P3.Tok`, `_3`, `_2`, `(%4)()`, `(%3)(%5, 1)`, `return %6`: lowering holds a local in a slot, `_binding`
+stops at a SlotNumber, and an assignment's right side is never read as naming the token. The same with the token
+taken by reflection, `tk = Base.unwrap_unionall(first(methods(T)).sig).parameters[2]`, reads 0 and returns a W. The
+fix: resolve a slot through its assignments (one assignment, its right side; more, refuse), and read a GlobalRef to the
+token wherever it stands, an assignment's right side included.
+precedent: Rust's private constructor, enforced by the compiler at every caller; Julia's lowered IR is the nearest
+thing it has to read, and the read must follow its SSA form to see what it claims to see.
+
+Area: enforcement and prose — every hunk of 1abb9261 (dev/block.jl, test/parity_ratchet.jl, src/julia/construction.jl),
+29602959's test/parity_ratchet.jl, ea466c71 (dev/depot.sh, dev/gate.sh, dev/land.sh, dev/lane.sh, dev/block.jl,
+dev/block_runner.jl, test/lock_negatives.jl, test/depot_isolation.jl, test/runtests.jl, test/block_groups.tsv), 97ed7e3a (dev/CHARTER.md, src/WasmTarget.jl, test/block_groups.tsv, test/parity_ratchet.jl), the landing log and the gate records. 1abb9261 is sound: the load stage asks Julia's own Base.isprecompiled, so a
+precompile error is a red load, never a cold run; this answers the gate-side half of the cold-gate class (a method
+overwrite during precompilation passed every stage for three landings, dbef1df6, 53ded292 and 4f1ecde9, each
+"unjudged (cold)"). (A38E1, low) ea466c71's message and dev/depot.sh's header give a cause measured false (the
+corrections above); the fix is a one-line header that names the real cause, or the isolation as the reason.
+(A38E2, low) Kaimon: 1abb9261 and 29602959 measured "in fresh processes"; ea466c71 in its lane's Kaimon session.
+97ed7e3a measured in fresh processes. Requirements: D9 and D32 hold where the subset's typestate holds (A38S2 bounds it); no lock fired inside its
+band.
+
+Landing times (edit to landed; own, queue; gate state): 1abb9261 233 s (121.6, 111.4; warm); 29602959 25 s (24.6, 0.4;
+cold); ea466c71 145 s (51.0, 94.0; cold); 97ed7e3a 25 s (24.0, 1.0; warm).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A38S1 is answered by 97ed7e3a,
+which carries no Fixes: line for it. A38S2 is open on MARCH 1.S. A38E1 and A38E2 are open on MARCH 1.L.
