@@ -57,3 +57,30 @@ its abstract types are open by language, so the refusal runs when the package lo
 end
 # checked last, when every definition exists (src/WasmTarget.jl calls it after every include)
 @quarantine "the open-hierarchy refusal's assertion, run when the package loads" Base.isabstracttype construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)
+
+"""
+    check_sole_constructor(T, token, file) -> Int
+
+The check of a typestate: a value of `T` can be made in one place alone. `T` has exactly one
+constructor method, defined in `file`, whose first argument is the singleton `token`; `token` has
+exactly one constructor method, defined in `file` too, so only code in that file holds the token
+and makes a `T`. Throws a `ConstructionViolation` naming the first fault.
+
+precedent(rust: typestate with a private constructor, the value made by one function of its module).
+Julia's differs: it has no private constructors, so the sole constructor and the token's are checked
+by reflection over their method tables when the package loads.
+"""
+@quarantine "Julia has no private constructors; a typestate's sole constructor is checked by reflection" Base.methods function check_sole_constructor(T::DataType, token::DataType, file::AbstractString)::Int
+    local name = string(nameof(T))
+    local here(m) = normpath(string(m.file)) == normpath(file)
+    local ms = collect(methods(T))
+    length(ms) == 1 || throw(ConstructionViolation(name, "$(length(ms)) constructor methods, where its one is made in $(basename(file)) alone"))
+    here(only(ms)) || throw(ConstructionViolation(name, "its constructor is defined at $(only(ms).file):$(only(ms).line), not in $(basename(file))"))
+    local sig = Base.unwrap_unionall(only(ms).sig)
+    length(sig.parameters) >= 2 && sig.parameters[2] === token ||
+        throw(ConstructionViolation(name, "its constructor does not take the token $(nameof(token)) first"))
+    local ts = collect(methods(token))
+    length(ts) == 1 && here(only(ts)) ||
+        throw(ConstructionViolation(name, "the token $(nameof(token)) has $(length(ts)) constructor methods, where its one is in $(basename(file)) alone"))
+    return 0
+end

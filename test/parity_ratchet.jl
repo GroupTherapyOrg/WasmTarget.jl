@@ -252,6 +252,8 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L218" => (:construction, "Rejection"), "L219" => (:construction, "check_no_open_abstract"),
     # the file map, the anchors and the quarantine (C2): src/julia/parity.jl
     "L210" => (:construction, "include_dart"), "L211" => (:construction, "parity"), "L212" => (:construction, "quarantine"),
+    # the strict subset's typestate (C6, dev/MARCH.md 1.A7): src/julia/subset.jl
+    "L220" => (:construction, "ClosedWorld"),
 )
 
 
@@ -268,6 +270,8 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
                "Julia's include takes any path, so include_dart admits the pin table's files alone and the files it loaded are checked against the directory listing when the package loads"),
     "L211" => ("rust: the deny missing_docs lint, every item documented or the crate does not build",
                "nothing in Julia requires a definition to say where it comes from, so @parity checks the anchor and the name where it is written and the totality check refuses, by reflection over the method table and the bindings, any definition outside src/julia no @parity spans when the package loads"),
+    "L220" => ("rust: typestate with a private constructor, the value made by one function of its module",
+               "Julia has no private constructors, so ClosedWorld's sole constructor takes a token only subset.jl holds, and both constructors' method tables are checked by reflection when the package loads"),
     "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
                "Julia has no keyword marking Julia-only code, so @quarantine checks the necessity and resolves the Julia API where it is written and the totality check refuses any src/julia definition no @quarantine spans when the package loads"),
 )
@@ -328,6 +332,20 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         refuses(() -> noopen(sub)) || push!(out, "negative missed: an open abstract type in a submodule passes")
         local par = Module(:ParamPlant); Core.eval(par, :(abstract type Open{T} end))
         refuses(() -> noopen(par)) || push!(out, "negative missed: a parametric open abstract type (a UnionAll binding) passes")
+    elseif definition === :ClosedWorld
+        local sole = getfield(wt, :check_sole_constructor)
+        local f = "/plant/src/julia/typestate.jl"
+        local plant(code) = (m = Module(:TypestatePlant); Base.include_string(m, code, f); m)
+        local base = "struct Tok; Tok() = new(); end\nstruct W; x::Int; W(::Tok, x::Int) = new(x); end\n"
+        local good = plant(base)
+        passes(() -> sole(good.W, good.Tok, f)) || push!(out, "negative missed: a sole constructor taking the file's token fails")
+        local outer = plant(base * "W(x::Int) = W(Tok(), x)\n")
+        refuses(() -> sole(outer.W, outer.Tok, f)) || push!(out, "negative missed: a second constructor, one any caller can use, passes")
+        local notok = plant("struct Tok; Tok() = new(); end\nstruct W; x::Int; W(x::Int) = new(x); end\n")
+        refuses(() -> sole(notok.W, notok.Tok, f)) || push!(out, "negative missed: a constructor that takes no token passes")
+        refuses(() -> sole(good.W, good.Tok, "/plant/src/julia/elsewhere.jl")) || push!(out, "negative missed: a constructor defined in another file passes")
+        local tok2 = plant(base * "Tok(::Int) = Tok()\n")
+        refuses(() -> sole(tok2.W, tok2.Tok, f)) || push!(out, "negative missed: a token with a second constructor passes")
     elseif definition in (:include_dart, :parity, :quarantine)
         append!(out, parity_negatives_missed(wt, definition, refuses, passes))
     else
@@ -2460,6 +2478,8 @@ const LOCKS = [
         ConstructionLock(:Rejection)),
     "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose definition carries `@parity` (an entry of the registry naming it, src/julia/parity.jl), so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
         ConstructionLock(:check_no_open_abstract)),
+    "L220_closed_world_typestate" => ("every stage after the strict subset's check takes the ClosedWorld Julia's trim verifier accepted, by construction (dev/MARCH.md 1.A7, ledger D32: the subset is Julia's verifier's, never bypassed): src/julia/subset.jl's ClosedWorld has one constructor method, which takes the token _SubsetToken, and the token one constructor method, both defined in subset.jl, so only check_subset makes a ClosedWorld and compile's next stage, compile_world, takes it; construction_check(::Val{:ClosedWorld}) asserts it when WasmTarget loads (check_sole_constructor, by reflection over both method tables), and this lock only calls it, with its plants (construction_negatives_missed: a second constructor, a constructor taking no token, a constructor defined in another file and a token with a second constructor each refused, a sole constructor taking the file's token passed) (dev/CHARTER.md C6)",
+        ConstructionLock(:ClosedWorld)),
     "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\")` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): the path a key of the pin table DART_FILES, loaded once from src/<path>.jl, and when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed) (dev/CHARTER.md C2)",
         ConstructionLock(:include_dart)),
     "L211_anchor" => ("every definition outside src/julia carries `@parity \"<file>.dart:<line> <Symbol>\"`, the dart definition it copies at the pin (Dale: dart2wasm 1:1 through and through, dev/LEDGER.md D1): the macro refuses, at the definition's line, an anchor not of that form or whose file is no key of DART_FILES, a file in src/julia or one include_dart did not load, and a Julia name other than the one rule's (snake), and expands `@unported` into a body rejecting with the anchor; when WasmTarget has loaded, every method it defines outside src/julia lies in an @parity's span in its file and every binding it owns is a marked definition's, by reflection over the method table and the bindings; construction_check(::Val{:parity}) asserts it (check_parity), and this lock only calls it, with its plants (an unmarked method, an unmarked binding, an anchor outside the pin table or with no line, a name not the rule's, @parity in src/julia or in a file include_dart did not load, @unported outside @parity or with a body each refused; marked definitions passed and an @unported stub rejecting with its anchor; the snake rule) (dev/CHARTER.md C2)",

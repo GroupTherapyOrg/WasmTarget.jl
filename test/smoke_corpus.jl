@@ -4,6 +4,13 @@
 using Random, SHA   # seeded streams, as the full suite loads them
 using LinearAlgebra: Diagonal, Symmetric   # struct_by_structure: array-interface structs
 
+# ---- the strict subset (dev/MARCH.md 1.A7): Julia's trim verifier decides --------------------------
+# a call whose target inference cannot resolve is outside the subset: the compile rejects it with
+# OutsideSubset, Julia's own CallMissing text, and the ladder reads LOUD-OUTSIDE
+_g("subset", Any[
+    ("dynamic_dispatch", (x::Int64) -> Base.inferencebarrier(x) + 1, Int64(5)),
+])
+
 # ---- numerics -------------------------------------------------------------
 _g("numerics", Any[
     ("add_i", (x::Int64) -> x + 3, Int64(5)),

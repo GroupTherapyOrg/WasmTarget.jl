@@ -59,7 +59,7 @@ with the per-clause status. A clause is never closed by argument.
   covered at load).
   Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
   L84 L86 L88 L95 L110 L132 L149 R32 R40.
-  Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.A7, 1.E — `src/` generated file for file from
+  Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.E — `src/` generated file for file from
   the pinned SDK, the anchors resolved at the pin, the subset Julia's verifier's, dispatch by
   signature in the quarantine.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
@@ -67,7 +67,7 @@ with the per-clause status. A clause is never closed by argument.
   approximated; Julia's own bodies compile instead of bespoke re-implementations.
   Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
   L138 L140 L141 R38.
-  Planned: dev/MARCH.md 1.A7, 1.A10, 1.C, 1.E — Julia's trim verifier, Julia's typed IR, Julia's
+  Planned: dev/MARCH.md 1.A10, 1.C, 1.E — Julia's typed IR, Julia's
   answers for layouts and dispatch, each quarantined definition naming its Julia API.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
@@ -88,10 +88,12 @@ with the per-clause status. A clause is never closed by argument.
 - **C6 · Correct or loud, and located.** No silent value, default, substitution or fabricated
   result; every rejection is attributed to its statement with the inline chain innermost-first.
   `L218` (the rejections a closed sum: a `Union` of concrete kinds, each handled, checked at load).
+  `L220` (the strict subset's typestate: every stage after Julia's trim verifier takes the
+  ClosedWorld only check_subset makes, its sole constructor checked at load).
   Legacy (retired with the switch): L8 L15 L18 L19 L37 L38 L39 L48 L51 L58 L60 L63 L64 L66 L71
   L72 L73 L75 L76 L78 L79 L85 L89 L90 L93 L96 L101 L118 L119 L127 L135 L139 L146 L147 L156 R34
   R39.
-  Planned: dev/MARCH.md 1.A7, 1.D, 1.Q — every unported path a located rejection, the smoke
+  Planned: dev/MARCH.md 1.D, 1.Q — every unported path a located rejection, the smoke
   ladder derived from them, and no case going from passing back to loud.
 - **C7 · Valid by construction.** The builder models everything wasm validates and throws at
   the emitting line; nothing repairs, truncates or bypasses emitted bytes; wasm-tools is only
