@@ -443,6 +443,12 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local fwd = plant(:ForwardPlant)
         passes(() -> (two(Tuple{Module,String}[(fwd, a), (fwd, b)]); Base.invokelatest(() -> fwd.use_b(fwd.B(fwd.C())))) == 1 ? 0 : 1) ||
             push!(out, "negative missed: a method naming a type a later file declares does not load")
+        # a method an earlier file adds to a function a later file's marked definition binds loads
+        local impl = file("impl.jl", "@parity \"dart2wasm/lib/types.dart:3 C.serialize\" Main.ForwardFnPlant.serialize(c::Main.ForwardFnPlant.C)::Int = 2\n")
+        local decl = file("decl.jl", "@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    C() = new()\nend\n@parity \"dart2wasm/lib/translator.dart:5 Translator.serialize\" serialize(x::Int)::Int = 1\n")
+        local fwdfn = Core.eval(Main, :(module ForwardFnPlant; import WasmTarget: @parity, @unported; end))
+        passes(() -> (two(Tuple{Module,String}[(fwdfn, impl), (fwdfn, decl)]); Base.invokelatest(() -> fwdfn.serialize(fwdfn.C())) == 2 ? 0 : 1)) ||
+            push!(out, "negative missed: a method an earlier file adds to a function a later file binds does not load")
         local cyc = file("c.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    b::B\n    C(b::B) = new(b)\nend\n")
         refuses(() -> two(Tuple{Module,String}[(plant(:CyclePlant), cyc)])) || push!(out, "negative missed: two declarations that need each other load")
         local pkg = plant(:PackagePlant)

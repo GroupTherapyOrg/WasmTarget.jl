@@ -486,6 +486,18 @@ end
     return out
 end
 
+# the function a top-level statement of a port binds by a marked definition, bare-named, or nothing:
+# the generic the loader declares before the second pass
+@quarantine "Julia needs a function to exist before another module adds a method to it; dart resolves a library's names first" Base.Meta.isexpr function _generic_name(st)::Union{Symbol,Nothing}
+    local def = _marked_definition(st)
+    def === nothing && return nothing
+    Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline")) && (def = def.args[end])
+    (Meta.isexpr(def, :function) || Meta.isexpr(def, :(=))) || return nothing
+    local c = _call(def.args[1])
+    c === nothing && return nothing
+    return c.args[1] isa Symbol ? c.args[1] : nothing
+end
+
 """
     include_dart("<file>.dart", ...)
 
@@ -494,8 +506,9 @@ module (`DART_MODULES`): the only way a file of src/ outside src/julia loads, ca
 port. The paths must be in `DART_FILES`; when the package has loaded, the files it loaded are
 exactly the directory's (`check_include_dart`). It loads in two passes: first every file's type
 declarations (struct, abstract and primitive type, @enum and @closed sum behind @parity), each
-after the declarations its supertype, field types or kinds name, then every other definition, file by file in
-DART_FILES order; two declarations that need each other refuse the load.
+after the declarations its supertype, field types or kinds name, then every function a marked
+definition binds declared (no method), then every other definition, file by file in DART_FILES
+order; two declarations that need each other refuse the load.
 
 precedent(dart: `part`/`part of` naming each file, and a library's declarations resolved before
 its bodies; rust: `mod`, and items independent of their order). Julia's differs: `include` takes any
@@ -524,6 +537,7 @@ statements in order. Two declarations that need each other refuse the load, nami
 """
 @quarantine "Julia evaluates a file top to bottom; the type declarations of every file are evaluated first" Base.include function _load_two_pass!(units::Vector{Tuple{Module,String}})::Nothing
     local decls = Tuple{Module,String,Any,Symbol}[]
+    local generics = Tuple{Module,Symbol}[]
     for (m, path) in units
         include_dependency(path; track_content = true)
         local top = Meta.parseall(read(path, String); filename = path)
@@ -531,6 +545,8 @@ statements in order. Two declarations that need each other refuse the load, nami
         for st in top.args
             st isa LineNumberNode && (lnn = st; continue)
             _is_declaration(st) && push!(decls, (m, path, Expr(:toplevel, lnn, st), last(_defines(_marked_definition(st), lnn))))
+            local g = _generic_name(st)
+            g === nothing || push!(generics, (m, g))
         end
     end
     local index = Dict{Tuple{Module,Symbol},Int}((d[1], d[4]) => i for (i, d) in enumerate(decls))
@@ -561,6 +577,12 @@ statements in order. Two declarations that need each other refuse the load, nami
         state[i] = 2
     end
     foreach(i -> visit(i, i), eachindex(decls))
+    # every function a marked definition binds exists before any body names it: a method another
+    # module's file adds (`WasmBuilder.serialize(s, x::IR.RefType)`, dart's interface method
+    # implemented elsewhere) loads whatever the file order; `function f end` makes no method
+    for (m, g) in generics
+        isdefined(m, g) || Core.eval(m, Expr(:function, g))
+    end
     for (m, path) in units
         Base.include(st -> _is_declaration(st) ? nothing : st, m, path)
     end
