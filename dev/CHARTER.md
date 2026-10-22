@@ -44,8 +44,8 @@ with the per-clause status. A clause is never closed by argument.
   L40 L41 L45 L47 L61 L67 L68 L69 L80 L91 L97 L98 L100 L102 L103 L104 L112 L113 L114 L115 L117
   L120 L122 L124 L137 L142 L143 L150 R20 R21 R29a R29b R37 L152 L170 L171 L174 L175 L176 L177
   L178 L179 L180 L181 L182 L183 L184 L185.
-  Planned: dev/MARCH.md 1.A9, 1.A10, 1.C — two translators the only Type-to-wasm methods, NIR
-  Julia's one inference, the type chain computed once on the translator.
+  Planned: dev/MARCH.md 1.A9, 1.C — two translators the only Type-to-wasm methods, Julia's one
+  inference, the type chain computed once on the translator.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries an
   `@parity "<file>.dart:<line> <Symbol>"` anchor to dart-lang/sdk `898a1e4b` that names the
   structure it copies, or, in `src/julia/`, an `@quarantine "<necessity>" <Julia API>` naming the
@@ -67,7 +67,7 @@ with the per-clause status. A clause is never closed by argument.
   approximated; Julia's own bodies compile instead of bespoke re-implementations.
   Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
   L138 L140 L141 R38.
-  Planned: dev/MARCH.md 1.A10, 1.C, 1.E — Julia's typed IR, Julia's
+  Planned: dev/MARCH.md 1.C, 1.E — Julia's
   answers for layouts and dispatch, each quarantined definition naming its Julia API.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
@@ -82,6 +82,8 @@ with the per-clause status. A clause is never closed by argument.
   missing wasm runtime.
   `L219` (no open hierarchy passes for a closed one: every abstract type in src a registered
   construction or a dart abstract class's mirror, refused at load otherwise).
+  `L221` `L222` (NIR's statements and operands closed sums of Julia's optimized IR forms, each
+  kind handled, checked at load).
   Legacy (retired with the switch): L16 L94 L134 L155 R33 R36 L190 L191 L192 R42 R43 R44.
   Planned: dev/MARCH.md 1.A8, 1.D — closed sums matched exhaustively at load, the lowering on
   the typed stack.

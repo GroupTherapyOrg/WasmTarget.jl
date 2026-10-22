@@ -19,5 +19,6 @@ end
 # the stages after the subset check take the ClosedWorld check_subset alone makes; dart's compile,
 # which runs them, is not ported yet
 @quarantine "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.Compiler.typeinf_ext_toplevel function compile_world(world::ClosedWorld, at::String)::Vector{UInt8}
+    local bodies = build_nir(world, at)
     reject!(Unported("dart2wasm/lib/compile.dart:216 compile"), at)
 end

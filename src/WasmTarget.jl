@@ -10,6 +10,7 @@ include("julia/parity.jl")
 include("julia/construction.jl")
 include("julia/reject.jl")
 include("julia/subset.jl")
+include("julia/nir.jl")
 include("julia/entry.jl")
 
 # The load-time checks that need every definition to exist, so the package does not load otherwise:
@@ -20,5 +21,7 @@ construction_check(Val(:parity))
 construction_check(Val(:quarantine))
 construction_check(Val(:check_no_open_abstract))
 construction_check(Val(:ClosedWorld))
+construction_check(Val(:NirValue))
+construction_check(Val(:NirStmt))
 
 end # module

@@ -254,6 +254,8 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L210" => (:construction, "include_dart"), "L211" => (:construction, "parity"), "L212" => (:construction, "quarantine"),
     # the strict subset's typestate (C6, dev/MARCH.md 1.A7): src/julia/subset.jl
     "L220" => (:construction, "ClosedWorld"),
+    # NIR's closed sums (C5, dev/MARCH.md 1.A10): src/julia/nir.jl
+    "L221" => (:construction, "NirStmt"), "L222" => (:construction, "NirValue"),
 )
 
 
@@ -270,6 +272,10 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
                "Julia's include takes any path, so include_dart admits the pin table's files alone and the files it loaded are checked against the directory listing when the package loads"),
     "L211" => ("rust: the deny missing_docs lint, every item documented or the crate does not build",
                "nothing in Julia requires a definition to say where it comes from, so @parity checks the anchor and the name where it is written and the totality check refuses, by reflection over the method table and the bindings, any definition outside src/julia no @parity spans when the package loads"),
+    "L221" => ("rust: enum + exhaustive match; dart: sealed class + exhaustive switch",
+               "a Union of concrete structs, one per form of Julia's optimized IR, that subtype nothing, each handled by stmt_form and nothing else, checked when the package loads, since Julia checks no match at compile time"),
+    "L222" => ("rust: enum + exhaustive match; dart: sealed class + exhaustive switch",
+               "a Union of the four concrete operand forms of Julia's optimized IR, a literal held as Julia's own Core.Const, each handled by value_form and nothing else, checked when the package loads"),
     "L220" => ("rust: typestate with a private constructor, the value made by one function of its module",
                "Julia has no private constructors, so ClosedWorld's sole constructor takes a token only subset.jl holds, and both constructors' method tables are checked by reflection when the package loads"),
     "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
@@ -302,7 +308,8 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
     local V = getfield(wt, :ConstructionViolation)
     local refuses(f) = try; Base.invokelatest(f); false; catch e; e isa V; end
     local passes(f) = try; Base.invokelatest(f) == 0; catch; false; end
-    if definition === :Rejection
+    if definition in (:Rejection, :NirStmt, :NirValue)
+        # each is check_closed_sum over its sum and handler: the plants are the check's
         local closed = getfield(wt, :check_closed_sum)
         local m = Module(:RejectionPlant)
         Core.eval(m, quote
@@ -2521,6 +2528,10 @@ const LOCKS = [
         ConstructionLock(:Rejection)),
     "L219_no_open_hierarchy_passes_for_closed" => ("no open hierarchy passes for a closed one (dev/AUDIT.md A33S1): every abstract type WasmTarget or a submodule defines is a registered construction (construction_check(::Val{<name>}) has a method) or a dart abstract class's mirror whose definition carries `@parity` (an entry of the registry naming it, src/julia/parity.jl), so a closed sum is a `Union` or an `@enum` by its type, never by its comment; construction_check(::Val{:check_no_open_abstract}) asserts it last when WasmTarget loads (check_no_open_abstract, by reflection over the module's bindings), and this lock only calls it, with its plants (an open abstract type and one in a submodule each refused, a dart mirror with its anchor passed) (dev/CHARTER.md C5)",
         ConstructionLock(:check_no_open_abstract)),
+    "L221_nir_statements_a_closed_sum" => ("NIR's statements are a closed sum of Julia's optimized IR forms by construction (dev/MARCH.md 1.A10; ledger D3: Julia's IR is the ground truth, never re-guessed): src/julia/nir.jl's `NirStmt` is a `Union` of one concrete struct per statement form of Julia's optimized IR (call, invoke, new, foreigncall, boundscheck, the GC preservation pair, leave, pop_exception, the_exception, loopinfo, throw_undef_if_not, cfunction, invoke_modify, goto, gotoifnot, return, unreachable, phi, pi, enter, upsilon, phic, nothing, a GlobalRef read), each holding Julia's own operands, that subtype nothing, every kind handled by stmt_form and no other type; construction_check(::Val{:NirStmt}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed: a kind with no handler, a handler outside the sum, a kind under an open abstract type and a sum that is no Union each refused, a sum fully handled passed) (dev/CHARTER.md C5)",
+        ConstructionLock(:NirStmt)),
+    "L222_nir_operands_a_closed_sum" => ("NIR's operands are a closed sum of Julia's optimized IR operand forms by construction (dev/MARCH.md 1.A10): src/julia/nir.jl's `NirValue` is a `Union` of NirSSA, NirArgument, NirGlobal and NirConst, a literal held as Julia's own `Core.Const`, that subtype nothing, every kind handled by value_form and no other type; construction_check(::Val{:NirValue}) asserts it when WasmTarget loads (check_closed_sum), and this lock only calls it, with its plants (construction_negatives_missed, as L221's) (dev/CHARTER.md C5)",
+        ConstructionLock(:NirValue)),
     "L220_closed_world_typestate" => ("every stage after the strict subset's check takes the ClosedWorld Julia's trim verifier accepted, by construction (dev/MARCH.md 1.A7, ledger D32: the subset is Julia's verifier's, never bypassed): src/julia/subset.jl's ClosedWorld has one constructor method, which takes the token _SubsetToken, and the token one constructor method, both defined in subset.jl, so only check_subset makes a ClosedWorld and compile's next stage, compile_world, takes it; construction_check(::Val{:ClosedWorld}) asserts it when WasmTarget loads (check_sole_constructor, by reflection over both method tables; and check_sole_maker, reading every WasmTarget method's lowered code: no method but check_subset names the token, calls ClosedWorld or makes either with :new, matched by identity, dev/AUDIT.md A36S3; Julia has no module privacy, so the guarantee covers WasmTarget's own code, never a caller outside the package), and this lock only calls it, with its plants (construction_negatives_missed: a second constructor, a constructor taking no token, a constructor defined in another file and a token with a second constructor each refused, a sole constructor taking the file's token passed; a method beside the maker that makes a W and one that names the token each refused, the maker alone with W named as a type elsewhere passed) (dev/CHARTER.md C6)",
         ConstructionLock(:ClosedWorld)),
     "L210_file_map" => ("a file of src/ outside src/julia loads only through `include_dart(\"<file>.dart\")` (Dale: dart2wasm 1:1 file for file, dev/LEDGER.md D1): the path a key of the pin table DART_FILES, loaded once from src/<path>.jl, and when WasmTarget has loaded the files it loaded are exactly the .jl files under src/ outside src/julia, src/WasmTarget.jl aside, read from the directory listing, never from text; construction_check(::Val{:include_dart}) asserts it when WasmTarget loads (check_include_dart), and this lock only calls it, with its plants (a file loaded otherwise and an included file with no source each refused, a dart file outside the pin table refused by include_dart, a directory whose every file is included passed) (dev/CHARTER.md C2)",
