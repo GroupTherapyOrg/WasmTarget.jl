@@ -485,6 +485,7 @@ end
     if Meta.isexpr(def, :struct)
         Meta.isexpr(def.args[2], :(<:)) && walk(def.args[2].args[2])
         for f in def.args[3].args
+            Meta.isexpr(f, :const) && (f = f.args[1])   # a mutable struct's `const f::T`
             Meta.isexpr(f, :(::)) && length(f.args) == 2 && walk(f.args[2])
         end
     elseif Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive)
@@ -1273,7 +1274,7 @@ anywhere in its type; a field that may hold `nothing` is one the dart class decl
 precedent(typescript: strictNullChecks; dart: sound null safety). Julia's differs: a field may hold
 Any or nothing by its declared type alone, so the load reads each field type and the pinned class.
 """
-@quarantine "Julia's field types may hold Any or nothing; the load reads every ported struct" Base.fieldtypes function check_typed_fields(mod::Module, sdk::Union{String,Nothing})::Int
+@quarantine "Julia's field types may hold Any or nothing; the load reads every ported struct" Base.fieldcount function check_typed_fields(mod::Module, sdk::Union{String,Nothing})::Int
     local out = String[]
     for e in REGISTRY
         e isa ParityEntry && e.declares && _within(e.mod, mod) || continue
@@ -1281,7 +1282,11 @@ Any or nothing by its declared type alone, so the load reads each field type and
             isdefined(e.mod, n) || continue
             local T = Base.unwrap_unionall(getglobal(e.mod, n))
             T isa DataType && isstructtype(T) && !isabstracttype(T) || continue
-            for (f, F) in zip(fieldnames(T), fieldtypes(T))
+            # by index, one loop for every struct: zipping each struct's field-type tuple compiled a
+            # specialization per struct, 5.5 s of compilation over the skeleton's 561 declarations
+            for i in 1:fieldcount(T)
+                local f = fieldname(T, i)::Symbol
+                local F = fieldtype(T, i)
                 _mentions_any(F) && push!(out, "$n.$f holds Any ($F; $(e.anchor))")
                 if F isa Union && Nothing <: F && sdk !== nothing
                     local why = _dart_nullable(sdk, e.anchor, f)

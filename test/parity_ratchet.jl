@@ -465,6 +465,11 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local irf = file("ir_member.jl", "@parity \"wasm_builder/lib/src/ir/types.dart:1 Types.serializeIr\" PkgQ.serialize_ir(x::Int)::Int = 1\n")
         passes(() -> (two(Tuple{Module,String}[(pkgq.IR, irf)]); Base.invokelatest(() -> pkgq.serialize_ir(1)) == 1 ? Base.invokelatest(getfield(wt, :check_parity), pkgq, files) : 1)) ||
             push!(out, "negative missed: a package member defined only from its prefixed library does not load or is counted unmarked")
+        # a mutable struct's `const f::T` field orders its declaration after T's
+        local mut = file("mut.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" mutable struct B\n    const c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    C() = new()\nend\n")
+        local mutp = plant(:MutableConstPlant)
+        passes(() -> (two(Tuple{Module,String}[(mutp, mut)]); Base.invokelatest(() -> mutp.B(mutp.C()).c isa mutp.C) ? 0 : 1)) ||
+            push!(out, "negative missed: a mutable struct's const field does not order its declaration after the field's type")
         local cyc = file("c.jl", "@parity \"dart2wasm/lib/types.dart:1 B\" struct B\n    c::C\n    B(c::C) = new(c)\nend\n@parity \"dart2wasm/lib/types.dart:9 C\" struct C\n    b::B\n    C(b::B) = new(b)\nend\n")
         refuses(() -> two(Tuple{Module,String}[(plant(:CyclePlant), cyc)])) || push!(out, "negative missed: two declarations that need each other load")
         local pkg = plant(:PackagePlant)
