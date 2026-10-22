@@ -259,6 +259,8 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L213" => (:construction, "check_anchors_resolve"),
     # each mirror of a Julia form names the form, verified by converting a sample (C3, A39S1)
     "L225" => (:construction, "check_mirrors"),
+    # dart2wasm's test set mapped (C2, dev/LEDGER.md D41): a check over test/dart_tests.toml
+    "L226" => (:stopgap, ""),
     # the closed sums matched exhaustively (C5) and the typed signatures and fields (C4)
     "L217" => (:construction, "closed"), "L214" => (:construction, "check_typed_signatures"),
     "L215" => (:construction, "check_typed_fields"),
@@ -1098,6 +1100,182 @@ function src_progress_negatives_missed()::Vector{String}
     occursin("note:", src_progress("10", "2", "4")) && push!(out, "negative missed: four src-less landings printed the note")
     occursin("note:", src_progress("10", "2", "5")) || push!(out, "negative missed: five src-less landings printed no note")
     startswith(src_progress("10", "2", "0"), "src: 2 of 10 anchored dart definitions ported") || push!(out, "negative missed: the line's form")
+    return out
+end
+
+# ---- L226: dart2wasm's test set, ported with Julia as the ground truth (dev/LEDGER.md D41) ----------
+# test/dart_tests.toml gives every .dart file under the three test roots at the pin one entry: behavior
+# (the smoke cases porting it), structural (the property its golden pins), not portable (why) or a
+# helper (the entries it serves); the files are read from the pinned commit's tree in the checkout
+# L213 reads, so a file added at the pin or an entry dropped fails
+const DART_TESTS_PATH = joinpath(ROOT, "test", "dart_tests.toml")
+const DART_TEST_ROOTS = ("pkg/dart2wasm/test/", "tests/web/wasm/", "tests/language/")
+# each kind's fields besides `kind`, exactly
+const DART_TEST_FIELDS = Dict("behavior" => ["what", "cases"], "structural" => ["what", "property", "cases"],
+                              "not_portable" => ["what", "reason"], "helper" => ["what", "of"])
+const DartTestEntry = Pair{String,Dict{String,Union{String,Vector{String}}}}
+
+# the entries of a map's text in order, and its faults as a text: a line that is no header, field,
+# comment or blank, a value that is no one-line string or list of strings, a header or field twice
+function dart_test_entries(text::AbstractString)::Tuple{Vector{DartTestEntry},Vector{String}}
+    local entries = DartTestEntry[]
+    local faults = String[]
+    local seen = Set{String}()
+    for (i, l) in enumerate(split(text, '\n'))
+        local s = strip(l)
+        (isempty(s) || startswith(s, '#')) && continue
+        local h = match(r"^\[\"([^\"]+)\"\]$", s)
+        if h !== nothing
+            h[1] in seen && push!(faults, "test/dart_tests.toml:$i: [\"$(h[1])\"] appears twice")
+            push!(seen, h[1])
+            push!(entries, String(h[1]) => Dict{String,Union{String,Vector{String}}}())
+            continue
+        end
+        local f = match(r"^(\w+) = (.*)$", s)
+        if f === nothing || isempty(entries)
+            push!(faults, "test/dart_tests.toml:$i: neither a header, a field of an entry, a comment nor blank: $s")
+            continue
+        end
+        local d = last(entries[end])
+        haskey(d, f[1]) && push!(faults, "test/dart_tests.toml:$i: $(f[1]) appears twice in [\"$(first(entries[end]))\"]")
+        if (sv = match(r"^\"([^\"]*)\"$", f[2])) !== nothing
+            d[f[1]] = String(sv[1])
+        elseif occursin(r"^\[(?:\s*\"[^\"]*\"\s*(?:,\s*\"[^\"]*\"\s*)*)?\]$", f[2])
+            d[f[1]] = String[String(m[1]) for m in eachmatch(r"\"([^\"]*)\"", f[2])]
+        else
+            push!(faults, "test/dart_tests.toml:$i: $(f[1]) is no one-line string or list of strings")
+        end
+    end
+    return entries, faults
+end
+
+# the faults of a map against the .dart files at the pin and the smoke corpus's case keys
+function dart_test_faults(entries::AbstractVector{DartTestEntry}, files::AbstractVector{String},
+                          cases::AbstractSet{String})::Vector{String}
+    local out = String[]
+    local named = Set{String}(first.(entries))
+    for (key, d) in entries
+        local at = "[\"$key\"]"
+        any(r -> startswith(key, r), DART_TEST_ROOTS) || push!(out, "$at is under no dart test root ($(join(DART_TEST_ROOTS, ", ")))")
+        if endswith(key, "/")
+            any(f -> startswith(f, key), files) || push!(out, "$at names no directory of .dart files at the pin")
+        elseif !(key in files)
+            push!(out, "$at names no .dart file at the pin")
+        end
+        local kind = get(d, "kind", "")
+        if !(kind isa String) || !haskey(DART_TEST_FIELDS, kind)
+            push!(out, "$at has the kind $(repr(kind)), not one of $(join(sort!(collect(keys(DART_TEST_FIELDS))), ", "))")
+            continue
+        end
+        local want = DART_TEST_FIELDS[kind]
+        for k in sort!(collect(keys(d)))
+            k == "kind" || k in want || push!(out, "$at, $kind, carries $k")
+        end
+        for k in want
+            local v = get(d, k, nothing)
+            local list = k in ("cases", "of")
+            if v === nothing || (list ? !(v isa Vector{String}) : !(v isa String) || isempty(strip(v)))
+                push!(out, "$at, $kind, has no $(list ? "list" : "text") $k")
+            elseif k == "cases"
+                foreach(c -> c in cases || push!(out, "$at names the smoke case $c, which test/smoke_corpus.jl does not hold"), v)
+            elseif k == "of"
+                isempty(v) && push!(out, "$at, a helper, serves no entry")
+                foreach(e -> (e in named && e != key) || push!(out, "$at serves $e, which is no other entry"), v)
+            end
+        end
+    end
+    # each file covered by exactly one entry: its own path, or a directory's holding it
+    for f in files
+        local by = [k for k in named if k == f || (endswith(k, "/") && startswith(f, k))]
+        length(by) == 1 || push!(out, isempty(by) ? "$f, a dart test file at the pin, has no entry in test/dart_tests.toml" :
+                                                      "$f is covered by $(length(by)) entries: $(join(sort!(by), ", "))")
+    end
+    return out
+end
+
+# the .dart files under the three roots at the pin, read from the pinned commit's tree in the checkout of
+# dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; a blob-less fetch holds the tree),
+# or nothing when that checkout holds no such commit
+function dart_test_files_at_pin()::Union{Vector{String},Nothing}
+    local pm = match(r"\b([0-9a-f]{40})\b", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md")))
+    pm === nothing && return nothing
+    local dir = joinpath(homedir(), ".cache", "wasmtarget", "dart-sdk")
+    isdir(dir) || return nothing
+    local io = IOBuffer()
+    success(pipeline(`git -C $dir ls-tree -r --name-only $(pm[1]) -- $DART_TEST_ROOTS`; stdout = io, stderr = devnull)) || return nothing
+    return sort!(filter(f -> endswith(f, ".dart"), String.(split(String(take!(io)), '\n'; keepempty = false))))
+end
+
+# the smoke corpus's case keys, `<group>/<case>`, by dev/block.jl's one reader of them (corpus_case_keys)
+const _BLOCK_ENV = Ref{Union{Nothing,Module}}(nothing)
+function block_env()::Module
+    _BLOCK_ENV[] === nothing || return _BLOCK_ENV[]
+    local m = Module(:BlockEnv)
+    Base.include(m, joinpath(ROOT, "dev", "block.jl"))
+    return _BLOCK_ENV[] = m
+end
+smoke_case_keys()::Set{String} =
+    Base.invokelatest(getglobal(block_env(), :corpus_case_keys), _text(joinpath(ROOT, "test", "smoke_corpus.jl")))
+
+# this tree's faults, and its counts printed
+function dart_tests_faults_here()::Vector{String}
+    isfile(DART_TESTS_PATH) || return ["test/dart_tests.toml is missing"]
+    local entries, out = dart_test_entries(_text(DART_TESTS_PATH))
+    local files = dart_test_files_at_pin()
+    files === nothing && return vcat(out, ["no checkout of dart-lang/sdk holding the pinned commit at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"])
+    append!(out, dart_test_faults(entries, files, smoke_case_keys()))
+    local n(kind) = count(e -> get(last(e), "kind", "") == kind, entries)
+    local ported = count(e -> get(last(e), "kind", "") == "behavior" && !isempty(get(last(e), "cases", String[])), entries)
+    println("    · dart tests at the pin: $(length(files)) files in $(length(entries)) entries: $(n("behavior")) behavior ($ported ported), ",
+            "$(n("structural")) structural, $(n("not_portable")) not portable, $(n("helper")) helpers")
+    return out
+end
+
+# L226's negative test: a planted map, its files and cases, and each plant answering as stated
+function dart_tests_negatives_missed()::Vector{String}
+    local files = ["pkg/dart2wasm/test/a_test.dart", "tests/language/d/x_test.dart", "tests/language/d/y_test.dart", "tests/web/wasm/h.dart"]
+    local cases = Set(["dart_web/a"])
+    local base = """
+        # a planted map
+        ["pkg/dart2wasm/test/a_test.dart"]
+        kind = "behavior"
+        what = "w"
+        cases = ["dart_web/a"]
+
+        ["tests/language/d/"]
+        kind = "not_portable"
+        what = "w"
+        reason = "r"
+
+        ["tests/web/wasm/h.dart"]
+        kind = "helper"
+        of = ["pkg/dart2wasm/test/a_test.dart"]
+        what = "w"
+        """
+    local faults(text, fs = files) = (r = dart_test_entries(text); length(r[2]) + length(dart_test_faults(r[1], fs, cases)))
+    local plants = [
+        ("a whole map", base, files, 0),
+        ("a dart test file at the pin with no entry", base, vcat(files, "tests/web/wasm/new_test.dart"), 1),
+        ("an entry naming no file at the pin", base * "[\"tests/web/wasm/gone_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", files, 1),
+        ("a file covered by its own entry and its directory's", base * "[\"tests/language/d/x_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", files, 1),
+        ("a ported entry naming a case the corpus does not hold", replace(base, "[\"dart_web/a\"]" => "[\"dart_web/zzz\"]"), files, 1),
+        ("a not portable entry with no reason", replace(base, "reason = \"r\"\n" => ""), files, 1),
+        ("a structural entry with no property", replace(base, "kind = \"behavior\"" => "kind = \"structural\""), files, 1),
+        ("an unknown kind", replace(base, "kind = \"behavior\"" => "kind = \"ported\""), files, 1),
+        ("a helper serving no entry", replace(base, "of = [\"pkg/dart2wasm/test/a_test.dart\"]" => "of = [\"tests/web/wasm/x_test.dart\"]"), files, 1),
+        ("a line that is no field", base * "kind behavior\n", files, 1),
+        ("a header twice", base * "[\"tests/web/wasm/h.dart\"]\n", files, 2),
+        ("a field the kind does not carry", replace(base, "reason = \"r\"\n" => "reason = \"r\"\ncases = []\n"), files, 1),
+        ("an entry under no root", base * "[\"tests/corelib/z_test.dart\"]\nkind = \"not_portable\"\nwhat = \"w\"\nreason = \"r\"\n", vcat(files, "tests/corelib/z_test.dart"), 1),
+    ]
+    local out = String[]
+    for (what, text, fs, want) in plants
+        local got = faults(text, fs)
+        got == want || push!(out, "negative missed: $what gives $got faults, not $want")
+    end
+    local e = first(dart_test_entries(base))
+    (length(e) == 3 && last(e[1])["cases"] == ["dart_web/a"] && last(e[2])["reason"] == "r") ||
+        push!(out, "negative missed: the planted map's entries read back")
     return out
 end
 
@@ -2878,6 +3056,12 @@ const LOCKS = [
             local v = trailer_negatives_missed()
             occursin("commits with more than one Co-Authored-By trailer:", read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)) ||
                 push!(v, "CI's message-hygiene does not refuse a second Co-Authored-By trailer")
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L226_dart_tests_mapped" => ("dart2wasm's test set is ported with Julia as the ground truth (Dale 2026-10-22: \"we should ALSO port darts TEST set but with julia as the ground truth of course\", dev/LEDGER.md D41): every .dart file under pkg/dart2wasm/test, tests/web/wasm and tests/language at the commit dev/PARITY_MASTER.md pins, read from that commit's tree in the checkout at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh), is covered by exactly one entry of test/dart_tests.toml, its own path or a directory's: behavior, naming the test/smoke_corpus.jl cases that port it (each existing, by dev/block.jl's corpus_case_keys), structural, stating the property its golden pins, not portable, stating why, or a helper, naming the entries it serves; every entry names a file or directory at the pin and carries exactly its kind's fields, so a new dart test file at the pin, a dropped entry or a stale one fails. A stopgap by its kind: a check over a map, the porting itself behavior the differential lane judges. Behavior, run here: dart_tests_negatives_missed plants a whole map and twelve faults, each answering as stated (dev/CHARTER.md C2)",
+        () -> begin
+            local v = vcat(dart_tests_faults_here(), dart_tests_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),

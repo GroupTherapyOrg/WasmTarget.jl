@@ -57,11 +57,15 @@ with the per-clause status. A clause is never closed by argument.
   written, every method and binding covered at load) `L212` (every `src/julia/` definition
   carries `@quarantine`, its Julia API resolved where it is written, every method and binding
   covered at load) `L213` (every anchor's line declares its symbol at the pin, read from the
-  pinned checkout where the anchor is written and at load, the gate requiring the checkout).
+  pinned checkout where the anchor is written and at load, the gate requiring the checkout)
+  `L226` (every dart2wasm test file at the pin has one entry of test/dart_tests.toml: ported to
+  named smoke cases, structural with its property, not portable with its reason, or a helper; a
+  check over a map).
   Legacy (retired with the switch): L2 L20 L21 L23 L28 L30 L31 L32 L43 L44 L46 L50 L55 L77 L83
   L84 L86 L88 L95 L110 L132 L149 R32 R40.
-  Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.E — `src/` generated file for file from
-  the pinned SDK and never drifting from it, dispatch by signature in the quarantine.
+  Planned: dev/MARCH.md 1.A4, 1.A5, 1.A6, 1.E, 1.T — `src/` generated file for file from
+  the pinned SDK and never drifting from it, dispatch by signature in the quarantine, dart's tests
+  ported with Julia's answers.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
   approximated; Julia's own bodies compile instead of bespoke re-implementations.
@@ -69,8 +73,9 @@ with the per-clause status. A clause is never closed by argument.
   sample built by Julia's own constructors).
   Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
   L138 L140 L141 R38.
-  Planned: dev/MARCH.md 1.C, 1.E — Julia's
-  answers for layouts and dispatch, each quarantined definition naming its Julia API.
+  Planned: dev/MARCH.md 1.C, 1.E, 1.T — Julia's
+  answers for layouts and dispatch, each quarantined definition naming its Julia API, and the
+  expected value of every ported dart test native Julia's.
 - **C4 · Strict in every regard.** Typed internal APIs: return types annotated, no `Any`
   outside named heterogeneous seams, every emitted value typed at its emission, and a
   constant's static type the type its emission pushes.

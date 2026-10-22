@@ -1,0 +1,1643 @@
+# test/dart_tests.toml — dart2wasm's test set at the pin, ported with Julia as the ground truth
+# (dev/LEDGER.md D41, dev/MARCH.md 1.T; L226 reads this file and the pinned checkout).
+#
+# Every .dart file at the commit dev/PARITY_MASTER.md pins under pkg/dart2wasm/test, tests/web/wasm and
+# tests/language has exactly one entry covering it: an entry named by the file's own path, or by a
+# directory's path ending in `/`, which covers every .dart file under it (tests/language is
+# classified by directory first; a directory entry is split into file entries when its tests are
+# ported). An entry carries `what` (the construct the dart test exercises) and a `kind`:
+#   behavior      a program whose result Julia decides: `cases` names the smoke cases porting it
+#                 (`<group>/<case>` of test/smoke_corpus.jl, each existing), the expected value what
+#                 native Julia computes, never dart's (D3); `cases = []` until it is ported
+#   structural    a golden or a property of dart2wasm's emitted module: `property` states the property
+#                 the golden pins, to check on WT's emitted module once the compiler emits, and
+#                 `cases` the smoke cases writing the same construct in Julia ([] until written)
+#   not_portable  a dart-only feature or dart2wasm tooling: `reason` says why
+#   helper        a library a test imports, no test itself: `of` names the entries it serves
+# Values are one-line strings or one-line lists of strings, with no double quote inside a value.
+
+# ---- pkg/dart2wasm/test ----------------------------------------------------------------------------
+
+["pkg/dart2wasm/test/ir_test.dart"]
+kind = "structural"
+what = "the IR-golden runner: compiles each ir_tests program, prints the module filtered by function, type, global and table name, and compares it with the .wat golden"
+property = "each ported golden's property is checked on WT's emitted module (wasm-tools print of the bytes), never byte for byte across source languages"
+cases = []
+
+["pkg/dart2wasm/test/util.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_test.dart", "pkg/dart2wasm/test/wasm_read_write_test.dart", "pkg/dart2wasm/test/wasm2wat_test.dart", "pkg/dart2wasm/test/self_compile_test.dart", "pkg/dart2wasm/test/record_use_test.dart", "pkg/dart2wasm/test/phases/", "pkg/dart2wasm/test/deferred_loading/"]
+what = "process and temporary-directory helpers of the tooling tests"
+
+["pkg/dart2wasm/test/wasm_read_write_test.dart"]
+kind = "not_portable"
+what = "wasm_builder's deserializer reads a dart2wasm module and its serializer writes the same bytes"
+reason = "the deserializer is outside WT's scope (src/julia/parity.jl's pin table holds wasm_builder's ir, builder and serialize, no deserializer); WT's serializer is checked by 1.B's byte identity with wasm-tools on hand-built modules"
+
+["pkg/dart2wasm/test/wasm2wat_test.dart"]
+kind = "not_portable"
+what = "wasm_builder's deserializer and printer print a dart2wasm module, before and after wasm-opt"
+reason = "the deserializer and printer are outside WT's scope (the pin table holds neither); WT prints modules with wasm-tools, the alarm only"
+
+["pkg/dart2wasm/test/self_compile_test.dart"]
+kind = "not_portable"
+what = "dart2wasm compiles itself and the wasm compiler's output equals the VM's"
+reason = "self-hosting: WT is a Julia package compiling Julia programs to a frozen module, never itself; reflection and eval are outside its scope (dev/PARITY_MASTER.md)"
+
+["pkg/dart2wasm/test/record_use_test.dart"]
+kind = "not_portable"
+what = "dart2wasm records the uses of @RecordUse-annotated definitions into a JSON file"
+reason = "package:record_use is dart's build-hook tooling with no Julia counterpart"
+
+["pkg/dart2wasm/test/phases/"]
+kind = "not_portable"
+what = "the compiler run in phases: kernel from the CFE, the TFA dill, wasm, then wasm-opt, each phase's output resumed by the next"
+reason = "dart's kernel pipeline and its dill files; WT's front end is Julia's own inference (D3), whose stages are Julia's"
+
+["pkg/dart2wasm/test/dry_run/"]
+kind = "not_portable"
+what = "the dry-run mode's diagnostics for programs importing dart:html, dart:js, dart:ffi or misusing JS interop types"
+reason = "diagnostics of dart's front end over dart libraries; WT's rejections are Julia's verifier's and its own located ones (D32, D9)"
+
+["pkg/dart2wasm/test/deferred_loading/"]
+kind = "not_portable"
+what = "the deferred-loading partitioner, its dominator tree and the deferred map of loading units"
+reason = "deferred loading splits the program into modules loaded on demand; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+# ---- pkg/dart2wasm/test/ir_tests: the IR goldens --------------------------------------------------
+
+["pkg/dart2wasm/test/ir_tests/hello.dart"]
+kind = "structural"
+what = "main prints a constant string"
+property = "the entry function's body is the constant string's global read and one call of the print function, nothing else"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/standalone.dart"]
+kind = "not_portable"
+what = "--standalone mode imports no JS string globals"
+reason = "a dart2wasm option selecting a JS-free host; WT has one host contract (1.F) and no mode switch"
+
+["pkg/dart2wasm/test/ir_tests/always_throws.dart"]
+kind = "structural"
+what = "a call of a function whose return type is Never is followed by unreachable"
+property = "a call Julia infers as Union{} (a callee that always throws) is followed by unreachable and nothing after it, and the throwing callee ends in its throw call and unreachable"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/constant_string_ops.dart"]
+kind = "structural"
+what = "length and codeUnitAt of a constant string fold to constants; constant strings concatenate"
+property = "a query Julia's optimizer folds on a constant string (its length, a code unit) is a constant in the module, no call; concatenation of constant strings emits one concatenation"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/pure_function.dart"]
+kind = "not_portable"
+what = "a function marked wasm:pure-function has its unused calls removed by wasm-opt"
+reason = "a dart pragma for binaryen's optimizer; WT runs no wasm-opt and Julia's effect analysis is its own, ported where Julia answers it"
+
+["pkg/dart2wasm/test/ir_tests/external_effect.dart"]
+kind = "not_portable"
+what = "an external function marked external-effect keeps its argument's computation"
+reason = "a dart pragma on an external declaration; Julia has no external declarations, a foreigncall's effects are Julia's"
+
+["pkg/dart2wasm/test/ir_tests/math_min_max.dart"]
+kind = "structural"
+what = "math.min and math.max of int, double and num operands"
+property = "min and max of two Int64 compile to a compare and select on i64 with no call; of two Float64 to Julia's own min and max bodies (NaN and signed zero as Julia answers them); a mixed pair promotes first"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/constructor.dart"]
+kind = "not_portable"
+what = "constructors of subclasses with super initializers, initializer lists and a mixin compile to allocator, initializer and body functions"
+reason = "dart's constructor split across a superclass chain and a mixin application; a Julia struct inherits no fields and its constructor is a method ending in new, ported as behavior by tests/web/wasm/constructor_test.dart"
+
+["pkg/dart2wasm/test/ir_tests/covariance_check.dart"]
+kind = "not_portable"
+what = "a getter whose static type is covariant in a class type parameter gets a runtime cast"
+reason = "dart's covariant generics; Julia's parametric types are invariant, so no such check exists"
+
+["pkg/dart2wasm/test/ir_tests/dyn_closure.dart"]
+kind = "not_portable"
+what = "closures called from a dynamic call site get a vtable entry per positional-argument count"
+reason = "a call whose target inference cannot resolve is outside Julia's strict subset (D32): a Julia closure is called directly or by union split, so no Julia program reaches the dynamic-call vtable"
+
+["pkg/dart2wasm/test/ir_tests/dyn_closure_function_apply.dart"]
+kind = "not_portable"
+what = "Function.apply with runtime positional lists selects closure vtable entries"
+reason = "a call through a runtime argument list is a dynamic call outside Julia's strict subset (D32)"
+
+["pkg/dart2wasm/test/ir_tests/dyn_closure_function_apply_named.dart"]
+kind = "not_portable"
+what = "Function.apply with a runtime named-argument map selects closure vtable entries"
+reason = "a runtime map of keyword arguments is a dynamic call outside Julia's strict subset (D32)"
+
+["pkg/dart2wasm/test/ir_tests/dynamic_call.dart"]
+kind = "not_portable"
+what = "dynamic calls of toString with named arguments go through a dynamic dispatcher"
+reason = "a call on an untyped receiver is outside Julia's strict subset (D32)"
+
+["pkg/dart2wasm/test/ir_tests/globals.dart"]
+kind = "structural"
+what = "static fields with constant, eager and lazy initializers, read and written, placed in globals or a table"
+property = "a Julia global (const and typed non-const, initialized by a constant or by a call) reads and writes through one wasm global of its type, a lazy initializer run once before the first read"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/try_blocks.dart"]
+kind = "structural"
+what = "the catch clauses of try blocks select the Dart and JS exception tags by the caught type"
+property = "a Julia try/catch catches with WT's one exception tag (Julia catches every exception, its catch clause untyped), the handler a catch of that tag"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/type_brand.dart"]
+kind = "structural"
+what = "--unique-types gives each class its own struct type, distinct by brand"
+property = "two Julia structs with the same field layout are two distinct wasm struct types (each its own class id and type), never merged by shape"
+cases = []
+
+["pkg/dart2wasm/test/ir_tests/type_nobrand.dart"]
+kind = "not_portable"
+what = "--no-unique-types merges classes of the same layout into one struct type"
+reason = "a dart2wasm option; Julia's types are nominal and WT keeps each distinct (type_brand's property)"
+
+["pkg/dart2wasm/test/ir_tests/export_annotations.dart"]
+kind = "not_portable"
+what = "wasm:export and wasm:weak-export pragmas export functions, an unused weak export dropped"
+reason = "dart pragmas on user functions; WT's exports are the signatures its compile call names"
+
+["pkg/dart2wasm/test/ir_tests/memory_use.dart"]
+kind = "not_portable"
+what = "an imported linear memory used through dart:_wasm's Memory intrinsics"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types, and linear memory is outside WT's scope (dev/PARITY_MASTER.md)"
+
+["pkg/dart2wasm/test/ir_tests/wasm_function_from_function.dart"]
+kind = "not_portable"
+what = "WasmFunction.fromFunction passes a dart function as a typed funcref to an import"
+reason = "dart:_wasm intrinsics exposed to user code; a Julia program has no wasm-level types"
+
+["pkg/dart2wasm/test/ir_tests/js_inline.dart"]
+kind = "not_portable"
+what = "inline JS code in dart:_js_helper's JS<T>, inlined when arguments pass straight through"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/interop.bool.dart"]
+kind = "not_portable"
+what = "a bool passed to and returned from a JS interop function"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/interop.double.dart"]
+kind = "not_portable"
+what = "a double passed to and returned from a JS interop function"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/interop.int.dart"]
+kind = "not_portable"
+what = "an int passed to and returned from a JS interop function"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/interop.num.dart"]
+kind = "not_portable"
+what = "a num passed to and returned from a JS interop function"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/interop.string.dart"]
+kind = "not_portable"
+what = "a String passed to and returned from a JS interop function"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["pkg/dart2wasm/test/ir_tests/dispatch_table_reuse.dart"]
+kind = "not_portable"
+what = "a deferred module reuses the main module's dispatch table rows"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/import_name.dart"]
+kind = "not_portable"
+what = "the import names between a main and a deferred module"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/import_name.h.0.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/import_name.dart"]
+what = "the deferred library of import_name"
+
+["pkg/dart2wasm/test/ir_tests/defer_load_lists.dart"]
+kind = "not_portable"
+what = "the load lists of deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.dart"]
+kind = "not_portable"
+what = "constants used by deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.h.0.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.dart"]
+what = "a deferred library of deferred.constant"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.h.1.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.dart"]
+what = "a deferred library of deferred.constant"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.dart"]
+kind = "not_portable"
+what = "one constant used by several deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.h.0.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.dart"]
+what = "a deferred library of deferred.constant.multi_module_use"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.h.1.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.dart"]
+what = "a deferred library of deferred.constant.multi_module_use"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.h.2.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.multi_module_use.dart"]
+what = "a deferred library of deferred.constant.multi_module_use"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.type_use.dart"]
+kind = "not_portable"
+what = "a constant's type used across deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.type_use.h.0.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.type_use.dart"]
+what = "a deferred library of deferred.constant.type_use"
+
+["pkg/dart2wasm/test/ir_tests/deferred.constant.type_use.h.1.dart"]
+kind = "helper"
+of = ["pkg/dart2wasm/test/ir_tests/deferred.constant.type_use.dart"]
+what = "a deferred library of deferred.constant.type_use"
+
+["pkg/dart2wasm/test/ir_tests/deferred.fine_grained.dart"]
+kind = "not_portable"
+what = "fine-grained deferred module splitting"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.fine_grained.devirtualized.dart"]
+kind = "not_portable"
+what = "fine-grained deferred splitting with devirtualized calls"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.init_at_startup.dart"]
+kind = "not_portable"
+what = "wasm:initialize-at-startup globals with deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["pkg/dart2wasm/test/ir_tests/deferred.type_checks.dart"]
+kind = "not_portable"
+what = "type checks against classes of deferred modules"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+# ---- tests/web/wasm: compiled programs' behavior ----------------------------------------------------
+
+["tests/web/wasm/allow_import_export_pragmas_test.dart"]
+kind = "not_portable"
+what = "wasm:import and wasm:export pragmas compile under --enable-experimental-wasm-interop"
+reason = "dart pragmas exposing wasm imports and exports to user code; WT's exports are the signatures its compile call names"
+
+["tests/web/wasm/reject_import_export_pragmas_test.dart"]
+kind = "not_portable"
+what = "dart:ffi imports and wasm:import or wasm:export pragmas are compile-time errors without the flag"
+reason = "a dart compile-time diagnostic over dart pragmas, no runtime behavior"
+
+["tests/web/wasm/annotations_do_not_clash_test.dart"]
+kind = "not_portable"
+what = "an @Native ffi declaration and a @JS static-interop class compile together"
+reason = "dart:ffi and JS interop; native libraries and JS interop are outside WT's scope (dev/PARITY_MASTER.md, 1.F)"
+
+["tests/web/wasm/assertion_failure_message_test.dart"]
+kind = "behavior"
+what = "a failed assert with a message throws an AssertionError carrying the message"
+cases = []
+
+["tests/web/wasm/async_switch_no_await_test.dart"]
+kind = "not_portable"
+what = "a labelled continue between switch cases inside an async main with no await"
+reason = "async functions (dev/PARITY_MASTER.md scopes out async and tasks), and Julia has no switch with case labels"
+
+["tests/web/wasm/asyncstar_desugaring_test.dart"]
+kind = "not_portable"
+what = "async* desugaring keeps user Completer values apart from its own"
+reason = "async* streams; dev/PARITY_MASTER.md scopes out async and tasks"
+
+["tests/web/wasm/boxed_value_tearoff_test.dart"]
+kind = "behavior"
+what = "a method torn off a boxed int receiver, (-4).abs, then called"
+cases = []
+
+["tests/web/wasm/callback_test.dart"]
+kind = "not_portable"
+what = "dart functions passed to JS as callbacks with positional and optional parameters"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/capture_type_and_this_test.dart"]
+kind = "not_portable"
+what = "an async closure and a sync* closure in a generic constructor capture T and this through a context chain"
+reason = "async and sync* functions (dev/PARITY_MASTER.md scopes out async and tasks); a closure capturing a type parameter is ported by constructor_test's port"
+
+["tests/web/wasm/closure_hash_code_test.dart"]
+kind = "behavior"
+what = "equality, hash code and identity of closures, static tear-offs, generic instantiations and member tear-offs"
+cases = []
+
+["tests/web/wasm/constant_environment_test.dart"]
+kind = "not_portable"
+what = "bool.fromEnvironment('dart.tool.dart2wasm') is true"
+reason = "dart's compile-time environment constants; Julia has none"
+
+["tests/web/wasm/constructor_tearoff_test.dart"]
+kind = "behavior"
+what = "constructors, redirecting and factory constructors called directly and torn off, typed and dynamic, with named defaults"
+cases = []
+
+["tests/web/wasm/constructor_test.dart"]
+kind = "behavior"
+what = "constructor parameters captured, modified and stored in initializers and bodies; generic inheritance; optional and named parameters; redirecting and factory constructors"
+cases = []
+
+["tests/web/wasm/data_loader_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/multi_module_stress_test.dart"]
+what = "loads a file through a JS promise"
+
+["tests/web/wasm/default_nullable_param_test.dart"]
+kind = "not_portable"
+what = "a deferred library's overrides with nullable optional parameter defaults"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/default_nullable_param_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/default_nullable_param_test.dart"]
+what = "the deferred library of default_nullable_param_test"
+
+["tests/web/wasm/deferred_constant_use_under_load_guard_test.dart"]
+kind = "not_portable"
+what = "a constant used under two deferred load guards"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_constant_use_under_load_guard_def.dart"]
+kind = "helper"
+of = ["tests/web/wasm/deferred_constant_use_under_load_guard_test.dart"]
+what = "a deferred library of deferred_constant_use_under_load_guard_test"
+
+["tests/web/wasm/deferred_constant_use_under_load_guard_def1.dart"]
+kind = "helper"
+of = ["tests/web/wasm/deferred_constant_use_under_load_guard_test.dart"]
+what = "a deferred library of deferred_constant_use_under_load_guard_test"
+
+["tests/web/wasm/deferred_constant_use_under_load_guard_def2.dart"]
+kind = "helper"
+of = ["tests/web/wasm/deferred_constant_use_under_load_guard_test.dart"]
+what = "a deferred library of deferred_constant_use_under_load_guard_test"
+
+["tests/web/wasm/deferred_dynamic_table_test.dart"]
+kind = "not_portable"
+what = "dynamic calls on classes of deferred libraries"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_init_at_startup_test.dart"]
+kind = "not_portable"
+what = "a wasm:initialize-at-startup array global written by a deferred library"
+reason = "deferred loading and dart:_wasm types; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_loading_js_callback_test.dart"]
+kind = "not_portable"
+what = "a deferred library's closure converted to a JS function and called from JS"
+reason = "deferred loading and JS interop; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_loading_js_callback_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/deferred_loading_js_callback_test.dart"]
+what = "the deferred library of deferred_loading_js_callback_test"
+
+["tests/web/wasm/deferred_memory_test.dart"]
+kind = "not_portable"
+what = "a linear memory defined in a deferred library"
+reason = "deferred loading and dart:_wasm's Memory; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_mixin_regression_62683_test.dart"]
+kind = "not_portable"
+what = "a mixin method loading a deferred library"
+reason = "deferred loading and mixins; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/deferred_mixin_regression_62683_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/deferred_mixin_regression_62683_test.dart"]
+what = "the mixin library of deferred_mixin_regression_62683_test"
+
+["tests/web/wasm/delete_tostring_test.dart"]
+kind = "not_portable"
+what = "the baseline of delete_tostring2_test: package:expect's ExpectException.toString through a list of objects"
+reason = "with delete_tostring2_test it pins dart2wasm's --delete-tostring-package-uri option; the program alone checks package:expect's class"
+
+["tests/web/wasm/delete_tostring2_test.dart"]
+kind = "not_portable"
+what = "--delete-tostring-package-uri replaces a package's toString with Object's"
+reason = "a dart2wasm option; Julia's show methods are the program's"
+
+["tests/web/wasm/dynamic_calls_test.dart"]
+kind = "not_portable"
+what = "dynamic method, getter, setter and tear-off calls, noSuchMethod and argument shape errors on objects of a deferred library"
+reason = "dynamic calls are outside Julia's strict subset (D32), noSuchMethod is dart's, and deferred loading is out of scope"
+
+["tests/web/wasm/externs_assert_error_test.dart"]
+kind = "not_portable"
+what = "compile-time errors for misused dart:_wasm Memory externals"
+reason = "a dart compile-time diagnostic over dart:_wasm, no runtime behavior"
+
+["tests/web/wasm/field_dependency_test.dart"]
+kind = "not_portable"
+what = "fields of an eager class used from a deferred library"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/field_dependency_helper1.dart"]
+kind = "helper"
+of = ["tests/web/wasm/field_dependency_test.dart"]
+what = "the eager library of field_dependency_test"
+
+["tests/web/wasm/field_dependency_helper2.dart"]
+kind = "helper"
+of = ["tests/web/wasm/field_dependency_test.dart"]
+what = "the deferred library of field_dependency_test"
+
+["tests/web/wasm/super_dependency_test.dart"]
+kind = "not_portable"
+what = "super calls of an eager class used from a deferred library"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/super_dependency_helper1.dart"]
+kind = "helper"
+of = ["tests/web/wasm/super_dependency_test.dart"]
+what = "the eager library of super_dependency_test"
+
+["tests/web/wasm/super_dependency_helper2.dart"]
+kind = "helper"
+of = ["tests/web/wasm/super_dependency_test.dart"]
+what = "the deferred library of super_dependency_test"
+
+["tests/web/wasm/ffi/disabled_test.dart"]
+kind = "not_portable"
+what = "dart.library.ffi is false without the flag and a conditional import picks the helper without ffi"
+reason = "dart:ffi and dart's conditional imports; native libraries are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/web/wasm/ffi/enabled_test.dart"]
+kind = "not_portable"
+what = "dart.library.ffi is true with --enable-experimental-ffi"
+reason = "dart:ffi; native libraries are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/web/wasm/ffi/disabled_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/ffi/disabled_test.dart", "tests/web/wasm/ffi/enabled_test.dart"]
+what = "the conditional import without ffi"
+
+["tests/web/wasm/ffi/enabled_helper.dart"]
+kind = "helper"
+of = ["tests/web/wasm/ffi/disabled_test.dart", "tests/web/wasm/ffi/enabled_test.dart"]
+what = "the conditional import with ffi"
+
+["tests/web/wasm/ffi/ffi_native_test.dart"]
+kind = "not_portable"
+what = "@Native functions of a native wasm module called with every ffi integer, float, bool and pointer type and a struct"
+reason = "dart:ffi into a separately built native module; arbitrary native calls are outside WT's scope (dev/PARITY_MASTER.md: native and host capabilities)"
+
+["tests/web/wasm/ffi/ffi_native_deferred_test.dart"]
+kind = "not_portable"
+what = "ffi_native_test loaded as a deferred library"
+reason = "dart:ffi and deferred loading, both outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/web/wasm/flute_stress_test.dart"]
+kind = "not_portable"
+what = "the flute benchmark in multi-module stress-test mode"
+reason = "a dart2wasm multi-module mode over a dart benchmark; WT emits one module"
+
+["tests/web/wasm/multi_module_stress_test.dart"]
+kind = "not_portable"
+what = "dart2js compiled by dart2wasm in multi-module stress-test mode"
+reason = "a dart2wasm multi-module mode over a dart program; WT emits one module"
+
+["tests/web/wasm/flutter_regress_152029_test.dart"]
+kind = "behavior"
+what = "a generic class's nullable field written and read through a receiver of a mixed list, under --omit-implicit-checks"
+cases = []
+
+["tests/web/wasm/forwarding_stubs_regress_62662_test.dart"]
+kind = "not_portable"
+what = "forwarding stubs check covariant parameters when a class implements a generic interface through inherited members"
+reason = "dart's implements and inherited members with covariant checks; a Julia method's signature is its own check and nothing is inherited"
+
+["tests/web/wasm/function_apply_minify_test.dart"]
+kind = "not_portable"
+what = "under --minify a runtime Symbol does not match a named parameter in Function.apply"
+reason = "a dart2wasm option and dart's runtime Symbol maps of named arguments, a dynamic call outside Julia's strict subset (D32)"
+
+["tests/web/wasm/inlining_test.dart"]
+kind = "behavior"
+what = "recursive functions and constructors marked prefer-inline are not inlined into themselves and answer correctly"
+cases = []
+
+["tests/web/wasm/issue_54406_test.dart"]
+kind = "not_portable"
+what = "a while loop whose condition holds a let expression inside an async function"
+reason = "async functions; dev/PARITY_MASTER.md scopes out async and tasks"
+
+["tests/web/wasm/issue_54926_test.dart"]
+kind = "behavior"
+what = "two instantiations of a generic method tear-off at the same type are equal and not identical"
+cases = []
+
+["tests/web/wasm/issue_56234_test.dart"]
+kind = "behavior"
+what = "a cast of a double to int fails at runtime even under --omit-explicit-checks (a multitest expecting a runtime error)"
+cases = []
+
+["tests/web/wasm/issue_59901_test.dart"]
+kind = "not_portable"
+what = "codeUnitAt on a JS-backed string"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/js_exceptions_test.dart"]
+kind = "not_portable"
+what = "JS exceptions caught in try/catch and try/finally, sync and async"
+reason = "JS interop and async; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/js_int_passing_test.dart"]
+kind = "not_portable"
+what = "ints passed to JS as externalized i31refs at the i31 bounds"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/js_interop_type_tests_test.dart"]
+kind = "not_portable"
+what = "JS typed-array wrapper classes reject a JS array of another element type"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/large_const_set_test.dart"]
+kind = "structural"
+what = "a const set of 10,001 ints, more elements than array.new_fixed allows"
+property = "a constant array longer than array.new_fixed's limit of 10,000 elements is allocated with array.new and filled, never one array.new_fixed past the limit"
+cases = []
+
+["tests/web/wasm/lazy_const_record_test.dart"]
+kind = "behavior"
+what = "a const record holding a const list of 10,001 ints, used once"
+cases = []
+
+["tests/web/wasm/lazy_static_number_initializer_regression_test.dart"]
+kind = "behavior"
+what = "a lazily initialized num global chosen by a type test, used by a function rounding a dynamic number"
+cases = []
+
+["tests/web/wasm/location_href_test.dart"]
+kind = "not_portable"
+what = "location.href read through JS interop"
+reason = "JS interop and the host page; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/long_string_import_test.dart"]
+kind = "structural"
+what = "printing a string literal of 100,001 bytes, one past the JS shells' limit on import names"
+property = "a string constant longer than 100,000 bytes is emitted in a form every host loads, never as an import name past that limit"
+cases = []
+
+["tests/web/wasm/masquerade_test.dart"]
+kind = "not_portable"
+what = "runtimeType of typed-data views and JS-backed values reports the public type"
+reason = "dart's runtimeType hides implementation classes behind their public interface; Julia's typeof is the concrete type, nothing masquerades"
+
+["tests/web/wasm/memory_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's Memory: size, grow, fill, loads and stores with offsets"
+reason = "dart:_wasm exposes wasm types to user code; linear memory is outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/web/wasm/no_omit_error_details_test.dart"]
+kind = "behavior"
+what = "an index past a list's end throws an IndexError naming the index and the length"
+cases = []
+
+["tests/web/wasm/omit_error_details_test.dart"]
+kind = "not_portable"
+what = "--omit-error-details replaces the IndexError message"
+reason = "a dart2wasm option; Julia's BoundsError is Julia's (no_omit_error_details_test's port)"
+
+["tests/web/wasm/regress_54794_test.dart"]
+kind = "behavior"
+what = "is-tests of a generic class against a supertype instantiated with record types"
+cases = []
+
+["tests/web/wasm/regress_56372_test.dart"]
+kind = "not_portable"
+what = "a cast between function types differing in named parameters"
+reason = "dart's structural function types; a Julia function's type is its own singleton, with no structural function types"
+
+["tests/web/wasm/regress_56664_test.dart"]
+kind = "not_portable"
+what = "is-tests of a generic method tear-off against function types under --omit-implicit-checks"
+reason = "dart's structural function types and a dart2wasm option"
+
+["tests/web/wasm/regress_56952_named_test.dart"]
+kind = "not_portable"
+what = "an override of toString with a constant named default called from a deferred library"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/regress_56952_pos_test.dart"]
+kind = "not_portable"
+what = "an override of toString with a constant positional default called from a deferred library"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/web/wasm/regress_59782_test.dart"]
+kind = "behavior"
+what = "a switch on a dynamic int against string cases takes the default, or none"
+cases = []
+
+["tests/web/wasm/regress_59840_test.dart"]
+kind = "behavior"
+what = "two optional named nullable doubles, an assert relating them and a null check on one"
+cases = []
+
+["tests/web/wasm/regress_62273_test.dart"]
+kind = "behavior"
+what = "an override with its own named default value, reached through a function returning the base type"
+cases = []
+
+["tests/web/wasm/regress_63264_test.dart"]
+kind = "not_portable"
+what = "a closure in a sync* generator after a loop variable's scope"
+reason = "sync* generators; Julia has no resumable functions in WT's scope (dev/PARITY_MASTER.md scopes out tasks)"
+
+["tests/web/wasm/regress_63454_test.dart"]
+kind = "behavior"
+what = "a loop over an empty map's entries whose body writes a field of the key"
+cases = []
+
+["tests/web/wasm/regress_63735_test.dart"]
+kind = "not_portable"
+what = "a dynamic tear-off on a JS-backed ByteBuffer throws NoSuchMethodError"
+reason = "JS interop and dynamic calls outside Julia's strict subset (D32)"
+
+["tests/web/wasm/regress_63747_test.dart"]
+kind = "behavior"
+what = "a constructor parameter reassigned in the body and in an initializer before setRange copies it"
+cases = []
+
+["tests/web/wasm/regression_179853_test.dart"]
+kind = "not_portable"
+what = "typed-data views and sublists over JS-backed buffers"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/source_map_simple_test.dart"]
+kind = "structural"
+what = "the source map maps a thrown error's stack frames to dart file, line, column and function"
+property = "WT's source map maps each frame of a thrown error's stack to the Julia file, line and function of its statement"
+cases = []
+
+["tests/web/wasm/source_map_simple_lib.dart"]
+kind = "helper"
+of = ["tests/web/wasm/source_map_simple_test.dart", "tests/web/wasm/source_map_simple_optimized_test.dart", "tests/web/wasm/source_map_simple_optimized_deferred_test.dart"]
+what = "the functions f and g whose stack the source-map tests read"
+
+["tests/web/wasm/source_map_simple_optimized_test.dart"]
+kind = "not_portable"
+what = "source maps after wasm-opt at -O4"
+reason = "binaryen's optimizer; WT runs no wasm-opt"
+
+["tests/web/wasm/source_map_simple_optimized_deferred_test.dart"]
+kind = "not_portable"
+what = "source maps after wasm-opt at -O4 with deferred loading"
+reason = "binaryen's optimizer and deferred loading, both outside WT's scope"
+
+["tests/web/wasm/source_map_unminification_test.dart"]
+kind = "not_portable"
+what = "minified class names are recovered from the source map"
+reason = "a dart2wasm option (--minify); WT does not minify names"
+
+["tests/web/wasm/utils.dart"]
+kind = "helper"
+of = ["tests/web/wasm/source_map_simple_test.dart", "tests/web/wasm/source_map_unminification_test.dart"]
+what = "reads a source map file through d8's readbuffer"
+
+["tests/web/wasm/static_dispatch_pragma_test.dart"]
+kind = "behavior"
+what = "a polymorphic call over two subclasses, one override marked wasm:static-dispatch"
+cases = []
+
+["tests/web/wasm/static_interop_test.dart"]
+kind = "not_portable"
+what = "static-interop classes, members, renames and optional parameters"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/static_interop_library.dart"]
+kind = "helper"
+of = ["tests/web/wasm/static_interop_test.dart"]
+what = "a @JS library of static_interop_test"
+
+["tests/web/wasm/string_copy_test.dart"]
+kind = "not_portable"
+what = "long one-byte and two-byte strings copied to JS and back"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/string_switch_test.dart"]
+kind = "not_portable"
+what = "a switch on a JS-backed string"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/table_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's WasmTable of funcrefs: set, get, call and callIndirect"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/type_arguments_member_test.dart"]
+kind = "not_portable"
+what = "a user getter named like dart2wasm's internal _typeArguments member"
+reason = "a clash with a dart runtime name; WT's internal names live in its builder, never in a Julia program's namespace"
+
+["tests/web/wasm/typed_data_setrange_test.dart"]
+kind = "not_portable"
+what = "setRange between typed lists and JS-backed typed lists and views"
+reason = "JS interop; WT's host contract is its own import set (1.F)"
+
+["tests/web/wasm/unreachable_selector_implementation_test.dart"]
+kind = "behavior"
+what = "a call over two subclasses while a third, never allocated, keeps an entry-point override with an optional named parameter"
+cases = []
+
+["tests/web/wasm/uri_base_test.dart"]
+kind = "not_portable"
+what = "Uri.base names the test's directory"
+reason = "the host's location; the filesystem and host environment are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/web/wasm/wasm_types_test.dart"]
+kind = "not_portable"
+what = "dart:_wasm's reference and numeric types, their casts and conversions"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+["tests/web/wasm/while_condition_let_in_async_test.dart"]
+kind = "not_portable"
+what = "a while loop with a null-aware assignment inside an async main"
+reason = "async functions; dev/PARITY_MASTER.md scopes out async and tasks"
+
+["tests/web/wasm/closures/dynamic_call_nsm_test.dart"]
+kind = "not_portable"
+what = "dynamic closure, field and method calls reaching noSuchMethod with their arguments"
+reason = "dynamic calls are outside Julia's strict subset (D32) and noSuchMethod is dart's"
+
+["tests/web/wasm/closures/dynamic_call_via_field_test.dart"]
+kind = "not_portable"
+what = "a dynamic call of a generic closure getter with a named argument registers the name combination"
+reason = "dynamic calls are outside Julia's strict subset (D32)"
+
+["tests/web/wasm/closures/function_apply_test.dart"]
+kind = "behavior"
+what = "functions with an optional positional default applied to 1 and 2 arguments, and one argument too many raising"
+cases = []
+
+["tests/web/wasm/closures/large_name_combination_test.dart"]
+kind = "not_portable"
+what = "a dynamic closure call with many combinations of 16 named arguments"
+reason = "dynamic calls are outside Julia's strict subset (D32); Julia resolves keyword calls statically"
+
+["tests/web/wasm/simd/"]
+kind = "not_portable"
+what = "dart:_wasm's v128 SIMD types: constants, lane operations, vector arithmetic and a vector-backed Offset class"
+reason = "dart:_wasm exposes wasm types to user code; a Julia program has no wasm-level types"
+
+# ---- tests/language: the language tests dart2wasm runs (tests/language/language_dart2wasm.status), by directory ----
+
+["tests/language/abstract/"]
+kind = "not_portable"
+what = "dart abstract classes and members: instantiation and override rules"
+reason = "dart's abstract classes hold members and fields and their errors are static diagnostics; Julia's abstract types hold neither"
+
+["tests/language/accessor_conflict/"]
+kind = "not_portable"
+what = "getters and setters conflicting across a class hierarchy"
+reason = "dart accessors; Julia has no getters or setters on fields"
+
+["tests/language/anonymous_methods/"]
+kind = "not_portable"
+what = "anonymous methods, an experimental dart syntax"
+reason = "dart syntax with no Julia counterpart"
+
+["tests/language/argument/"]
+kind = "not_portable"
+what = "argument-count and argument-type errors at calls"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/assert/"]
+kind = "behavior"
+what = "assert statements, their messages and evaluation"
+cases = []
+
+["tests/language/assign/"]
+kind = "not_portable"
+what = "assignments to finals, getters and undefined names"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/async/"]
+kind = "not_portable"
+what = "async functions, await and Futures"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/async_nested/"]
+kind = "not_portable"
+what = "nested async functions and awaits"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/async_star/"]
+kind = "not_portable"
+what = "async* streams"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/await/"]
+kind = "not_portable"
+what = "await expressions"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/bool/"]
+kind = "behavior"
+what = "bool values, conditions and boolean operators"
+cases = []
+
+["tests/language/call/"]
+kind = "behavior"
+what = "objects with a call method invoked as functions (Julia's callable structs)"
+cases = []
+
+["tests/language/canonicalize/"]
+kind = "behavior"
+what = "canonical identity of constant values"
+cases = []
+
+["tests/language/cascade/"]
+kind = "not_portable"
+what = "cascade expressions (..)"
+reason = "dart syntax with no Julia counterpart"
+
+["tests/language/class/"]
+kind = "not_portable"
+what = "class declarations, members and their static rules"
+reason = "dart classes with members, getters and inheritance; Julia's structs and methods are ported by the behavior directories"
+
+["tests/language/class_modifiers/"]
+kind = "not_portable"
+what = "sealed, base, interface and final class modifiers"
+reason = "dart class modifiers, mostly static diagnostics; Julia's types have none"
+
+["tests/language/closure/"]
+kind = "behavior"
+what = "closures: capture, mutation of captured variables, closures in loops and as values"
+cases = []
+
+["tests/language/compile_time_constant/"]
+kind = "not_portable"
+what = "dart const expressions evaluated at compile time"
+reason = "dart's const semantics; Julia folds constants by its own inference, ported where Julia answers it (D3)"
+
+["tests/language/const/"]
+kind = "not_portable"
+what = "const constructors, const collections and their canonicalization rules"
+reason = "dart's const semantics, largely static diagnostics"
+
+["tests/language/const_functions/"]
+kind = "not_portable"
+what = "the experimental const-functions feature"
+reason = "dart's const evaluation, static diagnostics"
+
+["tests/language/constants_2018/"]
+kind = "not_portable"
+what = "the 2018 extensions of dart constant expressions"
+reason = "dart's const semantics"
+
+["tests/language/constructor/"]
+kind = "behavior"
+what = "constructors: initializers, bodies, redirecting, defaults (Julia's inner and outer constructors)"
+cases = []
+
+["tests/language/control_flow_collections/"]
+kind = "behavior"
+what = "if and for elements in collection literals (Julia's comprehensions and generators)"
+cases = []
+
+["tests/language/covariant/"]
+kind = "not_portable"
+what = "covariant parameters and their runtime checks"
+reason = "dart's covariant generics; Julia's parametric types are invariant"
+
+["tests/language/covariant_override/"]
+kind = "not_portable"
+what = "covariant overrides"
+reason = "dart's covariant generics; Julia's parametric types are invariant"
+
+["tests/language/deferred/"]
+kind = "not_portable"
+what = "deferred imports and loadLibrary"
+reason = "deferred loading; dev/PARITY_MASTER.md scopes WT to one frozen closed-world module"
+
+["tests/language/dot_shorthands/"]
+kind = "not_portable"
+what = "dot-shorthand syntax (.name for a context type's member)"
+reason = "dart syntax resolved by a context type, mostly static diagnostics"
+
+["tests/language/double/"]
+kind = "behavior"
+what = "double arithmetic, rounding, parsing and printing"
+cases = []
+
+["tests/language/double_literals/"]
+kind = "behavior"
+what = "double literals and their values"
+cases = []
+
+["tests/language/dynamic/"]
+kind = "not_portable"
+what = "the dynamic type and dynamic calls"
+reason = "dynamic calls are outside Julia's strict subset (D32)"
+
+["tests/language/enum/"]
+kind = "behavior"
+what = "enums, their values, indexes and names (Julia's @enum)"
+cases = []
+
+["tests/language/exception/"]
+kind = "behavior"
+what = "throw, try, catch, finally and rethrow"
+cases = []
+
+["tests/language/export/"]
+kind = "not_portable"
+what = "library exports and combinators"
+reason = "dart's library system; Julia's modules are ported nowhere by WT, which compiles one closed world"
+
+["tests/language/extension_methods/"]
+kind = "not_portable"
+what = "extension methods"
+reason = "dart's static extension dispatch; Julia's methods are its multiple dispatch"
+
+["tests/language/extension_type/"]
+kind = "not_portable"
+what = "extension types"
+reason = "dart's zero-cost wrapper types, statically resolved"
+
+["tests/language/external_abstract_fields/"]
+kind = "not_portable"
+what = "external and abstract field declarations"
+reason = "dart declarations, static diagnostics"
+
+["tests/language/factory/"]
+kind = "not_portable"
+what = "factory constructors and their static rules"
+reason = "dart's factory constructors; a Julia outer constructor is a method, ported under constructor"
+
+["tests/language/field/"]
+kind = "behavior"
+what = "field reads, writes and initializers"
+cases = []
+
+["tests/language/final/"]
+kind = "not_portable"
+what = "final variables and fields"
+reason = "dart's single-assignment rules, static diagnostics"
+
+["tests/language/function/"]
+kind = "behavior"
+what = "functions: optional and named parameters, recursion, functions as values"
+cases = []
+
+["tests/language/function_subtype/"]
+kind = "not_portable"
+what = "subtyping between function types"
+reason = "dart's structural function types; a Julia function's type is its own singleton"
+
+["tests/language/function_type/"]
+kind = "not_portable"
+what = "function types in declarations and checks"
+reason = "dart's structural function types; a Julia function's type is its own singleton"
+
+["tests/language/generic/"]
+kind = "behavior"
+what = "generic classes and their reified type arguments (Julia's parametric types)"
+cases = []
+
+["tests/language/generic_methods/"]
+kind = "behavior"
+what = "generic methods and their type arguments (Julia's where clauses)"
+cases = []
+
+["tests/language/getter/"]
+kind = "not_portable"
+what = "getters and setters"
+reason = "dart accessors; Julia has no getters or setters on fields"
+
+["tests/language/identifier/"]
+kind = "not_portable"
+what = "identifiers, built-in identifiers and their static rules"
+reason = "dart syntax, static diagnostics"
+
+["tests/language/identity/"]
+kind = "behavior"
+what = "identical() on numbers, objects and closures (Julia's ===)"
+cases = []
+
+["tests/language/if/"]
+kind = "behavior"
+what = "if statements and their branches"
+cases = []
+
+["tests/language/if_null/"]
+kind = "not_portable"
+what = "the if-null operator ?? and ??="
+reason = "dart's null-aware syntax over nullable types"
+
+["tests/language/implicit_creation/"]
+kind = "not_portable"
+what = "instance creation without new or const"
+reason = "dart syntax with no Julia counterpart"
+
+["tests/language/implicit_downcast_during/"]
+kind = "not_portable"
+what = "implicit downcasts in assignments, calls and returns"
+reason = "dart's static typing, static diagnostics"
+
+["tests/language/import/"]
+kind = "not_portable"
+what = "imports, prefixes and conditional imports"
+reason = "dart's library system; WT compiles one closed world"
+
+["tests/language/inference/"]
+kind = "not_portable"
+what = "dart type inference"
+reason = "dart's static inference; Julia's inference is its own and the ground truth (D3)"
+
+["tests/language/inference_update_1/"]
+kind = "not_portable"
+what = "the first dart type inference update"
+reason = "dart's static inference"
+
+["tests/language/inference_update_2/"]
+kind = "not_portable"
+what = "the second dart type inference update (private field promotion)"
+reason = "dart's static inference"
+
+["tests/language/inference_update_3/"]
+kind = "not_portable"
+what = "the third dart type inference update"
+reason = "dart's static inference"
+
+["tests/language/inference_update_4/"]
+kind = "not_portable"
+what = "the fourth dart type inference update"
+reason = "dart's static inference"
+
+["tests/language/inference_using_bounds/"]
+kind = "not_portable"
+what = "inference of type arguments from bounds"
+reason = "dart's static inference"
+
+["tests/language/initializing_formal/"]
+kind = "not_portable"
+what = "initializing formals (this.x parameters)"
+reason = "dart constructor syntax; Julia's constructors are ported under constructor"
+
+["tests/language/instance/"]
+kind = "not_portable"
+what = "instance member access and its static rules"
+reason = "dart's class members, static diagnostics"
+
+["tests/language/instantiate_to_bound/"]
+kind = "not_portable"
+what = "instantiate-to-bound of raw generic types"
+reason = "dart's static typing"
+
+["tests/language/interceptor/"]
+kind = "not_portable"
+what = "dart2js interceptors of methods on core types"
+reason = "a dart2js runtime mechanism, with dynamic calls outside Julia's strict subset (D32)"
+
+["tests/language/interface/"]
+kind = "not_portable"
+what = "interfaces and implements"
+reason = "dart's implements; Julia's abstract types carry no interface members"
+
+["tests/language/invalid_returns/"]
+kind = "not_portable"
+what = "invalid return statements"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/is/"]
+kind = "behavior"
+what = "type tests with is and is! (Julia's isa)"
+cases = []
+
+["tests/language/label/"]
+kind = "not_portable"
+what = "labelled statements with break and continue"
+reason = "dart labels; Julia's @goto and @label are a different construct, ported under loop"
+
+["tests/language/lazy/"]
+kind = "not_portable"
+what = "lazily initialized statics"
+reason = "dart's lazy static initialization; a Julia global's initializer runs at load"
+
+["tests/language/least_upper_bound/"]
+kind = "not_portable"
+what = "the least upper bound of types"
+reason = "dart's static typing"
+
+["tests/language/library/"]
+kind = "not_portable"
+what = "libraries, parts and their names"
+reason = "dart's library system"
+
+["tests/language/list/"]
+kind = "behavior"
+what = "lists: literals, indexing, growth and iteration (Julia's Vector)"
+cases = []
+
+["tests/language/loop/"]
+kind = "behavior"
+what = "for, while and do loops with break and continue"
+cases = []
+
+["tests/language/main/"]
+kind = "not_portable"
+what = "the forms of main and its arguments"
+reason = "dart's entry point; WT's entry points are its compile call's signatures"
+
+["tests/language/malbounded/"]
+kind = "not_portable"
+what = "type arguments outside their bounds"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/malformed/"]
+kind = "not_portable"
+what = "malformed types"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/map/"]
+kind = "behavior"
+what = "maps: literals, lookup, insertion and iteration (Julia's Dict)"
+cases = []
+
+["tests/language/metadata/"]
+kind = "not_portable"
+what = "annotations"
+reason = "dart metadata; Julia has none in the closed world"
+
+["tests/language/method/"]
+kind = "behavior"
+what = "instance and static methods, their invocation and binding"
+cases = []
+
+["tests/language/mixin/"]
+kind = "not_portable"
+what = "mixins"
+reason = "dart mixin application; Julia has no mixins"
+
+["tests/language/mixin_constructor_forwarding/"]
+kind = "not_portable"
+what = "constructors forwarded through mixin applications"
+reason = "dart mixins"
+
+["tests/language/mixin_declaration/"]
+kind = "not_portable"
+what = "mixin declarations"
+reason = "dart mixins"
+
+["tests/language/mixin_legacy/"]
+kind = "not_portable"
+what = "legacy class-as-mixin application"
+reason = "dart mixins"
+
+["tests/language/named_arguments_anywhere/"]
+kind = "not_portable"
+what = "named arguments before positional ones"
+reason = "dart syntax; Julia's keyword arguments follow a semicolon"
+
+["tests/language/new/"]
+kind = "not_portable"
+what = "the new keyword"
+reason = "dart syntax"
+
+["tests/language/nnbd/"]
+kind = "not_portable"
+what = "sound null safety: nullable types, late variables and null checks"
+reason = "dart's null safety, mostly static; Julia's nothing is a value of its own type, ported under null"
+
+["tests/language/no_such_method/"]
+kind = "not_portable"
+what = "noSuchMethod"
+reason = "dart's noSuchMethod; Julia raises a MethodError"
+
+["tests/language/nonfunction_type_aliases/"]
+kind = "not_portable"
+what = "typedefs of non-function types"
+reason = "dart typedefs, static"
+
+["tests/language/nosuchmethod_forwarding/"]
+kind = "not_portable"
+what = "noSuchMethod forwarders"
+reason = "dart's noSuchMethod"
+
+["tests/language/null/"]
+kind = "behavior"
+what = "null values and comparisons (Julia's nothing)"
+cases = []
+
+["tests/language/null_aware/"]
+kind = "not_portable"
+what = "null-aware access ?. and spreads"
+reason = "dart's null-aware syntax over nullable types"
+
+["tests/language/null_aware_elements/"]
+kind = "not_portable"
+what = "null-aware collection elements"
+reason = "dart's null-aware syntax"
+
+["tests/language/number/"]
+kind = "behavior"
+what = "int and double arithmetic, overflow, division and conversions (number/separators_test and number/web_int_literals_test are SkipByDesign in language_dart2wasm.status)"
+cases = []
+
+["tests/language/operator/"]
+kind = "behavior"
+what = "user-defined operators (Julia's methods of +, ==, getindex and friends)"
+cases = []
+
+["tests/language/optimize/"]
+kind = "behavior"
+what = "regressions of compiler optimizations on ordinary programs, to classify file by file when ported"
+cases = []
+
+["tests/language/override/"]
+kind = "not_portable"
+what = "override rules"
+reason = "dart's override checks, static diagnostics"
+
+["tests/language/parameter/"]
+kind = "behavior"
+what = "optional, named and default parameters (Julia's optional and keyword arguments)"
+cases = []
+
+["tests/language/part/"]
+kind = "not_portable"
+what = "part and part of"
+reason = "dart's library system"
+
+["tests/language/patterns/"]
+kind = "not_portable"
+what = "patterns: destructuring, switch patterns and guards"
+reason = "dart patterns; Julia has no pattern matching (its destructuring is ported under records)"
+
+["tests/language/prefix/"]
+kind = "not_portable"
+what = "import prefixes"
+reason = "dart's library system"
+
+["tests/language/primary_constructors/"]
+kind = "not_portable"
+what = "primary constructors"
+reason = "dart syntax, mostly static diagnostics"
+
+["tests/language/private/"]
+kind = "not_portable"
+what = "library-private names"
+reason = "dart's library privacy; Julia has no module privacy"
+
+["tests/language/private_named_parameters/"]
+kind = "not_portable"
+what = "private named parameters"
+reason = "dart syntax"
+
+["tests/language/propagate/"]
+kind = "behavior"
+what = "type propagation regressions on ordinary programs"
+cases = []
+
+["tests/language/records/"]
+kind = "behavior"
+what = "records: literals, fields, equality (Julia's Tuple and NamedTuple)"
+cases = []
+
+["tests/language/redirecting/"]
+kind = "not_portable"
+what = "redirecting constructors and factories"
+reason = "dart constructor syntax; Julia's constructors are ported under constructor"
+
+["tests/language/reg_exp/"]
+kind = "not_portable"
+what = "regular expressions"
+reason = "Julia's Regex calls PCRE through ccall, a native library outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/regress/"]
+kind = "behavior"
+what = "regression tests of every kind, to classify file by file when ported"
+cases = []
+
+["tests/language/resolution/"]
+kind = "not_portable"
+what = "name resolution"
+reason = "dart's static resolution"
+
+["tests/language/return/"]
+kind = "behavior"
+what = "return statements in loops and branches"
+cases = []
+
+["tests/language/rewrite/"]
+kind = "behavior"
+what = "regressions of compiler rewrites of assignments, conditions and loops"
+cases = []
+
+["tests/language/scaling/"]
+kind = "not_portable"
+what = "a class with very many type parameters"
+reason = "dart's reified type arguments at scale; Julia's parametric types are tested under generic"
+
+["tests/language/script/"]
+kind = "not_portable"
+what = "scripts and their directives"
+reason = "dart's script syntax"
+
+["tests/language/sealed_class/"]
+kind = "not_portable"
+what = "sealed classes"
+reason = "dart class modifiers; Julia's closed sums are WT's own (D8)"
+
+["tests/language/set_literals/"]
+kind = "behavior"
+what = "set literals and set operations (Julia's Set)"
+cases = []
+
+["tests/language/setter/"]
+kind = "not_portable"
+what = "setters"
+reason = "dart accessors; Julia has no setters"
+
+["tests/language/sound_flow_analysis/"]
+kind = "not_portable"
+what = "sound flow analysis"
+reason = "dart's static flow analysis"
+
+["tests/language/spread_collections/"]
+kind = "not_portable"
+what = "spread elements in collection literals"
+reason = "dart syntax with null-aware spreads, static diagnostics"
+
+["tests/language/stack_trace/"]
+kind = "not_portable"
+what = "stack traces of thrown errors"
+reason = "dart's StackTrace objects; WT's located rejections and source maps are ported under source_map_simple_test"
+
+["tests/language/static/"]
+kind = "not_portable"
+what = "static members and their static rules"
+reason = "dart class statics"
+
+["tests/language/string/"]
+kind = "behavior"
+what = "strings: literals, interpolation, concatenation, comparison and code units"
+cases = []
+
+["tests/language/subtyping_static/"]
+kind = "not_portable"
+what = "static subtyping"
+reason = "dart's static typing"
+
+["tests/language/super/"]
+kind = "not_portable"
+what = "super calls"
+reason = "dart inheritance of members; Julia has no super (invoke is ported where Julia answers it)"
+
+["tests/language/superinterface_variance/"]
+kind = "not_portable"
+what = "variance of superinterfaces"
+reason = "dart's variance rules, static diagnostics"
+
+["tests/language/switch/"]
+kind = "not_portable"
+what = "switch statements and case labels"
+reason = "dart's switch; Julia has none (if chains are ported under if)"
+
+["tests/language/symbol/"]
+kind = "behavior"
+what = "symbols and symbol literals (Julia's Symbol)"
+cases = []
+
+["tests/language/sync_star/"]
+kind = "not_portable"
+what = "sync* generators"
+reason = "resumable functions; dev/PARITY_MASTER.md scopes out tasks"
+
+["tests/language/syntax/"]
+kind = "not_portable"
+what = "parser regressions"
+reason = "dart syntax"
+
+["tests/language/test_runner/"]
+kind = "not_portable"
+what = "the test runner's own expectations"
+reason = "dart's test tooling"
+
+["tests/language/this/"]
+kind = "not_portable"
+what = "this in members"
+reason = "dart's implicit receiver"
+
+["tests/language/this_promotion/"]
+kind = "not_portable"
+what = "promotion of this"
+reason = "dart's static flow analysis"
+
+["tests/language/top_level/"]
+kind = "not_portable"
+what = "top-level declarations and their collisions"
+reason = "dart's library scoping, static diagnostics"
+
+["tests/language/type/"]
+kind = "not_portable"
+what = "typedef equality and type checks of function types"
+reason = "dart's structural function types"
+
+["tests/language/type_object/"]
+kind = "behavior"
+what = "type literals and Type objects (Julia's typeof and DataType values)"
+cases = []
+
+["tests/language/type_promotion/"]
+kind = "not_portable"
+what = "type promotion"
+reason = "dart's static flow analysis"
+
+["tests/language/type_variable/"]
+kind = "not_portable"
+what = "type variables and their static rules"
+reason = "dart's reified type variables, mostly static diagnostics; Julia's are ported under generic"
+
+["tests/language/typedef/"]
+kind = "not_portable"
+what = "typedefs"
+reason = "dart typedefs, static"
+
+["tests/language/unsorted/"]
+kind = "behavior"
+what = "unsorted tests of every kind, to classify file by file when ported"
+cases = []
+
+["tests/language/value_class/"]
+kind = "not_portable"
+what = "value classes"
+reason = "an experimental dart feature"
+
+["tests/language/variable/"]
+kind = "not_portable"
+what = "variable declarations and their static rules"
+reason = "dart's variable rules, mostly static diagnostics"
+
+["tests/language/variance/"]
+kind = "not_portable"
+what = "declaration-site variance"
+reason = "an experimental dart feature"
+
+["tests/language/void/"]
+kind = "not_portable"
+what = "the void type"
+reason = "dart's void, static"
+
+["tests/language/why_not_promoted/"]
+kind = "not_portable"
+what = "why-not-promoted diagnostics"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/wildcard_variables/"]
+kind = "not_portable"
+what = "wildcard variables"
+reason = "dart syntax"
+
+# ---- tests/language: the top-level files ----
+
+["tests/language/await_type_error_test.dart"]
+kind = "not_portable"
+what = "await on a value of a wrong static type"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/await_type_test.dart"]
+kind = "not_portable"
+what = "the static type of await expressions"
+reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
+
+["tests/language/covariant_field_implicit_setter_test.dart"]
+kind = "not_portable"
+what = "the implicit setter of a covariant field checks its argument"
+reason = "dart's covariant generics; Julia's parametric types are invariant"
+
+["tests/language/explicit_type_instantiation_parsing_test.dart"]
+kind = "not_portable"
+what = "parsing of explicit generic instantiations like f<int>"
+reason = "dart syntax, static diagnostics"
+
+["tests/language/flutter_regession_151473_test.dart"]
+kind = "behavior"
+what = "overrides calling super of a method and a getter, through a list of two subclasses, with is-tests on the results"
+cases = []
+
+["tests/language/local_null_initialization.dart"]
+kind = "behavior"
+what = "a local declared without an initializer and assigned in some switch cases reads null in the others (no _test suffix: dart's runner does not run it)"
+cases = []
+
+["tests/language/record_literal_test.dart"]
+kind = "behavior"
+what = "record literals: positional, named, nested, holding closures, const"
+cases = []
+
+["tests/language/record_literal_problems_test.dart"]
+kind = "not_portable"
+what = "compile-time errors in record literals"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/record_type_test.dart"]
+kind = "behavior"
+what = "record types in declarations, parameters and returns"
+cases = []
+
+["tests/language/record_type_problems_test.dart"]
+kind = "not_portable"
+what = "compile-time errors in record types"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/record_type_empty_problems_test.dart"]
+kind = "not_portable"
+what = "compile-time errors for the empty record type"
+reason = "static diagnostics of dart's front end"
+
+["tests/language/regress_54994_test.dart"]
+kind = "behavior"
+what = "is-tests against generic subclasses whose type arguments differ, after casts to a supertype"
+cases = []
+
+["tests/language/regression_55741_test.dart"]
+kind = "behavior"
+what = "is-tests of a generic class and a subclass instantiated at nullable and non-nullable type arguments"
+cases = []
+
+["tests/language/regression_56129_test.dart"]
+kind = "not_portable"
+what = "a class overriding a mixin's method with a named default, and one calling it through super"
+reason = "dart mixins and super calls; Julia has neither"
+
+["tests/language/static_weak_reference_test.dart"]
+kind = "not_portable"
+what = "the weak-tearoff-reference pragma"
+reason = "a dart pragma for tree shaking; Julia has none"
+
+["tests/language/static_weak_reference_error_test.dart"]
+kind = "not_portable"
+what = "compile-time errors for the weak-tearoff-reference pragma"
+reason = "static diagnostics over a dart pragma"
+
+["tests/language/static_weak_reference_function_apply_test.dart"]
+kind = "not_portable"
+what = "Function.apply of a weak tear-off reference"
+reason = "a dart pragma, and a dynamic call outside Julia's strict subset (D32)"
+
+["tests/language/dynamic_type_helper.dart"]
+kind = "helper"
+of = ["tests/language/function_subtype/", "tests/language/generic/", "tests/language/mixin_legacy/", "tests/language/mixin/"]
+what = "checks of a value's dynamic type"
+
+["tests/language/static_type_helper.dart"]
+kind = "helper"
+of = ["tests/language/anonymous_methods/", "tests/language/async_star/", "tests/language/async/", "tests/language/await/", "tests/language/call/", "tests/language/closure/", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic_methods/", "tests/language/generic/", "tests/language/if_null/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/inference/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware_elements/", "tests/language/null_aware/", "tests/language/operator/", "tests/language/patterns/", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
+what = "checks of an expression's static type"
+
+["tests/language/syntax_helper.dart"]
+kind = "helper"
+of = ["tests/language/generic_methods/"]
+what = "syntax checks of generic method calls"
+
+["tests/language/library1.dart"]
+kind = "helper"
+of = ["tests/language/library/", "tests/language/prefix/"]
+what = "a library imported by the library and prefix tests"
+
+["tests/language/library2.dart"]
+kind = "helper"
+of = ["tests/language/library/", "tests/language/prefix/"]
+what = "a library imported by the library and prefix tests"
+
+["tests/language/library10.dart"]
+kind = "helper"
+of = ["tests/language/prefix/"]
+what = "a library imported by the prefix tests"
+
+["tests/language/library11.dart"]
+kind = "helper"
+of = ["tests/language/function/", "tests/language/prefix/", "tests/language/top_level/"]
+what = "a library imported by the function, prefix and top_level tests"
+
+["tests/language/library12.dart"]
+kind = "helper"
+of = ["tests/language/prefix/"]
+what = "a library imported by the prefix tests"
