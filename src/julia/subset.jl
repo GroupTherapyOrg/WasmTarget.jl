@@ -83,5 +83,6 @@ end
 # but check_subset names the token or makes either (A36S3)
 @quarantine "the typestate's assertion, run when the package loads" Base.methods construction_check(::Val{:ClosedWorld})::Int =
     check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__) +
-    check_sole_maker(Base.moduleroot(@__MODULE__), ClosedWorld, _SubsetToken, (check_subset,),
-                     (which(construction_check, Tuple{Val{:ClosedWorld}}),))
+    check_sole_maker(Base.moduleroot(@__MODULE__), ClosedWorld, _SubsetToken, (only(methods(check_subset)),),
+                     (which(construction_check, Tuple{Val{:ClosedWorld}}),),
+                     (joinpath(@__DIR__, "parity.jl"), joinpath(@__DIR__, "construction.jl")))
