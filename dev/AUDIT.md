@@ -3426,3 +3426,67 @@ cold-after-warm).
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A39S1 is open on MARCH 1.S. A39E1 and
 A39E2 are open on MARCH 1.L.
+
+## 2026-10-22 — audited through 24ed6a9e (739d623d..24ed6a9e: entry 39, a charter change authorised by its patch-id, closed sums matched @exhaustive, functions declared between the passes, dart's late final field)
+
+The fortieth audit covers 55ea0727 (entry 39; its author's), 560247c4 (dev/.block/charter_authorised also takes
+`patch:<id> - <clauses> <date>`, the change's `git patch-id --stable`, so a rebase that keeps the hunks keeps the
+authorisation; written by the lead), 6ea4b04b (1.A8: `@closed` and `@exhaustive`, L217; A34S4's sealed half; one inner
+constructor per ported struct; L214 typed parameters, L215 no Any field; `Charter-change: C4 C5 authorised by Dale
+2026-10-21`), 41faad3b (every function a marked definition binds is declared between the loader's passes) and 24ed6a9e
+(src/julia/late.jl: Late{T}, dart's `late final` field, carrying its field's anchor; a read before the assignment
+rejects as Unported with the anchor, a second assignment as Internal; with an initializer, init runs on the first read;
+written by loop4). No wrong answer. Each landed head's record is green. Every finding rests on one exact command, quoted.
+A34S4 is fixed as 6ea4b04b states. Findings A40S1, A40E1, A40E2, A40E4 and A40E5.
+
+Area: builder — empty by diff: src/wasm_builder/ does not exist on 24ed6a9e. Skeleton commit 1, which writes it, was
+refused by the full window and falls in entry 41's range.
+
+Area: collection and planning — 41faad3b's src/julia/parity.jl: between the passes, `function f end` for each bare
+function name a marked definition binds, so an implementation in a later module's file finds its generic function;
+no method is made, so identity matching stands. Sound; precedent dart's resolution of a library's names before its
+bodies.
+
+Area: emission and diagnostics — 6ea4b04b's src/julia/reject.jl and nir.jl: `_reason`, `stmt_form` and `value_form` are
+each one @exhaustive match.
+
+stopgap in disguise: @closed and @exhaustive are constructions in kind: the match refuses, where it is written, a missing,
+extra, repeated, wildcard or untyped arm, and its expansion is an isa chain under a type assertion on the subject, its
+last arm the chain's else, so a value outside the sum throws a TypeError and no arm is taken by default
+(construction.jl's `macro exhaustive`, read). (A40S1, low) The guarantee covers the matches written with @exhaustive and
+no other: a hand `isa` ladder or a method per kind over a @closed sum is not read, so D8 ("match a closed sum with
+@exhaustive") binds by convention for those; and the arms are matched to kinds by name (`k in kinds`, `nameof(T)`), while
+the expansion's `isa(v, k)` resolves `k` where the match is written, so a local binding of a kind's name (a parameter
+named `A`) would test another type and fall to the last arm.
+precedent: @closed and @exhaustive, Rust's enum and match (E0004) and dart's sealed class and switch; Julia has no closed
+declaration and no match, so a macro checks each match where it is written and the load checks every sum and match
+again. Late{T}: dart's `late final`, Rust's OnceCell and LazyCell (late.jl:22).
+
+Area: enforcement and prose — every hunk of 560247c4 (dev/land.sh, test/parity_ratchet.jl), 6ea4b04b (dev/CHARTER.md,
+dev/HISTORY.md, dev/LEDGER.md, dev/MARCH.md, src/julia/*, test/parity_ratchet.jl), 41faad3b, 24ed6a9e (src/julia/late.jl, src/julia/packages.jl, test/late.jl, test/runtests.jl, test/block_groups.tsv), the landing log and
+the gate records. (A40E1, medium) A patch-id authorisation admits a changed hunk whose change is whitespace, and it is
+reusable without bound. `git patch-id --stable` drops every whitespace character, measured on a scratch repository whose
+CHARTER.md held "the gate takes at most 60 s of wall": the reviewed change to "at most 90 s of wall" gave
+d1d4421252d1eb4f2a0b213dd0b19cd1d755bfbc, and so did "at most 90 s  of  wall", "atmost90sofwall" and "at most 9 0 s of
+wall", while "at most 900 s of wall" gave c11798e143527bc24859e23edbbc3a32b0b985bd. Whitespace carries meaning in the
+charter's check lists ("L19 2" and "L192" hash alike). The authorisation also names no commit, so any later commit making
+the same change (a revert re-applied, another lane's copy) is admitted under it. The fix: key the authorisation to the
+patch-id and the diff's text with whitespace kept (`git diff` hashed as it is), and spend it once, on the commit it
+admitted. 560247c4 is otherwise sound: the clause rule (every changed line inside the authorised clauses) and the date
+still bind, and a changed hunk changes the id. (A40E2, low) Kaimon: 560247c4, 6ea4b04b and 41faad3b measured "in fresh
+processes" or "on this commit"; 24ed6a9e "in a fresh process". (A40E4, low) Late{T}'s initializer value is
+`convert(T, init())` (late.jl:42): dart's static type makes init return a T, where Julia's convert can change a value's
+representation without a word (an Int64 initializer for a Late{Float64} becomes 2.0), and late.jl's test "the value
+converted to the field's type" holds that conversion; a typeassert, `init()::T`, rejects a wrong type where dart's
+types would. (A40E5, low) Its state is a byte with three meanings (`state::UInt8`, "0 unassigned, 1 its initializer
+running, 2 assigned", late.jl:29), a classification A8's @closed or an @enum would make closed; and a read before the
+assignment rejects as Unported, the right kind while the assigning code is unported and the wrong one after it is.
+Requirements: D8 (A40S1); D19's authorisation pair (A40E1); no lock fired inside
+its band.
+
+Landing times (edit to landed; own, queue; gate state): 560247c4 25 s (23.5, 1.5; cold); 6ea4b04b 3529 s (24.3, 3504.7;
+cold); 41faad3b 25 s (23.5, 1.5; cold); 24ed6a9e 49 s (48.3, 0.7; cold), unjudged past the cap at factor 2.13.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A40S1 is open on MARCH 1.S. A40E1 is fixed by
+59ba9f14, which lands after this entry (a whitespace-kept content hash and a spent-once mark), and is open on MARCH 1.L
+until it does. A40E2, A40E4 and A40E5 are open on MARCH 1.L.
