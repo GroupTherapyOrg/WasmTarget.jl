@@ -8,12 +8,12 @@
 # not carried: an open abstract node type, `Any` fields and comment anchors fail WT2's load-time checks.
 
 """An operand that is a statement's value, Julia's `Core.SSAValue`; `id` its statement."""
-@quarantine "Julia's optimized IR names a statement's value by SSAValue; dart's Kernel nests the subexpression" Core.DataType struct NirSSA
+@quarantine "Julia's optimized IR names a statement's value by SSAValue; dart's Kernel nests the subexpression" Core.SSAValue struct NirSSA
     id::Int
 end
 
 """An operand that is an argument, Julia's `Core.Argument`; `n` its position, 1 the callee itself."""
-@quarantine "Julia's optimized IR names an argument by its position, Core.Argument" Core.DataType struct NirArgument
+@quarantine "Julia's optimized IR names an argument by its position, Core.Argument" Core.Argument struct NirArgument
     n::Int
 end
 
@@ -24,7 +24,7 @@ end
 
 """An operand that is a literal (a `QuoteNode`'s payload or any other constant), as Julia's own
 `Core.Const` lattice element holds it."""
-@quarantine "Julia's literal operands are any value; Julia's Const lattice element holds one" Core.Const struct NirConst
+@quarantine "Julia's literal operands are any value; Julia's Const lattice element holds one" Core.QuoteNode struct NirConst
     c::Core.Const
 end
 
@@ -53,103 +53,103 @@ end
 
 # ---- the statement kinds, one per form of Julia's optimized IR ----------------------------------
 """`Expr(:call, f, args...)`: a call Julia's optimizer left; `args` its operands, the callee first."""
-@quarantine "Julia's optimized IR keeps a call as Expr(:call)" Core.DataType struct NirCall
+@quarantine "Julia's optimized IR keeps a call as Expr(:call)" Core.Expr struct NirCall
     args::Vector{NirValue}
 end
 """`Expr(:invoke, target, f, args...)`: a call Julia resolved; `target` the instance it calls."""
-@quarantine "Julia's optimized IR resolves a call to its MethodInstance or CodeInstance, Expr(:invoke)" Core.MethodInstance struct NirInvoke
+@quarantine "Julia's optimized IR resolves a call to its MethodInstance or CodeInstance, Expr(:invoke)" Core.Expr struct NirInvoke
     target::Union{Core.MethodInstance, Core.CodeInstance}
     args::Vector{NirValue}
 end
 """`Expr(:new, T, fields...)`: an allocation; `args` its type operand and fields."""
-@quarantine "Julia's optimized IR allocates with Expr(:new)" Core.DataType struct NirNew
+@quarantine "Julia's optimized IR allocates with Expr(:new)" Core.Expr struct NirNew
     args::Vector{NirValue}
 end
 """`Expr(:foreigncall, name, rt, argtypes, nreq, cc, args...)`: a foreign call, its operands as Julia wrote them."""
-@quarantine "Julia's optimized IR calls a foreign function with Expr(:foreigncall)" Core.DataType struct NirForeignCall
+@quarantine "Julia's optimized IR calls a foreign function with Expr(:foreigncall)" Core.Expr struct NirForeignCall
     args::Vector{NirValue}
 end
 """`Expr(:boundscheck[, flag])`: whether bounds are checked here."""
-@quarantine "Julia's bounds-check elision, Expr(:boundscheck); dart has none" Core.DataType struct NirBoundscheck
+@quarantine "Julia's bounds-check elision, Expr(:boundscheck); dart has none" Core.Expr struct NirBoundscheck
     args::Vector{NirValue}
 end
 """`Expr(:gc_preserve_begin, values...)`: the values kept alive until its end."""
-@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_begin); WasmGC needs none but the IR holds them" Core.DataType struct NirGCPreserveBegin
+@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_begin); WasmGC needs none but the IR holds them" Core.Expr struct NirGCPreserveBegin
     args::Vector{NirValue}
 end
 """`Expr(:gc_preserve_end, token)`: the end of a preservation region."""
-@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_end)" Core.DataType struct NirGCPreserveEnd
+@quarantine "Julia's GC preservation regions, Expr(:gc_preserve_end)" Core.Expr struct NirGCPreserveEnd
     args::Vector{NirValue}
 end
 """`Expr(:leave, tokens...)`: leaving try regions."""
-@quarantine "Julia's try regions are left with Expr(:leave)" Core.DataType struct NirLeave
+@quarantine "Julia's try regions are left with Expr(:leave)" Core.Expr struct NirLeave
     args::Vector{NirValue}
 end
 """`Expr(:pop_exception, token)`: restoring the exception stack after a catch."""
-@quarantine "Julia's exception stack, Expr(:pop_exception)" Core.DataType struct NirPopException
+@quarantine "Julia's exception stack, Expr(:pop_exception)" Core.Expr struct NirPopException
     args::Vector{NirValue}
 end
 """`Expr(:the_exception)`: the exception a catch region received."""
-@quarantine "Julia's caught exception, Expr(:the_exception)" Core.DataType struct NirTheException
+@quarantine "Julia's caught exception, Expr(:the_exception)" Core.Expr struct NirTheException
     args::Vector{NirValue}
 end
 """`Expr(:loopinfo, hints...)`: loop hints, with no effect on a value."""
-@quarantine "Julia's loop hints, Expr(:loopinfo)" Core.DataType struct NirLoopInfo
+@quarantine "Julia's loop hints, Expr(:loopinfo)" Core.Expr struct NirLoopInfo
     args::Vector{NirValue}
 end
 """`Expr(:throw_undef_if_not, name, cond)`: an UndefVarError unless `cond`."""
-@quarantine "Julia's undefined-variable check, Expr(:throw_undef_if_not)" Core.DataType struct NirThrowUndefIfNot
+@quarantine "Julia's undefined-variable check, Expr(:throw_undef_if_not)" Core.Expr struct NirThrowUndefIfNot
     args::Vector{NirValue}
 end
 """`Expr(:cfunction, ...)`: a C function pointer to a Julia function, its operands as Julia wrote them."""
-@quarantine "Julia's @cfunction, Expr(:cfunction)" Core.DataType struct NirCFunction
+@quarantine "Julia's @cfunction, Expr(:cfunction)" Core.Expr struct NirCFunction
     args::Vector{NirValue}
 end
 """`Expr(:invoke_modify, ...)`: a resolved modifyfield!-style call, its operands as Julia wrote them."""
-@quarantine "Julia's resolved atomic modify, Expr(:invoke_modify)" Core.DataType struct NirInvokeModify
+@quarantine "Julia's resolved atomic modify, Expr(:invoke_modify)" Core.Expr struct NirInvokeModify
     args::Vector{NirValue}
 end
 """`Core.GotoNode`: a jump to statement `label`."""
-@quarantine "Julia's IR is a flat statement list with GotoNode jumps; dart's Kernel is structured" Core.DataType struct NirGoto
+@quarantine "Julia's IR is a flat statement list with GotoNode jumps; dart's Kernel is structured" Core.GotoNode struct NirGoto
     label::Int
 end
 """`Core.GotoIfNot`: a jump to statement `dest` unless `cond`."""
-@quarantine "Julia's conditional jump, GotoIfNot" Core.DataType struct NirGotoIfNot
+@quarantine "Julia's conditional jump, GotoIfNot" Core.GotoIfNot struct NirGotoIfNot
     cond::NirValue
     dest::Int
 end
 """`Core.ReturnNode` with a value: the body returns `val`."""
-@quarantine "Julia's return, ReturnNode" Core.DataType struct NirReturn
+@quarantine "Julia's return, ReturnNode" Core.ReturnNode struct NirReturn
     val::NirValue
 end
 """`Core.ReturnNode` with no value: a statement Julia proved unreachable."""
-@quarantine "Julia marks unreachable code with a ReturnNode of no value" Core.DataType struct NirUnreachable
+@quarantine "Julia marks unreachable code with a ReturnNode of no value" Core.ReturnNode struct NirUnreachable
 end
 """`Core.PhiNode`: the value from the predecessor statement `edges[k]` is `values[k]`, `nothing` where unassigned."""
-@quarantine "Julia's optimized IR is in SSA form, PhiNode; dart's Kernel merges through variables" Core.DataType struct NirPhi
+@quarantine "Julia's optimized IR is in SSA form, PhiNode; dart's Kernel merges through variables" Core.PhiNode struct NirPhi
     edges::Vector{Int32}
     values::Vector{Union{Nothing, NirValue}}
 end
 """`Core.PiNode`: `val` narrowed to `typ` on this path, as Julia's inference proved."""
-@quarantine "Julia's PiNode narrows a value to a type on one path" Core.DataType struct NirPi
+@quarantine "Julia's PiNode narrows a value to a type on one path" Core.PiNode struct NirPi
     val::NirValue
     typ::Type
 end
 """`Core.EnterNode`: a try region whose catch begins at statement `catch_dest`; `scope` its scope, if any."""
-@quarantine "Julia's try regions, EnterNode" Core.DataType struct NirEnter
+@quarantine "Julia's try regions, EnterNode" Core.EnterNode struct NirEnter
     catch_dest::Int
     scope::Union{Nothing, NirValue}
 end
 """`Core.UpsilonNode`: a value a PhiC of a catch region receives, `nothing` where unassigned."""
-@quarantine "Julia's exception phis, UpsilonNode" Core.DataType struct NirUpsilon
+@quarantine "Julia's exception phis, UpsilonNode" Core.UpsilonNode struct NirUpsilon
     val::Union{Nothing, NirValue}
 end
 """`Core.PhiCNode`: the value a catch region receives from its Upsilons."""
-@quarantine "Julia's exception phis, PhiCNode" Core.DataType struct NirPhiC
+@quarantine "Julia's exception phis, PhiCNode" Core.PhiCNode struct NirPhiC
     values::Vector{NirValue}
 end
 """A `nothing` statement: a statement the optimizer emptied."""
-@quarantine "Julia's optimizer leaves an emptied statement as nothing" Core.DataType struct NirNothing
+@quarantine "Julia's optimizer leaves an emptied statement as nothing" Core.Nothing struct NirNothing
 end
 """A statement that is a `GlobalRef`: a read of a module binding."""
 @quarantine "Julia's optimized IR can read a binding as a statement of its own" Core.GlobalRef struct NirGlobalRead
@@ -283,6 +283,29 @@ end
     st isa GlobalRef && return NirGlobalRead(st)
     reject!(Unquarantined("src/julia/nir.jl: Julia's statement form $(typeof(st)), outside NirStmt"), at)
 end
+
+# a sample of each mirror's Julia form, built by Julia's own constructors: converted at load, each must
+# come back as the mirror that names its form (check_mirrors, src/julia/parity.jl; A39S1)
+mirror_samples!(_nir_operand, :NirValue,
+    NirSSA => Core.SSAValue(1), NirArgument => Core.Argument(2), NirGlobal => GlobalRef(Base, :sin),
+    NirConst => QuoteNode(1))
+mirror_samples!(_nir_stmt, :NirStmt,
+    NirCall => Expr(:call, GlobalRef(Base, :+), Core.SSAValue(1), 1),
+    NirInvoke => Expr(:invoke, Core.Compiler.specialize_method(only(methods(+, (Int, Int))), Tuple{typeof(+), Int, Int}, Core.svec()),
+                      GlobalRef(Base, :+), Core.SSAValue(1), 1),
+    NirNew => Expr(:new, GlobalRef(Core, :Int), 1),
+    NirForeignCall => Expr(:foreigncall, QuoteNode(:jl_gc_safepoint), Nothing, Core.svec(), 0, QuoteNode(:ccall)),
+    NirBoundscheck => Expr(:boundscheck, true), NirGCPreserveBegin => Expr(:gc_preserve_begin, Core.SSAValue(1)),
+    NirGCPreserveEnd => Expr(:gc_preserve_end, Core.SSAValue(1)), NirLeave => Expr(:leave, Core.SSAValue(1)),
+    NirPopException => Expr(:pop_exception, Core.SSAValue(1)), NirTheException => Expr(:the_exception),
+    NirLoopInfo => Expr(:loopinfo), NirThrowUndefIfNot => Expr(:throw_undef_if_not, QuoteNode(:x), true),
+    NirCFunction => Expr(:cfunction, Ptr{Cvoid}, QuoteNode(:f), Int, Core.svec(), QuoteNode(:ccall)),
+    NirInvokeModify => Expr(:invoke_modify, Core.SSAValue(1)),
+    NirGoto => Core.GotoNode(2), NirGotoIfNot => Core.GotoIfNot(Core.SSAValue(1), 3),
+    NirReturn => Core.ReturnNode(Core.SSAValue(1)), NirUnreachable => Core.ReturnNode(),
+    NirPhi => Core.PhiNode(Int32[1], Any[Core.SSAValue(1)]), NirPi => Core.PiNode(Core.SSAValue(1), Int),
+    NirEnter => Core.EnterNode(3), NirUpsilon => Core.UpsilonNode(Core.SSAValue(1)),
+    NirPhiC => Core.PhiCNode(Any[Core.SSAValue(1)]), NirNothing => nothing, NirGlobalRead => GlobalRef(Base, :sin))
 
 # each statement's type, Julia's: its ssavaluetypes entry; a body Julia stored without them (a constant
 # return, ssavaluetypes a count) has the one statement, typed by its CodeInstance's rettype

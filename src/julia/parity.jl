@@ -136,6 +136,11 @@ let defs = quote
     # definitions are evaluated inside its own)
     @quarantine "Julia numbers each new method by a world age, which brackets a definition's evaluation" Base.Vector const _WORLDS = Vector{UInt}()
 
+    # the mirrors claimed: a quarantined type declaration whose Julia API is the Julia form it mirrors,
+    # which its own text need not name (a mirror holds a projection of the form); each claim is
+    # verified at load by converting a sample of exactly that form (check_mirrors)
+    @quarantine "a mirror of a Julia form names the form, verified by converting a sample, where its text holds only a projection" Base.Vector const MIRRORS = Vector{Tuple{Module,Symbol,Any}}()
+
     # the src directory, which the location rules and the include set are relative to
     @quarantine "a Julia package's source files have a path, Julia's include unit" Base.dirname const SRC = dirname(@__DIR__)
 
@@ -275,7 +280,11 @@ let defs = quote
         Meta.isexpr(api, :., 2) && api.args[2] isa QuoteNode || refuse("the Julia API $(repr(api)) is not a qualified name (Module.name)")
         local v = _resolve_name(mod, api)
         v === nothing && refuse("the Julia API $(repr(api)) does not resolve")
-        _references(mod, def, something(v)) || refuse("the definition does not reference its Julia API $api")
+        if !_references(mod, def, something(v))
+            local decl = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive)
+            (decl && something(v) isa Type) || refuse("the definition does not reference its Julia API $api")
+            push!(MIRRORS, (mod, last(_defines(def, source)), something(v)))   # a mirror's claim, verified at load
+        end
         local file = string(something(source.file, :none))
         local julia = joinpath(SRC, "julia")
         (_inside(file, SRC) || _within(mod, @__MODULE__)) && !_inside(file, julia) &&
@@ -972,6 +981,72 @@ where it is written and the totality check refuses any definition without it whe
     local e, def2 = _parity_entry(__module__, __source__, anchor, def)
     return esc(_expansion(__source__, def2, e))
 end
+
+"""
+    MIRROR_SAMPLES
+
+The samples that verify the mirrors' claims: `(module, mirror, sample, convert)`, a value of the Julia
+form a mirror names, built by Julia's own constructors, and the function converting such a form to its
+mirror; and `MIRROR_SUMS`, the closed sums whose every kind a sample must cover. Registered by
+`mirror_samples!` beside the converters.
+"""
+@quarantine "a mirror's claim is checked by converting a sample of its form, which a table holds" Base.Vector const MIRROR_SAMPLES = Vector{Tuple{Module,Symbol,Any,Function}}()
+@quarantine "the closed sums whose kinds the mirror samples must cover" Base.Vector const MIRROR_SUMS = Vector{Tuple{Module,Symbol}}()
+
+"""
+    mirror_samples!(convert, sum, mirror => sample, ...)
+
+Registers a sample of each mirror's Julia form and the function converting it (`convert(form, at)`),
+and the closed sum `sum` (a Symbol in the mirrors' module) whose every kind must have a sample.
+"""
+@quarantine "the samples are values of Julia's own forms, kept in a table the load reads" Base.push! function mirror_samples!(convert::Function, sum::Symbol, pairs::Pair...)::Nothing
+    local mod = parentmodule(first(first(pairs)))
+    push!(MIRROR_SUMS, (mod, sum))
+    for (T, sample) in pairs
+        push!(MIRROR_SAMPLES, (parentmodule(T), nameof(T), sample, convert))
+    end
+    return nothing
+end
+
+"""
+    check_mirrors(mod) -> Int
+
+The mirrors' check: every mirror a quarantined declaration of `mod` claims has a sample of exactly the
+form it names; every sample's mirror names its sample's type as its Julia API and comes back from
+converting the sample, that mirror type itself; and every registered sum's kinds each have a sample.
+Throws a `ConstructionViolation` listing the rest.
+
+precedent(rust: a mirror type's `From<Form>` impl, its source type named in the impl and checked by the
+compiler). Julia's differs: a mirror holds a projection of its form, not the form, so the claim is
+checked by converting a sample of the form, built by Julia's own constructors, when the package loads.
+"""
+@quarantine "a mirror's form is Julia's, checked by a conversion run when the package loads" Core.typeof function check_mirrors(mod::Module)::Int
+    local out = String[]
+    local samples = [s for s in MIRROR_SAMPLES if _within(s[1], mod)]
+    for (m, n, T) in MIRRORS
+        _within(m, mod) || continue
+        any(s -> s[1] === m && s[2] === n, samples) || push!(out, "the mirror $m.$n names $T, but no sample of $T converts to it")
+    end
+    for (m, n, sample, convert) in samples
+        local api = nothing
+        for e in REGISTRY
+            e isa QuarantineEntry && e.mod === m && n in e.names && (api = _resolve_name(m, Meta.parse(e.api)))
+        end
+        (api !== nothing && something(api) === typeof(sample)) ||
+            push!(out, "the mirror $m.$n names $(api === nothing ? "no Julia API" : something(api)), not its sample's form $(typeof(sample))")
+        local r = try; Base.invokelatest(convert, sample, "the mirror check of $m.$n"); catch err; err; end
+        typeof(r) === getglobal(m, n) || push!(out, "a sample of $m.$n's form $(typeof(sample)) converts to $(typeof(r)), not $m.$n")
+    end
+    for (m, sum) in MIRROR_SUMS
+        _within(m, mod) || continue
+        for T in Base.uniontypes(getglobal(m, sum))
+            any(s -> s[1] === m && s[2] === nameof(T), samples) || push!(out, "$sum's kind $(nameof(T)) has no sample of the form it mirrors")
+        end
+    end
+    isempty(out) || throw(ConstructionViolation("check_mirrors", join(out, "; ")))
+    return 0
+end
+@quarantine "the mirrors' assertion, run when the package loads" Base.Val construction_check(::Val{:check_mirrors})::Int = check_mirrors(@__MODULE__)
 
 """
     anchor_of(f) -> String

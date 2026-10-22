@@ -65,6 +65,8 @@ with the per-clause status. A clause is never closed by argument.
 - **C3 · Julia is the ground truth.** When Julia's compiler answers a question (a hash, a
   predicate, a layout, a dispatch result, an exception payload), the answer is ported, never
   approximated; Julia's own bodies compile instead of bespoke re-implementations.
+  `L225` (each mirror of a Julia form names the form it mirrors, checked at load by converting a
+  sample built by Julia's own constructors).
   Legacy (retired with the switch): L42 L52 L53 L54 L56 L57 L59 L62 L70 L81 L82 L92 L123 L133
   L138 L140 L141 R38.
   Planned: dev/MARCH.md 1.C, 1.E — Julia's

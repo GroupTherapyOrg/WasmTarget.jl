@@ -228,7 +228,7 @@ _short_id(id::AbstractString) = (m = match(r"^([LR]\d+[a-z]?)_", id); m === noth
 const STRICT_SCOPE = ("C0", "C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
 # The clauses whose every cited lock is classified (2026-10-21); C1 to C3 classify theirs before
 # they close, since L201 reads an unclassified lock in a clause with no Planned text as a violation.
-const STRICT_CLASSIFIED = ("C0", "C2", "C4", "C5", "C6", "C7", "C8")
+const STRICT_CLASSIFIED = ("C0", "C2", "C3", "C4", "C5", "C6", "C7", "C8")
 # Every lock a classified clause cites, by what decides it, and for a construction the definition in
 # src that is the construction. :construction: that definition makes the wrong choice inexpressible
 # through WT's interfaces, and its assertion lives in src beside it, the load-time check the definition
@@ -257,6 +257,8 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     # NIR's closed sums (C5, dev/MARCH.md 1.A10): src/julia/nir.jl
     "L221" => (:construction, "NirStmt"), "L222" => (:construction, "NirValue"),
     "L213" => (:construction, "check_anchors_resolve"),
+    # each mirror of a Julia form names the form, verified by converting a sample (C3, A39S1)
+    "L225" => (:construction, "check_mirrors"),
     # the closed sums matched exhaustively (C5) and the typed signatures and fields (C4)
     "L217" => (:construction, "closed"), "L214" => (:construction, "check_typed_signatures"),
     "L215" => (:construction, "check_typed_fields"),
@@ -290,6 +292,8 @@ const STRICT_PRECEDENTS = Dict{String,Tuple{String,String}}(
                "Julia accepts an untyped parameter as Any, so the load reads every method signature of each ported @parity definition"),
     "L215" => ("typescript: strictNullChecks; dart: sound null safety",
                "Julia's field types may hold Any or nothing by declaration alone, so the load reads each ported struct's field types, and a field holding nothing against the pinned dart class's T? where the checkout exists"),
+    "L225" => ("rust: a mirror type's From<Form> impl, its source type named in the impl and checked by the compiler",
+               "a mirror holds a projection of its Julia form, not the form, so the form it names is checked by converting a sample of that form, built by Julia's own constructors, when the package loads"),
     "L212" => ("rust: unsafe with clippy's undocumented_unsafe_blocks, every block saying why",
                "Julia has no keyword marking Julia-only code, so @quarantine checks the necessity and resolves the Julia API where it is written and the totality check refuses any src/julia definition no @quarantine spans when the package loads"),
 )
@@ -368,6 +372,8 @@ function construction_negatives_missed(wt::Module, definition::Symbol)::Vector{S
         refuses(() -> sole(good.W, good.Tok, "/plant/src/julia/elsewhere.jl")) || push!(out, "negative missed: a constructor defined in another file passes")
         local tok2 = plant(base * "Tok(::Int) = Tok()\n")
         refuses(() -> sole(tok2.W, tok2.Tok, f)) || push!(out, "negative missed: a token with a second constructor passes")
+    elseif definition === :check_mirrors
+        append!(out, mirror_negatives_missed(wt, refuses, passes))
     elseif definition in (:include_dart, :parity, :quarantine, :check_anchors_resolve)
         append!(out, parity_negatives_missed(wt, definition, refuses, passes))
     else
@@ -677,6 +683,41 @@ function sum_negatives_missed(wt::Module, definition::Symbol, refuses::Function,
         passes(() -> check(withctor, sdk)) || push!(out, "negative missed: a struct's fields are read against its constructor's anchor, not its class's")
         rm(sdk; recursive = true)
     end
+    return out
+end
+
+# the mirrors' plants (src/julia/parity.jl check_mirrors): two quarantined mirrors of Julia forms in a
+# fresh module, a converter and their samples; each fault planted alone must refuse
+function mirror_negatives_missed(wt::Module, refuses::Function, passes::Function)::Vector{String}
+    local out = String[]
+    local plant(ssa_api, conv_ssa, samples, extra = "") = begin
+        local m = Module(:MirrorPlant)
+        Core.eval(m, Meta.parse("import WasmTarget: @parity, @quarantine, @unported, @closed, @exhaustive"))
+        Core.eval(m, :(import WasmTarget))
+        Base.include_string(m, """
+            @quarantine "a mirror" $ssa_api struct MSSA
+                id::Int
+            end
+            @quarantine "a mirror" Core.Argument struct MArg
+                n::Int
+            end
+            @quarantine "a sum" Core.Union @closed const MVal = Union{MSSA, MArg}
+            @quarantine "a converter" Core.SSAValue function conv(x, at::String)::MVal
+                x isa Core.SSAValue && return $conv_ssa
+                return MArg(x.n)
+            end
+            WasmTarget.mirror_samples!(conv, :MVal, $samples)
+            $extra
+            """, "/plant/src/julia/mirrors.jl")
+        m
+    end
+    local check(m) = getfield(wt, :check_mirrors)(m)
+    local both = "MSSA => Core.SSAValue(1), MArg => Core.Argument(2)"
+    passes(() -> check(plant("Core.SSAValue", "MSSA(x.id)", both))) || push!(out, "negative missed: mirrors naming their forms, each converting back, fail")
+    refuses(() -> check(plant("Core.Argument", "MSSA(x.id)", both))) || push!(out, "negative missed: a mirror naming the wrong form passes")
+    refuses(() -> check(plant("Core.SSAValue", "MArg(x.id)", both))) || push!(out, "negative missed: a sample converting to another mirror passes")
+    refuses(() -> check(plant("Core.SSAValue", "MSSA(x.id)", both, "@quarantine \"a mirror\" Core.GotoNode struct MGoto\n    label::Int\nend"))) ||
+        push!(out, "negative missed: a mirror's claim with no sample passes")
     return out
 end
 
@@ -2797,6 +2838,8 @@ const LOCKS = [
         ConstructionLock(:quarantine)),
     "L213_anchors_resolve" => ("every anchor resolves at the pin (Dale: dart2wasm the structural oracle through and through, dev/LEDGER.md D1): the dart line an @parity anchor names declares its symbol at the commit dev/PARITY_MASTER.md pins, read from the checkout of dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; CI fetches it): `X` a top-level declaration at column 0 or X's unnamed constructor in its body, `X.m` a member at column 2 of X's body, a bare `m` a member of an unnamed extension; where the checkout exists @parity refuses an anchor that does not resolve at the definition's line, the load checks every anchor of WasmTarget, and construction_check(::Val{:check_anchors_resolve}) requires the checkout, so this lock, which only calls it, fails without one; with its plants (an anchor moved a line, one in another declaration's body, at a comment, past the end and a member's line read as its class each refused; every declaration form resolving; a planted checkout's HEAD read; PIN the pinned commit) (dev/CHARTER.md C2)",
         ConstructionLock(:check_anchors_resolve)),
+    "L225_mirrors_name_their_form" => ("each mirror of a Julia form names the form it mirrors (Dale: the Julia compiler is the ground truth, dev/LEDGER.md D3; audit 39, A39S1): a quarantined type declaration whose Julia API its text does not reference is a mirror's claim (NIR's NirSSA names Core.SSAValue, NirCall Core.Expr, NirGoto Core.GotoNode, ...), recorded where it is written; when WasmTarget loads, every claim has a sample of exactly that form, built by Julia's own constructors and registered with its converter (mirror_samples!), every sample's mirror names the sample's type and comes back from converting it, and every registered sum's kinds each have a sample (NirValue, NirStmt); construction_check(::Val{:check_mirrors}) asserts it (check_mirrors), and this lock only calls it, with its plants (a mirror naming the wrong form, a sample converting to another mirror and a claim with no sample each refused; mirrors naming their forms passed) (dev/CHARTER.md C3)",
+        ConstructionLock(:check_mirrors)),
     "L217_closed_sums_matched_exhaustively" => ("every Union WasmTarget binds is a @closed sum and every match over one is @exhaustive (Dale: \"we don't allow certain broken wasm patterns\", closed sums and an exhaustive match, dev/LEDGER.md D8): `@closed const X = Union{...}` refuses, where it is written, a sum of fewer than two kinds or a kind that is not a concrete type defined above it subtyping nothing; `@exhaustive v::X begin (k::K) => ... end` refuses a sum not @closed above it and a missing, extra, repeated, wildcard `_` or untyped-binder arm, and expands into an isa chain over the asserted subject; when WasmTarget loads construction_check(::Val{:closed}) refuses a Union binding no @closed declares and re-checks every recorded match against its sum (check_closed), and this lock only calls it, with its plants (an unclosed Union binding, a stale match record and each refused arm form; an exhaustive match taking each kind's arm) (dev/CHARTER.md C5)",
         ConstructionLock(:closed)),
     "L214_typed_signatures" => ("every method of a ported @parity definition declares each parameter (Dale: strict means the wrong choice cannot be written, dev/LEDGER.md D6): none untyped (Any), an unbounded type variable or a bare Vararg, read from each method's signature in the method table when WasmTarget loads; an @unported stub and a quarantined definition (a Julia API's own types, the charter's named seam) are exempt; construction_check(::Val{:check_typed_signatures}) asserts it, and this lock only calls it, with its plants (an untyped parameter, an unbounded type variable and a bare Vararg each refused; a typed method and an untyped stub passed) (dev/CHARTER.md C4)",
