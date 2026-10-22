@@ -366,7 +366,6 @@ function strict_violations(clauses, kinds::Dict{String,Tuple{Symbol,String}})::V
     out = String[]
     for (cid, (body, ids)) in clauses
         (cid in STRICT_SCOPE && !occursin("Planned:", body)) || continue
-        isempty(ids) && push!(out, "$cid cites no check and has no Planned text: CLOSED on nothing")
         for i in ids
             local k = _strict_kind(i, kinds)
             k === :construction || push!(out, "$cid cites $i ($k)")
@@ -428,7 +427,8 @@ function strict_negatives_missed()::Vector{String}
         ("a stopgap in a clause with Planned text", plant("C5", " T. Checks: Planned: 13.1", ["L2", "R9"]), 0),
         ("constructions alone", plant("C6", " T. Checks: ", ["L1"]), 0),
         ("a clause outside the scope", plant("C9", " T. Checks: ", ["L2", "R9"]), 0),
-        ("a clause with no Planned text that cites nothing", plant("C4", " T. Checks: ", String[]), 1),
+        # a clause citing nothing is no violation here: clause_open_reasons, the one verdict, reads it OPEN
+        ("a clause with no Planned text that cites nothing", plant("C4", " T. Checks: ", String[]), 0),
     ]
     local out = String[]
     for (what, cl, want) in cases
