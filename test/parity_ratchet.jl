@@ -246,7 +246,7 @@ const STRICT_KINDS = Dict{String,Tuple{Symbol,String}}(
     "L154" => (:stopgap, ""), "L201" => (:stopgap, ""), "L202" => (:stopgap, ""), "L203" => (:stopgap, ""),
     # the ledger's (L204 to L207): each reads the ledger, the charter, the plan, AGENTS.md or this file
     "L204" => (:stopgap, ""), "L205" => (:stopgap, ""), "L206" => (:stopgap, ""), "L207" => (:stopgap, ""),
-    "L208" => (:stopgap, ""),
+    "L208" => (:stopgap, ""), "L209" => (:behavior, ""),
     # the rebuild's first constructions (dev/MARCH.md 1.A2c): the rejections a closed sum (C6), and
     # no open abstract type passing for a closed one (C5, A33S1); C4, C7 and C8's arrive with theirs
     "L218" => (:construction, "Rejection"), "L219" => (:construction, "check_no_open_abstract"),
@@ -759,6 +759,26 @@ function findings_negatives_missed()::Vector{String}
     for (what, r, fx, want) in cases
         length(findings_off_row(open_findings(entry), r, fx)) == want || push!(out, "negative missed: $what")
     end
+    return out
+end
+
+# ---- L209: one Co-Authored-By trailer per commit (dev/LEDGER.md D24, A35E4) ----------------------
+# the hook's verdict on a planted message: true when dev/hooks/commit-msg accepts it
+function hook_accepts(message::String)::Bool
+    local f = tempname()
+    write(f, message)
+    local ok = success(pipeline(setenv(`sh $(joinpath(ROOT, "dev", "hooks", "commit-msg")) $f`, filter(p -> !startswith(p, "WT_HOOK_FILTER="), ["$k=$v" for (k, v) in ENV])); stderr = devnull))
+    rm(f; force = true)
+    return ok
+end
+
+# L209's negative test: the hook refuses two trailers (one indented), accepts one
+function trailer_negatives_missed()::Vector{String}
+    local out = String[]
+    local base = "fix: x\n\nCharter: C0 (x)\n\nCo-Authored-By: A <a@b>\n"
+    hook_accepts(base) || push!(out, "negative missed: the hook refuses a message with one Co-Authored-By trailer")
+    hook_accepts(base * "    Co-Authored-By: A <a@b>\n") && push!(out, "negative missed: the hook accepts an indented second trailer")
+    hook_accepts(base * "Co-authored-by: B <c@d>\n") && push!(out, "negative missed: the hook accepts a second trailer in another case")
     return out
 end
 
@@ -2517,6 +2537,14 @@ const LOCKS = [
             startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
             occursin("    bash \"\$W/dev/src_progress.sh\"\n    exit 0\n", read(joinpath(ROOT, "dev", "land.sh"), String)) ||
                 push!(v, "dev/land.sh land does not run dev/src_progress.sh after its landing")
+            foreach(x -> println("    ✗ ", x), v)
+            length(v)
+        end),
+    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case (a replay of landed history, WT_HOOK_FILTER, keeps what it carries), and CI's message-hygiene refuses one from the commit that put the rule in the hook on. Behavior, run here: the hook on three planted messages, one trailer accepted, an indented second and a second in another case refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
+        () -> begin
+            local v = trailer_negatives_missed()
+            occursin("commits with more than one Co-Authored-By trailer:", read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)) ||
+                push!(v, "CI's message-hygiene does not refuse a second Co-Authored-By trailer")
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),

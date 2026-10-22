@@ -19,6 +19,13 @@ if [ -z "${WT_HOOK_FILTER:-}" ] && ! grep -qE '^Charter: C[0-9]+' "$msg"; then
     echo "commit refused: add a 'Charter: C<n> …' trailer naming the dev/CHARTER.md clause(s) this change advances" >&2
     exit 1
 fi
+# one attribution: a message carries at most one Co-Authored-By trailer, indented or not (A35E4; a
+# replay of landed history, WT_HOOK_FILTER, keeps what it carries)
+coauthors=$(grep -ciE '^[[:space:]]*Co-Authored-By:' "$msg" || true)
+if [ -z "${WT_HOOK_FILTER:-}" ] && [ "$coauthors" -gt 1 ]; then
+    echo "commit refused: $coauthors Co-Authored-By trailers; a commit carries one" >&2
+    exit 1
+fi
 # a `Closes: C<n>` line runs the full matrix (gate.yml: large-scale runs only when a full clause is
 # closed out, Dale 2026-10-21): only on a tree whose ratchet reads C<n> CLOSED (the working tree the
 # commit is made from; `dev/land.sh land` checks the landed tree's gate record again)

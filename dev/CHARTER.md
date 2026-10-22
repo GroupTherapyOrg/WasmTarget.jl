@@ -175,7 +175,8 @@ with the per-clause status. A clause is never closed by argument.
   the band) `L206` (AGENTS.md carries every live requirement, generated from the ledger) `L207`
   (every lock's negative runs in every gate, inside the ratchet stage) `R45` (the locks that owe
   theirs) `L208` (after every landing `land` prints the rebuild's src progress; landings that change
-  nothing under src/ draw a note from the fifth in a row, never a failure).
+  nothing under src/ draw a note from the fifth in a row, never a failure) `L209` (a commit carries one
+  Co-Authored-By trailer, the hook and CI refusing a second).
   Planned: dev/MARCH.md 1.R, 1.S — the ledger's planned checks; each of these checks a
   construction, or Dale's ruling that a prose clause is checked by behavior.
 

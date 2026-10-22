@@ -48,6 +48,16 @@ jobs:
             done
             if [ -n "$miss" ]; then echo "commits without a 'Charter: C<n>' trailer:"; printf '%s' "$miss"; exit 1; fi
           fi
+          # one Co-Authored-By trailer per commit, from the commit that put the rule in dev/hooks/commit-msg on (A35E4)
+          c=$(git log --format=%H -S'Co-Authored-By trailers; a commit carries one' -- dev/hooks/commit-msg | tail -1)
+          if [ -n "$c" ]; then
+            dup=""
+            for h in $(git rev-list --no-merges "$c^..HEAD"); do
+              n=$(git log -1 --format=%B "$h" | grep -ciE '^[[:space:]]*Co-Authored-By:' || true)
+              [ "$n" -gt 1 ] && dup="$dup $(git log -1 --format='%h %s' "$h")"$'\n'
+            done
+            if [ -n "$dup" ]; then echo "commits with more than one Co-Authored-By trailer:"; printf '%s' "$dup"; exit 1; fi
+          fi
           echo "clean: $(git rev-list --count origin/main..HEAD) commits"
 
   test:
