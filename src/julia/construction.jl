@@ -56,7 +56,7 @@ its abstract types are open by language, so the refusal runs when the package lo
     return 0
 end
 # checked last, when every definition exists (src/WasmTarget.jl calls it after every include)
-@quarantine "the open-hierarchy refusal's assertion, run when the package loads" Base.isabstracttype construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)
+@quarantine "the open-hierarchy refusal's assertion, run when the package loads" Base.Val construction_check(::Val{:check_no_open_abstract})::Int = check_no_open_abstract(@__MODULE__)
 
 """
     check_sole_constructor(T, token, file) -> Int
@@ -108,7 +108,7 @@ end
 # GlobalRef, `M.x` or getfield), a call whose callee's binding is `T`, a `:new` or `:splatnew` whose
 # type's binding is `T` or `token`, or a foreigncall of Julia's runtime struct constructors
 # (jl_new_struct, jl_new_structv, jl_new_structt) (A36S3, A37S1, A38); naming `T` as a type makes nothing
-@quarantine "a lowered body's makers are its bindings, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.SSAValue function _code_makes(code::Vector{Any}, T::DataType, token::DataType)::Bool
+@quarantine "a lowered body's makers are its bindings, calls, :new, :splatnew and foreigncall forms, Julia's lowered IR" Core.Expr function _code_makes(code::Vector{Any}, T::DataType, token::DataType)::Bool
     local walk(x) = if x isa Expr
         if (x.head === :new || x.head === :splatnew) && !isempty(x.args)
             local t = _binding(code, x.args[1])
@@ -142,7 +142,7 @@ end
 # splat lowers to Core._apply_iterate, invokelatest takes eval as an argument), whose binding is a
 # function named eval, include_string or include; or a getfield, getglobal or getproperty of a module
 # with a name that is no literal symbol (A37S1, A38)
-@quarantine "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.eval function _code_escapes(code::Vector{Any})::Bool
+@quarantine "code made at run time or a binding found by a computed name is invisible to a read of lowered IR" Core.getglobal function _code_escapes(code::Vector{Any})::Bool
     local evalish(b) = b isa Function && nameof(b) in (:eval, :include_string, :include)
     local walk(x) = if x isa Expr
         if x.head === :call && length(x.args) >= 3

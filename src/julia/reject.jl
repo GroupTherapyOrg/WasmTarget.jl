@@ -5,27 +5,27 @@
 # type, Rust's Result<_, E> over a sealed E.
 
 """A path reached a dart definition not yet ported; `anchor` is `<file>.dart:<line> <Symbol>`."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.Union struct Unported
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct Unported
     anchor::String
 end
 
 """A path reached a Julia-only definition (src/julia/) not yet written; `row` names it."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.Union struct Unquarantined
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct Unquarantined
     row::String
 end
 
 """Julia's trim verifier rejects the program; `reason` is Julia's own text."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.Union struct OutsideSubset
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct OutsideSubset
     reason::String
 end
 
 """The module WasmTarget built is not valid wasm; `site` names where it was found."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.Union struct InvalidModule
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct InvalidModule
     site::String
 end
 
 """WasmTarget broke its own invariant; `site` names where."""
-@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.Union struct Internal
+@quarantine "Julia has no checked exceptions; a rejection's kind is a struct of the closed sum" Core.String struct Internal
     site::String
 end
 
@@ -75,5 +75,5 @@ Stop the compile `at` names with `rejection`.
 
 # The sum's load-time check: every kind concrete, subtyping nothing, handled by `_reason`, and
 # `_reason` defined for the kinds alone. A violation refuses the package's load.
-@quarantine "the closed sum's assertion, run when the package loads" Base.uniontypes construction_check(::Val{:Rejection})::Int = check_closed_sum(Rejection, _reason)
+@quarantine "the closed sum's assertion, run when the package loads" Base.Val construction_check(::Val{:Rejection})::Int = check_closed_sum(Rejection, _reason)
 construction_check(Val(:Rejection))

@@ -1,24 +1,17 @@
 # The file map, the anchors and the quarantine (dev/CHARTER.md C2): every file of src/ outside
 # src/julia loads through `include_dart` from the pin table, every definition in it carries
 # `@parity "<file>.dart:<line> <Symbol>"`, the dart definition it copies, and every definition in
-# src/julia carries `@quarantine "<necessity>" <Julia API>`, what Julia forces and dart lacks. Each
-# macro checks its definition where it is written and records it in REGISTRY; when the package has
-# loaded, the totality checks walk every method and binding WasmTarget defines and refuse the load
-# for one no entry covers.
+# src/julia carries `@quarantine "<necessity>" <Julia API>`, what Julia forces and dart lacks, the API
+# one its code references. Each macro checks its definition where it is written and records it in
+# REGISTRY with the world its evaluation spans; when the package has loaded, every method WasmTarget
+# defines is matched to the definition whose evaluation made it, and every binding to the definition
+# naming it, and the load refuses one no entry covers.
 
 # The registry's own definitions carry @quarantine like every other src/julia definition, but the
-# macro is one of them and cannot expand before it exists: this block evaluates each definition, then
-# registers each through the function the macro's expansion calls, so no definition goes unmarked.
+# macro is one of them and cannot expand before it exists: this block evaluates each definition,
+# noting the worlds it spans, then registers each through the functions the macro's expansion calls,
+# so no definition goes unmarked.
 let defs = quote
-    """
-        construction_check(::Val{definition}) -> Int
-
-    The load-time check of the construction `definition` names, defined beside that definition; 0
-    when it holds, and it throws, refusing the load, when it does not. `ConstructionLock(definition)`
-    in test/parity_ratchet.jl only calls it.
-    """
-    @quarantine "Julia checks no construction at compile time; each asserts itself at load" Base.invokelatest function construction_check end
-
     """
         ConstructionViolation(definition, what)
 
@@ -31,13 +24,14 @@ let defs = quote
     @quarantine "the refusal's text, Julia's error display" Base.showerror Base.showerror(io::IO, e::ConstructionViolation) = print(io, "WasmTarget: construction ", e.definition, " broken: ", e.what)
 
     """
-        ParityEntry(mod, anchor, ported, names, file, first, last)
+        ParityEntry(mod, anchor, ported, names, file, first, last, worlds, pid, methods)
 
     A definition `@parity` checked: `anchor` the dart definition it copies, `ported` false for an
-    `@unported` stub, `names` the bindings it defines in `mod`, and `file` lines `first` to `last`
-    the span its methods sit in.
+    `@unported` stub, `names` the bindings it defines in `mod`, `file` lines `first` to `last` its
+    text, `worlds` the world ages its evaluation spanned in the process `pid`, and `methods` the
+    methods that evaluation made, matched when the package has loaded (`_attribute!`).
     """
-    @quarantine "dart's analyzer knows each declaration's source; Julia records a method's line only" Base.Method struct ParityEntry
+    @quarantine "dart's analyzer knows each declaration's members; Julia knows a method's world" Base.Method struct ParityEntry
         mod::Module
         anchor::String
         ported::Bool
@@ -45,13 +39,17 @@ let defs = quote
         file::Symbol
         first::Int
         last::Int
+        worlds::UnitRange{UInt}
+        pid::Int32
+        methods::Vector{Method}
     end
 
     """
-        QuarantineEntry(mod, necessity, api, names, file, first, last)
+        QuarantineEntry(mod, necessity, api, names, file, first, last, worlds, pid, methods)
 
     A definition `@quarantine` checked: `necessity` what Julia forces, `api` the Julia API it relies
-    on (resolved when it was checked), and the rest as `ParityEntry`.
+    on (resolved, and referenced by the definition, where it was checked), and the rest as
+    `ParityEntry`.
     """
     @quarantine "the Julia-only definitions' record, Rust's unsafe blocks with their SAFETY comments" Base.Method struct QuarantineEntry
         mod::Module
@@ -61,6 +59,9 @@ let defs = quote
         file::Symbol
         first::Int
         last::Int
+        worlds::UnitRange{UInt}
+        pid::Int32
+        methods::Vector{Method}
     end
 
     """
@@ -79,19 +80,46 @@ let defs = quote
     Every checked definition of every module, in load order; the totality checks read it. Filled
     when the package loads (at precompile, and saved in the package image with the module).
     """
-    @quarantine "Julia keeps no declaration table to reflect on; the macros build one at load" Base.Vector const REGISTRY = RegistryEntry[]
+    @quarantine "Julia keeps no declaration table to reflect on; the macros build one at load" Base.Vector const REGISTRY = Vector{RegistryEntry}()
+
+    # the worlds at which the definitions being evaluated began, innermost last (a module's
+    # definitions are evaluated inside its own)
+    @quarantine "Julia numbers each new method by a world age, which brackets a definition's evaluation" Base.Vector const _WORLDS = Vector{UInt}()
 
     # the src directory, which the location rules and the include set are relative to
     @quarantine "a Julia package's source files have a path, Julia's include unit" Base.dirname const SRC = dirname(@__DIR__)
 
-    @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.push! _register!(e::RegistryEntry)::Nothing = (push!(REGISTRY, e); nothing)
+    # notes the world a definition's evaluation begins at
+    @quarantine "a definition's evaluation begins at the world it reads" Base.get_world_counter _mark!()::Nothing = (push!(_WORLDS, Base.get_world_counter()); nothing)
+
+    # records a checked definition with the worlds its evaluation spanned, after `w0` up to `w1`, in
+    # this process
+    @quarantine "the registry grows as the package loads, each entry stamped with its worlds" Base.getpid function _register_range!(e::RegistryEntry, w0::UInt, w1::UInt)::Nothing
+        local T = typeof(e)
+        local fields = Any[getfield(e, i) for i in 1:fieldcount(T)-3]
+        push!(REGISTRY, T(fields..., (w0 + 1):w1, Int32(getpid()), Method[]))
+        return nothing
+    end
+
+    # records a checked definition whose evaluation began at the last _mark! and ends now
+    @quarantine "the registry grows as the package loads, Julia's top-level evaluation" Base.get_world_counter _register!(e::RegistryEntry)::Nothing = _register_range!(e, pop!(_WORLDS), Base.get_world_counter())
 
     # whether `file` lies in the directory `dir` (both absolute)
     @quarantine "a source file's place is its path" Base.startswith _inside(file::AbstractString, dir::AbstractString)::Bool = startswith(normpath(file), joinpath(normpath(dir), ""))
 
     @quarantine "the macros' refusals name the line they stand on, Julia's LineNumberNode" Core.LineNumberNode _at(source::LineNumberNode)::String = string(something(source.file, :none), ":", source.line)
 
-    # the last line a definition's expression spans: its methods' lines lie from the macro's line to it
+    # the module and its submodules
+    @quarantine "a module's methods are found by their module, Julia's reflection" Base.parentmodule function _within(m::Module, root::Module)::Bool
+        while true
+            m === root && return true
+            local p = parentmodule(m)
+            p === m && return false
+            m = p
+        end
+    end
+
+    # the last line a definition's expression spans
     @quarantine "Julia's parser records lines as LineNumberNodes inside the expression" Core.LineNumberNode function _last_line(ex, line::Int)::Int
         ex isa LineNumberNode && return max(line, ex.line)
         ex isa Expr || return line
@@ -111,10 +139,10 @@ let defs = quote
 
     # the bindings a definition creates in its module and the Julia name the anchor's rule judges, or
     # a refusal naming its line: function (long, short, `function f end`), macro, struct, abstract and
-    # primitive type, const and @enum, under @inline or @noinline
+    # primitive type, const, @enum and module, under @inline or @noinline
     @quarantine "Julia's definition forms, read from the parsed expression" Base.Meta.isexpr function _defines(def, source::LineNumberNode)::Tuple{Vector{Symbol},Symbol}
         refuse() = throw(ConstructionViolation("the definition forms",
-            "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum)"))
+            "$(_at(source)): not a definition @parity or @quarantine reads (function, macro, struct, abstract or primitive type, const, @enum, module)"))
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
         if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"))
             return _defines(def.args[end], source)
@@ -129,6 +157,9 @@ let defs = quote
                 end
             end
             return (vcat(typename(x), members), typename(x))
+        elseif Meta.isexpr(def, :module)
+            def.args[2] isa Symbol || refuse()
+            return ([def.args[2]], def.args[2])
         elseif Meta.isexpr(def, :struct)
             local t = typename(def.args[2])
             return ([t], t)
@@ -162,49 +193,74 @@ let defs = quote
         refuse()
     end
 
-    # the Julia API a quarantined definition relies on, resolved in `mod` from a dotted name: every
-    # prefix a module, the last part defined in it; anything else refuses the definition
-    @quarantine "a quarantined definition names the Julia API it rests on, which must exist" Base.isdefined function _resolve_api(mod::Module, api, source::LineNumberNode)
-        refuse(why) = throw(ConstructionViolation("@quarantine", "$(_at(source)): the Julia API $(repr(api)) $why"))
-        Meta.isexpr(api, :., 2) && api.args[2] isa QuoteNode || refuse("is not a qualified name (Module.name)")
-        local owner = api.args[1] isa Symbol ? (isdefined(mod, api.args[1]) ? getglobal(mod, api.args[1]) : refuse("does not resolve")) :
-            _resolve_api(mod, api.args[1], source)
-        local n = api.args[2].value
-        owner isa Module && n isa Symbol && isdefined(owner, n) || refuse("does not resolve")
-        return getglobal(owner, n)
+    # the value a dotted name resolves to in `mod`, every prefix a module, or nothing
+    @quarantine "a qualified name resolves through modules, Julia's getglobal" Core.getglobal function _resolve_name(mod::Module, ex)
+        ex isa Symbol && return isdefined(mod, ex) ? Some(getglobal(mod, ex)) : nothing
+        ex isa GlobalRef && return isdefined(ex.mod, ex.name) ? Some(getglobal(ex.mod, ex.name)) : nothing
+        Meta.isexpr(ex, :., 2) && ex.args[2] isa QuoteNode || return nothing
+        local owner = _resolve_name(mod, ex.args[1])
+        owner === nothing && return nothing
+        local o, n = something(owner), ex.args[2].value
+        return o isa Module && n isa Symbol && isdefined(o, n) ? Some(getglobal(o, n)) : nothing
     end
 
-    # the QuarantineEntry of one definition, or a refusal at its line: the necessity stated, the API
-    # resolved, the file in src/julia (a file under src/ elsewhere carries @parity)
+    # whether the definition's own text references `v`: a name, a qualified name or a GlobalRef in it
+    # resolving to `v` in `mod`, or a form whose syntax stands for it (a module definition for
+    # Core.Module, a type declaration for Core.DataType, an interpolated string for Base.string)
+    @quarantine "the API a definition rests on is one its code references, read from its expression" Base.Meta.isexpr function _references(mod::Module, ex, @nospecialize(v))::Bool
+        Meta.isexpr(ex, :module) && v === Core.Module && return true
+        (Meta.isexpr(ex, :struct) || Meta.isexpr(ex, :abstract) || Meta.isexpr(ex, :primitive)) && v === Core.DataType && return true
+        Meta.isexpr(ex, :string) && v === Base.string && return true
+        local r = _resolve_name(mod, ex)
+        r !== nothing && something(r) === v && return true
+        ex isa Expr || return false
+        Meta.isexpr(ex, :., 2) && return _references(mod, ex.args[1], v)
+        return any(a -> _references(mod, a, v), ex.args)
+    end
+
+    # the QuarantineEntry of one definition, or a refusal at its line: the necessity stated, the API a
+    # qualified name that resolves and that the definition references, the file in src/julia (a file
+    # under src/ elsewhere carries @parity)
     @quarantine "the Julia-only definitions are checked where they are written, Rust's unsafe" Base.Meta.isexpr function _quarantine_entry(mod::Module, source::LineNumberNode, necessity, api, def)::QuarantineEntry
-        necessity isa String && !isempty(strip(necessity)) ||
-            throw(ConstructionViolation("@quarantine", "$(_at(source)): the necessity is not a non-empty string"))
-        _resolve_api(mod, api, source)
+        refuse(why) = throw(ConstructionViolation("@quarantine", "$(_at(source)): $why"))
+        necessity isa String && !isempty(strip(necessity)) || refuse("the necessity is not a non-empty string")
+        Meta.isexpr(api, :., 2) && api.args[2] isa QuoteNode || refuse("the Julia API $(repr(api)) is not a qualified name (Module.name)")
+        local v = _resolve_name(mod, api)
+        v === nothing && refuse("the Julia API $(repr(api)) does not resolve")
+        _references(mod, def, something(v)) || refuse("the definition does not reference its Julia API $api")
         local file = string(something(source.file, :none))
         local julia = joinpath(SRC, "julia")
-        (_inside(file, SRC) || mod === @__MODULE__) && !_inside(file, julia) &&
-            throw(ConstructionViolation("@quarantine", "$(_at(source)): a definition outside src/julia carries @parity, the dart definition it copies"))
+        (_inside(file, SRC) || _within(mod, @__MODULE__)) && !_inside(file, julia) &&
+            refuse("a definition outside src/julia carries @parity, the dart definition it copies")
         local names, _ = _defines(def, source)
-        return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source.line))
+        return QuarantineEntry(mod, necessity, string(api), names, Symbol(file), source.line, _last_line(def, source.line),
+                               UInt(0):UInt(0), Int32(0), Method[])
+    end
+
+    # a checked definition's expansion: the evaluation bracketed by its worlds, then the entry; a
+    # module, whose expression must stand at top level, in a top-level expression
+    @quarantine "a definition's evaluation is bracketed by world reads, Julia's top-level evaluation" Base.Meta.isexpr function _expansion(source::LineNumberNode, def, e::RegistryEntry)::Expr
+        local mark = Expr(:call, GlobalRef(@__MODULE__, :_mark!))
+        local reg = Expr(:call, GlobalRef(@__MODULE__, :_register!), e)
+        Meta.isexpr(def, :module) && return Expr(:toplevel, mark, def, reg, nothing)
+        return Expr(:block, mark, Expr(:macrocall, GlobalRef(Core, Symbol("@__doc__")), source, def), reg, nothing)
     end
 
     """
         @quarantine "<necessity>" <Module.api> <definition>
 
     Marks a definition of src/julia: what Julia forces that dart lacks, and the Julia API it relies
-    on, a qualified name resolved when the definition loads (one that does not resolve refuses the
-    load). A definition outside src/julia carries `@parity` instead.
+    on, a qualified name that resolves and that the definition's own code references (one that does
+    not refuses the load at this line). A definition outside src/julia carries `@parity` instead.
 
     precedent(rust: `unsafe` with clippy's undocumented_unsafe_blocks, each block saying why). Julia's
     differs: no keyword marks Julia-only code, so the macro checks and records it when it loads.
     """
-    @quarantine "Julia has no unsafe blocks; a macro marks and records each Julia-only definition" Base.var"@macroexpand" macro quarantine(necessity, api, def)
-        local e = _quarantine_entry(__module__, __source__, necessity, api, def)
-        return esc(Expr(:block, Expr(:macrocall, GlobalRef(Core, Symbol("@__doc__")), __source__, def),
-                        Expr(:call, GlobalRef(@__MODULE__, :_register!), e), nothing))
+    @quarantine "Julia has no unsafe blocks; a macro marks and records each Julia-only definition" Base.esc macro quarantine(necessity, api, def)
+        return esc(_expansion(__source__, def, _quarantine_entry(__module__, __source__, necessity, api, def)))
     end
 end
-    local marked = Tuple{LineNumberNode,Any,Any,Any}[]
+    local marked = Tuple{LineNumberNode,Any,Any,Any,UInt,UInt}[]
     for st in defs.args
         st isa LineNumberNode && continue
         local doc = nothing
@@ -214,13 +270,30 @@ end
         Meta.isexpr(st, :macrocall) && st.args[1] === Symbol("@quarantine") && length(st.args) == 5 ||
             error("parity.jl: the registry's block holds only @quarantine definitions")
         local source, necessity, api, def = st.args[2], st.args[3], st.args[4], st.args[5]
+        local w0 = Base.get_world_counter()
         Core.eval(@__MODULE__, doc === nothing ? def : Expr(:macrocall, GlobalRef(Core, Symbol("@doc")), source, doc, def))
-        push!(marked, (source, necessity, api, def))
+        push!(marked, (source, necessity, api, def, w0, Base.get_world_counter()))
     end
-    for (source, necessity, api, def) in marked
-        Core.eval(@__MODULE__, Expr(:call, :_register!, Expr(:call, :_quarantine_entry, @__MODULE__, QuoteNode(source),
-                                                              necessity, QuoteNode(api), QuoteNode(def))))
+    for (source, necessity, api, def, w0, w1) in marked
+        Core.eval(@__MODULE__, Expr(:call, :_register_range!, Expr(:call, :_quarantine_entry, @__MODULE__, QuoteNode(source),
+                                                                     necessity, QuoteNode(api), QuoteNode(def)), w0, w1))
     end
+end
+
+"""
+    construction_check(::Val{definition}) -> Int
+
+The load-time check of the construction `definition` names, defined beside that definition; 0 when
+it holds, and it throws, refusing the load, when it does not. `ConstructionLock(definition)` in
+test/parity_ratchet.jl only calls it. This method is the file map's (`check_include_dart`); every
+directory of src/ is a dependency of the package image by its listing, so a file added anywhere
+under src/ rebuilds the image and meets the check, rather than loading the image built before it.
+"""
+@quarantine "Julia rebuilds a package image only for its include dependencies" Base.include_dependency function construction_check(::Val{:include_dart})::Int
+    for (dir, _, _) in walkdir(SRC)
+        include_dependency(dir; track_content = true)
+    end
+    return check_include_dart(SRC, INCLUDED)
 end
 
 """
@@ -232,7 +305,7 @@ under the sdk's pkg/ exactly as it sits at the pin (`dart2wasm/lib/translator.da
 (`_jl_path`), and an anchor names only these. The files left out are out of scope (dev/MARCH.md
 1.A4's dev/skeleton_scope.toml gives each its reason).
 """
-@quarantine "Julia's include takes any path; the pin table is the file map dart's part directives fix" Base.include const DART_FILES = (
+@quarantine "Julia's include takes any path; the pin table is the file map dart's part directives fix" Core.String const DART_FILES::Tuple{Vararg{String}} = (
     "dart2wasm/lib/abi.dart", "dart2wasm/lib/class_info.dart", "dart2wasm/lib/closures.dart",
     "dart2wasm/lib/code_generator.dart", "dart2wasm/lib/compile.dart",
     "dart2wasm/lib/compiler_options.dart", "dart2wasm/lib/constant_evaluator.dart",
@@ -279,7 +352,170 @@ under the sdk's pkg/ exactly as it sits at the pin (`dart2wasm/lib/translator.da
 The dart files `include_dart` has loaded, in order; when the package has loaded they are exactly
 the .jl files under src/ outside src/julia (`construction_check(::Val{:include_dart})`).
 """
-@quarantine "Julia records no include set a module can reflect on; include_dart keeps it" Base.Vector const INCLUDED = String[]
+@quarantine "Julia records no include set a module can reflect on; include_dart keeps it" Core.String const INCLUDED = String[]
+
+"""
+    DART_MODULES
+
+The module each dart file loads into, by the first prefix of its key that matches: one module per
+dart package (`Dart2Wasm` for dart2wasm/lib, `WasmBuilder` for wasm_builder), and inside it one per
+library dart imports under a prefix at the pin (dart2wasm's `util.dart as util` and
+`js/runtime_generator.dart as js`, wasm_builder's `ir/ir.dart as ir`, which exports every ir file);
+dart2wasm's `package:wasm_builder/wasm_builder.dart as w` is the package module itself. A name dart
+spells `p.X` is `P.X` in the module that binds P: the package modules and a package's library
+modules are bound where src/julia/packages.jl declares them.
+
+precedent(dart: an import prefix, the library's names under it; rust: a module per namespace).
+Julia's differs: it has no per-file namespace, so a prefix is a module, and a file is loaded into it.
+"""
+@quarantine "Julia has no per-file namespace; a dart package or prefixed library is a module" Base.Pair const DART_MODULES = (
+    "dart2wasm/lib/util.dart" => (:Dart2Wasm, :Util),
+    "dart2wasm/lib/js/runtime_generator.dart" => (:Dart2Wasm, :JS),
+    "dart2wasm/lib/" => (:Dart2Wasm,),
+    "wasm_builder/lib/src/ir/" => (:WasmBuilder, :IR),
+    "wasm_builder/lib/" => (:WasmBuilder,),
+)
+
+# the module a dart file of the pin table loads into
+@quarantine "a dart file's namespace is its package's or prefixed library's module" Core.getglobal function _module_of(dart::String)::Module
+    for (prefix, path) in DART_MODULES
+        startswith(dart, prefix) || continue
+        local m = @__MODULE__
+        for n in path
+            isdefined(m, n) || throw(ConstructionViolation("include_dart", "the module $(join(path, '.')) for $dart is not declared (src/julia/packages.jl)"))
+            m = getglobal(m, n)
+        end
+        return m
+    end
+    throw(ConstructionViolation("include_dart", "$dart is in no module of DART_MODULES"))
+end
+
+# the definition a top-level statement of a port carries, its docstring and @parity peeled, or nothing
+@quarantine "a port's top-level statements are Julia expressions, read by their parsed form" Base.Meta.isexpr function _marked_definition(st)
+    Meta.isexpr(st, :macrocall) && length(st.args) == 4 && st.args[1] == GlobalRef(Core, Symbol("@doc")) && (st = st.args[4])
+    Meta.isexpr(st, :macrocall) && length(st.args) == 4 && _is_macro(st, Symbol("@parity")) || return nothing
+    local def = st.args[4]
+    _is_macro(def, Symbol("@unported")) && (def = def.args[end])
+    return def
+end
+
+# whether a top-level statement of a port declares a type: a struct, abstract or primitive type or
+# @enum behind @parity, which the first pass evaluates
+@quarantine "Julia needs a type to exist before a signature names it; a declaration is read by its head" Base.Meta.isexpr function _is_declaration(st)::Bool
+    local def = _marked_definition(st)
+    def === nothing && return false
+    return Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
+           (Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@enum"))
+end
+
+# the names a declaration's supertype and field types mention, each with the module path it is
+# qualified by (empty for a bare name): the declarations it must follow
+@quarantine "a type's supertype and field types are read from its parsed declaration" Base.Meta.isexpr function _declaration_needs(def)::Vector{Tuple{Vector{Symbol},Symbol}}
+    local out = Tuple{Vector{Symbol},Symbol}[]
+    local walk(ex) = if ex isa Symbol
+        push!(out, (Symbol[], ex))
+    elseif Meta.isexpr(ex, :., 2) && ex.args[2] isa QuoteNode
+        local path = Symbol[]
+        local a = ex.args[1]
+        while Meta.isexpr(a, :., 2) && a.args[2] isa QuoteNode
+            pushfirst!(path, a.args[2].value); a = a.args[1]
+        end
+        a isa Symbol && pushfirst!(path, a)
+        push!(out, (path, ex.args[2].value))
+    elseif ex isa Expr
+        foreach(walk, ex.args)
+    end
+    if Meta.isexpr(def, :struct)
+        Meta.isexpr(def.args[2], :(<:)) && walk(def.args[2].args[2])
+        for f in def.args[3].args
+            Meta.isexpr(f, :(::)) && length(f.args) == 2 && walk(f.args[2])
+        end
+    elseif Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive)
+        Meta.isexpr(def.args[1], :(<:)) && walk(def.args[1].args[2])
+    end
+    return out
+end
+
+"""
+    include_dart("<file>.dart", ...)
+
+Loads the ports of those dart files, each its path under the sdk's pkg/ (`_jl_path`), each into its
+module (`DART_MODULES`): the only way a file of src/ outside src/julia loads, called once with every
+port. The paths must be in `DART_FILES`; when the package has loaded, the files it loaded are
+exactly the directory's (`check_include_dart`). It loads in two passes: first every file's type
+declarations (struct, abstract and primitive type, @enum behind @parity), each after the
+declarations its supertype and field types name, then every other definition, file by file in
+DART_FILES order; two declarations that need each other refuse the load.
+
+precedent(dart: `part`/`part of` naming each file, and a library's declarations resolved before
+its bodies; rust: `mod`, and items independent of their order). Julia's differs: `include` takes any
+path and a signature can name only a type that exists, so the file map is a table checked against
+the directory and the loader orders the passes.
+"""
+@quarantine "Julia's include loads any path in its text's order; include_dart admits the pin table's files and records each it loads" Base.push! function include_dart(darts::String...)::Nothing
+    isempty(INCLUDED) || throw(ConstructionViolation("include_dart", "include_dart is called once, with every port"))
+    for d in darts
+        d in DART_FILES || throw(ConstructionViolation("include_dart", "$d is no file of the pin table DART_FILES"))
+        d in INCLUDED && throw(ConstructionViolation("include_dart", "$d is included twice"))
+        push!(INCLUDED, d)
+    end
+    local order = String[d for d in DART_FILES if d in INCLUDED]
+    _load_two_pass!(Tuple{Module,String}[(_module_of(d), _jl_path(d)) for d in order])
+    return nothing
+end
+
+"""
+    _load_two_pass!(units)
+
+Loads each `(module, file)` of `units` in two passes: the type declarations of every file first,
+ordered so each follows the declarations its supertype and field types name in the units (by
+module and name; a dotted name by the module named last before it), then each file's other
+statements in order. Two declarations that need each other refuse the load, naming both.
+"""
+@quarantine "Julia evaluates a file top to bottom; the type declarations of every file are evaluated first" Base.include function _load_two_pass!(units::Vector{Tuple{Module,String}})::Nothing
+    local decls = Tuple{Module,String,Any,Symbol}[]
+    for (m, path) in units
+        include_dependency(path; track_content = true)
+        local top = Meta.parseall(read(path, String); filename = path)
+        local lnn = LineNumberNode(1, Symbol(path))
+        for st in top.args
+            st isa LineNumberNode && (lnn = st; continue)
+            _is_declaration(st) && push!(decls, (m, path, Expr(:toplevel, lnn, st), last(_defines(_marked_definition(st), lnn))))
+        end
+    end
+    local index = Dict{Tuple{Module,Symbol},Int}((d[1], d[4]) => i for (i, d) in enumerate(decls))
+    local needs(i) = begin
+        local m = decls[i][1]
+        local out = Int[]
+        for (path, n) in _declaration_needs(_marked_definition(decls[i][3].args[2]))
+            local target = isempty(path) ? m : nothing
+            if !isempty(path)
+                for (mm, _, _, _) in decls
+                    nameof(mm) === path[end] && (target = mm; break)
+                end
+            end
+            target === nothing && continue
+            local j = get(index, (target, n), 0)
+            j != 0 && j != i && push!(out, j)
+        end
+        out
+    end
+    local state = zeros(Int, length(decls))   # 0 unvisited, 1 on the path, 2 evaluated
+    local visit(i, from) = begin
+        state[i] == 2 && return
+        state[i] == 1 && throw(ConstructionViolation("include_dart",
+            "the declarations $(decls[from][4]) and $(decls[i][4]) need each other ($(decls[i][2]))"))
+        state[i] = 1
+        foreach(j -> visit(j, i), needs(i))
+        Core.eval(decls[i][1], decls[i][3])
+        state[i] = 2
+    end
+    foreach(i -> visit(i, i), eachindex(decls))
+    for (m, path) in units
+        Base.include(st -> _is_declaration(st) ? nothing : st, m, path)
+    end
+    return nothing
+end
 
 # the source file of a dart file of the pin table, relative to src/: dart2wasm's lib/<f>.dart is
 # <f>.jl, wasm_builder's lib/<f>.dart and lib/src/<f>.dart are wasm_builder/<f>.jl (dev/MARCH.md 1.A4)
@@ -296,26 +532,7 @@ end
 The dart-lang/sdk commit every anchor cites (dev/PARITY_MASTER.md states it; the ratchet's L213
 holds the two equal). An anchor's file is its path under that checkout's pkg/.
 """
-@quarantine "the oracle's commit, which the anchors' resolver reads the pinned sdk at" Base.String const PIN = "898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e"
-
-"""
-    include_dart("<file>.dart")
-
-Loads the port of that dart file, its path under the sdk's pkg/ (`_jl_path`): the only way a file of src/ outside src/julia
-loads. The path must be in `DART_FILES` and loads once; when the package has loaded, the files it
-loaded are exactly the directory's (`check_include_dart`).
-
-precedent(dart: `part`/`part of`, a library naming each file it holds; rust: `mod`, a crate's
-files reachable only through its declarations). Julia's differs: `include` takes any path, so the
-file map is a table checked against the directory when the package loads.
-"""
-@quarantine "Julia's include loads any path; include_dart admits the pin table's files alone" Base.include function include_dart(dart::String)::Nothing
-    dart in DART_FILES || throw(ConstructionViolation("include_dart", "$dart is no file of the pin table DART_FILES"))
-    dart in INCLUDED && throw(ConstructionViolation("include_dart", "$dart is included twice"))
-    push!(INCLUDED, dart)
-    Base.include(@__MODULE__, _jl_path(dart))
-    return nothing
-end
+@quarantine "the oracle's commit, which the anchors' resolver reads the pinned sdk at" Core.String const PIN::String = "898a1e4bbfbc472dc0a9505dc7d2e4c21d6f856e"
 
 """
     check_include_dart(src, included) -> Int
@@ -340,16 +557,6 @@ Throws a `ConstructionViolation` naming a file loaded otherwise or a dart file w
     end
     return 0
 end
-# the file map's assertion, run when the package loads; every directory of src/ is a dependency of
-# the package image by its listing, so a file added anywhere under src/ rebuilds the image and meets
-# the check, rather than loading the image built before it
-@quarantine "Julia rebuilds a package image only for its include dependencies" Base.include_dependency function construction_check(::Val{:include_dart})::Int
-    for (dir, _, _) in walkdir(SRC)
-        include_dependency(dir; track_content = true)
-    end
-    return check_include_dart(SRC, INCLUDED)
-end
-
 """
     snake(symbol) -> String
 
@@ -363,23 +570,26 @@ together (`toJSON` → `to_json`, `i32Const` → `i32_const`), a leading `_` kep
     return m[1] * lowercase(body)
 end
 
-# a dart operator's Julia function: the operators dart declares on a class and the Base function each
-# extends
-@quarantine "dart's operator declarations are Base methods in Julia" Base.getindex const DART_OPERATORS = Dict{String,Symbol}(
+# the dart members Julia spells as a Base function, the one name the rule admits for each: the
+# operators dart declares on a class, and Object's toString and hashCode, which Julia's show and hash
+# answer
+@quarantine "dart's operators and Object members are Base functions in Julia" Base.Dict const DART_BASE = Dict{String,Symbol}(
+    "toString" => :show, "hashCode" => :hash,
     "==" => :(==), "[]" => :getindex, "[]=" => :setindex!, "+" => :+, "-" => :-, "unary-" => :-,
     "*" => :*, "/" => :/, "~/" => :div, "%" => :mod, "<" => :<, ">" => :>, "<=" => :<=, ">=" => :>=,
     "&" => :&, "|" => :|, "^" => :xor, "~" => :~, "<<" => :<<, ">>" => :>>, ">>>" => :>>>)
 
 # the Julia names the rule admits for an anchor's symbol: `X` its type or unnamed constructor X (a
-# top-level function or variable `f`: snake(f)); `X.m` snake(m) (a method, getter or field),
-# X_snake(m) (a static or named constructor), set_snake(m)! (a setter), or the operator's Base function
+# top-level function or variable `f`: snake(f)); `X.m` the Base function DART_BASE names for m alone,
+# else snake(m) (a method, getter or field), X_snake(m) (a static or named constructor) or
+# set_snake(m)! (a setter). A dart name that is a Julia keyword is written var"<name>", Julia's own
+# spelling of any identifier, so the rule needs no case for it
 @quarantine "dart and Julia name a definition by different conventions; one rule maps them" Base.Symbol function _admitted_names(symbol::AbstractString)::Vector{Symbol}
     local parts = split(symbol, '.'; limit = 2)
     length(parts) == 1 && return unique([Symbol(symbol), Symbol(snake(symbol))])
     local x, m = parts
-    local out = Symbol[Symbol(snake(m)), Symbol(x, "_", snake(m)), Symbol("set_", snake(m), "!")]
-    haskey(DART_OPERATORS, m) && push!(out, DART_OPERATORS[m])
-    return out
+    haskey(DART_BASE, m) && return Symbol[DART_BASE[m]]
+    return Symbol[Symbol(snake(m)), Symbol(x, "_", snake(m)), Symbol("set_", snake(m), "!")]
 end
 
 # the stub @unported stands for: a function whose body rejects with its anchor, or a struct with no
@@ -417,7 +627,7 @@ end
 # and the package's load checks every anchor; the ratchet's L213 requires the checkout.
 
 # an anchor's three parts: the key of its dart file, its line and its symbol
-@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer has a name" Base.Regex const ANCHOR_RX = r"^([\w/]+\.dart):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?)$"
+@quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer has a name" Base.var"@r_str" const ANCHOR_RX = r"^([\w/]+\.dart):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?)$"
 
 # the commit a git checkout's HEAD names, or nothing (no checkout, or a HEAD it cannot resolve)
 @quarantine "git records a checkout's commit in its HEAD file, which Julia reads without a git process" Base.read function _head_commit(dir::String)::Union{String,Nothing}
@@ -446,7 +656,7 @@ end
 @quarantine "Julia reads a file per call; the resolver reads each pinned file once" Base.Dict const _PIN_LINES = Dict{String,Vector{String}}()
 
 # a dart declaration that opens a body at column 0, and its name
-@quarantine "dart's declaration keywords, read from its formatted source" Base.Regex const DART_DECL_RX = r"^(?:(?:abstract|sealed|base|final|interface|mixin)\s+)*(?:class|mixin|enum|typedef|extension(?:\s+type)?)\s+([A-Za-z_$][\w$]*)"
+@quarantine "dart's declaration keywords, read from its formatted source" Base.var"@r_str" const DART_DECL_RX = r"^(?:(?:abstract|sealed|base|final|interface|mixin)\s+)*(?:class|mixin|enum|typedef|extension(?:\s+type)?)\s+([A-Za-z_$][\w$]*)"
 
 # the name of the declaration whose body holds line `i`: the nearest code line above it at column 0
 # (dart's formatter puts every top-level declaration there and its members at column 2); "" for an
@@ -520,10 +730,10 @@ compile; rust: rustdoc denies broken intra-doc links). Julia's differs: nothing 
 another language's source, so the macro reads the pinned dart line where the anchor is written and
 the load checks every anchor, both where the pinned checkout exists.
 """
-@quarantine "Julia resolves no name in dart's source; the anchors are read against the pinned files" Base.readlines function check_anchors_resolve(mod::Module, sdk::String)::Int
+@quarantine "Julia resolves no name in dart's source; the anchors are read against the pinned files" Base.empty! function check_anchors_resolve(mod::Module, sdk::String)::Int
     local out = String[]
     for e in REGISTRY
-        e isa ParityEntry && e.mod === mod || continue
+        e isa ParityEntry && _within(e.mod, mod) || continue
         local f = _anchor_fault(sdk, e.anchor)
         f === nothing || push!(out, "$(basename(string(e.file))):$(e.first) $(e.anchor): $f")
     end
@@ -533,7 +743,7 @@ the load checks every anchor, both where the pinned checkout exists.
 end
 # the oracle's assertion: run when the package loads where the pinned checkout exists
 # (src/WasmTarget.jl), and required by the ratchet's L213, which a missing checkout fails
-@quarantine "the oracle's assertion, run when the package loads" Base.invokelatest function construction_check(::Val{:check_anchors_resolve})::Int
+@quarantine "the oracle's assertion, run when the package loads" Base.Val function construction_check(::Val{:check_anchors_resolve})::Int
     local sdk = _pin_sdk()
     sdk === nothing && throw(ConstructionViolation("check_anchors_resolve",
         "no checkout of dart-lang/sdk at $PIN at ~/.cache/wasmtarget/dart-sdk: bash dev/fetch_dart_sdk.sh"))
@@ -542,7 +752,7 @@ end
 
 # the ParityEntry of one definition and the definition to evaluate (an @unported stub expanded), or
 # a refusal at its line: the anchor's form and file, the file outside src/julia (and loaded by
-# include_dart, in WasmTarget), the Julia name the rule admits
+# include_dart, in WasmTarget), the Julia name the rule admits, the anchor resolved at the pin
 @quarantine "the dart anchors are checked where they are written, as dart's analyzer would" Base.match function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
@@ -550,8 +760,9 @@ end
     m === nothing && refuse("the anchor $(repr(anchor)) does not read \"<file>.dart:<line> <Symbol>\"")
     m[1] in DART_FILES || refuse("the anchor's file $(m[1]) is no file of the pin table DART_FILES")
     local file = string(something(source.file, :none))
+    local own = _within(mod, @__MODULE__)
     _inside(file, joinpath(SRC, "julia")) && refuse("a definition in src/julia carries @quarantine, the Julia necessity that forces it")
-    (_inside(file, SRC) || mod === (@__MODULE__)) && !any(d -> _jl_path(d) == normpath(file), INCLUDED) &&
+    (_inside(file, SRC) || own) && !any(d -> _jl_path(d) == normpath(file), INCLUDED) &&
         refuse("$file is not a file include_dart loaded")
     local ported = !_is_macro(def, Symbol("@unported"))
     ported || (def = _unported(anchor, def.args[end], source))
@@ -559,10 +770,10 @@ end
     local admitted = _admitted_names(m[3])
     name in admitted || refuse("the Julia name $name is not the rule's for $(m[3]): $(join(admitted, ", "))")
     # WasmTarget's own anchors resolve at the pin where its checkout exists (L213)
-    local sdk = mod === (@__MODULE__) ? _pin_sdk() : nothing
+    local sdk = own ? _pin_sdk() : nothing
     local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
     fault === nothing || refuse("the anchor does not resolve at the pin: $fault")
-    return (ParityEntry(mod, anchor, ported, names, Symbol(file), source.line, _last_line(def, source.line)), def)
+    return (ParityEntry(mod, anchor, ported, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
 end
 
 """
@@ -571,17 +782,32 @@ end
 Marks a definition outside src/julia with the dart definition it copies at the pinned commit:
 the file a key of `DART_FILES`, the Julia name the one rule's for the symbol (`snake`), the file
 loaded by `include_dart`, and, where the pinned checkout exists, the anchor's line declaring its
-symbol at `PIN` (`check_anchors_resolve`); any other form refuses the load at this line. `@parity "<anchor>"
-@unported <definition>` stands for a definition not yet ported: its body rejects with the anchor.
+symbol at `PIN` (`check_anchors_resolve`); any other form refuses the load at this line.
+`@parity "<anchor>" @unported <definition>` stands for a definition not yet ported: its body rejects
+with the anchor.
 
 precedent(rust: the deny missing_docs lint, every item documented or the crate does not build).
 Julia's differs: nothing requires a definition to say where it comes from, so the macro checks it
 where it is written and the totality check refuses any definition without it when the package loads.
 """
-@quarantine "Julia has no lint that denies an unanchored item; a macro checks and records each" Base.var"@macroexpand" macro parity(anchor, def)
+@quarantine "Julia has no lint that denies an unanchored item; a macro checks and records each" Base.esc macro parity(anchor, def)
     local e, def2 = _parity_entry(__module__, __source__, anchor, def)
-    return esc(Expr(:block, Expr(:macrocall, GlobalRef(Core, Symbol("@__doc__")), __source__, def2),
-                    Expr(:call, GlobalRef(@__MODULE__, :_register!), e), nothing))
+    return esc(_expansion(__source__, def2, e))
+end
+
+"""
+    anchor_of(f) -> String
+
+The `@parity` anchor of the one definition that binds `f`, found by identity in REGISTRY (an entry
+whose module binds one of its names to `f` itself), so a rejection can name the dart definition it
+stands for without writing the anchor a second time. No entry, or more than one, refuses.
+"""
+@quarantine "a definition's dart anchor is read from the registry by the object it binds, Julia's identity" Core.getglobal function anchor_of(@nospecialize(f))::String
+    local hits = ParityEntry[e for e in REGISTRY if e isa ParityEntry &&
+                             any(n -> isdefined(e.mod, n) && getglobal(e.mod, n) === f, e.names)]
+    length(hits) == 1 || throw(ConstructionViolation("anchor_of",
+        "$f is bound by $(isempty(hits) ? "no @parity definition" : "$(length(hits)) @parity definitions"), not one"))
+    return hits[1].anchor
 end
 
 """
@@ -590,58 +816,95 @@ end
 Inside `@parity` only, which expands it: a definition not yet ported, its body
 `reject!(Unported(<anchor>), <signature>)` with the enclosing `@parity`'s anchor.
 """
-@quarantine "a stub's anchor is its @parity's, so the stub cannot name another" Base.var"@macroexpand" macro unported(def)
+@quarantine "a stub's anchor is its @parity's, so the stub cannot name another" Base.throw macro unported(def)
     throw(ConstructionViolation("@unported", "$(_at(__source__)): @unported outside @parity, whose anchor is the stub's"))
 end
 
-# the module and its submodules
-@quarantine "a module's methods are found by their module, Julia's reflection" Base.parentmodule function _within(m::Module, root::Module)::Bool
-    while true
-        m === root && return true
-        local p = parentmodule(m)
-        p === m && return false
-        m = p
+# ---- totality: every method and binding a definition's (L211, L212) -------------------------------
+
+# the modules under `mod`, itself first
+@quarantine "a package's modules are bindings of their parents, found by Julia's reflection" Base.names function _modules(mod::Module)::Vector{Module}
+    local out = Module[mod]
+    for n in names(mod; all = true)
+        isdefined(mod, n) || continue
+        local b = getglobal(mod, n)
+        b isa Module && b !== mod && parentmodule(b) === mod && append!(out, _modules(b))
     end
+    return out
 end
 
-# the faults of a module's definitions under one mark: in `src/julia` (`julia`, @quarantine) or
-# elsewhere under `src` (@parity), each method a registry entry of that mark must span in its file,
-# and every binding the module owns an entry must name; a body Julia's lowering gives no location (a
-# generator's) must belong to a named definition
-@quarantine "Julia's methods and bindings are reflected on, the only declaration list it keeps" Base.visit function _unmarked(mod::Module, src::String, julia::Bool)::Vector{String}
-    local want = julia ? QuarantineEntry : ParityEntry
+"""
+    _attribute!(mod) -> Vector{Method}
+
+Matches each method `mod` or a module under it defines to the definition whose evaluation made it,
+by identity: a method a definition's entry already holds is its; any other goes to the entry,
+registered in this process, whose evaluation's worlds hold the method's `primary_world`, and is
+pushed to it. The matching runs while the package loads (where each definition's methods are new
+worlds), so the package image keeps each entry's methods; a definition evaluated later in a session
+(by Revise) is matched the same way. Returns the methods no definition made.
+"""
+@quarantine "a method records the world it was defined at, which identifies the definition that made it" Base.visit function _attribute!(mod::Module)::Vector{Method}
+    local entries = RegistryEntry[e for e in REGISTRY if _within(e.mod, mod)]
+    local held = IdSet{Method}(m for e in entries for m in e.methods)
+    local here = RegistryEntry[e for e in entries if e.pid == getpid()]
+    local orphans = Method[]
+    Base.visit(Core.methodtable) do m
+        (_within(m.module, mod) && !(m in held)) || return
+        local i = findfirst(e -> m.primary_world in e.worlds, here)
+        i === nothing ? push!(orphans, m) : push!(here[i].methods, m)
+    end
+    return orphans
+end
+
+# why a method a definition made does not lie in it, or nothing: in the definition's own file, a body
+# Julia's lowering gives no location (a closure's or a generator's), or a method Julia's @enum writes
+# for the enum the definition declares (in Base's Enums.jl, its signature naming that type)
+@quarantine "Julia's @enum writes its methods in Base's Enums.jl; every other method lies in its definition" Base.unwrap_unionall function _misplaced(m::Method, e::RegistryEntry, src::String)::Union{String,Nothing}
+    local mods = Module[getglobal(e.mod, n) for n in e.names if isdefined(e.mod, n) && getglobal(e.mod, n) isa Module]
+    if !isempty(mods)
+        m.name in (:eval, :include) && m.module in mods && return nothing
+        return "$(m.module).$(m.name) at $(m.file):$(m.line) lies in a module's body with no mark of its own"
+    end
+    m.file === e.file && return nothing
+    m.file === :none && startswith(string(m.name), '#') && return nothing
+    if string(m.file) == "Enums.jl"
+        local enums = Any[getglobal(e.mod, n) for n in e.names if isdefined(e.mod, n)]
+        local mentions(t) = any(x -> x isa DataType && (t === x || (t isa DataType && t <: Type && t.parameters[1] === x)), enums)
+        any(mentions, Base.unwrap_unionall(m.sig).parameters) && return nothing
+    end
+    return "$(m.module).$(m.name) at $(m.file):$(m.line) lies outside the definition that made it ($(relpath(string(e.file), src)):$(e.first))"
+end
+
+# the faults of `mod`'s definitions under one mark, in `src/julia` (`julia`, @quarantine) or
+# elsewhere (@parity): each method made by no definition, or lying outside the one that made it, and
+# each binding of `mod` or a module under it that no entry names
+@quarantine "Julia's methods and bindings are reflected on, the only declaration list it keeps" Base.names function _unmarked(mod::Module, src::String, julia::Bool)::Vector{String}
     local mark = julia ? "@quarantine" : "@parity"
     local jdir = joinpath(src, "julia")
-    local entries = RegistryEntry[e for e in REGISTRY if _within(e.mod, mod)]
-    local named = Set{Symbol}(n for e in entries for n in e.names)
+    local side(file) = _inside(string(file), jdir) == julia
     local out = String[]
-    Base.visit(Core.methodtable) do m
-        _within(m.module, mod) || return
-        local file = string(m.file)
-        if m.file === :none
-            julia && return
-            local p = match(r"^#+([^#]+)#", string(m.name))
-            p !== nothing && Symbol(p[1]) in named ||
-                push!(out, "$(m.module).$(m.name), a body with no location, belongs to no marked definition")
-            return
-        end
-        if !_inside(file, src)
-            julia || push!(out, "$(m.module).$(m.name) is defined at $file:$(m.line), outside src")
-            return
-        end
-        _inside(file, jdir) == julia || return
-        any(e -> e isa want && e.file === m.file && e.first <= m.line <= e.last, entries) ||
-            push!(out, "$(relpath(file, src)):$(m.line) $(m.name) carries no $mark")
+    for m in _attribute!(mod)
+        local f = string(m.file)
+        (_inside(f, src) ? side(f) : !julia) &&
+            push!(out, "$(m.module).$(m.name) at $(_inside(f, src) ? relpath(f, src) : f):$(m.line) was made by no definition carrying $mark")
     end
-    # an unmarked binding is this mark's fault when its methods lie on this mark's side, and both
-    # marks' when it has none (a const, an abstract type, a function with no method)
-    for n in names(mod; all = true)
-        (startswith(string(n), '#') || n in (:eval, :include) || n === nameof(mod) || !isdefined(mod, n)) && continue
-        (which(mod, n) === mod && !(n in named)) || continue
-        local b = getglobal(mod, n)
-        local files = b isa Function || b isa Type ? String[string(m.file) for m in methods(b) if m.module === mod] : String[]
-        (isempty(files) || any(f -> _inside(f, jdir) == julia, files)) &&
-            push!(out, "the binding $mod.$n carries neither @parity nor @quarantine")
+    local entries = RegistryEntry[e for e in REGISTRY if _within(e.mod, mod)]
+    for e in entries
+        side(e.file) || continue
+        for m in e.methods
+            local why = _misplaced(m, e, src)
+            why === nothing || push!(out, why)
+        end
+    end
+    for sub in _modules(mod)
+        local named = Set{Symbol}(n for e in entries if e.mod === sub for n in e.names)
+        for n in names(sub; all = true)
+            (startswith(string(n), '#') || n in (:eval, :include) || n === nameof(sub) || !isdefined(sub, n)) && continue
+            (which(sub, n) === sub && !(n in named)) || continue
+            local b = getglobal(sub, n)
+            local files = b isa Function || b isa Type ? String[string(m.file) for m in methods(b) if m.module === sub] : String[]
+            (isempty(files) || any(side, files)) && push!(out, "the binding $sub.$n carries neither @parity nor @quarantine")
+        end
     end
     return out
 end
@@ -649,27 +912,28 @@ end
 """
     check_parity(mod, src) -> Int
 
-The anchors' check: every method `mod` defines under `src` outside `src/julia` lies in an
-`@parity` definition's lines, and every binding it owns is a marked definition's; throws a
-`ConstructionViolation` listing the rest.
+The anchors' check: every method `mod` or a module under it defines outside `src/julia` was made by
+an `@parity` definition's evaluation and lies in it, and every binding it owns is a marked
+definition's; throws a `ConstructionViolation` listing the rest.
 """
-@quarantine "the anchors' totality, by reflection when the package loads" Base.visit function check_parity(mod::Module, src::String)::Int
+@quarantine "the anchors' totality, by reflection when the package loads" Core.throw function check_parity(mod::Module, src::String)::Int
     local out = _unmarked(mod, src, false)
     isempty(out) || throw(ConstructionViolation("parity", join(out, "; ")))
     return 0
 end
-@quarantine "the anchors' assertion, run when the package loads" Base.invokelatest construction_check(::Val{:parity})::Int = check_parity(@__MODULE__, SRC)
+@quarantine "the anchors' assertion, run when the package loads" Base.Val construction_check(::Val{:parity})::Int = check_parity(@__MODULE__, SRC)
 
 """
     check_quarantine(mod, src) -> Int
 
-The quarantine's check: every method `mod` defines in `src/julia` lies in a `@quarantine`
-definition's lines, and every binding it owns is a marked definition's; throws a
-`ConstructionViolation` listing the rest.
+The quarantine's check: every method `mod` or a module under it defines in `src/julia` was made by a
+`@quarantine` definition's evaluation and lies in it, and every binding it owns is a marked
+definition's; throws a `ConstructionViolation` listing the rest. Each definition's Julia API was
+checked where it was written: a qualified name that resolves and that the definition references.
 """
-@quarantine "the quarantine's totality, by reflection when the package loads" Base.visit function check_quarantine(mod::Module, src::String)::Int
+@quarantine "the quarantine's totality, by reflection when the package loads" Core.throw function check_quarantine(mod::Module, src::String)::Int
     local out = _unmarked(mod, src, true)
     isempty(out) || throw(ConstructionViolation("quarantine", join(out, "; ")))
     return 0
 end
-@quarantine "the quarantine's assertion, run when the package loads" Base.invokelatest construction_check(::Val{:quarantine})::Int = check_quarantine(@__MODULE__, SRC)
+@quarantine "the quarantine's assertion, run when the package loads" Base.Val construction_check(::Val{:quarantine})::Int = check_quarantine(@__MODULE__, SRC)

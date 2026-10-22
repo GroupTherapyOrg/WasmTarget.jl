@@ -6,7 +6,7 @@
 # Julia answers every edge (ledger D3): a class's parent is its `supertype`, never re-derived.
 
 # Julia's kinds, the concrete types of a type as a value: Base.iskindtype's four
-@quarantine "a type is a value in Julia, its class one of Julia's kinds" Base.iskindtype const _KINDS = (DataType, UnionAll, Union, Core.TypeofBottom)
+@quarantine "a type is a value in Julia, its class one of Julia's kinds" Core.DataType const _KINDS = (DataType, UnionAll, Union, Core.TypeofBottom)
 
 """
     closed_world_classes(bodies, at) -> Vector{DataType}
@@ -24,7 +24,7 @@ Julia's differs: a program declares no class list, so the list is the types Juli
 values, each met once, and a parametric instance (`Vector{Int64}`) is a class of its own, as Julia's
 `supertype` gives it.
 """
-@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.supertype function closed_world_classes(bodies::Vector{NirBody}, at::String)::Vector{DataType}
+@quarantine "a Julia program declares no class list; its classes are the types Julia inferred for its values" Base.unwrap_unionall function closed_world_classes(bodies::Vector{NirBody}, at::String)::Vector{DataType}
     local out = DataType[]
     local seen = Base.IdSet{DataType}()
     for b in bodies

@@ -9,7 +9,7 @@
 # not hold that tree, or when a changed line of code lies in no piece. The rebuild's map is written
 # by hand: every case runs the one compile entry, which the core covers, until WasmTarget lowers code
 # a measurement can cover (dev/MARCH.md 1.D). Every group still runs on the full matrix.
-measured	146db5826ce383ba4a4ac44767a0db07ca94c244
+measured	d0874873c89ba4fd0f7274643375b4cf84e68b57
 probes	-
 core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs exceptions float32_fastmath constant_callees
 dev/depot.sh	-	depot_isolation.jl	-

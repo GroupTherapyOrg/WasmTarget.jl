@@ -8,7 +8,7 @@
 
 # The token only this file holds: ClosedWorld's sole constructor takes it, so no code outside this file
 # makes a ClosedWorld (construction_check(::Val{:ClosedWorld}), below).
-@quarantine "Julia has no private constructors; an unexported token held by this file alone stands in for one" Base.methods struct _SubsetToken
+@quarantine "Julia has no private constructors; an unexported token held by this file alone stands in for one" Core.DataType struct _SubsetToken
     _SubsetToken() = new()
 end
 
@@ -27,7 +27,7 @@ precedent(rust: typestate with a private constructor, the value made by one func
 Julia's differs: it has no private constructors, so the sole constructor and the token's are checked
 by reflection when the package loads (check_sole_constructor).
 """
-@quarantine "Julia's trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs" Core.Compiler.typeinf_ext_toplevel struct ClosedWorld
+@quarantine "Julia's trim inference returns the closed world as an untyped list of CodeInstance and CodeInfo pairs" Core.Any struct ClosedWorld
     codeinfos::Vector{Any}
     notes::Vector{String}
     ClosedWorld(::_SubsetToken, codeinfos::Vector{Any}, notes::Vector{String}) = new(codeinfos, notes)
@@ -80,13 +80,13 @@ end
 
 # the typestate's assertion, run when the package loads: ClosedWorld and its token each have one
 # constructor method, both in this file, ClosedWorld's taking the token (a construction, L220)
-@quarantine "the typestate's assertion, run when the package loads" Base.methods construction_check(::Val{:ClosedWorld})::Int =
+@quarantine "the typestate's assertion, run when the package loads" Base.Val construction_check(::Val{:ClosedWorld})::Int =
     check_sole_constructor(ClosedWorld, _SubsetToken, @__FILE__)
 
 # no method of WasmTarget but check_subset names the token or makes either: read in every method's
 # lowered code when the package loads. A stopgap, not a construction (L224): Julia has no module
 # privacy, so the wrong choice stays writable and this read finds it (A36S3, A37S1, A38)
-@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.uncompressed_ast check_closed_world_makers()::Int =
+@quarantine "Julia has no module privacy; WasmTarget's own lowered code is read when the package loads" Base.moduleroot check_closed_world_makers()::Int =
     check_sole_maker(Base.moduleroot(@__MODULE__), ClosedWorld, _SubsetToken, (only(methods(check_subset)),),
                      (which(check_closed_world_makers, Tuple{}), which(construction_check, Tuple{Val{:ClosedWorld}})),
                      (joinpath(@__DIR__, "parity.jl"), joinpath(@__DIR__, "construction.jl")))
