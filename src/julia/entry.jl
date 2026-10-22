@@ -20,5 +20,6 @@ end
 # which runs them, is not ported yet
 @quarantine "the compile's stages take the ClosedWorld Julia's verifier accepted, a typestate dart's driver has no need of" Core.Compiler.typeinf_ext_toplevel function compile_world(world::ClosedWorld, at::String)::Vector{UInt8}
     local bodies = build_nir(world, at)
+    local classes = closed_world_classes(bodies, at)
     reject!(Unported("dart2wasm/lib/compile.dart:216 compile"), at)
 end

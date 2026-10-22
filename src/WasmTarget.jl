@@ -11,6 +11,7 @@ include("julia/construction.jl")
 include("julia/reject.jl")
 include("julia/subset.jl")
 include("julia/nir.jl")
+include("julia/classes.jl")
 include("julia/entry.jl")
 
 # The load-time checks that need every definition to exist, so the package does not load otherwise:

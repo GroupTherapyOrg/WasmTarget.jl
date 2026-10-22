@@ -54,6 +54,8 @@ end
 _wt_qa_include("lock_negatives.jl")
 # two worktrees loading alternately each keep their compiled image, in their private depots (dev/depot.sh)
 _wt_qa_include("depot_isolation.jl")
+# the closed world's classes in program order, each supertype chain Julia's (src/julia/classes.jl, 1.C)
+_wt_qa_include("classes.jl")
 # the charter's checks (dev/CHARTER.md): every lock at 0, every ratchet at most its baseline
 if _wt_qa("parity_ratchet.jl")
     _wt_ratchet_t0 = time()
