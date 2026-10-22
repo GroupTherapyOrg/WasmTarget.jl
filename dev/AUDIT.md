@@ -3366,3 +3366,63 @@ cold); ea466c71 145 s (51.0, 94.0; cold); 97ed7e3a 25 s (24.0, 1.0; warm).
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A38S1 is answered by 97ed7e3a,
 which carries no Fixes: line for it. A38S2 is open on MARCH 1.S. A38E1 and A38E2 are open on MARCH 1.L.
+
+## 2026-10-22 — audited through 739d623d (97ed7e3a..739d623d: entry 38, the class-id model, anchors resolved at the pin, the closed world's classes, the two-pass loader)
+
+The thirty-ninth audit covers 713a8872 (entry 38; its author's), 5b3573a0 (dev/formal/ClassIdNumbering.tla, dart's
+class-id walk before its port, 1.C), 973a216e (1.A6, L213: every @parity anchor resolves at the pin, read where it is
+written and at load; `Charter-change: C2 authorised by Dale 2026-10-21`), 55c5a967 (src/julia/classes.jl, the closed
+world's classes in program order, 1.C) and 739d623d (include_dart in two passes into a module per dart package; a method
+matched to its definition by identity; a quarantine's API referenced; Fixes: A36S1 A36S2). No wrong answer: the
+rebuild compiles nothing yet. Each landed head's record is green. Every finding rests on one exact command, quoted.
+One ruling recorded. Findings A39S1, A39E1 and A39E2.
+
+Area: builder — empty by diff: src/wasm_builder/ does not exist on 739d623d.
+
+Area: collection and planning — 55c5a967's src/julia/classes.jl: closed_world_classes walks each NIR body's signature,
+statement types and return type; every edge is Julia's (supertype, fieldtypes, and typeof for a type held as a value,
+Base.iskindtype's four kinds when the type is not known); any other UnionAll rejects as Unquarantined, located; Union{}
+brings nothing. Sound. 5b3573a0's model: its anchors read at the pin with `sed -n 831p pkg/dart2wasm/lib/class_info.dart`
+(`List<Range> getConcreteClassIdRange(Class klass) {`) and `sed -n 864p` (`static ClassIdNumbering _number(`); dart
+starts concrete ids at 1 ("`0` is occupied by artificial non-Dart top class") and abstract ids at
+`nextConcreteClassId + concreteClassCount`, as the model; dart's saved ids (classIds, dynamic modules) are out of scope
+and left out. Sound.
+
+Area: emission and diagnostics — empty by diff for emission; 739d623d's src/julia/nir.jl and reject.jl change only
+their quarantine APIs and docstrings.
+
+stopgap in disguise: 739d623d's A36S1 fix is identity in kind: each entry records the worlds its evaluation spanned, and
+each method is matched to the entry whose evaluation made it (its primary_world), saved in the package image. Its A36S2
+fix asks that a definition's expression reference its API, and admits "the form standing for it": a type declaration
+for Core.DataType, an interpolated string for Base.string. (A39S1, medium) That admission makes the API a label again
+for the mirrors. Measured on 739d623d: `grep -n "^@quarantine" src/julia/nir.jl` names Core.DataType for 24
+definitions and Core.String for 29; `grep -n "Core.DataType struct" src/julia/nir.jl` lists NirSSA ("names a
+statement's value by SSAValue"), NirArgument, NirCall, NirNew, NirForeignCall, NirBoundscheck and the rest of the
+statement mirrors, where 53ded292 named Core.SSAValue, Core.Argument and Core.Expr; the handlers `value_form` and
+`stmt_form` name Core.String because they return a string. The ground truth D3 asks a quarantine to name is the Julia
+form a mirror mirrors, and it can be checked by reflection and a run at load: each mirror names its form (NirSSA
+Core.SSAValue, NirCall Expr(:call), …), and the load converts a sample of each form through _nir_operand or _nir_stmt and
+requires the mirror back. As the lead ruled, this is filed as a requirement for the mirrors.
+precedent: the module per dart package, dart's library prefixes (`import 'ir/ir.dart' as ir`); the class list, dart's
+component classes (class_info.dart:864), Julia's types inferred for its values; the anchors, Rust's deny(missing_docs)
+with each doc's target resolved.
+
+Area: enforcement and prose — every hunk of 973a216e (dev/HISTORY.md, dev/LEDGER.md, dev/MARCH.md,
+dev/fetch_dart_sdk.sh, src/WasmTarget.jl, src/julia/parity.jl, test/parity_ratchet.jl), 55c5a967 (test/classes.jl,
+test/runtests.jl, test/block_groups.tsv), 739d623d (src/julia/packages.jl, src/julia/parity.jl, the quarantine APIs,
+test/parity_ratchet.jl), the landing log and the gate records. Ruling recorded: A6's load-time resolution skips when
+~/.cache/wasmtarget/dart-sdk is absent, by design (users load WasmTarget without the dart SDK; the gate's L213 requires
+the checkout). (A39E1, medium) L207 holds a lock to calling its negatives function, not to its plants running: 973a216e's
+message records that L210 to L212's plants "ran in no gate since 32b7e806's rebase: a conflict resolution left an empty
+`elseif` above the branch that runs them in construction_negatives_missed", so three locks read as negative-tested for
+several landings with no plant run. The fix the lead wants, queued after the port: each negatives function returns its
+plant count, and L207 requires every lock's count above 0. (A39E2, low) Kaimon: 55c5a967 measured "WT_QA_ONLY=classes.jl,
+26 of 26" with no session named; 973a216e and 739d623d measured "on this commit". Requirements: D3 (A39S1); D1's anchors
+now resolve at the pin; no lock fired inside its band.
+
+Landing times (edit to landed; own, queue; gate state): 5b3573a0 185 s (25.9, 159.1; cold), unjudged past the cap at
+factor 1.6; 973a216e 3181 s (22.8, 3158.2; cold); 55c5a967 24 s (22.9, 1.1; cold); 739d623d 1540 s (105.4, 1434.6;
+cold-after-warm).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A39S1 is open on MARCH 1.S. A39E1 and
+A39E2 are open on MARCH 1.L.
