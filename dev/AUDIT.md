@@ -3106,3 +3106,96 @@ Landing times (edit to landed; own, queue): 5582a4f1 195 s (37.7, 157.3); 0d87ec
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A35S1 is open on MARCH 1.S. A35E1,
 A35E2, A35E3, A35E4 and A35E5 are open on MARCH 1.L.
+
+## 2026-10-22 — audited through 32b7e806 (acee85e0..32b7e806: entry 35, own_s without waits, one empty-clause rule, the file map and the quarantine, the strict subset)
+
+The thirty-sixth audit covers d23e14b5 (entry 35; its author's), 371373c2 (own_s leaves out a change's waits inside
+an own red's span, from the main tree's waits.tsv; queue_wait_s floored at 0, A34E3), 0806bf56 (the empty-clause rule
+written once, in the clause verdict; Fixes: A33E7), 10064fa7 (1.A3: src/julia/parity.jl; include_dart from the pin
+table DART_FILES; @parity, @unported and @quarantine, each checked where it is written and total at load by a walk of
+the method table and the bindings, L210-L212; L219 exempts a mirror only by its @parity entry; src progress from the
+registry; Fixes: A34S4 A35S1; `Charter-change: C2 authorised by Dale 2026-10-21`) and 32b7e806 (1.A7: src/julia/subset.jl,
+Julia's trim verifier decides the strict subset, a program outside it rejecting with Julia's own text; ClosedWorld a
+typestate with one constructor taking a token, L220; `Charter-change: C2 C3 C6 authorised by Dale 2026-10-22`). No
+wrong answer: the rebuild compiles nothing; the corpus reads 996 loud, 820 unported and 176 outside the subset
+(32b7e806's message). Each landed head's record is green. Fixed as their commits state: A33E7, A34E3, A34S4 and A35S1
+(the progress line now reads "0 of 0 anchored dart definitions ported", run on this tree). The builder's first group
+(wt2-builder, 681bdd62 and 56a3b629) is not in the range: it is based on c1c74a43, before 1.A2c and 1.A3, and must
+rebase onto them. One red flag: A36S3. Findings A36S1-A36S3 and A36E1.
+
+Area: builder — empty by diff: src/wasm_builder/ does not exist on 32b7e806.
+
+Area: collection and planning — 32b7e806's src/julia/subset.jl. check_subset infers once, as trimming does: Base._which
+for the entry's method, Core.Compiler.specialize_method, then typeinf_ext_toplevel in TRIM_UNSAFE mode at one world
+(with 1.13's external_linkage false), and TrimVerifier.get_verify_typeinf_trim judges the result, its errors
+OutsideSubset in Julia's verify_print_error text, its warnings notes. No other inference path exists in src: a search of
+src for typeinf, infer, code_typed, return_type, code_lowered, specialize_method and _which finds them in subset.jl
+alone (entry.jl names inference only in prose). That is D3 and D32 as written.
+
+Area: emission and diagnostics — 10064fa7's and 32b7e806's src/julia/entry.jl, reject.jl and construction.jl:
+compile runs check_subset, then compile_world, which takes a ClosedWorld and rejects Unported at compile.dart:216;
+every path is a located rejection.
+
+(a) The totality walk is a construction in its kind: when the package precompiles (and again when a ConstructionLock
+calls it), `Base.visit(Core.methodtable)` reflects over every method whose module lies in WasmTarget and the bindings
+`names(mod; all = true)`, and refuses the load for any the registry does not cover. No text is read. Its coverage test,
+though, is a location: a method counts as marked when its (file, line) lies inside some entry's [first, last] span
+(parity.jl:490, read, not planted), never by identity. (A36S1, low) So a method of a function
+another module owns (`Base.show(io::IO, x::T) = …`), written on a marked definition's line after a `;` or inside its
+span (an inner definition, an `@eval` in a body), passes: the binding check does not see it (Base owns `show`), and the
+span holds its line. Methods with no location (`m.file === :none`) are excused entirely on the src/julia side. The
+construction: each macro expansion registers the methods it creates by their signatures (the Method objects the
+expansion's evaluation adds), and the walk matches methods to entries by identity.
+(b) include_dart's directory dependency is honest: `include_dependency(dir; track_content = true)` on each directory
+under src/ makes the image depend on `join(readdir(dir))` (Julia 1.12's docstring, read in the Kaimon session), so a
+file added anywhere rebuilds the image and meets check_include_dart, which compares the listing to the loaded set. The
+bootstrap block registers the registry's own definitions honestly: it evaluates each, then passes each through
+_quarantine_entry, the same function the macro calls, with the same checks (a necessity stated, the API resolved, the
+file in src/julia); a statement that is not a @quarantine definition errors. (A36S2, medium, stopgap in disguise)
+@quarantine's API is checked for existence only: `_resolve_api` (parity.jl:167) asks that the qualified name resolve, never that the
+definition uses it. On 10064fa7's tree `_register!` names `Base.push!` (it calls push!, true), but `_at` names
+`Core.LineNumberNode`, `SRC` names `Base.dirname`, and any resolvable name passes for any definition, so the Julia
+ground truth D3 asks a quarantine to name is a label checked to exist. The check is possible by reflection: the
+definition's lowered code (`code_lowered` of its methods, a const's initializer) references the named API as a
+GlobalRef.
+(c) src_progress reads the registry: on acee85e0's successor tree it prints "0 of 0 anchored dart definitions ported",
+the honest count A35S1 asked; "ported" is an entry without @unported, so a body that is a placeholder of any other
+form counts ported (noted, no finding while none exists).
+(A7) ClosedWorld's typestate (L220): check_sole_constructor reflects over both method tables when the package
+loads and finds one ClosedWorld constructor, in subset.jl, taking _SubsetToken first, and one token constructor, in
+subset.jl. That is reflection, no text read, and it holds for the definition site. (A36S3, medium, red flag) It does not
+hold for the caller, which is what the typestate claims ("no code outside this file makes a ClosedWorld", "none can be
+reached by a program Julia's verifier did not accept"). Measured in this lane's Kaimon session (e1d51284) on
+32b7e806's tree, from Main: `WasmTarget.ClosedWorld(WasmTarget._SubsetToken(), Any[], String[])` returns a ClosedWorld,
+and `Core.eval(Main, Expr(:new, WasmTarget.ClosedWorld, Any[], String[]))` returns one too, while
+construction_check(Val(:ClosedWorld)) reads 0. The token's constructor is defined in subset.jl and callable from any
+file, so it is a convention, not Rust's module privacy. Today only subset.jl calls either, so no stage runs on an
+unverified program; nothing keeps it so. The check is possible by reflection: walk the lowered code of every method
+WasmTarget defines (Base.uncompressed_ir of each Method) and refuse the load for a call of _SubsetToken or ClosedWorld,
+or a `:new` of ClosedWorld, in any method outside subset.jl's check_subset.
+
+stopgap in disguise: @parity's anchor is checked for form, file and the naming rule where it is written; its line and
+symbol are not resolved at the pin (L213, 1.A6), so "each checked where it is written" holds for the form only, as C2's
+Planned text says; A36S2 and A36S3 above.
+precedent: include_dart, dart's `part`/`part of` and Rust's `mod`; @parity, Rust's deny(missing_docs); @quarantine,
+Rust's `unsafe` with clippy's undocumented_unsafe_blocks; the registry, a Union of two structs, Rust's enum; ClosedWorld,
+Rust's typestate with a private constructor, whose privacy Rust's compiler enforces at every caller and Julia's
+reflection here checks only at the definition (A36S3). Julia's differs: no declaration table and no privacy, so the
+macros build the one and a load-time walk must stand in for the other.
+
+Area: enforcement and prose — every hunk of 371373c2 (dev/land.sh, test/lock_negatives.jl, test/parity_ratchet.jl),
+0806bf56 (dev/MARCH.md, test/parity_ratchet.jl), 10064fa7 (AGENTS.md, dev/CHARTER.md, dev/HISTORY.md, dev/LEDGER.md,
+dev/MARCH.md, dev/PARITY_MASTER.md, dev/src_progress.sh, test/parity_ratchet.jl), 32b7e806 (dev/CHARTER.md, dev/LEDGER.md,
+dev/MARCH.md, test/parity_ratchet.jl, test/smoke_corpus.jl, test/smoke_times.tsv), the landing log and the gate records.
+371373c2: own_s subtracts the change's waits inside an own red's span (waits.tsv), queue_wait_s floored at 0: A34E3
+fixed (no Fixes: line; its prose names it). 0806bf56: the empty-clause rule written once: A33E7 fixed; its message
+carries a fourth indented Co-Authored-By trailer. (A36E1, low) dev/src_progress.sh, which land runs after every landing, starts a fresh
+`julia --project=.` to load WasmTarget and read the registry, beside the gate's own processes (D31); 10064fa7 measured
+"on this commit", a fresh run, and 32b7e806 in its lane's Kaimon session. Requirements: D32 has its check (the subset
+group's LOUD-OUTSIDE case, L220); D3's `planned: 1.A7` now cites L220; no lock fired inside its band.
+
+Landing times (edit to landed; own, queue): 371373c2 186 s (100.2, 85.8); 0806bf56 450 s (22.0, 428.0); 10064fa7 523 s
+(31.5, 491.5), unjudged past the cap at factor 1.58; 32b7e806 450 s (27.1, 422.9).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A36S1, A36S2 and A36S3 are open on
+MARCH 1.S. A36E1 is open on MARCH 1.L.
