@@ -1,0 +1,217 @@
+# ============================================================================
+# Performance Timer — jl_hrtime via performance.now()
+# ============================================================================
+
+"""
+    ensure_perf_now_import!(mod, registry) -> UInt32
+
+Import env.perf_now() → f64 for high-resolution timing, once per module (the registry holds it).
+
+parity(quarantine: Julia's time_ns() is the jl_hrtime foreigncall into libuv's clock, which
+wasm does not have; the host clock import stands in for it.)
+"""
+function ensure_perf_now_import!(mod::WasmModule, registry::TypeRegistry)::UInt32
+    registry.perf_now_idx === nothing || return registry.perf_now_idx
+    return registry.perf_now_idx = add_import!(mod, "env", "perf_now", WasmValType[], WasmValType[F64])
+end
+
+# ============================================================================
+# RNG State — Xoshiro256++ via Wasm Globals
+# ============================================================================
+
+"""
+    ensure_rng_globals!(mod, registry) -> RNGGlobals
+
+The four mutable i64 globals that hold the Task's Xoshiro256++ state words, and the host
+entropy import `env.random_i64` that seeds them (rng_seed_initializer!), made once per module (the registry holds them).
+
+parity(sdk/lib/_internal/wasm/standalone/math_externs_patch.dart:54 _initialSeed): dart2wasm
+seeds its default Random from the embedder's random integer.
+"""
+function ensure_rng_globals!(mod::WasmModule, registry::TypeRegistry)::RNGGlobals
+    registry.rng_globals === nothing || return registry.rng_globals
+    seed_idx = add_import!(mod, "env", "random_i64", WasmValType[], WasmValType[I64])
+    # const-expr init via the builder's ONE global-def channel (i64.const 0; end); the start
+    # function stores the host's seed before any code reads them
+    g = UInt32[add_global!(mod, I64, true, Int64(0)) for _ in 1:4]
+    return registry.rng_globals = RNGGlobals(g[1], g[2], g[3], g[4], seed_idx)
+end
+
+"""
+    rng_seed_initializer!(mod, rng) -> func_idx
+
+The module initializer that stores four host draws in the RNG's state words, in order: Julia's
+`Random.__init__` seeds the default RNG with four `UInt64`s from `RandomDevice`
+(`seed!(rng, nothing)` → `initstate!(rng, (s0, s1, s2, s3))`), and `env.random_i64` is that
+device. It is the first initializer the one start function runs.
+
+parity(globals.dart:167 _initializeAtStartup): a static field whose initializer is not a
+constant is initialized in the module's start function.
+"""
+function rng_seed_initializer!(mod::WasmModule, rng::RNGGlobals)::UInt32
+    b = InstrBuilder(; func_name="rng_seed_initializer", mod=mod)
+    for g in (rng.rng0_idx, rng.rng1_idx, rng.rng2_idx, rng.rng3_idx)
+        call!(b, rng.seed_import_idx)
+        global_set!(b, g)
+    end
+    finish_function!(b)
+    return add_function!(mod, b; name=generated_function_name(:rng_seed))
+end
+
+"""
+    get_rng_global_idx(registry, field_name::Symbol) -> Union{UInt32, Nothing}
+
+Map rngState field name to global index. Returns nothing if field is not an RNG field.
+
+parity(quarantine: redirects getfield(current_task(), :rngStateN) to the module global that
+holds that word, see RNGGlobals.)
+"""
+function get_rng_global_idx(registry::TypeRegistry, field_name::Symbol)::Union{UInt32, Nothing}
+    rng = registry.rng_globals
+    if rng === nothing
+        return nothing
+    end
+    if field_name === :rngState0
+        return rng.rng0_idx
+    elseif field_name === :rngState1
+        return rng.rng1_idx
+    elseif field_name === :rngState2
+        return rng.rng2_idx
+    elseif field_name === :rngState3
+        return rng.rng3_idx
+    end
+    return nothing
+end
+
+# ============================================================================
+# String Operations
+# ============================================================================
+
+"""
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+
+The N-way string-concat LOGIC only: `str_locals` already hold the DATA array refs to
+concatenate (already pushed there by the caller — via `emit_value!` for the ctx+args
+call site, or via raw `local.get`/`struct.get` for a standalone intrinsic body). No
+`ctx` involved — pure InstrBuilder local-index manipulation, so both call shapes
+(argument-emitting and raw-param) can share this one array.new_default + array.copy
+sequence instead of each re-deriving it.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)
+"""
+function _emit_string_concat_core!(b::InstrBuilder, str_type_idx::Integer, str_locals::Vector{Int},
+                                   offset_local::Int, total_len_local::Int, result_local::Int)::InstrBuilder
+    i32_const!(b, 0)
+    for loc in str_locals
+        local_get!(b, loc); array_len!(b); num!(b, Opcode.I32_ADD)
+    end
+    local_set!(b, total_len_local)
+    local_get!(b, total_len_local); array_new_default!(b, str_type_idx)
+    local_set!(b, result_local)
+    i32_const!(b, 0); local_set!(b, offset_local)
+
+    for loc in str_locals
+        local_get!(b, result_local); local_get!(b, offset_local)
+        local_get!(b, loc); i32_const!(b, 0)
+        local_get!(b, loc); array_len!(b)
+        array_copy!(b, str_type_idx, str_type_idx)
+        local_get!(b, offset_local); local_get!(b, loc); array_len!(b)
+        num!(b, Opcode.I32_ADD); local_set!(b, offset_local)
+    end
+    local_get!(b, result_local)
+    return b
+end
+
+"""Concatenate every proven String/Symbol argument through one N-way builder.
+Also the sole home of 2-arg concatenation (str1 * str2) — callers pass `[str1, str2]`.
+parity(pkg/dart2wasm/lib/code_generator.dart:2900 CodeGenerator.visitStringConcatenation)"""
+function compile_string_concat_many_b(args, ctx::AbstractCompilationContext)::InstrBuilder
+    isempty(args) && error("N-way string concatenation requires at least one argument")
+    str_type_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    strref = ConcreteRef(str_type_idx, true)
+    str_locals = [allocate_local!(ctx, strref) for _ in eachindex(args)]
+    offset_local = allocate_local!(ctx, I32)
+    total_len_local = allocate_local!(ctx, I32)
+    result_local = allocate_local!(ctx, strref)
+    b = _ctx_builder(ctx, "compile_string_concat_many")
+
+    for i in eachindex(args)
+        emit_value!(b, args[i], ctx, strref)
+        local_set!(b, str_locals[i])
+    end
+    _emit_string_concat_core!(b, str_type_idx, str_locals, offset_local, total_len_local, result_local)
+    return b
+end
+
+"""
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
+
+The element-wise char-array equality LOGIC only: `str1_local`/`str2_local` already
+hold the DATA array refs to compare. No `ctx` involved — shared by the ctx+args call
+site and any raw-param intrinsic body.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
+"""
+function _emit_string_equal_core!(b::InstrBuilder, str_type_idx::Integer,
+                                  str1_local::Int, str2_local::Int, len_local::Int, i_local::Int)::InstrBuilder
+    # len1 = str1.len (tee into len_local); compare with len2
+    local_get!(b, str1_local); array_len!(b); local_tee!(b, len_local)
+    local_get!(b, str2_local); array_len!(b); num!(b, Opcode.I32_NE)
+
+    # If lengths differ → 0; else compare elements
+    if_!(b; results=WasmValType[I32])
+        i32_const!(b, 0)                                   # lengths differ → not equal
+    else_!(b)
+        i32_const!(b, 0); local_set!(b, i_local)           # i = 0
+        done_label = block!(b; results=WasmValType[I32]) # break-with-result block
+            loop_label = loop!(b)                    # void loop
+                # if i >= len → all matched, push 1 and break to block
+                local_get!(b, i_local); local_get!(b, len_local); num!(b, Opcode.I32_GE_S)
+                if_!(b)
+                    i32_const!(b, 1); br!(b, done_label)
+                end_block!(b)
+                # compare str1[i] vs str2[i] (unsigned packed-byte get)
+                local_get!(b, str1_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx; signed=false)
+                local_get!(b, str2_local); local_get!(b, i_local)
+                array_get!(b, str_type_idx; signed=false)
+                num!(b, Opcode.I32_NE)
+                if_!(b)
+                    i32_const!(b, 0); br!(b, done_label)    # differ → not equal
+                end_block!(b)
+                # i += 1; continue
+                local_get!(b, i_local); i32_const!(b, 1); num!(b, Opcode.I32_ADD); local_set!(b, i_local)
+                br!(b, loop_label)
+            end_block!(b)                                  # end loop
+            unreachable!(b)                                # loop never falls through  # structural trap (dart-legit dead path)
+        end_block!(b)                                      # end result block
+    end_block!(b)                                          # end if-else
+
+    return b
+end
+
+"""
+Compile string equality comparison (str1 == str2).
+Returns i32 (0 or 1). Uses scratch locals allocated by allocate_scratch_locals!.
+builder-returning core (): callers merge via append_builder!.
+parity(quarantine: jl_egal compares String by length and bytes, builtins.c jl_egal__special; dart's identical on strings is reference equality.)
+"""
+function compile_string_equal_b(str1, str2, ctx::AbstractCompilationContext)::InstrBuilder
+    str_type_idx = ctx.type_registry.string_array_idx
+
+    # Use scratch locals stored in context (allocated at compile context creation time)
+    ctx.scratch_locals === nothing && allocate_string_scratch!(ctx)
+    _, str1_local, str2_local, len_local, i_local = ctx.scratch_locals
+
+    b = _ctx_builder(ctx, "compile_string_equal")
+    set_context!(b, "string ==")
+    strref = ConcreteRef(UInt32(str_type_idx), true)
+
+    # Store str1 and str2 — expected=the DATA array; the funnel unwraps the classed
+    # string (parity M9: ops read the class's array field once at entry)
+    emit_value!(b, str1, ctx, strref)
+    local_set!(b, str1_local)
+    emit_value!(b, str2, ctx, strref)
+    local_set!(b, str2_local)
+
+    _emit_string_equal_core!(b, str_type_idx, str1_local, str2_local, len_local, i_local)
+    return b
+end

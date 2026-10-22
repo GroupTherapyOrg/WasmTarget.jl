@@ -1,0 +1,18 @@
+# The blocking gate's selections (dev/block.jl, `bash dev/gate.sh --block`; L194). `core`: the smoke
+# groups every landing runs. `probes`: the probe core (`-` while test/probe_corpus.jl holds none).
+# `<file><TAB><groups><TAB><QA families><TAB><1.13 groups>`: a changed file's groups beyond the core,
+# the QA families the gate's tests stage runs for it, and the smoke groups it runs on Julia 1.13;
+# `-` for none (a directory row, ending in /, covers its files; the longest match wins). A changed
+# file under src/, or a changed test file no stage runs and no QA family is, with no row fails the
+# gate. `measured`: the src tree the map was written for; a change to src/ fails the gate when more
+# than 8 pieces of src it alters moved since (dev/block.jl STALE_PIECES), when this repository does
+# not hold that tree, or when a changed line of code lies in no piece. The rebuild's map is written
+# by hand: every case runs the one compile entry, which the core covers, until WasmTarget lowers code
+# a measurement can cover (dev/MARCH.md 1.D). Every group still runs on the full matrix.
+measured	d0874873c89ba4fd0f7274643375b4cf84e68b57
+probes	-
+core	memory_length pointer_float_bytes memoryref_barrier capture_typed_invoke undef_slots any_return_boundary int128_limbs exceptions float32_fastmath constant_callees
+dev/depot.sh	-	depot_isolation.jl	-
+src/	-	-	-
+src/julia/late.jl	-	late.jl	-
+src/julia/classes.jl	-	classes.jl	-

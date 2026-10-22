@@ -1,0 +1,1 @@
+lock: carried from 59695ef5 of the precedent lane the rebuild cancelled, its author time 21:49:08Z kept; refused once at 22:19:38Z by the stale-map budget alone (record ab57e81e-1, test/block_groups.tsv stale on 82a227bd's 55 pieces, A30E5, fixed by 9eb30016); its own rework for audit 30's pre-landing red flags followed; its land 150.9 s, runner 72.4 s, gate-1 70.9 s

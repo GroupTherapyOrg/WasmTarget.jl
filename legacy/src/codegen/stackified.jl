@@ -1,0 +1,1478 @@
+# parity(code_generator.dart:28 CodeGenerator) ONE LOWERING: generate_complex_flow (the old strategy router) is GONE. The
+# stackifier below is THE single lowering for every multi-block body, void included (dart
+# parity: one CodeGenerator, one structured lowering, no routing heuristic). The old routes it
+# absorbed: the 5-clause heuristic → generate_nested_conditionals (a documented multivar-phi
+# miscompiler — dropped all-but-one phi at diamond merges, gap 1bcb0e7214c3 family,
+# test/fuzz/repro_multivar_phi_merge.jl), is_simple_conditional → generate_if_then_else, and
+# the void-without-loops fast-path → generate_void_flow (whose missing pre-loop phi init was
+# The stackifier stores EVERY live phi local at each edge via set_phi_locals_for_edge!).
+
+"""parity(code_generator.dart:38 CodeGenerator.generate): THE flow front — the ONE seam where a stackified region's bytes
+enter a typed builder. All drivers route here."""
+function generate_stackified_flow!(b::InstrBuilder, ctx::AbstractCompilationContext, args...; kwargs...)::InstrBuilder
+    append_builder!(b, generate_stackified_flow(ctx, args...; kwargs...))   # typed merge
+    return b
+end
+
+"""
+    cfg_dominators(preds, nodes, entry) -> Dict{Int,Set{Int}}
+
+Each block's dominators among `nodes`, by the iterative intersection over its predecessors in
+`nodes` (`preds`, a CFG's): the entry dominates only itself; a block with no predecessor among
+`nodes`, which no path reaches, keeps every node. The one dominator computation the trampoline
+threading and the stackifier's loop labels read. It is Julia's naive_idoms
+(Compiler/src/ssair/domtree.jl:681, the same line on 1.12.7 and 1.13.1), its dominator-set phase:
+the entry's set is itself, every other starts at all nodes, and each takes the intersection over
+its predecessors plus itself until nothing changes. Compiler's construct_domtree is not called:
+it takes Compiler's own BasicBlocks (statement ranges, a virtual entry predecessor) and answers
+immediate dominators over the whole graph, where the stackifier asks for dominator sets over the
+folded CFG's live blocks of statements it rewrote (the trampolines), which have no Compiler blocks.
+parity(quarantine: Julia's IR is a CFG of gotos; the stackifier reconstructs wasm's structure from
+it (dev/formal/Stackifier.tla), where dart's kernel tree carries its structure.)
+"""
+function cfg_dominators(preds::Vector{Vector{Int}}, nodes, entry::Int)::Dict{Int,Set{Int}}
+    local ns = sort!(collect(nodes))
+    local all = Set(ns)
+    local dom = Dict{Int,Set{Int}}(b => (b == entry ? Set([b]) : copy(all)) for b in ns)
+    local changed = true
+    while changed
+        changed = false
+        for b in ns
+            b == entry && continue
+            local ps = Int[p for p in preds[b] if p in all]
+            isempty(ps) && continue
+            local d = copy(dom[ps[1]])
+            for p in Iterators.drop(ps, 1); intersect!(d, dom[p]); end
+            push!(d, b)
+            d == dom[b] || (dom[b] = d; changed = true)
+        end
+    end
+    return dom
+end
+
+"""
+    _thread_backward_trampolines!(cfg, nir, try_regions) -> cfg
+
+Julia's optimizer may place a phi's predecessor AFTER the phi block as a one-statement
+`goto` trampoline: `%39 goto %53 if not …` / `%44 = φ(%43 => …, %53 => …)` / `%53 goto %44`.
+By linear order the edge 53→44 looks like a loop back edge, but the "header" does not
+dominate the "latch" (block 9 reaches 53 without passing 44): it is a forward diamond
+laid out backwards, and a `loop` opened at 44 would have to contain a block entered from
+outside it. Such an edge is threaded away at the IR level — every predecessor that
+jumps to the trampoline jumps to its target instead, and the phi edges keyed by the
+trampoline's terminator are re-keyed to each predecessor's — after which the trampoline
+is unreachable and drops out by reachability like any dead block. Only explicit jumps
+are threaded (a fall-through into a trampoline is left for the stackifier's own error).
+Each round re-derives the one CFG (nir_cfg) of the rewritten statements.
+Kernel never produces this shape; it is a Julia-layout quarantine
+(parity(quarantine: Julia IR block order)).
+"""
+function _thread_backward_trampolines!(cfg::NirCFG, nir::Vector{NirStmt}, try_regions)::NirCFG
+    region_bounds = Set{Int}()
+    for r in try_regions
+        push!(region_bounds, r.enter_idx); push!(region_bounds, r.catch_dest)
+    end
+    # fast path: no one-statement goto block that jumps backwards → nothing to thread
+    any(k -> cfg.blocks[k].terminator isa NirGoto && cfg.blocks[k].start_idx == cfg.blocks[k].end_idx &&
+             only(cfg.succs[k]) < k, eachindex(cfg.blocks)) || return cfg
+    for _ in 1:16   # each round threads one trampoline and re-derives the CFG
+        blocks, preds = cfg.blocks, cfg.preds
+        dom = cfg_dominators(preds, eachindex(blocks), 1)
+        threaded = false
+        for (s, b) in enumerate(blocks)
+            t = b.terminator
+            (t isa NirGoto && b.start_idx == b.end_idx) || continue   # a pure goto block
+            d = cfg.block_of[t.target]
+            (d <= s && !(d in dom[s])) || continue           # backward, not a loop
+            isempty(preds[s]) && continue
+            (b.start_idx in region_bounds || t.target in region_bounds) && continue
+            all(p -> (pt = blocks[p].terminator; pt isa Union{NirGoto,NirGotoIfNot} &&
+                      pt.target == b.start_idx), preds[s]) || continue
+            # re-key the target's phi edges from the trampoline to each predecessor
+            for i in blocks[d].start_idx:blocks[d].end_idx
+                rec = nir[i]
+                ph = rec.node
+                ph isa NirPhi || continue
+                k = findfirst(==(b.end_idx), ph.edges)
+                k === nothing && continue
+                edges = copy(ph.edges); values = copy(ph.values)
+                v = values[k]
+                deleteat!(edges, k); deleteat!(values, k)
+                for p in preds[s]
+                    push!(edges, blocks[p].end_idx); push!(values, v)
+                end
+                nir[i] = NirStmt(NirPhi(edges, values), rec.julia_type, rec.slot)
+            end
+            for p in preds[s]
+                pb = blocks[p]; pt = pb.terminator
+                nt = pt isa NirGoto ? NirGoto(t.target) : NirGotoIfNot(pt.cond, t.target)
+                prec = nir[pb.end_idx]
+                nir[pb.end_idx] = NirStmt(nt, prec.julia_type, prec.slot)
+            end
+            threaded = true
+            break
+        end
+        threaded || break
+        cfg = nir_cfg(nir)
+    end
+    return cfg
+end
+
+"""
+Stackifier algorithm for complex control flow.
+Converts Julia IR CFG to WASM structured control flow by:
+1. Building a CFG from basic blocks
+2. Computing dominators and identifying merge points
+3. Generating each block exactly once
+4. Using block/br for forward jumps, loop/br for back jumps
+
+Based on LLVM's WebAssembly backend stackifier and Cheerp's enhancements.
+Reference: https://labs.leaningtech.com/blog/control-flow
+parity(quarantine: Julia's typed IR is an unstructured goto CFG that must be stackified into
+wasm blocks and loops; Kernel's control flow is already structured, so dart2wasm lowers it
+statement by statement.)
+"""
+function generate_stackified_flow(ctx::AbstractCompilationContext, cfg::NirCFG;
+                                  trailing_unreachable::Bool = true,
+                                  try_regions::Vector = Any[])::InstrBuilder
+    # The flow's own view of the IR: the trampoline threading below re-keys phi edges and
+    # re-targets jumps in THIS copy; the context's NIR is left as Julia produced it.
+    nir = copy(ctx.nir)
+    # Slice B: try regions are FIRST-CLASS — Julia's CFG ends a block at each Enter and
+    # starts one at each catch destination, and its Enter block's successors are its
+    # fall-through and its catch destination; the two label events below (open at the enter
+    # block's end, close at the handler block's start) are the ENTIRE try lowering. Handler
+    # blocks compile as plain CFG blocks: the stackifier's phi machinery owns their phis.
+    cfg = _thread_backward_trampolines!(cfg, nir, try_regions)
+    blocks = cfg.blocks
+    # ========================================================================
+    # STEP 0: FOLD THE ALWAYS-TAKEN BOUNDSCHECK BRANCHES
+    # ========================================================================
+    # An explicit `boundscheck false` (inside @inbounds) feeding a GotoIfNot is
+    # a branch that always jumps; boundscheck=true falls through to the check
+    # and its catchable throw_boundserror, which must stay live. Only the
+    # branch is folded here — which code is dead follows from REACHABILITY
+    # over the folded CFG (below), never from the text between the jump and
+    # its target: Julia's inlined reductions place the live loop inside that
+    # span, entered by an unrelated edge (reduce(max, 1:n) compiled to a
+    # function that returned an unset local on 1.13).
+    # formal(dev/formal/Stackifier.tla): every edge of the folded CFG is realized exactly
+    # once; a block is dropped only when no path from the entry reaches it.
+    boundscheck_jumps = Set{Int}()  # Statement indices of GotoIfNot that always jump
+    dead_regions = Set{Int}()       # Statement indices that are dead code
+    dead_blocks = Set{Int}()        # Block indices unreachable from the entry
+
+    for i in 1:length(nir)
+        # NirBoundscheck's `flag` is `nothing` unless the arg was a literal Bool, so
+        # `flag === false` is exactly `Expr(:boundscheck, false)`.
+        if (nstmt = nir[i].node) isa NirBoundscheck && nstmt.flag === false
+            if i + 1 <= length(nir) && nir[i + 1].node isa NirGotoIfNot
+                goto_stmt = nir[i + 1].node::NirGotoIfNot
+                if goto_stmt.cond isa NirSSA && goto_stmt.cond.id == i
+                    push!(boundscheck_jumps, i + 1)
+                    push!(dead_regions, i)
+                end
+            end
+        end
+    end
+
+    # ========================================================================
+    # STEP 1: Build Control Flow Graph
+    # ========================================================================
+
+    # statement index -> block index, the CFG's
+    stmt_to_block = Dict{Int, Int}(i => k for (i, k) in enumerate(cfg.block_of) if k != 0)
+
+    # Slice B: region → block-event maps. A region OPENS at the end of the
+    # block containing its EnterNode and CLOSES at the start of its handler block.
+    try_open_at = Dict{Int, Vector{Any}}()   # block_idx (enter block) → regions, outermost first
+    try_close_at = Dict{Int, Vector{Any}}()  # block_idx (handler block) → regions, innermost first
+    for r in try_regions
+        eb = get(stmt_to_block, r.enter_idx, nothing)
+        hb = get(stmt_to_block, r.catch_dest, nothing)
+        (eb === nothing || hb === nothing) && continue
+        push!(get!(Vector{Any}, try_open_at, eb), r)
+        pushfirst!(get!(Vector{Any}, try_close_at, hb), r)
+    end
+
+    # The folded CFG: every block's edges as Julia's CFG has them (nir_cfg), except that an
+    # always-taken boundscheck branch keeps only its target edge.
+    successors = Dict{Int, Vector{Int}}(k => copy(cfg.succs[k]) for k in eachindex(blocks))
+    predecessors = Dict{Int, Vector{Int}}(k => copy(cfg.preds[k]) for k in eachindex(blocks))
+    for (block_idx, block) in enumerate(blocks)
+        term = block.terminator
+        (term isa NirGotoIfNot && block.end_idx in boundscheck_jumps) || continue
+        local dest_block = cfg.block_of[term.target]
+        for s in successors[block_idx]
+            s == dest_block && continue
+            filter!(!=(block_idx), predecessors[s])
+        end
+        successors[block_idx] = Int[dest_block]
+    end
+
+    # Dead code = unreachable from the entry over the folded CFG. Its blocks
+    # lose their edges and their statements are never emitted.
+    if !isempty(blocks)
+        reached = Set{Int}()
+        worklist = Int[1]
+        while !isempty(worklist)
+            bi = pop!(worklist)
+            bi in reached && continue
+            push!(reached, bi)
+            append!(worklist, successors[bi])
+        end
+        for bi in eachindex(blocks)
+            bi in reached && continue
+            push!(dead_blocks, bi)
+            for i in blocks[bi].start_idx:blocks[bi].end_idx
+                push!(dead_regions, i)
+            end
+        end
+        for bi in eachindex(blocks)
+            filter!(x -> !(x in dead_blocks), successors[bi])
+            filter!(x -> !(x in dead_blocks), predecessors[bi])
+        end
+        # a dead block's own edges are not edges of the folded CFG either: a threaded
+        # trampoline's backward goto would otherwise still register as a loop
+        for bi in dead_blocks
+            empty!(successors[bi])
+        end
+    end
+
+    # Compute block dominators from the real CFG. Numeric block intervals are
+    # not loop membership: Julia 1.13 may lay a loop-exit merge between the
+    # header and a late latch even though an outer branch reaches that merge
+    # without passing through the header. Such a target must not receive a
+    # label nested inside the loop.
+    live_blocks = Set(i for i in eachindex(blocks) if !(i in dead_blocks))
+    dominators = isempty(live_blocks) ? Dict{Int,Set{Int}}() :
+        cfg_dominators([predecessors[k] for k in eachindex(blocks)], live_blocks, minimum(live_blocks))
+
+    # ========================================================================
+    # STEP 2: Identify Back Edges (loops) vs Forward Edges
+    # ========================================================================
+
+    back_edges = Set{Tuple{Int, Int}}()  # (from_block, to_block)
+    forward_edges = Set{Tuple{Int, Int}}()
+    loop_headers = Set{Int}()
+
+    for (block_idx, succs) in successors
+        for succ in succs
+            if succ <= block_idx  # Back edge (loop)
+                push!(back_edges, (block_idx, succ))
+                push!(loop_headers, succ)
+            else  # Forward edge
+                push!(forward_edges, (block_idx, succ))
+            end
+        end
+    end
+
+    # ========================================================================
+    # STEP 3: Find Forward Edge Targets (merge points that need block/br)
+    # ========================================================================
+
+    # For each forward edge target, track the sources
+    # These are targets where we need to emit a block and use br to jump
+    forward_targets = Dict{Int, Vector{Int}}()  # target_block -> source_blocks
+
+    for (src, dst) in forward_edges
+        # A forward edge needs block/br if it's NOT a simple fall-through
+        # (i.e., src + 1 != dst or there are multiple paths to dst)
+        if !haskey(forward_targets, dst)
+            forward_targets[dst] = Int[]
+        end
+        push!(forward_targets[dst], src)
+    end
+
+    # ========================================================================
+    # STEP 4: Count SSA uses for drop logic
+    # ========================================================================
+
+    ssa_use_count = Dict{Int, Int}()
+    ssa_non_phi_uses = Dict{Int, Int}()  # Uses from non-PhiNode statements only
+    for rec in nir
+        count_ssa_uses!(rec, ssa_use_count)
+        if !(rec.node isa NirPhi)
+            count_ssa_uses!(rec, ssa_non_phi_uses)
+        end
+    end
+
+    # ========================================================================
+    # STEP 6: Main Code Generation
+    # ========================================================================
+    #
+    # Strategy: Process blocks in order. For each block:
+    # - If it's a loop header: wrap with loop/end
+    # - If it's a forward edge target: wrap with block/end (so br can jump past it)
+    # - For GotoIfNot: emit if/else
+    # - For GotoNode: emit br to the right scope
+    #
+    # The key insight: we need to set up block scopes BEFORE we need to br to them.
+    # So we scan ahead to find all forward jump targets and wrap them.
+    #
+    # Simplified approach for Julia IR:
+    # - Julia's IR tends to have simple diamond patterns (if/else merge)
+    # - Most forward jumps go to the "next" merge point
+    # - We use nested if/else for these patterns
+    # - For more complex patterns, we use labeled blocks
+
+    # The main accumulator and every helper fragment are typed builders. Fragment
+    # composition preserves tracked stack contracts; no byte splice or validation
+    # exception exists in the flow path.
+    b = _ctx_builder(ctx, "generate_stackified_flow")
+    for target_idx in ctx.entry_calls
+        local target_ft = _function_type(ctx.mod, target_idx)
+        params, results = target_ft.params, target_ft.results
+        isempty(params) && isempty(results) || throw(ArgumentError(
+            "root entry call $target_idx must have signature () -> (); got " *
+            "$(params) -> $(results) while compiling $(ctx.func_ref)"))
+        emit_direct_call!(b, ctx.mod, ctx.type_registry, target_idx)
+    end
+
+    # For very complex functions, use a dispatcher-style approach
+    # Create a big block structure with all targets as labeled positions
+
+    # Every block a branch reaches other than by falling through: the folded CFG's successors
+    # (an always-taken boundscheck branch keeps only its target; a dead block has none and is
+    # none), except an Enter's catch edge, whose handler its try structures (no label).
+    non_trivial_targets = Set{Int}()
+    for (block_idx, block) in enumerate(blocks)
+        nir[block.end_idx].node isa NirEnter && continue
+        for s in successors[block_idx]
+            s != block_idx + 1 && push!(non_trivial_targets, s)
+        end
+    end
+
+    # Julia inference commonly shares a terminal throw block between checks in
+    # different loop regions. That gives the otherwise reducible loop body a
+    # crossing interval: one copy of a Wasm `block` label cannot be both outside
+    # the loop (for the outer predecessor) and inside it (for the inner one).
+    # Normalize this standard CFG shape by tail-duplicating terminal, phi-free,
+    # non-fallthrough blocks at each explicit incoming edge. The cloned tail is
+    # still ordinary Julia IR compiled by the one statement visitor; no value or
+    # alternate compiler path is introduced.
+    duplicated_terminal_targets = Set{Int}()
+    if isempty(try_regions)
+        for target in copy(non_trivial_targets)
+            block = blocks[target]
+            term = block.terminator
+            terminal = term isa NirReturn && term.value === nothing
+            phi_free = all(i -> !(nir[i].node isa NirPhi),
+                           block.start_idx:block.end_idx)
+            prev_can_fallthrough = if target == 1
+                true
+            else
+                prev = blocks[target - 1].terminator
+                !(prev isa NirGoto || prev isa NirReturn)
+            end
+            if terminal && phi_free && !prev_can_fallthrough
+                push!(duplicated_terminal_targets, target)
+                delete!(non_trivial_targets, target)
+            end
+        end
+    end
+
+    # ========================================================================
+    # Determine which targets are inside loops vs outside
+    # ========================================================================
+    # A target is "inside a loop" if it's between the loop header and the
+    # back-edge source (latch) block. Such targets need their BLOCKs opened
+    # INSIDE the LOOP instruction, not outside it, to maintain valid nesting.
+
+    # Map: loop_header -> latch_block (back-edge source)
+    loop_latches = Dict{Int, Int}()
+    for (src, dst) in back_edges
+        # If multiple back edges to same header, take the latest latch
+        if !haskey(loop_latches, dst) || src > loop_latches[dst]
+            loop_latches[dst] = src
+        end
+    end
+
+    # Determine which targets are inside which loop
+    # target_loop[target] = loop_header if target is inside that loop
+    target_loop = Dict{Int, Int}()
+    for target in non_trivial_targets
+        for (header, latch) in loop_latches
+            if target > header && target <= latch &&
+               header in get(dominators, target, Set{Int}())
+                # Target is inside this loop
+                # If nested, pick the innermost loop (largest header)
+                if !haskey(target_loop, target) || header > target_loop[target]
+                    target_loop[target] = header
+                end
+            end
+        end
+    end
+
+    # Slice B: targets INSIDE a try region must open INSIDE its try —
+    # a br from within the region to a label opened outside the try would exit the
+    # try entirely (first-contact bug: the normal path br'd into the handler).
+    # Deepest-construct-wins vs loops: a target inside both belongs to whichever
+    # opened later; for the slice-B gate (non-nested, non-overlapping-with-loop
+    # regions) region membership simply overrides.
+    target_region = Dict{Int, Int}()   # target block → region enter block
+    for target in non_trivial_targets
+        for r in try_regions
+            eb = get(stmt_to_block, r.enter_idx, nothing)
+            hb = get(stmt_to_block, r.catch_dest, nothing)
+            (eb === nothing || hb === nothing) && continue
+            if target > eb && target < hb
+                target_region[target] = eb
+            end
+        end
+    end
+    region_inner_targets = Dict{Int, Vector{Int}}()  # enter block → sorted targets (desc)
+    for (target, eb) in collect(target_region)
+        if haskey(target_loop, target)
+            # deepest construct wins: if the target's loop header lies INSIDE the
+            # region, the loop label is more inner — the loop keeps the target
+            # (f_l2: try-around-loop; region-always stole the loop's exit target).
+            local _lh = target_loop[target]
+            if _lh > eb
+                delete!(target_region, target)
+                continue
+            end
+            delete!(target_loop, target)   # loop is outside the region — region wins
+        end
+        push!(get!(Vector{Int}, region_inner_targets, eb), target)
+    end
+    for eb in keys(region_inner_targets)
+        sort!(region_inner_targets[eb]; rev=true)
+    end
+
+    # Split targets into outer (outside all loops) and inner (inside a loop)
+    outer_targets = sort([t for t in non_trivial_targets if !haskey(target_loop, t) && !haskey(target_region, t)]; rev=true)
+    # Group inner targets by their loop header
+    loop_inner_targets = Dict{Int, Vector{Int}}()  # header -> sorted targets (desc)
+    for (target, header) in target_loop
+        if !haskey(loop_inner_targets, header)
+            loop_inner_targets[header] = Int[]
+        end
+        push!(loop_inner_targets[header], target)
+    end
+    for header in keys(loop_inner_targets)
+        sort!(loop_inner_targets[header]; rev=true)
+    end
+
+    # ONE emission-ordered symbolic label stack. Each entry retains the exact
+    # identity returned by the builder, matching dart2wasm's Label objects;
+    # branch depths are resolved only inside InstrBuilder at emission time.
+    label_stack = Tuple{Symbol,Int,ControlLabel}[]
+    _ls_blocks() = Int[e[2] for e in label_stack if e[1] === :block]   # transitional views
+    _ls_loops()  = Int[e[2] for e in label_stack if e[1] === :loop]
+
+    # Open blocks for OUTER forward jump targets only (outermost first = largest target)
+    for target in outer_targets
+        local label = block!(b)  # void
+        push!(label_stack, (:block, target, label))
+    end
+
+    function get_forward_label(target_block::Int)::ControlLabel
+        i = findlast(e -> e[1] === :block && e[2] == target_block, label_stack)
+        i === nothing && error("forward branch target block $target_block is not open")
+        return label_stack[i][3]
+    end
+
+    function get_loop_label(loop_header::Int)::ControlLabel
+        i = findlast(e -> e[1] === :loop && e[2] == loop_header, label_stack)
+        i === nothing && error("loop branch target block $loop_header is not open")
+        return label_stack[i][3]
+    end
+
+    # Helper to check if destination has phi nodes from this edge
+    function dest_has_phi_from_edge(dest_block::Int, terminator_idx::Int)::Bool
+        if dest_block < 1 || dest_block > length(blocks)
+            return false
+        end
+        dest_start = blocks[dest_block].start_idx
+        dest_end = blocks[dest_block].end_idx
+        for i in dest_start:dest_end
+            stmt = nir[i].node
+            if stmt isa NirPhi
+                if haskey(ctx.phi_locals, i) && terminator_idx in stmt.edges
+                    return true
+                end
+            else
+                break  # Phi nodes are consecutive at the start
+            end
+        end
+        return false
+    end
+
+    # A phi lowering failure may never be repaired with a fabricated zero/null.
+    # Match dart's unimplemented shape: diagnostic plus a validating polymorphic trap.
+    function emit_phi_failure!(tb::InstrBuilder, message::AbstractString; idx::Int=0)
+        record_unsupported!(ctx, :unsupported_type, message; idx=idx)
+        unreachable!(tb)  # loud unsupported trap
+        ctx.last_stmt_was_stub = true
+        return tb
+    end
+
+    # Helper to compile a value, ensuring it actually produces bytes
+    # For SSAValues without locals, we need to recompute the value
+    # phi_idx: the SSA index of the phi node we're setting (to get the phi's type)
+    function compile_phi_value(val::NirNode, phi_idx::Int,
+                               temp_map::Dict{Int,Int}=Dict{Int,Int}())::Tuple{InstrBuilder,Union{WasmValType,Nothing},Int}
+        # Typed channel: emits into `pvb` and returns THE BUILDER
+        # (pushed_type, npushed are its tracked byproducts) -- callers merge with
+        # append_builder!, so the fragment's REAL stack effect transfers (no declared
+        # pushes; the pv_ty===nothing guess that let an invalid module through WT's
+        # own validation is structurally impossible now). `temp_map` substitutes
+        # circular-phi temp locals at the plain local.get branches.
+        pvb = _ctx_builder(ctx, "compile_phi_value")
+        _cpv_ret() = begin
+            if ctx.translator.options.audit_value_stack && length(pvb.v.stack) != 1 && !isempty(pvb.instrs)
+                println(stderr, "PHI-VALUE-LIAR n=$(length(pvb.v.stack)) stack=$(pvb.v.stack) val=$(first(repr(val), 80)) phi=$phi_idx instrs=$(join(builder_disasm(pvb), "; ")) philoc=$(haskey(ctx.phi_locals, phi_idx) ? ctx.locals[ctx.phi_locals[phi_idx] - ctx.n_params + 1] : :none) errs=$(pvb.v.errors)")
+            end
+            (pvb,
+             isempty(pvb.v.stack) ? nothing : pvb.v.stack[end],
+             length(pvb.v.stack))
+        end
+        # A MemoryRef feeds a MemoryRef phi as its Memory — the phi's offset local takes the
+        # offset (set_phi_locals_for_edge!) — and a phi that holds any value as its
+        # single-value struct (emit_value!'s MemoryRef arm).
+        local _mr_val_t = value_type(ctx, val)
+        if _mr_val_t isa DataType && _mr_val_t <: Core.GenericMemoryRef && haskey(ctx.phi_locals, phi_idx)
+            local _mr_phi_t = get(ctx.ssa_types, phi_idx, Any)
+            local _mr_kind = first(_memoryref_source(ctx, val))
+            if _mr_phi_t isa Type && _mr_phi_t !== Union{} && _mr_phi_t <: Core.GenericMemoryRef
+                if _mr_kind === :indexed || _mr_kind === :pair || _mr_kind === :snapshot ||
+                   _mr_kind === :boxed ||
+                   (_mr_kind === :constant && !memoryref_offset_is_zero(ctx, val))
+                    emit_memoryref_mem!(pvb, ctx, val; temp_map=temp_map)
+                    return _cpv_ret()
+                end
+            else
+                local _mr_local = ctx.phi_locals[phi_idx]
+                emit_value!(pvb, val, ctx, ctx.locals[_mr_local - ctx.n_params + 1])
+                return _cpv_ret()
+            end
+        end
+        if is_nothing_value(val, ctx)
+            # `nothing` is the null member of a reference-represented phi and the
+            # zero-width semantic member of a numeric nullable phi. Resolve it
+            # before compiling SSA aliases, which otherwise look like i32.const 0
+            # and could be mistaken for a numeric value requiring a classId box.
+            if haskey(ctx.phi_locals, phi_idx)
+                local_idx = ctx.phi_locals[phi_idx]
+                local_wasm_type = ctx.locals[local_idx - ctx.n_params + 1]
+                local phi_julia = get(ctx.ssa_types, phi_idx, Any)
+                if local_wasm_type isa ConcreteRef
+                    ref_null!(pvb, Int64(local_wasm_type.type_idx))
+                elseif local_wasm_type === ExternRef || local_wasm_type === StructRef ||
+                       local_wasm_type === ArrayRef || local_wasm_type === AnyRef ||
+                       local_wasm_type === EqRef
+                    ref_null!(pvb, local_wasm_type)
+                elseif phi_julia isa DataType && isconcretetype(phi_julia) && phi_julia !== Nothing
+                    # `nothing` on an edge of a numeric phi of another type: Julia's phi is
+                    # undefined on this edge (see _emit_phi_edge_guarded_unbox!); it keeps
+                    # its local's content, never a zero standing for `nothing`.
+                    local_get!(pvb, local_idx)
+                elseif phi_julia === Nothing && local_wasm_type === I32
+                    i32_const!(pvb, 0)   # a Nothing-typed phi: the zero-width singleton
+                else
+                    emit_phi_failure!(pvb, "`nothing` edge into a $(local_wasm_type) phi of type $(phi_julia)";
+                                      idx=phi_idx)
+                end
+            else
+                emit_phi_failure!(pvb, "phi edge has no allocated destination local"; idx=phi_idx)
+            end
+        elseif val isa NirSSA
+            # Determine the phi local's wasm type for compatibility checking
+            phi_local_wasm_type = nothing
+            if haskey(ctx.phi_locals, phi_idx)
+                phi_local_idx = ctx.phi_locals[phi_idx]
+                phi_local_wasm_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
+            end
+
+            # Check if this SSA has a local allocated
+            if haskey(ctx.ssa_locals, val.id)
+                local_idx = ctx.ssa_locals[val.id]
+                # Check type compatibility: the SSA local's type must match the phi local's type
+                local_array_idx = local_idx - ctx.n_params + 1
+                ssa_local_type = local_array_idx >= 1 && local_array_idx <= length(ctx.locals) ? ctx.locals[local_array_idx] : nothing
+                if phi_local_wasm_type !== nothing && ssa_local_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_local_type)
+                    if phi_local_wasm_type === I64 && ssa_local_type === I32
+                        # Return i32 local.get — caller handles i64 widening
+                        local_get!(pvb, get(temp_map, local_idx, local_idx))
+                    else
+                        # Loop C flow/phi dedup: box / cast / UNBOX via the single shared
+                        # converter (source = local.get of the SSA local). The unbox arm is
+                        # what fixes Any[i]→0 (numeric phi local ← classId-box SSA local).
+                        local _srcb = _ctx_builder(ctx, "phi_edge_src")
+                        local_get!(_srcb, local_idx)
+                        local _src_julia = value_type(ctx, val)
+                        if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                    ssa_local_type, _srcb, _src_julia, phi_idx)
+                            emit_phi_failure!(pvb, "phi edge has no valid coercion"; idx=phi_idx)
+                        end
+                    end
+                else
+                    local_get!(pvb, get(temp_map, local_idx, local_idx))
+                    # parity(translator.dart:1597 convertType): the single-source-at-load contract — a join-refined
+                    # numeric riding a ref local narrows HERE too, and the reported type
+                    # becomes the numeric so the phi store boxes through the funnel.
+                    local _cpv_refined = value_type(ctx, val)
+                    if exact_register(_cpv_refined) !== nothing &&
+                       ssa_local_type !== nothing && _wt_is_ref(ssa_local_type)
+                        # funnel-unbox directly on the builder (no byte seam)
+                        coerce_stack_top!(pvb, exact_register(_cpv_refined), ctx;
+                                          from_julia=_cpv_refined)
+                    end
+                end
+            elseif haskey(ctx.phi_locals, val.id)
+                local_idx = ctx.phi_locals[val.id]
+                # Check type compatibility for phi-to-phi
+                src_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, src_local_type)
+                    # Loop C flow/phi dedup: box / cast / UNBOX (phi-to-phi) via the single helper.
+                    local _srcb = _ctx_builder(ctx, "phi_edge_src")
+                    local_get!(_srcb, local_idx)
+                    local _src_julia = value_type(ctx, val)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                src_local_type, _srcb, _src_julia, phi_idx)
+                        emit_phi_failure!(pvb, "phi-to-phi edge has no valid coercion"; idx=phi_idx)
+                    end
+                else
+                    local_get!(pvb, get(temp_map, local_idx, local_idx))
+                end
+            else
+                # SSA without local - need to recompute the statement
+                # This should ideally not happen for phi values, but handle it
+                # Guard against out-of-bounds SSAValue IDs (sentinel values)
+                if val.id < 1 || val.id > length(nir)
+                    emit_phi_failure!(pvb, "phi edge references an invalid SSA value"; idx=phi_idx)
+                    return _cpv_ret()
+                end
+                # Every phi owns a local (allocate_phi_locals!) and a `nothing` definition
+                # took the `nothing` edge above (is_nothing_value), so the definition here
+                # is an ordinary statement the visitor re-emits.
+                def_rec = nir[val.id]
+                (def_rec.node isa NirPhi ||
+                 (def_rec.slot == 0 && def_rec.node isa NirLiteral && def_rec.node.value === nothing)) &&
+                    error("phi edge source %$(val.id) is a phi or `nothing` without a local")
+                # Type compatibility for recomputed SSA values (the M10a fix lives in the
+                # ssa_types join-write, not here). Source = emit_value! (typed recompute).
+                ssa_julia_type = value_type(ctx, val)
+                if ssa_julia_type === Union{}
+                    # A bottom producer has no runtime value to classify or coerce.
+                    # Revisit its real statement so the throw/unreachable terminator is
+                    # preserved; the enclosing edge is then stack-polymorphic by Wasm
+                    # validation, exactly as in dart's unreachable expression handling.
+                    compile_statement!(pvb, val.id, ctx)
+                    return _cpv_ret()
+                end
+                ssa_wasm_type = get_concrete_wasm_type(ssa_julia_type, ctx.mod, ctx.type_registry)
+                if phi_local_wasm_type !== nothing && !wasm_types_compatible(phi_local_wasm_type, ssa_wasm_type) && !(phi_local_wasm_type === I64 && ssa_wasm_type === I32)
+                    local _sb = _ctx_builder(ctx, "phi_edge_src")
+                    # the converter below is told the source is `ssa_wasm_type`; the emission states it
+                    emit_value!(_sb, val, ctx, ssa_wasm_type)
+                    local _src_julia = ssa_julia_type isa Type ? ssa_julia_type : Any
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_wasm_type,
+                                                ssa_wasm_type, _sb, _src_julia, phi_idx)
+                        emit_phi_failure!(pvb, "recomputed phi edge has no valid coercion"; idx=phi_idx)
+                    end
+                elseif phi_local_wasm_type !== nothing && phi_local_wasm_type === I64 && ssa_wasm_type === I32
+                    # i32 → i64 widening for recomputed SSA without local.
+                    # Compile the value as i32 and let the caller (set_phi_locals_for_edge!)
+                    # handle the i64.extend_i32_s widening.
+                    emit_value!(pvb, val, ctx, I32)
+                else
+                    compile_statement!(pvb, val.id, ctx)   # THE visitor — tracked
+                end
+            end
+        else
+            # Not an SSA and not nothing - just compile directly
+            # Check type compatibility for non-SSA values (QuoteNode, literals, etc.)
+            if haskey(ctx.phi_locals, phi_idx)
+                phi_local_idx = ctx.phi_locals[phi_idx]
+                phi_local_type = ctx.locals[phi_local_idx - ctx.n_params + 1]
+                edge_val_type = get_phi_edge_wasm_type(val, ctx)
+                if edge_val_type !== nothing && !wasm_types_compatible(phi_local_type, edge_val_type) && !(phi_local_type === I64 && edge_val_type === I32)
+                    # Loop C flow/phi dedup: box / cast / UNBOX (non-SSA edge) via the single helper.
+                    local _ne_b = _compile_value_b(val, ctx)
+                    local _ne_vty = isempty(_ne_b.v.stack) ? nothing : _ne_b.v.stack[end]
+                    local _ne_jt = value_type(ctx, val)
+                    if !_emit_phi_edge_convert!(pvb, ctx, phi_local_type,
+                                                (_ne_vty === nothing ? edge_val_type : _ne_vty), _ne_b,
+                                                _ne_jt, phi_idx)
+                        emit_phi_failure!(pvb, "literal phi edge has no valid coercion"; idx=phi_idx)
+                    end
+                    return _cpv_ret()
+                end
+            end
+            emit_value!(pvb, val, ctx, static_wasm_type(val, ctx))
+        end
+        return _cpv_ret()
+    end
+
+    # Helper to set all phi locals at destination
+    # dest_block: the block index being jumped to
+    # terminator_idx: the statement index of the terminator (edge in phi)
+    # target_stmt: optional - the actual statement being jumped to (may differ from block start)
+    # MIGRATED: emits phi-local stores directly into the outer typed builder `b`.
+    # Byte-inspecting branches keep their local UInt8[] scan of the recursive
+    # compile_phi_value result; only the EMISSION migrates to typed methods.
+    function set_phi_locals_for_edge!(b::InstrBuilder, dest_block::Int, terminator_idx::Int; target_stmt::Int=0)
+        if dest_block < 1 || dest_block > length(blocks)
+            return
+        end
+        # If target_stmt is specified, start from there; otherwise start from block start
+        dest_start = target_stmt > 0 ? target_stmt : blocks[dest_block].start_idx
+        dest_end = blocks[dest_block].end_idx
+
+        # Detect circular phi references (simultaneous assignment)
+        # When phi A's value reads phi B's local and both are being set on the same edge,
+        # we must save old values to temps first to avoid read-after-write corruption.
+        # Example: a, b = b, a+b → %17=phi(edge→%19), %18=phi(edge→%17)
+        # Without temps, setting %17 first corrupts the value %18 reads.
+        phi_locals_being_set = Set{Int}()  # phi local indices being updated on this edge
+        phi_values_reading = Dict{Int,Int}()  # phi_stmt_idx → phi_local it reads from (if any)
+        for i in dest_start:dest_end
+            stmt = nir[i].node
+            if stmt isa NirPhi && haskey(ctx.phi_locals, i)
+                for (edge_idx, edge) in enumerate(stmt.edges)
+                    if edge == terminator_idx && stmt.values[edge_idx] !== nothing
+                        push!(phi_locals_being_set, ctx.phi_locals[i])
+                        val = stmt.values[edge_idx]
+                        # Check if val references another phi local
+                        if val isa NirSSA && haskey(ctx.phi_locals, val.id)
+                            phi_values_reading[i] = ctx.phi_locals[val.id]
+                        end
+                        break
+                    end
+                end
+            elseif !(stmt isa NirPhi)
+                break
+            end
+        end
+
+        # If any phi reads from another phi local that is ALSO being set, use temps
+        needs_temp = Dict{Int,Int}()  # original phi_local → temp local index
+        for (phi_idx, read_local) in phi_values_reading
+            if read_local in phi_locals_being_set && read_local != ctx.phi_locals[phi_idx]
+                # read_local is being set on this edge AND read by another phi → need temp
+                if !haskey(needs_temp, read_local)
+                    phi_local_array_idx = read_local - ctx.n_params + 1
+                    local_type = ctx.locals[phi_local_array_idx]   # a phi's own local, never a parameter
+                    temp_local = allocate_local!(ctx, local_type)
+                    needs_temp[read_local] = temp_local
+                    # Save old value: local.get $orig → local.set $temp
+                    local_get!(b, read_local)
+                    local_set!(b, temp_local)
+                end
+            end
+        end
+
+        # A MemoryRef phi's element offset (allocate_memoryref_offset_locals!): every
+        # incoming offset is read before any phi on this edge is stored, then stored after
+        # the Memories.
+        # An incoming indexed ref is re-emitted from its operands, which may be phi locals
+        # this edge stores; its Memory is read before any store too.
+        offset_stores = Tuple{Int,Int}[]
+        mem_temps = Dict{Int,Int}()   # phi → the temp holding its incoming Memory
+        for i in dest_start:dest_end
+            stmt = nir[i].node
+            stmt isa NirPhi || break
+            haskey(ctx.phi_locals, i) || continue
+            off_local = get(ctx.memoryref_offset_locals, i, nothing)
+            for (edge_idx, edge) in enumerate(stmt.edges)
+                if edge == terminator_idx && stmt.values[edge_idx] !== nothing
+                    val = stmt.values[edge_idx]
+                    phi_t = get(ctx.ssa_types, i, Any)
+                    if phi_t isa Type && phi_t !== Union{} && phi_t <: Core.GenericMemoryRef &&
+                       first(_memoryref_source(ctx, val)) === :indexed
+                        mem_tmp = allocate_local!(ctx, ctx.locals[ctx.phi_locals[i] - ctx.n_params + 1])
+                        emit_memoryref_mem!(b, ctx, val)
+                        local_set!(b, mem_tmp)
+                        mem_temps[i] = mem_tmp
+                    end
+                    if off_local !== nothing
+                        off_tmp = allocate_local!(ctx, I32)
+                        emit_memoryref_offset!(b, ctx, val)
+                        local_set!(b, off_tmp)
+                        push!(offset_stores, (off_local, off_tmp))
+                    end
+                    break
+                end
+            end
+        end
+
+        phi_count = 0
+        for i in dest_start:dest_end
+            stmt = nir[i].node
+            if stmt isa NirPhi
+                if haskey(ctx.phi_locals, i)
+                    found_edge = false
+                    for (edge_idx, edge) in enumerate(stmt.edges)
+                        if edge == terminator_idx
+                            if stmt.values[edge_idx] !== nothing
+                                val = stmt.values[edge_idx]
+                                # Check type compatibility before emitting local.set
+                                local_idx = ctx.phi_locals[i]
+                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                map_to_statement!(b, ctx, i)   # this edge's store maps to its phi
+                                # parity(code_generator.dart:2149 visitVariableSet) wrap+store: typed compile_phi_value → THE
+                                # convert_type! funnel → local.set. Replaces the arm-chain +
+                                # END-byte sniffing + LEB re-decode + temp byte-rewrite
+                                # (cpv takes needs_temp) + the "safety check" re-derivation.
+                                pv_b, pv_ty, pv_n = haskey(mem_temps, i) ?
+                                    (let tb = _ctx_builder(ctx, "phi_edge_mem")
+                                         local_get!(tb, mem_temps[i])
+                                         (tb, tb.v.stack[end], 1)
+                                     end) :
+                                    compile_phi_value(val, i, needs_temp)
+                                # Typed merge — the audit proved the channel honest
+                                # (pv_n is now trustworthy; the phantom declared-push is gone).
+                                if pv_n >= 2
+                                    emit_phi_failure!(b, "multi-value phi edge cannot feed one local"; idx=i)
+                                    phi_count += 1
+                                elseif !isempty(pv_b.instrs)
+                                    append_builder!(b, pv_b)
+                                    # a recomputed value statement ends mapped to the
+                                    # function's definition: the coercion and store map back
+                                    # to the phi
+                                    map_to_statement!(b, ctx, i)
+                                    if pv_ty !== nothing && pv_ty !== phi_local_type
+                                        local _edge_julia = value_type(ctx, val)
+                                        coerce_stack_top!(b, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
+                                    end
+                                    # parity(code_generator.dart:2149 visitVariableSet): ALWAYS store — the `ty===nothing`
+                                    # skip orphaned the emitted value on the stack (the
+                                    # escaping-closure double-load bug, second site).
+                                    local_set!(b, local_idx)
+                                    phi_count += 1
+                                end
+                            end
+                            found_edge = true
+                            break
+                        end
+                    end
+                end
+            else
+                break  # Phi nodes are consecutive at the start
+            end
+        end
+        # the remaining edge code is the jump's again
+        map_to_statement!(b, ctx, terminator_idx)
+        for (off_local, off_tmp) in offset_stores
+            local_get!(b, off_tmp)
+            local_set!(b, off_local)
+        end
+    end
+
+    # trace function name for debugging.
+    # Ctx has no func_name field — use func_ref (the function object),
+    # otherwise WT_DBG_FN can never match and the traces below are unreachable.
+    _debug_fn_pattern = ctx.translator.options.debug_fn
+    _debug_stackified = !isempty(_debug_fn_pattern) && contains(string(ctx.func_ref), _debug_fn_pattern)
+    if _debug_stackified
+        @warn "STACKIFIED DEBUG: $(length(blocks)) blocks, non_trivial_targets=$non_trivial_targets, duplicated_terminal_targets=$duplicated_terminal_targets, outer_targets=$outer_targets, loop_latches=$loop_latches, target_loop=$target_loop, return_type=$(ctx.return_type)"
+    end
+
+    function emit_duplicated_terminal!(tb::InstrBuilder, target::Int)
+        target in duplicated_terminal_targets || error(
+            "block $target is not an admitted duplicated terminal")
+        block = blocks[target]
+        for i in block.start_idx:block.end_idx
+            nir[i].node isa NirReturn && continue
+            compile_statement!(tb, i, ctx)
+            (get(ctx.ssa_types, i, Any) === Union{} || ctx.last_stmt_was_stub) && break
+        end
+        if isempty(tb.instrs) || !(tb.instrs[end] isa InstrIR.Unreachable)
+            unreachable!(tb)  # structural trap: duplicated tail is proven non-returning
+        end
+        ctx.last_stmt_was_stub = true
+        return tb
+    end
+
+    # When compiling a SUBSET of
+    # the function's blocks (pre-try regions, chain prefixes), a terminator can
+    # target a statement BEYOND the subset (e.g. `if cond; return X; end; try…`
+    # — the GotoIfNot's dest is the try region). Previously the branch was
+    # silently dropped while its compiled condition stayed on the stack
+    # ("values remaining at end of block"). Wrap the subset in an EXIT block:
+    # out-of-subset forward branches br to it, landing exactly where the
+    # caller's continuation (e.g. the region's try) begins.
+    _subset_end = isempty(blocks) ? 0 : maximum(byt.end_idx for byt in blocks)
+    _term_dest(t) = t isa Union{NirGotoIfNot, NirGoto} ? t.target : 0
+    needs_exit_block = any(begin
+                               d = _term_dest(byt.terminator)
+                               d > _subset_end && get(stmt_to_block, d, nothing) === nothing
+                           end for byt in blocks)
+    exit_label = nothing
+    if needs_exit_block
+        exit_label = block!(b)
+    end
+
+    # Now generate code for each block in order
+    for (block_idx, block) in enumerate(blocks)
+        # First, close any blocks whose target is this block
+        # (We close BEFORE generating code for the target block)
+        # a region's handler block starts here → its try's body, catch and end close exactly at
+        # this boundary (the catch's payload arrives at the handler's first instruction).
+        # Innermost regions close first.
+        if haskey(try_close_at, block_idx)
+            for r in try_close_at[block_idx]
+                # any region-inner target labels still open close first (nesting)
+                while !isempty(label_stack) && label_stack[end][1] === :block
+                    pop!(label_stack)
+                    end_block!(b)
+                end
+                if !isempty(label_stack) && label_stack[end][1] === :try
+                    pop!(label_stack)
+                    # the body's normal exits branch out of the region, so its end is not
+                    # reached (dart's body ends in `br wrapperBlock`, code_generator.dart:951)
+                    unreachable!(b)        # structural trap: no normal path reaches the try's end
+                    catch_legacy!(b, exc_tag(ctx.type_registry))    # the payload is the try's outputs, at its end
+                    end_block!(b)          # end try — the catch payload arrives here
+                    # The payload's entry, which its throw pushed, is Julia's top here (Julia's
+                    # landing leaves the stack as it is): it becomes the top by identity, also
+                    # when the host caught the escape, called an export and threw it again
+                    # (ExceptionStack.tla, Landing = "identity", HostReraise). The exception and
+                    # its stack are read from the entry; the count is the host's glue's, exact.
+                    global_set!(b, exc_top_global!(ctx.mod, ctx.type_registry))
+                    drop!(b)   # stackTrace
+                    drop!(b)   # exception
+                end
+                ctx.last_stmt_was_stub = false   # the handler is reachable
+            end
+        end
+
+        # (slice-A exact-semantics note: the old code keyed on the LAST *block*
+        # entry regardless of loops above it; replicated via findlast-:block)
+        while true
+            local _lb = findlast(e -> e[1] === :block && e[2] == block_idx,
+                                 label_stack)
+            _lb === nothing && break
+            _lb == length(label_stack) || error(
+                "crossing control regions at block $block_idx " *
+                "[$(block.start_idx):$(block.end_idx)] of `$(ctx.func_ref)`: forward label is not " *
+                "the innermost open control label (open=$(Tuple{Symbol,Int}[(e[1], e[2]) for e in label_stack]))")
+            deleteat!(label_stack, _lb)
+            end_block!(b)  # End the block for this target
+            if _debug_stackified
+                @warn "  CLOSE block for target $block_idx, stack=$label_stack, bytes_len=$(_byte_len(b))"
+            end
+        end
+
+        # Skip dead blocks (from boundscheck patterns)
+        if block_idx in dead_blocks
+            if _debug_stackified
+                @warn "  SKIP dead block $block_idx"
+            end
+            continue
+        end
+        if block_idx in duplicated_terminal_targets
+            _debug_stackified && @warn "  SKIP duplicated terminal block $block_idx"
+            continue
+        end
+
+        if _debug_stackified
+            @warn "  BLOCK $block_idx [$(block.start_idx):$(block.end_idx)] term=$(typeof(block.terminator)) bytes=$(_byte_len(b)) stack=$label_stack"
+        end
+
+        # Check if we're entering a loop
+        is_loop_header = block_idx in loop_headers
+
+        if is_loop_header
+            local loop_label = loop!(b)  # void
+            push!(label_stack, (:loop, block_idx, loop_label))
+
+            # Open BLOCKs for forward-jump targets INSIDE this loop (emission order:
+            # the loop label sits below its inner-target labels)
+            if haskey(loop_inner_targets, block_idx)
+                for target in loop_inner_targets[block_idx]  # sorted desc = outermost first
+                    local target_label = block!(b)  # void
+                    push!(label_stack, (:block, target, target_label))
+                end
+            end
+        end
+
+        # Compile the block's statements (not the terminator, we handle it separately)
+        # Skip any dead statements within the block.
+        # The block's sub-builder `bb`: straight-line emission uses typed methods and
+        # recursive sub-results merge through append_builder!.
+        bb = _ctx_builder(ctx, "generate_stackified_flow.block")
+        # Values legitimately flow BETWEEN basic blocks on the wasm stack —
+        # the block fragment declares the incoming stack (the merge settles exactly).
+        isempty(b.v.stack) || seed_input!(bb, copy(b.v.stack))
+        # Reset dead code guard at block boundaries. Each non-dead block
+        # is reachable via a different control flow path, so a stub flag from a previous
+        # block must not cascade. Without this, compile_statement emits unreachable on
+        # valid fall-through paths after br_if (e.g., _next_token codepoint check).
+        ctx.last_stmt_was_stub = false
+        _block_is_dead = false  # Track dead code within a block
+        for i in block.start_idx:block.end_idx
+            # Skip dead statements
+            if i in dead_regions
+                continue
+            end
+            if i in boundscheck_jumps
+                continue  # This GotoIfNot always jumps - skip it (handled below)
+            end
+            # Skip statements after unreachable/stub within same block.
+            # After throw/error, remaining statements in the block are dead code.
+            # Compiling them would place unreachable opcodes in the wrong block.
+            if _block_is_dead
+                continue
+            end
+
+            rec = nir[i]
+            stmt = rec.node
+
+            # Skip terminator if we're going to handle it separately
+            if i == block.end_idx && (stmt isa NirGotoIfNot || stmt isa NirGoto || stmt isa NirReturn)
+                continue
+            end
+
+            if stmt isa NirReturn
+                map_to_statement!(bb, ctx, i)
+                if stmt.value !== nothing
+                    # THE single return-coercion path (dead pre-emit type locals deleted).
+                    bb = emit_return_coerced!(bb, stmt.value, ctx)
+                else
+                    # A valueless ReturnNode is Julia IR `unreachable` (the tail of a
+                    # throw branch) — a structural trap, NEVER a bare `return` (which is
+                    # invalid in a result-typed function and was silently wrong in a void
+                    # one). dart: unimplemented/throw paths end in unreachable.
+                    unreachable!(bb)   # structural trap (dart-legit dead path)
+                end
+                map_to_definition!(bb, ctx)   # the code after the return is the function's again
+
+            elseif stmt isa NirGotoIfNot
+                # GotoIfNot: handled by control flow structure
+                # Nothing to emit here
+
+            elseif stmt isa NirGoto
+                # Unconditional goto: handled by control flow structure
+                # Nothing to emit here
+
+            elseif stmt isa NirPhi
+                # Phi nodes: check if we're falling through from a previous statement
+                if haskey(ctx.phi_locals, i)
+                    for (edge_idx, edge) in enumerate(stmt.edges)
+                        if edge >= block.start_idx && edge < i
+                            if stmt.values[edge_idx] !== nothing
+                                val = stmt.values[edge_idx]
+                                # Check type compatibility before storing
+                                local_idx = ctx.phi_locals[i]
+                                phi_local_type = ctx.locals[local_idx - ctx.n_params + 1]
+                                # parity(code_generator.dart:2149 visitVariableSet) wrap+store: typed compile_phi_value → THE convert_type! funnel.
+                                pv_b2, pv_ty2, pv_n2 = compile_phi_value(val, i)
+                                if pv_n2 >= 2
+                                    emit_phi_failure!(bb, "multi-value fallthrough phi cannot feed one local"; idx=i)
+                                elseif !isempty(pv_b2.instrs)
+                                    append_builder!(bb, pv_b2)   # typed merge (audit-proven channel)
+                                    if pv_ty2 !== nothing && pv_ty2 !== phi_local_type
+                                        local _edge_julia = value_type(ctx, val)
+                                        coerce_stack_top!(bb, phi_local_type, ctx;
+                                            from_julia=(_edge_julia isa Type && isconcretetype(_edge_julia)) ?
+                                                _edge_julia : nothing)
+                                    end
+                                    # parity(code_generator.dart:2149 visitVariableSet): ALWAYS store — an unknown-typed value
+                                    # left on the stack (the old `ty===nothing` skip)
+                                    # orphaned it: the escaping-closure double-load bug.
+                                    local_set!(bb, local_idx)
+                                    if haskey(ctx.memoryref_offset_locals, i)
+                                        emit_memoryref_offset!(bb, ctx, val)
+                                        local_set!(bb, ctx.memoryref_offset_locals[i])
+                                    end
+                                end
+                            end
+                            break
+                        end
+                    end
+                end
+
+            elseif rec.slot == 0 && stmt isa NirLiteral && stmt.value === nothing
+                # Nothing statement
+
+            else
+                # Phase C: THE statement visitor emits directly; the drop
+                # logic reads the emission's node window (byte sniffs are gone).
+                local _stmt_i0 = length(bb.instrs)
+                local _stmt_stack0 = length(bb.v.stack)
+                compile_statement!(bb, i, ctx)
+                local _stmt_emitted = length(bb.instrs) > _stmt_i0
+                local _stmt_pushed_value = length(bb.v.stack) > _stmt_stack0
+
+                # After unreachable/stub, mark dead code within block.
+                # Previous `break` exited the block loop, causing subsequent dead
+                # statements to be placed in the wrong block. Now we mark dead code
+                # and skip remaining statements with `continue` at the top of the loop.
+                stmt_type2 = get(ctx.ssa_types, i, Any)
+                if stmt_type2 === Union{} || ctx.last_stmt_was_stub
+                    _block_is_dead = true
+                    continue  # Skip drop/local checks but stay in block
+                end
+
+                if !haskey(ctx.ssa_locals, i)
+                    # Skip if the visitor already emitted a DROP.
+                    # The func_idx-0x1a false positive cannot exist at the ir/ layer.
+                    already_dropped = _stmt_emitted && bb.instrs[end] isa InstrIR.Drop
+                    if stmt isa Union{NirCall, NirInvoke, NirForeignCall}
+                        if !already_dropped && _stmt_emitted && _stmt_pushed_value
+                            if !haskey(ctx.phi_locals, i)
+                                use_count = get(ssa_use_count, i, 0)
+                                if use_count == 0
+                                    drop!(bb)
+                                    @debug "STACKIFIED-DROP ADDED extra drop for stmt=$i"
+                                end
+                            end
+                        end
+                    elseif stmt isa NirPi && _stmt_emitted
+                        # PiNode without ssa_local pushed a value onto the stack.
+                        # Drop it if it's only used by phi edges (phi stores re-compute
+                        # the value via compile_phi_value, so this stack value is orphaned).
+                        non_phi_uses = get(ssa_non_phi_uses, i, 0)
+                        if non_phi_uses == 0
+                            drop!(bb)
+                        end
+                    end
+                end
+            end
+        end
+        append_builder!(b, bb)   # typed merge — the block's real tracked effect
+
+        # Handle the terminator: its code (the branch, the return's coercion, the phi stores on
+        # its edges) maps to the terminator statement, each phi store to its phi
+        term = block.terminator
+        terminator_idx = block.end_idx
+        map_to_statement!(b, ctx, terminator_idx)
+
+        # Check if this terminator is a boundscheck always-jump
+        if terminator_idx in boundscheck_jumps && term isa NirGotoIfNot
+            # This is an always-jump - emit unconditional br to the target
+            dest_block = get(stmt_to_block, term.target, nothing)
+            # Its edge carries the target's phi values exactly as a GotoNode's does
+            # (a forward jump or fall-through that skipped this store left the phi
+            # local at its default: `@inbounds isvalid(::SubString{String}, i)`
+            # returned false).
+            if dest_block !== nothing && dest_block > block_idx &&
+               !(dest_block in duplicated_terminal_targets)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+            end
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx && dest_block in non_trivial_targets
+                br!(b, get_forward_label(dest_block))
+            elseif dest_block !== nothing && dest_block <= block_idx
+                # a backward always-taken jump is a loop back edge — the same br a
+                # GotoNode emits (dev/formal/Stackifier.tla: every edge is realized;
+                # this arm used to emit nothing)
+                set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+                dest_block in loop_headers ||
+                    record_unsupported!(ctx, :unsupported_control_flow,
+                        "backward always-taken boundscheck jump whose target block $dest_block is not a loop header";
+                        idx=terminator_idx, detail=term, soundness_fatal=true)
+                br!(b, get_loop_label(dest_block))
+            end
+            # Otherwise, it's just a fall-through to a live block - nothing needed
+
+        elseif term isa NirReturn
+            if _debug_stackified
+                @warn "  RETURN terminator at block $block_idx: term=$(term), val=$(term.value)"
+            end
+            if term.value !== nothing
+                # parity(code_generator.dart:1372 visitReturnStatement): THE single return-coercion path (emit_return_coerced!, same as
+                # the block-statement ReturnNode site) — deletes this duplicated ladder
+                # (byte-scanned externref check + hand widening/casts + a numeric→ConcreteRef
+                # ref.null VALUE DROP; the single source boxes/converts properly).
+                b = emit_return_coerced!(b, term.value, ctx)
+            else
+                # A valueless ReturnNode terminator is Julia IR `unreachable` (throw tail):
+                # a structural trap, never a bare `return` (invalid in result-typed fns).
+                unreachable!(b)   # structural trap (dart-legit dead path)
+            end
+
+        elseif term isa NirGotoIfNot
+            dest_block = get(stmt_to_block, term.target, nothing)
+
+
+            # Check if destination has phi nodes that need values from this edge
+            has_phi = dest_block !== nothing && dest_has_phi_from_edge(dest_block, terminator_idx)
+
+            if _debug_stackified
+                @warn "  GIN blk=$block_idx term_idx=$terminator_idx dest=$(term.target) dest_block=$dest_block has_phi=$has_phi nontrivial=$(dest_block in non_trivial_targets) bytes=$(_byte_len(b))"
+            end
+
+            # Compile condition (THE condition front)
+            compile_condition_to_i32!(b, term.cond, ctx)
+
+            # If condition is TRUE, fall through to next block
+            # If condition is FALSE, jump to dest
+
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                # GotoIfNot: true falls through, false executes the cloned
+                # non-returning tail. The `if` merge remains reachable only from
+                # the true arm because the false arm ends polymorphically.
+                if_!(b)
+                else_!(b)
+                emit_duplicated_terminal!(b, dest_block)
+                end_block!(b)
+                ctx.last_stmt_was_stub = false
+            elseif dest_block !== nothing && dest_block > block_idx
+                # Forward jump when condition is false
+                if dest_block in non_trivial_targets
+                    if has_phi
+                        # Need to set phi values before jumping - use if/else
+                        if_!(b)  # void
+                        # Then branch: condition true, fall through (empty)
+                        else_!(b)
+                        # Else branch: condition false, set all phi locals and jump
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+                        br!(b, get_forward_label(dest_block))
+                        end_block!(b)
+                    else
+                        # No phi - use br_if
+                        num!(b, Opcode.I32_EQZ)  # Invert the condition
+                        br_if!(b, get_forward_label(dest_block))
+                    end
+                else
+                    # Simple fall-through pattern - condition true continues, false skips
+                    if has_phi
+                        if_!(b)
+                        else_!(b)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+                        end_block!(b)
+                    else
+                        if_!(b)
+                        end_block!(b)
+                    end
+                end
+            elseif dest_block !== nothing && dest_block <= block_idx
+                # Back edge (loop continuation condition)
+                if dest_block in loop_headers
+                    if has_phi
+                        if_!(b)
+                        else_!(b)
+                        set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+                        br!(b, get_loop_label(dest_block))
+                        end_block!(b)
+                    else
+                        num!(b, Opcode.I32_EQZ)
+                        br_if!(b, get_loop_label(dest_block))
+                    end
+                end
+            elseif dest_block === nothing && needs_exit_block && term.target > _subset_end
+                # Dest is beyond the compiled subset — branch to the
+                # exit block (the caller's continuation begins right after it).
+                num!(b, Opcode.I32_EQZ)
+                br_if!(b, exit_label::ControlLabel)
+            elseif dest_block === nothing
+                # Unresolvable dest: drop the compiled condition rather than
+                # orphaning it on the operand stack.
+                drop!(b)
+            end
+
+            # GotoIfNot fall-through phi locals
+            # When condition is TRUE, execution falls through to the next block.
+            # The false branch sets phi locals via set_phi_locals_for_edge! above,
+            # but the true (fall-through) path never did. Set phi locals for the
+            # next block on the fall-through path.
+            next_fall_block = block_idx + 1
+            if next_fall_block <= length(blocks)
+                fall_has_phi = dest_has_phi_from_edge(next_fall_block, terminator_idx)
+                if fall_has_phi
+                    set_phi_locals_for_edge!(b, next_fall_block, terminator_idx)
+                end
+            end
+
+        elseif term isa NirGoto
+            dest_block = get(stmt_to_block, term.target, nothing)
+            terminator_idx = block.end_idx
+
+
+            # Set all phi values before jumping
+            # Pass the actual target statement to find phi nodes (might be inside the block)
+            if dest_block !== nothing
+                if !(dest_block in duplicated_terminal_targets)
+                    set_phi_locals_for_edge!(b, dest_block, terminator_idx; target_stmt=term.target)
+                end
+            end
+
+            if dest_block !== nothing && dest_block in duplicated_terminal_targets
+                emit_duplicated_terminal!(b, dest_block)
+            elseif dest_block !== nothing && dest_block > block_idx
+                # Forward jump
+                if dest_block in non_trivial_targets
+                    local target_label = get_forward_label(dest_block)
+                    # If the br exits ALL open blocks (outermost),
+                    # emit return instead to avoid falling through to unreachable.
+                    # The phi locals were just set by set_phi_locals_for_edge!.
+                    # Find the destination block's ReturnNode and its phi local.
+                    local target_pos = findlast(e -> e[3] === target_label, label_stack)
+                    exits_outermost = target_pos == 1
+                    if exits_outermost && ctx.return_type !== Nothing && ctx.return_type !== Union{}
+                        func_ret_wasm = boundary_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+                        # Find the return phi local: look at the destination block
+                        # for a ReturnNode whose value is a phi with a phi_local.
+                        ret_local = nothing
+                        ret_value = nothing   # the returned value, whose own type a conversion reads
+                        dest_start = blocks[dest_block].start_idx
+                        dest_end = blocks[dest_block].end_idx
+                        for di in dest_start:dest_end
+                            s = nir[di].node
+                            if s isa NirReturn && s.value isa NirSSA
+                                vid = s.value.id
+                                ret_value = s.value
+                                if haskey(ctx.phi_locals, vid)
+                                    ret_local = ctx.phi_locals[vid]
+                                    break
+                                elseif haskey(ctx.ssa_locals, vid)
+                                    # Only use ssa_local for return optimization
+                                    # if the SSA value is defined OUTSIDE the destination block.
+                                    # SSA values defined IN the destination block haven't been
+                                    # computed yet (the local is still 0), so we must use br
+                                    # to reach the block and let it compute the value.
+                                    if vid < dest_start || vid > dest_end
+                                        ret_local = ctx.ssa_locals[vid]
+                                    end
+                                    break
+                                end
+                            end
+                        end
+                        # a MemoryRef result is its single-value struct, which the local's
+                        # bare Memory is not: that return goes through its ReturnNode
+                        if ret_local !== nothing && !(func_ret_wasm isa ConcreteRef &&
+                               func_ret_wasm.type_idx in values(ctx.type_registry.memoryref_box_idxs))
+                            local_get!(b, ret_local)
+                            if func_ret_wasm isa ConcreteRef
+                                ref_cast!(b, Int64(func_ret_wasm.type_idx), true)
+                            else
+                                # (gap dc4aaea42654): The local can be
+                                # narrower than the function result (Int32 return
+                                # value in a function whose rettype widened to
+                                # Union{Int32,Int64} → i64). Mirror the numeric
+                                # conversions of the in-block ReturnNode handler, typed by
+                                # the returned value's own type when it is one class (a
+                                # number bound for a reference result is boxed under it)
+                                local _rv_jt = value_type(ctx, ret_value)
+                                coerce_stack_top!(b, func_ret_wasm, ctx;
+                                                  from_julia=isconcretetype(_rv_jt) ? _rv_jt : nothing)
+                            end
+                            return_!(b)
+                        else
+                            br!(b, target_label)
+                        end
+                    else
+                        br!(b, target_label)
+                    end
+                end
+                # Otherwise, simple fall through - implicit
+            elseif dest_block !== nothing && dest_block <= block_idx
+                # Back edge (loop)
+                if dest_block in loop_headers
+                    br!(b, get_loop_label(dest_block))
+                end
+            elseif dest_block === nothing && needs_exit_block && term.target > _subset_end
+                # Unconditional jump beyond the compiled subset —
+                # branch to the exit block (the caller's continuation).
+                br!(b, exit_label::ControlLabel)
+            end
+        else
+            # No explicit terminator (GotoNode, GotoIfNot, ReturnNode)
+            # This block falls through to the next block
+            # Check if next block has phi nodes that need values from this edge
+            next_block_idx = block_idx + 1
+            if next_block_idx <= length(blocks)
+                # The edge for fallthrough is the last statement of this block
+                terminator_idx = block.end_idx
+                set_phi_locals_for_edge!(b, next_block_idx, terminator_idx)
+            end
+        end
+        # the code after the terminator's — a try region's opening, the blocks' ends, the
+        # trailing unreachable — maps to the function's definition (code_generator.dart:721)
+        map_to_definition!(b, ctx)
+
+        # this block ends with an EnterNode (post-split guarantee) → open the region: one try
+        # whose outputs are the tag's payload (exn, stackTrace, entry), which its catch
+        # delivers at the try's end, where the handler begins. Outermost first.
+        # parity(pkg/dart2wasm/lib/code_generator.dart:945 try_legacy): visitTryCatch's
+        # `b.try_legacy([], [exceptionType, stackTraceType])` and `b.catch_legacy(tag)` (:999).
+        # dart's catch stashes the payload in locals, branches to the try's label with it once a
+        # guard passes (:985-993) and ends in a `rethrow` no guard reaches (:1025); WT emits
+        # neither, since both serve guards and a Julia catch has none: the catch's payload is the
+        # try's outputs directly.
+        if haskey(try_open_at, block_idx)
+            for r in try_open_at[block_idx]
+                local try_label = try_legacy!(b; results=WasmValType[AnyRef, ExternRef,
+                                                                    ConcreteRef(exc_cell_type(ctx.type_registry), true)])
+                push!(label_stack, (:try, get(stmt_to_block, r.enter_idx, 0), try_label))
+                # region-inner forward targets open INSIDE the try
+                local _eb = get(stmt_to_block, r.enter_idx, 0)
+                if haskey(region_inner_targets, _eb)
+                    for target in region_inner_targets[_eb]
+                        local target_label = block!(b)
+                        push!(label_stack, (:block, target, target_label))
+                    end
+                end
+            end
+        end
+
+        # Close loop if this is the LAST back-edge source of the loop. A loop
+        # with several `continue`-style branches has MULTIPLE back-edge sources
+        # to the same header (1.13 Base IR does this in print); the loop label
+        # closes only at the maximal one — earlier sources just `br` back
+        # (their terminators already emitted it). Firing at every source emitted
+        # one spurious End per extra edge, eating outer labels (the byte era
+        # spliced this silently; the typed merge rejects it).
+        for (src, dst) in back_edges
+            if src == block_idx && block_idx == maximum(s for (s, d) in back_edges if d == dst)
+                # Close any inner target blocks that are still open for this loop
+                if haskey(loop_inner_targets, dst)
+                    for target in loop_inner_targets[dst]
+                        local _it = findlast(e -> e[1] === :block && e[2] == target, label_stack)
+                        if _it !== nothing
+                            _it == length(label_stack) || error(
+                                "crossing control regions while closing loop $dst at block " *
+                                "$block_idx: target $target is not innermost " *
+                                "(open=$(label_stack))")
+                            deleteat!(label_stack, _it)
+                            end_block!(b)  # End inner target block
+                        end
+                    end
+                end
+                _debug_stackified && @warn "  END-OF-LOOP fires at block=$block_idx src=$src dst=$dst stack=$label_stack labels=$(length(b.v.labels))"
+                end_block!(b)  # End of loop
+                local _lp = findlast(e -> e[1] === :loop && e[2] == dst, label_stack)
+                if _lp !== nothing
+                    _lp == length(label_stack) || error(
+                        "crossing control regions while closing loop $dst at block " *
+                        "$block_idx: loop is not innermost (open=$(label_stack))")
+                    deleteat!(label_stack, _lp)
+                end
+            end
+        end
+    end
+
+    # Close any remaining open blocks (slice A: :block entries only, as before)
+    while true
+        local _rb = findlast(e -> e[1] === :block, label_stack)
+        _rb === nothing && break
+        _rb == length(label_stack) || error(
+            "crossing control regions during final label closure: forward label is " *
+            "not innermost (open=$(label_stack))")
+        _debug_stackified && @warn "  FINAL-SWEEP close $(label_stack[_rb]) labels=$(length(b.v.labels))"
+        deleteat!(label_stack, _rb)
+        end_block!(b)
+    end
+
+    # After all blocks close, control may reach here when a `br`
+    # exits the outermost block. For void functions: unreachable is fine.
+    # For functions with a return type: emit unreachable (WASM validation uses
+    # polymorphic stack after unreachable, so this validates). But we ALSO need
+    # to ensure br to the outermost block uses `return` instead of `br`.
+    # Callers compiling a FALL-THROUGH region (the pre-branch code
+    # of an exit-branch try/catch) opt out — for them this guard is live code.
+    trailing_unreachable && unreachable!(b)  # structural trap (dart-legit dead path)
+
+    # Close the subset exit block — out-of-subset branches land
+    # here, i.e. exactly at the caller's continuation.
+    needs_exit_block && end_block!(b)
+
+    return b
+end

@@ -1,0 +1,1867 @@
+# ============================================================================
+# Value Compilation
+# ============================================================================
+
+"""
+    static_wasm_type(val, ctx) -> WasmValType
+
+THE single PRE-EMISSION static-type query (dart2wasm's `translateType(dartTypeOf(node))`,
+code_generator.dart:124/:129): what wasm type WOULD `val` push, derived from locals/ssa_types/literals.
+CONTRACT: use ONLY to make decisions BEFORE emitting (opcode/width selection, path choice) —
+NEVER to describe a value that has already been emitted; the emission's own returned type
+(`_compile_value_b`/`emit_value!`) is the truth there. The old name `infer_value_wasm_type`
+(the post-emission re-guess anti-pattern, once ~265 callers) is retired and LOCKED at zero by
+test/parity_ratchet.jl; every remaining caller of this function is a pre-emit decider.
+parity(code_generator.dart:124 translateType) of dartTypeOf (:129).
+"""
+function static_wasm_type(val::NirNode, ctx::AbstractCompilationContext)::WasmValType
+    # Handle GlobalRef by resolving it and recursively determining type
+    # GlobalRef to nothing emits i32.const 0; GlobalRef to Type emits i32.const 0;
+    # GlobalRef to struct instance emits struct_new
+    if val isa NirGlobalRef
+        if val.name === :nothing
+            return I32
+        end
+        # The binding was resolved once at the NIR boundary; an unbound one is the same
+        # located reject the emission of this operand raises.
+        val.bound || record_unsupported!(ctx, :unsupported_global,
+            unbound_global_text(val.mod, val.name);
+            detail=GlobalRef(val.mod, val.name), soundness_fatal=true)
+        return static_wasm_type(NirLiteral(val.value), ctx)
+    end
+    if val isa NirSSA
+        if haskey(ctx.ssa_locals, val.id)
+            local_idx = ctx.ssa_locals[val.id]
+            local_array_idx = local_idx - ctx.n_params + 1
+            if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                # the read narrows a generic local to the SSA's refined type (_narrow_generic_local!)
+                local narrowed = narrowed_local_type(ctx, local_idx, val.id)
+                return narrowed === nothing ? ctx.locals[local_array_idx] : narrowed
+            end
+        elseif haskey(ctx.phi_locals, val.id)
+            local_idx = ctx.phi_locals[val.id]
+            local_array_idx = local_idx - ctx.n_params + 1
+            if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                return ctx.locals[local_array_idx]
+            end
+        end
+        # Fall back to Julia type inference
+        ssa_type = value_type(ctx, val)
+        return get_concrete_wasm_type(ssa_type, ctx.mod, ctx.type_registry; for_local=true)
+    elseif val isa NirSlot
+        # SlotNumber in unoptimized IR — check slot_locals first, then params
+        if haskey(ctx.slot_locals, val.id)
+            local_idx = ctx.slot_locals[val.id]
+            local_array_idx = local_idx - ctx.n_params + 1
+            if local_array_idx >= 1 && local_array_idx <= length(ctx.locals)
+                return ctx.locals[local_array_idx]
+            end
+        end
+        # Fall back to param mapping or slottypes
+        if ctx.is_compiled_closure
+            arg_idx = val.id
+        else
+            arg_idx = val.id - 1
+        end
+        if arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
+        else
+            return get_concrete_wasm_type(value_type(ctx, val), ctx.mod, ctx.type_registry; for_local=true)
+        end
+    elseif val isa NirArgument
+        # Match compile_value's offset — for regular functions, _1 is the
+        # function object, so actual args start at _2 → arg_types[1].
+        if ctx.is_compiled_closure
+            arg_idx = val.n
+        else
+            arg_idx = val.n - 1
+        end
+        packed_type = packed_vararg_source_type(ctx, val.n, arg_idx)
+        if packed_type !== nothing
+            tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, packed_type)
+            tuple_info === nothing && error("packed vararg tuple layout is unavailable")
+            return ConcreteRef(UInt32(tuple_info.wasm_type_idx), true)
+        elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            return get_concrete_wasm_type(ctx.arg_types[arg_idx], ctx.mod, ctx.type_registry; for_local=true)
+        end
+        error("$(val) is outside the function's $(length(ctx.arg_types)) arguments: invalid IR")
+    elseif val isa NirLiteral
+        # Literal value
+        lit = val.value
+        # Handle nothing specially - compile_value(nothing) produces i32_const 0
+        if lit === nothing
+            return I32
+        elseif lit isa Core.SSAValue || lit isa Core.Argument || lit isa Core.SlotNumber
+            # D-001: an IR reference type carried as a literal VALUE is a literal struct,
+            # not an IR ref.
+            T = typeof(lit)
+            info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+            return ConcreteRef(info.wasm_type_idx, false)
+        elseif lit isa Symbol || lit isa String
+            # parity(constants.dart:1714 TypeOfConstantVisitor.visitStringConstant, :1739 visitSymbolConstant): String/Symbol constants are the CLASSED string struct
+            str_type_idx = get_string_struct_type!(ctx.mod, ctx.type_registry)
+            return ConcreteRef(str_type_idx, false)
+        elseif lit isa Int128 || lit isa UInt128
+            # a 128-bit constant is its {classId, lo, hi} struct, built or read from its global
+            return ConcreteRef(get_int128_type!(ctx.mod, ctx.type_registry, typeof(lit)), false)
+        elseif isprimitivetype(typeof(lit))
+            # every other primitive constant is its bits in the register the one width rule
+            # names (julia_to_wasm_type), as the emitter pushes them
+            return julia_to_wasm_type(typeof(lit))
+        # Every reference constant below is non-null, as every dart constant is
+        # (constants.dart:821 `assert(!type.nullable)`; TypeOfConstantVisitor's _typeOfClass).
+        elseif lit isa TypeVar && ctx.type_registry.jl_typevar_idx !== nothing
+            # a TypeVar compiles to global.get of its constant (get_typevar_constant_global!)
+            return ConcreteRef(ctx.type_registry.jl_typevar_idx, false)
+        elseif lit isa Type
+            # a type object compiles to global.get of its constant, an instance of its kind
+            # (typeof(Int64) is DataType). Checked BEFORE isstructtype: typeof(Type) is a struct.
+            return ConcreteRef(type_object_struct_idx(ctx.type_registry, lit), false)
+        elseif lit isa Core.TypeName
+            # TypeName constants compile to global.get ($JlTypeName struct ref)
+            tn_idx = ctx.type_registry.jl_typename_idx
+            if tn_idx !== nothing
+                return ConcreteRef(tn_idx, false)
+            end
+            return StructRef
+        elseif isstructtype(typeof(lit))
+            # Struct values compile to struct_new or read their constant global
+            return _wt_drop_nullable(get_concrete_wasm_type(typeof(lit), ctx.mod, ctx.type_registry))
+        else
+            return AnyRef
+        end
+    end
+    error("static_wasm_type: $(nameof(typeof(val))) is not a value operand")
+end
+
+"""
+Check if a value type can satisfy a function's return type — the principled
+dart2wasm stance (replacing the old special-case pile). Compatible iff:
+  * `value === return`; OR
+  * both are reference types (any ref↔ref is convertible — upcast free, downcast
+    via ref.cast, extern↔any via the convert ops — emit_return_coerced! picks); OR
+  * a WT numeric WIDENING pair (Julia mixed int/float widths; dart2wasm itself
+    throws on numeric→numeric, but WT needs the widening ladder); OR
+  * a numeric value flowing into a ref return (boxed for externref / dummied for
+    a dead Union arm — matches dart2wasm's instantiateDummyValue).
+Otherwise false.
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
+"""
+function return_type_compatible(value_type::WasmValType, return_type::WasmValType)::Bool
+    value_type === return_type && return true
+    val_is_ref = _wt_is_ref(value_type)
+    ret_is_ref = _wt_is_ref(return_type)
+    # Both refs: any ref↔ref conversion is expressible (upcast/downcast/extern↔any).
+    if val_is_ref && ret_is_ref
+        return true
+    end
+    # WT numeric widening ladder (value narrower → return wider).
+    if (value_type === I32 && return_type === I64) ||
+       (value_type === I64 && return_type === F64) ||
+       (value_type === I32 && return_type === F64) ||
+       (value_type === F32 && return_type === F64) ||
+       (value_type === I64 && return_type === F32) ||
+       (value_type === I32 && return_type === F32)
+        return true
+    end
+    # Numeric value into a ref return: boxed (externref) or dummied (dead Union arm).
+    if !val_is_ref && ret_is_ref
+        return true
+    end
+    return false
+end
+
+"""
+    convert_type!(b, from, to, ctx; from_julia)
+
+The single coercion funnel (dart2wasm `translator.dart:1597 convertType`). Given a value of
+wasm type `from` already on the stack, emit the ops that leave a value of type `to`, or
+reject through the located diagnostic funnel. Every arm is decided on heap KIND, hierarchy
+and nullability, and the runtime-length tuple's arms on whether a struct is that
+representation (vararg_tuple_of_struct) — the kinds dev/formal/Coercion.tla models, which
+lets it exhaust the whole lattice: for every pair the result is a wasm subtype of `to` or a
+rejection, an upcast emits nothing, a value that may be a fixed tuple is built into the
+runtime-length tuple and never cast to it, and only pairs the wasm type system cannot
+express are rejected (cross-hierarchy without the extern bridge; a numeric into an array/
+i31/func/exn sink; a numeric without a concrete Julia source type to stamp the box's
+classId), with the runtime-length tuple's two (widened to a slot of any class with no class
+stated; a struct that is no NTuple of its element bound for it). `from_julia` is the source
+value's own static type, never the sink's: the funnel reads the value's class from it
+(source_class) where the representation cannot tell it, and its check is the one widening
+check.
+
+  * numeric→ref: BOX through `emit_classid_box!`, then this funnel again for the box ref.
+  * ref→numeric: `any.convert_extern` if extern, then UNBOX through `emit_classid_unbox!`.
+  * ref→ref: the runtime-length tuple arms (emit_fixed_to_vararg_tuple!; `_narrow_ref!` for
+    a value of any class), the string arms (classed string ↔ its byte array), the extern↔any bridge,
+    then `Narrow`: nothing on an upcast, `ref.as_non_null` when only nullability blocks it,
+    else `ref.cast` to `to`'s heap type with `to`'s nullability.
+  * numeric→numeric: WT's widening ladder plus the two narrowing arms Julia call
+    boundaries need (dart2wasm throws here; Julia widens).
+
+Returns `b`.
+formal(dev/formal/Coercion.tla): for every (from, to, source) triple the emitted sequence lands on a wasm subtype of `to` or rejects; a possible fixed tuple is never cast to the runtime-length tuple (NoTupleCast); the runtime-length tuple reaches a slot of any class only as another class's struct its source type names (NoUnclassedWidening); `nothing` at every nullable reference of the any hierarchy is its null, never boxed (NothingIsNull), and a nothing held in a reference is never unboxed or cast, its placeholder (boxed for a non-null reference) taken instead (NothingNeverCast); upcasts emit nothing but a nothing's null; only inexpressible pairs reject
+parity(translator.dart:1597 convertType)
+"""
+function convert_type!(b::InstrBuilder, from::WasmValType, to::WasmValType,
+                       ctx::AbstractCompilationContext;
+                       @nospecialize(from_julia::Union{Type,Nothing}))::Union{Nothing,InstrBuilder}
+    local _mod = ctx.mod
+    # `nothing` meeting a nullable reference of the any hierarchy (a Union{T,Nothing}'s box or
+    # struct, anyref, eqref, structref) is its null, whichever position's form it arrives in (a
+    # field's i32 placeholder, a tuple field's singleton, a box): never boxed, never cast, so the
+    # one null test reads it; one already in a nullable reference the sink admits is that null
+    if from_julia === Nothing && from != to && _wt_is_ref(to) && _wt_ref_nullable(to) &&
+       _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
+       !(_wt_is_ref(from) && _wt_ref_nullable(from) && wasm_subtype(from, to, _mod.types))
+        drop!(b)
+        to isa ConcreteRef ? ref_null!(b, Int64(to.type_idx)) : ref_null!(b, to)
+        return b
+    end
+    # a `nothing` held in a reference (the null it is there) bound for its i32 placeholder or a
+    # non-null reference of the any hierarchy is never unboxed or cast, which traps on the null: its
+    # placeholder, boxed under Nothing's class for a reference its box is; any other sink holds no
+    # nothing (formal: NothingNeverCast)
+    if from_julia === Nothing && _wt_is_ref(from) && from != to &&
+       (!_wt_is_ref(to) || (!_wt_ref_nullable(to) && _wt_hierarchy_top(_wt_heap_kind(to, _mod.types)) === :any &&
+                            !wasm_subtype(from, to, _mod.types)))
+        (to === I32 || _wt_is_ref(to)) || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "a nothing has no $(to) representation"; detail=from_julia)
+        drop!(b)
+        emit_value!(b, NirLiteral(nothing), ctx, I32)   # the constant `nothing`, its i32 placeholder
+        to === I32 && return b
+        local nbox = emit_classid_box!(b, ctx, I32, Nothing)
+        wasm_subtype(ConcreteRef(UInt32(nbox), false), to, _mod.types) ||
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a nothing has no $(to) representation: its box is no $(to)"; detail=from_julia)
+        return b
+    end
+    # a runtime-length tuple is an NTuple{n,E} for its run-time n (jl_f_tuple), but its
+    # representation's header names Tuple{Vararg{E}}, a class no Julia value has: widened to a
+    # slot of any class, a class read would answer for that class, so it rejects here: the one
+    # widening check, which a sink meets only by converting through this funnel. Only the
+    # source's own class passes it (source_class: another struct may share the
+    # representation's layout); a source type that is no class (the runtime-length tuple's, a
+    # sink's abstract type) does not
+    if from isa ConcreteRef && (to === AnyRef || to === EqRef || to === StructRef || to === ExternRef) &&
+       source_class(from_julia) === nothing
+        local vt = vararg_tuple_of_struct(ctx.type_registry, from.type_idx)
+        vt === nothing || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "a runtime-length tuple ($(vt)) held as a value of any class: its class is " *
+            "NTuple{n,$(vararg_tuple_eltype(vt))} for the n it has at run time, which its representation does not carry")
+    end
+    # a fixed tuple flowing into a slot Julia types as a runtime-length tuple (a phi joining an
+    # NTuple{k,E} with one: Tuple{E} <: Tuple{Vararg{E}}) is that runtime-length tuple, its
+    # representation built from the tuple's fields; a cast between the two structs trapped
+    # (dev/AUDIT.md A9E4)
+    if from isa ConcreteRef && to isa ConcreteRef && from.type_idx != to.type_idx
+        local vt_to = vararg_tuple_of_struct(ctx.type_registry, to.type_idx)
+        if vt_to !== nothing && vararg_tuple_of_struct(ctx.type_registry, from.type_idx) === nothing
+            local E = vararg_tuple_eltype(vt_to)
+            # a value Julia admits in a Tuple{Vararg{E}} slot is an NTuple{k,E}, its type the one
+            # the edge states (a struct of another type may share the layout, A10E6)
+            local T = from_julia
+            (T isa DataType && T <: Tuple && isconcretetype(T) && all(P -> P === E, T.parameters) &&
+             get(ctx.type_registry.structs, T, nothing) isa StructInfo &&
+             ctx.type_registry.structs[T].wasm_type_idx == from.type_idx) ||
+                return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                    "a $(something(from_julia, "value")) into a slot of the runtime-length tuple $(vt_to): only an NTuple of its element converts")
+            return emit_fixed_to_vararg_tuple!(b, ctx, T, vt_to)
+        end
+    end
+    if !_wt_is_ref(from) && _wt_is_ref(to)
+        # numeric→ref: BOX (F-ii). dart2wasm convertType boxing arm — box the value into the
+        # canonical {classId,value} struct (real classId when from_julia is known), then upcast
+        # the box ref to `to` (the box subtypes $JlBase, so any/eq/struct targets are free).
+        (from_julia isa Type && isconcretetype(from_julia)) || error(
+            "numeric-to-reference conversion lacks a concrete Julia source type")
+        # a box is a struct in the any hierarchy: an array/i31/func/exn sink can never hold it
+        local _tk = _wt_heap_kind(to, _mod.types)
+        (_tk === :array || _tk === :concrete_array || _tk === :i31 ||
+         _wt_hierarchy_top(_tk) === :func || _wt_hierarchy_top(_tk) === :exn) &&
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a $(from) value cannot be boxed into a $(to) sink"; detail=from_julia)
+        box_idx = emit_classid_box!(b, ctx, from, from_julia)
+        convert_type!(b, ConcreteRef(UInt32(box_idx), false), to, ctx; from_julia=from_julia)
+        return b
+    elseif _wt_is_ref(from) && !_wt_is_ref(to)
+        # ref→numeric: UNBOX (F-ii). Narrow to the `to` numeric box, read its value field.
+        # F8: an externref source crosses the boundary first (the box lives
+        # under anyref; ref.cast from externref is not wasm-valid).
+        local _fk = _wt_heap_kind(from, _mod.types)
+        if _fk === :extern
+            any_convert_extern!(b)
+        elseif _wt_hierarchy_top(_fk) !== :any
+            # a func/exn ref holds no box; the cast would not validate
+            return emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "a $(from) value holds no numeric box to unbox as $(to)"; detail=from_julia)
+        end
+        emit_classid_unbox!(b, ctx, to)
+        return b
+    elseif _wt_is_ref(from) && _wt_is_ref(to)
+        # (dart convertType, closure meets a top type): a KNOWN closure's
+        # captured struct erasing to any/eq/struct becomes the closure OBJECT
+        # {classId, context, vtable} — the value stays dynamically callable.
+        if (to === AnyRef || to === EqRef || to === StructRef) && from isa ConcreteRef &&
+           maybe_wrap_closure!(b, ctx, from_julia)
+            return b
+        end
+        # The extern hierarchy is bridged to/from any by exactly two ops; func and exn
+        # have no bridge to anything, so a pair crossing into or out of them is
+        # inexpressible (a ref.cast across hierarchies is a validation error).
+        local _fk = _wt_heap_kind(from, _mod.types)
+        local _tk = _wt_heap_kind(to, _mod.types)
+        local _fh = _wt_hierarchy_top(_fk)
+        local _th = _wt_hierarchy_top(_tk)
+        local _bridgeable = _fh === _th || (_fh === :extern && _th === :any) ||
+                            (_th === :extern && _fh === :any)
+        _bridgeable || return emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "no conversion from $(from) to $(to): the hierarchies do not meet"; detail=from_julia)
+        # parity(translator.dart:1597 convertType): the STRING arms — the classed string {classId,data} vs its byte
+        # array. Ops consume/produce the array; values carry the class (dart: methods
+        # read the class's array field; convertType adjusts at every boundary).
+        local _ssi = ctx.type_registry.string_struct_idx
+        local _sai = ctx.type_registry.string_array_idx
+        if _ssi !== nothing && _sai !== nothing
+            local _to_is_sarr = to isa ConcreteRef && to.type_idx == _sai
+            local _to_is_sstr = to isa ConcreteRef && to.type_idx == _ssi
+            local _from_is_sarr = from isa ConcreteRef && from.type_idx == _sai
+            local _from_is_sstr = from isa ConcreteRef && from.type_idx == _ssi
+            if _to_is_sarr && !_from_is_sarr && !(from_julia isa Type && is_bare_array_class(from_julia))
+                # any string-ish ref → its data array: narrow to $JlString, read data
+                # (an externref source crosses the boundary first). A String's CodeUnits or a
+                # Memory{UInt8} held as any value is the byte array itself, cast by the ref→ref
+                # arms below (A8C4: read as a String's data, it trapped where native answers 100)
+                _fh === :extern && any_convert_extern!(b)
+                _from_is_sstr || ref_cast!(b, Int64(_ssi), false)
+                struct_get!(b, UInt32(_ssi), UInt32(2))
+                _wt_ref_nullable(to) || ref_as_non_null!(b)
+                return b
+            elseif _from_is_sarr && !_to_is_sarr &&
+                   (from_julia === nothing || from_julia === String || from_julia === Symbol)
+                # a String's or Symbol's bare data array flowing to a value position: WRAP
+                # (the one producer) under the value's class, then adjust the struct ref to
+                # `to` normally. A Memory{UInt8} shares the byte array type but is no string:
+                # it stays the array and takes the ref→ref arms below.
+                emit_string_wrap!(b, ctx, from_julia === Symbol ? Symbol : String)
+                _to_is_sstr && return b
+                convert_type!(b, ConcreteRef(UInt32(_ssi), false), to, ctx;
+                              from_julia=(from_julia === Symbol ? Symbol : String))
+                return b
+            end
+        end
+        # dart2wasm convertType for ref→ref (with WT's extern↔any boundary ops).
+        if _th === :extern && _fh !== :extern
+            # A KNOWN closure crossing to extern wraps first (the seam)
+            from isa ConcreteRef && maybe_wrap_closure!(b, ctx, from_julia)
+            # any→extern at the JS boundary; the op keeps the source's nullability
+            extern_convert_any!(b)
+            (_wt_ref_nullable(from) && !_wt_ref_nullable(to)) && ref_as_non_null!(b)
+        elseif _fh === :extern && _th !== :extern
+            # extern→any boundary, then land on `to` from the any of the source's nullability
+            any_convert_extern!(b)
+            _narrow_ref!(b, ctx, _wt_ref_nullable(from) ? AnyRef : NonNullAbstractRef(UInt8(AnyRef)), to, from_julia)
+        else
+            _narrow_ref!(b, ctx, from, to, from_julia)
+        end
+    else
+        # numeric→numeric: WT's widening ladder (dart2wasm throws here; Julia widens).
+        if from === I32 && to === I64
+            num!(b, Opcode.I64_EXTEND_I32_S)
+        elseif from === I64 && to === F64
+            num!(b, Opcode.F64_CONVERT_I64_S)
+        elseif from === I32 && to === F64
+            num!(b, Opcode.F64_CONVERT_I32_S)
+        elseif from === F32 && to === F64
+            num!(b, Opcode.F64_PROMOTE_F32)
+        elseif from === I64 && to === F32
+            num!(b, Opcode.F32_CONVERT_I64_S)
+        elseif from === I32 && to === F32
+            num!(b, Opcode.F32_CONVERT_I32_S)
+        # F8: the NARROWING arms (dart throws here; Julia call boundaries
+        # genuinely narrow — e.g. an Int64 value meeting an Int32 param)
+        elseif from === I64 && to === I32
+            num!(b, Opcode.I32_WRAP_I64)
+        elseif from === F64 && to === F32
+            num!(b, Opcode.F32_DEMOTE_F64)
+        else
+            # Julia never converts implicitly across these (float→int is a `trunc`/`round`
+            # call in typed IR); reaching here is a codegen type-chain defect, and an
+            # un-converted value would validate as the wrong type or silently miscompute.
+            emit_unsupported_stub!(ctx, b, :unsupported_type,
+                "no numeric conversion from $(from) to $(to)"; detail=from_julia)
+        end
+    end
+    return b
+end
+
+"""
+    source_class(from_julia) -> Union{DataType, Nothing}
+
+The class a converted value has, read from its Julia source type where its representation
+cannot tell it (a struct type another class's layout shares, a closure's captured-fields
+context): the source type when it is concrete, else `nothing`. Every caller of the funnel passes
+the source value's own static type, never the sink's; an abstract one names no class, so the
+two checks that need a class (the runtime-length tuple's widening, a closure context's erasure)
+reject where it is not known.
+parity(quarantine: dart's every value carries its class in its header; WT's runtime-length tuple
+and closure context share their layouts with other classes, so their class comes from Julia's
+static type.)
+"""
+source_class(@nospecialize(from_julia))::Union{DataType, Nothing} =
+    (from_julia isa DataType && isconcretetype(from_julia)) ? from_julia : nothing
+
+"""
+    is_closure_context_ref(registry, to) -> Bool
+
+Whether `to` is a closure's captured-context struct (a registered closure type laid out as
+its context, `field_offset == 1`): a value narrowed to it may arrive as the closure OBJECT.
+parity(pkg/dart2wasm/lib/code_generator.dart:2641 CodeGenerator._generateDirectClosureCall):
+a closure value's context, read at a direct call.
+"""
+is_closure_context_ref(registry::TypeRegistry, @nospecialize(to::WasmValType))::Bool =
+    to isa ConcreteRef && any(((T, info),) -> info.wasm_type_idx == to.type_idx && is_closure_type(T) &&
+                                              info.field_offset == 1, registered_structs(registry))
+
+"""
+    emit_closure_context_unwrap!(b, mod, registry, l, to) -> b
+
+THE object→context unwrap: with the value on the stack and in local `l`, narrow it to the
+closure context struct `to` — the closure object's context (field 2) when the value is the
+object (`ref.test` of the closure base), else a cast of the value itself. Every site that
+narrows a value to a closure context calls it (the coercion funnel, a closure entry's argument).
+parity(pkg/dart2wasm/lib/code_generator.dart:2641 CodeGenerator._generateDirectClosureCall):
+a closure value's context, read at a direct call.
+"""
+function emit_closure_context_unwrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                                      l::UInt32, to::ConcreteRef)::InstrBuilder
+    local cb = get_closure_base_struct!(mod, registry)
+    ref_test!(b, Int64(cb), false)
+    if_!(b; results=WasmValType[to])
+    local_get!(b, l); ref_cast!(b, Int64(cb), false); struct_get!(b, cb, UInt32(2))   # .context
+    ref_cast!(b, Int64(to.type_idx), to.nullable)
+    else_!(b)
+    local_get!(b, l); ref_cast!(b, Int64(to.type_idx), to.nullable)
+    end_block!(b)
+    return b
+end
+
+"""
+    _narrow_ref!(b, ctx, from, to, from_julia)
+
+Land a ref of type `from` (already in `to`'s hierarchy) on `to` — Coercion.tla `Narrow`:
+nothing on an upcast; `ref.as_non_null` when only nullability blocks it; otherwise
+`ref.cast` to `to`'s heap type with `to`'s nullability — a concrete index, or an abstract
+GC kind (`ref.cast null` for the nullable shorthand, `ref.cast` for a NonNullAbstractRef).
+A downcast to a CLOSURE's captured struct may receive the closure OBJECT (the erasure seam
+wraps every context, maybe_wrap_closure!): unwrap via `.context` when the runtime value is the
+object, cast directly otherwise (dart reads a closure value's context, field 2, at a direct
+call, code_generator.dart:2656 _generateDirectClosureCall).
+parity(translator.dart:1597 convertType): the ref→ref arm — ref.as_non_null when only
+nullability blocks the upcast (:1614-1616), else ref.cast (:1619).
+"""
+function _narrow_ref!(b::InstrBuilder, ctx::AbstractCompilationContext, from::WasmValType,
+                      to::WasmValType, @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder
+    local _mod = ctx.mod
+    if wasm_subtype(from, to, _mod.types)
+        # Upcast is free — emit nothing.
+    elseif wasm_subtype(_wt_drop_nullable(from), to, _mod.types)
+        # dart2wasm convertType L847-849: the ONLY thing blocking the upcast is
+        # nullability (heap types compatible, source nullable → non-null target).
+        # A null-check (ref.as_non_null) suffices — cheaper than a full ref.cast (P9).
+        ref_as_non_null!(b)
+    elseif to isa ConcreteRef && !(from isa ConcreteRef) &&
+           vararg_tuple_of_struct(ctx.type_registry, to.type_idx) !== nothing
+        # a value narrowed to a runtime-length tuple Tuple{Vararg{E}} is that representation or
+        # an NTuple{k,E} of a fixed class, built into it (emit_fixed_to_vararg_tuple!); a cast
+        # of the fixed struct trapped where native answers 3 (dev/AUDIT.md A10E4)
+        local reg = ctx.type_registry
+        local V = vararg_tuple_of_struct(reg, to.type_idx)
+        local v = allocate_local!(ctx, AnyRef)
+        local_set!(b, v)
+        local done = block!(b; results=WasmValType[to])
+        local_get!(b, v); ref_test!(b, Int64(to.type_idx), false)
+        if_!(b)
+        local_get!(b, v); ref_cast!(b, Int64(to.type_idx), false); br!(b, done)
+        end_block!(b)
+        for (T, _) in ordered_pairs(reg.type_ids, registry_order_key(reg),
+                                    T -> T isa DataType && T <: V && isconcretetype(T) &&
+                                         !is_runtime_vararg_tuple_type(T))
+            local tinfo = get(reg.structs, T, nothing)
+            tinfo isa StructInfo || continue   # a class with no layout has no value
+            local_get!(b, v); ref_test!(b, Int64(tinfo.wasm_type_idx), false)
+            if_!(b)
+            local_get!(b, v); emit_fixed_to_vararg_tuple!(b, ctx, T, V); br!(b, done)
+            end_block!(b)
+        end
+        local_get!(b, v); ref_cast!(b, Int64(to.type_idx), to.nullable)
+        end_block!(b)
+    elseif to isa ConcreteRef
+        if is_closure_context_ref(ctx.type_registry, to)
+            local _uw = allocate_local!(ctx, AnyRef)
+            local_tee!(b, UInt32(_uw))
+            emit_closure_context_unwrap!(b, ctx.mod, ctx.type_registry, UInt32(_uw), to)
+        else
+            ref_cast!(b, Int64(to.type_idx), to.nullable)
+        end
+    elseif to isa RefType
+        ref_cast!(b, to, true)
+    elseif to isa NonNullAbstractRef
+        ref_cast!(b, RefType(to.heaptype_byte), false)
+    else
+        emit_unsupported_stub!(ctx, b, :unsupported_type,
+            "no conversion from $(from) to $(to)"; detail=from_julia)
+    end
+    return b
+end
+
+"""
+    coerce_stack_top!(b, expected, ctx; from_julia)
+
+Adjust the value most recently emitted into `b` to a storage/call boundary type. The
+builder's tracked stack is the sole source of the actual type; callers never re-derive it
+from Julia IR. This is the post-emission half of dart's `wrap` chokepoint for producers
+whose emission and sink are structurally separated.
+parity(code_generator.dart:677 convertType): the conversion translateExpression applies to
+the emitted result type.
+"""
+function coerce_stack_top!(b::InstrBuilder, expected::WasmValType,
+                           ctx::AbstractCompilationContext;
+                           @nospecialize(from_julia::Union{Type,Nothing}))::WasmValType
+    isempty(b.v.stack) && throw(ArgumentError("cannot coerce an empty emitted-value stack"))
+    actual = b.v.stack[end]
+    actual === expected || convert_type!(b, actual, expected, ctx; from_julia=from_julia)
+    return expected
+end
+
+# Unknown source/target type (e.g. get_phi_edge_wasm_type returned `nothing`): the
+# inline ladders this funnel replaces all emit nothing in that case (no `=== I64` etc.
+# branch matches), so a no-op preserves byte-identity.
+# parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
+convert_type!(b::InstrBuilder, ::Nothing, ::Any, ::AbstractCompilationContext;
+              @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder = b
+# parity(quarantine: an edge whose wasm type the phi analysis left unknown converts nothing; the consumer's own validation rejects a mismatch.)
+convert_type!(b::InstrBuilder, ::WasmValType, ::Nothing, ::AbstractCompilationContext;
+              @nospecialize(from_julia::Union{Type,Nothing}))::InstrBuilder = b
+
+# ============================================================================
+# Single-source classId box/unbox/discriminate (dev/HISTORY.md#uniform-values-objects-and-class-hierarchy).
+# dart2wasm's convertType boxing: a dynamic value is a {classId:i32@0, value@1} struct
+# subtyping the Top struct ($JlBase); type-tests read classId off the box. These are the
+# ONE producer + ONE consumer that ALL boxing/discrimination routes through. The former ~41
+# scattered emit_box_type_id!+struct_new ladders (flow/conditionals/statements return boxes,
+# stackified phi-edge boxes, calls/invoke arg+ret boxes, tuple-field boxes) have ALL been
+# collapsed onto this producer; the old emit_box_type_id! helper is DELETED (census F5) — its
+# wasm-rep classId fallback (values.jl below). Added DORMANT in F-i (byte-identical); wired via
+# convert_type!'s box/unbox arms + the isa sites in F-ii; the site sweep finished in Loop C.
+# ============================================================================
+
+"""
+    emit_classid_box!(b, ctx, wasm_type, julia_type) -> box_type_idx
+
+Box the numeric value on the stack into a `{classId:i32, value:wasm_type}` struct (the
+canonical numeric box, which subtypes `\$JlBase`). Stores the REAL Julia-type classId when
+`julia_type` is the proven concrete Julia source type; it supplies the exact classId.
+There is no width-based fallback because distinct Julia types share Wasm representations.
+Pushes the box ref. This is THE single boxing producer (dart `convertType` box arm).
+parity(translator.dart:1597 convertType): the boxing arm; the classId comes from the Julia
+source type where dart reads `boxedClasses[from]` (:1623).
+"""
+function emit_classid_box!(b::InstrBuilder, ctx::AbstractCompilationContext,
+                           wasm_type::WasmValType, julia_type::Type)::UInt32
+    return emit_classid_box!(b, ctx.mod, ctx.type_registry, boxing_scratch_local!(ctx, wasm_type),
+                             wasm_type, julia_type)
+end
+# Core (mod, registry) method, the scratch local the caller's own: the dispatch wrappers, the
+# selector callers and the closure entries build their functions without a codegen context.
+# The scratch is a local the caller declared for this box, of the boxed value's own wasm type:
+# a parameter, or a local of another type, is refused (a same-typed index is told only by its
+# declaration, L173).
+# parity(translator.dart:1597 convertType): the boxing arm — save the value, the classId, the
+# value, struct.new (:1640-1644).
+function emit_classid_box!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                           scratch::Integer, wasm_type::WasmValType, julia_type::Type)::UInt32
+    isconcretetype(julia_type) || error(
+        "numeric boxing requires a concrete Julia source type, got $julia_type")
+    (scratch >= length(b.params) && _local_type(b, scratch, "the box's scratch") === wasm_type) ||
+        throw(ArgumentError("$(b.func_name): the scratch of a $(wasm_type) box is local $(scratch), " *
+                            "which is no local declared with the type $(wasm_type)"))
+    box_idx = get_numeric_box_type!(mod, registry, wasm_type)
+    local_set!(b, scratch)                  # save the value
+    emit_type_id!(b, registry, julia_type)
+    local_get!(b, scratch)                  # reload the value (field 1)
+    struct_new!(b, box_idx)
+    return box_idx
+end
+
+"""
+    emit_classid_unbox!(b, ctx, to_wasm)
+
+Unbox: the boxed ref is on the stack; narrow to the `to_wasm` numeric box and read its
+value field (field 1). THE single unboxing consumer (dart `convertType` unbox arm). `nullable`
+selects the ref.cast form: `false` (default) traps on a null ref — correct inside an isa/ref.test
+guard; `true` permits null (the permissive external/dynamic call boundary). An extern→any prefix
+(`any_convert_extern!`), when the source is externref, stays in the caller (a distinct coercion).
+parity(translator.dart:1597 convertType): the unboxing arm.
+"""
+function emit_classid_unbox!(b::InstrBuilder, ctx::AbstractCompilationContext, to_wasm::WasmValType;
+                             nullable::Bool=false)::InstrBuilder
+    return emit_classid_unbox!(b, ctx.mod, ctx.type_registry, to_wasm; nullable=nullable)
+end
+# Core (mod, registry) method — the unbox needs no scratch local, so it works outside the main
+# codegen context too (e.g. the dispatch-wrapper subsystem, which carries mod + registry, not ctx).
+# parity(translator.dart:1597 convertType): the unboxing arm — ref.cast to the box, struct.get
+# of the value field.
+function emit_classid_unbox!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                             to_wasm::WasmValType; nullable::Bool=false)::InstrBuilder
+    box_idx = get_numeric_box_type!(mod, registry, to_wasm)
+    ref_cast!(b, Int64(box_idx), nullable)
+    struct_get!(b, UInt32(box_idx), UInt32(1))
+    return b
+end
+
+"""
+    emit_string_wrap!(b, mod, registry, scratch, class)
+
+parity(constants.dart:872 visitStringConstant) — the classed string PRODUCER (dart: String IS a class): with the UTF-8
+byte array on the stack, wrap it as `\$JlString{classId(class), 0, data}`, through `scratch`, a
+local of the byte array's type the caller declared. The ONE
+place a String or Symbol value is born; every producer routes here and names its class.
+parity(constants.dart:1556 ConstantCreator.visitSymbolConstant): a Symbol is its own class.
+parity(quarantine: Julia's jl_sym_t holds its name bytes inline as jl_string_t does, and Base
+reads them through the jl_symbol_name pointer, so a Symbol shares the classed string's layout
+under Symbol's classId where dart wraps a String field.)
+"""
+function emit_string_wrap!(b::InstrBuilder, mod::WasmModule, registry::TypeRegistry,
+                           scratch::Integer, class::Type)::InstrBuilder
+    (class === String || class === Symbol) ||
+        error("emit_string_wrap!: $class is not a classed-string class (String or Symbol)")
+    struct_idx = get_string_struct_type!(mod, registry)
+    local_set!(b, scratch)
+    i32_const!(b, Int64(ensure_type_id!(registry, class)))
+    i32_const!(b, 0) # identityHash: lazily assigned by objectid
+    local_get!(b, scratch)
+    struct_new!(b, struct_idx)
+    return b
+end
+
+"""ctx convenience: allocates the scratch local itself.
+
+parity(constants.dart:872 visitStringConstant): the same classed string producer, with the
+scratch local dart's `b.addLocal` would give it."""
+function emit_string_wrap!(b::InstrBuilder, ctx::AbstractCompilationContext, class::Type)::InstrBuilder
+    arr_idx = get_string_array_type!(ctx.mod, ctx.type_registry)
+    sc = allocate_local!(ctx, ConcreteRef(arr_idx, true))
+    return emit_string_wrap!(b, ctx.mod, ctx.type_registry, sc, class)
+end
+
+"""
+    emit_classid_range_check!(b, low, high)
+
+dart's `emitClassIdRangeCheck` (code_generator.dart:5684), THE single abstract-type
+discriminator: with the classId (i32) on the stack, a single id lowers to `i32.const id;
+i32.eq`; a dense DFS range lowers to the 3-instruction unsigned window
+`i32.const low; i32.sub; i32.const (high-low); i32.le_u` (an id below `low` wraps to a huge
+unsigned value, so one comparison covers both bounds — no temp local, no i32.and).
+parity(code_generator.dart:5684 emitClassIdRangeCheck) — the one-range case; dart compares
+`i32.const length; i32.lt_u` where this compares `i32.const (high-low); i32.le_u`.
+"""
+function emit_classid_range_check!(b::InstrBuilder, low::Integer, high::Integer)::InstrBuilder
+    if low == high
+        i32_const!(b, Int64(low))
+        num!(b, Opcode.I32_EQ)
+    else
+        i32_const!(b, Int64(low))
+        num!(b, Opcode.I32_SUB)
+        i32_const!(b, Int64(high - low))
+        num!(b, Opcode.I32_LE_U)
+    end
+    return b
+end
+
+"""isa's classId test for a non-concrete type over the closed world: the exact id set
+(concrete_class_ids), emitted as dart's range window when it is contiguous and as an
+OR-chain otherwise; an empty set is constant false. typeId on the stack; result i32.
+parity(code_generator.dart:5709 classIdSearch) — chooses the search form for the id set;
+the OR-chain form (emit_classid_ranges!) is not dart's, which searches a List<Range>."""
+function emit_classid_membership!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
+    isempty(ids) && return emit_classid_ranges!(b, ctx, ids)
+    if ids[end] - ids[1] + 1 == length(ids)
+        return emit_classid_range_check!(b, ids[1], ids[end])
+    end
+    return emit_classid_ranges!(b, ctx, ids)
+end
+
+"""The OR-chain form of `emit_classid_membership!`: a non-contiguous id set with no
+single dart-style range window, so each id gets its own equality test. typeId is on the
+stack; result i32. An empty set is constant false (no concrete class of the closed
+world is a subtype).
+parity(pkg/dart2wasm/lib/code_generator.dart:5684 emitClassIdRangeCheck)"""
+function emit_classid_ranges!(b::InstrBuilder, ctx::AbstractCompilationContext, ids::Vector{Int32})::InstrBuilder
+    if isempty(ids)
+        drop!(b)
+        i32_const!(b, 0)
+        return b
+    end
+    sc = allocate_local!(ctx, I32)
+    local_tee!(b, sc)
+    for (i, x) in enumerate(ids)
+        i > 1 && local_get!(b, UInt32(sc))
+        i32_const!(b, Int64(x))
+        num!(b, Opcode.I32_EQ)
+        i > 1 && num!(b, Opcode.I32_OR)
+    end
+    return b
+end
+
+"""
+    emit_isa_class_header!(b, ctx, T) -> b
+
+Replace the reference on the stack with the i32 answer to whether it is a value of the concrete
+class `T`: an object (`\$JlBase`) whose header classId is `T`'s (a closure of any class is its
+closure object, maybe_wrap_closure!). Anything else (a type object, a bare array, a host value)
+is not. dart's is checker loads the classId from the
+top struct and compares it, whichever struct the class's own values are.
+parity(types.dart:907 IsCheckerCodeGenerator.generate): loadClassId, then the classId compare.
+The `ref.test \$JlBase` before it: parity(quarantine: a value WT holds as any value may be a
+type object (a `\$JlType` without the class header) or a bare array, neither a header-carrying
+object; dart's every value of a top type, its type objects included, is one.)
+"""
+function emit_isa_class_header!(b::InstrBuilder, ctx::AbstractCompilationContext, @nospecialize(T))::InstrBuilder
+    local base = ctx.type_registry.base_struct_idx
+    base === nothing && error("a class test needs the class base struct")
+    local tid = ensure_type_id!(ctx.type_registry, T)
+    local tmp = allocate_local!(ctx, AnyRef)
+    local_set!(b, tmp)
+    # an object (`$JlBase`) whose header classId is T's
+    local_get!(b, tmp)
+    ref_test!(b, Int64(base), false)
+    if_!(b; results=WasmValType[I32])
+    local_get!(b, tmp)
+    emit_typeof!(b, base)
+    i32_const!(b, Int64(tid))
+    num!(b, Opcode.I32_EQ)
+    else_!(b)
+    i32_const!(b, 0)
+    end_block!(b)
+    return b
+end
+
+"""
+    emit_return_coerced!(b, val, ctx)
+
+Emit a ReturnNode value `val` coerced to the function's wasm return type. Extracted from ~9
+identical copies (cleanup Loop 4). a numeric value into a ref return → synthesize
+ref.null / extern-box. Else if the value type cannot satisfy the return type → `unreachable`
+(trap). Else compile the value + the numeric-widening / extern-convert coercion ladder, then
+`return`. Byte-identical to the inlined blocks it replaces.
+parity(code_generator.dart:1372 visitReturnStatement)
+"""
+function emit_return_coerced!(b::InstrBuilder, val, ctx::AbstractCompilationContext)::InstrBuilder
+    # Framework roots may deliberately erase a Julia result (`void_return=true`).
+    # The typed IR still contains `return %value`; evaluate that value for its
+    # side effects, discard its physical result when present, and return void.
+    # Treating Nothing like an ordinary value made a valid setter-returning
+    # handler end in `drop; unreachable`, so its surrounding reactive batch
+    # never reached the flush/presentation boundary.
+    if ctx.return_type === Nothing
+        # The discard is still a typed consumer: route through THE wrap funnel
+        # with the value's static physical representation, then drop it.
+        emit_value!(b, val, ctx, static_wasm_type(val, ctx))
+        drop!(b)
+        return_!(b)
+        return b
+    end
+    # parity(code_generator.dart:1372 visitReturnStatement): THE wrap for returns — emit typed, coerce the ACTUAL type through the ONE
+    # convert_type! funnel, return. Deletes the infer_value_wasm_type pre-guess and the
+    # numeric→ConcreteRef ref.null VALUE DROP (the funnel boxes value-preservingly; an
+    # ill-typed non-box concrete target now traps loudly instead of silently nulling).
+    func_ret_wasm = boundary_wasm_type(ctx.return_type, ctx.mod, ctx.type_registry)
+    # a MemoryRef result crosses as its single-value struct, its element offset with it
+    if func_ret_wasm isa ConcreteRef && func_ret_wasm.type_idx in values(ctx.type_registry.memoryref_box_idxs)
+        emit_value!(b, val, ctx, func_ret_wasm)
+        return_!(b)
+        return b
+    end
+    # `nothing` into a ref return → typed null (dart returns null, never a boxed zero).
+    if _wt_is_ref(func_ret_wasm) && is_nothing_value(val, ctx)
+        if func_ret_wasm isa ConcreteRef
+            ref_null!(b, Int64(func_ret_wasm.type_idx))
+        else
+            ref_null!(b, func_ret_wasm)
+        end
+        return_!(b)
+        return b
+    end
+    ty = emit_value!(b, val, ctx, static_wasm_type(val, ctx))
+    # numeric→ref precedence (boxing) is checked before compatibility, as before.
+    needs_box = ty !== nothing && !_wt_is_ref(ty) && _wt_is_ref(func_ret_wasm)
+    if ty === nothing || (!needs_box && !return_type_compatible(ty, func_ret_wasm))
+        # dead/unsatisfiable path (unresolvable value or dead Union arm) — trap.
+        unreachable!(b)  # structural trap (dart-legit dead path)
+    else
+        if ty !== func_ret_wasm
+            source_julia = value_type(ctx, val)
+            convert_type!(b, ty, func_ret_wasm, ctx;
+                          from_julia=(source_julia isa Type && isconcretetype(source_julia)) ? source_julia : nothing)
+        end
+        return_!(b)
+    end
+    return b
+end
+
+"""
+THE condition visitor: emit a GotoIfNot condition as an i32 directly into the target builder.
+When the condition SSA value has an anyref/externref local (Julia typed it Any), the value
+would push a reference where i32.eqz needs an i32, so it is unboxed (ref.cast + struct.get).
+parity(pkg/dart2wasm/lib/code_generator.dart:1277 CodeGenerator.visitIfStatement)
+"""
+function compile_condition_to_i32!(b::InstrBuilder, cond::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
+    if tracing(ctx, :condstub) && ctx.last_stmt_was_stub
+        println(stderr, "CONDSTUB cond=", first(repr(cond), 30))
+        for fr in stacktrace()[2:9]
+            println(stderr, "   ", fr)
+        end
+    end
+    set_context!(b, "GotoIfNot cond → i32")
+    emit_value!(b, cond, ctx, static_wasm_type(cond, ctx))  # the local's representation drives Bool unboxing
+    # Check if the condition value is in a non-i32 local
+    if cond isa NirSSA
+        local_idx = get(ctx.ssa_locals, cond.id, nothing)
+        if local_idx === nothing
+            local_idx = get(ctx.phi_locals, cond.id, nothing)
+        end
+        if local_idx !== nothing
+            local_offset = local_idx - ctx.n_params
+            if local_offset >= 0 && local_offset < length(ctx.locals)
+                local_type = ctx.locals[local_offset + 1]
+                if local_type === AnyRef || local_type === ExternRef
+                    # Value is anyref/externref but should be i32 (Bool). Unbox via the one consumer.
+                    local_type === ExternRef && any_convert_extern!(b)
+                    emit_classid_unbox!(b, ctx, I32; nullable=true)
+                elseif local_type isa ConcreteRef || local_type === StructRef || local_type === ArrayRef
+                    error("Bool condition has a non-boolean reference representation: $local_type")
+                end
+            end
+        end
+    end
+    return b
+end
+
+
+# B4/Loop C — the typed value channel (dart2wasm `wrap`/`node.accept1 -> w.ValueType`,
+# code_generator.dart:879): the body builds into the typed InstrBuilder `b`, so the type it
+# pushes IS a byproduct of emission = `b.v.stack[end]`. `_compile_value_b` returns that
+# builder, and `emit_value!` is the sole merge/coercion channel.
+
+"""
+    emit_value!(b, val, ctx[, expected]) -> Union{WasmValType,Nothing}
+
+Compile `val` and splice it into builder `b`, declaring the stack effect with the type the
+emission ACTUALLY pushed (`_compile_value_b`'s tracked result) — NOT a re-guess via
+`infer_value_wasm_type` (the typed channel).
+Returns the pushed type. Output is byte-identical (the value bytes are the same; only the
+validator's stack type is now the truth instead of a re-derivation).
+parity(code_generator.dart:676 accept1): the emission whose result type is its byproduct.
+"""
+function emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext)::Union{WasmValType,Nothing}
+    # THE typed merge — valid because the WT_AUDIT_VALUE_STACK sweep
+    # proved _compile_value_b's tracked stack honest (zero liars across smoke +
+    # the heaviest shards after the struct_new! mod-resolving fix).
+    vb = _compile_value_b(val, ctx)
+    ty = isempty(vb.v.stack) ? nothing : vb.v.stack[end]
+    # A constant's type is known before it is emitted, and the emission pushes exactly that
+    # type: dart asserts the same of every constant (constants.dart:811
+    # `info.constant.accept(TypeOfConstantVisitor(translator)) == info.type`).
+    if (val isa NirLiteral || (val isa NirGlobalRef && val.bound)) && ty !== nothing && vb.v.reachable
+        local st = static_wasm_type(val, ctx)
+        st == ty || error("a $(typeof(val.value)) constant pushed $(ty), but static_wasm_type names $(st)")
+    end
+    append_builder!(b, vb)
+    return ty
+end
+
+"""
+    _is_type_operand(arg) -> Bool
+
+True when a call argument is a compile-time TYPE parameter rather than a runtime
+value — `sext_int(Int64, x)`'s first argument, `isa(x, T)`'s second. `===`/`!==`
+are the exception (there a Type IS the runtime value being compared), which is
+why `emit_call_operands!` takes `include_types`.
+parity(quarantine: Julia's typed IR passes compile-time Types as ordinary call arguments —
+`sext_int(Int64, x)`, `isa(x, T)` — where a kernel call carries type arguments apart from
+its positional operands.)
+"""
+_is_type_operand(arg::NirNode)::Bool =
+    (arg isa NirLiteral && arg.value isa Type) ||
+    (arg isa NirGlobalRef && arg.bound && arg.value isa Type)
+
+"""
+    emit_call_operand!(b, ctx, arg) -> Union{WasmValType,Nothing}
+
+THE call-operand emission point: emit one call argument at its static type and
+return that type — dart's `codeGen.translateExpression(x, typeOfExp(x))`
+(intrinsics.dart:981, :1250, :1522). parity(intrinsics.dart:995 `_binaryOperator
+Map` call sites / :1007 / :1018): in dart2wasm every intrinsic wraps its OWN
+operands (`codeGen.wrap(node.arguments.positional[i], …)`) — nothing is
+pre-pushed for it — so `compile_call!`'s generic loop and every self-contained
+`BUILTIN_LOWERINGS` entry emit through this one point instead of one of them
+inheriting the other's stack.
+"""
+emit_call_operand!(b::InstrBuilder, ctx::AbstractCompilationContext, arg)::Union{WasmValType,Nothing} =
+    emit_value!(b, arg, ctx, static_wasm_type(arg, ctx))
+
+"""
+    emit_call_operands!(b, ctx, args; include_types=false) -> b
+
+Every runtime operand of one call, in argument order, through
+`emit_call_operand!`; compile-time Type parameters are skipped unless
+`include_types`.
+parity(intrinsics.dart:998 translateExpression): each operand emitted in argument order.
+"""
+function emit_call_operands!(b::InstrBuilder, ctx::AbstractCompilationContext, args;
+                             include_types::Bool=false)::InstrBuilder
+    for arg in args
+        (_is_type_operand(arg) && !include_types) && continue
+        emit_call_operand!(b, ctx, arg)
+    end
+    return b
+end
+
+"""
+    _is_boxed_numeric_operand(arg, ctx) -> Bool
+
+True when `arg` arrives in a physically `AnyRef` local and its refined type is not a number its
+register holds exactly (exact_register: a Bool, or a 32- or 64-bit number): a numeric operation on
+it rejects in compile_call! (its class is known only at run time, dev/AUDIT.md A3E6), and
+`_lower_operator!` unboxes it at the width its node states. An SSA whose refined type is a machine
+numeric is not included: its load is the one unbox (translator.dart:2099
+translateTypeOfLocalVariable).
+parity(pkg/dart2wasm/lib/translator.dart:1597 Translator.convertType)
+"""
+function _is_boxed_numeric_operand(arg::NirNode, ctx::AbstractCompilationContext)::Bool
+    arg isa NirSSA || return false
+    _is_externref_value(arg, ctx) && return false
+    exact_register(value_type(ctx, arg)) === nothing || return false
+    li = get(ctx.ssa_locals, arg.id, nothing)
+    li === nothing && (li = get(ctx.phi_locals, arg.id, nothing))
+    li === nothing && return false
+    off = li - ctx.n_params
+    return off >= 0 && off < length(ctx.locals) && ctx.locals[off + 1] === AnyRef
+end
+
+# parity(code_generator.dart:4890 EagerStaticFieldInitializerCodeGenerator): the initializer
+# body of a mutable global constant (generateInternal :4901 — translateExpression, then the
+# caller's global.set), run from the start function as dart's is (globals.dart:179).
+function compile_module_initializer(@nospecialize(val), ctx::CompilationContext)::Tuple{InstrBuilder,Vector{WasmValType}}
+    saved_n_params = ctx.n_params
+    saved_locals = ctx.locals
+    saved_scratch = ctx.scratch_locals
+    saved_boxing = ctx.boxing_scratch_locals
+    saved_typeof = ctx.typeof_scratch_local
+    saved_params, saved_results = ctx.wasm_params, ctx.wasm_results
+    ctx.n_params = 0
+    ctx.wasm_params, ctx.wasm_results = WasmValType[], WasmValType[]
+    ctx.locals = WasmValType[]
+    ctx.scratch_locals = nothing
+    ctx.boxing_scratch_locals = Dict{WasmValType,Int}()
+    ctx.typeof_scratch_local = nothing
+    try
+        b = _compile_value_b(NirLiteral(val), ctx)
+        return b, ctx.locals
+    finally
+        ctx.n_params = saved_n_params
+        ctx.wasm_params, ctx.wasm_results = saved_params, saved_results
+        ctx.locals = saved_locals
+        ctx.scratch_locals = saved_scratch
+        ctx.boxing_scratch_locals = saved_boxing
+        ctx.typeof_scratch_local = saved_typeof
+    end
+end
+
+"""
+    emit_value!(b, val, ctx, expected) -> WasmValType
+
+THE wrap chokepoint (dart `translateExpression`, code_generator.dart:665): emit `val`, take
+the type it ACTUALLY pushed (the emission byproduct), coerce actual→`expected` through the ONE
+`convert_type!` funnel (dart `convertType`), and return `expected`; the type is never
+re-derived after emission. The source type the funnel reads is the node's own static type
+(value_type, dart's `dartTypeOf(node)`); emit_value_as! states a narrower one the caller knows.
+
+A `nothing` actual type means the emit produced no single result (dead/unreachable
+path — the `unreachable` is already emitted); `expected` is returned so the declared stack
+shape stays consistent, matching dart's posture that unreachable code still validates.
+parity(code_generator.dart:665 translateExpression)
+"""
+emit_value!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+            expected::WasmValType)::WasmValType =
+    _emit_value_wrap!(b, val, ctx, expected, nothing)
+
+"""
+    emit_value_as!(b, val, ctx, expected, from_julia) -> WasmValType
+
+emit_value! for a value whose class the caller knows to be `from_julia`, narrower than the
+node's static type (a class switch's arm, a method error's argument class, a constant's own
+class), so the funnel stamps that class where it boxes.
+parity(code_generator.dart:665 translateExpression)
+"""
+emit_value_as!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+               expected::WasmValType, @nospecialize(from_julia::Type))::WasmValType =
+    _emit_value_wrap!(b, val, ctx, expected, from_julia)
+
+"""
+    _emit_value_static!(b, val, ctx, expected, T) -> WasmValType
+
+emit_value! for a value the caller types `T` (a call's static argument type, a field's declared
+type): emit_value_as! at `T` where `T` is a concrete class, else the node's own static type.
+parity(code_generator.dart:665 translateExpression)
+"""
+_emit_value_static!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+                    expected::WasmValType, @nospecialize(T))::WasmValType =
+    (T isa DataType && isconcretetype(T)) ? emit_value_as!(b, val, ctx, expected, T) :
+                                            emit_value!(b, val, ctx, expected)
+
+# parity(code_generator.dart:665 translateExpression): its one body; `from_julia` nothing reads
+# the node's own static type (value_type) when the funnel needs it, and a stated one must be
+# narrower than it (a literal's value of it): a class that disagrees with the value's own type
+# raises at its statement, never converts the value as another class's.
+function _emit_value_wrap!(b::InstrBuilder, val::NirNode, ctx::AbstractCompilationContext,
+                           expected::WasmValType, @nospecialize(from_julia::Union{Type,Nothing}))::WasmValType
+    from_julia === nothing ||
+        (val isa NirLiteral ? val.value isa from_julia : from_julia <: value_type(ctx, val)) ||
+        error("the class $(from_julia) stated for $(val) disagrees with its own type " *
+              "$(val isa NirLiteral ? Core.Typeof(val.value) : value_type(ctx, val))")
+    # A literal `nothing` has an exact null representation at a reference sink.
+    # This is deliberately literal-only; SSA/Union shape guesses once swallowed
+    # live values here. Dynamic Nothing is handled by its typed producer.
+    if _is_nothing_literal(val) && _wt_is_ref(expected)
+        if expected isa ConcreteRef
+            ref_null!(b, Int64(expected.type_idx))
+        else
+            ref_null!(b, expected)
+        end
+        return expected
+    end
+    # A MemoryRef into a slot that holds any value (anyref/eqref/structref/externref) or into
+    # a field that holds its single-value struct (memoryref_field_type!) is that struct,
+    # classed MemoryRef{T} and carrying its element offset — never its bare Memory.
+    if (expected isa ConcreteRef && expected.type_idx in values(ctx.type_registry.memoryref_box_idxs)) ||
+       expected === AnyRef || expected === EqRef || expected === StructRef || expected === ExternRef
+        local mr_T = value_type(ctx, val)
+        if mr_T isa DataType && mr_T <: Core.GenericMemoryRef && isconcretetype(mr_T)
+            emit_memoryref_box!(b, ctx, val, mr_T)
+            expected === ExternRef && extern_convert_any!(b)
+            return expected
+        end
+    end
+    ty = emit_value!(b, val, ctx)  # parity(code_generator.dart:676 accept1): the one visitor call; convertType below
+    ty === nothing && return expected
+    if ty !== expected
+        # Like dart's wrap(node, expectedType), the single wrap funnel owns both
+        # the emitted Wasm type and the node's static source type. Callers must
+        # not independently rediscover source types just to request a coercion.
+        convert_type!(b, ty, expected, ctx; from_julia=(from_julia === nothing ? value_type(ctx, val) : from_julia))
+    end
+    return expected
+end
+
+"""Widen the stored unsigned i32 Object identity field to Julia's UInt64 objectid result.
+parity(intrinsics.dart:1498 getIdentityHashField): struct.get identityHash; i64.extend_i32_u (:1503)."""
+extend_identity_hash_to_u64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
+
+# Physical collection lengths are i32 in WasmGC and Int64 in Julia. Keep these
+# representation conversions beside the central value/conversion machinery so
+# collection lowerers do not grow independent coercion ladders.
+# parity(intrinsics.dart:1223 wasmArrayIndex): an i64 index/length wraps to i32 before the array op (:1232).
+narrow_length_to_i32!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I32_WRAP_I64)
+# parity(intrinsics.dart:626 WasmArrayRef.length): array.len; i64.extend_i32_u (:631).
+widen_length_to_i64!(b::InstrBuilder)::InstrBuilder = num!(b, Opcode.I64_EXTEND_I32_U)
+
+"""
+    _ctx_builder(ctx, name) -> InstrBuilder
+
+A fragment of the function `ctx` compiles: its parameters and results are the function's
+(ctx.wasm_params, ctx.wasm_results), so a return in it is checked against the function's
+results, and its locals are the function's one list (ctx.locals), which every builder of the
+function shares and allocate_local! declares into.
+parity(quarantine: WT emits a function through fragment builders merged by append_builder!; dart emits a function into one builder.)
+"""
+_ctx_builder(ctx::AbstractCompilationContext, name::String)::InstrBuilder =
+    InstrBuilder(ctx.wasm_params, ctx.wasm_results; func_name=name, mod=ctx.mod, locals=ctx.locals,
+                 fragment=true)
+
+"""
+    _ctx_function_builder(ctx, func_idx) -> InstrBuilder
+
+The body of the function `ctx` compiles, defined at `func_idx`: its builder (function_builder),
+whose locals are ctx.locals, the list its fragments share.
+parity(pkg/wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder)
+"""
+_ctx_function_builder(ctx::AbstractCompilationContext, func_idx::Integer)::InstrBuilder =
+    function_builder(ctx.mod, func_idx; locals=ctx.locals)
+
+"""True for the literal `nothing` operand.
+parity(code_generator.dart:2984 visitNullLiteral): `nothing` is the null literal."""
+_is_nothing_literal(x::NirNode)::Bool = x isa NirLiteral && x.value === nothing
+
+"""
+    emit_constant_slots!(b, ctx, mem, arr_type_idx, elem_type; contents) -> b
+
+`[] -> [slot...]`: each slot of the constant Memory or Vector `mem`, of the Julia element type
+`elem_type`, as its array type `arr_type_idx` stores it, for an `array.new_fixed`: an assigned
+slot its value, typed by its own class (emit_value!); an unset one (`!isassigned`, which Julia's
+allocator and _unsetindex! leave) `#undef` (emit_undef!: the undefined value where the slot holds
+`nothing` too, else the null), so isassigned answers false and a read throws UndefRefError, as
+for a slot the program allocates. `contents(i)` false marks a slot whose bits hold no value of
+the program (a Dict's unoccupied isbits slot is uninitialized memory, process-varying and never
+read): it takes its storage type's zero. A slot after a rejected one is not emitted.
+parity(constants.dart:1128 visitListConstant): a list constant's elements, each instantiated.
+"""
+function emit_constant_slots!(b::InstrBuilder, ctx::AbstractCompilationContext, mem,
+                              arr_type_idx::Integer, @nospecialize(elem_type);
+                              contents::Function)::InstrBuilder
+    local def = ctx.mod.types[Int(arr_type_idx) + 1]
+    # an invariant, not a gap: every caller passes the array type get_array_type! registered
+    def isa ArrayType || error("a constant $(typeof(mem)) has no Wasm array layout")
+    local w = unpacked(def.elem.valtype)
+    for i in 1:length(mem)
+        ctx.last_stmt_was_stub && break
+        if !isassigned(mem, i)
+            emit_undef!(b, ctx, elem_type, w)
+        elseif contents(i)
+            emit_value!(b, NirLiteral(mem[i]), ctx, w)   # typed by the element's own type
+        elseif w isa RefType
+            ref_null!(b, w)
+        elseif w isa ConcreteRef && w.nullable
+            ref_null!(b, Int64(w.type_idx))
+        elseif w === I32
+            i32_const!(b, 0)
+        elseif w === I64
+            i64_const!(b, 0)
+        elseif w === F32
+            f32_const!(b, 0.0f0)
+        elseif w === F64
+            f64_const!(b, 0.0)
+        else
+            record_unsupported!(ctx, :unsupported_type, "slot $i of a constant $(typeof(mem)), which holds no value, has no zero of its storage type $w"; detail=string(typeof(mem)), soundness_fatal=true)
+        end
+    end
+    return b
+end
+
+# parity(constants.dart:552 ConstantInstantiator): a literal operand is instantiated per
+# constant kind as dart instantiates a Constant; an SSA value, argument or slot reads its local
+# as code_generator.dart:2127 visitVariableGet does.
+function _compile_value_b(node::NirNode, ctx::AbstractCompilationContext)::InstrBuilder
+    # The accumulator is the typed builder `b`.
+    b = _ctx_builder(ctx, "compile_value")
+    # Bridge external byte-emitting helpers (their intermediate buffers stay bytes):
+    _emit_tid!(T) = haskey(ctx.type_registry.structs, T) ?
+        emit_struct_prefix!(b, ctx.type_registry, T, ctx.type_registry.structs[T]) :
+        emit_type_id!(b, ctx.type_registry, T)
+    # parity(pkg/wasm_builder/lib/src/builder/instructions.dart:494 _verifyTypes, :212 _stackTypes): the narrow DECLARES its stack effect so the typed channel sees the
+    # refined type (it was emitted invisibly — vty stayed anyref and stores skipped the
+    # funnel box for join-refined numerics).
+    # THE narrow channel emits direct — the cast/unbox is tracked (the
+    # declared pops/pushes contract died with the bytes buffer).
+    _narrow!(li, sid) = _narrow_generic_local!(b, li, sid, ctx)
+
+    # If we're in dead code (previous sub-call was a stub), don't compile
+    # more values. Emitting data after unreachable creates invalid WASM byte sequences
+    # (e.g., array element i32_const values decode as block/loop instructions).
+    if ctx.last_stmt_was_stub
+        tracing(ctx, :deadval) && println(stderr, "DEADVAL val=", first(repr(node), 60))
+        unreachable!(b)  # 0x00  # structural trap (dart-legit dead path)
+        return b
+    end
+
+    if node isa NirSSA
+        # A MemoryRef carrying an element offset in the pair channel (builtins.jl) is
+        # one value here only at offset 0; any other crossing rejects, located.
+        if first(_memoryref_source(ctx, node)) in (:indexed, :pair, :snapshot, :boxed)
+            emit_memoryref_single!(b, ctx, node)
+            return b
+        end
+        # Check if this SSA has a local allocated (either regular or phi)
+        if haskey(ctx.ssa_locals, node.id)
+            local_idx = ctx.ssa_locals[node.id]
+            local_get!(b, local_idx)
+            # Narrow generic locals (anyref/structref) to concrete type.
+            # When SSA type is concrete but local was allocated as generic (due to Union/Any),
+            # ref.cast ensures downstream struct_get/array_get see the correct type.
+            _narrow!(local_idx, node.id)
+        elseif haskey(ctx.phi_locals, node.id)
+            # Phi node - load from phi local
+            local_idx = ctx.phi_locals[node.id]
+            local_get!(b, local_idx)
+        else
+            # No local — re-emit from the SSA's DEFINITION node.
+            # Guard against out-of-bounds SSAValue IDs (e.g. sentinel Core.SSAValue(-2)
+            # that appear as constant literals in IR of compiler functions like construct_ssa!)
+            if node.id < 1 || node.id > length(ctx.nir)
+                return b  # Dead code - sentinel SSAValue with invalid id
+            end
+            _rec = ctx.nir[node.id]
+            # A slot ASSIGNMENT publishes its value through the slot local, never here;
+            # only a plain definition is re-emitted from its node.
+            def = _rec.slot > 0 ? nothing : _rec.node
+            if def isa NirPi
+                pi_type = value_type(ctx, node)
+                if pi_type === Nothing
+                    # PiNode narrowed to Nothing - emit appropriate null/zero value
+                    # Nothing maps to I32 in Wasm, so emit i32.const 0 as default.
+                    # For Union{Nothing, T} where T is a ref type, emit ref.null instead.
+                    emitted_nothing = false
+                    if def.value isa NirSSA
+                        underlying_type = value_type(ctx, def.value)
+                        # For Union{Nothing, T}, emit ref.null $T
+                        if underlying_type !== Nothing && underlying_type !== Any
+                            wasm_type = get_concrete_wasm_type(underlying_type, ctx.mod, ctx.type_registry; for_local=true)
+                            if wasm_type isa ConcreteRef
+                                ref_null!(b, Int64(wasm_type.type_idx))
+                                emitted_nothing = true
+                            end
+                        end
+                    end
+                    if !emitted_nothing
+                        # Nothing is i32(0) as placeholder — this is what the callee expects
+                        i32_const!(b, 0)
+                    end
+                else
+                    # Non-Nothing PiNode without local: re-emit the underlying value.
+                    # Can't assume it's on the stack since block boundaries clear the stack.
+                    emit_value!(b, def.value, ctx, static_wasm_type(def.value, ctx))
+                    # Unbox from anyref to numeric type when PiNode narrows
+                    # a Union-typed anyref value to a concrete numeric type.
+                    # e.g., π(x::Union{Int32,Float64}, Int32) → ref.cast $BoxedInt32 + struct.get 1
+                    local _pi_target_wasm = julia_to_wasm_type(pi_type)
+                    if (_pi_target_wasm === I32 || _pi_target_wasm === I64 || _pi_target_wasm === F32 || _pi_target_wasm === F64)
+                        # Check if the underlying value is anyref (boxed).
+                        # P4-stdlib (Random hash_seed): read the ACTUAL local type
+                        # when one exists — get_concrete_wasm_type guesses I64 for
+                        # Union{Nothing, UInt64}, but such unions are allocated as
+                        # AnyRef locals (an i64 cannot encode `nothing`), so the
+                        # guess skipped the unbox and raw anyref reached i64.sub.
+                        local _pi_src_wasm = nothing
+                        if def.value isa NirSSA
+                            local _pi_li = get(ctx.ssa_locals, def.value.id, nothing)
+                            _pi_li === nothing && (_pi_li = get(ctx.phi_locals, def.value.id, nothing))
+                            if _pi_li !== nothing
+                                local _pi_off = _pi_li - ctx.n_params
+                                if _pi_off >= 0 && _pi_off < length(ctx.locals)
+                                    _pi_src_wasm = ctx.locals[_pi_off + 1]
+                                end
+                            end
+                            if _pi_src_wasm === nothing
+                                local _pi_src_type = value_type(ctx, def.value)
+                                _pi_src_wasm = get_concrete_wasm_type(_pi_src_type, ctx.mod, ctx.type_registry)
+                            end
+                        elseif def.value isa NirArgument
+                            local _pi_arg_idx = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
+                            if _pi_arg_idx >= 1 && _pi_arg_idx <= length(ctx.arg_types)
+                                _pi_src_wasm = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx], ctx.mod, ctx.type_registry)
+                            end
+                        end
+                        if _pi_src_wasm === AnyRef || _pi_src_wasm === StructRef || _pi_src_wasm isa ConcreteRef
+                            # Value is boxed in anyref — unbox via THE single consumer (non-null: isa-guarded).
+                            emit_classid_unbox!(b, ctx, _pi_target_wasm)
+                        end
+                    else
+                        # PiNode narrows to a struct/ref type (not numeric).
+                        # Source value may be EqRef/StructRef/AnyRef (from Union{Nothing, T} local).
+                        # Add ref.cast_null to narrow to the concrete type so struct.get works.
+                        local _pi_concrete = get_concrete_wasm_type(pi_type, ctx.mod, ctx.type_registry; for_local=true)
+                        if _pi_concrete isa ConcreteRef
+                            # Check if the source is a generic ref type that needs casting
+                            local _pi_src_wasm2 = nothing
+                            if def.value isa NirSSA
+                                local _pi_src_type2 = value_type(ctx, def.value)
+                                _pi_src_wasm2 = get_concrete_wasm_type(_pi_src_type2, ctx.mod, ctx.type_registry; for_local=true)
+                            elseif def.value isa NirArgument
+                                local _pi_arg_idx2 = ctx.is_compiled_closure ? def.value.n : def.value.n - 1
+                                if _pi_arg_idx2 >= 1 && _pi_arg_idx2 <= length(ctx.arg_types)
+                                    _pi_src_wasm2 = get_concrete_wasm_type(ctx.arg_types[_pi_arg_idx2], ctx.mod, ctx.type_registry; for_local=true)
+                                end
+                            end
+                            if _pi_src_wasm2 === EqRef || _pi_src_wasm2 === StructRef || _pi_src_wasm2 === AnyRef || _pi_src_wasm2 === ExternRef
+                                _pi_src_wasm2 === ExternRef && any_convert_extern!(b)
+                                ref_cast!(b, Int64(_pi_concrete.type_idx), true)
+                            end
+                        end
+                    end
+                end
+            elseif def isa NirSSA || def isa NirArgument || def isa NirSlot
+                # Julia 1.13 may retain a bare alias as an SSA definition (not a
+                # PiNode), notably for captured closure fields on x86. A local-less
+                # alias is not proof that the fragment validator already owns its
+                # operand. Follow the alias to its real producer/slot so value
+                # emission has an explicit, architecture-independent stack effect.
+                emit_value!(b, def, ctx, static_wasm_type(node, ctx))
+            elseif def isa NirBoundscheck
+                # real value (true unless @inbounds) — see statements.jl
+                i32_const!(b, def.flag === false ? 0 : 1)
+            elseif def isa NirCall || def isa NirInvoke || def isa NirNew || def isa NirForeignCall
+                # Re-compile the definition to produce its value on the stack.
+                local _ssa_t = WasmValType[static_wasm_type(node, ctx)]
+                if def isa NirCall
+                    compile_call!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirInvoke
+                    compile_invoke!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirNew
+                    compile_new!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
+                elseif def isa NirForeignCall
+                    compile_foreigncall!(b, def, node.id, ctx)   # dart visitor: emits direct, tracked
+                end
+            end
+            # For non-PiNode SSAs without locals, assume on stack (single-use in sequence)
+        end
+
+    elseif node isa NirArgument
+        # For closures being compiled, _1 is the closure object (arg_types[1])
+        # For regular functions, arguments start at _2 (arg_types[1])
+        # Use is_compiled_closure flag (not the type of first arg)
+        if ctx.is_compiled_closure
+            # Closure: direct mapping (_1 = closure, _2 = first arg)
+            arg_idx = node.n
+        else
+            # Regular function: skip _1 (function type in IR)
+            arg_idx = node.n - 1
+        end
+
+        packed_type = packed_vararg_source_type(ctx, node.n, arg_idx)
+
+        # Reconstruct the one source-level vararg tuple from its flattened
+        # physical parameter tail. This is the sole source-ABI projection; every
+        # consumer then sees an ordinary, concrete Julia tuple value.
+        if packed_type !== nothing
+            any(i -> i in ctx.global_args, arg_idx:length(ctx.arg_types)) &&
+                error("a packed vararg tail cannot contain phantom WasmGlobal parameters")
+            tuple_info = register_tuple_type!(ctx.mod, ctx.type_registry, packed_type)
+            tuple_info === nothing && error("packed vararg tuple layout is unavailable")
+            emit_struct_prefix!(b, ctx.type_registry, packed_type, tuple_info)
+            tuple_def = ctx.mod.types[tuple_info.wasm_type_idx + 1]
+            for (field, physical_arg) in enumerate(arg_idx:length(ctx.arg_types))
+                field_idx = field + Int(tuple_info.field_offset)
+                expected = tuple_def isa StructType && field_idx <= length(tuple_def.fields) ?
+                    unpacked(tuple_def.fields[field_idx].valtype) : nothing
+                expected === nothing && error(
+                    "packed vararg tuple field lacks a physical Wasm type")
+                local_idx = count(i -> !(i in ctx.global_args), 1:physical_arg-1)
+                local_get!(b, local_idx)
+                actual = _local_type(b, local_idx, "local.get")
+                if actual !== expected
+                    coerce_stack_top!(b, expected, ctx;
+                        from_julia=ctx.arg_types[physical_arg])
+                end
+            end
+            packed_source_tuple_new!(b, tuple_info.wasm_type_idx)
+
+        # WasmGlobal arguments don't have locals - they're accessed via global.get/set
+        # in the getfield/setfield handlers, so we skip emitting anything here
+        elseif arg_idx in ctx.global_args
+            # WasmGlobal arg - no local.get needed (handled by getfield/setfield)
+            # Return empty bytes
+        elseif arg_idx >= 1 && arg_idx <= length(ctx.arg_types)
+            # Calculate local index: count non-WasmGlobal args before this one
+            local_idx = count(i -> !(i in ctx.global_args), 1:arg_idx-1)
+            local_get!(b, local_idx)
+        end
+
+    elseif node isa NirSlot
+        # Check slot_locals first (for local variables in unoptimized IR),
+        # then fall back to param mapping (slot 2 = param 0, slot 3 = param 1, etc.)
+        if haskey(ctx.slot_locals, node.id)
+            local_get!(b, ctx.slot_locals[node.id])
+        else
+            local_idx = node.id - 2
+            if local_idx >= 0
+                local_get!(b, local_idx)
+            end
+        end
+
+    elseif node isa NirGlobalRef
+        # A GlobalRef operand — its binding was resolved ONCE at the NIR boundary.
+        local val = GlobalRef(node.mod, node.name)   # the diagnostic's raw operand
+        node.bound || record_unsupported!(ctx, :unsupported_global,
+            unbound_global_text(node.mod, node.name); detail=val,
+            soundness_fatal=true)
+        actual_val = node.value
+        if ismutabletype(typeof(actual_val)) && !(actual_val isa String) &&
+           !(actual_val isa Type) && !(actual_val isa Module) && !(actual_val isa Function)
+            globals = ctx.type_registry.mutable_constant_globals
+            globals === nothing && record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef identity registry is unavailable"; detail=string(val), soundness_fatal=true)
+            if haskey(globals, actual_val)
+                global_idx, type_idx = globals[actual_val]
+                global_get!(b, global_idx)
+                ref_as_non_null!(b)
+            else
+                init_b, init_locals = compile_module_initializer(actual_val, ctx)
+                length(init_b.v.stack) == 1 || throw(StackImbalanceError(
+                    "mutable GlobalRef initializer must produce exactly one value",
+                    copy(init_b.v.stack), 0, "compile_value"))
+                init_type = only(init_b.v.stack)
+                init_type isa ConcreteRef || record_unsupported!(ctx, :unsupported_global, "mutable GlobalRef initializer produced non-concrete type $init_type"; detail=string(val), soundness_fatal=true)
+                global_idx = add_global!(ctx.mod, ConcreteRef(init_type.type_idx, true), true, nothing)
+                global_set!(init_b, global_idx)
+                init_func = define_function!(ctx.mod, WasmValType[], WasmValType[];
+                                             name=generated_function_name(:field_initializer,
+                                                                          "$(node.mod).$(node.name)"))
+                local init_body = function_builder(ctx.mod, init_func; locals=init_locals)
+                append_builder!(init_body, init_b)
+                finish_function!(init_body)
+                fill_function!(ctx.mod, init_func, init_body)
+                push!(ctx.type_registry.module_init_functions, init_func)
+                globals[actual_val] = (global_idx, init_type.type_idx)
+                global_get!(b, global_idx)
+                ref_as_non_null!(b)
+            end
+        else
+            local _gr_lit = NirLiteral(actual_val)
+            emit_value!(b, _gr_lit, ctx, static_wasm_type(_gr_lit, ctx))
+        end
+
+    else
+        # NirLiteral — a constant operand. Everything below is the constant chain.
+        val = node.value
+        if val === nothing
+            # Nothing maps to i32 in WasmGC — push i32(0) as placeholder
+            i32_const!(b, 0)
+            return b
+        end
+        if val isa Bool
+        i32_const!(b, val ? 1 : 0)
+
+    elseif val isa Char
+        # STACK-003: Char stored as Julia's internal representation (UTF-8 encoding
+        # left-packed in UInt32). This matches Julia IR semantics where
+        # bitcast(UInt32, c::Char) is a no-op reinterpret of the raw bytes.
+        # '+' (U+002B) → 0x2b000000, 'é' (U+00E9) → 0xc3a90000
+        # JS callers must convert codepoints to Julia encoding before passing.
+        raw = reinterpret(Int32, reinterpret(UInt32, val))
+        i32_const!(b, raw)
+
+    elseif val isa Int8 || val isa UInt8 || val isa Int16 || val isa UInt16
+        # Small integers - stored as i32 in WASM
+        i32_const!(b, Int32(val))
+
+    elseif val isa Int32
+        i32_const!(b, val)
+
+    elseif val isa UInt32
+        i32_const!(b, reinterpret(Int32, val))
+
+    elseif val isa Int64 || val isa Int
+        i64_const!(b, Int64(val))
+
+    elseif val isa UInt64
+        i64_const!(b, reinterpret(Int64, val))
+
+    elseif val isa Int128 || val isa UInt128
+        # funnel-first (int128) — parity(constants.dart:622-655 visitIntConstant)
+        local _cgint128 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgint128 !== nothing
+            global_get!(b, _cgint128)
+            return b
+        end
+        # 128-bit integers are represented as WasmGC structs with (lo, hi) fields
+        result_type = typeof(val)
+        type_idx = get_int128_type!(ctx.mod, ctx.type_registry, result_type)
+
+        # Extract lo (low 64 bits) and hi (high 64 bits)
+        lo = UInt64(val & 0xFFFFFFFFFFFFFFFF)
+        hi = UInt64((val >> 64) & 0xFFFFFFFFFFFFFFFF)
+
+        # Push typeId (field 0) with DFS-assigned ID
+        _emit_tid!(result_type)
+        i64_const!(b, reinterpret(Int64, lo))   # lo
+        i64_const!(b, reinterpret(Int64, hi))   # hi
+        struct_new!(b, type_idx)
+
+    elseif val isa Float32
+        f32_const!(b, val)
+
+    elseif val isa Float64
+        f64_const!(b, val)
+
+    elseif val isa String
+        # census F3 (): short literals read the ONE interned global (dart
+        # constants.dart dedup — code size + `===` identity); the inline
+        # data-segment path remains for long strings (dart lazies those).
+        local _sg = get_string_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _sg !== nothing
+            global_get!(b, _sg)
+            return b
+        end
+        # LAZY: a pre-passed long literal reads its global, initializing on
+        # first use (dart constants.dart:322-339: global.get + br_on_non_null + call init)
+        local _lz = get(ctx.type_registry.lazy_string_globals, val, nothing)
+        if _lz !== nothing
+            # parity(constants.dart:1937 _readDefinedConstant): `block [T]`, T non-null
+            local _lzs = ConcreteRef(get_string_struct_type!(ctx.mod, ctx.type_registry), false)
+            local _lazy_done = block!(b; results=WasmValType[_lzs])
+            global_get!(b, _lz[1])
+            br_on_non_null!(b, _lazy_done)
+            call!(b, _lz[2])
+            end_block!(b)
+            return b
+        end
+        # a long constant the pre-pass could not see (one codegen itself emits): an eager global
+        # parity(constants.dart:872 visitStringConstant): a string constant is its global.
+        global_get!(b, get_string_constant_global!(ctx.mod, ctx.type_registry, val; eager=true)::UInt32)
+
+    elseif val isa QuoteNode
+        # QuoteNode wraps a constant value - unwrap and compile.
+        # D-001: Core IR reference types (SSAValue, Argument, SlotNumber) inside QuoteNodes
+        # are LITERAL struct values, not IR references. compile_value would misinterpret them
+        # as SSA slot lookups / argument loads. Compile them as struct constants instead.
+        inner = val.value
+        if inner isa Core.SSAValue || inner isa Core.Argument || inner isa Core.SlotNumber
+            # THE ensureConstant funnel (constants.dart:49/427-443 — ONE constantInfo map
+            # deduplicating every constant kind). SSAValue/Argument/SlotNumber are immutable
+            # single-Int64-field structs: their layout is fixed by the type (not by the
+            # runtime value), so `_const_init!`'s constant-expressibility guard always
+            # holds and the funnel always succeeds — there is no inline struct_new! fallback
+            # for these types (unlike the mutable/non-constant-field kinds elsewhere in this
+            # function, which keep one because their funnel attempt is genuinely conditional).
+            _cgir = ensure_constant_global!(ctx.mod, ctx.type_registry, inner)
+            _cgir === nothing && error(
+                "unreachable: $(typeof(inner)) constant funnel declined — its immutable " *
+                "single-Int layout is always constant-expressible")
+            _ciir = register_struct_type!(ctx.mod, ctx.type_registry, typeof(inner))
+            global_get!(b, _cgir)
+        else
+            local _qn_lit = NirLiteral(inner)
+            emit_value!(b, _qn_lit, ctx, static_wasm_type(_qn_lit, ctx))
+        end
+
+    elseif isprimitivetype(typeof(val)) && !isa(val, Bool) && !isa(val, Char) &&
+           !isa(val, Int8) && !isa(val, Int16) && !isa(val, Int32) && !isa(val, Int64) &&
+           !isa(val, UInt8) && !isa(val, UInt16) && !isa(val, UInt32) && !isa(val, UInt64) &&
+           !isa(val, Float32) && !isa(val, Float64)
+        # Custom primitive type (e.g., JuliaSyntax.Kind): its bits in its register, zero above
+        # its width (8*sizeof, the register's when as wide)
+        T = typeof(val)
+        sz = sizeof(T)
+        if sz == 4
+            i32_const!(b, Int64(Core.Intrinsics.bitcast(Int32, val)))
+        elseif sz < 4
+            i32_const!(b, Int64(Core.Intrinsics.zext_int(UInt32, val)))
+        elseif sz == 8
+            i64_const!(b, Core.Intrinsics.bitcast(Int64, val))
+        elseif sz < 8
+            i64_const!(b, Int64(Core.Intrinsics.zext_int(UInt64, val)))
+        else
+            error("Primitive type with unsupported size for Wasm: $T ($sz bytes)")
+        end
+
+    elseif val isa Symbol
+        # Symbols share the classed string layout and its intern registry under their own
+        # class (dart visitSymbolConstant) — equal symbol literals read the ONE deduplicated
+        # global, never the equal String's, whatever the name's length.
+        global_get!(b, get_string_constant_global!(ctx.mod, ctx.type_registry, val; eager=true)::UInt32)
+
+    elseif typeof(val) <: Tuple
+        # funnel-first (tuple) — tuples of constant-expressible fields intern
+        local _cgtp = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cgtp !== nothing
+            local _citp = get(ctx.type_registry.structs, typeof(val), nothing)
+            _citp !== nothing && (global_get!(b, _cgtp); return b)
+        end
+        # Tuple constant - create it with struct.new
+        T = typeof(val)
+
+        # Ensure tuple type is registered using register_tuple_type!
+        info = register_tuple_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+
+        # Get the struct type definition to check expected field types
+        struct_type_def = ctx.mod.types[type_idx + 1]
+
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
+
+        # Push field values (tuples use 1-based indexing)
+        for i in 1:length(val)
+            field_val = val[i]
+            local _wasm_fi = i + Int(info.field_offset)  # skip typeId
+            (struct_type_def isa StructType && _wasm_fi <= length(struct_type_def.fields)) ||
+                error("tuple constant field lacks a physical Wasm type")
+            local expected_wasm = struct_type_def.fields[_wasm_fi].valtype
+            emit_value_as!(b, NirLiteral(field_val), ctx, expected_wasm, typeof(field_val))
+        end
+
+        # Create the struct
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
+
+    elseif val isa Type
+        # Type constant — each unique Type gets a unique Wasm global
+        # so that ref.eq can distinguish different Type objects at runtime.
+        # Previous behavior (i32.const 0) made all Types indistinguishable.
+        global_idx = get_type_constant_global!(ctx.mod, ctx.type_registry, val)
+        global_get!(b, global_idx)
+
+    elseif val isa TypeVar
+        # one constant per TypeVar object, its name and bounds populated at startup
+        global_idx = get_typevar_constant_global!(ctx.mod, ctx.type_registry, val)
+        global_get!(b, global_idx)
+
+    elseif val isa Core.TypeName
+        # TypeName constant — look up or create the TypeName global.
+        # TypeName objects have many undefined fields so the general struct constant
+        # path would emit ref.null. Instead, use the dedicated TypeName global registry.
+        tn_global_idx = get_typename_constant_global!(ctx.mod, ctx.type_registry, val)
+        global_get!(b, tn_global_idx)
+
+    elseif val isa Module
+        # One interned identity object per Julia Module. Names are payload, never
+        # identity, and no call site may allocate an ad hoc empty Module shell.
+        global_idx = get_module_constant_global!(ctx.mod, ctx.type_registry, val)
+        info = ctx.type_registry.structs[Module]
+        global_get!(b, global_idx)
+
+    elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) == 0
+        # funnel-first (fn-singleton) — interned when eager-able
+        local _cg_0 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_0 !== nothing
+            local _ci_0 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_0)
+            return b
+        end
+        # Function singleton (e.g., typeof(some_function)) — empty struct with no fields
+        T = typeof(val)
+        info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
+
+    elseif val isa Function && isstructtype(typeof(val)) && fieldcount(typeof(val)) > 0
+        # funnel-first (closure-const) — interned when eager-able
+        local _cg_1 = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg_1 !== nothing
+            local _ci_1 = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg_1)
+            return b
+        end
+        # Function closure with captured fields (e.g., Fix2{typeof(isequal), Char})
+        # These are structs that happen to be Functions — compile like regular structs
+        T = typeof(val)
+        info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+
+        has_undefined = any(!isdefined(val, fn) for fn in fieldnames(T))
+        if has_undefined
+            record_unsupported!(ctx, :unsupported_type, "closure constant of type $T has undefined captures; WT never fabricates capture values"; detail=string(nameof(T)), soundness_fatal=true)
+        end
+
+        struct_type_def = ctx.mod.types[type_idx + 1]
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
+        for (fi, field_name) in enumerate(fieldnames(T))
+            field_val = getfield(val, field_name)
+            local _fw = struct_type_def.fields[fi + Int(info.field_offset)].valtype
+            emit_value_as!(b, NirLiteral(field_val), ctx, _fw, typeof(field_val))
+        end
+
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
+
+    elseif typeof(val) <: Dict
+        # Dict constant with pre-populated data — materialize Memory fields as arrays.
+        # parity(quarantine: mutable-identity floor — constants.dart:1152 visitMapConstant
+        # canonicalizes ONLY Dart's immutableMapClass, i.e. genuine `const` map literals;
+        # Julia's Dict has no immutable-literal form, so every Dict constant takes dart's
+        # ordinary non-const runtime map-instantiation shape (fresh struct.new), never
+        # ConstantCreator's Map<Constant,ConstantInfo> cache. R14 floor, never migratable.)
+        T = typeof(val)
+        K = keytype(val)
+        V = valtype(val)
+
+        if !haskey(ctx.type_registry.structs, T)
+            register_struct_type!(ctx.mod, ctx.type_registry, T)
+        end
+        dict_info = ctx.type_registry.structs[T]
+
+        slots_arr_type = get_array_type!(ctx.mod, ctx.type_registry, UInt8)
+        keys_arr_type = get_array_type!(ctx.mod, ctx.type_registry, K)
+        vals_arr_type = get_array_type!(ctx.mod, ctx.type_registry, V)
+
+        # Get the raw internal arrays from the Dict
+        # Dict internals: slots, keys, vals are Memory{UInt8}, Memory{K}, Memory{V}
+        dict_slots = getfield(val, :slots)
+        dict_keys = getfield(val, :keys)
+        dict_vals = getfield(val, :vals)
+
+        # Only an occupied hash-table slot holds a key and a value (Base.isslotfilled: the slot
+        # byte's high bit); an unoccupied isbits slot is uninitialized memory, and an unoccupied
+        # reference slot is `#undef` (emit_constant_slots!)
+        local occupied = i -> (dict_slots[i] & 0x80) != 0
+
+        # Push typeId (field 0) with DFS-assigned ID
+        _emit_tid!(T)
+
+        # field 1: slots — array of UInt8 (always defined, never throws)
+        for i in 1:length(dict_slots)
+            i32_const!(b, Int32(dict_slots[i]))
+        end
+        array_new_fixed!(b, slots_arr_type, length(dict_slots))
+
+        # field 2: keys — array of K
+        emit_constant_slots!(b, ctx, dict_keys, keys_arr_type, K; contents=occupied)
+        array_new_fixed!(b, keys_arr_type, length(dict_keys))
+
+        # field 3: vals — array of V
+        emit_constant_slots!(b, ctx, dict_vals, vals_arr_type, V; contents=occupied)
+        array_new_fixed!(b, vals_arr_type, length(dict_vals))
+
+        # fields 4-8: ndel, count, age, idxfloor, maxprobe (i64)
+        i64_const!(b, Int64(getfield(val, :ndel)))
+        i64_const!(b, Int64(getfield(val, :count)))
+        i64_const!(b, Int64(getfield(val, :age)))
+        i64_const!(b, Int64(getfield(val, :idxfloor)))
+        i64_const!(b, Int64(getfield(val, :maxprobe)))
+
+        # struct.new
+        struct_new!(b, dict_info.wasm_type_idx)   # mod-resolved fields
+
+    elseif typeof(val) <: AbstractVector && typeof(val) <: Vector
+        # Constant Vector{T} — emit as struct{data_array, size_tuple}
+        # This handles global constant vectors like ascii_is_identifier_char :: Vector{Bool}
+        # The data array must contain the actual values, not ref.null.
+        # parity(quarantine: mutable-identity floor — constants.dart:1128 visitListConstant
+        # canonicalizes ONLY Dart's immutableListClass, i.e. genuine `const` list literals;
+        # Julia's Vector has no immutable-literal form, so every Vector constant takes dart's
+        # ordinary non-const runtime list-instantiation shape (fresh struct.new for both the
+        # data array and this nested size tuple below), never ConstantCreator's cache. R14
+        # floor, never migratable.)
+        T = typeof(val)
+        elem_type = eltype(T)
+
+        # Register the Vector struct type
+        if !haskey(ctx.type_registry.structs, T)
+            register_vector_type!(ctx.mod, ctx.type_registry, T)
+        end
+        vec_info = ctx.type_registry.structs[T]
+
+        # Get the array type for elements
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+
+        # Push typeId (field 0) with DFS-assigned ID for Vector struct
+        _emit_tid!(T)
+
+        # Field 1: data array — array.new_fixed of its slots (emit_constant_slots!)
+        emit_constant_slots!(b, ctx, val, array_type_idx, elem_type; contents=_ -> true)
+        # Skip array_new_fixed if we're in dead code (stub was hit)
+        if !ctx.last_stmt_was_stub
+            array_new_fixed!(b, array_type_idx, length(val))
+        end
+
+        # Field 2: size tuple — an immutable Tuple{Int64}, interned like any tuple
+        # constant (Base replaces v.size wholesale, never writes into the tuple), so
+        # every constant Vector of one length shares it. parity(constants.dart:938-959
+        # ensureConstant: sub-constants intern regardless of the composite's eagerness)
+        local _cgsz = ensure_constant_global!(ctx.mod, ctx.type_registry, (Int64(length(val)),))
+        _cgsz === nothing && error("unreachable: Tuple{Int64} constant funnel declined")
+        global_get!(b, _cgsz)
+
+        # off0: the materialized data array holds exactly the live elements, from element 0
+        i32_const!(b, 0)
+
+        # struct.new for Vector{T}
+        struct_new!(b, vec_info.wasm_type_idx)   # mod-resolved fields
+
+    elseif typeof(val) isa DataType && typeof(val).name.name in (:MemoryRef, :GenericMemoryRef, :Memory, :GenericMemory)
+        # MemoryRef/Memory constants map to array types, not struct types.
+        # Materialize the exact contents, an unset slot as `#undef` (emit_constant_slots!).
+        # Size is never a license to replace a real Memory constant with null.
+        T = typeof(val)
+        elem_type = T.name.name in (:GenericMemoryRef, :GenericMemory) ? T.parameters[2] : T.parameters[1]
+        array_type_idx = get_array_type!(ctx.mod, ctx.type_registry, elem_type)
+        mem = T.name.name in (:MemoryRef, :GenericMemoryRef) ? getfield(val, :mem) : val
+        # A MemoryRef constant is its Memory only at offset 0 (the pair channel,
+        # builtins.jl, reads a constant's offset itself).
+        T <: Core.GenericMemoryRef && Base.memoryrefoffset(val) != 1 &&
+            record_unsupported!(ctx, :unsupported_type,
+                "a MemoryRef constant at memoryrefoffset $(Base.memoryrefoffset(val)) crosses a single-value boundary, which carries only its Memory";
+                detail=val, soundness_fatal=true)
+        n_mem = length(mem)
+        if n_mem > 4096
+            record_unsupported!(ctx, :value_stub,
+                "Memory constant of type $T has $n_mem elements; exact materialization is not implemented";
+                detail=val, soundness_fatal=true)
+        else
+            emit_constant_slots!(b, ctx, mem, array_type_idx, elem_type; contents=_ -> true)
+            # `array.new_fixed 0` is the real non-null empty array representation; skipped in dead
+            # code (a slot's emission hit a stub), as the Vector branch skips it
+            ctx.last_stmt_was_stub || array_new_fixed!(b, array_type_idx, n_mem)
+        end
+
+    elseif isstructtype(typeof(val)) && !isa(val, Function) && !isa(val, Module)
+        # THE ensureConstant funnel first — an eager-internable immutable
+        # constant reads its ONE deduplicated global (dart constants.dart:427-443);
+        # mutable / non-constant-field values fall through to the inline path.
+        local _cg = ensure_constant_global!(ctx.mod, ctx.type_registry, val)
+        if _cg !== nothing
+            local _cgi = register_struct_type!(ctx.mod, ctx.type_registry, typeof(val))
+            global_get!(b, _cg)
+            return b
+        end
+        # Struct constant - create it with struct.new
+        T = typeof(val)
+
+        # struct CONSTANTS with cyclic/unboundedly deep
+        # object graphs (Luxor/Karnak/Graphs values captured in Makie figures)
+        # recursed compile_value to a StackOverflow. Guard by object identity
+        # AND depth; refuse with a NAMED error so pipelines degrade honestly.
+        if any(x -> x === val, ctx.translator.constants_in_progress)
+            record_unsupported!(ctx, :unsupported_type, "cyclic struct constant of type $(T) (object graph references itself)"; detail=string(nameof(T)), soundness_fatal=true)
+        end
+        if length(ctx.translator.constants_in_progress) > 200
+            _tail = join((string(nameof(typeof(x))) for x in ctx.translator.constants_in_progress[end-7:end]), " → ")
+            record_unsupported!(ctx, :unsupported_type, "struct constant nesting exceeded depth 200 (… → $(_tail) → $(T))"; detail=string(nameof(T)), soundness_fatal=true)
+        end
+        push!(ctx.translator.constants_in_progress, val)
+        try
+
+        # Ensure struct type is registered and get its type index
+        info = register_struct_type!(ctx.mod, ctx.type_registry, T)
+        type_idx = info.wasm_type_idx
+
+        local undefined_fields = Symbol[fn for fn in fieldnames(T) if !isdefined(val, fn)]
+        if T === Core.Box && undefined_fields == Symbol[:contents]
+            # Julia's unassigned captured variable is represented by an actual
+            # Core.Box whose contents field is undefined: the undefined value (undef_slot,
+            # undef.jl), which the isdefined and getfield lowerings read as `#undef` — not a
+            # fabricated value, and not the null `nothing` is.
+            # parity(quarantine: mutable-identity floor — Core.Box is WT's captured-variable
+            # cell, dart's closures.dart:1533 _buildContexts captured-variable field; a closure cell is never
+            # a kernel `Constant` AST node, so it never enters constants.dart's canonicalization
+            # map on the dart side either. R14 floor, never migratable.)
+            emit_struct_prefix!(b, ctx.type_registry, T, info)
+            emit_undef!(b, ctx, Any, ctx.mod.types[type_idx + 1].fields[2].valtype)
+            struct_new!(b, type_idx)
+            return b
+        end
+        isempty(undefined_fields) || record_unsupported!(ctx, :unsupported_type, "constant of type $(T) has undefined fields $(undefined_fields); WT never fabricates field values"; detail=string(nameof(T)), soundness_fatal=true)
+
+        struct_type_def = ctx.mod.types[type_idx + 1]
+        struct_type_def isa StructType || error("constant $T has no struct Wasm layout")
+        emit_struct_prefix!(b, ctx.type_registry, T, info)
+        for (fi, field_name) in enumerate(fieldnames(T))
+            field_val = getfield(val, field_name)
+            local wasm_fi = fi + Int(info.field_offset)
+            wasm_fi <= length(struct_type_def.fields) ||
+                error("constant $T field $field_name has no physical Wasm slot")
+            local expected = struct_type_def.fields[wasm_fi].valtype
+            # A materialized constant supplies stronger evidence than its declared
+            # field annotation (e.g. KeyError.key::Any holding Int64). Preserve the
+            # exact runtime Julia class so numeric boxing stamps the real classId.
+            emit_value_as!(b, NirLiteral(field_val), ctx, expected, typeof(field_val))
+        end
+
+        # Create the struct
+        struct_new!(b, type_idx)   # mod-resolved fields (the empty-list fudge is dead)
+        finally
+            pop!(ctx.translator.constants_in_progress)
+        end
+        end   # the NirLiteral constant chain
+    end
+
+    return b
+end

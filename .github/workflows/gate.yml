@@ -1,0 +1,177 @@
+name: Gate
+# The full matrix on CI's runners, NON-BLOCKING (AGENTS.md; dev/CHARTER.md C10, L153): every lane
+# of `bash dev/lanes.sh`'s default run, one job each, each through `dev/lanes.sh --lane <name>
+# [--part i/N]`, so the commands are the script's: `julia` 1.12 and `julia +1.13` (juliaup, as
+# the script calls them), Node from ci.yml's node-version, wasm-tools, Java 17 for TLC. The
+# first red job cancels the rest (fail-fast), as the script stops at the first red lane.
+# It runs at clause closure only (Dale, 2026-10-21: large-scale runs happen only when a full clause
+# is closed out): on a push of wt2, the march branch, whose head commit carries a `Closes: C<n>` line (the commit that
+# closes clause n; dev/hooks/commit-msg and `dev/land.sh land` refuse that line unless the ratchet
+# reads C<n> CLOSED on its tree), on a gate/** push and on workflow_dispatch; every other push runs
+# the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/land.sh
+# land` pushes wt2 and nothing else, each landing one push (ci.yml, formal.yml and downstream.yml trigger
+# exactly as this file does, under the same closure predicate, A23E4), refuses while the last closure matrix (the newest
+# run named "Gate closure") is red, its red the next item, and is never gated by it (a landing's
+# gate is `bash dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
+# verdict: the one final full gate before PR #128 merges is that run on the exact merge head.
+# The parts are sized from measured job times (each lane's work under ~12 min on ubuntu-latest):
+# smoke in 2 parts per version, TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
+# deals the instances round-robin, and at 5 the two largest, ExceptionStackDeep and
+# ExceptionStackValueIdentityBroken, land apart), the suite (test/runtests.jl's QA families) whole,
+# WT1's smoke (legacy/test/smoke.jl, the agreement oracle) in 2 parts per version.
+# The budget B = 20 minutes per lane job (L162; Dale 2026-10-09, the gate "~15-20 min"): the lane
+# job's timeout, so a lane past it is cut and red and fail-fast cancels the rest; dev/gate.sh
+# reads B from here and names a job past it. B is lowered, never raised: a lane past it is split
+# or rebalanced first.
+on:
+  push:
+    branches: ['gate/**', 'wt2']
+  workflow_dispatch:
+
+# the run's name says whether this run is a closure matrix ("Gate closure", what `dev/land.sh land`
+# reads) or a push that runs nothing but the `closure` job: the closure predicate, the closure job's
+# text too (A23E6): a dispatch, a gate/** push, or a pushed head with a line `Closes: C<digit>…`
+# (grep's '^Closes: C[0-9]+', spelt for an expression: the message after a newline holds a newline
+# then `Closes: C` then a digit; fromJSON('"\n"') is the newline)
+run-name: >-
+  ${{ (github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"')))) && 'Gate closure' || 'Gate (no closure)' }}
+
+# Only the newest push per branch runs; a superseded run is cancelled. A wt2 push's run is its head's
+# own group: every landing pushes wt2, and a later landing's push never cancels a closure matrix.
+concurrency:
+  group: gate-${{ github.ref == 'refs/heads/wt2' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # julia-actions/cache deletes this branch's superseded caches
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # the full matrix runs only at clause closure: a dispatch, a gate/** push, or a wt2 push whose
+  # head commit carries a `Closes: C<n>` line; any other push stops here and says so
+  closure:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - id: decide
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          RUN: >-
+            ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
+        run: |
+          if [ "$RUN" = true ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; echo "the full matrix runs ($EVENT, $REF)"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "no Closes: C<n> line on the pushed head: the full matrix runs at clause closure only"
+          fi
+
+  lane:
+    needs: closure
+    if: needs.closure.outputs.run == 'true'
+    name: ${{ matrix.lane }}${{ matrix.part != '' && format(' {0}', matrix.part) || '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20   # the budget B (header): a slow lane and a hung one are cut at it, red
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { lane: ratchet, part: '' }
+          - { lane: smoke, part: '0/2' }
+          - { lane: smoke, part: '1/2' }
+          - { lane: smoke-1.13, part: '0/2' }
+          - { lane: smoke-1.13, part: '1/2' }
+          - { lane: probes, part: '' }
+          - { lane: suite, part: '' }
+          - { lane: legacy, part: '0/2' }
+          - { lane: legacy, part: '1/2' }
+          - { lane: legacy-1.13, part: '0/2' }
+          - { lane: legacy-1.13, part: '1/2' }
+          - { lane: formal, part: '2/5' }
+          - { lane: formal, part: '3/5' }
+          - { lane: formal, part: '4/5' }
+          - { lane: formal, part: '1/5' }
+          - { lane: formal, part: '0/5' }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # L148 checks the audit log against the commit history
+
+      # the wasm engine is CI's: the Node major ci.yml's node-version names (dev/lanes.sh reads
+      # the same line and fails a lane on any other major)
+      - name: CI's Node major
+        id: ci
+        run: |
+          echo "node=$(sed -n "s/^ *node-version: *'\{0,1\}\([0-9][0-9]*\).*/\1/p" .github/workflows/ci.yml | head -1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.ci.outputs.node }}
+
+      - uses: actions/setup-java@v4
+        if: matrix.lane == 'formal'
+        with: { distribution: temurin, java-version: '17' }
+
+      # juliaup, so `julia` is 1.12 and `julia +1.13` is 1.13, the two commands dev/lanes.sh runs;
+      # each download retried (a timed-out Julia download failed a whole run, 37890994081)
+      - name: Julia (juliaup)
+        if: matrix.lane != 'formal'
+        run: |
+          retry() { for i in 1 2 3 4 5; do "$@" && return 0; echo "attempt $i failed: $*"; sleep 15; done; return 1; }
+          J="$HOME/.juliaup/bin/juliaup"
+          channel() { "$J" status | awk 'NR > 2 { print ($1 == "*") ? $2 : $1 }' | grep -x "$1" >/dev/null || retry "$J" add "$1"; }
+          [ -x "$J" ] || retry sh -c 'curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel 1.12'
+          channel 1.12 && "$J" default 1.12
+          if [ "${{ matrix.lane }}" = smoke-1.13 ] || [ "${{ matrix.lane }}" = legacy-1.13 ]; then channel 1.13; fi
+          echo "$HOME/.juliaup/bin" >> "$GITHUB_PATH"
+
+      # one cache per kind of job and runner CPU model: the suite job precompiles Pkg.test's
+      # environment, the others the package alone, smoke-1.13 on its own Julia; a package image
+      # compiled for one CPU model is recompiled on another (GitHub's runners are of several)
+      - name: Runner CPU model
+        if: matrix.lane != 'formal'
+        id: cpu
+        run: |
+          echo "model=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -1 | tr -c 'A-Za-z0-9\n' '-')" >> "$GITHUB_OUTPUT"
+      - uses: julia-actions/cache@v2
+        if: matrix.lane != 'formal'
+        with:
+          cache-name: gate-${{ matrix.lane == 'suite' && 'suite' || (startsWith(matrix.lane, 'legacy') && matrix.lane || (matrix.lane == 'smoke-1.13' && 'lanes-1.13' || 'lanes')) }}-${{ steps.cpu.outputs.model }}
+          include-matrix: false
+
+      - name: Install wasm-tools
+        if: matrix.lane != 'formal'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-tools
+
+      # instantiate only: each lane precompiles in its own configuration (Pkg.test's differs)
+      - name: Install dependencies
+        if: matrix.lane != 'formal'
+        env:
+          JULIA_PKG_PRECOMPILE_AUTO: '0'
+        run: ${{ (matrix.lane == 'smoke-1.13' || matrix.lane == 'legacy-1.13') && 'julia +1.13' || 'julia' }} --project=${{ startsWith(matrix.lane, 'legacy') && 'legacy' || '.' }} -e 'using Pkg; Pkg.instantiate()'
+
+      # the dart-lang/sdk sources the anchors cite, for L213 (the ratchet lane, and the suite shard the
+      # ratchet's family is dealt to)
+      - name: Pinned dart2wasm sources
+        if: matrix.lane == 'ratchet' || matrix.lane == 'suite'
+        run: bash dev/fetch_dart_sdk.sh
+
+      - name: dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}
+        run: |
+          # the job's stdout can be a non-blocking pipe, where one large write fails part-way
+          # ("echo: write error: Resource temporarily unavailable": 37893727231 lost a shard's log)
+          python3 -c 'import os; os.set_blocking(1, True); os.set_blocking(2, True)'
+          bash dev/lanes.sh --lane ${{ matrix.lane }}${{ matrix.part != '' && format(' --part {0}', matrix.part) || '' }}${{ matrix.lane == 'formal' && ' --all' || '' }}
+
+      # a red lane cancels the run: fail-fast cancels the other lanes, this the jobs beside them
+      - name: Cancel the run
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }} --repo ${{ github.repository }}

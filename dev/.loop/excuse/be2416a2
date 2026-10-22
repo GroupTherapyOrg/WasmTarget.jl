@@ -1,0 +1,1 @@
+lock: measured by dev/land.sh land: edit to landed 436.0 s; hold 195.2 s; runner 1.1 s; gate-1 64.3 s (record 45c0c347-1, warm, factor 3.244), 4.3 s past the 60 s budget; its own 236.5 s of the 300 s target
