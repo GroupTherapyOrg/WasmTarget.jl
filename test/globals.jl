@@ -8,8 +8,16 @@ const D = WasmTarget.Dart2Wasm
 
 module GlobalsCases
 const C = (1, "two")
+const R = Ref(1)        # const, but its object mutable: a load may change it
 v = 3.5
 global u::Int
+# a global __init__ sets, as Base sets stdout: run again at load, never a build-time constant
+global io_at_load::Int = 0
+const loaded = Ref(0)
+function __init__()
+    global io_at_load = 7
+    loaded[] = 1
+end
 end
 
 # a collaborator's translator, which these definitions hold and never read
@@ -20,13 +28,19 @@ _rejection(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.
 @testset "globals.dart" begin
     @test D.dart_field_table_use_cutoff() == 10
     local g = D.DartGlobals(Val(:_), GlobalsNodes())
-    # a binding's initializer is the value it holds, Julia's own object (===), or none when unassigned
+    # a binding's initializer is its value only for a const binding holding a mutation-free value,
+    # which no load can change; Julia's own object (===)
     local c = D.get_constant_initializer(g, GlobalRef(GlobalsCases, :C))
     @test c isa WasmTarget.NirConst && c.c.val === GlobalsCases.C
-    @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, :v)) === WasmTarget.NirConst(Core.Const(3.5))
-    @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, :u)) === nothing
+    # every other binding takes the lazy path: non-const, unassigned, const holding a mutable
+    # object, and the ones __init__ writes (whose session values here are the post-__init__ ones)
+    @test GlobalsCases.io_at_load == 7 && GlobalsCases.loaded[] == 1
+    for n in (:v, :u, :R, :io_at_load, :loaded)
+        @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, n)) === nothing
+    end
     @test D._member_name(g, GlobalRef(GlobalsCases, :v)) == string(GlobalRef(GlobalsCases, :v))
-    @test D._initialize_at_startup(g, GlobalRef(GlobalsCases, :v))
+    # no pragma answers false (dart's `getPragma(..., defaultValue: true) ?? false`)
+    @test !D._initialize_at_startup(g, GlobalRef(GlobalsCases, :v))
     # the sealed class is constructed only through a subclass
     @test _rejection(() -> D.DartGlobalDefinition()) isa WasmTarget.Internal
 end

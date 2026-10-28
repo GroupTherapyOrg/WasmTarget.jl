@@ -473,6 +473,10 @@ translator.builtinTypes, the 8- and 16-bit ones held in an i32), the constant it
 reference is expected, the box of its class, one global per module, `valueTypeConstants`. dart has
 one integer class, boxed by `_BoxedInt`; each Julia integer type is its own class, whose struct
 holds the object header and the value.
+
+A deliberate difference from dart: dart's box is `i32.const classId`, then the value; this box is
+the class's struct as class_info lays out every class below `Any`, its object header
+(pushObjectHeaderFields: the class id and the identity hash), then the value.
 """
 @parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, constant::Union{Base.BitInteger64,Char})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
@@ -511,7 +515,8 @@ end
 """
 A float constant: unboxed, its value's own wasm type (`Float32` f32, `Float64` f64); where a
 reference is expected, the box of its class, one global per module. dart has one double class;
-each Julia float type is its own class.
+each Julia float type is its own class. A deliberate difference from dart: the box carries class_info's object header
+(pushObjectHeaderFields), not dart's class id alone.
 """
 @parity "dart2wasm/lib/constants.dart:658 ConstantInstantiator.visitDoubleConstant" function visit_double_constant(self::ConstantInstantiator, constant::Union{Float32,Float64})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
@@ -625,7 +630,8 @@ end
 
 """
 A boxed `Bool`, the struct of Julia's class `Bool` (dart's `_BoxedBool`): the object header, then the
-value. Its header is the class's own, as class_info lays out every class below `Any`.
+value. Its header is the class's own, as class_info lays out every class below `Any`. A deliberate
+difference from dart, whose `_BoxedBool` takes `i32.const classId` alone.
 """
 @parity "dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant" function visit_bool_constant(self::ConstantCreator, constant::Bool)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator

@@ -123,15 +123,22 @@ end
 @parity "dart2wasm/lib/globals.dart:97 DartGlobals" @unported function DartGlobals(translator) end
 
 """
-dart's literal initializer of a static field, its constant: a Julia global binding has no
-initializer expression, and the value it holds where the closed world was compiled is its value in
-the program, as Julia's own juliac image holds it (the NIR's literal of the value, compared by `===`).
-A binding with no value has no initializer; a read of it is Julia's UndefVarError, which this
-`nothing` leaves to the lazy path.
+dart's literal initializer of a static field, its constant. A Julia global binding has no
+initializer expression: a juliac image is the heap after the top level ran, but every module's
+`__init__` runs again at load (Julia 1.13 Compiler/src/precompile.jl:352-366), so a value set or
+mutated at load is no build-time constant. A binding's value is its constant initializer only when no
+load can change it: the binding is `const` and its value is free of mutation (`Base.ismutationfree`
+of its type), the NIR's literal of it, compared by `===`. Every other binding (a non-const one, one
+`__init__` assigns, a const one holding a mutable object, one with no value) has none and takes
+dart's lazy path.
+
+A deliberate difference from dart, whose initializer is the field's literal expression.
 """
 @parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
-    isdefinedglobal(variable.mod, variable.name) || return nothing
-    return NirConst(Core.Const(getglobal(variable.mod, variable.name)))
+    isdefinedglobal(variable.mod, variable.name) && isconst(variable.mod, variable.name) || return nothing
+    local value = getglobal(variable.mod, variable.name)
+    Base.ismutationfree(typeof(value)) || return nothing
+    return NirConst(Core.Const(value))
 end
 
 @parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" @unported function get_definition_for_static_field(self::DartGlobals, field::ClassField) end
@@ -174,10 +181,12 @@ end
 @parity "dart2wasm/lib/globals.dart:290 DartGlobals._memberName" _member_name(self::DartGlobals, field::GlobalRef)::String = string(field)
 
 """
-dart's `wasm:initialize-at-startup` pragma, whose default is `true`: Julia declares no pragmas, so
-every binding takes the default.
+dart's `wasm:initialize-at-startup` pragma: `getPragma(..., defaultValue: true) ?? false`, whose
+default applies only to a pragma present without a value, so a field with no pragma answers `false`
+(util.dart:64 returns null). Julia declares no pragmas, so every binding answers `false` and is
+initialized lazily.
 """
-@parity "dart2wasm/lib/globals.dart:292 DartGlobals._initializeAtStartup" _initialize_at_startup(self::DartGlobals, node::GlobalRef)::Bool = true
+@parity "dart2wasm/lib/globals.dart:292 DartGlobals._initializeAtStartup" _initialize_at_startup(self::DartGlobals, node::GlobalRef)::Bool = false
 
 # dart's sealed class is abstract: its constructor runs only as a subclass's super constructor, whose
 # struct holds its field; called on its own it is dart's compile error
