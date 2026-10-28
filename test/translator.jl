@@ -351,3 +351,25 @@ end
     o.phases = [D.CompilerPhase_cfe, D.CompilerPhase_tfa, D.CompilerPhase_codegen]
     @test D.emit_codegen(o) && !D.emit_tfa(o)
 end
+
+@testset "translator.dart: translate, the first program end to end" begin
+    local W = WasmTarget
+    local B = W.WasmBuilder
+    local IR = B.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(FirstCases.f, (Int32,), "translator"), data, D.TranslatorOptions())
+    local mods = D.translate(t, nothing)
+    # one module, the main one, built by the builder that validated every instruction (D10)
+    @test length(mods) == 1 && only(keys(mods)).is_main
+    local m = only(values(mods))
+    @test m isa IR.Module
+    # the entry exported under its function's name, its type the external (i32) -> (i32)
+    local mi = first(t.component).ci.def
+    local fn = D.get_existing_function(t.functions[], mi)
+    @test fn !== nothing && fn.is_js_called && fn.type.inputs == [IR.NumType_i32] && fn.type.outputs == [IR.NumType_i32]
+    @test D.get_export_name(t.functions[], mi) == "f"
+    # its code generated: the queue drained; the dispatch tables empty (D32)
+    @test D.is_empty(t.compilation_queue[]) && isempty(t.dispatch_table[]._table[])
+    local s = B.Serializer(); B.serialize(s, m)
+    @test length(B.data(s)) > 8 && B.data(s)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
+end

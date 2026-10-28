@@ -53,13 +53,44 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:46 FunctionCollector.interopNamer" @unported function interop_namer(self::FunctionCollector) end
 
-@parity "dart2wasm/lib/functions.dart:48 FunctionCollector._collectImportsAndExports" @unported function _collect_imports_and_exports(self::FunctionCollector) end
+"""
+Register the program's exported members and queue the strong ones. dart walks its libraries'
+procedures for the export pragmas; a Julia program exports its entry, dart's main: the closed
+world's first body, the MethodInstance Julia's trim inference was asked for, which
+typeinf_ext_toplevel returns first.
+"""
+@parity "dart2wasm/lib/functions.dart:48 FunctionCollector._collectImportsAndExports" function _collect_imports_and_exports(self::FunctionCollector)::Nothing
+    _handle_exports(self, first(self.translator.component).ci.def)
+    return nothing
+end
 
-@parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" @unported function _handle_exports(self::FunctionCollector, member::Core.MethodInstance) end
+# the entry is a strong export: queued for compilation
+@parity "dart2wasm/lib/functions.dart:57 FunctionCollector._handleExports" function _handle_exports(self::FunctionCollector, member::Core.MethodInstance)::Nothing
+    get_export_name(self, member) === nothing || get_function(self, member)
+    return nothing
+end
 
-@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" @unported function get_export_name(self::FunctionCollector, target::Core.MethodInstance) end
+# the export name of the program's entry, its function's name (dart's wasm:export pragma value); no
+# other member is exported
+@parity "dart2wasm/lib/functions.dart:68 FunctionCollector.getExportName" function get_export_name(self::FunctionCollector, target::Core.MethodInstance)::Union{String,Nothing}
+    target === first(self.translator.component).ci.def || return nothing
+    return string((target.def::Method).name)
+end
 
-@parity "dart2wasm/lib/functions.dart:71 FunctionCollector.initialize" @unported function initialize(self::FunctionCollector) end
+"""
+Collect the exports, and record the value classes as allocated. dart's boxed bool, int and double
+are always allocated; Julia's boxes are its primitive classes with a wasm representation, each a
+class of the closed world's class table.
+"""
+@parity "dart2wasm/lib/functions.dart:71 FunctionCollector.initialize" function initialize(self::FunctionCollector)::Nothing
+    _collect_imports_and_exports(self)
+    local translator = self.translator
+    # Value classes are always implicitly allocated.
+    for (cls, info) in translator.class_info
+        isprimitivetype(cls) && haskey(translator.builtin_types[], cls) && record_class_allocation(self, class_id(info))
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/functions.dart:86 FunctionCollector.getExistingFunction" get_existing_function(self::FunctionCollector, target::Core.MethodInstance)::Union{WasmBuilder.IR.BaseFunction,Nothing} = get(self._functions, target, nothing)
 
@@ -67,7 +98,7 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 The wasm function of `target`, made on first request in its module and queued for its code.
 
 A Julia member carries none of dart's pragmas: no `wasm:import` (a foreign call is a host import,
-dev/MARCH.md 1.F), no `wasm:export` (the entry's export is the compile's), no `wasm:pure`; its
+dev/MARCH.md 1.F), no `wasm:pure`, and only the program's entry is exported (getExportName); its
 inlining hint is Julia's own declaration, `@noinline` 0 and `@inline` 127 (dart's never- and
 prefer-inline pragmas).
 """
@@ -80,10 +111,18 @@ prefer-inline pragmas).
     local always_inline = Core.Compiler.is_declared_inline(method)
     local inline_hint = never_inline ? 0 : (always_inline ? 127 : nothing)
     local module_ = module_for_reference(translator, target)
-    local ftype = signature_for_direct_call(translator, target)
+    # an exported member's function type is the external one
+    local export_name = get_export_name(self, target)
+    local ftype = export_name !== nothing ?
+        _make_function_type(translator, target, nothing; is_import_or_export = true, synthesize_null_return_value = false, synthesize_no_return = false) :
+        signature_for_direct_call(translator, target)
     local function_ = WasmBuilder.define(module_.functions[], ftype, get_function_name(self, target))
     function_.is_pure = false
     function_.inline_hint = inline_hint
+    if export_name !== nothing
+        function_.is_js_called = true
+        WasmBuilder.var"export"(module_.exports, export_name, function_)
+    end
     self._functions[target] = function_
     add(translator.compilation_queue[], AstCompilationTask(function_, get_member_code_generator(translator, function_, target), target))
     return function_
@@ -142,13 +181,31 @@ end
 
 @parity "dart2wasm/lib/functions.dart:399 FunctionCollector.recordSelectorUse" @unported function record_selector_use(self::FunctionCollector, selector::SelectorInfo, use_unchecked_entry::Bool) end
 
-@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" @unported function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Core.MethodInstance) end
+@parity "dart2wasm/lib/functions.dart:413 FunctionCollector.recordClassTargetUse" function record_class_target_use(self::FunctionCollector, class_id::Int64, target::Core.MethodInstance)::Nothing
+    if class_id in self._allocated_classes
+        # Class declaring or inheriting member is allocated somewhere.
+        get_function(self, target)
+    else
+        # Remember the member in case an allocation is encountered later.
+        push!(get!(() -> Core.MethodInstance[], self._pending_allocation, class_id), target)
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/functions.dart:423 FunctionCollector.recordDynamicSelectorUse" @unported function record_dynamic_selector_use(self::FunctionCollector, selector::DynamicSelector) end
 
 @parity "dart2wasm/lib/functions.dart:431 FunctionCollector.recordClassDynamicTargetUse" @unported function record_class_dynamic_target_use(self::FunctionCollector, class_id::Int64, shape::CallShape, target::Core.MethodInstance) end
 
-@parity "dart2wasm/lib/functions.dart:446 FunctionCollector.recordClassAllocation" @unported function record_class_allocation(self::FunctionCollector, class_id::Int64) end
+# dart also schedules the dynamic forwarders pending the class; a Julia program has none (D32)
+@parity "dart2wasm/lib/functions.dart:446 FunctionCollector.recordClassAllocation" function record_class_allocation(self::FunctionCollector, class_id::Int64)::Nothing
+    class_id in self._allocated_classes && return nothing
+    push!(self._allocated_classes, class_id)
+    # Schedule all members that were pending allocation of this class.
+    for target in get(self._pending_allocation, class_id, Core.MethodInstance[])
+        get_function(self, target)
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/functions.dart:461 FunctionCollector.translatedProcedures" @unported function translated_procedures(self::FunctionCollector) end
 
@@ -207,15 +264,21 @@ end
 
 @parity "dart2wasm/lib/functions.dart:875 makeInvocationCreatorSignature" @unported function make_invocation_creator_signature(translator::Translator, shape::MethodCallShape) end
 
-# dart's external types for an import or export (translateExternalType) wait for the host imports
-# (dev/MARCH.md 1.F): such a function type rejects, located
+# an import's or export's types are the external ones (translateExternalType); a member returning
+# only `nothing` returns nothing in an export, dart's void
 @parity "dart2wasm/lib/functions.dart:890 _makeFunctionType" function _make_function_type(translator::Translator, target::Core.MethodInstance, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType};
         synthesize_null_return_value::Bool, synthesize_no_return::Bool, is_import_or_export::Bool = false)::WasmBuilder.IR.FunctionType
-    is_import_or_export && reject!(Unquarantined("src/functions.jl _makeFunctionType: an import or export's external types (dev/MARCH.md 1.F)"), "dart2wasm/lib/functions.dart:890 _makeFunctionType")
-    local inputs = _get_input_types(translator, target, receiver_type, is_import_or_export, (t::Type) -> translate_type(translator, t))
+    # Translate types differently for imports and exports.
+    local tt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_type(translator, t)
+    local trt(t::Type) = is_import_or_export ? translate_external_type(translator, t) : translate_return_type(translator, t)
+    local inputs = _get_input_types(translator, target, receiver_type, is_import_or_export, tt)
+    local is_void_type(t::Type) = is_import_or_export && t === Nothing
     local has_no_return_value = synthesize_null_return_value || synthesize_no_return
-    local outputs = has_no_return_value ? WasmBuilder.IR.ValueType[] :
-        WasmBuilder.IR.ValueType[translate_return_type(translator, type_of_return_value(translator, target))]
+    local outputs = WasmBuilder.IR.ValueType[]
+    if !has_no_return_value
+        local return_type = type_of_return_value(translator, target)
+        is_void_type(return_type) || push!(outputs, trt(return_type))
+    end
     return WasmBuilder.define_function(types_builder(translator), inputs, outputs)
 end
 

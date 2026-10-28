@@ -425,7 +425,62 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:524 Translator.translate" @unported function translate(self::Translator, source_map_url_generator::Union{Nothing,Function}) end
+"""
+Translate the program to its wasm modules: the modules, the dynamic call shapes, the closure
+layouts, the classes, the globals and constants, the dispatch tables, the functions from the
+exports, their code, the linking actions, and the tables' contents; then build each module.
+
+Deferred loading is out of scope: one main module, no loading map to prune or patch (dart's
+neededForLoadList, the empty modules' removal and the loading map getters).
+
+Fields to come read here: `constructorClosures` :204, cleared after the code is generated.
+"""
+@parity "dart2wasm/lib/translator.dart:524 Translator.translate" function translate(self::Translator, source_map_url_generator::Union{Nothing,Function})::LinkedHashMap{ModuleMetadata,WasmBuilder.IR.Module}
+    local at = "dart2wasm/lib/translator.dart:524 Translator.translate"
+    _init_modules(self, source_map_url_generator)
+    local dynamic_call_shapes = DynamicCallSiteCollector_collect(self.component)
+
+    collect(self.closure_layouter[])
+    collect(self.class_info_collector[])
+
+    self.globals[] = Globals(self)
+    self.dart_globals[] = DartGlobals(Val(:_), self)
+    self.constants[] = Constants(self)
+
+    build(self.dispatch_table[])
+    build(self.dynamic_dispatch_table[], dynamic_call_shapes)
+    initialize(self.functions[])
+
+    drain_completion_queue(self)
+
+    is_empty(self.compilation_queue[]) || reject!(Internal("$at: the queue is not empty after its drain"), at)
+    for action in self.linking_actions
+        action()
+    end
+    is_empty(self.compilation_queue[]) || reject!(Internal("$at: a linking action queued code"), at)
+
+    output(self.dispatch_table[])
+    output(self.dynamic_dispatch_table[])
+    output(self.cross_module_function_table[])
+    output_tables(self.table_based_globals[])
+
+    for info in values(self.constants[].constant_info)
+        print_initializer(info, f -> _print_function(self, f, info.constant),
+            g -> (self.options.print_wasm && (println("Global #$(g.global_name): $(info.constant)");
+                                               g isa WasmBuilder.GlobalBuilder && println(WasmBuilder.trace(g.initializer)))))
+    end
+    _print_function(self, WasmBuilder.start_function(main_module(self)), "init")
+
+    local result = LinkedHashMap{ModuleMetadata,WasmBuilder.IR.Module}()
+    for (output_module, builder) in self._output_to_builder
+        local module_ = WasmBuilder.build(builder)
+        if builder !== main_module(self) && !isempty(module_.exports.exported)
+            reject!(Internal("$at: Deferred modules are not allowed to have exports."), at)
+        end
+        result[output_module] = module_
+    end
+    return result
+end
 
 @parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" @unported function _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
@@ -437,7 +492,13 @@ end
 
 @parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" @unported function _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" @unported function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Any) end
+@parity "dart2wasm/lib/translator.dart:815 Translator._printFunction" function _print_function(self::Translator, function_::WasmBuilder.IR.BaseFunction, name::Union{String,NirConst,DummyValueConstant})::Nothing
+    if self.options.print_wasm
+        println("#$(function_.function_name): $name")
+        function_ isa WasmBuilder.FunctionBuilder && println(WasmBuilder.trace(WasmBuilder.body(function_)))
+    end
+    return nothing
+end
 
 """Call `reference` directly on `b`, inlining it where allowed and beneficial; the call's outputs."""
 @parity "dart2wasm/lib/translator.dart:830 Translator.callReference" call_reference(self::Translator, reference::Core.MethodInstance, b::WasmBuilder.InstructionsBuilder)::Vector{WasmBuilder.IR.ValueType} =
@@ -585,7 +646,20 @@ end
 
 @parity "dart2wasm/lib/translator.dart:1218 Translator.wasmArrayType" @unported function wasm_array_type(self::Translator, type_::WasmBuilder.IR.StorageType, name::String; mutable_::Bool = true) end
 
-@parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" @unported function translate_external_type(self::Translator, type_::Type) end
+"""
+The wasm type of a Julia type on the interop boundary, an import's or export's parameter or
+return: a non-nullable primitive class its builtin type, when that is a number type; anything else
+the nullable anyref, as dart coerces every reference to an abstract one (Binaryen's closed world).
+dart's wasm classes (funcref, externref, arrays) have no Julia counterpart. Callable before the class
+info is built.
+"""
+@parity "dart2wasm/lib/translator.dart:1239 Translator.translateExternalType" function translate_external_type(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
+    if type_ isa DataType && isprimitivetype(type_)
+        local builtin = get(self.builtin_types[], type_, nothing)
+        builtin !== nothing && WasmBuilder.is_primitive(builtin) && return builtin::WasmBuilder.IR.ValueType
+    end
+    return WasmBuilder.IR.RefType_any(; nullable = true)
+end
 
 @parity "dart2wasm/lib/translator.dart:1273 Translator.translateExternalStorageType" @unported function translate_external_storage_type(self::Translator, type_::Type) end
 
