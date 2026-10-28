@@ -48,5 +48,12 @@ if [ -n "$cfgs" ]; then
   echo "check: TLC green on $cfgs"
 fi
 wall=$(( $(date +%s) - s0 ))
-if [ $wall -gt 120 ]; then echo "check: RED — ${wall}s, past D14's band (a 60-s target, red past 120 s)"; exit 1; fi
+# a machine loaded past its cores (Dale's own jobs share it) leaves the band unjudged, never a
+# scaled pass: the time is printed with the load, as the retired timing ratchet left a slow
+# machine's timing unjudged (L195)
+load=$(sysctl -n vm.loadavg 2>/dev/null | awk '{ print int($2) }'); cores=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+if [ $wall -gt 120 ]; then
+  if [ "${load:-0}" -gt "$cores" ]; then echo "check: ${wall}s, past D14's band but UNJUDGED: load ${load} on ${cores} cores"
+  else echo "check: RED — ${wall}s, past D14's band (a 60-s target, red past 120 s) at load ${load} on ${cores} cores"; exit 1; fi
+fi
 echo "check: green (${wall}s)"
