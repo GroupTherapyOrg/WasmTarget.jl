@@ -9,14 +9,14 @@ cd "$(dirname "$0")/.."
 # the depot of the lane being checked: dev/ship.sh checks in a scratch worktree of the lane and
 # names the lane in WT_DEPOT_DIR, so its compiled images are the lane's, never a cold depot
 . dev/depot.sh; wt_depot_export "${WT_DEPOT_DIR:-$(pwd)}"
-# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most four checks run at
+# D31: the machine is shared (Dale's own jobs run beside the lanes), so at most three checks (two Julia processes each) run at
 # once across every lane, each holding a slot in the repository's common dir; a slot whose holder
 # died is freed. The wait is reported and not counted in D14's band, which times the check itself.
 slots="$(git rev-parse --path-format=absolute --git-common-dir)/wt-check-slots"; mkdir -p "$slots"
 w0=$(date +%s); slot=""
 # the landing-lock holder (dev/ship.sh sets CHECK_RESERVED) takes slot L alone, so it never waits
 # behind other lanes' optimistic checks
-ids="1 2 3 4"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
+ids="1 2 3"; [ "${CHECK_RESERVED:-}" = 1 ] && ids="L"
 while [ -z "$slot" ]; do
   for i in $ids; do
     if mkdir "$slots/$i" 2>/dev/null; then echo $$ > "$slots/$i/pid"; slot=$i; break; fi
@@ -31,8 +31,13 @@ trap 'rm -rf "$slots/$slot"' EXIT
 export JULIA_NUM_THREADS=1 JULIA_NUM_PRECOMPILE_TASKS=2
 mkdir -p .wtd; s0=$(date +%s)
 base=${CHECK_BASE:-origin/wt2}
-julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1
-rc=$?
+# the ratchet and the tests of ported code run side by side (two processes, one thread each): the
+# landing-lock holder's re-check is the loop's one serial step, so its wall is the slower of the two
+julia --project=. --startup-file=no -e 'using WasmTarget' > .wtd/load.out 2>&1 || { echo "check: WasmTarget does not load"; tail -30 .wtd/load.out; exit 1; }
+julia --project=. --startup-file=no test/parity_ratchet.jl > .wtd/ratchet.out 2>&1 & rpid=$!
+julia --project=. --startup-file=no test/src_tests.jl > .wtd/src_tests.out 2>&1 & tpid=$!
+wait $rpid; rc=$?
+wait $tpid; trc=$?
 if [ $rc -ne 0 ]; then
   echo "check: the ratchet fails (exit $rc)"
   grep -E '❌|FAIL|BROKEN|ERROR' .wtd/ratchet.out | cut -c1-300 | head -20
@@ -47,7 +52,8 @@ for c in $(git rev-list "$(git merge-base "$base" HEAD)..HEAD" -- dev/CHARTER.md
   git log -1 --format=%B "$c" | grep -qE '^Charter-change: .*Dale [0-9]{4}-[0-9]{2}-[0-9]{2}: ".+"' ||
     { echo "check: $(git log -1 --format='%h %s' "$c" | cut -c1-80) changes dev/CHARTER.md with no Charter-change trailer quoting Dale (D19)"; exit 1; }
 done
-julia --project=. --startup-file=no test/src_tests.jl || { echo "check: src tests red"; exit 1; }
+grep -E '^(Test Summary|src )' .wtd/src_tests.out | tail -2
+[ $trc -eq 0 ] || { echo "check: src tests red"; grep -vE '^\s*$' .wtd/src_tests.out | tail -40; exit 1; }
 # the models the change touches: a changed dev/formal/<Name>.tla or MC<Name>*.{tla,cfg} selects
 # every instance MC<Name>*.cfg of that model
 models=$(git diff --name-only "$base" HEAD -- dev/formal | sed -nE 's#^dev/formal/(MC)?([A-Z][A-Za-z0-9]*)\.(tla|cfg)$#\2#p' | sort -u)
