@@ -3,9 +3,14 @@ uuid = "9f3a1415-1112-405b-ae89-c61daf9872bd"
 version = "0.5.3"
 authors = ["Dale Black"]
 
+[deps]
+Binaryen_jll = "a54ac8ab-712d-5a0e-8e11-9296c0d3c20e"
+
 [compat]
 # Tilde specifiers pin to supported minor lines only: the typed-IR format the
 # compiler consumes is version-specific, so each minor needs explicit support.
+# wasm-opt for dart's opt phase (compile.dart:711); its version is pinned in dev/PARITY_MASTER.md
+Binaryen_jll = "=0.130.0"
 julia = "~1.12, ~1.13"
 Test = "1"
 
