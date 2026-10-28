@@ -855,10 +855,35 @@ kind = "not_portable"
 what = "await expressions"
 reason = "async and tasks are outside WT's scope (dev/PARITY_MASTER.md)"
 
-["tests/language/bool/"]
+["tests/language/bool/bool_test.dart"]
 kind = "behavior"
-what = "bool values, conditions and boolean operators"
-cases = []
+what = "bool equality and identity, toString, negation, && and || over non-bool operands raising TypeError, and short-circuit evaluation counted"
+cases = ["dart_language/bool_bool"]
+
+["tests/language/bool/check_strong_test.dart"]
+kind = "behavior"
+what = "a null and a String used as a condition raise TypeError"
+cases = ["dart_language/bool_check_strong"]
+
+["tests/language/bool/condition_check_strong_test.dart"]
+kind = "behavior"
+what = "nullable bools from named parameters used as conditions raise TypeError"
+cases = ["dart_language/bool_condition_check_strong"]
+
+["tests/language/bool/conditional_expression_condition_context_error_test.dart"]
+kind = "not_portable"
+what = "a cascade on a generic cast in a condition, a compile-time error"
+reason = "dart front-end diagnostics of a cascade invoking a method the type lacks"
+
+["tests/language/bool/has_environment_not_new_test.dart"]
+kind = "not_portable"
+what = "bool.hasEnvironment called with new throws off the VM"
+reason = "dart compile-time environment declarations (-D) have no counterpart in a Julia program"
+
+["tests/language/bool/has_environment_test.dart"]
+kind = "not_portable"
+what = "const bool.hasEnvironment of declared and undeclared names"
+reason = "dart compile-time environment declarations (-D) have no counterpart in a Julia program"
 
 ["tests/language/call/"]
 kind = "behavior"
@@ -945,10 +970,20 @@ kind = "behavior"
 what = "double arithmetic, rounding, parsing and printing"
 cases = []
 
-["tests/language/double_literals/"]
+["tests/language/double_literals/double_literal_coercion_error_test.dart"]
+kind = "not_portable"
+what = "integer literals in a double context that no double holds exactly, each a compile-time error"
+reason = "the test is dart front-end diagnostics of literals (its expectations are analyzer and CFE errors); a Julia literal is an Int, Int128 or BigInt and converts by Julia rules, rejected or not by Julia"
+
+["tests/language/double_literals/double_literal_coercion_test.dart"]
 kind = "behavior"
-what = "double literals and their values"
-cases = []
+what = "integer literals passed where a double is expected are the double of the same value, signed zero and powers of two included"
+cases = ["dart_language/double_literals_double_literal_coercion"]
+
+["tests/language/double_literals/implicit_double_context_test.dart"]
+kind = "behavior"
+what = "integer literals in double contexts: typed locals, constants, assignments, setters and list elements"
+cases = ["dart_language/double_literals_implicit_double_context"]
 
 ["tests/language/dynamic/"]
 kind = "not_portable"
@@ -1035,15 +1070,60 @@ kind = "not_portable"
 what = "identifiers, built-in identifiers and their static rules"
 reason = "dart syntax, static diagnostics"
 
-["tests/language/identity/"]
+["tests/language/identity/closure2_test.dart"]
 kind = "behavior"
-what = "identical() on numbers, objects and closures (Julia's ===)"
-cases = []
+what = "identical passed as a value, over the minimum int, ints and doubles, and NaN"
+cases = ["dart_language/identity_closure2"]
 
-["tests/language/if/"]
+["tests/language/identity/closure_test.dart"]
 kind = "behavior"
-what = "if statements and their branches"
-cases = []
+what = "identical passed as a value, over ints, doubles, strings, objects and null"
+cases = ["dart_language/identity_closure"]
+
+["tests/language/identity/const_test.dart"]
+kind = "behavior"
+what = "identical of constant functions and ints in constants (its compile-time error sections are dart diagnostics)"
+cases = ["dart_language/identity_const"]
+
+["tests/language/identity/identical_test.dart"]
+kind = "behavior"
+what = "identical against a string, negated and in conditions"
+cases = ["dart_language/identity_identical"]
+
+["tests/language/identity/mint_identical_test.dart"]
+kind = "behavior"
+what = "identical of integers past 2^61"
+cases = ["dart_language/identity_mint_identical"]
+
+["tests/language/identity/nan_identical_test.dart"]
+kind = "behavior"
+what = "identical of NaNs of two bit patterns and their negations"
+cases = ["dart_language/identity_nan_identical"]
+
+["tests/language/identity/strict_equal_test.dart"]
+kind = "behavior"
+what = "identical and its negation against constants, in returns and conditions, and null != null"
+cases = ["dart_language/identity_strict_equal"]
+
+["tests/language/if/and_test.dart"]
+kind = "behavior"
+what = "a bit set under a condition read before a shift, in a loop"
+cases = ["dart_language/if_and"]
+
+["tests/language/if/dangling_else_test.dart"]
+kind = "behavior"
+what = "an else after nested ifs, a while, a for and a labeled block belongs to the outer if"
+cases = ["dart_language/if_dangling_else"]
+
+["tests/language/if/if_test.dart"]
+kind = "behavior"
+what = "if statements with empty branches, else, negation, || and &&"
+cases = ["dart_language/if_if"]
+
+["tests/language/if/nested_if_test.dart"]
+kind = "behavior"
+what = "a list rebound in a branch never taken, then appended to in a loop"
+cases = ["dart_language/if_nested_if"]
 
 ["tests/language/if_null/"]
 kind = "not_portable"
@@ -1340,10 +1420,25 @@ kind = "not_portable"
 what = "name resolution"
 reason = "dart's static resolution"
 
-["tests/language/return/"]
+["tests/language/return/in_loop_test.dart"]
 kind = "behavior"
-what = "return statements in loops and branches"
-cases = []
+what = "a return inside an infinite loop"
+cases = ["dart_language/return_in_loop"]
+
+["tests/language/return/skip_expression_test.dart"]
+kind = "behavior"
+what = "a generic class getter returning a new instance of its own type, is-tests on it, code after a return"
+cases = ["dart_language/return_skip_expression"]
+
+["tests/language/return/this_type_test.dart"]
+kind = "behavior"
+what = "a method of the superclass returning this, is-tested against the subclass"
+cases = ["dart_language/return_this_type"]
+
+["tests/language/return/type_test.dart"]
+kind = "not_portable"
+what = "returning a String from int and void functions, a compile-time error"
+reason = "dart front-end diagnostics of return types; Julia converts or raises at run time, and its verifier judges the program"
 
 ["tests/language/rewrite/"]
 kind = "behavior"
@@ -1540,17 +1635,17 @@ reason = "dart syntax, static diagnostics"
 ["tests/language/flutter_regession_151473_test.dart"]
 kind = "behavior"
 what = "overrides calling super of a method and a getter, through a list of two subclasses, with is-tests on the results"
-cases = []
+cases = ["dart_language/flutter_regession_151473"]
 
 ["tests/language/local_null_initialization.dart"]
 kind = "behavior"
 what = "a local declared without an initializer and assigned in some switch cases reads null in the others (no _test suffix: dart's runner does not run it)"
-cases = []
+cases = ["dart_language/local_null_initialization"]
 
 ["tests/language/record_literal_test.dart"]
 kind = "behavior"
 what = "record literals: positional, named, nested, holding closures, const"
-cases = []
+cases = ["dart_language/record_literal"]
 
 ["tests/language/record_literal_problems_test.dart"]
 kind = "not_portable"
@@ -1560,7 +1655,7 @@ reason = "static diagnostics of dart's front end"
 ["tests/language/record_type_test.dart"]
 kind = "behavior"
 what = "record types in declarations, parameters and returns"
-cases = []
+cases = ["dart_language/record_type"]
 
 ["tests/language/record_type_problems_test.dart"]
 kind = "not_portable"
@@ -1575,12 +1670,12 @@ reason = "static diagnostics of dart's front end"
 ["tests/language/regress_54994_test.dart"]
 kind = "behavior"
 what = "is-tests against generic subclasses whose type arguments differ, after casts to a supertype"
-cases = []
+cases = ["dart_language/regress_54994"]
 
 ["tests/language/regression_55741_test.dart"]
 kind = "behavior"
 what = "is-tests of a generic class and a subclass instantiated at nullable and non-nullable type arguments"
-cases = []
+cases = ["dart_language/regression_55741"]
 
 ["tests/language/regression_56129_test.dart"]
 kind = "not_portable"

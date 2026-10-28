@@ -2687,3 +2687,221 @@ _g("dart_web_wasm", Any[
                  _dw_apply(fs[2], (n,)) == "static2: $n missing-b", _dw_apply(fs[2], (n, 2)) == "static2: $n 2",
                  (try; _dw_apply(fs[1], (n, 2, "extra2")); false; catch e; e isa MethodError; end))), Int64(1)),
 ])
+
+# ---- dart2wasm's tests at the pin, tests/language (test/dart_tests.toml, dev/LEDGER.md D41) -------
+# Each case is named by the dart file's path under tests/language, `/` written `_`, less `_test`.
+# flutter_regession_151473: methods calling their supertype's method (Julia's invoke), through a
+# list of two subtypes
+abstract type _DlI end
+abstract type _DlRes end
+struct _DlSub1 <: _DlRes end
+struct _DlSub2 <: _DlRes end
+struct _DlSub3 <: _DlRes end
+abstract type _DlA <: _DlI end
+struct _DlB1 <: _DlA end
+struct _DlB2 <: _DlA end
+_dl_foo(::_DlA)::_DlRes = _DlSub1()
+_dl_foo(b::_DlB1)::_DlRes = (invoke(_dl_foo, Tuple{_DlA}, b) isa _DlSub1 ? _DlSub2() : _DlSub1())
+_dl_foo(b::_DlB2)::_DlRes = (invoke(_dl_foo, Tuple{_DlA}, b) isa _DlSub1 ? _DlSub3() : _DlSub1())
+_dl_bar(::_DlA)::_DlRes = _DlSub1()
+_dl_bar(b::_DlB1)::_DlRes = (invoke(_dl_bar, Tuple{_DlA}, b) isa _DlSub1 ? _DlSub2() : _DlSub1())
+_dl_bar(b::_DlB2)::_DlRes = (invoke(_dl_bar, Tuple{_DlA}, b) isa _DlSub1 ? _DlSub3() : _DlSub1())
+# local_null_initialization: a variable of a loop's body, assigned in some iterations, is fresh in
+# each (read with @isdefined, Julia's unassigned local)
+function _dl_convert(text::String)
+    local result = Union{Nothing,Int64}[]
+    for ch in text
+        if ch == '<'
+            replacement = Int64(1)
+        elseif ch == '>'
+            replacement = Int64(2)
+        end
+        push!(result, @isdefined(replacement) ? replacement : nothing)
+    end
+    return result
+end
+# record_literal / record_type: tuples and named tuples, nested, holding a function, of one
+# element, declared by type, passed and returned
+_dl_rec_foo(input::Tuple{Int64,@NamedTuple{b::Bool}}, x::Int64)::Tuple{Int64,Int64} = input[2].b ? (42, 42) : (1, 1)
+_dl_rec_f1(t::T) where {T} = (Int64(42), t)
+struct _DlBar end
+_dl_rec_bar(::_DlBar, x::Int64)::Tuple{Int64,Int64} = (42, 42)
+# regress_54994: isa against parametric subtypes after a value is held at a supertype
+abstract type _DlG0{T} end
+abstract type _DlG1{T,H} <: _DlG0{Int64} end
+struct _DlG1c{T,H} <: _DlG1{T,H} end
+struct _DlG2{T} <: _DlG1{T,T} end
+_dl_b0(k::Bool)::_DlG0{Int64} = k ? _DlG2{String}() : _DlG1c{Bool,Bool}()
+_dl_b1(k::Bool)::_DlG1 = k ? _DlG2{Int64}() : _DlG1c{Number,Number}()
+function _dl_x_test(::Type{T}, k::Bool) where {T<:Number}
+    local a = k ? _DlG2{T}() : _DlG1c{T,T}()
+    return _dw_bits(a isa _DlG2{T}, a isa _DlG2{Int64}, a isa _DlG2{Float64})
+end
+# regression_55741: isa against a parametric type whose subtype instantiates it at a nullable type
+abstract type _DlBaseA{T} end
+struct _DlBase{T} <: _DlBaseA{T}
+    data::T
+end
+struct _DlSubN{T} <: _DlBaseA{Union{Nothing,T}}
+    data::Union{Nothing,T}
+end
+# if/and: a bit set after a shift of a value read in a loop
+_dl_opshr(n::Int64, a2::Int64) = (negative = a2 == 496; res2 = a2; negative && (res2 |= 3); res2)
+# if/dangling_else: nested ifs whose else belongs to the outer if, and a labeled block left early
+function _dl_nested_if1(notTrue::Bool)
+    notTrue && return "bad input"
+    if notTrue
+        notTrue && return "bad"
+    else
+        return "good"
+    end
+    return "bug"
+end
+function _dl_nested_while(notTrue::Bool)
+    notTrue && return "bad input"
+    if notTrue
+        while notTrue
+            notTrue && return "bad"
+        end
+    else
+        return "good"
+    end
+    return "bug"
+end
+function _dl_nested_for(notTrue::Bool)
+    notTrue && return "bad input"
+    if notTrue
+        for i in 0:2
+            i == 0 && return "bad"
+        end
+    else
+        return "good"
+    end
+    return "bug"
+end
+function _dl_nested_labeled(notTrue::Bool)
+    notTrue && return "bad input"
+    if notTrue
+        notTrue && @goto label
+        @label label
+    else
+        return "good"
+    end
+    return "bug"
+end
+# if/if_test: if statements with empty branches, else, negation, || and &&
+_dl_f0(b::Bool) = (if b; end; if b; else; end; Int64(0))
+_dl_f1(b::Bool) = b ? Int64(1) : Int64(2)
+_dl_f3(b::Bool) = (b && return Int64(1); Int64(2))
+_dl_f5(b::Bool) = (!b && return Int64(1); Int64(2))
+_dl_f6(a::Bool, b::Bool) = (a || b) ? Int64(1) : Int64(2)
+_dl_f7(a::Bool, b::Bool) = (a && b) ? Int64(1) : Int64(2)
+# if/nested_if: a list rebound in a branch never taken, then appended to in a loop
+function _dl_nested_if(x::Bool, a::Vector{Int64})
+    for _ in 1:10
+        if x
+            !x && (a = Int64[])
+            push!(a, 3)
+        end
+    end
+    return a
+end
+# return/in_loop: a return inside an infinite loop
+_dl_in_loop() = (x = 0; while true; true && return Int64(42); x = 1; end)
+# return/skip_expression: a parametric struct's method returning a new instance of its type
+struct _DlOneArg{A} end
+struct _DlTwoArgs{A,B} end
+_dl_next(::_DlOneArg{A}) where {A} = _DlOneArg{A}()
+_dl_next(::_DlTwoArgs{A,B}) where {A,B} = _DlTwoArgs{A,B}()
+# return/this_type: a method of the supertype returning its receiver
+abstract type _DlRA end
+struct _DlRB <: _DlRA end
+_dl_this(a::_DlRA) = a
+# bool/bool_test: Bool equality and identity, string, negation, && and || over operands of a union
+# (a non-Bool condition raises TypeError) and their short circuit counted
+_dl_and(a::Union{Bool,Int64}, b::Union{Bool,Int64}) = (try; a && b; catch e; e isa TypeError ? Int64(-1) : Int64(-2); end)
+_dl_or(a::Union{Bool,Int64}, b::Union{Bool,Int64}) = (try; a || b; catch e; e isa TypeError ? Int64(-1) : Int64(-2); end)
+function _dl_short_circuit()
+    local t = Ref(Int64(0))
+    local f = Ref(Int64(0))
+    local tf = () -> (t[] += 1; true)
+    local ff = () -> (f[] += 1; false)
+    local s = Int64(0)
+    tf() && tf(); s = 100s + 10t[] + f[]; t[] = f[] = 0
+    ff() && tf(); s = 100s + 10t[] + f[]; t[] = f[] = 0
+    tf() && ff(); s = 100s + 10t[] + f[]; t[] = f[] = 0
+    ff() || ff(); s = 100s + 10t[] + f[]
+    return s
+end
+# bool/check_strong, bool/condition_check_strong: a condition that is nothing or a String
+_dl_cond(x::Union{Nothing,String,Bool}) = (try; x ? Int64(1) : Int64(0); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end)
+_dl_check(; a::Union{Nothing,Bool} = false, b::Union{Nothing,Bool} = true) = string(a ? "a" : "", b ? "b" : "")
+# identity: === passed as a value, over integers, floats, strings, mutable structs and NaNs
+mutable struct _DlPoint
+    x::Int64
+    y::Int64
+end
+_dl_f() = nothing
+const _DL_G = Int64(1)
+const _DL_IDENTICAL_FF = _dl_f === _dl_f
+const _DL_IDENTICAL_FG = _dl_f === _DL_G
+_dl_ident_ho(a::String) = (!("ho" === a) ? Int64(2) : Int64(1))
+_dl_strict(a::Int64) = _dw_bits(a === 3, !(a === 3), !(3 === a), (a === 3 ? 1 : 2) == 1, (a === 0), (0 === a), nothing != nothing)
+# double_literals: integer literals in a Float64 context convert to the Float64 of the same value
+mutable struct _DlSetter
+    x::Float64
+end
+_dl_expect_double(e::Float64, a::Float64) = e === a
+_g("dart_language", Any[
+    ("flutter_regession_151473", (i::Int64) -> (l = Union{_DlB1,_DlB2}[_DlB1(), _DlB2()];
+        _dw_bits(_dl_foo(l[i]) isa _DlSub2, _dl_bar(l[i]) isa _DlSub2, _dl_foo(l[i + 1]) isa _DlSub3, _dl_bar(l[i + 1]) isa _DlSub3)), Int64(1)),
+    ("local_null_initialization", (s::String) -> (s2 = Int64(0); for x in _dl_convert(s); s2 = 10s2 + (x === nothing ? 9 : x); end; s2), "<A>"),
+    ("record_literal", (n::Int64) -> (r1 = ((n, 2), (a = 3, b = 4)); r2 = (42, 42, 42); r3 = ((42,), (foo = 42, bar = 42, baz = 42)); r4 = ((42, 42), 42);
+        r5 = ((foo, bar) -> 42, 42); r6 = (42,); r8 = ((42,), (foo = "bar",));
+        r1[1][1] + r1[1][2] + r1[2].a + r1[2].b + sum(r2) + r3[1][1] + r3[2].bar + r4[1][2] + r5[1](1, 2) + r5[2] + r6[1] + ncodeunits(r8[2].foo)), Int64(1)),
+    ("record_type", (n::Int64) -> (r1::Tuple{Int64,Int64} = (n, 2); r3::Tuple{Int64,Int64,@NamedTuple{a::Int64,b::Int64}} = (1, 2, (a = 3, b = 4));
+        l = Tuple{Int64,Int64}[]; push!(l, r1); one::Tuple{Int64} = (1,); ok::@NamedTuple{ok::Int64} = (ok = 1,);
+        f = _dl_rec_foo((42, (b = true,)), 42); g = _dl_rec_bar(_DlBar(), 42); h = _dl_rec_f1("x");
+        r1[1] + r3[3].b + l[1][2] + one[1] + ok.ok + f[1] + g[2] + h[1] + ncodeunits(h[2])), Int64(1)),
+    ("regress_54994", (k::Bool) -> (a = _dl_b0(k); b = _dl_b1(k);
+        _dw_bits(a isa _DlG2{Int64}, a isa _DlG2{String}, b isa _DlG2{Number}, b isa _DlG2{Int64}, b isa _DlG2{Float64},
+                 b isa _DlG2{<:Number}) * 64 + _dl_x_test(Int64, k) * 8 + _dl_x_test(Float64, k)), true),
+    ("regression_55741", (k::Bool) -> (base = k ? _DlBase{String}("a") : 1; baseN = k ? _DlBase{Union{Nothing,String}}("a") : 1;
+        sub = k ? _DlSubN{String}("a") : 1;
+        _dw_bits(base isa _DlBaseA{String}, base isa _DlBaseA{Union{Nothing,String}}, baseN isa _DlBaseA{String}, baseN isa _DlBaseA{Union{Nothing,String}},
+                 sub isa _DlSubN{String}, sub isa _DlBaseA{String}, sub isa _DlBaseA{Union{Nothing,String}}, base isa _DlBaseA{<:Union{Nothing,String}})), true),
+    ("if_and", (n::Int64) -> (t = 0; for _ in 1:3; t = _dl_opshr(n, Int64(496)); end; t), Int64(99)),
+    ("if_dangling_else", (b::Bool) -> _dw_bits(_dl_nested_if1(b) == "good", _dl_nested_while(b) == "good", _dl_nested_for(b) == "good", _dl_nested_labeled(b) == "good"), false),
+    ("if_if", (b::Bool) -> (r = [_dl_f0(b), _dl_f1(b), _dl_f1(!b), _dl_f3(b), _dl_f3(!b), _dl_f5(b), _dl_f5(!b), _dl_f6(b, b), _dl_f6(b, !b), _dl_f6(!b, b), _dl_f6(!b, !b),
+        _dl_f7(b, b), _dl_f7(b, !b), _dl_f7(!b, b), _dl_f7(!b, !b)]; s = Int64(0); for x in r; s = 3s + x; end; s), true),
+    ("if_nested_if", (x::Bool) -> (a = _dl_nested_if(x, Int64[]); length(a) * 10 + a[1]), true),
+    ("return_in_loop", (n::Int64) -> _dl_in_loop() + n, Int64(0)),
+    ("return_skip_expression", (n::Int64) -> _dw_bits(_dl_next(_DlOneArg{String}()) isa _DlOneArg, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs,
+        _dl_next(_DlOneArg{String}()) isa _DlOneArg{String}, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs{String,Int64}) + n, Int64(0)),
+    ("return_this_type", (n::Int64) -> (_dl_this(_DlRB()) isa _DlRB ? 1 : 0) + n, Int64(0)),
+    ("bool_bool", (t::Bool) -> (f = !t;
+        _dw_bits(t === true, t === f, t == (t == t), f === (t == f), t != f, string(t) == "true", string(f) == "false", !f == t) * 10^12 +
+        (_dl_and(t, t) === true) * 10^11 + (_dl_and(t, Int64(0)) === Int64(0)) * 10^10 + (_dl_and(Int64(0), t) === Int64(-1)) * 10^9 +
+        (_dl_or(f, t) === true) * 10^8 + (_dl_or(t, Int64(0)) === true) * 10^7 + (_dl_or(f, Int64(1)) === Int64(1)) * 10^6 +
+        (_dl_or(Int64(1), f) === Int64(-1)) * 10^5 + _dl_short_circuit() % 10^5), true),
+    ("bool_check_strong", (s::String) -> _dl_cond(nothing) * 10 + _dl_cond(s), "true"),
+    ("bool_condition_check_strong", (n::Int64) -> (try; ncodeunits(_dl_check(a = nothing, b = nothing)); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end) * 10 +
+        ncodeunits(_dl_check()) + n, Int64(0)),
+    ("identity_closure2", (n::Int64) -> (myid = (===); _dw_bits(myid(typemin(Int64), typemin(Int64)), myid(typemin(Int64), typemin(Int64) + n), myid(42, 42.0), myid(NaN, NaN))), Int64(1)),
+    ("identity_closure", (n::Int64) -> (myid = (===); p = _DlPoint(n, n); q = _DlPoint(n, n); a = "hello"; b = string("hel", "lo");
+        _dw_bits(myid(42, 42), myid(42, 41), myid(42.0, 42.0), myid(42.0, 41.0), myid(35184372088832, 35184372088832), myid(35184372088832, 35184372088831),
+                 myid("hello", 41), myid(p, q), myid(p, p), myid(a, b), myid(42, nothing), myid(nothing, nothing))), Int64(1)),
+    ("identity_const", (n::Int64) -> _dw_bits(_DL_IDENTICAL_FF, _DL_G === _DL_G, _DL_IDENTICAL_FG, _DL_G === _dl_f) + n, Int64(0)),
+    ("identity_identical", (s::String) -> (r = Int64(0); for _ in 1:20; r += _dl_ident_ho(s) + (("ho" === s) ? 10 : 20) + (!("ho" === s) ? 100 : 200); end; r), "ho"),
+    ("identity_mint_identical", (n::Int64) -> _dw_bits(2305843009213693952 + n === 2305843009213693952, 4611686018427387903 + n === 4611686018427387903,
+        4611686018427387904 + n === 4611686018427387904, 2305843009213693953 + n === 2305843009213693954), Int64(0)),
+    ("identity_nan_identical", (x::Float64) -> (other = reinterpret(Float64, typemax(UInt64) - UInt64(1)); a = other; b = x;
+        _dw_bits(NaN === -NaN, NaN === NaN, -NaN === -NaN, other === -other, other === other, -other === -other, a === b, -a === -b, -a === b, a === -b,
+                 -(-a) === a, -(-b) === b)), NaN),
+    ("identity_strict_equal", (n::Int64) -> _dl_strict(n) * 1000 + _dl_strict(n - 2) * 10 + _dl_strict(Int64(0)) % 10, Int64(5)),
+    ("double_literals_double_literal_coercion", (n::Int64) -> (v1::Float64 = 255 + n; v2::Float64 = 9007199254740992 + n; v3::Float64 = -0 + n; v4::Float64 = 4611686018427387904 + n;
+        _dw_bits(_dl_expect_double(255.0, v1), _dl_expect_double(9007199254740992.0, v2), _dl_expect_double(0.0, v3), _dl_expect_double(-0.0, v3),
+                 _dl_expect_double(4.611686018427387904e18, v4), _dl_expect_double(-1.0, Float64(-1 + n)))), Int64(0)),
+    ("double_literals_implicit_double_context", (n::Int64) -> (v::Float64 = 0; v = v + n; o = _DlSetter(0); o.x = 2 + n; w::Float64 = 0x02;
+        l = Float64[1, 2]; push!(l, 3); _dw_bits(v === 0.0, o.x === 2.0, w === 2.0, l[3] === 3.0, sum(l) === 6.0)), Int64(0)),
+])
