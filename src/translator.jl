@@ -865,8 +865,12 @@ end
 @parity "dart2wasm/lib/translator.dart:2087 Translator.typeOfField" type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::Type =
     node isa ClassField ? node.type : Core.get_binding_type(node.mod, node.name)
 
-# dart reads the parameter's TFA-inferred type, else its declared one; the code generator passes the
-# type Julia inferred for the argument (its MethodInstance's signature)
+"""
+The wasm type of a parameter. dart reads the parameter's TFA-inferred type, else its declared one;
+the code generator passes the type Julia inferred for the argument (its MethodInstance's signature).
+
+Reshaped: `node` — the variable's type is the NIR body's, which the code generator reads; the translator takes the Julia type.
+"""
 @parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, type_::Type, is_required::Bool)::WasmBuilder.IR.ValueType =
     translate_type(self, type_)
 
@@ -884,8 +888,13 @@ nullable, its read checking for Julia's UndefRefError.
     return wasm_type
 end
 
-# the type Julia inferred for the local (the code generator passes it); a cyclic class's locals are
-# never assigned, so they take the top type, whose dummy initialization is a ref.null
+"""
+The wasm type of a local, the type Julia inferred for it, which the code generator passes; a cyclic
+class's locals are never assigned, so they take the top type, whose dummy initialization is a
+ref.null.
+
+Reshaped: `node` — the variable's type is the NIR body's, which the code generator reads; the translator takes the Julia type.
+"""
 @parity "dart2wasm/lib/translator.dart:2100 Translator.translateTypeOfLocalVariable" function translate_type_of_local_variable(self::Translator, type_::Type)::WasmBuilder.IR.ValueType
     if type_ isa DataType
         local info = get(self.class_info, type_, nothing)
