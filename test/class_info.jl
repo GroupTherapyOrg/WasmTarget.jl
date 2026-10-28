@@ -126,8 +126,12 @@ end
     @test isempty(fields(FieldCases.A)) && isempty(fields(FieldCases.S)) && isempty(fields(Any)) && isempty(fields(Nothing))
     @test [(f.name, f.type, f.index, f.mutable) for f in fields(Int64)] == [("value", Int64, 0, false)]
     @test isprimitivetype(Bool) && fields(Bool)[1].type === Bool
-    # a kind and a class whose data Julia holds outside its fields reject, located
-    for c in (DataType, String, Symbol)
+    # a kind takes dart's runtime type layout: isDeclaredNullable, and a DataType the class id
+    @test [(f.name, f.type, f.index) for f in fields(DataType)] == [("isDeclaredNullable", Bool, 0), ("classId", Int32, 0)]
+    @test [f.name for f in fields(Core.TypeofBottom)] == ["isDeclaredNullable"]
+    @test [f.name for f in fields(Union)] == ["isDeclaredNullable", "a", "b"]
+    # a class whose data Julia holds outside its fields rejects, located
+    for c in (String, Symbol)
         local e = try; fields(c); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end

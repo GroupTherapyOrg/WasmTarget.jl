@@ -133,16 +133,45 @@ dart's `cls.fields.where((f) => f.isInstanceMember)`, a class's own instance fie
 an abstract class has none (Julia's abstract types have no fields, so every field is a concrete
 class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `value`, as dart's
 boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
-none. A kind (a type as a value) and a class whose data Julia holds outside its fields (`String`,
-`Symbol`, `Core.SimpleVector`) reject, located, until their representation is written.
+none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`). A class whose
+data Julia holds outside its fields (`String`, `Symbol`, `Core.SimpleVector`) rejects, located,
+until its representation is written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
-    Base.iskindtype(c) && reject!(Unquarantined("src/julia/classes.jl class_instance_fields: the kind $c, a type as a value, whose representation is not written"), at)
+    Base.iskindtype(c) && return _kind_instance_fields(c, at)
     if fieldcount(c) == 0
         Base.issingletontype(c) && return ClassField[]
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
+end
+
+"""
+    _kind_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a kind's instance, a type as a value: dart's runtime type objects (`_Type` and its
+subclasses, sdk/lib/_internal/wasm/lib/type.dart), whose fields class_info.dart's FieldIndex names.
+Each kind first holds dart's `_Type.isDeclaredNullable` (FieldIndex.typeIsDeclaredNullable), which is
+Julia's `Nothing <: T`: `Nothing` is dart's Null and `Any` dart's `Object?`, both nullable. A
+`DataType` is dart's `_InterfaceType`: `classId` (FieldIndex.interfaceTypeClassId) is the id of the
+class the type denotes. dart's `typeArguments` has no field here, because a Julia class is an instance
+with its parameters bound, so its id already fixes them. `Union` and `UnionAll` have no dart
+counterpart and keep Julia's own fields (`a`, `b`; `var`, `body`), each a value of any class.
+`Union{}`'s kind, `Core.TypeofBottom`, is dart's `_BottomType` and holds nothing more. The two fields
+that are not Julia's take index 0, like a primitive class's `value`.
+
+precedent(dart: the runtime type classes of sdk/lib/_internal/wasm/lib/type.dart, laid out by
+class_info.dart like any class). Julia's differs: its kinds are runtime classes whose own fields
+(`DataType.name`, `.parameters`, ...) are Julia's internals, so a type value takes dart's layout
+where dart has one, and Julia's own fields where only Julia has the kind.
+"""
+@quarantine "a type is a value in Julia, its class a kind whose own fields are the runtime's internals" Core.TypeofBottom function _kind_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    local nullable = ClassField(c, 0, "isDeclaredNullable", Bool, false)
+    c === DataType && return ClassField[nullable, ClassField(c, 0, "classId", Int32, false)]
+    c === Union && return ClassField[nullable, ClassField(c, 1, "a", Any, false), ClassField(c, 2, "b", Any, false)]
+    c === UnionAll && return ClassField[nullable, ClassField(c, 1, "var", Any, false), ClassField(c, 2, "body", Any, false)]
+    c === Core.TypeofBottom && return ClassField[nullable]
+    reject!(Internal("src/julia/classes.jl _kind_instance_fields: $c, no kind of Julia's"), at)
 end
