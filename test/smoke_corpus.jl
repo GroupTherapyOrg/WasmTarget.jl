@@ -2484,8 +2484,9 @@ _g("entered_paths", Any[
 # ---- dart2wasm's tests at the pin, tests/web/wasm (test/dart_tests.toml, dev/LEDGER.md D41) -------
 # Each case is the dart test's construct written in Julia, named by the dart file less `_test`; the
 # expected value is what native Julia computes, never dart's (D3). A case whose dart test asserts
-# several facts returns them as bits, the first fact the highest, so a wrong one names itself.
-_dw_bits(bs::Bool...) = foldl((a, b) -> 2a + Int64(b), bs; init = Int64(0))
+# several facts returns them as a tuple, or a vector of the results a loop collects, so a wrong
+# fact names itself; facts are never folded into one number.
+_dw_facts(xs...) = xs
 # boxed_value_tearoff: a method bound to a boxed receiver, then called
 _dw_tearoff(x::Int64) = () -> abs(x)
 # closure_hash_code: closures, a function value and a closure over a mutable receiver compared by
@@ -2495,7 +2496,7 @@ mutable struct _DwC
     x::Int64
 end
 _dw_member(o::_DwC) = () -> o.x
-_dw_same(a, b) = _dw_bits(a == b, hash(a) == hash(b), a === b)
+_dw_same(a, b) = _dw_facts(a == b, hash(a) == hash(b), a === b)
 # constructor_tearoff: a parametric struct with a keyword default, its constructor, a redirecting
 # outer constructor, a factory and a constructor that forwards, each called and passed as a value
 struct _DwFoo{T}
@@ -2648,11 +2649,11 @@ _g("dart_web_wasm", Any[
     ("assertion_failure_message", (x::Bool) -> (try; @assert x "failure message"; 0; catch e; e isa AssertionError && occursin("failure message", e.msg) ? 1 : 2; end), false),
     ("boxed_value_tearoff", (x::Int64) -> (t = _dw_tearoff(x); t()), Int64(-4)),
     ("closure_hash_code", (n::Int64) -> (f = () -> n; o1 = _DwC(n); o2 = _DwC(n);
-        _dw_bits(_dw_same(f, f) == 7, _dw_same(() -> nothing, () -> nothing) == 0, _dw_same(_dw_static, _dw_static) == 7,
-                 _dw_same(_dw_member(o1), _dw_member(o1)) == 7, _dw_same(_dw_member(o1), _dw_member(o2)) == 0)), Int64(1)),
+        _dw_facts(_dw_same(f, f), _dw_same(() -> nothing, () -> nothing), _dw_same(_dw_static, _dw_static),
+                  _dw_same(_dw_member(o1), _dw_member(o1)), _dw_same(_dw_member(o1), _dw_member(o2)))), Int64(1)),
     ("constructor_tearoff", (x::Float64) -> (n = Int64(round(x));
         cs = (_DwFoo, _dw_foo_redirect, _dw_foo_factory, _dw_foo_forward);
-        _dw_bits(_dw_foo_is(_DwFoo(n), n, "Foo named"), _dw_foo_is(_dw_foo_redirect(n), n, "Foo.redirect named"),
+        _dw_facts(_dw_foo_is(_DwFoo(n), n, "Foo named"), _dw_foo_is(_dw_foo_redirect(n), n, "Foo.redirect named"),
                  _dw_foo_is(_dw_foo_factory(n), n, "Foo.factory named"), _dw_foo_is(_dw_foo_forward(n), n, "Foo named"),
                  _dw_foo_is(cs[1](x), x, "Foo named"), _dw_foo_is(cs[2](x; named = "2"), x, "2"),
                  _dw_foo_is(cs[3](x), x, "Foo.factory named"), _dw_foo_is(cs[4](x; named = "4"), x, "4"))), 1.0),
@@ -2660,30 +2661,30 @@ _g("dart_web_wasm", Any[
         (gi, vi) = _dw_init_capture(10 * one); (gm, pa) = _dw_init_capture_modify(30 * one); (gb, pb) = _dw_body_capture_modify(40 * one);
         (ci, cb) = _dw_double_capture(300 * one); m1 = _DwMixed(one); m2 = _DwMixed(one, 10 * one); k1 = _DwNamed(a = 5 * one);
         k2 = _DwNamed(b = 30 * one, a = 7 * one);
-        _dw_bits(d.base.t == "hello" && d.base.u == 42 && d.v == "hello", gi() == 10 && vi == 10, pa == 32 && gm() == 33 && gm() == 34,
+        _dw_facts(d.base.t == "hello" && d.base.u == 42 && d.v == "hello", gi() == 10 && vi == 10, pa == 32 && gm() == 33 && gm() == 34,
                  pb == 50 && gb() == 51 && gb() == 52, ci() == 310 && cb() == 310, (m1.a, m1.b, m1.c) == (1, 2, 3) && (m2.a, m2.b, m2.c) == (1, 10, 3),
                  (k1.a, k1.b) == (5, 20) && (k2.a, k2.b) == (7, 30), _DwFactory(50 * one).x == 150)), Int64(1)),
     ("flutter_regress_152029", (i::Int64) -> (list = Union{_DwA{String},Int64}[_DwA{String}(nothing), Int64(1)]; a = list[i];
         a isa _DwA && i == 1 && (a.value = "42"); a isa _DwA && a.value == "42" ? 1 : 0), Int64(1)),
-    ("inlining", (n::Int64) -> length(_DwWidget(n).children) * 100 + _dw_fib(Int64(5)), Int64(10)),
-    ("issue_54926", (n::Int64) -> (c = _DwC2(); f1 = Base.Fix1(_dw_f, c); f2 = Base.Fix1(_dw_f, c); _dw_bits(f1 === f2, f1 == f2, f1(n) == n)), Int64(3)),
+    ("inlining", (n::Int64) -> _dw_facts(length(_DwWidget(n).children), _dw_fib(Int64(5))), Int64(10)),
+    ("issue_54926", (n::Int64) -> (c = _DwC2(); f1 = Base.Fix1(_dw_f, c); f2 = Base.Fix1(_dw_f, c); _dw_facts(f1 === f2, f1 == f2, f1(n) == n)), Int64(3)),
     ("issue_56234", (x::Float64) -> (try; v = _dw_getx(_DwX(x))::Int64; v; catch e; e isa TypeError ? Int64(-1) : Int64(-2); end), 0.0),
-    ("lazy_const_record", (i::Int64) -> _DW_RECORD[1][i] + _DW_RECORD[2] + length(_DW_RECORD[1]), Int64(10001)),
-    ("lazy_static_number_initializer_regression", (x::Float64) -> _dw_bits(_dw_round(x) == 1, _dw_round(Int64(1)) == 1, _dw_round(Inf) == _DW_MAXINT), 1.0),
+    ("lazy_const_record", (i::Int64) -> _dw_facts(_DW_RECORD[1][i], _DW_RECORD[2], length(_DW_RECORD[1])), Int64(10001)),
+    ("lazy_static_number_initializer_regression", (x::Float64) -> _dw_facts(_dw_round(x) == 1, _dw_round(Int64(1)) == 1, _dw_round(Inf) == _DW_MAXINT), 1.0),
     ("no_omit_error_details", (i::Int64) -> (try; _DW_L[i]; catch e; e isa BoundsError ? Int64(-1) : Int64(-2); end), Int64(6)),
     ("regress_54794", (i::Int64) -> (o = i == 1 ? _DwSub{Int64,String}() : i;
-        _dw_bits(o isa _DwBaseT, o isa _DwBaseT{<:Tuple}, o isa _DwBaseT{<:Tuple{Any,Any}}, o isa _DwBaseT{<:Tuple{Int64,Any}},
+        _dw_facts(o isa _DwBaseT, o isa _DwBaseT{<:Tuple}, o isa _DwBaseT{<:Tuple{Any,Any}}, o isa _DwBaseT{<:Tuple{Int64,Any}},
                  o isa _DwBaseT{<:Tuple{Any,String}}, o isa _DwBaseT{Tuple{Int64,String}}, o isa _DwBaseT{<:Tuple{String,Any}},
                  o isa _DwBaseT{<:Tuple{Any,Int64}}, o isa _DwBaseT{Tuple{Any,Any}})), Int64(1)),
-    ("regress_59782", (n::Int64) -> _dw_bits(_dw_switch(n) == "default", _dw_switch_none(n) === nothing), Int64(42)),
-    ("regress_59840", (x::Float64) -> _dw_opt(something = x, other = x) + _dw_opt(), 1.0),
-    ("regress_62273", (x::Int64) -> _dw_bits(_dw_foo(_dw_geta(x)) == "there", _dw_foo(_dw_geta(x - 1); s = "wow") == "wow"), Int64(9)),
-    ("regress_63454", (n::Int64) -> (value = Ref(n); d = Dict{_DwUnused,Int64}(); k = 0; for (key, _) in d; key.foo = value; k += 1; end; k + n), Int64(3)),
-    ("regress_63747", (n::Int64) -> (f = _dw_bytes_foo(fill(n, 80)); (b, l) = _dw_bytes_bar(fill(n, 80)); Int64(sum(f.field)) + Int64(sum(b.field)) + l), Int64(0)),
-    ("static_dispatch_pragma", (n::Int64) -> (list = Union{_DwA1,_DwA2}[_DwA1(), _DwA2()]; s = Int64(0); for e in list; s = 10s + _dw_doit(e); end; s + n), Int64(0)),
-    ("unreachable_selector_implementation", (n::Int64) -> (l = Union{_DwSub1,_DwSub2}[_DwSub1(), _DwSub2()]; s = Int64(0); for x in l; s += ncodeunits(_dw_sel(x)); end; s + n), Int64(0)),
+    ("regress_59782", (n::Int64) -> (x = n == 0 ? "a" : n; _dw_facts(_dw_switch(x) == "default", _dw_switch_none(x) === nothing)), Int64(42)),
+    ("regress_59840", (x::Float64) -> _dw_facts(_dw_opt(something = x, other = x), _dw_opt()), 1.0),
+    ("regress_62273", (x::Int64) -> _dw_facts(_dw_foo(_dw_geta(x)) == "there", _dw_foo(_dw_geta(x - 1); s = "wow") == "wow"), Int64(9)),
+    ("regress_63454", (n::Int64) -> (value = Ref(n); d = Dict{_DwUnused,Int64}(); k = 0; for (key, _) in d; key.foo = value; k += 1; end; k), Int64(3)),
+    ("regress_63747", (n::Int64) -> (f = _dw_bytes_foo(fill(n, 80)); (b, l) = _dw_bytes_bar(fill(n, 80)); _dw_facts(f.field, b.field, l)), Int64(0)),
+    ("static_dispatch_pragma", (n::Int64) -> (list = Union{_DwA1,_DwA2}[_DwA1(), _DwA2()]; r = Int64[]; for e in list; push!(r, _dw_doit(e) + n); end; r), Int64(0)),
+    ("unreachable_selector_implementation", (n::Int64) -> (l = Union{_DwSub1,_DwSub2}[_DwSub1(), _DwSub2()]; r = Bool[]; for x in l; push!(r, _dw_sel(x) == (x isa _DwSub1 ? "Sub1.foo()" : "Sub2.foo()")); end; r), Int64(0)),
     ("function_apply", (n::Int64) -> (fs = (_dw_static1, _dw_static2);
-        _dw_bits(_dw_apply(fs[1], (n,)) == "static1: $n missing-b", _dw_apply(fs[1], (n, 2)) == "static1: $n 2",
+        _dw_facts(_dw_apply(fs[1], (n,)) == "static1: $n missing-b", _dw_apply(fs[1], (n, 2)) == "static1: $n 2",
                  _dw_apply(fs[2], (n,)) == "static2: $n missing-b", _dw_apply(fs[2], (n, 2)) == "static2: $n 2",
                  (try; _dw_apply(fs[1], (n, 2, "extra2")); false; catch e; e isa MethodError; end))), Int64(1)),
 ])
@@ -2735,7 +2736,7 @@ _dl_b0(k::Bool)::_DlG0{Int64} = k ? _DlG2{String}() : _DlG1c{Bool,Bool}()
 _dl_b1(k::Bool)::_DlG1 = k ? _DlG2{Int64}() : _DlG1c{Number,Number}()
 function _dl_x_test(::Type{T}, k::Bool) where {T<:Number}
     local a = k ? _DlG2{T}() : _DlG1c{T,T}()
-    return _dw_bits(a isa _DlG2{T}, a isa _DlG2{Int64}, a isa _DlG2{Float64})
+    return _dw_facts(a isa _DlG2{T}, a isa _DlG2{Int64}, a isa _DlG2{Float64})
 end
 # regression_55741: isa against a parametric type whose subtype instantiates it at a nullable type
 abstract type _DlBaseA{T} end
@@ -2816,6 +2817,7 @@ _dl_next(::_DlTwoArgs{A,B}) where {A,B} = _DlTwoArgs{A,B}()
 # return/this_type: a method of the supertype returning its receiver
 abstract type _DlRA end
 struct _DlRB <: _DlRA end
+struct _DlRB2 <: _DlRA end
 _dl_this(a::_DlRA) = a
 # bool/bool_test: Bool equality and identity, string, negation, && and || over operands of a union
 # (a non-Bool condition raises TypeError) and their short circuit counted
@@ -2826,11 +2828,11 @@ function _dl_short_circuit()
     local f = Ref(Int64(0))
     local tf = () -> (t[] += 1; true)
     local ff = () -> (f[] += 1; false)
-    local s = Int64(0)
-    tf() && tf(); s = 100s + 10t[] + f[]; t[] = f[] = 0
-    ff() && tf(); s = 100s + 10t[] + f[]; t[] = f[] = 0
-    tf() && ff(); s = 100s + 10t[] + f[]; t[] = f[] = 0
-    ff() || ff(); s = 100s + 10t[] + f[]
+    local s = Tuple{Int64,Int64}[]
+    tf() && tf(); push!(s, (t[], f[])); t[] = f[] = 0
+    ff() && tf(); push!(s, (t[], f[])); t[] = f[] = 0
+    tf() && ff(); push!(s, (t[], f[])); t[] = f[] = 0
+    ff() || ff(); push!(s, (t[], f[]))
     return s
 end
 # bool/check_strong, bool/condition_check_strong: a condition that is nothing or a String
@@ -2846,64 +2848,189 @@ const _DL_G = Int64(1)
 const _DL_IDENTICAL_FF = _dl_f === _dl_f
 const _DL_IDENTICAL_FG = _dl_f === _DL_G
 _dl_ident_ho(a::String) = (!("ho" === a) ? Int64(2) : Int64(1))
-_dl_strict(a::Int64) = _dw_bits(a === 3, !(a === 3), !(3 === a), (a === 3 ? 1 : 2) == 1, (a === 0), (0 === a), nothing != nothing)
+_dl_strict(a::Int64) = _dw_facts(a === 3, !(a === 3), !(3 === a), (a === 3 ? 1 : 2) == 1, (a === 0), (0 === a), nothing != nothing)
 # double_literals: integer literals in a Float64 context convert to the Float64 of the same value
 mutable struct _DlSetter
     x::Float64
 end
 _dl_expect_double(e::Float64, a::Float64) = e === a
+const _DL_P2_8 = 256.0
+const _DL_P2_30 = 1073741824.0
+const _DL_P2_31 = 2147483648.0
+const _DL_P2_32 = 4294967296.0
+const _DL_P2_52 = 4503599627370496.0
+const _DL_P2_53 = 9007199254740992.0
+const _DL_P2_54 = 18014398509481984.0
+const _DL_P2_62 = 4611686018427387904.0
+const _DL_P2_63 = 9223372036854775808.0
+const _DL_P2_64 = 18446744073709551616.0
+const _DL_MAXV = 1.7976931348623157e+308
+function _dl_coercion(n::Int64)
+    local r = Bool[]
+    local v::Float64 = 0
+    v = 0; push!(r, v === 0.0)
+    v = 1; push!(r, v === 1.0)
+    v = 0; push!(r, v === 0.0)
+    v = 1; push!(r, v === 1.0)
+    v = 255; push!(r, v === _DL_P2_8 - 1)
+    v = 256; push!(r, v === _DL_P2_8)
+    v = 257; push!(r, v === _DL_P2_8 + 1)
+    v = 1073741823; push!(r, v === _DL_P2_30 - 1)
+    v = 1073741824; push!(r, v === _DL_P2_30)
+    v = 1073741825; push!(r, v === _DL_P2_30 + 1)
+    v = 2147483647; push!(r, v === _DL_P2_31 - 1)
+    v = 2147483648; push!(r, v === _DL_P2_31)
+    v = 2147483649; push!(r, v === _DL_P2_31 + 1)
+    v = 4294967295; push!(r, v === _DL_P2_32 - 1)
+    v = 4294967296; push!(r, v === _DL_P2_32)
+    v = 4294967297; push!(r, v === _DL_P2_32 + 1)
+    v = 4503599627370495; push!(r, v === _DL_P2_52 - 1)
+    v = 4503599627370496; push!(r, v === _DL_P2_52)
+    v = 4503599627370497; push!(r, v === _DL_P2_52 + 1)
+    v = 9007199254740991; push!(r, v === _DL_P2_53 - 1)
+    v = 9007199254740992; push!(r, v === _DL_P2_53)
+    v = 9007199254740994; push!(r, v === _DL_P2_53 + 2)
+    v = 18014398509481982; push!(r, v === _DL_P2_54 - 2)
+    v = 18014398509481984; push!(r, v === _DL_P2_54)
+    v = 18014398509481988; push!(r, v === _DL_P2_54 + 4)
+    v = 4611686018427387904; push!(r, v === _DL_P2_62)
+    v = 9223372036854775808; push!(r, v === _DL_P2_63)
+    v = 18446744073709551616; push!(r, v === _DL_P2_64)
+    v = -0; push!(r, v === -0.0)
+    v = -1; push!(r, v === -1.0)
+    v = -0; push!(r, v === -0.0)
+    v = -1; push!(r, v === -1.0)
+    v = -255; push!(r, v === -(_DL_P2_8 - 1))
+    v = -256; push!(r, v === -(_DL_P2_8))
+    v = -257; push!(r, v === -(_DL_P2_8 + 1))
+    v = -1073741823; push!(r, v === -(_DL_P2_30 - 1))
+    v = -1073741824; push!(r, v === -(_DL_P2_30))
+    v = -1073741825; push!(r, v === -(_DL_P2_30 + 1))
+    v = -2147483647; push!(r, v === -(_DL_P2_31 - 1))
+    v = -2147483648; push!(r, v === -(_DL_P2_31))
+    v = -2147483649; push!(r, v === -(_DL_P2_31 + 1))
+    v = -4294967295; push!(r, v === -(_DL_P2_32 - 1))
+    v = -4294967296; push!(r, v === -(_DL_P2_32))
+    v = -4294967297; push!(r, v === -(_DL_P2_32 + 1))
+    v = -4503599627370495; push!(r, v === -(_DL_P2_52 - 1))
+    v = -4503599627370496; push!(r, v === -(_DL_P2_52))
+    v = -4503599627370497; push!(r, v === -(_DL_P2_52 + 1))
+    v = -9007199254740991; push!(r, v === -(_DL_P2_53 - 1))
+    v = -9007199254740992; push!(r, v === -(_DL_P2_53))
+    v = -9007199254740994; push!(r, v === -(_DL_P2_53 + 2))
+    v = -18014398509481982; push!(r, v === -(_DL_P2_54 - 2))
+    v = -18014398509481984; push!(r, v === -(_DL_P2_54))
+    v = -18014398509481988; push!(r, v === -(_DL_P2_54 + 4))
+    v = -4611686018427387904; push!(r, v === -(_DL_P2_62))
+    v = -9223372036854775808; push!(r, v === -(_DL_P2_63))
+    v = -18446744073709551616; push!(r, v === -(_DL_P2_64))
+    v = 0x0; push!(r, v === 0.0)
+    v = 0x1; push!(r, v === 1.0)
+    v = 0x00; push!(r, v === 0.0)
+    v = 0x01; push!(r, v === 1.0)
+    v = 0xff; push!(r, v === _DL_P2_8 - 1)
+    v = 0x100; push!(r, v === _DL_P2_8)
+    v = 0x101; push!(r, v === _DL_P2_8 + 1)
+    v = 0x3fffffff; push!(r, v === _DL_P2_30 - 1)
+    v = 0x40000000; push!(r, v === _DL_P2_30)
+    v = 0x40000001; push!(r, v === _DL_P2_30 + 1)
+    v = 0x7fffffff; push!(r, v === _DL_P2_31 - 1)
+    v = 0x80000000; push!(r, v === _DL_P2_31)
+    v = 0x80000001; push!(r, v === _DL_P2_31 + 1)
+    v = 0xffffffff; push!(r, v === _DL_P2_32 - 1)
+    v = 0x100000000; push!(r, v === _DL_P2_32)
+    v = 0x100000001; push!(r, v === _DL_P2_32 + 1)
+    v = 0xfffffffffffff; push!(r, v === _DL_P2_52 - 1)
+    v = 0x10000000000000; push!(r, v === _DL_P2_52)
+    v = 0x10000000000001; push!(r, v === _DL_P2_52 + 1)
+    v = 0x1fffffffffffff; push!(r, v === _DL_P2_53 - 1)
+    v = 0x20000000000000; push!(r, v === _DL_P2_53)
+    v = 0x20000000000002; push!(r, v === _DL_P2_53 + 2)
+    v = 0x3ffffffffffffe; push!(r, v === _DL_P2_54 - 2)
+    v = 0x40000000000000; push!(r, v === _DL_P2_54)
+    v = 0x40000000000004; push!(r, v === _DL_P2_54 + 4)
+    v = 0x4000000000000000; push!(r, v === _DL_P2_62)
+    v = 0x8000000000000000; push!(r, v === _DL_P2_63)
+    v = 0x10000000000000000; push!(r, v === _DL_P2_64)
+    v = -0x0; push!(r, v === -0.0)
+    v = -0x1; push!(r, v === -1.0)
+    v = -0x00; push!(r, v === -0.0)
+    v = -0x01; push!(r, v === -1.0)
+    v = -0xff; push!(r, v === -(_DL_P2_8 - 1))
+    v = -0x100; push!(r, v === -(_DL_P2_8))
+    v = -0x101; push!(r, v === -(_DL_P2_8 + 1))
+    v = -0x3fffffff; push!(r, v === -(_DL_P2_30 - 1))
+    v = -0x40000000; push!(r, v === -(_DL_P2_30))
+    v = -0x40000001; push!(r, v === -(_DL_P2_30 + 1))
+    v = -0x7fffffff; push!(r, v === -(_DL_P2_31 - 1))
+    v = -0x80000000; push!(r, v === -(_DL_P2_31))
+    v = -0x80000001; push!(r, v === -(_DL_P2_31 + 1))
+    v = -0xffffffff; push!(r, v === -(_DL_P2_32 - 1))
+    v = -0x100000000; push!(r, v === -(_DL_P2_32))
+    v = -0x100000001; push!(r, v === -(_DL_P2_32 + 1))
+    v = -0xfffffffffffff; push!(r, v === -(_DL_P2_52 - 1))
+    v = -0x10000000000000; push!(r, v === -(_DL_P2_52))
+    v = -0x10000000000001; push!(r, v === -(_DL_P2_52 + 1))
+    v = -0x1fffffffffffff; push!(r, v === -(_DL_P2_53 - 1))
+    v = -0x20000000000000; push!(r, v === -(_DL_P2_53))
+    v = -0x20000000000002; push!(r, v === -(_DL_P2_53 + 2))
+    v = -0x3ffffffffffffe; push!(r, v === -(_DL_P2_54 - 2))
+    v = -0x40000000000000; push!(r, v === -(_DL_P2_54))
+    v = -0x40000000000004; push!(r, v === -(_DL_P2_54 + 4))
+    v = -0x4000000000000000; push!(r, v === -(_DL_P2_62))
+    v = -0x8000000000000000; push!(r, v === -(_DL_P2_63))
+    v = -0x10000000000000000; push!(r, v === -(_DL_P2_64))
+    return r
+end
 _g("dart_language", Any[
     ("flutter_regession_151473", (i::Int64) -> (l = Union{_DlB1,_DlB2}[_DlB1(), _DlB2()];
-        _dw_bits(_dl_foo(l[i]) isa _DlSub2, _dl_bar(l[i]) isa _DlSub2, _dl_foo(l[i + 1]) isa _DlSub3, _dl_bar(l[i + 1]) isa _DlSub3)), Int64(1)),
-    ("local_null_initialization", (s::String) -> (s2 = Int64(0); for x in _dl_convert(s); s2 = 10s2 + (x === nothing ? 9 : x); end; s2), "<A>"),
+        _dw_facts(_dl_foo(l[i]) isa _DlSub2, _dl_bar(l[i]) isa _DlSub2, _dl_foo(l[i + 1]) isa _DlSub3, _dl_bar(l[i + 1]) isa _DlSub3)), Int64(1)),
+    ("local_null_initialization", (s::String) -> _dl_convert(s), "<A>"),
     ("record_literal", (n::Int64) -> (r1 = ((n, 2), (a = 3, b = 4)); r2 = (42, 42, 42); r3 = ((42,), (foo = 42, bar = 42, baz = 42)); r4 = ((42, 42), 42);
         r5 = ((foo, bar) -> 42, 42); r6 = (42,); r8 = ((42,), (foo = "bar",));
-        r1[1][1] + r1[1][2] + r1[2].a + r1[2].b + sum(r2) + r3[1][1] + r3[2].bar + r4[1][2] + r5[1](1, 2) + r5[2] + r6[1] + ncodeunits(r8[2].foo)), Int64(1)),
+        _dw_facts(r1[1], r1[2].a, r1[2].b, r2, r3[1][1], r3[2].foo, r3[2].bar, r3[2].baz, r4, r5[1](1, 2), r5[2], r6, r8[1], r8[2].foo == "bar")), Int64(1)),
     ("record_type", (n::Int64) -> (r1::Tuple{Int64,Int64} = (n, 2); r3::Tuple{Int64,Int64,@NamedTuple{a::Int64,b::Int64}} = (1, 2, (a = 3, b = 4));
         l = Tuple{Int64,Int64}[]; push!(l, r1); one::Tuple{Int64} = (1,); ok::@NamedTuple{ok::Int64} = (ok = 1,);
         f = _dl_rec_foo((42, (b = true,)), 42); g = _dl_rec_bar(_DlBar(), 42); h = _dl_rec_f1("x");
-        r1[1] + r3[3].b + l[1][2] + one[1] + ok.ok + f[1] + g[2] + h[1] + ncodeunits(h[2])), Int64(1)),
+        _dw_facts(r1, r3, l, one, ok.ok, f, g, h[1], h[2] == "x")), Int64(1)),
     ("regress_54994", (k::Bool) -> (a = _dl_b0(k); b = _dl_b1(k);
-        _dw_bits(a isa _DlG2{Int64}, a isa _DlG2{String}, b isa _DlG2{Number}, b isa _DlG2{Int64}, b isa _DlG2{Float64},
-                 b isa _DlG2{<:Number}) * 64 + _dl_x_test(Int64, k) * 8 + _dl_x_test(Float64, k)), true),
+        _dw_facts(_dw_facts(a isa _DlG2{Int64}, a isa _DlG2{String}, b isa _DlG2{Number}, b isa _DlG2{Int64}, b isa _DlG2{Float64},
+                 b isa _DlG2{<:Number}), _dl_x_test(Int64, k), _dl_x_test(Float64, k))), true),
     ("regression_55741", (k::Bool) -> (base = k ? _DlBase{String}("a") : 1; baseN = k ? _DlBase{Union{Nothing,String}}("a") : 1;
         sub = k ? _DlSubN{String}("a") : 1;
-        _dw_bits(base isa _DlBaseA{String}, base isa _DlBaseA{Union{Nothing,String}}, baseN isa _DlBaseA{String}, baseN isa _DlBaseA{Union{Nothing,String}},
+        _dw_facts(base isa _DlBaseA{String}, base isa _DlBaseA{Union{Nothing,String}}, baseN isa _DlBaseA{String}, baseN isa _DlBaseA{Union{Nothing,String}},
                  sub isa _DlSubN{String}, sub isa _DlBaseA{String}, sub isa _DlBaseA{Union{Nothing,String}}, base isa _DlBaseA{<:Union{Nothing,String}})), true),
     ("if_and", (n::Int64) -> (t = 0; for _ in 1:3; t = _dl_opshr(n, Int64(496)); end; t), Int64(99)),
-    ("if_dangling_else", (b::Bool) -> _dw_bits(_dl_nested_if1(b) == "good", _dl_nested_while(b) == "good", _dl_nested_for(b) == "good", _dl_nested_labeled(b) == "good"), false),
+    ("if_dangling_else", (b::Bool) -> _dw_facts(_dl_nested_if1(b) == "good", _dl_nested_while(b) == "good", _dl_nested_for(b) == "good", _dl_nested_labeled(b) == "good"), false),
     ("if_if", (b::Bool) -> (r = [_dl_f0(b), _dl_f1(b), _dl_f1(!b), _dl_f3(b), _dl_f3(!b), _dl_f5(b), _dl_f5(!b), _dl_f6(b, b), _dl_f6(b, !b), _dl_f6(!b, b), _dl_f6(!b, !b),
-        _dl_f7(b, b), _dl_f7(b, !b), _dl_f7(!b, b), _dl_f7(!b, !b)]; s = Int64(0); for x in r; s = 3s + x; end; s), true),
-    ("if_nested_if", (x::Bool) -> (a = _dl_nested_if(x, Int64[]); length(a) * 10 + a[1]), true),
+        _dl_f7(b, b), _dl_f7(b, !b), _dl_f7(!b, b), _dl_f7(!b, !b)]; r), true),
+    ("if_nested_if", (x::Bool) -> (a = _dl_nested_if(x, Int64[]); _dw_facts(length(a), a[1])), true),
     ("return_in_loop", (n::Int64) -> _dl_in_loop() + n, Int64(0)),
-    ("return_skip_expression", (n::Int64) -> _dw_bits(_dl_next(_DlOneArg{String}()) isa _DlOneArg, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs,
-        _dl_next(_DlOneArg{String}()) isa _DlOneArg{String}, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs{String,Int64}) + n, Int64(0)),
-    ("return_this_type", (n::Int64) -> (_dl_this(_DlRB()) isa _DlRB ? 1 : 0) + n, Int64(0)),
+    ("return_skip_expression", (n::Int64) -> _dw_facts(_dl_next(_DlOneArg{String}()) isa _DlOneArg, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs,
+        _dl_next(_DlOneArg{String}()) isa _DlOneArg{String}, _dl_next(_DlTwoArgs{String,Int64}()) isa _DlTwoArgs{String,Int64}, n == 0), Int64(0)),
+    ("return_this_type", (n::Int64) -> _dl_this(n == 0 ? _DlRB() : _DlRB2()) isa _DlRB, Int64(0)),
     ("bool_bool", (t::Bool) -> (f = !t;
-        _dw_bits(t === true, t === f, t == (t == t), f === (t == f), t != f, string(t) == "true", string(f) == "false", !f == t) * 10^12 +
-        (_dl_and(t, t) === true) * 10^11 + (_dl_and(t, Int64(0)) === Int64(0)) * 10^10 + (_dl_and(Int64(0), t) === Int64(-1)) * 10^9 +
-        (_dl_or(f, t) === true) * 10^8 + (_dl_or(t, Int64(0)) === true) * 10^7 + (_dl_or(f, Int64(1)) === Int64(1)) * 10^6 +
-        (_dl_or(Int64(1), f) === Int64(-1)) * 10^5 + _dl_short_circuit() % 10^5), true),
-    ("bool_check_strong", (s::String) -> _dl_cond(nothing) * 10 + _dl_cond(s), "true"),
-    ("bool_condition_check_strong", (n::Int64) -> (try; ncodeunits(_dl_check(a = nothing, b = nothing)); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end) * 10 +
-        ncodeunits(_dl_check()) + n, Int64(0)),
-    ("identity_closure2", (n::Int64) -> (myid = (===); _dw_bits(myid(typemin(Int64), typemin(Int64)), myid(typemin(Int64), typemin(Int64) + n), myid(42, 42.0), myid(NaN, NaN))), Int64(1)),
+        _dw_facts(_dw_facts(t === true, t === f, t == (t == t), f === (t == f), t != f, string(t) == "true", string(f) == "false", !f == t),
+                  _dw_facts(_dl_and(t, t), _dl_and(t, Int64(0)), _dl_and(Int64(0), t), _dl_or(f, t), _dl_or(t, Int64(0)), _dl_or(f, Int64(1)), _dl_or(Int64(1), f)),
+                  _dl_short_circuit())), true),
+    ("bool_check_strong", (s::String) -> _dw_facts(_dl_cond(s == "true" ? nothing : true), _dl_cond(isempty(s) ? false : s)), "true"),
+    ("bool_condition_check_strong", (n::Int64) -> _dw_facts((try; ncodeunits(_dl_check(a = nothing, b = nothing)); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end),
+        _dl_check() == "b"), Int64(0)),
+    ("identity_closure2", (n::Int64) -> (myid = (===); _dw_facts(myid(typemin(Int64), typemin(Int64)), myid(typemin(Int64), typemin(Int64) + n), myid(42, 42.0), myid(NaN, NaN))), Int64(1)),
     ("identity_closure", (n::Int64) -> (myid = (===); p = _DlPoint(n, n); q = _DlPoint(n, n); a = "hello"; b = string("hel", "lo");
-        _dw_bits(myid(42, 42), myid(42, 41), myid(42.0, 42.0), myid(42.0, 41.0), myid(35184372088832, 35184372088832), myid(35184372088832, 35184372088831),
+        _dw_facts(myid(42, 42), myid(42, 41), myid(42.0, 42.0), myid(42.0, 41.0), myid(35184372088832, 35184372088832), myid(35184372088832, 35184372088831),
                  myid("hello", 41), myid(p, q), myid(p, p), myid(a, b), myid(42, nothing), myid(nothing, nothing))), Int64(1)),
-    ("identity_const", (n::Int64) -> _dw_bits(_DL_IDENTICAL_FF, _DL_G === _DL_G, _DL_IDENTICAL_FG, _DL_G === _dl_f) + n, Int64(0)),
-    ("identity_identical", (s::String) -> (r = Int64(0); for _ in 1:20; r += _dl_ident_ho(s) + (("ho" === s) ? 10 : 20) + (!("ho" === s) ? 100 : 200); end; r), "ho"),
-    ("identity_mint_identical", (n::Int64) -> _dw_bits(2305843009213693952 + n === 2305843009213693952, 4611686018427387903 + n === 4611686018427387903,
+    ("identity_const", (n::Int64) -> _dw_facts(_DL_IDENTICAL_FF, _DL_G === _DL_G, _DL_IDENTICAL_FG, _DL_G === _dl_f), Int64(0)),
+    ("identity_identical", (s::String) -> (r = Tuple{Int64,Bool,Bool}[]; for _ in 1:20; push!(r, (_dl_ident_ho(s), "ho" === s, !("ho" === s))); end; r), "ho"),
+    ("identity_mint_identical", (n::Int64) -> _dw_facts(2305843009213693952 + n === 2305843009213693952, 4611686018427387903 + n === 4611686018427387903,
         4611686018427387904 + n === 4611686018427387904, 2305843009213693953 + n === 2305843009213693954), Int64(0)),
     ("identity_nan_identical", (x::Float64) -> (other = reinterpret(Float64, typemax(UInt64) - UInt64(1)); a = other; b = x;
-        _dw_bits(NaN === -NaN, NaN === NaN, -NaN === -NaN, other === -other, other === other, -other === -other, a === b, -a === -b, -a === b, a === -b,
+        _dw_facts(NaN === -NaN, NaN === NaN, -NaN === -NaN, other === -other, other === other, -other === -other, a === b, -a === -b, -a === b, a === -b,
                  -(-a) === a, -(-b) === b)), NaN),
-    ("identity_strict_equal", (n::Int64) -> _dl_strict(n) * 1000 + _dl_strict(n - 2) * 10 + _dl_strict(Int64(0)) % 10, Int64(5)),
-    ("double_literals_double_literal_coercion", (n::Int64) -> (v1::Float64 = 255 + n; v2::Float64 = 9007199254740992 + n; v3::Float64 = -0 + n; v4::Float64 = 4611686018427387904 + n;
-        _dw_bits(_dl_expect_double(255.0, v1), _dl_expect_double(9007199254740992.0, v2), _dl_expect_double(0.0, v3), _dl_expect_double(-0.0, v3),
-                 _dl_expect_double(4.611686018427387904e18, v4), _dl_expect_double(-1.0, Float64(-1 + n)))), Int64(0)),
+    ("identity_strict_equal", (n::Int64) -> _dw_facts(_dl_strict(n), _dl_strict(n - 2), _dl_strict(Int64(0))), Int64(5)),
+    ("double_literals_double_literal_coercion", (n::Int64) -> _dl_coercion(n), Int64(0)),
     ("double_literals_implicit_double_context", (n::Int64) -> (v::Float64 = 0; v = v + n; o = _DlSetter(0); o.x = 2 + n; w::Float64 = 0x02;
-        l = Float64[1, 2]; push!(l, 3); _dw_bits(v === 0.0, o.x === 2.0, w === 2.0, l[3] === 3.0, sum(l) === 6.0)), Int64(0)),
+        l = Float64[1, 2]; push!(l, 3); _dw_facts(v === 0.0, o.x === 2.0, w === 2.0, l[3] === 3.0, sum(l) === 6.0)), Int64(0)),
 ])
 
 # ---- dart2wasm's structural tests at the pin (test/dart_tests.toml, dev/LEDGER.md D41) -------------
@@ -2933,14 +3060,14 @@ const _DS_BAR1 = Ref{Union{Nothing,_DsFoo}}(_DsFoo("bar1"))
 const _DS_BAR3 = Ref{Union{Nothing,_DsFoo}}(nothing)
 global _ds_baz::Union{Nothing,_DsFoo} = _DsFoo("baz1")
 function _ds_globals(n::Int64)
-    local r = ncodeunits(_DS_FOO0.s) + ncodeunits(_DS_FOO1[].s) + (_DS_BAR3[] === nothing ? 1 : 0)
+    local before = (_DS_FOO0.s, _DS_FOO1[].s, _DS_BAR3[] === nothing)
     _DS_FOO1[] = _DsFoo("")
     _DS_BAR1[] = nothing
     _DS_BAR3[] = _DsFoo("x")
     global _ds_baz = nothing
-    r += ncodeunits(_DS_FOO1[].s) + (_DS_BAR1[] === nothing ? 10 : 0) + ncodeunits(something(_DS_BAR3[]).s) + (_ds_baz === nothing ? 100 : 0)
+    local after = (_DS_FOO1[].s, _DS_BAR1[] === nothing, something(_DS_BAR3[]).s, _ds_baz === nothing)
     _DS_FOO1[] = _DsFoo("foo1"); _DS_BAR1[] = _DsFoo("bar1"); _DS_BAR3[] = nothing; global _ds_baz = _DsFoo("baz1")
-    return r + n
+    return _dw_facts(before == ("foo0", "foo1", true), after == ("", true, "x", true), n == 0)
 end
 # try_blocks: catch clauses selecting by the caught exception's type
 @noinline _ds_f(n::Int64) = n == 0 ? throw(ErrorException("Hi")) : n
@@ -2966,17 +3093,17 @@ const _DS_LONG = repeat("x", 100000) * "y"
 _g("dart_structural", Any[
     ("hello", (n::Int64) -> (print(devnull, "hello world"); n), Int64(0)),
     ("always_throws", (n::Int64) -> (try; _ds_foo(n); catch e; e isa ArgumentError ? Int64(-1) : Int64(-2); end), Int64(1)),
-    ("constant_string_ops", (n::Int64) -> (a = "hello"; b = "world"; ncodeunits("foo") * 1000 + Int64(codeunit("foo", 1)) + ncodeunits(a * " " * b) * 10^6 + n), Int64(0)),
+    ("constant_string_ops", (n::Int64) -> (a = "hello"; b = "world"; _dw_facts(ncodeunits("foo"), Int64(codeunit("foo", 1)), a * " " * b == "hello world")), Int64(0)),
     ("math_min_max", (k::Bool) -> (ia = k ? Int64(1) : Int64(2); ib = k ? Int64(2) : Int64(1); da = k ? 1.5 : 2.5; db = k ? 2.5 : 1.5;
         na = k ? ia : 1.2; nb = k ? ib : 1.2;
-        Float64(_ds_min_ii(ia, ib) + 10 * _ds_max_ii(ia, ib)) + 100 * _ds_min_dd(da, db) + 1000 * _ds_max_dd(da, db) + 10^4 * _ds_min_id(ia, da) +
-        10^5 * _ds_max_id(ia, da) + 10^6 * _ds_min_nn(na, nb) + 10^7 * _ds_max_nn(na, nb)), true),
+        _dw_facts(_ds_min_ii(ia, ib), _ds_max_ii(ia, ib), _ds_min_dd(da, db), _ds_max_dd(da, db), _ds_min_id(ia, da), _ds_max_id(ia, da),
+                  _ds_min_nn(na, nb), _ds_max_nn(na, nb))), true),
     ("globals", (n::Int64) -> _ds_globals(n), Int64(0)),
-    ("try_blocks", (n::Int64) -> _ds_try1(n) * 100 + _ds_try2(n) * 10 + _ds_try3(n) + _ds_try1(n + 1) * 1000, Int64(0)),
+    ("try_blocks", (n::Int64) -> _dw_facts(_ds_try1(n), _ds_try2(n), _ds_try3(n), _ds_try1(n + 1)), Int64(0)),
     ("type_brand", (n::Int64) -> (l = Union{_DsFoo1,_DsFoo2,_DsFoo3,_DsBar1}[_DsFoo1("1", n), _DsFoo2("1", n), _DsFoo3("1", n), _DsBar1("1", 1.1)];
-        s = Int64(0); for e in vcat(l, l); s = 10s + _ds_brand(e); end; s), Int64(1)),
-    ("large_const_set", (n::Int64) -> (n in _DS_SET ? 1 : 0) + length(_DS_SET) * 10, Int64(10000)),
-    ("long_string_import", (n::Int64) -> ncodeunits(_DS_LONG) + Int64(codeunit(_DS_LONG, ncodeunits(_DS_LONG))) + n, Int64(0)),
+        r = Int64[]; for e in vcat(l, l); push!(r, _ds_brand(e)); end; r), Int64(1)),
+    ("large_const_set", (n::Int64) -> _dw_facts(n in _DS_SET, length(_DS_SET), (n + 1) in _DS_SET, sort!(collect(_DS_SET)) == collect(Int64(0):n)), Int64(10000)),
+    ("long_string_import", (n::Int64) -> _dw_facts(ncodeunits(_DS_LONG), Int64(codeunit(_DS_LONG, ncodeunits(_DS_LONG)))), Int64(0)),
     ("source_map_simple", (n::Int64) -> (try; _ds_sf(n); catch e; e isa ErrorException ? Int64(-1) : Int64(-2); end), Int64(1)),
 ])
 
@@ -2986,42 +3113,47 @@ _g("dart_structural", Any[
 # typeassert that cannot fail); dart's Never is Julia's Union{}.
 const _NaI = Union{Nothing,Int64}
 const _NaO = Union{Int64,String}
-_na_pack(xs::Int64...) = foldl((a, b) -> 16a + b, xs; init = Int64(0))
+# opaque inputs: a value chosen at run time by the case's argument, so inference cannot fold the facts
+_na_ni(n::Int64, k::Int64)::_NaI = n == k ? nothing : n
+_na_os(n::Int64, k::Int64, s::String)::_NaO = n == k ? s : n
 
 # flow_analysis/boolean_parameter: a parameter of type Bool or a union reassigned to a null test, then
 # branched on, in a function, a method, a local function and a closure
 struct _NaBpC end
-function _na_bp_bool(x::_NaI, b::Bool)
+function _na_bp_bool(n::Int64, k::Int64, b::Bool)
+    local x::_NaI = _na_ni(n, k)
     b = x !== nothing
     return b ? x isa Int64 : false
 end
-function _na_bp_obj(x::_NaI, b::Union{Nothing,Bool,String})
+function _na_bp_obj(n::Int64, k::Int64, b::Union{Nothing,Bool,String})
+    local x::_NaI = _na_ni(n, k)
     b = x !== nothing
     return (b::Bool) ? x isa Int64 : false
 end
-_na_bp_method(::_NaBpC, x::_NaI, b::Bool) = (b = x !== nothing; b ? x isa Int64 : false)
-function _na_bp_local(x::_NaI)
+_na_bp_method(::_NaBpC, n::Int64, k::Int64, b::Bool) = (x = _na_ni(n, k); b = x !== nothing; b ? x isa Int64 : false)
+function _na_bp_local(n::Int64, k::Int64)
+    local x::_NaI = _na_ni(n, k)
     local f = (b::Bool) -> (b = x !== nothing; b ? x isa Int64 : false)
     local g = (b::Union{Nothing,Bool,String}) -> (b = x !== nothing; (b::Bool) ? x isa Int64 : false)
-    return _dw_bits(f(false), g(nothing), g("foo"))
+    return _dw_facts(f(false), g(nothing), g("foo"))
 end
 # flow_analysis/demotion_and_type_of_interest_promotion: a variable narrowed twice, then assigned values
 # of a narrower, a wider and an unrelated type
-function _na_demote(n::Int64)
-    local x::Union{Int64,Float64,String,Vector{Int64}} = n
+function _na_demote(n::Int64, k::Int64)
+    local x::Union{Int64,Float64,String,Vector{Int64}} = n == k ? n : string(n)
     x::Real
     x::Int64
     local a = x isa Int64
-    x = 1.0
+    x = n == k ? 1.0 : n
     local b = x isa Real && !(x isa Int64)
     x = n
-    x = ""
+    x = n == k ? "" : n
     local c = !(x isa Real)
-    x = Int64[]
+    x = n == k ? Int64[] : n
     local d = x isa AbstractVector{<:Real}
-    x = n
+    x = n == k ? n : string(n)
     local e = x isa Int64
-    return _dw_bits(a, b, c, d, e)
+    return _dw_facts(a, b, c, d, e)
 end
 # flow_analysis/expr_property_not_promoted: a field of a struct returned by a function value, tested
 # and read again through a second call
@@ -3031,12 +3163,13 @@ end
 _na_ep_eq(c) = c().f === nothing ? c().f === nothing : c().f isa Int64
 _na_ep_is(c) = c().f isa Int64 ? c().f isa Int64 : c().f === nothing
 # flow_analysis/identical: === against nothing, either operand order, unprefixed and through Core
-function _na_ident(i::_NaI)
+function _na_ident(n::Int64, k::Int64)
+    local i::_NaI = _na_ni(n, k)
     local a = !(i === nothing) ? i isa Int64 : true
     local b = !(nothing === i) ? i isa Int64 : true
     local c = !Core.:(===)(i, nothing) ? i isa Int64 : true
     local d = !Core.:(===)(nothing, i) ? i isa Int64 : true
-    return _dw_bits(a, b, c, d, i === nothing)
+    return _dw_facts(a, b, c, d, i === nothing)
 end
 # flow_analysis/issue43093: a null-aware field read followed by a non-null assertion, in one branch
 struct _NaI43C
@@ -3060,7 +3193,7 @@ function _na_late_try(n::Int64)
     finally
         r2 = y == 10n
     end
-    return _dw_bits(r1, r2)
+    return _dw_facts(r1, r2)
 end
 # flow_analysis/late_var_used_before_assignment_in_local_function_ok: a variable written inside a local
 # function or closure and read after the call, or written outside and read inside
@@ -3084,33 +3217,33 @@ function _na_late_localfn(n::Int64)
     local w::Int64
     local rc = () -> w == 10n
     w = 10n
-    return _dw_bits(a, b, rf(), rc())
+    return _dw_facts(a, b, rf(), rc())
 end
 # flow_analysis/late_var_used_before_assignment_in_loop: a variable written in one loop iteration and
 # read in the next (for, for-each, while, do-while)
 function _na_late_loop(n::Int64)
-    local r = Int64(0)
+    local r = Int64[]
     local x::Int64
     for i in 0:1
-        i == 1 && (r += x)
+        i == 1 && push!(r, x)
         i == 0 && (x = 10n)
     end
     local y::Int64
     for b in (false, true)
-        b && (r += 2y)
+        b && push!(r, y)
         !b && (y = 10n)
     end
     local z::Int64
     local i = 0
     while i < 2
-        i == 1 && (r += 3z)
+        i == 1 && push!(r, z)
         i == 0 && (z = 10n)
         i += 1
     end
     local w::Int64
     local j = 0
     while true
-        j == 1 && (r += 4w)
+        j == 1 && push!(r, w)
         j == 0 && (w = 10n)
         j += 1
         j < 2 || break
@@ -3138,20 +3271,20 @@ function _na_dba_cond(x::_NaI, b2::Bool)
     local r1 = b && x isa Int64
     b2 && (b = true)
     local r2 = b && x isa Int64
-    return _dw_bits(r1, r2, b)
+    return _dw_facts(r1, r2, b)
 end
 function _na_dba_prom(x::_NaI, b2::Bool, y::_NaI)
     local b = x !== nothing
     local r1 = b && x isa Int64
     b2 && (x = y)
-    return _dw_bits(r1, b && x isa Int64)
+    return _dw_facts(r1, b && x isa Int64)
 end
 function _na_dba_loop(x::_NaI, y::_NaI)
     local b = x !== nothing
-    local r = Int64(0)
+    local r = Bool[]
     local i = 0
     while i < 2
-        r = 2r + (b && x isa Int64)
+        push!(r, b && x isa Int64)
         x = y
         i += 1
     end
@@ -3180,11 +3313,12 @@ function _na_dbc(x0::_NaI)
     g(nothing)
     local r4 = c && x isa Int64
     f(false)
-    return _dw_bits(r1, r2, r3, r4, b)
+    return _dw_facts(r1, r2, r3, r4, b)
 end
 # flow_analysis/local_boolean_does_not_detect_aliases: a copy of the tested variable, and a copy of
 # the condition Bool
-function _na_alias(x::_NaI)
+function _na_alias(n::Int64, k::Int64)
+    local x::_NaI = _na_ni(n, k)
     local y::_NaI = x
     local b = x !== nothing
     local r1 = b ? (x isa Int64 && y isa Int64) : y === nothing
@@ -3192,81 +3326,73 @@ function _na_alias(x::_NaI)
     local b2 = b1
     local r2 = b1 ? x isa Int64 : x === nothing
     local r3 = b2 ? x isa Int64 : x === nothing
-    return _dw_bits(r1, r2, r3, b2)
+    return _dw_facts(r1, r2, r3, b2)
 end
 # flow_analysis/local_boolean_expression_types: a Bool from is, !is, ==/!= nothing, &&, ||, ?:, and an
 # assignment, used by if, !, &&, ||, while and do-while
 _na_et_true(x) = true
 _na_et_false(x) = false
 function _na_et(x::_NaO, y::_NaO, z::_NaI)
-    local s = Int64(0)
     local b = x isa Int64
-    if (b)
-        s += x::Int64
-    end
-    if !b
-        s += 10
-    else
-        s += x::Int64
-    end
-    (b && _na_et_true(x::Int64)) && (s += x::Int64)
-    (_na_et_true(x) && b) && (s += x::Int64)
-    (b || _na_et_false(x)) && (s += 100)
+    local r1 = (b) ? x::Int64 : Int64(-1)
+    local r2 = !b ? Int64(-1) : x::Int64
+    local r3 = (b && _na_et_true(x::Int64)) ? x::Int64 : Int64(-1)
+    local r4 = (_na_et_true(x) && b) ? x::Int64 : Int64(-1)
+    local r5 = b || _na_et_false(x)
+    local r6 = Int64(-1)
     while b
-        s += x::Int64
+        r6 = x::Int64
         _na_et_true(nothing) && break
     end
+    local r7 = Int64(0)
     while true
-        s += 1000
+        r7 += 1
         _na_et_true(nothing) && break
         b || break
     end
     local c = !(x isa Int64)
-    !c && (s += x::Int64)
+    local r8 = !c ? x::Int64 : Int64(-1)
     local d = z === nothing
-    !d && (s += z::Int64)
+    local r9 = !d ? z::Int64 : Int64(-1)
     local e = nothing !== z
-    e && (s += z::Int64)
+    local r10 = e ? z::Int64 : Int64(-1)
     local f = x isa String && y isa String
-    f && (s += ncodeunits(x::String) + ncodeunits(y::String))
+    local r11 = f ? ncodeunits(x::String) : Int64(-1)
+    local r12 = f ? ncodeunits(y::String) : Int64(-1)
     local o = x isa Int64 || y isa Int64
-    o || (s += 10000)
     local g = x isa Int64 ? true : false
-    g && (s += x::Int64)
+    local r13 = g ? x::Int64 : Int64(-1)
     local h
     local k = (h = x isa Int64)
-    (k && h) && (s += x::Int64)
-    return s
+    local r14 = (k && h) ? x::Int64 : Int64(-1)
+    return (r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, o, r13, r14)
 end
 # flow_analysis/local_boolean_implicitly_typed_new: untyped Bool locals initialized or assigned with a
 # null test, of a parameter, a reassigned parameter and a local
 function _na_itn(x::_NaI, y::_NaI)
-    local s = Int64(0)
     local b1 = x !== nothing
-    b1 && (s += (x::Int64) + 1)
+    local r1 = b1 ? x::Int64 : Int64(-1)
     local b2
     b2 = x !== nothing
-    b2 && (s += 2(x::Int64) + 2)
+    local r2 = b2 ? x::Int64 : Int64(-1)
     x = y
     local b3 = x !== nothing
-    b3 && (s += 4(x::Int64) + 4)
+    local r3 = b3 ? x::Int64 : Int64(-1)
     local w::_NaI = y
     local b4 = w !== nothing
-    b4 && (s += 8(w::Int64) + 8)
-    return s
+    local r4 = b4 ? w::Int64 : Int64(-1)
+    return (r1, r2, r3, r4)
 end
 # flow_analysis/local_boolean_join_equivalent: the same null test assigned to a Bool on both paths of
 # an if, a loop's break, an enum switch, a try/catch and a labelled block, then used after the join
 @enum _NaJeE _na_je_E1 _na_je_E2
 function _na_je(x::_NaI, b1::Bool, e::_NaJeE)
-    local s = Int64(0)
     local b2::Bool
     if b1
         b2 = x !== nothing
     else
         b2 = x !== nothing
     end
-    b2 && (s += 1)
     local b3::Bool = false
     for i in 0:0
         if b1
@@ -3275,14 +3401,12 @@ function _na_je(x::_NaI, b1::Bool, e::_NaJeE)
         end
         b3 = x !== nothing
     end
-    b3 && (s += 2)
     local b4::Bool
     if e == _na_je_E1
         b4 = x !== nothing
     elseif e == _na_je_E2
         b4 = x !== nothing
     end
-    b4 && (s += 4)
     local b5::Bool
     try
         b1 && throw(ErrorException("foo"))
@@ -3290,7 +3414,6 @@ function _na_je(x::_NaI, b1::Bool, e::_NaJeE)
     catch
         b5 = x !== nothing
     end
-    b5 && (s += 8)
     local b6::Bool
     if b1
         b6 = x !== nothing
@@ -3298,64 +3421,62 @@ function _na_je(x::_NaI, b1::Bool, e::_NaJeE)
     end
     b6 = x !== nothing
     @label label
-    b6 && (s += 16)
-    return s + (x === nothing ? Int64(0) : 32 * (x::Int64))
+    return _dw_facts(b2, b3, b4, b5, b6)
 end
 # flow_analysis/local_boolean_logical_op: two condition Bools combined by && and ||, invalidated by
 # writes to the tested variables or to a condition
 function _na_lo_and(x::_NaI, y::_NaI, z::_NaI, b::Bool)
-    local s = Int64(0)
     local b1 = x isa Int64
     local b2 = y isa Int64
-    (b1 && b2) && (s += 1)
+    local r1 = (b1 && b2) && (x isa Int64 && y isa Int64)
     b1 = x isa Int64
     x = z
     b2 = y isa Int64
-    (b1 && b2) && (s += 2 * (x isa Int64))
+    local r2 = (b1 && b2) && x isa Int64
     b1 = x isa Int64
     b1 = b
     b2 = y isa Int64
-    (b1 && b2) && (s += 4)
+    local r3 = b1 && b2
     b1 = x isa Int64
     b2 = y isa Int64
     y = z
-    (b1 && b2) && (s += 8 * (y isa Int64))
-    return s
+    local r4 = (b1 && b2) && y isa Int64
+    return (r1, r2, r3, r4)
 end
 function _na_lo_or(x::_NaI, y::_NaI, z::_NaI, b::Bool)
-    local s = Int64(0)
     local b1 = x === nothing
     local b2 = y === nothing
-    (b1 || b2) || (s += (x::Int64) + (y::Int64))
+    local r1 = !(b1 || b2) && (x isa Int64 && y isa Int64)
     b1 = x === nothing
     x = z
-    (b1 || b2) || (s += 100 * (x isa Int64))
+    local r2 = !(b1 || b2) && x isa Int64
     b1 = b
-    (b1 || b2) || (s += 1000)
-    return s
+    local r3 = !(b1 || b2)
+    return (r1, r2, r3)
 end
 # flow_analysis/local_boolean_null: a comparison against a local holding nothing
-function _na_lbnull(x::_NaI)
+function _na_lbnull(n::Int64, k::Int64)
+    local x::_NaI = _na_ni(n, k)
     local a = x === nothing ? x === nothing : x isa Int64
     local y::_NaI = nothing
     local c = x === y
-    return _dw_bits(a, c)
+    return _dw_facts(a, c)
 end
 # flow_analysis/local_boolean_promoted_on_assignment: a nullable Bool, and a union narrowed to Bool by
 # being assigned a null test, then used as the condition
 function _na_lbpoa(x::_NaI)
-    local s = Int64(0)
     local b::Union{Nothing,Bool} = nothing
     b = x !== nothing
-    (b::Bool) && (s += (x::Int64) + 1)
+    local r1 = (b::Bool) ? x::Int64 : Int64(-1)
     local o::Union{Bool,Vector{Int64}} = Int64[]
+    local r2 = Int64(-2)
     if !(o isa Bool)
         o = x !== nothing
-        (o::Bool) && (s += 2(x::Int64) + 2)
+        r2 = (o::Bool) ? x::Int64 : Int64(-1)
     end
     local c::Union{Nothing,Bool} = x !== nothing
-    (c::Bool) && (s += 4)
-    return s
+    local r3 = (c::Bool) ? x::Int64 : Int64(-1)
+    return (r1, r2, r3)
 end
 # flow_analysis/local_boolean_promoted: a union-typed local holding a null test, narrowed to Bool
 function _na_lbprom(x::_NaI)
@@ -3365,84 +3486,87 @@ end
 # flow_analysis/local_boolean: condition locals typed Bool, nullable Bool or untyped, initialized or
 # assigned later, over a parameter, a reassigned parameter and locals
 function _na_lb(x::_NaI, y::_NaI)
-    local s = Int64(0)
     local b1::Bool = x !== nothing
-    b1 && (s += 1 + (x::Int64))
+    local r1 = b1 ? x::Int64 : Int64(-1)
     local b2::Bool
     b2 = x !== nothing
-    b2 && (s += 2)
+    local r2 = b2 ? x::Int64 : Int64(-1)
     local b3::Union{Nothing,Bool} = x !== nothing
-    (b3::Bool) && (s += 4)
+    local r3 = (b3::Bool) ? x::Int64 : Int64(-1)
     local b4 = x !== nothing
-    b4 && (s += 8)
+    local r4 = b4 ? x::Int64 : Int64(-1)
     x = y
     local b5::Bool = x !== nothing
-    b5 && (s += 16 + (x::Int64))
+    local r5 = b5 ? x::Int64 : Int64(-1)
     local w::_NaI = y
     local b6::Bool = w !== nothing
-    b6 && (s += 32)
+    local r6 = b6 ? w::Int64 : Int64(-1)
     local v::_NaI
     v = y
     local b7::Bool
     b7 = v !== nothing
-    b7 && (s += 64)
-    return s
+    local r7 = b7 ? v::Int64 : Int64(-1)
+    return (r1, r2, r3, r4, r5, r6, r7)
 end
 # flow_analysis/local_boolean_try_finally: a condition Bool assigned in try or in finally, used in the
 # other block and after
 function _na_lbtf(x::_NaI, b2::Bool)
-    local s = Int64(0)
     local b::Bool = b2
+    local r1 = Int64(-2)
+    local r2 = false
     try
         b = x !== nothing
-        b && (s += (x::Int64) + 1)
+        r1 = b ? x::Int64 : Int64(-1)
     finally
-        b && (s += 2)
+        r2 = b
     end
-    b && (s += 4)
+    local r3 = b ? x::Int64 : Int64(-1)
     local c::Bool
     try
         c = x !== nothing
     finally
         nothing
     end
-    c && (s += 8)
+    local r4 = c ? x::Int64 : Int64(-1)
     local d::Bool = b2
+    local r5 = false
     try
-        d && (s += 16)
+        r5 = d
     finally
         d = x !== nothing
     end
-    d && (s += 32)
+    local r6 = d ? x::Int64 : Int64(-1)
     local e::Bool
     try
         nothing
     finally
         e = x !== nothing
     end
-    e && (s += 64)
-    return s
+    local r7 = e ? x::Int64 : Int64(-1)
+    return (r1, r2, r3, r4, r5, r6, r7)
 end
 # flow_analysis/local_boolean_undefeated_by_assignment: a write followed by a throw on the same path,
 # so it cannot reach the later use of the condition
 function _na_lbu(x::_NaI, b2::Bool, y::_NaI)
-    local s = Int64(0)
+    local r1 = false
+    local r2 = false
+    local r3 = false
     try
         local b = x !== nothing
-        b && (s += 1)
+        r1 = b && x isa Int64
         b2 && (b = true; throw("foo"))
-        b && (s += 2)
+        r2 = b && x isa Int64
     catch err
         err isa String || rethrow()
     end
     try
         local c = x !== nothing
         b2 && (x = y; throw("foo"))
-        c && (s += 4 * (x isa Int64))
+        r3 = c && x isa Int64
     catch err
         err isa String || rethrow()
     end
-    return s
+    return (r1, r2, r3)
 end
 # flow_analysis/null_shorting_in_cascade: null-aware calls, property and index reads in one cascade
 # section, and `??=` through a getter and an index operator
@@ -3451,13 +3575,13 @@ struct _NaNsE end
 struct _NaNsC{T}
     t::T
 end
-_na_ns_f(::_NaNsD, cnt::Base.RefValue{Int64}, v::_NaI) = (cnt[] += v === nothing ? 1 : 10; nothing)
+_na_ns_f(::_NaNsD, log::Vector{Int64}, v::_NaI) = (push!(log, something(v, Int64(-1))); nothing)
 _na_ns_d(d::_NaNsD) = d
 _na_ns_index(d::_NaNsD, ::Int64) = d
 _na_ns_eindex(::_NaNsE, ::Int64) = nothing
-_na_ns_eset(::_NaNsE, ::Int64, ::Int64, cnt::Base.RefValue{Int64}) = (cnt[] += 100; nothing)
+_na_ns_eset(::_NaNsE, i::Int64, v::Int64, log::Vector{Int64}) = (push!(log, v); nothing)
 function _na_ns(i::_NaI)
-    local cnt = Ref(Int64(0))
+    local cnt = Int64[]
     local c = _NaNsC{Union{Nothing,_NaNsD}}(_NaNsD())
     local t = c.t
     t === nothing || _na_ns_f(t, cnt, nothing)
@@ -3468,7 +3592,7 @@ function _na_ns(i::_NaI)
     c.t === nothing && something(i)
     local e = _NaNsC{_NaNsE}(_NaNsE())
     _na_ns_eindex(e.t, 0) === nothing && _na_ns_eset(e.t, 0, something(i), cnt)
-    return cnt[] + 1000 * (c.t isa _NaNsD)
+    return (cnt, c.t isa _NaNsD)
 end
 # flow_analysis/null_shorting_in_conditional: a null-aware field chain as one arm of ?:
 struct _NaNcD
@@ -3482,16 +3606,18 @@ function _na_nc(b::Bool, c::Union{Nothing,_NaNcC}, d::_NaNcD)
     local v2 = b ? d : (c === nothing ? nothing : c.d)
     local v3 = b ? (c === nothing ? nothing : c.d.i) : d.i
     local v4 = b ? d.i : (c === nothing ? nothing : c.d.i)
-    return _dw_bits(v1 === nothing, v2 === nothing, v3 === nothing, v4 === nothing) + 16 * (something(v3, Int64(-1)) + 1)
+    return _dw_facts(v1 === nothing, v2 === nothing, something(v3, Int64(-1)), something(v4, Int64(-1)))
 end
 # flow_analysis/postfix_increment_decrement: x += 1 / x -= 1 on a narrowed Int64, and on a struct whose
 # + returns its abstract supertype
 abstract type _NaPiB end
 abstract type _NaPiC <: _NaPiB end
 struct _NaPiD <: _NaPiC end
+struct _NaPiE <: _NaPiB end
 Base.:+(d::_NaPiD, ::Int64)::_NaPiC = d
 Base.:-(d::_NaPiD, ::Int64)::_NaPiC = d
-function _na_pi_int(x::Union{Int64,Float64})
+function _na_pi_int(n::Int64, k::Int64)
+    local x::Union{Int64,Float64} = n == k ? n : Float64(n)
     local r = false
     if x isa Int64
         x += 1
@@ -3501,7 +3627,8 @@ function _na_pi_int(x::Union{Int64,Float64})
     end
     return r
 end
-function _na_pi_inc(x::_NaPiB)
+function _na_pi_inc(n::Int64, k::Int64)
+    local x::_NaPiB = n == k ? _NaPiD() : _NaPiE()
     if x isa _NaPiC
         if x isa _NaPiD
             x += 1
@@ -3510,7 +3637,8 @@ function _na_pi_inc(x::_NaPiB)
     end
     return false
 end
-function _na_pi_dec(x::_NaPiB)
+function _na_pi_dec(n::Int64, k::Int64)
+    local x::_NaPiB = n == k ? _NaPiD() : _NaPiE()
     if x isa _NaPiC
         if x isa _NaPiD
             x -= 1
@@ -3525,8 +3653,14 @@ abstract type _NaTnBase end
 struct _NaTnC <: _NaTnBase end
 struct _NaTnD <: _NaTnBase end
 struct _NaTnG end
-_na_tn_methods(this::_NaTnBase) = _dw_bits(this === nothing, this isa _NaTnBase, this isa _NaTnD)
-_na_tn_ext(this::Union{Nothing,_NaTnG}) = _dw_bits(this === nothing, this isa Union{Nothing,_NaTnG}, this isa _NaTnG)
+function _na_tn_methods(n::Int64, k::Int64)
+    local this::_NaTnBase = n == k ? _NaTnC() : _NaTnD()
+    return _dw_facts(this === nothing, this isa _NaTnBase, this isa _NaTnD)
+end
+function _na_tn_ext(n::Int64, k::Int64)
+    local this::Union{Nothing,_NaTnG} = n == k ? _NaTnG() : nothing
+    return _dw_facts(this === nothing, this isa Union{Nothing,_NaTnG}, this isa _NaTnG)
+end
 # flow_analysis/this_property_not_promoted: a receiver's nullable field tested with ===, !== and isa,
 # then read again
 struct _NaTpnpC
@@ -3540,17 +3674,21 @@ _na_tpnp_is(this::_NaTpnpC) = this.f isa Int64 ? this.f isa Int64 : this.f === n
 struct _NaUeC end
 _na_ue_null(::_NaUeC) = nothing
 _na_ue_objq(::_NaUeC)::_NaI = nothing
-function _na_ue_eqs(x::_NaI, y::_NaI, f)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_ue_eqs(n::Int64, k::Int64, f)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_ue_null(f()) === nothing
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_ue_eqb(x::_NaI, y::_NaI, f)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_ue_eqb(n::Int64, k::Int64, f)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_ue_objq(f()) isa Nothing
         if _na_ue_objq(f()) === nothing
             x = nothing
@@ -3558,19 +3696,23 @@ function _na_ue_eqb(x::_NaI, y::_NaI, f)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_ue_iss(x::_NaI, y::_NaI, f)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_ue_iss(n::Int64, k::Int64, f)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_ue_null(f()) isa Union{}
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_ue_isb(x::_NaI, y::_NaI, f)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_ue_isb(n::Int64, k::Int64, f)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_ue_objq(f()) isa Nothing
         if _na_ue_objq(f()) isa Union{}
             x = nothing
@@ -3578,7 +3720,7 @@ function _na_ue_isb(x::_NaI, y::_NaI, f)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
 # flow_analysis/unreachable_via_getter_get: a getter whose inferred type is Union{} (it always throws)
 # on the only path that skips the isa narrowing
@@ -3646,23 +3788,23 @@ function _na_uvn_ifnullassign(x::_NaI, n::Nothing)
     return x::Int64
 end
 function _na_uvn_ifexpr(x::_NaI, y::_NaI, f)
-    (x === nothing || y === nothing) && return Int64(-1)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if f() isa Union{}
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
 function _na_uvn_nonnull(x::_NaI, f)
     x === nothing && something(f())
     return x::Int64
 end
 function _na_uvn_nullaware(x::_NaI, y::_NaI, f, g)
-    (x === nothing || y === nothing) && return Int64(-1)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     f() === nothing || (x = nothing; _na_uvn_ext(x))
     g() === nothing || (y = nothing; _na_uvn_ext(y))
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
 # flow_analysis/unreachable_via_promotion: isa Union{} (directly and through a type parameter) and
 # !== nothing on a Nothing, on the only path that skips the isa narrowing
@@ -3700,17 +3842,23 @@ struct _NaUtpC <: _NaUtpB end
 struct _NaUtpD <: _NaUtpB end
 _na_utp_null(::_NaUtpB) = nothing
 _na_utp_objq(::_NaUtpB)::_NaI = nothing
-function _na_utp_eqs(this::_NaUtpB, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_utp_eqs(s::Int64, n::Int64, k::Int64)
+    local this::_NaUtpB = n == s ? _NaUtpC() : _NaUtpD()
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_utp_null(this) === nothing
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_utp_eqb(this::_NaUtpB, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_utp_eqb(s::Int64, n::Int64, k::Int64)
+    local this::_NaUtpB = n == s ? _NaUtpC() : _NaUtpD()
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_utp_objq(this) isa Nothing
         if _na_utp_objq(this) === nothing
             x = nothing
@@ -3718,19 +3866,25 @@ function _na_utp_eqb(this::_NaUtpB, x::_NaI, y::_NaI)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_utp_iss(this::_NaUtpB, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_utp_iss(s::Int64, n::Int64, k::Int64)
+    local this::_NaUtpB = n == s ? _NaUtpC() : _NaUtpD()
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_utp_null(this) isa Union{}
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_utp_isb(this::_NaUtpB, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_utp_isb(s::Int64, n::Int64, k::Int64)
+    local this::_NaUtpB = n == s ? _NaUtpC() : _NaUtpD()
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_utp_objq(this) isa Nothing
         if _na_utp_objq(this) isa Union{}
             x = nothing
@@ -3738,25 +3892,32 @@ function _na_utp_isb(this::_NaUtpB, x::_NaI, y::_NaI)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-_na_utp_all(this::_NaUtpB, x::Int64) = _na_pack(_na_utp_eqs(this, x, x), _na_utp_eqb(this, x, x), _na_utp_iss(this, x, x), _na_utp_isb(this, x, x))
+_na_utp_all(s::Int64, n::Int64, k::Int64) = (_na_utp_eqs(s, n, k), _na_utp_eqb(s, n, k), _na_utp_iss(s, n, k), _na_utp_isb(s, n, k))
 # flow_analysis/unreachable_via_this: === nothing, isa Nothing and isa Union{} on a receiver, non-null
 # or nullable and nothing
 struct _NaUvtC end
 struct _NaUvtE end
 const _NaUvtR = Union{Nothing,_NaUvtC,_NaUvtE}
-function _na_uvt_eqs(this::_NaUvtR, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+_na_uvt_this(n::Int64, s::Int64)::_NaUvtR = n == s ? _NaUvtC() : n == s + 1 ? _NaUvtE() : nothing
+function _na_uvt_eqs(s::Int64, n::Int64, k::Int64)
+    local this::_NaUvtR = _na_uvt_this(n, s)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if this === nothing
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvt_eqb(this::_NaUvtR, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvt_eqb(s::Int64, n::Int64, k::Int64)
+    local this::_NaUvtR = _na_uvt_this(n, s)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if this isa Nothing
         if this === nothing
             x = nothing
@@ -3764,19 +3925,25 @@ function _na_uvt_eqb(this::_NaUvtR, x::_NaI, y::_NaI)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvt_iss(this::_NaUvtR, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvt_iss(s::Int64, n::Int64, k::Int64)
+    local this::_NaUvtR = _na_uvt_this(n, s)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if this isa Union{}
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvt_isb(this::_NaUvtR, x::_NaI, y::_NaI)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvt_isb(s::Int64, n::Int64, k::Int64)
+    local this::_NaUvtR = _na_uvt_this(n, s)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if this isa Nothing
         if this isa Union{}
             x = nothing
@@ -3784,9 +3951,9 @@ function _na_uvt_isb(this::_NaUvtR, x::_NaI, y::_NaI)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-_na_uvt_all(this::_NaUvtR, x::Int64) = _na_pack(_na_uvt_eqs(this, x, x), _na_uvt_eqb(this, x, x), _na_uvt_iss(this, x, x), _na_uvt_isb(this, x, x))
+_na_uvt_all(s::Int64, n::Int64, k::Int64) = (_na_uvt_eqs(s, n, k), _na_uvt_eqb(s, n, k), _na_uvt_iss(s, n, k), _na_uvt_isb(s, n, k))
 # flow_analysis/unreachable_via_variable_get: a never-assigned local read on the only path that skips
 # the isa narrowing, inside a loop whose later write calls a function that always throws
 function _na_uvvg(f, x::_NaO, b1::Bool, b2::Bool)
@@ -3808,17 +3975,21 @@ end
 struct _NaUvvpC end
 _na_uvvp_pnull(::_NaUvvpC) = nothing
 _na_uvvp_pobjq(::_NaUvvpC)::_NaI = nothing
-function _na_uvvp_eqs(x::_NaI, y::_NaI, c::_NaUvvpC)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvvp_eqs(n::Int64, k::Int64, c::_NaUvvpC)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_uvvp_pnull(c) === nothing
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvvp_eqb(x::_NaI, y::_NaI, c::_NaUvvpC)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvvp_eqb(n::Int64, k::Int64, c::_NaUvvpC)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_uvvp_pobjq(c) isa Nothing
         if _na_uvvp_pobjq(c) === nothing
             x = nothing
@@ -3826,19 +3997,23 @@ function _na_uvvp_eqb(x::_NaI, y::_NaI, c::_NaUvvpC)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvvp_iss(x::_NaI, y::_NaI, c::_NaUvvpC)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvvp_iss(n::Int64, k::Int64, c::_NaUvvpC)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_uvvp_pnull(c) isa Union{}
         x = nothing
     else
         y = nothing
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
-function _na_uvvp_isb(x::_NaI, y::_NaI, c::_NaUvvpC)
-    (x === nothing || y === nothing) && return Int64(-1)
+function _na_uvvp_isb(n::Int64, k::Int64, c::_NaUvvpC)
+    local x::_NaI = _na_ni(n, k)
+    local y::_NaI = _na_ni(n, k)
+    (x === nothing || y === nothing) && return _dw_facts(false, false)
     if _na_uvvp_pobjq(c) isa Nothing
         if _na_uvvp_pobjq(c) isa Union{}
             x = nothing
@@ -3846,7 +4021,7 @@ function _na_uvvp_isb(x::_NaI, y::_NaI, c::_NaUvvpC)
             y = nothing
         end
     end
-    return _dw_bits(x === nothing, y === nothing)
+    return _dw_facts(x === nothing, y === nothing)
 end
 # flow_analysis/variable_property_not_promoted: a variable's nullable field tested with ===, !== and
 # isa, then read again
@@ -3859,70 +4034,77 @@ _na_vpnp_is(c::_NaVpnpC) = c.f isa Int64 ? c.f isa Int64 : c.f === nothing
 # flow_analysis/write_promoted_value_in_loop: a narrowed variable assigned an Int64 in a loop's
 # initializer and in a for-each's iterable, read in the body
 function _na_wpl(x::_NaO)
-    local s = Int64(0)
+    local r1 = false
+    local r2 = false
+    local r3 = false
     if x isa Int64
         x = Int64(0)
         while true
-            s += iseven(x::Int64)
+            r1 = iseven(x::Int64)
             break
         end
         local y = (x = Int64(0))
         while true
-            s += 2iseven(x::Int64)
+            r2 = iseven(x::Int64)
             break
         end
         for y2 in [begin x = Int64(0) end]
-            s += 4iseven(x::Int64)
+            r3 = iseven(x::Int64)
             break
         end
     end
-    return s
+    return (r1, r2, r3)
 end
 # flow_analysis/write_promoted_value_in_switch: a narrowed variable assigned in a switch's scrutinee or
 # in a case body, read in cases with and without a label reached by `continue L` (@goto)
-function _na_wps(x::_NaO)
-    local s = Int64(0)
+function _na_wps(n::Int64, k::Int64)
+    local x::_NaO = _na_os(n, k, "x")
+    local r1 = false
+    local r2 = false
+    local r3 = false
+    local r4 = false
     if x isa Int64
         local v = (x = Int64(0))
         if v == 1
         else
-            s += iseven(x::Int64)
+            r1 = iseven(x::Int64)
         end
         local v2 = (x = Int64(0))
         if v2 == 1
         elseif v2 == 0
-            s += 2iseven(x::Int64)
+            r2 = iseven(x::Int64)
         end
-        s += 4iseven(x::Int64)
+        r3 = iseven(x::Int64)
         x = Int64(0)
         local v3 = (x = Int64(0))
         if v3 == 1
             @goto L
         end
         @label L
-        s += 8iseven(x::Int64)
+        r4 = iseven(x::Int64)
     end
-    return s
+    return (r1, r2, r3, r4)
 end
 # flow_analysis/write_promoted_value_in_try: a narrowed variable read then assigned in catch and in
 # finally
 function _na_wpt(x::_NaO)
-    local s = Int64(0)
+    local r1 = false
+    local r2 = false
     if x isa Int64
         try
             nothing
         catch
-            s += iseven(x::Int64)
+            r1 = iseven(x::Int64)
             x = ""
         end
         try
             nothing
         finally
-            s += 2iseven(x::Int64)
+            r2 = iseven(x::Int64)
             x = Int64(0)
         end
     end
-    return s
+    return (r1, r2)
 end
 
 # type_promotion/assignment_inference_after_null_check: a nullable vector parameter assigned a fresh
@@ -3946,31 +4128,35 @@ function _na_t_docnt(x::_NaO)
         k += 1
         x isa String && break
     end
-    return ncodeunits(x::String) + 100k
+    return (ncodeunits(x::String), k)
 end
 # type_promotion/do_outer_is_type: a String use inside and after a do-while within an isa branch
-function _na_t_doouter(b::Bool, x::_NaO)
-    local s = Int64(0)
+function _na_t_doouter(b::Bool, n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = Int64(-1)
     if x isa String
         while true
-            s += ncodeunits(x::String)
+            r1 = ncodeunits(x::String)
             b || break
         end
-        s += ncodeunits(x::String)
+        r2 = ncodeunits(x::String)
     end
-    return s
+    return (r1, r2)
 end
 # type_promotion/for_outer_is_type: a String use inside and after a for(;b;) within an isa branch
-function _na_t_forouter(b::Bool, x::_NaO)
-    local s = Int64(0)
+function _na_t_forouter(b::Bool, n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = Int64(-1)
     if x isa String
         while b
-            s += 10ncodeunits(x::String)
+            r1 = ncodeunits(x::String)
             break
         end
-        s += ncodeunits(x::String)
+        r2 = ncodeunits(x::String)
     end
-    return s
+    return (r1, r2)
 end
 # type_promotion/function_expression_is_type_mutated_in_closure: a local function's parameter narrowed
 # by isa while a nested closure writes it
@@ -3980,11 +4166,12 @@ function _na_t_femut(x0::_NaO)
     local h = () -> (x = Int64(42); nothing)
     local b = x isa String
     h()
-    return _dw_bits(a == ncodeunits(string(x0)), b, x === Int64(42))
+    return _dw_facts(a == ncodeunits(string(x0)), b, x === Int64(42))
 end
 # type_promotion/function_expression_is_type: a closure's parameter narrowed by isa, then reassigned
-function _na_t_feis(x0::_NaO)
-    local g = (x::_NaO) -> (r = x isa String ? ncodeunits(x::String) : Int64(-1); x = Int64(42); r + x)
+function _na_t_feis(n::Int64, k::Int64, str::String)
+    local x0::_NaO = _na_os(n, k, str)
+    local g = (x::_NaO) -> (r = x isa String ? ncodeunits(x::String) : Int64(-1); x = Int64(42); (r, x))
     return g(x0)
 end
 # type_promotion/function_expression_outer_is_type_assigned_outside: a closure assigned only in an isa
@@ -3998,12 +4185,12 @@ function _na_t_feouter(x0::_NaO)
         g = () -> Int64(7)
     end
     x = Int64(42)
-    return r + g()
+    return (r, g())
 end
 # type_promotion/if_is_not_type: a String use in the else of `if !(x isa String)`
-_na_t_ifnot(x::_NaO) = !(x isa String) ? Int64(-1) : ncodeunits(x::String)
+_na_t_ifnot(n::Int64, k::Int64, str::String) = (x = _na_os(n, k, str); !(x isa String) ? Int64(-1) : ncodeunits(x::String))
 # type_promotion/if_is_type: a String use in the then of `if x isa String`
-_na_t_ifis(x::_NaO) = x isa String ? ncodeunits(x::String) : Int64(-1)
+_na_t_ifis(n::Int64, k::Int64, str::String) = (x = _na_os(n, k, str); x isa String ? ncodeunits(x::String) : Int64(-1))
 # type_promotion/logical_or_throw: `x isa String || throw(42)` then a String use
 function _na_t_orthrow(x::_NaO)
     x isa String || throw(Int64(42))
@@ -4012,8 +4199,8 @@ end
 # type_promotion/promoted_lhs_used_as_assignment_context: a Float64-narrowed variable assigned 1 (left
 # untyped, and through a Float64-typed local), then a String
 _na_t_g(x::Float64) = x
-function _na_t_plhs(x0::Union{Float64,Int64,String})
-    local x = x0
+function _na_t_plhs(f::Float64, k::Int64)
+    local x = f == Float64(k) ? f : f > Float64(k) ? "s" : Int64(1)
     local a = false
     local b = false
     local c = false
@@ -4027,92 +4214,103 @@ function _na_t_plhs(x0::Union{Float64,Int64,String})
         x = "foo"
         c = x isa String
     end
-    return _dw_bits(a, b, c)
+    return _dw_facts(a, b, c)
 end
 # type_promotion/try_catch_assigned_body: a narrowed variable reassigned in try, re-narrowed or returned
 _na_t_noop() = nothing
-function _na_t_tcab(x0::_NaO)
-    local x::_NaO = x0
-    x isa String || return Int64(-1)
-    local r = ncodeunits(x::String)
+function _na_t_tcab(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    x isa String || return (Int64(-1), Int64(-1), false)
+    local r1 = ncodeunits(x::String)
+    local r2 = Int64(-1)
     try
         x = Int64(42)
         _na_t_noop()
-        x isa String || return r
-        r += ncodeunits(x::String)
+        x isa String || return (r1, r2, false)
+        r2 = ncodeunits(x::String)
     catch
     end
-    return r + 100
+    return (r1, r2, true)
 end
 # type_promotion/try_catch_catch_finally_outer_is_type: a String use in try, catch, finally and after,
 # within an isa branch
-function _na_t_tccf(x::_NaO)
-    local s = Int64(0)
+function _na_t_tccf(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = Int64(-1)
+    local r3 = Int64(-1)
+    local r4 = Int64(-1)
     if x isa String
         try
-            s += ncodeunits(x::String)
+            r1 = ncodeunits(x::String)
         catch
-            s += 10ncodeunits(x::String)
+            r2 = ncodeunits(x::String)
         finally
-            s += 100ncodeunits(x::String)
+            r3 = ncodeunits(x::String)
         end
-        s += 1000ncodeunits(x::String)
+        r4 = ncodeunits(x::String)
     end
-    return s
+    return (r1, r2, r3, r4)
 end
 # type_promotion/try_catch_is_not_type_exit_body_catch: `isa String || return` in both try and catch,
 # then a String use after
-function _na_t_tcnebc(x::_NaO)
-    local s = Int64(0)
+function _na_t_tcnebc(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = Int64(-1)
     try
-        x isa String || return Int64(-1)
-        s += ncodeunits(x::String)
+        x isa String || return (Int64(-2), Int64(-2), Int64(-2))
+        r1 = ncodeunits(x::String)
     catch
-        x isa String || return Int64(-2)
-        s += ncodeunits(x::String)
+        x isa String || return (Int64(-3), Int64(-3), Int64(-3))
+        r2 = ncodeunits(x::String)
     end
-    return s + ncodeunits(x::String)
+    return (r1, r2, ncodeunits(x::String))
 end
 # type_promotion/try_catch_is_not_type_exit_body: `isa String || return` in try, an empty catch
-function _na_t_tcneb(x::_NaO)
-    local s = Int64(0)
+function _na_t_tcneb(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r = Int64(-2)
     try
         x isa String || return Int64(-1)
-        s += ncodeunits(x::String)
+        r = ncodeunits(x::String)
     catch
     end
-    return s
+    return r
 end
 # type_promotion/try_finally_outer_is_type_assigned_body: a narrowed variable reassigned in try, read in
 # finally
-function _na_t_tfab(x0::_NaO)
-    local x::_NaO = x0
-    local s = Int64(0)
+function _na_t_tfab(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = false
     if x isa String
         try
-            s += ncodeunits(x::String)
+            r1 = ncodeunits(x::String)
             x = Int64(42)
         finally
-            s += x isa Int64 ? Int64(100) : Int64(0)
+            r2 = x isa Int64
         end
     end
-    return s
+    return (r1, r2)
 end
 # type_promotion/try_finally_outer_is_type_assigned_finally: a narrowed variable read in try and in
 # finally, then reassigned in finally
-function _na_t_tfaf(x0::_NaO)
-    local x::_NaO = x0
-    local s = Int64(0)
+function _na_t_tfaf(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r1 = Int64(-1)
+    local r2 = Int64(-1)
+    local r3 = false
     if x isa String
         try
-            s += ncodeunits(x::String)
+            r1 = ncodeunits(x::String)
         finally
-            s += 10ncodeunits(x::String)
+            r2 = ncodeunits(x::String)
             x = Int64(42)
         end
-        s += x isa Int64 ? Int64(100) : Int64(0)
+        r3 = x isa Int64
     end
-    return s
+    return (r1, r2, r3)
 end
 # type_promotion/while_condition_false: a String use after `while !(x isa String)`
 function _na_t_wcf(x::_NaO)
@@ -4121,13 +4319,14 @@ function _na_t_wcf(x::_NaO)
     return ncodeunits(x::String)
 end
 # type_promotion/while_condition_true: a String use inside `while x isa String`
-function _na_t_wct(x::_NaO)
-    local s = Int64(0)
+function _na_t_wct(n::Int64, k::Int64, str::String)
+    local x::_NaO = _na_os(n, k, str)
+    local r = Int64(-1)
     while x isa String
-        s += ncodeunits(x::String)
+        r = ncodeunits(x::String)
         break
     end
-    return s
+    return r
 end
 
 # static_errors/equals_parameter_made_nullable_at_invoke: == between a value and nothing, and a
@@ -4138,7 +4337,7 @@ function _na_s_eqnull(n::Int64)
     local o = n
     local foInt::_NaI = nothing
     local c = _NaSEqC()
-    return _dw_bits(o == nothing, o == foInt, c == c, c == _NaSEqC(), c == nothing)
+    return _dw_facts(o == nothing, o == foInt, c == c, c == _NaSEqC(), c == nothing)
 end
 # static_errors/implicit_downcasts: an explicit downcast of a union-typed value to Int64, succeeding
 # and failing
@@ -4152,7 +4351,7 @@ function _na_s_downcast(n::Int64)
     catch e
         e isa TypeError
     end
-    return _dw_bits(asInt3 == n, t)
+    return _dw_facts(asInt3 == n, t)
 end
 # static_errors/non_null_assertion: a non-null assertion (something) of nothing
 _na_s_nna(n::Int64) = (iq::_NaI = n == 1 ? nothing : n; something(iq))
@@ -4193,9 +4392,9 @@ struct _NaSNfC end
 (c::_NaSNfC)() = Int64(7)
 function _na_s_nft(n::Int64)
     local c1 = _NaSNfC()
-    local nc1::Union{Nothing,_NaSNfC} = nothing
+    local nc1::Union{Nothing,_NaSNfC} = n == 1 ? nothing : _NaSNfC()
     local nf3 = nc1 === nothing ? nothing : nc1
-    return c1() + n + (nf3 === nothing ? Int64(0) : Int64(100))
+    return (c1(), nf3 === nothing, nf3 === nothing ? Int64(-1) : nf3())
 end
 # static_errors/super_equals_allows_null: `super == x` as invoke of the supertype's ==, skipped when x
 # is nothing; a covariant Real parameter given a String throws
@@ -4235,7 +4434,7 @@ function _na_s_se(n::Int64)
     catch e
         e isa TypeError
     end
-    return _dw_bits(a1, a2, a3, a4, a5, m.calls == 1)
+    return _dw_facts(a1, a2, a3, a4, a5, m.calls == 1)
 end
 # static_errors/this_reference_in_late_field: a field initialized lazily to its own receiver
 mutable struct _NaSTrC
@@ -4270,7 +4469,7 @@ function _na_s_unn(n::Int64)
     local f = cond === nothing && !(cond !== nothing)
     local g = (x === nothing ? nothing : iseven(x)) === iseven(n)
     local spread = list === nothing ? Int64[] : copy(list)
-    return _dw_bits(a, b, q === nothing, c, d, e1, f, g, isempty(spread))
+    return _dw_facts(a, b, q === nothing, c, d, e1, f, g, isempty(spread))
 end
 # static_errors/unchecked_use_of_nullable_cascaded: null-aware cascade sections on nothing (skipped)
 # and toString/typeof on it
@@ -4283,106 +4482,105 @@ function _na_s_unc(n::Int64)
     local t = typeof(list)
     local list2::Union{Nothing,Vector{Int64}} = [n]
     list2 === nothing || push!(list2, n)
-    return _dw_bits(list === nothing, s == "nothing", t === Nothing, length(something(list2)) == 2)
+    return _dw_facts(list === nothing, s == "nothing", t === Nothing, length(something(list2)) == 2)
 end
 
 _g("dart_nnbd", Any[
-    ("flow_analysis_boolean_parameter", (n::Int64) -> _dw_bits(_na_bp_bool(nothing, false), _na_bp_bool(n, false),
-        _na_bp_obj(nothing, nothing), _na_bp_obj(n, "foo"), _na_bp_method(_NaBpC(), nothing, false), _na_bp_method(_NaBpC(), n, false),
-        _na_bp_local(nothing) == 0, _na_bp_local(n) == 7), Int64(0)),
-    ("flow_analysis_demotion_and_type_of_interest_promotion", (n::Int64) -> _na_demote(n), Int64(0)),
-    ("flow_analysis_expr_property_not_promoted", (n::Int64) -> _dw_bits(_na_ep_eq(() -> _NaEpC(n)), _na_ep_is(() -> _NaEpC(n)),
-        _na_ep_eq(() -> _NaEpC(nothing)), _na_ep_is(() -> _NaEpC(nothing))), Int64(1)),
-    ("flow_analysis_identical", (n::Int64) -> 100 * _na_ident(nothing) + _na_ident(n), Int64(0)),
-    ("flow_analysis_issue43093", (n::Int64) -> _dw_bits((try; _na_i43(true, _NaI43C(nothing)); false; catch e; e isa ArgumentError; end),
+    ("flow_analysis_boolean_parameter", (n::Int64) -> (_dw_facts(_na_bp_bool(n, 0, false), _na_bp_bool(n, -1, false),
+        _na_bp_obj(n, 0, nothing), _na_bp_obj(n, -1, "foo"), _na_bp_method(_NaBpC(), n, 0, false), _na_bp_method(_NaBpC(), n, -1, false)),
+        _na_bp_local(n, 0), _na_bp_local(n, -1)), Int64(0)),
+    ("flow_analysis_demotion_and_type_of_interest_promotion", (n::Int64) -> _na_demote(n, 0), Int64(0)),
+    ("flow_analysis_expr_property_not_promoted", (n::Int64) -> _dw_facts(_na_ep_eq(() -> _NaEpC(_na_ni(n, 0))), _na_ep_is(() -> _NaEpC(_na_ni(n, 0))),
+        _na_ep_eq(() -> _NaEpC(_na_ni(n, 1))), _na_ep_is(() -> _NaEpC(_na_ni(n, 1)))), Int64(1)),
+    ("flow_analysis_identical", (n::Int64) -> (_na_ident(n, 0), _na_ident(n, -1)), Int64(0)),
+    ("flow_analysis_issue43093", (n::Int64) -> _dw_facts((try; _na_i43(true, _NaI43C(nothing)); false; catch e; e isa ArgumentError; end),
         _na_i43(true, _NaI43C(n)) === n, _na_i43(false, _NaI43C(n)) === nothing, _na_i43(true, nothing) === nothing), Int64(1)),
     ("flow_analysis_late_var_assigned_in_try", (n::Int64) -> _na_late_try(n), Int64(1)),
     ("flow_analysis_late_var_used_before_assignment_in_local_function_ok", (n::Int64) -> _na_late_localfn(n), Int64(1)),
     ("flow_analysis_late_var_used_before_assignment_in_loop", (n::Int64) -> _na_late_loop(n), Int64(1)),
-    ("flow_analysis_late_var_used_before_assignment_in_switch", (n::Int64) -> _na_late_switch(n) + 100 * _na_late_switch(n + 1), Int64(1)),
-    ("flow_analysis_local_boolean_defeated_by_assignment", (n::Int64) -> _na_pack(_na_dba_cond(n, true), _na_dba_cond(nothing, true),
+    ("flow_analysis_late_var_used_before_assignment_in_switch", (n::Int64) -> (_na_late_switch(n), _na_late_switch(n + 1)), Int64(1)),
+    ("flow_analysis_local_boolean_defeated_by_assignment", (n::Int64) -> (_na_dba_cond(n, true), _na_dba_cond(nothing, true),
         _na_dba_cond(nothing, false), _na_dba_prom(n, true, nothing), _na_dba_prom(n, false, nothing), _na_dba_loop(n, nothing),
-        _na_dba_loop(nothing, n), Int64(_na_dba_catch(n, nothing)), Int64(_na_dba_catch(n, n))), Int64(0)),
-    ("flow_analysis_local_boolean_defeated_by_capture", (n::Int64) -> 100 * _na_dbc(n) + _na_dbc(nothing), Int64(0)),
-    ("flow_analysis_local_boolean_does_not_detect_aliases", (n::Int64) -> 100 * _na_alias(n) + _na_alias(nothing), Int64(0)),
-    ("flow_analysis_local_boolean_expression_types", (n::Int64) -> _na_et("foo", "bar", nothing) + 3 * _na_et(n, "bar", n) +
-        7 * _na_et(n, n + 1, nothing) + 11 * _na_et("foo", n, n), Int64(2)),
-    ("flow_analysis_local_boolean_implicitly_typed_new", (n::Int64) -> _na_itn(nothing, nothing) + 3 * _na_itn(n, nothing) +
-        5 * _na_itn(nothing, n) + 7 * _na_itn(n, n), Int64(1)),
-    ("flow_analysis_local_boolean_join_equivalent", (n::Int64) -> _na_je(nothing, false, _na_je_E1) + 3 * _na_je(nothing, true, _na_je_E2) +
-        5 * _na_je(n, false, _na_je_E1) + 7 * _na_je(n, true, _na_je_E2), Int64(1)),
-    ("flow_analysis_local_boolean_logical_op", (n::Int64) -> (vs = _NaI[n, nothing]; s = Int64(0);
-        for x in vs, y in vs, z in vs, b in (true, false); s = 3s + _na_lo_and(x, y, z, b) + _na_lo_or(x, y, z, b); end; s), Int64(1)),
-    ("flow_analysis_local_boolean_null", (n::Int64) -> 10 * _na_lbnull(n) + _na_lbnull(nothing), Int64(0)),
-    ("flow_analysis_local_boolean_promoted_on_assignment", (n::Int64) -> 100 * _na_lbpoa(n) + _na_lbpoa(nothing), Int64(1)),
-    ("flow_analysis_local_boolean_promoted", (n::Int64) -> 100 * _na_lbprom(n) + _na_lbprom(nothing), Int64(1)),
-    ("flow_analysis_local_boolean", (n::Int64) -> _na_lb(nothing, nothing) + 3 * _na_lb(nothing, n) + 5 * _na_lb(n, nothing) + 7 * _na_lb(n, n), Int64(1)),
-    ("flow_analysis_local_boolean_try_finally", (n::Int64) -> _na_lbtf(nothing, false) + 3 * _na_lbtf(nothing, true) +
-        5 * _na_lbtf(n, false) + 7 * _na_lbtf(n, true), Int64(1)),
-    ("flow_analysis_local_boolean_undefeated_by_assignment", (n::Int64) -> _na_pack(_na_lbu(n, true, nothing), _na_lbu(nothing, true, nothing),
+        _na_dba_loop(nothing, n), _dw_facts(_na_dba_catch(n, nothing), _na_dba_catch(n, n))), Int64(0)),
+    ("flow_analysis_local_boolean_defeated_by_capture", (n::Int64) -> (_na_dbc(n), _na_dbc(nothing)), Int64(0)),
+    ("flow_analysis_local_boolean_does_not_detect_aliases", (n::Int64) -> (_na_alias(n, -1), _na_alias(n, 0)), Int64(0)),
+    ("flow_analysis_local_boolean_expression_types", (n::Int64) -> (_na_et("foo", "bar", nothing), _na_et(n, "bar", n),
+        _na_et(n, n + 1, nothing), _na_et("foo", n, n)), Int64(2)),
+    ("flow_analysis_local_boolean_implicitly_typed_new", (n::Int64) -> (_na_itn(nothing, nothing), _na_itn(n, nothing),
+        _na_itn(nothing, n), _na_itn(n, n)), Int64(1)),
+    ("flow_analysis_local_boolean_join_equivalent", (n::Int64) -> (_na_je(nothing, false, _na_je_E1), _na_je(nothing, true, _na_je_E2),
+        _na_je(n, false, _na_je_E1), _na_je(n, true, _na_je_E2)), Int64(1)),
+    ("flow_analysis_local_boolean_logical_op", (n::Int64) -> (vs = _NaI[n, nothing]; r = Bool[];
+        for x in vs, y in vs, z in vs, b in (true, false); push!(r, _na_lo_and(x, y, z, b)...); push!(r, _na_lo_or(x, y, z, b)...); end; r), Int64(1)),
+    ("flow_analysis_local_boolean_null", (n::Int64) -> (_na_lbnull(n, -1), _na_lbnull(n, 0)), Int64(0)),
+    ("flow_analysis_local_boolean_promoted_on_assignment", (n::Int64) -> (_na_lbpoa(n), _na_lbpoa(nothing)), Int64(1)),
+    ("flow_analysis_local_boolean_promoted", (n::Int64) -> (_na_lbprom(n), _na_lbprom(nothing)), Int64(1)),
+    ("flow_analysis_local_boolean", (n::Int64) -> (_na_lb(nothing, nothing), _na_lb(nothing, n), _na_lb(n, nothing), _na_lb(n, n)), Int64(1)),
+    ("flow_analysis_local_boolean_try_finally", (n::Int64) -> (_na_lbtf(nothing, false), _na_lbtf(nothing, true),
+        _na_lbtf(n, false), _na_lbtf(n, true)), Int64(1)),
+    ("flow_analysis_local_boolean_undefeated_by_assignment", (n::Int64) -> (_na_lbu(n, true, nothing), _na_lbu(nothing, true, nothing),
         _na_lbu(n, false, nothing), _na_lbu(nothing, false, n)), Int64(0)),
     ("flow_analysis_null_shorting_in_cascade", (n::Int64) -> _na_ns(n), Int64(0)),
-    ("flow_analysis_null_shorting_in_conditional", (n::Int64) -> (cs = Union{Nothing,_NaNcC}[nothing, _NaNcC(_NaNcD(n))]; s = Int64(0);
-        for b in (false, true), c in cs; s = 100s + _na_nc(b, c, _NaNcD(n + 1)); end; s), Int64(0)),
-    ("flow_analysis_postfix_increment_decrement", (n::Int64) -> _dw_bits(_na_pi_int(n), _na_pi_int(1.0), _na_pi_inc(_NaPiD()), _na_pi_dec(_NaPiD())), Int64(0)),
-    ("flow_analysis_this_not_promoted", (n::Int64) -> _na_pack(_na_tn_methods(_NaTnC()), _na_tn_methods(_NaTnD()), _na_tn_ext(_NaTnG()),
-        _na_tn_ext(nothing)) + n, Int64(0)),
-    ("flow_analysis_this_property_not_promoted", (n::Int64) -> _dw_bits(_na_tpnp_eq(_NaTpnpC(n)), _na_tpnp_ne(_NaTpnpC(n)), _na_tpnp_is(_NaTpnpC(n)),
-        _na_tpnp_eq(_NaTpnpC(nothing)), _na_tpnp_ne(_NaTpnpC(nothing)), _na_tpnp_is(_NaTpnpC(nothing))), Int64(1)),
-    ("flow_analysis_unreachable_via_expr_property", (n::Int64) -> (f = () -> _NaUeC(); _na_pack(_na_ue_eqs(n, n, f), _na_ue_eqb(n, n, f),
-        _na_ue_iss(n, n, f), _na_ue_isb(n, n, f), _na_ue_eqs(nothing, n, f) + 2)), Int64(1)),
-    ("flow_analysis_unreachable_via_getter_get", (n::Int64) -> _dw_bits(_na_ugg(n, false), _na_ugg_t(_NaUggT{Union{}}(), n, false),
+    ("flow_analysis_null_shorting_in_conditional", (n::Int64) -> (c = _NaNcC(_NaNcD(n)); d = _NaNcD(n + 1);
+        (_na_nc(false, nothing, d), _na_nc(false, c, d), _na_nc(true, nothing, d), _na_nc(true, c, d))), Int64(0)),
+    ("flow_analysis_postfix_increment_decrement", (n::Int64) -> _dw_facts(_na_pi_int(n, 0), _na_pi_int(n, -1), _na_pi_inc(n, 0), _na_pi_dec(n, 0), _na_pi_inc(n, -1)), Int64(0)),
+    ("flow_analysis_this_not_promoted", (n::Int64) -> (_na_tn_methods(n, 0), _na_tn_methods(n, -1), _na_tn_ext(n, 0), _na_tn_ext(n, -1)), Int64(0)),
+    ("flow_analysis_this_property_not_promoted", (n::Int64) -> _dw_facts(_na_tpnp_eq(_NaTpnpC(_na_ni(n, 0))), _na_tpnp_ne(_NaTpnpC(_na_ni(n, 0))), _na_tpnp_is(_NaTpnpC(_na_ni(n, 0))),
+        _na_tpnp_eq(_NaTpnpC(_na_ni(n, 1))), _na_tpnp_ne(_NaTpnpC(_na_ni(n, 1))), _na_tpnp_is(_NaTpnpC(_na_ni(n, 1)))), Int64(1)),
+    ("flow_analysis_unreachable_via_expr_property", (n::Int64) -> (f = () -> _NaUeC(); (_na_ue_eqs(n, 0, f), _na_ue_eqb(n, 0, f),
+        _na_ue_iss(n, 0, f), _na_ue_isb(n, 0, f))), Int64(1)),
+    ("flow_analysis_unreachable_via_getter_get", (n::Int64) -> _dw_facts(_na_ugg(n, false), _na_ugg_t(_NaUggT{Union{}}(), n, false),
         _na_ugg("x", false), (try; _na_ugg("x", true); false; catch e; e isa ErrorException; end)), Int64(0)),
-    ("flow_analysis_unreachable_via_invocation", (n::Int64) -> _dw_bits(_na_uvi(n, false), _na_uvi_t(_NaUviT{Union{}}(), n, false),
+    ("flow_analysis_unreachable_via_invocation", (n::Int64) -> _dw_facts(_na_uvi(n, false), _na_uvi_t(_NaUviT{Union{}}(), n, false),
         _na_uvi("x", false), (try; _na_uvi_t(_NaUviT{Union{}}(), "x", true); false; catch e; e isa ErrorException; end)), Int64(0)),
-    ("flow_analysis_unreachable_via_never", (n::Int64) -> _na_pack(_na_uvn_as(n, n), _na_uvn_ifnull(n, () -> nothing), _na_uvn_ifnullassign(n, nothing),
+    ("flow_analysis_unreachable_via_never", (n::Int64) -> (_na_uvn_as(n, n), _na_uvn_ifnull(n, () -> nothing), _na_uvn_ifnullassign(n, nothing),
         _na_uvn_ifexpr(n, n, () -> n), _na_uvn_nonnull(n, () -> nothing), _na_uvn_nullaware(n, n, () -> nothing, () -> n),
-        (try; _na_uvn_as(nothing, n); Int64(0); catch e; e isa TypeError ? Int64(1) : Int64(2); end)), Int64(1)),
-    ("flow_analysis_unreachable_via_promotion", (n::Int64) -> _dw_bits(_na_uvp_is(n, "foo"), _na_uvp_tv(Union{}, n, "foo"),
+        (try; _na_uvn_as(nothing, n); false; catch e; e isa TypeError; end)), Int64(1)),
+    ("flow_analysis_unreachable_via_promotion", (n::Int64) -> _dw_facts(_na_uvp_is(n, "foo"), _na_uvp_tv(Union{}, n, "foo"),
         _na_uvp_tv(Any, n, "foo"), _na_uvp_null(n, nothing), _na_uvp_is("x", "foo"), _na_uvp_null("x", nothing)), Int64(0)),
-    ("flow_analysis_unreachable_via_this_property", (n::Int64) -> 65536 * _na_utp_all(_NaUtpC(), n) + _na_utp_all(_NaUtpD(), n), Int64(1)),
-    ("flow_analysis_unreachable_via_this", (n::Int64) -> _na_uvt_all(_NaUvtC(), n) * 4294967296 + _na_uvt_all(_NaUvtE(), n) * 65536 + _na_uvt_all(nothing, n), Int64(1)),
-    ("flow_analysis_unreachable_via_variable_get", (n::Int64) -> _dw_bits(_na_uvvg(() -> throw(ErrorException("x")), n, false, true),
+    ("flow_analysis_unreachable_via_this_property", (n::Int64) -> (_na_utp_all(1, n, 0), _na_utp_all(0, n, 0)), Int64(1)),
+    ("flow_analysis_unreachable_via_this", (n::Int64) -> (_na_uvt_all(1, n, 0), _na_uvt_all(0, n, 0), _na_uvt_all(5, n, 0)), Int64(1)),
+    ("flow_analysis_unreachable_via_variable_get", (n::Int64) -> _dw_facts(_na_uvvg(() -> throw(ErrorException("x")), n, false, true),
         _na_uvvg(() -> throw(ErrorException("x")), "x", false, true),
         (try; _na_uvvg(() -> throw(ErrorException("x")), n, false, false); false; catch e; e isa ErrorException; end)), Int64(0)),
-    ("flow_analysis_unreachable_via_variable_property", (n::Int64) -> (c = _NaUvvpC(); _na_pack(_na_uvvp_eqs(n, n, c), _na_uvvp_eqb(n, n, c),
-        _na_uvvp_iss(n, n, c), _na_uvvp_isb(n, n, c))), Int64(1)),
-    ("flow_analysis_variable_property_not_promoted", (n::Int64) -> _dw_bits(_na_vpnp_eq(_NaVpnpC(n)), _na_vpnp_ne(_NaVpnpC(n)), _na_vpnp_is(_NaVpnpC(n)),
-        _na_vpnp_eq(_NaVpnpC(nothing)), _na_vpnp_ne(_NaVpnpC(nothing)), _na_vpnp_is(_NaVpnpC(nothing))), Int64(1)),
-    ("flow_analysis_write_promoted_value_in_loop", (n::Int64) -> 10 * _na_wpl(n) + _na_wpl("x"), Int64(1)),
-    ("flow_analysis_write_promoted_value_in_switch", (n::Int64) -> 100 * _na_wps(n) + _na_wps("x"), Int64(1)),
-    ("flow_analysis_write_promoted_value_in_try", (n::Int64) -> 10 * _na_wpt(n) + _na_wpt("x"), Int64(1)),
-    ("type_promotion_assignment_inference_after_null_check", (n::Int64) -> _na_t_aianc(nothing) + 10 * _na_t_aianc([n]), Int64(1)),
-    ("type_promotion_conditional_both", (n::Int64) -> _dw_bits(_na_t_condboth(true, "ab") == 2, _na_t_condboth(false, "abc") == 3,
+    ("flow_analysis_unreachable_via_variable_property", (n::Int64) -> (c = _NaUvvpC(); (_na_uvvp_eqs(n, 0, c), _na_uvvp_eqb(n, 0, c),
+        _na_uvvp_iss(n, 0, c), _na_uvvp_isb(n, 0, c))), Int64(1)),
+    ("flow_analysis_variable_property_not_promoted", (n::Int64) -> _dw_facts(_na_vpnp_eq(_NaVpnpC(_na_ni(n, 0))), _na_vpnp_ne(_NaVpnpC(_na_ni(n, 0))), _na_vpnp_is(_NaVpnpC(_na_ni(n, 0))),
+        _na_vpnp_eq(_NaVpnpC(_na_ni(n, 1))), _na_vpnp_ne(_NaVpnpC(_na_ni(n, 1))), _na_vpnp_is(_NaVpnpC(_na_ni(n, 1)))), Int64(1)),
+    ("flow_analysis_write_promoted_value_in_loop", (n::Int64) -> (_na_wpl(n), _na_wpl("x")), Int64(1)),
+    ("flow_analysis_write_promoted_value_in_switch", (n::Int64) -> (_na_wps(n, 0), _na_wps(n, 1)), Int64(1)),
+    ("flow_analysis_write_promoted_value_in_try", (n::Int64) -> (_na_wpt(n), _na_wpt("x")), Int64(1)),
+    ("type_promotion_assignment_inference_after_null_check", (n::Int64) -> (_na_t_aianc(nothing), _na_t_aianc([n])), Int64(1)),
+    ("type_promotion_conditional_both", (n::Int64) -> (_na_t_condboth(true, "ab"), _na_t_condboth(false, "abc"),
         (try; _na_t_condboth(true, n); false; catch e; e === Int64(1); end), (try; _na_t_condboth(false, n); false; catch e; e === Int64(2); end)), Int64(0)),
     ("type_promotion_do_condition_is_not_type", (x::String) -> _na_t_docnt(x), "abc"),
-    ("type_promotion_do_outer_is_type", (n::Int64) -> 100 * _na_t_doouter(false, "ab") + _na_t_doouter(false, n), Int64(0)),
-    ("type_promotion_for_outer_is_type", (n::Int64) -> 1000 * _na_t_forouter(true, "ab") + 10 * _na_t_forouter(false, "abc") + _na_t_forouter(true, n), Int64(0)),
-    ("type_promotion_function_expression_is_type_mutated_in_closure", (n::Int64) -> 10 * _na_t_femut("ab") + _na_t_femut(n), Int64(0)),
-    ("type_promotion_function_expression_is_type", (n::Int64) -> 100 * _na_t_feis("ab") + _na_t_feis(n), Int64(1)),
-    ("type_promotion_function_expression_outer_is_type_assigned_outside", (n::Int64) -> 100 * _na_t_feouter("ab") +
-        (try; _na_t_feouter(n); catch e; e isa UndefVarError ? Int64(-1) : Int64(-2); end), Int64(1)),
-    ("type_promotion_if_is_not_type", (n::Int64) -> 100 * _na_t_ifnot("ab") + _na_t_ifnot(n), Int64(1)),
-    ("type_promotion_if_is_type", (n::Int64) -> 100 * _na_t_ifis("ab") + _na_t_ifis(n), Int64(1)),
-    ("type_promotion_logical_or_throw", (n::Int64) -> 100 * _na_t_orthrow("abc") + (try; _na_t_orthrow(n); catch e; e === Int64(42) ? Int64(-1) : Int64(-2); end), Int64(1)),
-    ("type_promotion_promoted_lhs_used_as_assignment_context", (x::Float64) -> 10 * _na_t_plhs(x) + _na_t_plhs(Int64(1)), 1.0),
-    ("type_promotion_try_catch_assigned_body", (n::Int64) -> 100 * _na_t_tcab("ab") + _na_t_tcab(n), Int64(1)),
-    ("type_promotion_try_catch_catch_finally_outer_is_type", (n::Int64) -> _na_t_tccf("ab") + _na_t_tccf(n), Int64(1)),
-    ("type_promotion_try_catch_is_not_type_exit_body_catch", (n::Int64) -> 100 * _na_t_tcnebc("ab") + _na_t_tcnebc(n), Int64(1)),
-    ("type_promotion_try_catch_is_not_type_exit_body", (n::Int64) -> 100 * _na_t_tcneb("ab") + _na_t_tcneb(n), Int64(1)),
-    ("type_promotion_try_finally_outer_is_type_assigned_body", (n::Int64) -> 1000 * _na_t_tfab("ab") + _na_t_tfab(n), Int64(1)),
-    ("type_promotion_try_finally_outer_is_type_assigned_finally", (n::Int64) -> 1000 * _na_t_tfaf("ab") + _na_t_tfaf(n), Int64(1)),
+    ("type_promotion_do_outer_is_type", (n::Int64) -> (_na_t_doouter(false, n, 0, "ab"), _na_t_doouter(false, n, 1, "ab")), Int64(0)),
+    ("type_promotion_for_outer_is_type", (n::Int64) -> (_na_t_forouter(n == 0, n, 0, "ab"), _na_t_forouter(n != 0, n, 0, "abc"), _na_t_forouter(n == 0, n, 1, "ab")), Int64(0)),
+    ("type_promotion_function_expression_is_type_mutated_in_closure", (n::Int64) -> (_na_t_femut("ab"), _na_t_femut(n)), Int64(0)),
+    ("type_promotion_function_expression_is_type", (n::Int64) -> (_na_t_feis(n, 1, "ab"), _na_t_feis(n, 0, "ab")), Int64(1)),
+    ("type_promotion_function_expression_outer_is_type_assigned_outside", (n::Int64) -> (_na_t_feouter("ab"),
+        (try; _na_t_feouter(n); false; catch e; e isa UndefVarError; end)), Int64(1)),
+    ("type_promotion_if_is_not_type", (n::Int64) -> (_na_t_ifnot(n, 1, "ab"), _na_t_ifnot(n, 0, "ab")), Int64(1)),
+    ("type_promotion_if_is_type", (n::Int64) -> (_na_t_ifis(n, 1, "ab"), _na_t_ifis(n, 0, "ab")), Int64(1)),
+    ("type_promotion_logical_or_throw", (n::Int64) -> (_na_t_orthrow("abc"), (try; _na_t_orthrow(n); false; catch e; e === Int64(42); end)), Int64(1)),
+    ("type_promotion_promoted_lhs_used_as_assignment_context", (x::Float64) -> (_na_t_plhs(x, 1), _na_t_plhs(x, 2)), 1.0),
+    ("type_promotion_try_catch_assigned_body", (n::Int64) -> (_na_t_tcab(n, 1, "ab"), _na_t_tcab(n, 0, "ab")), Int64(1)),
+    ("type_promotion_try_catch_catch_finally_outer_is_type", (n::Int64) -> (_na_t_tccf(n, 1, "ab"), _na_t_tccf(n, 0, "ab")), Int64(1)),
+    ("type_promotion_try_catch_is_not_type_exit_body_catch", (n::Int64) -> (_na_t_tcnebc(n, 1, "ab"), _na_t_tcnebc(n, 0, "ab")), Int64(1)),
+    ("type_promotion_try_catch_is_not_type_exit_body", (n::Int64) -> (_na_t_tcneb(n, 1, "ab"), _na_t_tcneb(n, 0, "ab")), Int64(1)),
+    ("type_promotion_try_finally_outer_is_type_assigned_body", (n::Int64) -> (_na_t_tfab(n, 1, "ab"), _na_t_tfab(n, 0, "ab")), Int64(1)),
+    ("type_promotion_try_finally_outer_is_type_assigned_finally", (n::Int64) -> (_na_t_tfaf(n, 1, "ab"), _na_t_tfaf(n, 0, "ab")), Int64(1)),
     ("type_promotion_while_condition_false", (x::String) -> _na_t_wcf(x), "abcd"),
-    ("type_promotion_while_condition_true", (n::Int64) -> 100 * _na_t_wct("ab") + _na_t_wct(n), Int64(1)),
+    ("type_promotion_while_condition_true", (n::Int64) -> (_na_t_wct(n, 1, "ab"), _na_t_wct(n, 0, "ab")), Int64(1)),
     ("static_errors_equals_parameter_made_nullable_at_invoke", (n::Int64) -> _na_s_eqnull(n), Int64(0)),
     ("static_errors_implicit_downcasts", (n::Int64) -> _na_s_downcast(n), Int64(1)),
-    ("static_errors_non_null_assertion", (n::Int64) -> (try; _na_s_nna(n); catch e; e isa ArgumentError ? Int64(-1) : Int64(-2); end) * 100 + _na_s_nna(n + 1), Int64(1)),
-    ("static_errors_not_assigned_local_if_then_else", (b::Bool) -> 10 * _na_s_naite(b) + _na_s_naite(!b), true),
-    ("static_errors_not_assigned_local_try_catch_body_catch", (n::Int64) -> 10 * _na_s_natcbc(n) + _na_s_natcbc(-n), Int64(1)),
-    ("static_errors_not_assigned_local_while_true_break_after", (b::Bool) -> _na_s_nawtba(b) + 1, true),
+    ("static_errors_non_null_assertion", (n::Int64) -> ((try; _na_s_nna(n); false; catch e; e isa ArgumentError; end), _na_s_nna(n + 1)), Int64(1)),
+    ("static_errors_not_assigned_local_if_then_else", (b::Bool) -> (_na_s_naite(b), _na_s_naite(!b)), true),
+    ("static_errors_not_assigned_local_try_catch_body_catch", (n::Int64) -> (_na_s_natcbc(n), _na_s_natcbc(-n)), Int64(1)),
+    ("static_errors_not_assigned_local_while_true_break_after", (b::Bool) -> _na_s_nawtba(b), true),
     ("static_errors_nullable_function_types", (n::Int64) -> _na_s_nft(n), Int64(1)),
     ("static_errors_super_equals_allows_null", (n::Int64) -> _na_s_se(n), Int64(0)),
-    ("static_errors_this_reference_in_late_field", (n::Int64) -> (c = _NaSTrC(); a = c.x === nothing; _dw_bits(c === c, a, _na_s_tr_x(c) === c, c.x === c, n == 1)), Int64(1)),
+    ("static_errors_this_reference_in_late_field", (n::Int64) -> (c = _NaSTrC(); a = c.x === nothing; _dw_facts(c === c, a, _na_s_tr_x(c) === c, c.x === c)), Int64(1)),
     ("static_errors_throw_of_invalid_type", (n::Int64) -> _na_s_f1(n), Int64(5)),
     ("static_errors_unchecked_use_of_nullable", (n::Int64) -> _na_s_unn(n), Int64(1)),
     ("static_errors_unchecked_use_of_nullable_cascaded", (n::Int64) -> _na_s_unc(n), Int64(0)),
@@ -4390,12 +4588,11 @@ _g("dart_nnbd", Any[
 
 # ---- dart2wasm's tests at the pin, tests/language/nnbd (all but flow_analysis, type_promotion, static_errors) ----
 # nnbd: a call's outcome as a code (0 returned; 1 TypeError, 2 MethodError, 3 ErrorException, 4 AssertionError,
-# 5 UndefVarError, 6 UndefKeywordError, 7 UndefRefError, 8 ArgumentError, 9 InexactError), packed four bits each
+# 5 UndefVarError, 6 UndefKeywordError, 7 UndefRefError, 8 ArgumentError, 9 InexactError)
 _nb_code(f::F) where {F} = (try; f(); Int64(0); catch e; e isa TypeError ? Int64(1) : e isa MethodError ? Int64(2) :
     e isa ErrorException ? Int64(3) : e isa AssertionError ? Int64(4) : e isa UndefVarError ? Int64(5) :
     e isa UndefKeywordError ? Int64(6) : e isa UndefRefError ? Int64(7) : e isa ArgumentError ? Int64(8) :
     e isa InexactError ? Int64(9) : Int64(15); end)
-_nb_pack(cs::Int64...) = foldl((a, b) -> 16a + b, cs; init = Int64(0))
 const _NbNum = Union{Int64,Float64}
 # nnbd late: a cell assigned before use; a read before raises UndefRefError, a final one's second write (or a write
 # during its initializer) raises ErrorException, an initializer runs on the first read
@@ -4454,7 +4651,7 @@ function _nb_bc_dyn(value::_NbBcV, index::Int64)
     end
     return nothing
 end
-_nb_bc_mask(v::_NbBcV) = (m = Int64(0); for i in 0:10; m = 4m + min(_nb_code(() -> _nb_bc_dyn(v, i)), Int64(3)); end; m)
+_nb_bc_codes!(out::Vector{Int64}, v::_NbBcV) = (for i in 0:10; push!(out, _nb_code(() -> _nb_bc_dyn(v, i))); end; out)
 # const/potentially_constant_types: a parametric struct built from isa and typeasserts against its parameter
 struct _NbPc{T}
     isT::Bool
@@ -4467,6 +4664,8 @@ _nb_pc2(::Type{T}, x) where {T} = _NbPc{T}(true, false, x::T, nothing)
 _nb_pc3(::Type{T}, x) where {T} = _NbPc{T}(false, true, nothing, x::Vector{T})
 _nb_pc4(::Type{T}, x) where {T} = _NbPc{T}(x isa T, x isa Vector{T}, x isa T ? x : nothing, x isa Vector{T} ? x : nothing)
 const _NB_PC_I0 = Int64[0]
+const _NB_PC_I1 = Int64[1]
+const _NB_PC_N1 = _NbNum[1]
 const _NB_PC_N0 = _NbNum[0]
 const _NB_PC_S0 = String["hello"]
 # inference/variables_initialized_to_null: a global, a field and a local holding nothing, then an Int64
@@ -4532,7 +4731,7 @@ function _nb_ca_run(one::Int64)
     _nb_ca_sety!(foo, begin; foo.w = 20one; end)
     f20 = _nb_ca_y(foo) == 20 && foo.w == 20
     _NB_CA_Z[] = 0
-    return _dw_bits(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20)
+    return _dw_facts(f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15, f16, f17, f18, f19, f20)
 end
 # late/covariant_instance_field: a subtype narrowing a field to Int64; a Float64 written to it
 mutable struct _NbCvFoo
@@ -4579,14 +4778,14 @@ _nb_if_with_c(a::Int64, b::Int64, c::Int64) = _NbIfFoo(a, b, _NbLate{Int64}(fals
 _nb_if_without_c(a::Int64, b::Int64) = _NbIfFoo(a, b, _NbLate{Int64}(false), _NbLate{Int64}(true))
 _nb_if_c(o::_NbIfFoo) = _nb_get(o.c, () -> _nb_if_log(-1))
 _nb_if_d(o::_NbIfFoo) = _nb_get(o.d, () -> _nb_if_log(-2))
-function _nb_if_check(foo::_NbIfFoo, c0::Int64, hist::Vector{Int64})
-    r = _dw_bits(foo.a == 1, foo.b == 2, _nb_if_c(foo) == c0, _nb_if_d(foo) == -2)
+function _nb_if_check(foo::_NbIfFoo, hist::Vector{Int64})
+    r1 = _dw_facts(foo.a, foo.b, _nb_if_c(foo), _nb_if_d(foo))
     foo.a = _nb_if_log(100)
     t = _nb_code(() -> (foo.b = _nb_if_log(101)))
     _nb_set!(foo.c, _nb_if_log(102))
-    r2 = _dw_bits(foo.a == 100, foo.b == 2, _nb_get(foo.c) == 102, _NB_IF_HISTORY == hist)
+    r2 = _dw_facts(foo.a, foo.b, _nb_get(foo.c), _NB_IF_HISTORY == hist)
     empty!(_NB_IF_HISTORY)
-    return (r * 16 + t) * 16 + r2
+    return (r1, t, r2)
 end
 # never/never_null_assignability_strong: functions taking nothing, an Int64, a non-nothing value, anything, and one
 # with no method (dart's Never parameter), called directly, after a typeassert and as values
@@ -4605,6 +4804,9 @@ _nb_list(::Type{T}) where {T} = Vector{T}
 struct _NbRep{T} end
 _nb_rep(::Type{T}) where {T} = _NbRep{T}
 _nb_rep_rt(::Type{T}) where {T} = typeof(_NbRep{T}())
+_nb_orq_rt(t::Type) = Union{Nothing,t}
+_nb_list_rt(t::Type) = Vector{t}
+_nb_rep_t(t::Type) = _NbRep{t}
 # required_named_parameters/missing_required_argument_dynamic: keyword arguments without defaults, mixed with
 # defaulted ones, a required one past 32 optional ones, missing at the call
 struct _NbMrA end
@@ -4617,8 +4819,8 @@ _nb_mr_m4(::_NbMrA; p1::Int64 = 1, p2::Int64 = 2, p3::Int64 = 3, p4::Int64 = 4, 
     p15::Int64 = 15, p16::Int64 = 16, p17::Int64 = 17, p18::Int64 = 18, p19::Int64 = 19, p20::Int64 = 20, p21::Int64 = 21,
     p22::Int64 = 22, p23::Int64 = 23, p24::Int64 = 24, p25::Int64 = 25, p26::Int64 = 26, p27::Int64 = 27, p28::Int64 = 28,
     p29::Int64 = 29, p30::Int64 = 30, p31::Int64 = 31, p32::Int64 = 32, p33::Int64 = 33, p34::Int64 = 34, p35::Int64 = 35,
-    p36::Int64) = p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 + p14 + p15 + p16 + p17 + p18 + p19 +
-    p20 + p21 + p22 + p23 + p24 + p25 + p26 + p27 + p28 + p29 + p30 + p31 + p32 + p33 + p34 + p35 + p36
+    p36::Int64) = (ps = (p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, p21, p22, p23,
+    p24, p25, p26, p27, p28, p29, p30, p31, p32, p33, p34, p35, p36); s = Int64(0); for p in ps; s += p; end; s)
 _nb_mr_f(; a::Int64) = Int64(2)
 _nb_mr_g() = (; a::Int64) -> "g"
 _nb_mr_h(; p1::Int64, p2::Int64 = 2, p3::Int64 = 3, p4::Int64 = 4, p5::Int64 = 5, p6::Int64 = 6, p7::Int64 = 7, p8::Int64,
@@ -4639,6 +4841,7 @@ _nb_r41_foo(::_NbR41A)::Union{Nothing,Int64} = Int64(0)
 # resolution/null_assertion_null_type: something(nothing) passed where an Int64 is expected
 _nb_nt_f(i::Int64) = nothing
 _nb_nt_g(n::Nothing) = _nb_nt_f(something(n))
+_nb_nt_h(x::Union{Nothing,Int64}) = x isa Nothing ? _nb_nt_g(x) : _nb_nt_f(x)
 # subtyping/function_type_required_params: a required and a defaulted keyword argument, compared and called
 _nb_ft_f(; i::Int64) = i + 1
 _nb_ft_g(; i::Int64 = 1) = i + 1
@@ -4657,10 +4860,12 @@ struct _NbTcW{T} end
 @noinline _nb_tc_as_nxt(::_NbTcW{T}, arg) where {T} = arg::Union{Nothing,_NbTcX{T}}
 @noinline _nb_tc_as_xnt(::_NbTcW{T}, arg) where {T} = arg::_NbTcX{Union{Nothing,T}}
 _nb_ok(f::F) where {F} = _nb_code(f) == 0
+# a run repeated twenty times (dart's optimization_counter_threshold): the first run's facts, and whether every run agreed
+_nb_rep20(f::F) where {F} = (r = f(); same = true; for _ in 2:20; same = same && r == f(); end; (r, same))
 function _nb_tc_tests()
     wy = _NbTcW{_NbTcY}()
     wny = _NbTcW{Union{Nothing,_NbTcY}}()
-    return _dw_bits(
+    return _dw_facts(
         _nb_ok(() -> _nb_tc_as_t(wy, _NbTcY0())), _nb_ok(() -> _nb_tc_as_t(wy, _NbTcZ())), _nb_ok(() -> _nb_tc_as_t(wy, nothing)),
         _nb_ok(() -> _nb_tc_as_t(wy, _NbTcC())),
         _nb_ok(() -> _nb_tc_as_nt(wy, _NbTcY0())), _nb_ok(() -> _nb_tc_as_nt(wy, _NbTcZ())), _nb_ok(() -> _nb_tc_as_nt(wy, nothing)),
@@ -4711,20 +4916,20 @@ _nb_lb_wn(a::_NbLbA) = _nb_get(a.fieldWithNullInit, () -> nothing)
 function _nb_lb_run(x::Float64)
     _NB_LB_CALLS[] = 0
     a = _NbLbA()
-    r1 = _dw_bits(_NB_LB_CALLS[] == 0, _nb_lb_wi(a) == 1.23, _nb_lb_wt(a) == 1.23, _nb_lb_wn(a) === nothing,
+    r1 = _dw_facts(_NB_LB_CALLS[] == 0, _nb_lb_wi(a) == 1.23, _nb_lb_wt(a) == 1.23, _nb_lb_wn(a) === nothing,
         _nb_code(() -> _nb_get(a.fieldWithNoInit)) == 7, _NB_LB_CALLS[] == 1, _nb_lb_wi(a) == 1.23, _nb_lb_wt(a) == 1.23,
         _nb_lb_wn(a) === nothing, _nb_code(() -> _nb_get(a.fieldWithNoInit)) == 7, _NB_LB_CALLS[] == 1)
     _nb_set!(a.fieldWithInit, x); _nb_set!(a.fieldWithTrivialInit, x); _nb_set!(a.fieldWithNullInit, x); _nb_set!(a.fieldWithNoInit, x)
-    r2 = _dw_bits(_NB_LB_CALLS[] == 1, _nb_lb_wi(a) == 4.56, _nb_lb_wt(a) == 4.56, _nb_lb_wn(a) == 4.56, _nb_get(a.fieldWithNoInit) == 4.56,
+    r2 = _dw_facts(_NB_LB_CALLS[] == 1, _nb_lb_wi(a) == 4.56, _nb_lb_wt(a) == 4.56, _nb_lb_wn(a) == 4.56, _nb_get(a.fieldWithNoInit) == 4.56,
         _NB_LB_CALLS[] == 1)
     _NB_LB_CALLS[] = 0
     b = _NbLbA()
     _nb_set!(b.fieldWithInit, x)
-    r3 = _dw_bits(_NB_LB_CALLS[] == 0, _nb_lb_wi(b) == 4.56, _NB_LB_CALLS[] == 0)
+    r3 = _dw_facts(_NB_LB_CALLS[] == 0, _nb_lb_wi(b) == 4.56, _NB_LB_CALLS[] == 0)
     c = _NbLbA()
     _nb_set!(c.fieldWithInit, nothing)
-    r4 = _dw_bits(_NB_LB_CALLS[] == 0, _nb_lb_wi(c) === nothing, _NB_LB_CALLS[] == 0)
-    return ((r1 * 64 + r2) * 8 + r3) * 8 + r4
+    r4 = _dw_facts(_NB_LB_CALLS[] == 0, _nb_lb_wi(c) === nothing, _NB_LB_CALLS[] == 0)
+    return (r1, r2, r3, r4)
 end
 # syntax/late_modifier_edge_cases: lazy initializers writing their own field, recursing into it, nested in closures,
 # and throwing before and after a write
@@ -4744,7 +4949,7 @@ _nb_le_s_final()::Int64 = _nb_get(_NB_LE_S_FINAL, () -> _NB_LE_S_COUNT[] == 5 ? 
 function _nb_le_intermediate()
     _nb_unset!(_NB_LE_S_LATE); _nb_unset!(_NB_LE_S_FINAL); _NB_LE_S_COUNT[] = 0
     a = _NbLeA()
-    return _dw_bits(_nb_le_late(a) == 123, _nb_code(() -> _nb_le_late_final(a)) == 3, _nb_le_late_final(a) == 5,
+    return _dw_facts(_nb_le_late(a) == 123, _nb_code(() -> _nb_le_late_final(a)) == 3, _nb_le_late_final(a) == 5,
         _nb_le_s_late() == 123, _nb_code(() -> _nb_le_s_final()) == 3, _nb_le_s_final() == 5)
 end
 function _nb_le_complicated()
@@ -4753,21 +4958,21 @@ function _nb_le_complicated()
     nested = _NbLate{Int64}(false)
     lateVar = _NbLate{Vector{Int64}}(false)
     lv = () -> _nb_get(lateVar, () -> [i * i for i in 0:(_nb_get(nested, closure) - 1)])
-    r1 = _dw_bits(count[] == 0, lv() == [0, 1, 4, 9, 16], count[] == 1, lv() == [0, 1, 4, 9, 16], count[] == 1)
+    r1 = _dw_facts(count[] == 0, lv() == [0, 1, 4, 9, 16], count[] == 1, lv() == [0, 1, 4, 9, 16], count[] == 1)
     count[] = 0
     inIf = _NbLate{Vector{Int64}}(false)
     mk = () -> vcat([(count[] += 1)], [i * i for i in 0:2])
-    r2 = _dw_bits(count[] == 0, _nb_get(inIf, mk) == [1, 0, 1, 4], count[] == 1, _nb_get(inIf, mk) == [1, 0, 1, 4], count[] == 1)
+    r2 = _dw_facts(count[] == 0, _nb_get(inIf, mk) == [1, 0, 1, 4], count[] == 1, _nb_get(inIf, mk) == [1, 0, 1, 4], count[] == 1)
     count[] = 0
     inClosure = _NbLate{Vector{Int64}}(false)
     another = () -> _nb_get(inClosure, mk) == [1, 0, 1, 4]
-    r3 = _dw_bits(count[] == 0, another(), another(), another(), count[] == 1)
+    r3 = _dw_facts(count[] == 0, another(), another(), another(), count[] == 1)
     count[] = 0
     outer = _NbLate{Int64}(false)
     outerInit = () -> (ok = count[] == 0; count[] += 1; inner = _NbLate{Int64}(false); ok = ok && count[] == 1;
         v = _nb_get(inner, closure); ok = ok && v == 5 && count[] == 2; ok ? v : Int64(-1))
-    r4 = _dw_bits(count[] == 0, _nb_get(outer, outerInit) == 5, count[] == 2)
-    return ((r1 * 32 + r2) * 32 + r3) * 8 + r4
+    r4 = _dw_facts(count[] == 0, _nb_get(outer, outerInit) == 5, count[] == 2)
+    return (r1, r2, r3, r4)
 end
 mutable struct _NbLeB
     throwBeforeWrite::_NbLate{Int64}
@@ -4779,8 +4984,8 @@ function _nb_le_throwing()
     local tbw = _NbLate{Int64}(false)
     local rd = () -> _nb_get(tbw, () -> throw(AssertionError("local")))
     b = _NbLeB(_NbLate{Int64}(false), _NbLate{Int64}(false))
-    return _nb_pack(_nb_code(rd), _nb_code(rd), _nb_code(rd), _nb_code(() -> _nb_le_tbw(b)), _nb_code(() -> _nb_le_tbw(b)),
-        _nb_code(() -> _nb_le_tbw(b)), _nb_code(() -> _nb_le_taw(b)), Int64(_nb_le_taw(b) == 456), Int64(_nb_le_taw(b) == 456))
+    return (_nb_code(rd), _nb_code(rd), _nb_code(rd), _nb_code(() -> _nb_le_tbw(b)), _nb_code(() -> _nb_le_tbw(b)),
+        _nb_code(() -> _nb_le_tbw(b)), _nb_code(() -> _nb_le_taw(b)), _nb_le_taw(b), _nb_le_taw(b))
 end
 # syntax/late_modifier_final_field: a final field with a lazy initializer over the supertype's final field of one
 # name (written through the supertype's setter), and a final field with no initializer
@@ -4797,22 +5002,22 @@ _nb_lf_super(a::_NbLfA) = _nb_get(a.base_fieldWithInit)
 function _nb_lf_run()
     _NB_LF_CALLS[] = 0
     a = _NbLfA()
-    r1 = _dw_bits(_NB_LF_CALLS[] == 0, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1)
+    r1 = _dw_facts(_NB_LF_CALLS[] == 0, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1)
     _nb_lf_set!(a, Int64(456))
-    r2 = _dw_bits(_nb_lf_super(a) == 456, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1, _nb_code(() -> _nb_lf_set!(a, Int64(789))) == 3,
+    r2 = _dw_facts(_nb_lf_super(a) == 456, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1, _nb_code(() -> _nb_lf_set!(a, Int64(789))) == 3,
         _NB_LF_CALLS[] == 1, _nb_lf_get(a) == 123, _NB_LF_CALLS[] == 1)
     _NB_LF_CALLS[] = 0
     a2 = _NbLfA()
     r3 = _NB_LF_CALLS[] == 0
     _nb_lf_set!(a2, Int64(456))
-    r4 = _dw_bits(_nb_lf_super(a) == 456, _NB_LF_CALLS[] == 0, _nb_code(() -> _nb_lf_set!(a2, Int64(789))) == 3, _NB_LF_CALLS[] == 0,
+    r4 = _dw_facts(_nb_lf_super(a) == 456, _NB_LF_CALLS[] == 0, _nb_code(() -> _nb_lf_set!(a2, Int64(789))) == 3, _NB_LF_CALLS[] == 0,
         _nb_lf_get(a2) == 123, _nb_lf_super(a) == 456, _NB_LF_CALLS[] == 1)
     b = _NbLate{Int64}(true)
     r5 = _nb_code(() -> _nb_get(b)) == 7
     _nb_set!(b, Int64(123))
-    r6 = _dw_bits(_nb_get(b) == 123, _nb_code(() -> _nb_set!(b, Int64(456))) == 3, _nb_get(b) == 123)
+    r6 = _dw_facts(_nb_get(b) == 123, _nb_code(() -> _nb_set!(b, Int64(456))) == 3, _nb_get(b) == 123)
     _NB_LF_CALLS[] = 0
-    return _dw_bits(r1 == 31, r2 == 127, r3, r4 == 127, r5, r6 == 7)
+    return (r1, r2, r3, r4, r5, r6)
 end
 # syntax/late_modifier_final_local_var: a final local with a lazy initializer, and one with none written once
 const _NB_LFL_CALLS = Ref(Int64(0))
@@ -4820,14 +5025,14 @@ _nb_lfl_init() = (_NB_LFL_CALLS[] += 1; Int64(123))
 function _nb_lfl_run()
     _NB_LFL_CALLS[] = 0
     fieldWithInit = _NbLate{Int64}(true)
-    r1 = _dw_bits(_NB_LFL_CALLS[] == 0, _nb_get(fieldWithInit, _nb_lfl_init) == 123, _NB_LFL_CALLS[] == 1,
+    r1 = _dw_facts(_NB_LFL_CALLS[] == 0, _nb_get(fieldWithInit, _nb_lfl_init) == 123, _NB_LFL_CALLS[] == 1,
         _nb_get(fieldWithInit, _nb_lfl_init) == 123, _NB_LFL_CALLS[] == 1)
     fieldWithNoInit = _NbLate{Int64}(true)
     r2 = _nb_code(() -> _nb_get(fieldWithNoInit)) == 7
     1 > 0 && _nb_set!(fieldWithNoInit, Int64(123))
-    r3 = _dw_bits(_nb_get(fieldWithNoInit) == 123, _nb_code(() -> _nb_set!(fieldWithNoInit, Int64(456))) == 3, _nb_get(fieldWithNoInit) == 123)
+    r3 = _dw_facts(_nb_get(fieldWithNoInit) == 123, _nb_code(() -> _nb_set!(fieldWithNoInit, Int64(456))) == 3, _nb_get(fieldWithNoInit) == 123)
     _NB_LFL_CALLS[] = 0
-    return (r1 * 2 + r2) * 8 + r3
+    return (r1, r2, r3)
 end
 # syntax/late_modifier_global_var: global cells with lazy, trivial, nothing and no initializers, final and not
 const _NB_LG_CALLS = Ref(Int64(0))
@@ -4853,24 +5058,24 @@ function _nb_lg_run(v::Int64)
     _nb_unset!(_NB_LG_VAR_WITH_INIT); _nb_unset!(_NB_LG_VAR_WITH_INIT2); _nb_unset!(_NB_LG_VAR_WITH_INIT3); _nb_unset!(_NB_LG_VAR_TRIVIAL)
     _nb_unset!(_NB_LG_VAR_NULL); _nb_unset!(_NB_LG_VAR_NO_INIT); _nb_unset!(_NB_LG_FINAL_WITH_INIT); _nb_unset!(_NB_LG_FINAL_TRIVIAL)
     _nb_unset!(_NB_LG_FINAL_NULL); _nb_unset!(_NB_LG_FINAL_NO_INIT)
-    r1 = _dw_bits(_NB_LG_CALLS[] == 0, _nb_lg_vwi() == 123, _nb_lg_vt() == 123, _nb_lg_vn() === nothing, _nb_code(() -> _nb_get(_NB_LG_VAR_NO_INIT)) == 7,
+    r1 = _dw_facts(_NB_LG_CALLS[] == 0, _nb_lg_vwi() == 123, _nb_lg_vt() == 123, _nb_lg_vn() === nothing, _nb_code(() -> _nb_get(_NB_LG_VAR_NO_INIT)) == 7,
         _NB_LG_CALLS[] == 1, _nb_lg_vwi() == 123, _nb_lg_vt() == 123, _nb_lg_vn() === nothing, _nb_code(() -> _nb_get(_NB_LG_VAR_NO_INIT)) == 7,
         _NB_LG_CALLS[] == 1)
     _nb_set!(_NB_LG_VAR_WITH_INIT, v); _nb_set!(_NB_LG_VAR_TRIVIAL, v); _nb_set!(_NB_LG_VAR_NULL, v); _nb_set!(_NB_LG_VAR_NO_INIT, v)
-    r2 = _dw_bits(_NB_LG_CALLS[] == 1, _nb_lg_vwi() == 456, _nb_lg_vt() == 456, _nb_lg_vn() == 456, _nb_get(_NB_LG_VAR_NO_INIT) == 456,
+    r2 = _dw_facts(_NB_LG_CALLS[] == 1, _nb_lg_vwi() == 456, _nb_lg_vt() == 456, _nb_lg_vn() == 456, _nb_get(_NB_LG_VAR_NO_INIT) == 456,
         _NB_LG_CALLS[] == 1)
     _NB_LG_CALLS[] = 0
     _nb_set!(_NB_LG_VAR_WITH_INIT2, v)
-    r3 = _dw_bits(_NB_LG_CALLS[] == 0, _nb_get(_NB_LG_VAR_WITH_INIT2, _nb_lg_init) == 456, _NB_LG_CALLS[] == 0)
+    r3 = _dw_facts(_NB_LG_CALLS[] == 0, _nb_get(_NB_LG_VAR_WITH_INIT2, _nb_lg_init) == 456, _NB_LG_CALLS[] == 0)
     _nb_set!(_NB_LG_VAR_WITH_INIT3, nothing)
-    r4 = _dw_bits(_NB_LG_CALLS[] == 0, _nb_get(_NB_LG_VAR_WITH_INIT3, _nb_lg_init) === nothing, _NB_LG_CALLS[] == 0)
-    r5 = _dw_bits(_nb_lg_fwi() == 123, _nb_lg_ft() == 123, _nb_lg_fn() === nothing, _NB_LG_CALLS[] == 1, _nb_lg_fwi() == 123,
+    r4 = _dw_facts(_NB_LG_CALLS[] == 0, _nb_get(_NB_LG_VAR_WITH_INIT3, _nb_lg_init) === nothing, _NB_LG_CALLS[] == 0)
+    r5 = _dw_facts(_nb_lg_fwi() == 123, _nb_lg_ft() == 123, _nb_lg_fn() === nothing, _NB_LG_CALLS[] == 1, _nb_lg_fwi() == 123,
         _nb_lg_ft() == 123, _nb_lg_fn() === nothing, _NB_LG_CALLS[] == 1)
     r6 = _nb_code(() -> _nb_get(_NB_LG_FINAL_NO_INIT)) == 7
     _nb_set!(_NB_LG_FINAL_NO_INIT, Int64(123))
-    r7 = _dw_bits(_nb_get(_NB_LG_FINAL_NO_INIT) == 123, _nb_code(() -> _nb_set!(_NB_LG_FINAL_NO_INIT, Int64(456))) == 3,
+    r7 = _dw_facts(_nb_get(_NB_LG_FINAL_NO_INIT) == 123, _nb_code(() -> _nb_set!(_NB_LG_FINAL_NO_INIT, Int64(456))) == 3,
         _nb_get(_NB_LG_FINAL_NO_INIT) == 123)
-    return _dw_bits(r1 == 2047, r2 == 63, r3 == 7, r4 == 7, r5 == 255, r6, r7 == 7)
+    return (r1, r2, r3, r4, r5, r6, r7)
 end
 # syntax/late_modifier_local_var: locals with lazy initializers (cells) and an unassigned Julia local read in a closure
 const _NB_LLV_CALLS = Ref(Int64(0))
@@ -4885,27 +5090,27 @@ function _nb_llv_run(v::Int64)
     vwi = () -> _nb_get(varWithInit, _nb_llv_init)
     vt = () -> _nb_get(varWithTrivialInit, () -> Int64(123))
     vn = () -> _nb_get(varWithNullInit, () -> nothing)
-    r1 = _dw_bits(_NB_LLV_CALLS[] == 0, vwi() == 123, vt() == 123, vn() === nothing, _nb_code(rd) == 5, _NB_LLV_CALLS[] == 1,
+    r1 = _dw_facts(_NB_LLV_CALLS[] == 0, vwi() == 123, vt() == 123, vn() === nothing, _nb_code(rd) == 5, _NB_LLV_CALLS[] == 1,
         vwi() == 123, vt() == 123, vn() === nothing, _nb_code(rd) == 5, _NB_LLV_CALLS[] == 1)
     _nb_set!(varWithInit, v); _nb_set!(varWithTrivialInit, v); _nb_set!(varWithNullInit, v)
     varWithNoInit = v
-    r2 = _dw_bits(_NB_LLV_CALLS[] == 1, vwi() == 456, vt() == 456, vn() == 456, rd() == 456, _NB_LLV_CALLS[] == 1)
+    r2 = _dw_facts(_NB_LLV_CALLS[] == 1, vwi() == 456, vt() == 456, vn() == 456, rd() == 456, _NB_LLV_CALLS[] == 1)
     _NB_LLV_CALLS[] = 0
     varWithInit2 = _NbLate{Int64}(false)
     r3 = _NB_LLV_CALLS[] == 0
     _nb_set!(varWithInit2, v)
-    r4 = _dw_bits(_NB_LLV_CALLS[] == 0, _nb_get(varWithInit2, _nb_llv_init) == 456, _NB_LLV_CALLS[] == 0)
+    r4 = _dw_facts(_NB_LLV_CALLS[] == 0, _nb_get(varWithInit2, _nb_llv_init) == 456, _NB_LLV_CALLS[] == 0)
     varWithInit3 = _NbLate{Union{Nothing,Int64}}(false)
     _nb_set!(varWithInit3, nothing)
-    r5 = _dw_bits(_NB_LLV_CALLS[] == 0, _nb_get(varWithInit3, _nb_llv_init) === nothing, _NB_LLV_CALLS[] == 0)
+    r5 = _dw_facts(_NB_LLV_CALLS[] == 0, _nb_get(varWithInit3, _nb_llv_init) === nothing, _NB_LLV_CALLS[] == 0)
     varWithCondInit = _NbLate{Int64}(false)
     lambda = () -> _nb_get(varWithCondInit, () -> something(nothing, _nb_llv_init())) == 123 && _NB_LLV_CALLS[] == 1
-    r6 = _dw_bits(lambda(), lambda(), lambda())
+    r6 = _dw_facts(lambda(), lambda(), lambda())
     _NB_LLV_CALLS[] = 0
     true && (varNotInBlock = _NbLate{Int64}(false))
     r7 = _NB_LLV_CALLS[] == 0
     _NB_LLV_CALLS[] = 0
-    return _dw_bits(r1 == 2047, r2 == 63, r3, r4 == 7, r5 == 7, r6 == 7, r7)
+    return (r1, r2, r3, r4, r5, r6, r7)
 end
 # syntax/late_modifier_non_final_field: fields with lazy, trivial, nothing, constructor-set and no initializers
 const _NB_LN_CALLS = Ref(Int64(0))
@@ -4928,23 +5133,23 @@ _nb_ln_both(a::_NbLnA) = _nb_get(a.fieldWithOnlyBothInitAndCtorInit, () -> Int64
 function _nb_ln_run(v::Int64)
     _NB_LN_CALLS[] = 0
     a = _NbLnA()
-    r1 = _dw_bits(_NB_LN_CALLS[] == 0, _nb_ln_wi(a) == 123, _nb_ln_wt(a) == 123, _nb_ln_wn(a) === nothing, _nb_code(() -> _nb_get(a.fieldWithNoInit)) == 7,
+    r1 = _dw_facts(_NB_LN_CALLS[] == 0, _nb_ln_wi(a) == 123, _nb_ln_wt(a) == 123, _nb_ln_wn(a) === nothing, _nb_code(() -> _nb_get(a.fieldWithNoInit)) == 7,
         _nb_code(() -> _nb_get(a.nullableFieldWithNoInit)) == 7, _nb_get(a.fieldWithOnlyCtorInit) === nothing, _nb_ln_both(a) === nothing,
         _NB_LN_CALLS[] == 1, _nb_ln_wi(a) == 123, _nb_ln_wt(a) == 123, _nb_ln_wn(a) === nothing, _nb_code(() -> _nb_get(a.fieldWithNoInit)) == 7,
         _nb_code(() -> _nb_get(a.nullableFieldWithNoInit)) == 7, _NB_LN_CALLS[] == 1)
     _nb_set!(a.fieldWithInit, v); _nb_set!(a.fieldWithTrivialInit, v); _nb_set!(a.fieldWithNullInit, v); _nb_set!(a.fieldWithNoInit, v)
     _nb_set!(a.nullableFieldWithNoInit, nothing); _nb_set!(a.fieldWithOnlyCtorInit, v); _nb_set!(a.fieldWithOnlyBothInitAndCtorInit, v)
-    r2 = _dw_bits(_NB_LN_CALLS[] == 1, _nb_ln_wi(a) == 456, _nb_ln_wt(a) == 456, _nb_ln_wn(a) == 456, _nb_get(a.fieldWithNoInit) == 456,
+    r2 = _dw_facts(_NB_LN_CALLS[] == 1, _nb_ln_wi(a) == 456, _nb_ln_wt(a) == 456, _nb_ln_wn(a) == 456, _nb_get(a.fieldWithNoInit) == 456,
         _nb_get(a.nullableFieldWithNoInit) === nothing, _nb_get(a.fieldWithOnlyCtorInit) == 456, _nb_ln_both(a) == 456, _NB_LN_CALLS[] == 1)
     _NB_LN_CALLS[] = 0
     b = _NbLnA()
     _nb_set!(b.fieldWithInit, v)
-    r3 = _dw_bits(_NB_LN_CALLS[] == 0, _nb_ln_wi(b) == 456, _NB_LN_CALLS[] == 0)
+    r3 = _dw_facts(_NB_LN_CALLS[] == 0, _nb_ln_wi(b) == 456, _NB_LN_CALLS[] == 0)
     c = _NbLnA()
     _nb_set!(c.fieldWithInit, nothing)
-    r4 = _dw_bits(_NB_LN_CALLS[] == 0, _nb_ln_wi(c) === nothing, _NB_LN_CALLS[] == 0)
+    r4 = _dw_facts(_NB_LN_CALLS[] == 0, _nb_ln_wi(c) === nothing, _NB_LN_CALLS[] == 0)
     _NB_LN_CALLS[] = 0
-    return _dw_bits(r1 == 32767, r2 == 511, r3 == 7, r4 == 7)
+    return (r1, r2, r3, r4)
 end
 # syntax/late_modifier_runtime_error: reads before a write, second writes of final cells and recursive initializers,
 # for globals, fields and locals (an unassigned Julia local raises UndefVarError)
@@ -4985,7 +5190,7 @@ function _nb_lr_run(s::String)
     local3 = _NbLate{Int64}(true)
     doRecursiveInitLocal3 = Ref(true)
     c12 = _nb_code(() -> _nb_lr_local3(local3, doRecursiveInitLocal3))
-    return _nb_pack(c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12)
+    return (c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12)
 end
 # syntax/late_modifier_static_field: global cells with lazy, trivial, nothing and no initializers, pre-empted by writes
 const _NB_LS_CALLS = Ref(Int64(0))
@@ -5003,17 +5208,17 @@ function _nb_ls_run(v::Int64)
     _NB_LS_CALLS[] = 0
     _nb_unset!(_NB_LS_A_INIT); _nb_unset!(_NB_LS_A_TRIVIAL); _nb_unset!(_NB_LS_A_NULL); _nb_unset!(_NB_LS_A_NO_INIT)
     _nb_unset!(_NB_LS_B_INIT); _nb_unset!(_NB_LS_C_INIT)
-    r1 = _dw_bits(_NB_LS_CALLS[] == 0, _nb_ls_ai() == 123, _nb_ls_at() == 123, _nb_ls_an() === nothing, _nb_code(() -> _nb_get(_NB_LS_A_NO_INIT)) == 7,
+    r1 = _dw_facts(_NB_LS_CALLS[] == 0, _nb_ls_ai() == 123, _nb_ls_at() == 123, _nb_ls_an() === nothing, _nb_code(() -> _nb_get(_NB_LS_A_NO_INIT)) == 7,
         _NB_LS_CALLS[] == 1, _nb_ls_ai() == 123, _nb_ls_at() == 123, _nb_ls_an() === nothing, _nb_code(() -> _nb_get(_NB_LS_A_NO_INIT)) == 7,
         _NB_LS_CALLS[] == 1)
     _nb_set!(_NB_LS_A_INIT, v); _nb_set!(_NB_LS_A_TRIVIAL, v); _nb_set!(_NB_LS_A_NULL, v); _nb_set!(_NB_LS_A_NO_INIT, v)
-    r2 = _dw_bits(_NB_LS_CALLS[] == 1, _nb_ls_ai() == 456, _nb_ls_at() == 456, _nb_ls_an() == 456, _nb_get(_NB_LS_A_NO_INIT) == 456, _NB_LS_CALLS[] == 1)
+    r2 = _dw_facts(_NB_LS_CALLS[] == 1, _nb_ls_ai() == 456, _nb_ls_at() == 456, _nb_ls_an() == 456, _nb_get(_NB_LS_A_NO_INIT) == 456, _NB_LS_CALLS[] == 1)
     _NB_LS_CALLS[] = 0
     _nb_set!(_NB_LS_B_INIT, v)
-    r3 = _dw_bits(_NB_LS_CALLS[] == 0, _nb_get(_NB_LS_B_INIT, _nb_ls_init) == 456, _NB_LS_CALLS[] == 0)
+    r3 = _dw_facts(_NB_LS_CALLS[] == 0, _nb_get(_NB_LS_B_INIT, _nb_ls_init) == 456, _NB_LS_CALLS[] == 0)
     _nb_set!(_NB_LS_C_INIT, nothing)
-    r4 = _dw_bits(_NB_LS_CALLS[] == 0, _nb_get(_NB_LS_C_INIT, _nb_ls_init) === nothing, _NB_LS_CALLS[] == 0)
-    return _dw_bits(r1 == 2047, r2 == 63, r3 == 7, r4 == 7)
+    r4 = _dw_facts(_NB_LS_CALLS[] == 0, _nb_get(_NB_LS_C_INIT, _nb_ls_init) === nothing, _NB_LS_CALLS[] == 0)
+    return (r1, r2, r3, r4)
 end
 # syntax/late_modifier_static_final_field: final global cells with lazy, trivial, nothing and no initializers
 const _NB_LSF_CALLS = Ref(Int64(0))
@@ -5028,12 +5233,12 @@ function _nb_lsf_run(v::Int64)
     fi = () -> _nb_get(_NB_LSF_INIT, _nb_lsf_init)
     ft = () -> _nb_get(_NB_LSF_TRIVIAL, () -> Int64(123))
     fnl = () -> _nb_get(_NB_LSF_NULL, () -> nothing)
-    r1 = _dw_bits(_NB_LSF_CALLS[] == 0, fi() == 123, ft() == 123, fnl() === nothing, _NB_LSF_CALLS[] == 1, fi() == 123, ft() == 123,
+    r1 = _dw_facts(_NB_LSF_CALLS[] == 0, fi() == 123, ft() == 123, fnl() === nothing, _NB_LSF_CALLS[] == 1, fi() == 123, ft() == 123,
         fnl() === nothing, _NB_LSF_CALLS[] == 1)
     r2 = _nb_code(() -> _nb_get(_NB_LSF_NO_INIT))
     _nb_set!(_NB_LSF_NO_INIT, v)
-    r3 = _dw_bits(_nb_get(_NB_LSF_NO_INIT) == 123, _nb_code(() -> _nb_set!(_NB_LSF_NO_INIT, Int64(456))) == 3, _nb_get(_NB_LSF_NO_INIT) == 123)
-    return (r1 * 16 + r2) * 8 + r3
+    r3 = _dw_facts(_nb_get(_NB_LSF_NO_INIT) == 123, _nb_code(() -> _nb_set!(_NB_LSF_NO_INIT, Int64(456))) == 3, _nb_get(_NB_LSF_NO_INIT) == 123)
+    return (r1, r2, r3)
 end
 # syntax/late_modifier: a final global with a lazy initializer, a const field set by the constructor, a local
 # assigned before use
@@ -5067,12 +5272,24 @@ _nb_rm_m(::_NbRmC, a::Int64; i::Int64) = a + i
 struct _NbRdFoo end
 _nb_rd_foo(::_NbRdFoo; a::String, b::String, c::String, d::String) = ncodeunits(a) + ncodeunits(b) + ncodeunits(c) + ncodeunits(d)
 _nb_rd_baz(; a::String, b::String, c::String, d::String) = ncodeunits(a) + ncodeunits(b) + ncodeunits(c) + ncodeunits(d)
-# type_equality/function_type_equality: functions of one signature under two names, compared by type and by the
-# argument lists they accept; a required keyword against a defaulted one
+# type_equality/function_type_equality: a function value wrapped with its dart function type as type parameters
+# (_NbFt{Ret,Positional,Optional,Named,Required}); runtime-type equality compares those types
+struct _NbFt{Ret,Pos,Opt,Named,Req} end
+struct _NbFn{S,F}
+    f::F
+end
+_NbFn{S}(f::F) where {S,F} = _NbFn{S,F}(f)
+_nb_sig(::_NbFn{S}) where {S} = S
+_nb_fn_eq(x::_NbFn, y::_NbFn) = _nb_sig(x) == _nb_sig(y)
+const _NbNoKw = NamedTuple{(),Tuple{}}
+const _NbKwI = NamedTuple{(:i,),Tuple{Int64}}
+const _NbKwNI = NamedTuple{(:i,),Tuple{Union{Nothing,Int64}}}
 _nb_fe_fn() = nothing
 _nb_fe_fn2() = nothing
 _nb_fe_void_to_int() = Int64(42)
 _nb_fe_void_to_int2() = Int64(42)
+_nb_fe_void_to_nint()::Union{Nothing,Int64} = Int64(42)
+_nb_fe_void_to_nint2()::Union{Nothing,Int64} = Int64(42)
 _nb_fe_pos_nullable(i::Union{Nothing,Int64}) = nothing
 _nb_fe_pos_nullable2(i::Union{Nothing,Int64}) = nothing
 _nb_fe_opt(i::Int64 = 0) = nothing
@@ -5081,30 +5298,83 @@ _nb_fe_opt_nullable(i::Union{Nothing,Int64} = nothing) = nothing
 _nb_fe_opt_nullable2(i::Union{Nothing,Int64} = nothing) = nothing
 _nb_fe_named(; i::Int64 = 0) = nothing
 _nb_fe_named2(; i::Int64 = 0) = nothing
+_nb_fe_named_nullable(; i::Union{Nothing,Int64} = nothing) = nothing
+_nb_fe_named_nullable2(; i::Union{Nothing,Int64} = nothing) = nothing
 _nb_fe_required(; i::Int64) = nothing
 _nb_fe_required2(; i::Int64) = nothing
-_nb_fe_sig(f::F) where {F} = _dw_bits(applicable(f), applicable(f, Int64(0)), applicable(f, nothing), hasmethod(f, Tuple{}, (:i,)))
-_nb_fe_same(f::F, g::G) where {F,G} = _dw_bits(typeof(f) == typeof(g), _nb_fe_sig(f) == _nb_fe_sig(g))
-# type_equality/generic_function_type_equality: methods with a type parameter under two names, compared by type and
-# by the arguments they accept; a required keyword against a defaulted one
+_nb_fe_required_nullable(; i::Union{Nothing,Int64}) = nothing
+_nb_fe_required_nullable2(; i::Union{Nothing,Int64}) = nothing
+const _NB_FE_FN = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_fn)
+const _NB_FE_FN2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_fn2)
+const _NB_FE_V2I = _NbFn{_NbFt{Int64,Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_void_to_int)
+const _NB_FE_V2I2 = _NbFn{_NbFt{Int64,Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_void_to_int2)
+const _NB_FE_V2NI = _NbFn{_NbFt{Union{Nothing,Int64},Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_void_to_nint)
+const _NB_FE_V2NI2 = _NbFn{_NbFt{Union{Nothing,Int64},Tuple{},Tuple{},_NbNoKw,()}}(_nb_fe_void_to_nint2)
+const _NB_FE_PN = _NbFn{_NbFt{Nothing,Tuple{Union{Nothing,Int64}},Tuple{},_NbNoKw,()}}(_nb_fe_pos_nullable)
+const _NB_FE_PN2 = _NbFn{_NbFt{Nothing,Tuple{Union{Nothing,Int64}},Tuple{},_NbNoKw,()}}(_nb_fe_pos_nullable2)
+const _NB_FE_OPT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Int64},_NbNoKw,()}}(_nb_fe_opt)
+const _NB_FE_OPT2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Int64},_NbNoKw,()}}(_nb_fe_opt2)
+const _NB_FE_ON = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Union{Nothing,Int64}},_NbNoKw,()}}(_nb_fe_opt_nullable)
+const _NB_FE_ON2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Union{Nothing,Int64}},_NbNoKw,()}}(_nb_fe_opt_nullable2)
+const _NB_FE_NAMED = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwI,()}}(_nb_fe_named)
+const _NB_FE_NAMED2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwI,()}}(_nb_fe_named2)
+const _NB_FE_NN = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNI,()}}(_nb_fe_named_nullable)
+const _NB_FE_NN2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNI,()}}(_nb_fe_named_nullable2)
+const _NB_FE_REQ = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwI,(:i,)}}(_nb_fe_required)
+const _NB_FE_REQ2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwI,(:i,)}}(_nb_fe_required2)
+const _NB_FE_RN = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNI,(:i,)}}(_nb_fe_required_nullable)
+const _NB_FE_RN2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNI,(:i,)}}(_nb_fe_required_nullable2)
+# type_equality/generic_function_type_equality: generic function types encoded with their type parameters numbered
+# (_NbTv{1} for the first), so renaming T to S gives the same type
+struct _NbTv{K} end
+const _NbT1 = _NbTv{1}
+const _NbKwT = NamedTuple{(:i,),Tuple{Vector{_NbT1}}}
+const _NbKwNT = NamedTuple{(:i,),Tuple{Union{Nothing,_NbT1}}}
 _nb_ge_fn(::Type{T}) where {T} = nothing
 _nb_ge_fn2(::Type{R}) where {R} = nothing
+_nb_ge_void_to_t(::Type{T}) where {T} = nothing
+_nb_ge_void_to_s(::Type{S}) where {S} = nothing
 _nb_ge_pos_t(i::T) where {T} = nothing
 _nb_ge_pos_s(i::S) where {S} = nothing
 _nb_ge_pos_nullable_t(i::Union{Nothing,T}) where {T} = nothing
 _nb_ge_pos_nullable_s(i::Union{Nothing,S}) where {S} = nothing
 _nb_ge_opt_t(i::Vector{T} = Int64[]) where {T} = nothing
 _nb_ge_opt_s(i::Vector{S} = Int64[]) where {S} = nothing
+_nb_ge_opt_nullable_t(i = nothing) = nothing
+_nb_ge_opt_nullable_s(i = nothing) = nothing
 _nb_ge_named_t(; i::Vector{<:Any} = Int64[]) = nothing
 _nb_ge_named_s(; i::Vector{<:Any} = Int64[]) = nothing
+_nb_ge_named_nullable_t(; i = nothing) = nothing
+_nb_ge_named_nullable_s(; i = nothing) = nothing
 _nb_ge_required_t(; i::Vector{<:Any}) = nothing
 _nb_ge_required_s(; i::Vector{<:Any}) = nothing
-_nb_ge_sig(f::F) where {F} = _dw_bits(applicable(f), applicable(f, Int64(0)), applicable(f, nothing), applicable(f, Int64),
-    applicable(f, Int64[0]), hasmethod(f, Tuple{}, (:i,)))
-_nb_ge_same(f::F, g::G) where {F,G} = _dw_bits(typeof(f) == typeof(g), _nb_ge_sig(f) == _nb_ge_sig(g))
+_nb_ge_required_nullable_t(; i) = nothing
+_nb_ge_required_nullable_s(; i) = nothing
+const _NB_GE_FN = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbNoKw,()}}(_nb_ge_fn)
+const _NB_GE_FN2 = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbNoKw,()}}(_nb_ge_fn2)
+const _NB_GE_V2T = _NbFn{_NbFt{_NbT1,Tuple{},Tuple{},_NbNoKw,()}}(_nb_ge_void_to_t)
+const _NB_GE_V2S = _NbFn{_NbFt{_NbT1,Tuple{},Tuple{},_NbNoKw,()}}(_nb_ge_void_to_s)
+const _NB_GE_PT = _NbFn{_NbFt{Nothing,Tuple{_NbT1},Tuple{},_NbNoKw,()}}(_nb_ge_pos_t)
+const _NB_GE_PS = _NbFn{_NbFt{Nothing,Tuple{_NbT1},Tuple{},_NbNoKw,()}}(_nb_ge_pos_s)
+const _NB_GE_PNT = _NbFn{_NbFt{Nothing,Tuple{Union{Nothing,_NbT1}},Tuple{},_NbNoKw,()}}(_nb_ge_pos_nullable_t)
+const _NB_GE_PNS = _NbFn{_NbFt{Nothing,Tuple{Union{Nothing,_NbT1}},Tuple{},_NbNoKw,()}}(_nb_ge_pos_nullable_s)
+const _NB_GE_OT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Vector{_NbT1}},_NbNoKw,()}}(_nb_ge_opt_t)
+const _NB_GE_OS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Vector{_NbT1}},_NbNoKw,()}}(_nb_ge_opt_s)
+const _NB_GE_ONT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Union{Nothing,_NbT1}},_NbNoKw,()}}(_nb_ge_opt_nullable_t)
+const _NB_GE_ONS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{Union{Nothing,_NbT1}},_NbNoKw,()}}(_nb_ge_opt_nullable_s)
+const _NB_GE_NT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwT,()}}(_nb_ge_named_t)
+const _NB_GE_NS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwT,()}}(_nb_ge_named_s)
+const _NB_GE_NNT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNT,()}}(_nb_ge_named_nullable_t)
+const _NB_GE_NNS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNT,()}}(_nb_ge_named_nullable_s)
+const _NB_GE_RT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwT,(:i,)}}(_nb_ge_required_t)
+const _NB_GE_RS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwT,(:i,)}}(_nb_ge_required_s)
+const _NB_GE_RNT = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNT,(:i,)}}(_nb_ge_required_nullable_t)
+const _NB_GE_RNS = _NbFn{_NbFt{Nothing,Tuple{},Tuple{},_NbKwNT,(:i,)}}(_nb_ge_required_nullable_s)
 # type_equality/regress42246: methods of a parametric struct returning and taking Union{Nothing,T} and Union{Nothing,S}
-struct _NbRgA{T} end
-_nb_rg_fn(::_NbRgA{T}) where {T} = nothing::Union{Nothing,T}
+struct _NbRgA{T}
+    v::Union{Nothing,T}
+end
+_nb_rg_fn(a::_NbRgA{T}) where {T} = a.v
 _nb_rg_gn(::_NbRgA{T}, ::Type{S}, param::Union{Nothing,S}) where {T,S} = nothing
 _nb_rg_hn(::_NbRgA{T}, ::Type{S}) where {T,S} = nothing::Union{Nothing,S}
 # type_object/equality: type objects compared with ==, from names, typeof and a function returning its parameter
@@ -5113,149 +5383,177 @@ struct _NbToB end
 _nb_to_type(::Type{T}) where {T} = T
 _g("dart_nnbd", Any[
     ("boolean_conversion_boolean_conversion_strong", (t::Bool) -> (vs = _NbBcV[t, !t, t, !t, nothing, "", "true", "null", "undefined", Int64(0), Int64(1), Bool[true]];
-        s = Int64(0); for v in vs; s = s * 1000003 + _nb_bc_mask(v); end; s), true),
+        out = Int64[]; for v in vs; _nb_bc_codes!(out, v); end; out), true),
     ("const_potentially_constant_types", (n::Int64) -> (c1 = _nb_pc1(Int64, n); c2 = _nb_pc1(Int64, n); c3 = _nb_pc1(Int64, n + 1); c4 = _nb_pc1(Int64, "hello");
-        c5 = _nb_pc1(Int64, nothing); l1 = _nb_pc1(Int64, _NB_PC_I0); l4 = _nb_pc1(Int64, _NB_PC_N0); l5 = _nb_pc1(_NbNum, _NB_PC_I0);
-        d1 = _nb_pc2(Int64, n); d2 = _nb_pc2(Int64, n); d3 = _nb_pc2(_NbNum, n); e1 = _nb_pc3(Int64, _NB_PC_I0); e2 = _nb_pc3(Int64, _NB_PC_I0);
+        c5 = _nb_pc1(Int64, nothing);
+        b1 = _dw_facts(c1 === c2, c1 === c3, c1 === c4, c1 === c5, c1.isT, c2.isT, c3.isT, c4.isT, c5.isT, c1.isListT, c2.isListT, c3.isListT,
+            c4.isListT, c5.isListT);
+        l1 = _nb_pc1(Int64, _NB_PC_I0); l2 = _nb_pc1(Int64, _NB_PC_I0); l3 = _nb_pc1(Int64, _NB_PC_I1); l4 = _nb_pc1(Int64, _NB_PC_N1); l5 = _nb_pc1(_NbNum, _NB_PC_I1);
+        b2 = _dw_facts(l1 === l2, l1 === l3, l1 === l4, l1 === l5, l4 === l5, l1.isT, l2.isT, l3.isT, l4.isT, l5.isT, l1.isListT, l2.isListT,
+            l3.isListT, l4.isListT, l5.isListT);
+        d1 = _nb_pc2(Int64, n); d2 = _nb_pc2(Int64, n); d3 = _nb_pc2(_NbNum, n + 1);
+        b3 = _dw_facts(d1 === d2, d1 === d3);
+        e1 = _nb_pc3(Int64, _NB_PC_I0); e2 = _nb_pc3(Int64, _NB_PC_I0);
+        b4 = (e1 === e2, _nb_code(() -> _nb_pc3(_NbNum, _NB_PC_I0)));
         f1 = _nb_pc4(_NbNum, n); f2 = _nb_pc4(_NbNum, "hello"); f3 = _nb_pc4(_NbNum, _NB_PC_I0); f4 = _nb_pc4(_NbNum, _NB_PC_S0); f5 = _nb_pc4(Int64, _NB_PC_N0);
-        _dw_bits(c1 === c2, c1 === c3, c1 === c4, c1 === c5, c1.isT, c4.isT, c5.isT, c1.isListT, l1.isListT, l4.isListT, l5.isListT, l1 === l5,
-                 d1 === d2, d1 === d3, e1 === e2, _nb_code(() -> _nb_pc3(_NbNum, _NB_PC_I0)) == 1,
-                 f1.isT && !f1.isListT && f1.t == 0 && f1.l === nothing, !f2.isT && !f2.isListT && f2.t === nothing && f2.l === nothing,
-                 f3.isListT, f3.l === nothing, !f4.isT && !f4.isListT && f4.l === nothing, !f5.isT && !f5.isListT && f5.l === nothing)), Int64(0)),
-    ("const_regress43281", (n::Int64) -> (s = Set([n, 2, 3, nothing]); _dw_bits(length(s) == 4, s isa Set{Union{Nothing,Int64}}, s isa Set{Int64})), Int64(1)),
-    ("constant_null_safety_mode", (n::Int64) -> (l = String[]; _dw_bits(Nothing[] isa Vector{Int64}) * 16 + _nb_code(() -> push!(l, nothing)) + length(l) * 256 + n), Int64(0)),
+        b5 = _dw_facts(f1.isT, f1.isListT, f1.t == 0, f1.l === nothing, f2.isT, f2.isListT, f2.t === nothing, f2.l === nothing,
+            f3.isT, f3.isListT, f3.t === nothing, f3.l === _NB_PC_I0, f4.isT, f4.isListT, f4.t === nothing, f4.l === nothing,
+            f5.isT, f5.isListT, f5.t === nothing, f5.l === nothing);
+        (b1, b2, b3, b4, b5)), Int64(0)),
+    ("const_regress43281", (n::Int64) -> (s = Set([n, 2, 3, nothing]); _dw_facts(length(s), s isa Set{Union{Nothing,Int64}}, s isa Set{Int64})), Int64(1)),
+    ("constant_null_safety_mode", (n::Int64) -> (l = String[]; _dw_facts(Nothing[] isa Vector{Int64}, _nb_code(() -> push!(l, nothing)), length(l))), Int64(0)),
     ("inference_variables_initialized_to_null", (three::Int64) -> (_NB_VN_G0[] = three; g0 = iseven(something(_NB_VN_G0[])); _NB_VN_G0[] = nothing;
         _NB_VN_S0[] = three; s0 = iseven(something(_NB_VN_S0[])); _NB_VN_S0[] = nothing;
         o = _NbVnTest(nothing); o.instance0 = three; local0::Union{Nothing,Int64} = nothing; local0 = three;
-        _dw_bits(!g0, !s0, !iseven(something(o.instance0)), !iseven(something(local0)))), Int64(3)),
+        _dw_facts(g0, s0, iseven(something(o.instance0)), iseven(something(local0)))), Int64(3)),
     ("is_type_test_null_is", (n::Int64) -> (x = _nb_am_null(n);
-        _dw_bits(x isa Union{}, x isa Union{Nothing,Union{}}, x isa Nothing, x isa Any, x isa Bool, x isa Union{Nothing,Bool}, x isa Real, x isa Union{Nothing,Real},
+        _dw_facts(x isa Union{}, x isa Union{Nothing,Union{}}, x isa Nothing, x isa Any, x isa Bool, x isa Union{Nothing,Bool}, x isa Real, x isa Union{Nothing,Real},
                  x isa Int64, x isa Union{Nothing,Int64}, x isa Float64, x isa Union{Nothing,Float64}, x isa String, x isa Union{Nothing,String},
                  x isa AbstractVector, x isa Union{Nothing,AbstractVector}, x isa AbstractSet, x isa Union{Nothing,AbstractSet}, x isa AbstractDict,
                  x isa Union{Nothing,AbstractDict}, x isa Symbol, x isa Union{Nothing,Symbol})), Int64(0)),
     ("late_chained_assignment", (one::Int64) -> _nb_ca_run(one), Int64(1)),
-    ("late_covariant_instance_field", (x::Float64) -> (foo = _NbCvFoo(); foo.a = 0; foo.b = 1; f1 = foo.a == 0 && foo.b == 1; foo.a = x; f2 = foo.a == 1.618;
+    ("late_covariant_instance_field", (x::Float64) -> (foo = _NbCvFoo(); foo.a = 0; foo.b = 1; a0 = foo.a; b0 = foo.b; foo.a = x; a1 = foo.a;
         bars = Union{_NbCvFoo,_NbCvBar}[_NbCvFoo(), _NbCvBar()]; bar = bars[2]; bar.a = 2; bar.b = 3;
-        _dw_bits(f1, f2, bar.a == 2 && bar.b == 3) * 16 + _nb_code(() -> (bar.a = 3.14))), 1.618),
+        _dw_facts(a0 == 0, b0 == 1, a1 == 1.618, bar.a == 2, bar.b == 3, _nb_code(() -> (bar.a = 3.14)))), 1.618),
     ("late_dynamic_instance_field", (k::Bool) -> (foo = _NbDiFoo(); bar = _NbDiBar("a", "b", "c", "d"); x = _nb_di_fetch(!k, foo, bar);
-        f1 = x.a == "a" && x.b == "b" && x.c == "c" && x.d == "d"; x = _nb_di_fetch(k, foo, bar); f2 = x.c == -1 && x.d == -2;
-        x isa _NbDiFoo && (x.a = 1; x.b = 2; x.c = 3); x = _nb_di_fetch(!k, foo, bar); f3 = x.a == "a" && x.b == "b" && x.c == "c" && x.d == "d";
-        x = _nb_di_fetch(k, foo, bar); _dw_bits(f1, f2, f3, x.a == 1 && x.b == 2 && x.c == 3 && x.d == -2)), true),
-    ("late_generic_covariant_instance_field", (x::Float64) -> (foo = _NbGcFoo{_NbNum}(); foo.a = 0; foo.b = 1; f1 = foo.a == 0 && foo.b == 1; foo.a = x;
-        f2 = foo.a == 1.618; bars = Union{_NbGcFoo{_NbNum},_NbGcFoo{Int64}}[_NbGcFoo{_NbNum}(), _NbGcFoo{Int64}()]; bar = bars[2]; bar.a = 2; bar.b = 3;
-        _dw_bits(f1, f2, bar.a == 2 && bar.b == 3) * 16 + _nb_code(() -> (bar.a = 3.14))), 1.618),
+        f1 = _dw_facts(x.a == "a", x.b == "b", x.c == "c", x.d == "d"); x = _nb_di_fetch(k, foo, bar); f2 = _dw_facts(x.c == -1, x.d == -2);
+        x isa _NbDiFoo && (x.a = 1; x.b = 2; x.c = 3); x = _nb_di_fetch(!k, foo, bar); f3 = _dw_facts(x.a == "a", x.b == "b", x.c == "c", x.d == "d");
+        x = _nb_di_fetch(k, foo, bar); (f1, f2, f3, _dw_facts(x.a == 1, x.b == 2, x.c == 3, x.d == -2))), true),
+    ("late_generic_covariant_instance_field", (x::Float64) -> (foo = _NbGcFoo{_NbNum}(); foo.a = 0; foo.b = 1; a0 = foo.a; b0 = foo.b; foo.a = x; a1 = foo.a;
+        bars = Union{_NbGcFoo{_NbNum},_NbGcFoo{Int64}}[_NbGcFoo{_NbNum}(), _NbGcFoo{Int64}()]; bar = bars[2]; bar.a = 2; bar.b = 3;
+        _dw_facts(a0 == 0, b0 == 1, a1 == 1.618, bar.a == 2, bar.b == 3, _nb_code(() -> (bar.a = 3.14)))), 1.618),
     ("late_instance_field_initializers", (one::Int64) -> (empty!(_NB_IF_HISTORY);
-        r1 = _nb_if_check(_nb_if_with_c(_nb_if_log(one), _nb_if_log(2one), _nb_if_log(3one)), Int64(3), Int64[1, 2, 3, -2, 100, 101, 102]);
-        r2 = _nb_if_check((a = _nb_if_log(one); b = _nb_if_log(2one); _nb_if_without_c(a, b)), Int64(-1), Int64[1, 2, -1, -2, 100, 101, 102]);
-        r1 * 4096 + r2), Int64(1)),
+        foo_c = _nb_if_check(_nb_if_with_c(_nb_if_log(one), _nb_if_log(2one), _nb_if_log(3one)), Int64[1, 2, 3, -2, 100, 101, 102]);
+        foo_noc = _nb_if_check((a = _nb_if_log(one); b = _nb_if_log(2one); _nb_if_without_c(a, b)), Int64[1, 2, -1, -2, 100, 101, 102]);
+        bar_c = _nb_if_check(_nb_if_with_c(_nb_if_log(one), _nb_if_log(2one), _nb_if_log(3one)), Int64[1, 2, 3, -2, 100, 101, 102]);
+        bar_noc = _nb_if_check(_nb_if_without_c(_nb_if_log(one), _nb_if_log(2one)), Int64[1, 2, -1, -2, 100, 101, 102]);
+        (foo_c, foo_noc, bar_c, bar_noc)), Int64(1)),
     ("never_never_null_assignability_strong", (n::Int64) -> (vals = Union{Nothing,Int64,String}[nothing, n, "hello"]; dn = vals[1]; d3 = vals[2]; ds = vals[3];
-        p1 = _nb_pack(_nb_code(() -> _nb_takes_null(nothing)), _nb_code(() -> _nb_takes_null(_nb_never())), _nb_code(() -> _nb_takes_null(d3)),
+        calls = (_nb_code(() -> _nb_takes_null(nothing)), _nb_code(() -> _nb_takes_null(_nb_never())), _nb_code(() -> _nb_takes_null(d3)),
             _nb_code(() -> _nb_takes_never(_nb_never())), _nb_code(() -> _nb_takes_never(d3)), _nb_code(() -> _nb_takes_int(n)),
             _nb_code(() -> _nb_takes_int(dn)), _nb_code(() -> _nb_takes_int(ds)), _nb_code(() -> _nb_takes_object(n)),
             _nb_code(() -> _nb_takes_object(dn)), _nb_code(() -> _nb_takes_any(n)), _nb_code(() -> _nb_takes_any(nothing)));
-        p2 = _nb_pack(_nb_code(() -> _nb_apply_null(_nb_takes_null, dn)), _nb_code(() -> _nb_apply_null(_nb_takes_any, dn)),
+        apply = (_nb_code(() -> _nb_apply_null(_nb_takes_null, dn)), _nb_code(() -> _nb_apply_null(_nb_takes_any, dn)),
             _nb_code(() -> _nb_apply_null(_nb_takes_null, d3)), _nb_code(() -> _nb_apply_null(_nb_takes_any, d3)),
             _nb_code(() -> _nb_apply_never(_nb_takes_null, dn)), _nb_code(() -> _nb_apply_never(_nb_takes_never, dn)),
             _nb_code(() -> _nb_apply_never(_nb_takes_int, dn)), _nb_code(() -> _nb_apply_never(_nb_takes_object, dn)),
             _nb_code(() -> _nb_apply_never(_nb_takes_any, dn)), _nb_code(() -> _nb_apply_never(_nb_takes_int, d3)),
             _nb_code(() -> _nb_apply_never(_nb_takes_any, d3)));
-        p3 = _nb_pack(_nb_code(() -> _nb_apply_dyn(_nb_takes_null, dn)), _nb_code(() -> _nb_apply_dyn(_nb_takes_any, dn)),
+        dyn = (_nb_code(() -> _nb_apply_dyn(_nb_takes_null, dn)), _nb_code(() -> _nb_apply_dyn(_nb_takes_any, dn)),
             _nb_code(() -> _nb_apply_dyn(_nb_takes_null, d3)), _nb_code(() -> _nb_apply_dyn(_nb_takes_any, d3)),
             _nb_code(() -> _nb_apply_dyn(_nb_takes_never, dn)), _nb_code(() -> _nb_apply_dyn(_nb_takes_int, dn)),
             _nb_code(() -> _nb_apply_dyn(_nb_takes_object, dn)), _nb_code(() -> _nb_apply_dyn(_nb_takes_null, d3)),
             _nb_code(() -> _nb_apply_dyn(_nb_takes_never, d3)), _nb_code(() -> _nb_apply_dyn(_nb_takes_int, d3)),
             _nb_code(() -> _nb_apply_dyn(_nb_takes_int, ds)), _nb_code(() -> _nb_apply_dyn(_nb_takes_object, d3)));
-        (p1 * 1000003 + p2) * 1000003 + p3), Int64(3)),
-    ("normalization_type_object_normalization", (n::Int64) -> (T = typeof(n);
-        _dw_bits(_nb_orq(Any) == Any, _nb_orq(_nb_orq(Any)) == Any, Union{} != Nothing, Union{Nothing,Union{}} == Nothing, _nb_orq(Nothing) == Nothing,
-                 _nb_orq(T) != T, _nb_orq(_nb_orq(_nb_orq(T))) == _nb_orq(T), Vector{Union{Nothing,Union{}}} == _nb_list(Nothing),
-                 _nb_list(_nb_orq(_nb_orq(T))) == Vector{Union{Nothing,Int64}}, _NbRep{Union{Nothing,Union{}}} == _nb_rep(Nothing),
-                 _nb_rep_rt(_nb_orq(_nb_orq(T))) == _NbRep{Union{Nothing,Int64}}, typeof(_NbRep{Union{}}()) != _nb_rep_rt(Nothing),
-                 _nb_rep_rt(_nb_orq(T)) != _nb_rep_rt(T))), Int64(0)),
+        (calls, apply, dyn)), Int64(3)),
+    ("normalization_type_object_normalization", (n::Int64) -> (A = n == 1 ? Any : Int64; B1 = n == 1 ? Union{} : Nothing; B2 = n == 1 ? Union{} : Int64;
+        N = n == 1 ? Nothing : Int64; T = n == 1 ? Int64 : String; Tn = n == 1 ? Int64 : Nothing;
+        _dw_facts(_nb_orq(A) == A, _nb_orq(_nb_orq(A)) == A, B1 != Nothing, _nb_orq_rt(B2) == Nothing, _nb_orq(N) == Nothing,
+                 _nb_orq(Tn) != Tn, _nb_orq(_nb_orq(_nb_orq(T))) == Union{Nothing,Int64}, _nb_list_rt(_nb_orq_rt(B2)) == Vector{Nothing},
+                 _nb_list(_nb_orq(_nb_orq(T))) == Vector{Union{Nothing,Int64}}, _nb_rep_t(_nb_orq_rt(B2)) == _nb_rep(Nothing),
+                 _nb_rep_rt(_nb_orq(_nb_orq(T))) == _NbRep{Union{Nothing,Int64}}, _nb_rep_t(B1) != _nb_rep(Nothing),
+                 _nb_rep_rt(_nb_orq(Tn)) != _nb_rep_rt(Tn))), Int64(1)),
     ("required_named_parameters_missing_required_argument_dynamic", (n::Int64) -> (a = _NbMrA();
-        codes = _nb_pack(_nb_code(() -> _nb_mr_m1(a)), _nb_code(() -> _nb_mr_f()), _nb_code(() -> _nb_mr_g()()), _nb_code(() -> _nb_mr_m2(a)()),
-            _nb_code(() -> _nb_mr_h(p1 = 1, p6 = 6, p10 = 10)), _nb_code(() -> _nb_mr_m3(a, p1 = 1, p8 = 8, p10 = 10)),
-            _nb_code(() -> _nb_mr_i(p36 = 36)), _nb_code(() -> _nb_mr_m4(a, p34 = 34)));
-        codes * 1024 + _dw_bits(_nb_mr_m1(a, a = 5n) == 1, _nb_mr_f(a = 3n) == 2, _nb_mr_g()(a = 4n) == "g", _nb_mr_m2(a)(x = "check") == "m2: check",
-            _nb_mr_h(p1 = n, p8 = 8, p10 = 10) == 7, _nb_mr_m3(a, p1 = n, p6 = 6, p8 = 8) == 55, _nb_mr_i(p34 = 34n) == 20,
-            _nb_mr_m4(a, p36 = 36n) == 666)), Int64(1)),
-    ("required_named_parameters_required_named_args_strong", (n::Int64) -> _nb_pack(_nb_code(() -> _nb_rn_func(""; p1 = nothing, p2 = nothing)),
-        _nb_code(() -> _nb_rn_func(""; (p1 = nothing, p2 = nothing)...)), _nb_code(() -> _nb_rn_func(""; p1 = 100n)),
-        _nb_code(() -> _nb_rn_func(""; (p1 = 100n,)...))), Int64(1)),
-    ("required_named_parameters_required_named_args", (n::Int64) -> ncodeunits(_nb_rn_func(""; p1 = 100n, p2 = "", p3 = true)) * 1000 +
-        ncodeunits(_nb_rn_func(""; (p1 = 100n, p2 = "", p3 = true)...)) * 100 + ncodeunits(_nb_rn_func(""; p1 = 100n, p2 = "")) * 10 +
-        ncodeunits(_nb_rn_func(""; (p1 = 100n, p2 = "")...)), Int64(1)),
-    ("resolution_issue41479", (n::Int64) -> (a = _NbR41A(); v = _nb_r41_foo(a); r = v === nothing ? nothing : iseven(v); (r === true ? 1 : 0) + n), Int64(0)),
-    ("resolution_null_assertion_null_type", (n::Int64) -> _nb_code(() -> _nb_nt_g(nothing)) + n, Int64(0)),
-    ("subtyping_function_type_required_params", (n::Int64) -> _dw_bits(typeof(_nb_ft_f) == typeof(_nb_ft_f), typeof(_nb_ft_f) == typeof(_nb_ft_g),
-        typeof(_nb_ft_g) == typeof(_nb_ft_g)) * 2^24 + _nb_pack(_nb_code(() -> _nb_ft_f(i = n)), _nb_code(() -> _nb_ft_f()), _nb_code(() -> _nb_ft_g(i = n)),
-        _nb_code(() -> _nb_ft_g()), _nb_code(() -> _nb_ft_f(i1 = n, i2 = n))) + _nb_ft_f(i = n) * 2^20, Int64(1)),
-    ("subtyping_regress41272", (n::Int64) -> (s = Int64(0); for _ in 1:20; x = _nb_r412_x(n); s += 100 * _nb_code(() -> x::Any) + _nb_code(() -> x::Int64); end; s), Int64(0)),
-    ("subtyping_type_casts_strong", (n::Int64) -> (r = _nb_tc_tests(); for _ in 2:20; r == _nb_tc_tests() || return Int64(-1); end; r + n), Int64(0)),
-    ("syntax_cascade_nullcheck", (n::Int64) -> (c = _nb_cn_test(_NbCnC(nothing)); something(c.y) + n), Int64(0)),
+        (_dw_facts(_nb_mr_m1(a, a = 5n) == 1, _nb_code(() -> _nb_mr_m1(a)), _nb_mr_f(a = 3n) == 2, _nb_code(() -> _nb_mr_f()),
+            _nb_mr_g()(a = 4n) == "g", _nb_code(() -> _nb_mr_g()()), _nb_mr_m2(a)(x = "check") == "m2: check", _nb_code(() -> _nb_mr_m2(a)())),
+         _dw_facts(_nb_mr_h(p1 = n, p8 = 8, p10 = 10), _nb_code(() -> _nb_mr_h(p1 = 1, p6 = 6, p10 = 10)),
+            _nb_mr_m3(a, p1 = n, p6 = 6, p8 = 8), _nb_code(() -> _nb_mr_m3(a, p1 = 1, p8 = 8, p10 = 10)),
+            _nb_mr_i(p34 = 34n), _nb_code(() -> _nb_mr_i(p36 = 36)), _nb_mr_m4(a, p36 = 36n), _nb_code(() -> _nb_mr_m4(a, p34 = 34))))), Int64(1)),
+    ("required_named_parameters_required_named_args_strong", (n::Int64) -> (p1v = n == 1 ? nothing : n; p2v = n == 1 ? nothing : "";
+        kn = n == 1 ? (p1 = nothing, p2 = nothing) : (p1 = n, p2 = ""); km = n == 1 ? (p1 = 100n,) : (p1 = 100n, p2 = "");
+        _dw_facts(_nb_code(() -> _nb_rn_func(""; p1 = p1v, p2 = p2v)), _nb_code(() -> _nb_rn_func(""; kn...)),
+            _nb_code(() -> n == 1 ? _nb_rn_func(""; p1 = 100n) : _nb_rn_func(""; p1 = 100n, p2 = "")), _nb_code(() -> _nb_rn_func(""; km...)))), Int64(1)),
+    ("required_named_parameters_required_named_args", (n::Int64) -> _dw_facts(ncodeunits(_nb_rn_func(""; p1 = 100n, p2 = "", p3 = true)),
+        ncodeunits(_nb_rn_func(""; (p1 = 100n, p2 = "", p3 = true)...)), ncodeunits(_nb_rn_func(""; p1 = 100n, p2 = "")),
+        ncodeunits(_nb_rn_func(""; (p1 = 100n, p2 = "")...))), Int64(1)),
+    ("resolution_issue41479", (n::Int64) -> (a = _NbR41A(); v = _nb_r41_foo(a); r = v === nothing ? nothing : iseven(v + n); r === true), Int64(0)),
+    ("resolution_null_assertion_null_type", (n::Int64) -> (x = _nb_am_null(n); _nb_code(() -> _nb_nt_h(x))), Int64(0)),
+    ("subtyping_function_type_required_params", (n::Int64) -> (_dw_facts(typeof(_nb_ft_f) == typeof(_nb_ft_f), typeof(_nb_ft_f) == typeof(_nb_ft_g),
+        typeof(_nb_ft_g) == typeof(_nb_ft_g)), _dw_facts(_nb_code(() -> _nb_ft_f(i = n)), _nb_code(() -> _nb_ft_f()), _nb_code(() -> _nb_ft_g(i = n)),
+        _nb_code(() -> _nb_ft_g()), _nb_code(() -> _nb_ft_f(i1 = n, i2 = n))), _nb_ft_f(i = n)), Int64(1)),
+    ("subtyping_regress41272", (n::Int64) -> (out = Int64[]; for _ in 1:20; x = _nb_r412_x(n); push!(out, _nb_code(() -> x::Any)); push!(out, _nb_code(() -> x::Int64)); end; out), Int64(0)),
+    ("subtyping_type_casts_strong", (n::Int64) -> _nb_rep20(_nb_tc_tests), Int64(0)),
+    ("syntax_cascade_nullcheck", (n::Int64) -> (c = _nb_cn_test(_NbCnC(n == 0 ? nothing : n)); something(c.y)), Int64(0)),
     ("syntax_class_member_declarations", (n::Int64) -> (a::Union{Nothing,_NbCmA} = n == 0 ? nothing : _NbCmA(0); s::Union{Nothing,String} = "";
         a === nothing || (length(_nb_cm_foo(a)); a.x27 = ncodeunits(something(s))); a === nothing ? Int64(-1) : a.x27), Int64(0)),
     ("syntax_late_modifier_bug_39658", (x::Float64) -> _nb_lb_run(x), 4.56),
-    ("syntax_late_modifier_edge_cases", (n::Int64) -> (_nb_le_intermediate() * 2^20 + _nb_le_complicated()) * 2^36 + _nb_le_throwing() + n, Int64(0)),
-    ("syntax_late_modifier_final_field", (n::Int64) -> (r = _nb_lf_run(); for _ in 2:20; r == _nb_lf_run() || return Int64(-1); end; r + n), Int64(0)),
-    ("syntax_late_modifier_final_local_var", (n::Int64) -> (r = _nb_lfl_run(); for _ in 2:20; r == _nb_lfl_run() || return Int64(-1); end; r + n), Int64(0)),
+    ("syntax_late_modifier_edge_cases", (n::Int64) -> (_nb_le_intermediate(), _nb_le_complicated(), _nb_le_throwing()), Int64(0)),
+    ("syntax_late_modifier_final_field", (n::Int64) -> _nb_rep20(_nb_lf_run), Int64(0)),
+    ("syntax_late_modifier_final_local_var", (n::Int64) -> _nb_rep20(_nb_lfl_run), Int64(0)),
     ("syntax_late_modifier_global_var", (v::Int64) -> _nb_lg_run(v), Int64(456)),
-    ("syntax_late_modifier_local_var", (v::Int64) -> (r = _nb_llv_run(v); for _ in 2:20; r == _nb_llv_run(v) || return Int64(-1); end; r), Int64(456)),
-    ("syntax_late_modifier_non_final_field", (v::Int64) -> (r = _nb_ln_run(v); for _ in 2:20; r == _nb_ln_run(v) || return Int64(-1); end; r), Int64(456)),
+    ("syntax_late_modifier_local_var", (v::Int64) -> _nb_rep20(() -> _nb_llv_run(v)), Int64(456)),
+    ("syntax_late_modifier_non_final_field", (v::Int64) -> _nb_rep20(() -> _nb_ln_run(v)), Int64(456)),
     ("syntax_late_modifier_runtime_error", (s::String) -> _nb_lr_run(s), "1"),
     ("syntax_late_modifier_static_field", (v::Int64) -> _nb_ls_run(v), Int64(456)),
     ("syntax_late_modifier_static_final_field", (v::Int64) -> _nb_lsf_run(v), Int64(123)),
-    ("syntax_late_modifier", (n::Int64) -> _dw_bits(_nb_lm_d() == 5, _nb_lm_e() == 6, _NbLmC().f == 7, _nb_lm_g(_NbLmC()) == 8) + n, Int64(0)),
+    ("syntax_late_modifier", (n::Int64) -> _dw_facts(_nb_lm_d(), _nb_lm_e(), _NbLmC().f, _nb_lm_g(_NbLmC())), Int64(0)),
     ("syntax_non_null_assertion", (n::Int64) -> (c = _NbNnC(); g = _nb_nn_f; i = n; x13 = [something((t = i; i += 1; t))];
-        _dw_bits([something(n)] isa Vector{Int64}, something(true) === true, something("foo") == "foo", something(:foo) === :foo,
+        _dw_facts([something(n)] isa Vector{Int64}, something(true) === true, something("foo") == "foo", something(:foo) === :foo,
                  something([1]) == [1], something(Dict(1 => 2)) == Dict(1 => 2), something(Set([1])) == Set([1]), something(_NbNnC()) === c,
-                 _nb_code(() -> [something(_nb_nn_f())]) == 8, _nb_code(() -> [something(_nb_nn_x(c))]) == 8, _nb_code(() -> [something(g())]) == 8,
-                 x13 == [0] && i == 1)), Int64(0)),
+                 _nb_code(() -> [something(_nb_nn_f())]), _nb_code(() -> [something(_nb_nn_x(c))]), _nb_code(() -> [something(g())]),
+                 x13 == [0], i)), Int64(0)),
     ("syntax_null_assertion_ambiguous", (n::Int64) -> (a = _nb_am_null(n); c1 = _nb_code(() -> throw(something(a))); x1 = () -> something(a);
         c2 = _nb_code(x1); x3::Int64 = Int64(0); c3 = _nb_code(() -> (x3 = something(a))); x4::Union{Nothing,Int64} = Int64(0);
         c4 = _nb_code(() -> (x4 = something(a))); x5 = true ? nothing : something(a); x6 = 2; i1 = _nb_am_null(Int64(2)); p6 = x6 * something(i1);
         x7 = _NbAmC(); i2 = _nb_am_null(n); c7 = _nb_code(() -> _nb_am_mul(x7, something(i2))); x8 = _nb_am_null(Int64(2)); p8 = -something(x8);
         x10 = _nb_am_neg(something(_NbAmC()));
-        _nb_pack(c1, c2, c3, c4, c7) * 64 + _dw_bits(x3 == 0, x4 == 0, x5 === nothing, p6 == 4, p8 == -2, x10 === nothing)), Int64(0)),
+        _dw_facts(c1, c2, c3, x3, c4, x4 == 0, x5 === nothing, p6, c7, p8, x10 === nothing)), Int64(0)),
     ("syntax_nullable_type_ambiguous", (k::Bool) -> (a1 = k; x1 = Set([(a1::Bool) ? -3 : 3]); a2 = Int64(0); x2 = Set([a2 isa Int64 ? -3 : 3]);
         a3 = _NbTaC(); x3 = Set([_nb_ta_mul(a3, Int64) ? -3 : 3]); x4 = Set([a1 isa Union{Nothing,Bool} ? -3 : 3]); x5 = Dict(something(a1 isa Bool, true) => 3);
-        _dw_bits(x1 isa AbstractSet, -3 in x1, x2 isa AbstractSet, -3 in x2, x3 isa AbstractSet, -3 in x3, x4 isa AbstractSet, -3 in x4,
-                 x5 isa AbstractDict, x5[true] == 3)), true),
-    ("syntax_nullable_type", (n::Int64) -> (x1 = Union{Nothing,Int64}[nothing]; x2 = Union{Nothing,Core.Int64}[nothing]; x3 = Union{Nothing,Vector{Int64}}[nothing];
-        x4 = Union{Nothing,Function}[nothing];
-        _dw_bits(x1 isa Vector{Union{Nothing,Int64}}, x1 isa Vector{Int64}, x2 isa Vector{Union{Nothing,Int64}}, x2 isa Vector{Int64},
-                 x3 isa Vector{Union{Nothing,Vector{Int64}}}, x3 isa Vector{Vector{Int64}}, x4 isa Vector{Union{Nothing,Function}}, x4 isa Vector{Function}) + n), Int64(0)),
-    ("syntax_required_modifier", (n::Int64) -> _nb_rm_f(i = 2n) * 100 + _nb_rm_m(_NbRmC(), 4n, i = 5n), Int64(1)),
+        _dw_facts(x1 isa AbstractSet, -3 in x1, x2 isa AbstractSet, -3 in x2, x3 isa AbstractSet, -3 in x3, x4 isa AbstractSet, -3 in x4,
+                 x5 isa AbstractDict, x5[true])), true),
+    ("syntax_nullable_type", (n::Int64) -> (x1 = n == 0 ? Union{Nothing,Int64}[nothing] : Int64[n]; x2 = n == 0 ? Union{Nothing,Core.Int64}[nothing] : Core.Int64[n];
+        x3 = n == 0 ? Union{Nothing,Vector{Int64}}[nothing] : [Int64[n]]; x4 = n == 0 ? Union{Nothing,Function}[nothing] : Function[_nb_fe_fn];
+        _dw_facts(x1 isa Vector{Union{Nothing,Int64}}, x1 isa Vector{Int64}, x2 isa Vector{Union{Nothing,Int64}}, x2 isa Vector{Int64},
+                 x3 isa Vector{Union{Nothing,Vector{Int64}}}, x3 isa Vector{Vector{Int64}}, x4 isa Vector{Union{Nothing,Function}}, x4 isa Vector{Function})), Int64(0)),
+    ("syntax_required_modifier", (n::Int64) -> _dw_facts(_nb_rm_f(i = 2n), _nb_rm_m(_NbRmC(), 4n, i = 5n)), Int64(1)),
     ("syntax_required_modifier_dynamic_error", (s::String) -> (f = _NbRdFoo(); closure = (; a::String, b::String, c::String, d::String) -> ncodeunits(a) + ncodeunits(b) + ncodeunits(c) + ncodeunits(d);
-        _nb_rd_foo(f, a = s, b = s, c = s, d = s) * 4096 + _nb_pack(_nb_code(() -> _nb_rd_foo(f, a = s, b = s, d = s)), _nb_code(() -> _nb_rd_baz(a = s, c = s, d = s)),
+        _dw_facts(_nb_rd_foo(f, a = s, b = s, c = s, d = s), _nb_code(() -> _nb_rd_foo(f, a = s, b = s, d = s)), _nb_code(() -> _nb_rd_baz(a = s, c = s, d = s)),
             _nb_code(() -> closure(a = s, c = s, d = s)))), "aa"),
-    ("type_equality_function_type_equality", (n::Int64) -> _dw_bits(_nb_fe_same(_nb_fe_fn, _nb_fe_fn) == 3, _nb_fe_same(_nb_fe_fn, _nb_fe_fn2) == 1,
-        _nb_fe_same(_nb_fe_void_to_int, _nb_fe_void_to_int2) == 1, _nb_fe_same(_nb_fe_pos_nullable, _nb_fe_pos_nullable2) == 1,
-        _nb_fe_same(_nb_fe_opt, _nb_fe_opt2) == 1, _nb_fe_same(_nb_fe_opt_nullable, _nb_fe_opt_nullable2) == 1, _nb_fe_same(_nb_fe_named, _nb_fe_named2) == 1,
-        _nb_fe_same(_nb_fe_required, _nb_fe_required2) == 1, _nb_fe_same(_nb_fe_opt, _nb_fe_opt_nullable) == 1,
-        _nb_code(() -> _nb_fe_required()) == _nb_code(() -> _nb_fe_named())) * 64 + _nb_fe_sig(_nb_fe_opt) * 4 + n, Int64(0)),
-    ("type_equality_generic_function_type_equality", (n::Int64) -> _dw_bits(_nb_ge_same(_nb_ge_fn, _nb_ge_fn2) == 1, _nb_ge_same(_nb_ge_pos_t, _nb_ge_pos_s) == 1,
-        _nb_ge_same(_nb_ge_pos_nullable_t, _nb_ge_pos_nullable_s) == 1, _nb_ge_same(_nb_ge_opt_t, _nb_ge_opt_s) == 1,
-        _nb_ge_same(_nb_ge_named_t, _nb_ge_named_s) == 1, _nb_ge_same(_nb_ge_required_t, _nb_ge_required_s) == 1,
-        _nb_code(() -> _nb_ge_named_t()) == _nb_code(() -> _nb_ge_required_t())) * 64 + _nb_ge_sig(_nb_ge_pos_nullable_t) + n, Int64(0)),
-    ("type_equality_regress42246", (n::Int64) -> (a = _NbRgA{Int64}();
-        _dw_bits(_nb_rg_fn(a) === nothing, _nb_rg_fn(a) isa Union{Nothing,Int64}, applicable(_nb_rg_gn, a, String, nothing), applicable(_nb_rg_gn, a, String, "s"),
-                 applicable(_nb_rg_gn, a, String, n), _nb_rg_hn(a, String) isa Union{Nothing,String})), Int64(0)),
-    ("type_object_equality", (n::Int64) -> (a = _NbToA(); b = _NbToB();
-        _dw_bits(_NbToA == _NbToA, _NbToB == _NbToB, _NbToA == _NbToB, _NbToA == typeof(a), _NbToB == typeof(b), typeof(a) == typeof(b), _NbToA == Int64,
-                 _NbToA == 123, Int64 == Int64, Int64 == typeof(n), Int64 == typeof(0x8000000000000000), String == typeof("x"), String == typeof("\U1D11E"),
-                 _nb_to_type(Union{Nothing,Int64}) == _nb_to_type(Union{Nothing,Int64}), _nb_to_type(Union{Nothing,Int64}) == _nb_to_type(Int64),
-                 _nb_to_type(Int64) == _nb_to_type(Union{Nothing,Int64}), _nb_to_type(Int64) == _nb_to_type(Int64))), Int64(0)),
+    ("type_equality_function_type_equality", (n::Int64) -> (w = n == 0 ? _NB_FE_REQ : _NB_FE_NAMED;
+        _dw_facts(_nb_fn_eq(n == 0 ? _NB_FE_FN : _NB_FE_V2I, _NB_FE_FN2), _nb_fn_eq(n == 0 ? _NB_FE_V2I : _NB_FE_V2NI, _NB_FE_V2I2),
+            _nb_fn_eq(n == 0 ? _NB_FE_V2NI : _NB_FE_V2I, _NB_FE_V2NI2), _nb_fn_eq(n == 0 ? _NB_FE_PN : _NB_FE_OPT, _NB_FE_PN2),
+            _nb_fn_eq(n == 0 ? _NB_FE_OPT : _NB_FE_ON, _NB_FE_OPT2), _nb_fn_eq(n == 0 ? _NB_FE_ON : _NB_FE_OPT, _NB_FE_ON2),
+            _nb_fn_eq(n == 0 ? _NB_FE_NAMED : _NB_FE_REQ, _NB_FE_NAMED2), _nb_fn_eq(n == 0 ? _NB_FE_NN : _NB_FE_NAMED, _NB_FE_NN2),
+            _nb_fn_eq(n == 0 ? _NB_FE_REQ : _NB_FE_NAMED, _NB_FE_REQ2), _nb_fn_eq(n == 0 ? _NB_FE_RN : _NB_FE_REQ, _NB_FE_RN2),
+            _nb_fn_eq(n == 0 ? _NB_FE_REQ : _NB_FE_NAMED2, _NB_FE_NAMED), _nb_code(() -> w.f()))), Int64(0)),
+    ("type_equality_generic_function_type_equality", (n::Int64) -> (w = n == 0 ? _NB_GE_RT : _NB_GE_NT;
+        _dw_facts(_nb_fn_eq(n == 0 ? _NB_GE_FN : _NB_GE_V2T, _NB_GE_FN2), _nb_fn_eq(n == 0 ? _NB_GE_V2T : _NB_GE_FN, _NB_GE_V2S),
+            _nb_fn_eq(n == 0 ? _NB_GE_PT : _NB_GE_PNT, _NB_GE_PS), _nb_fn_eq(n == 0 ? _NB_GE_PNT : _NB_GE_PT, _NB_GE_PNS),
+            _nb_fn_eq(n == 0 ? _NB_GE_OT : _NB_GE_ONT, _NB_GE_OS), _nb_fn_eq(n == 0 ? _NB_GE_ONT : _NB_GE_OT, _NB_GE_ONS),
+            _nb_fn_eq(n == 0 ? _NB_GE_NT : _NB_GE_RT, _NB_GE_NS), _nb_fn_eq(n == 0 ? _NB_GE_NNT : _NB_GE_NT, _NB_GE_NNS),
+            _nb_fn_eq(n == 0 ? _NB_GE_RT : _NB_GE_NT, _NB_GE_RS), _nb_fn_eq(n == 0 ? _NB_GE_RNT : _NB_GE_RT, _NB_GE_RNS),
+            _nb_fn_eq(n == 0 ? _NB_GE_NT : _NB_GE_RS, _NB_GE_RT), _nb_fn_eq(n == 0 ? _NB_GE_NNT : _NB_GE_RNS, _NB_GE_RNT),
+            _nb_code(() -> w.f()))), Int64(0)),
+    ("type_equality_regress42246", (n::Int64) -> (a = n == 0 ? _NbRgA{Int64}(nothing) : _NbRgA{String}("s"); S = n == 0 ? String : Int64;
+        p = n == 0 ? nothing : 1.5; Sh = n == 0 ? String : n;
+        _dw_facts(_nb_rg_fn(a) === nothing, _nb_rg_fn(a) isa Union{Nothing,Int64}, applicable(_nb_rg_gn, a, S, p), applicable(_nb_rg_gn, a, S, "s"),
+                 applicable(_nb_rg_gn, a, S, n), applicable(_nb_rg_hn, a, Sh))), Int64(0)),
+    ("type_object_equality", (n::Int64) -> (a = n == 0 ? _NbToA() : _NbToB(); b = n <= 1 ? _NbToB() : _NbToA(); i = n == 0 ? n : _NbToA();
+        x = n == 0 ? Int64(123) : _NbToA; big = n == 0 ? 0x8000000000000000 : n; s = n == 0 ? "x" : n; u = n == 0 ? "\U1D11E" : 1.5;
+        Q1 = n == 0 ? Union{Nothing,Int64} : Int64; Q2 = n == 0 ? Union{Nothing,Int64} : Int64; P1 = n == 0 ? Int64 : Union{Nothing,Int64};
+        P2 = n == 0 ? Int64 : Union{Nothing,Int64};
+        _dw_facts(_NbToA == typeof(a), _NbToB == typeof(b), typeof(a) == typeof(b), typeof(a) == typeof(i), typeof(a) == x, Int64 == typeof(i),
+                 typeof(i) == typeof(big), String == typeof(s), String == typeof(u), _nb_to_type(Q1) == _nb_to_type(Q2),
+                 _nb_to_type(Q1) == _nb_to_type(P1), _nb_to_type(P1) == _nb_to_type(Q2), _nb_to_type(P1) == _nb_to_type(P2))), Int64(0)),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/patterns (test/dart_tests.toml, dev/LEDGER.md D41) ----
 # Each case is named by the dart file's path under tests/language/patterns, `/` written `_`, less
-# `_test`. A pattern is written as Julia destructuring and if/elseif chains of isa tests, comparisons
-# and length checks; a switch no case matches throws ErrorException; a throw is coded by _pt_ecode.
+# `_test`; a case returns its facts as a tuple or a vector. A pattern is written as Julia destructuring
+# and if/elseif chains of isa tests, comparisons and length checks; a switch no case matches throws
+# ErrorException; a throw is coded by _pt_ecode.
 _pt_nomatch()::Union{} = throw(ErrorException("no case matched"))
 _pt_ecode(e) = e isa TypeError ? Int64(1) : e isa ErrorException ? Int64(2) : e isa MethodError ? Int64(3) :
     e isa ArgumentError ? Int64(4) : e isa KeyError ? Int64(5) : e isa BoundsError ? Int64(6) : Int64(9)
 _pt_throws(f) = (try; f(); Int64(0); catch e; _pt_ecode(e); end)
+# a function value with its dart function type as type parameters (argument tuple A, result R), so a
+# function-type test is an isa (implicit_instantiation, non_interface_object_pattern, object_pattern_inference)
+struct _PtNioFn{A<:Tuple,R,F}
+    f::F
+end
+_PtNioFn{A,R}(f::F) where {A<:Tuple,R,F} = _PtNioFn{A,R,F}(f)
+_pt_nio_pick(n::Int64, o) = n == 1 ? o : nothing
 # call_tear_off: a callable struct torn off to a closure where a function is expected, kept as itself
 # when destructured (so a function test refutes it)
 struct _PtCallC end
@@ -5287,7 +5585,7 @@ function _pt_cfd(n::Int64, s::String)
     local c = _PtCfdC()
     (x1,) = dl::Vector{Int64}
     (x2,) = l
-    return _dw_bits(n < big::Int64,
+    return _dw_facts(n < big::Int64,
         di::Int64 == 123, _pt_throws(() -> ds::Int64) == 1, di isa Int64, !(ds isa Int64),
         x1 == 123, _pt_throws(() -> ((y,) = dls::Vector{Int64}; y)) == 1, dl isa Vector{Int64} && length(dl) == 1, !(dls isa Vector{Int64}),
         (dm::Dict{String,Int64})["x"] == 123, _pt_throws(() -> (dms::Dict{String,Int64})["x"]) == 1, dm isa Dict{String,Int64} && haskey(dm, "x"),
@@ -5346,11 +5644,7 @@ function _pt_fb(b::Bool, e::_PtFbE)
         (nb::Bool) isa Bool ? 0 : _pt_nomatch(), something(nb) isa Bool ? 0 : _pt_nomatch(), (b isa Bool) ? 0 : _pt_nomatch(),
         e === _pt_fb_e1 ? 0 : e === _pt_fb_e2 ? 1 : _pt_nomatch(), (b, e) isa Tuple{Bool,_PtFbE} ? 0 : _pt_nomatch(),
         _pt_fb_nullable(nothing), _pt_fb_enum(e), _pt_fb_enum(nothing))
-    local s = Int64(0)
-    for r in rs
-        s = 3s + r
-    end
-    return s
+    return rs
 end
 # exhaustiveness/issue52048: a switch over an abstract type with one subtype that mixes in a trait
 abstract type _PtI52048A end
@@ -5449,7 +5743,7 @@ function _pt_gc_single(v::Vector{String})
     local r2 = a == "one" && b == "two"
     a = "after"
     b = "then"
-    return _dw_bits(r1, r2, a == "after" && b == "then", string(ca(), " ", cb()) == "after then")
+    return _dw_facts(r1, r2, a == "after" && b == "then", string(ca(), " ", cb()) == "after then")
 end
 function _pt_gc_shared(v::Vector{String})
     length(v) == 3 || return Int64(0)
@@ -5463,7 +5757,7 @@ function _pt_gc_shared(v::Vector{String})
     local r1 = a == "three"
     local r2 = string(c1(), " ", c2(), " ", c3()) == "one two three"
     a = "after"
-    return _dw_bits(r1, r2, a == "after", string(c1(), " ", c2(), " ", c3()) == "one two three")
+    return _dw_facts(r1, r2, a == "after", string(c1(), " ", c2(), " ", c3()) == "one two three")
 end
 # guard_scope: a pattern variable read in the guard of a switch statement, a switch expression, an
 # if-case and a collection element
@@ -5489,7 +5783,7 @@ function _pt_gs(v::String)
         _pt_gs_guard(a) && push!(list, "element")
     end
     local r4 = _pt_gs_expect("value") && length(list) == 1
-    return _dw_bits(r1, r2, r3, r4)
+    return _dw_facts(r1, r2, r3, r4)
 end
 # identifier_when_not: a constant, a module-qualified constant and a named tuple's constant matched
 # with a negated guard in switches, if-cases and list, map and set elements
@@ -5497,7 +5791,7 @@ const _PT_IWN_ONE = 1
 const _PT_IWN_VALUES = (one = 1,)
 function _pt_iwn(x::Int64)
     local ks = (_PT_IWN_ONE, (@__MODULE__)._PT_IWN_ONE, _PT_IWN_VALUES.one, (@__MODULE__)._PT_IWN_VALUES.one)
-    local s = Int64(0)
+    local facts = Bool[]
     for k in ks
         local sw = (x == k && !false) ? 1 : 0
         local ex = (x == k && !false) ? 0 : _pt_nomatch()
@@ -5505,18 +5799,25 @@ function _pt_iwn(x::Int64)
         local li = [(x == k && !false) ? "" : "Should have matched"] == [""]
         local mp = Dict((x == k && !false) ? ("" => "") : ("" => "Should have matched")) == Dict("" => "")
         local st = Set([(x == k && !false) ? "" : "Should have matched"]) == Set([""])
-        s = 64s + _dw_bits(sw == 1, ex == 0, ic == 1, li, mp, st)
+        push!(facts, sw == 1, ex == 0, ic == 1, li, mp, st)
     end
-    return s
+    return facts
 end
-# implicit_instantiation: a generic function instantiated at Int64 (a closure accepting only Int64)
-# where a function of Int64 is expected, kept generic when destructured; told apart by applicable
+# implicit_instantiation: a generic function value (_PtGenFn) instantiated to an Int64 function value
+# (_PtNioFn{Tuple{Int64},Int64}) where IntFn is expected, kept generic when destructured
+struct _PtGenFn{F}
+    f::F
+end
 _pt_ii_id(t) = t
-_pt_ii_inst() = (x::Int64) -> _pt_ii_id(x)
-_pt_ii_is_intfn(f) = applicable(f, Int64(1)) && !applicable(f, "s")
-_pt_ii_is_tfn(f) = applicable(f, Int64(1)) && applicable(f, "s")
+_pt_ii_id2(t) = t
+const _PT_II_ID = _PtGenFn(_pt_ii_id)
+const _PT_II_ID2 = _PtGenFn(_pt_ii_id2)
+_pt_ii_inst(g::_PtGenFn) = _PtNioFn{Tuple{Int64},Int64}((x::Int64) -> g.f(x)::Int64)
+_pt_ii_is_intfn(f) = f isa _PtNioFn{Tuple{Int64},Int64}
+_pt_ii_is_tfn(f) = f isa _PtGenFn
+_pt_ii_call(f::_PtNioFn{Tuple{Int64},Int64}, x::Int64) = f.f(x)
 struct _PtIiCompare end
-_pt_ii_lt(::_PtIiCompare, f) = _pt_ii_is_tfn(f)
+_pt_ii_lt(::_PtIiCompare, f::_PtNioFn{Tuple{Int64},Int64}) = _pt_ii_is_tfn(f)
 # int_to_double: an Int64 converted to Float64 by a typed declaration, an assignment and a comparison
 # with a Float64; a list of Int64 is no list of Float64
 struct _PtDoubleComparer
@@ -5531,7 +5832,7 @@ function _pt_itd(n::Int64)
     local c = _PtDoubleComparer(12.34)
     local v = [n]
     local result = v isa Vector{Float64} ? "wrong" : "ok"
-    return _dw_bits(r1, r2, !_pt_dc_gt(c, 345), _pt_dc_gt(c, 3), !(v isa Vector{Float64}), result == "ok")
+    return _dw_facts(r1, r2, !_pt_dc_gt(c, 345), _pt_dc_gt(c, 3), !(v isa Vector{Float64}), result == "ok")
 end
 # invalid_inside_unary_pattern_parentheses: casts, null asserts (something) and null checks nested in
 # one another, and relational patterns under a null check
@@ -5546,8 +5847,9 @@ _pt_iup_ncna(x) = something(x) !== nothing
 _pt_iup_ncnc(x) = x !== nothing && x !== nothing
 _pt_iup_eq(x) = x !== nothing && x == 1
 _pt_iup_gt(x) = x !== nothing && x > 1
-# issue_52439: a declaration destructuring a switch expression's tuple into an Int64 and a nullable tuple
-_pt_i52439_sw(foo::Int64)::Tuple{Int64,Union{Nothing,Tuple{Int64}}} = (Int64(42), nothing)
+# issue_52439: a declaration destructuring a switch expression's tuple (built from the scrutinee) into an
+# Int64 and a nullable tuple
+_pt_i52439_sw(foo::Int64)::Tuple{Int64,Union{Nothing,Tuple{Int64}}} = (div(foo, 2), foo > 0 ? nothing : (foo,))
 # issue52409: an object pattern on a field function that never returns, over a value not of its type
 struct _PtI52409A end
 _pt_i52409_never(::_PtI52409A)::Union{} = throw(ErrorException("0"))
@@ -5569,20 +5871,19 @@ function _pt_i54559(s::String)
     end
     return false
 end
-# non_interface_object_pattern: function values told apart by the argument types they accept
-# (hasmethod for dart's function types), then nothing and Int64
-_pt_nio_function() = nothing
-_pt_nio_int(i::Int64) = i
-_pt_nio_string(s::String) = s
-_pt_nio_bool(b::Bool) = b
-_pt_nio_dynamic(d) = d
-_pt_nio_multi(i::Int64, s::String) = nothing
+# non_interface_object_pattern: function values matched by isa against function types, then nothing and Int64
+const _PT_NIO_FUNCTION = _PtNioFn{Tuple{},Nothing}(() -> nothing)
+const _PT_NIO_INT = _PtNioFn{Tuple{Int64},Int64}((i::Int64) -> i)
+const _PT_NIO_STRING = _PtNioFn{Tuple{String},String}((s::String) -> s)
+const _PT_NIO_BOOL = _PtNioFn{Tuple{Bool},Bool}((b::Bool) -> b)
+const _PT_NIO_DYNAMIC = _PtNioFn{Tuple{Any},Any}(d -> d)
+const _PT_NIO_MULTI = _PtNioFn{Tuple{Int64,String},Nothing}((i::Int64, s::String) -> nothing)
 function _pt_nio(::Type{T}, o) where {T}
-    hasmethod(o, Tuple{}) && return Int64(1)
-    hasmethod(o, Tuple{Int64}) && !hasmethod(o, Tuple{String}) && return Int64(2)
-    hasmethod(o, Tuple{String}) && !hasmethod(o, Tuple{Int64}) && return Int64(3)
-    hasmethod(o, Tuple{T}) && return Int64(4)
-    hasmethod(o, Tuple{Any}) && return Int64(5)
+    o isa _PtNioFn{Tuple{},Nothing} && return Int64(1)
+    o isa _PtNioFn{Tuple{Int64},Int64} && return Int64(2)
+    o isa _PtNioFn{Tuple{String},String} && return Int64(3)
+    o isa _PtNioFn{Tuple{T},T} && return Int64(4)
+    o isa _PtNioFn{Tuple{Any},Any} && return Int64(5)
     o === nothing && return Int64(6)
     o isa Int64 && return Int64(7)
     return Int64(0)
@@ -5595,7 +5896,8 @@ _pt_nop_potential(::Type{T}, x) where {T} = x isa T
 _pt_nop_nonnull(::Type{T}, x) where {T} = x isa T && iseven(x)
 _pt_nop_fields(x) = x isa _PtNopA ? (typeof(x) == typeof(x) && hash(x) == hash(x)) : false
 # object_pattern_inference: object patterns over parametric types: a covariant (<:) parameter, a bound,
-# an f-bounded type, a subtype adding a parameter, a parametric alias and a function type (hasmethod)
+# an f-bounded type, a subtype adding a parameter, a parametric alias and a function type (an isa with
+# a contravariant argument tuple, >:, and a covariant result, <:)
 abstract type _PtOpiB{T} end
 struct _PtOpiC{T} <: _PtOpiB{T}
     t::T
@@ -5634,7 +5936,10 @@ struct _PtOpiH1{T,U}
 end
 const _PtOpiH2 = _PtOpiH1{<:Number,String}
 _pt_opi_alias(o) = o isa _PtOpiH2
-_pt_opi_fntype(o) = hasmethod(o, Tuple{Number})
+const _PT_OPI_FN_OBJECT = _PtNioFn{Tuple{Any},String}((o::Any) -> string(o))
+const _PT_OPI_FN_NUM = _PtNioFn{Tuple{Number},String}((m::Number) -> string(m))
+const _PT_OPI_FN_INT = _PtNioFn{Tuple{Int64},String}((i::Int64) -> string(i))
+_pt_opi_fntype(o) = o isa _PtNioFn{>:Tuple{Number},<:String}
 # primitive_switch: switch statements and expressions over two enums, separately and over their union
 @enum _PtPsA _pt_ps_aa _pt_ps_ab _pt_ps_ac
 @enum _PtPsB _pt_ps_ba _pt_ps_bb _pt_ps_bc
@@ -5698,38 +6003,38 @@ function _pt_rto(n::Int64)
     local r3 = rec isa _PtRtoR3{Int64,String,Bool} && rec[1] == 1 && rec[3].s5 == true
     local r4 = rec isa _PtRtoR3{Int64,String,Bool} && rec[1] == 1 && _pt_rto_ext3(rec) == "3" && rec[3].s5 == true &&
         _pt_rto_ext2p64p1(rec) == "2p64+1"
-    return _dw_bits(r1, r2, r3, r4)
+    return _dw_facts(r1, r2, r3, r4)
 end
 # regress_59613: if-cases binding the loop variable's name again, in nested scopes, at three types
 struct _PtR59613Obj end
 function _pt_r59613(x::Float64)
-    local s = Int64(0)
+    local seen = Int64[]
     for thing in Union{Float64,String,_PtR59613Obj}[x, "foo", _PtR59613Obj()]
         if thing isa Float64
             let thing = thing::Float64
-                s = 10s + (thing == x ? 1 : 0)
+                push!(seen, thing == x ? 1 : 0)
             end
         elseif thing isa String
             let thing = thing::String
-                s = 10s + ncodeunits(thing)
+                push!(seen, ncodeunits(thing))
             end
         elseif thing isa Any
             let thing = thing
-                s = 10s + (thing isa _PtR59613Obj ? 5 : 0)
+                push!(seen, thing isa _PtR59613Obj ? 5 : 0)
             end
         else
             throw(ErrorException("unknown"))
         end
     end
-    return s
+    return seen
 end
 # relational_pattern_expression_precedence: relational patterns (==, !=, <=, <, >=, >) whose operand is
 # a bitwise, shift, additive, multiplicative, unary, member or primary expression
-_pt_rpe(op::F, n::Int64) where {F} = _dw_bits(op(7 + n, 5 | 6), op(3 + n, xor(5, 6)), op(4 + n, 5 & 6), op(4 + n, 1 << 2), op(1 + n, 4 >> 2),
+_pt_rpe(op::F, n::Int64) where {F} = _dw_facts(op(7 + n, 5 | 6), op(3 + n, xor(5, 6)), op(4 + n, 5 & 6), op(4 + n, 1 << 2), op(1 + n, 4 >> 2),
     op(4 + n, 3 + 1), op(2 + n, 3 - 1), op(10 + n, 5 * 2), op(2.5 + n, 5 / 2), op(1 + n, 5 % 2), op(2 + n, div(5, 2)), op(-3 + n, -3),
     op(~3 + n, ~3), op(3 + n, ncodeunits("foo")))
-_pt_rpe_eq(op::F, n::Int64) where {F} = _pt_rpe(op, n) * 4 + _dw_bits(op(n == 0, !false), op(string("xy", 'z'), "xyz"))
-_pt_rpe_ord(op::F, n::Int64) where {F} = _pt_rpe(op, n) * 2 + _dw_bits(op(3 + n, 3))
+_pt_rpe_eq(op::F, n::Int64) where {F} = (_pt_rpe(op, n), op(n == 0, !false), op(string("xy", 'z'), "xyz"))
+_pt_rpe_ord(op::F, n::Int64) where {F} = (_pt_rpe(op, n), op(3 + n, 3))
 # schema: declarations and assignments destructuring by logical-and, a null assert (something), typed
 # and untyped variables, lists (empty, with rest), maps, tuples and object patterns
 function _pt_schema(n::Int64)
@@ -5759,7 +6064,7 @@ function _pt_schema(n::Int64)
     (; y) = nt
     local l = Int64[]
     local x7 = first([n])
-    return _dw_bits(x1(n) == n, y1(1.5) == 1.5, i1 == n, i2 == n, i3 == n, x2 == n, x3 isa Any, isempty(e1), isempty(e2), isempty(x4),
+    return _dw_facts(x1(n) == n, y1(1.5) == 1.5, i1 == n, i2 == n, i3 == n, x2 == n, x3 isa Any, isempty(e1), isempty(e2), isempty(x4),
         x5 == 0, x6 == [n], f1(n) == n && f2(1.5) == 1.5, haskey(d, 0), dm[1](n) == n && dm[2](n) == n, i4 == n && y == "y",
         l isa Vector{Int64}, x7 == n)
 end
@@ -5768,6 +6073,7 @@ end
 const _PT_SCV_LAST = Ref("none")
 _pt_scv_guard(v, label::String) = (_PT_SCV_LAST[] = string(v, ": ", label); true)
 _pt_scv_matched() = (r = _PT_SCV_LAST[]; _PT_SCV_LAST[] = "none"; r)
+_pt_scv_map(a::Int64, b::Bool) = (d = Dict{String,Union{Int64,Bool}}(); d["b"] = b; d["a"] = a; d)
 function _pt_scv_finality(k::Int64, v)
     if (k == 0 && v isa Int64 && _pt_scv_guard(v, "int")) || (k == 1 && v isa Int64 && _pt_scv_guard(v, "final int")) ||
        (k == 2 && _pt_scv_guard(v, "var")) || (k == 3 && _pt_scv_guard(v, "final"))
@@ -5820,9 +6126,10 @@ end
 # unshared and shared cases
 function _pt_scs_body(v::String)
     let x = v
-        let x = "local"
-            return x == "local"
+        local inner = let x = "local"
+            x
         end
+        return (inner == "local", x == v, x == "pattern")
     end
 end
 function _pt_scs_unshared(t::Tuple{String,String})
@@ -5866,72 +6173,71 @@ _pt_v229_ab(m::AbstractDict{String,Int64}) = haskey(m, "a") && haskey(m, "b") ? 
 _g("dart_patterns", Any[
     ("call_tear_off", (n::Int64) -> (c = _PtCallC(); a = _pt_tear(c); (b,) = (_pt_tear(c),); (d,) = [_pt_tear(c)];
         e = Dict("x" => _pt_tear(c))["x"]; f = _PtBox(_pt_tear(c)).value;
-        _dw_bits(a isa Function, a isa _PtCallC, b isa Function, d isa Function, e isa Function, f isa Function, a(n) + b(n) + d(n) + e(n) + f(n) == 5n,
+        _dw_facts(a isa Function, a isa _PtCallC, b isa Function, d isa Function, e isa Function, f isa Function, a(n) == n, b(n) == n, d(n) == n,
+                 e(n) == n, f(n) == n,
                  (c,)[1] isa Function, [c][1] isa Function, Dict("x" => c)["x"] isa Function, _PtBox(c).value isa Function, c(n) == n)), Int64(3)),
     ("cast_from_dynamic", (s::String) -> _pt_cfd(Int64(123), s), "wrong type"),
-    ("exhaustiveness_cast", (s::String) -> _dw_bits(
+    ("exhaustiveness_cast", (s::String) -> _dw_facts(
         _pt_ct_si(s) == "foo", _pt_ct_si(Int64(42)) == "42", _pt_throws(() -> _pt_ct_si(true)) == 1,
         _pt_ct_si_and(s) == "foo", _pt_ct_si_and(Int64(42)) == "4242", _pt_throws(() -> _pt_ct_si_and(true)) == 1,
         _pt_ct_sn(s) == "foo", _pt_ct_sn(Int64(42)) == "42", _pt_throws(() -> _pt_ct_sn(3.14)) == 1,
         _pt_ct_su(s) == "foo", _pt_ct_su(Int64(42)) == "true", _pt_ct_su(Int64(87)) == "false", _pt_throws(() -> _pt_ct_su(true)) == 1,
-        _pt_ct_mm(_PtCtA()) + _pt_ct_mm(_PtCtB()) + _pt_ct_mm(_PtCtC()) == 0,
-        _pt_ct_dm(_PtCtA()) + _pt_ct_dm(_PtCtB()) + _pt_ct_dm(_PtCtC()) == 0, _pt_throws(() -> _pt_ct_dm(true)) == 1,
-        _pt_ct_dmu(_PtCtA()) + _pt_ct_dmu(_PtCtB()) + _pt_ct_dmu(_PtCtC()) == 0, _pt_throws(() -> _pt_ct_dmu(true)) == 1,
+        _pt_ct_mm(_PtCtA()) == 0, _pt_ct_mm(_PtCtB()) == 0, _pt_ct_mm(_PtCtC()) == 0,
+        _pt_ct_dm(_PtCtA()) == 0, _pt_ct_dm(_PtCtB()) == 0, _pt_ct_dm(_PtCtC()) == 0, _pt_throws(() -> _pt_ct_dm(true)) == 1,
+        _pt_ct_dmu(_PtCtA()) == 0, _pt_ct_dmu(_PtCtB()) == 0, _pt_ct_dmu(_PtCtC()) == 0, _pt_throws(() -> _pt_ct_dmu(true)) == 1,
         _pt_ct_dms(_PtCtA()) == 0, _pt_throws(() -> _pt_ct_dms(_PtCtB())) == 1, _pt_throws(() -> _pt_ct_dms(_PtCtC())) == 1,
         _pt_throws(() -> _pt_ct_dms(true)) == 1,
         _pt_ct_list(Int64[]) == 0, _pt_ct_list(Int64[0]) == 1, _pt_ct_list(Int64[0, 1]) == 0, _pt_throws(() -> _pt_ct_list(true)) == 1), "foo"),
-    ("exhaustiveness_extension_type", (s::String) -> (s4 = Int64(0);
-        for r in (_pt_et_null1(nothing), _pt_et_null1(s), _pt_et_null2(nothing), _pt_et_null2(s), _pt_et_null3(nothing), _pt_et_null3(s),
-                  _pt_et_num1(Int64(42)), _pt_et_num1(3.14), _pt_et_num2(Int64(42)), _pt_et_num2(3.14), _pt_et_num3(Int64(42)), _pt_et_num3(3.14),
-                  _pt_et_bool1(true), _pt_et_bool1(false), _pt_et_bool2(true), _pt_et_bool2(false), _pt_et_bool3(true), _pt_et_bool3(false),
-                  _pt_et_sealed1(_PtEtA()), _pt_et_sealed1(_PtEtB()), _pt_et_sealed2(_PtEtA()), _pt_et_sealed2(_PtEtB()),
-                  _pt_et_sealed3(_PtEtA()), _pt_et_sealed3(_PtEtB()));
-            s4 = 4s4 + r;
-        end; s4), "foo"),
+    ("exhaustiveness_extension_type", (n::Int64) -> (s1 = n == 1 ? nothing : "foo"; s2 = n == 1 ? "foo" : nothing;
+        m1 = n == 1 ? Int64(42) : 3.14; m2 = n == 1 ? 3.14 : Int64(42); b1 = n == 1; b2 = n != 1;
+        e1 = n == 1 ? _PtEtA() : _PtEtB(); e2 = n == 1 ? _PtEtB() : _PtEtA();
+        (_pt_et_null1(s1), _pt_et_null1(s2), _pt_et_null2(s1), _pt_et_null2(s2), _pt_et_null3(s1), _pt_et_null3(s2),
+         _pt_et_num1(m1), _pt_et_num1(m2), _pt_et_num2(m1), _pt_et_num2(m2), _pt_et_num3(m1), _pt_et_num3(m2),
+         _pt_et_bool1(b1), _pt_et_bool1(b2), _pt_et_bool2(b1), _pt_et_bool2(b2), _pt_et_bool3(b1), _pt_et_bool3(b2),
+         _pt_et_sealed1(e1), _pt_et_sealed1(e2), _pt_et_sealed2(e1), _pt_et_sealed2(e2), _pt_et_sealed3(e1), _pt_et_sealed3(e2))), Int64(1)),
     ("exhaustiveness_fallback", (b::Bool) -> _pt_fb(b, _pt_fb_e1), false),
-    ("exhaustiveness_issue52048", (n::Int64) -> _pt_i52048_f(_PtI52048B()) + n, Int64(0)),
+    ("exhaustiveness_issue52048", (n::Int64) -> _pt_i52048_f(_PtI52048B[_PtI52048B()][n]), Int64(1)),
     ("exhaustiveness_list_constant", (n::Int64) -> ncodeunits(_pt_lc([n, 2, 3])), Int64(1)),
-    ("exhaustiveness_nullable_cast", (n::Int64) -> _dw_bits(_pt_nc_tv(Integer, n) == 0, _pt_nc_tv(Int64, n) == 0, _pt_throws(() -> _pt_nc_tv(Int64, nothing)) == 1,
+    ("exhaustiveness_nullable_cast", (n::Int64) -> _dw_facts(_pt_nc_tv(Integer, n) == 0, _pt_nc_tv(Int64, n) == 0, _pt_throws(() -> _pt_nc_tv(Int64, nothing)) == 1,
         _pt_nc_int(n) == 0, _pt_throws(() -> _pt_nc_int(nothing)) == 1, _pt_nc_num(n) == 0, _pt_throws(() -> _pt_nc_num(nothing)) == 1), Int64(42)),
-    ("exhaustiveness_restrictive_cast_pattern_3_2", (n::Int64) -> _pt_throws(() -> _pt_rc_method(_PtRcC())) * 100 +
-        _pt_throws(() -> _pt_rc_method(_PtRcB(true))) * 10 + something(_pt_rc_method(_PtRcA(true))) + n, Int64(0)),
-    ("exhaustiveness_restrictive_cast_pattern_error", (n::Int64) -> _pt_throws(() -> _pt_rc_method(_PtRcC())) + n, Int64(0)),
-    ("exhaustiveness_sealed_cast_3_2", (n::Int64) -> _pt_throws(() -> _pt_sc_method(_PtScA())) * 1000 + _pt_sc_method(_PtScB()) * 100 +
-        _pt_throws(() -> _pt_sc_method(_PtScC())) * 10 + _pt_sc_method(_PtScD()) + n, Int64(0)),
-    ("exhaustiveness_sealed_cast_error", (n::Int64) -> _pt_throws(() -> _pt_sc_method(_PtScA())) * 1000 + _pt_sc_method(_PtScB()) * 100 +
-        _pt_throws(() -> _pt_sc_method(_PtScC())) * 10 + _pt_sc_method(_PtScD()) + n, Int64(0)),
-    ("exhaustiveness_unsound_cast_3_2", (n::Int64) -> _dw_bits(_pt_uc_sound(_PtUcX()) == _pt_uc_unsound(_PtUcX()),
-        _pt_throws(() -> _pt_uc_unsound(_PtUcZ())) == 2) + n, Int64(0)),
-    ("flow_analysis_boolean_condition", (n::Int64) -> _pt_bc_assign(n) * 100 + _pt_bc_declare(n) * 10 + _pt_bc_assign(nothing) + _pt_bc_declare(nothing), Int64(0)),
-    ("flow_analysis_list_pattern_with_nullable_list_scrutinee", (n::Int64) -> _pt_lpn(nothing) * 10 + _pt_lpn(Union{Nothing,Int64}[]) + n, Int64(0)),
-    ("flow_analysis_null_check_in_guard", (n::Int64) -> _dw_bits(
+    ("exhaustiveness_restrictive_cast_pattern_3_2", (n::Int64) -> _dw_facts(_pt_throws(() -> _pt_rc_method(_PtRcC())),
+        _pt_throws(() -> _pt_rc_method(_PtRcB(n == 0))), something(_pt_rc_method(_PtRcA(n == 0)))), Int64(0)),
+    ("exhaustiveness_restrictive_cast_pattern_error", (n::Int64) -> _pt_throws(() -> _pt_rc_method(n == 0 ? _PtRcC() : _PtRcA(true))), Int64(0)),
+    ("exhaustiveness_sealed_cast_3_2", (n::Int64) -> (l = Union{_PtScA,_PtScB,_PtScC,_PtScD}[_PtScA(), _PtScB(), _PtScC(), _PtScD()];
+        _dw_facts(_pt_throws(() -> _pt_sc_method(l[n])), _pt_sc_method(l[n + 1]), _pt_throws(() -> _pt_sc_method(l[n + 2])), _pt_sc_method(l[n + 3]))), Int64(1)),
+    ("exhaustiveness_sealed_cast_error", (n::Int64) -> (l = Union{_PtScA,_PtScB,_PtScC,_PtScD}[_PtScA(), _PtScB(), _PtScC(), _PtScD()];
+        _dw_facts(_pt_throws(() -> _pt_sc_method(l[n])), _pt_sc_method(l[n + 1]), _pt_throws(() -> _pt_sc_method(l[n + 2])), _pt_sc_method(l[n + 3]))), Int64(1)),
+    ("exhaustiveness_unsound_cast_3_2", (n::Int64) -> (l = Union{_PtUcX,_PtUcZ}[_PtUcX(), _PtUcZ()];
+        _dw_facts(_pt_uc_sound(l[n]) == _pt_uc_unsound(l[n]), _pt_throws(() -> _pt_uc_unsound(l[n + 1])))), Int64(1)),
+    ("flow_analysis_boolean_condition", (n::Int64) -> _dw_facts(_pt_bc_assign(n), _pt_bc_declare(n), _pt_bc_assign(nothing), _pt_bc_declare(nothing)), Int64(0)),
+    ("flow_analysis_list_pattern_with_nullable_list_scrutinee", (n::Int64) -> _dw_facts(_pt_lpn(nothing), _pt_lpn(Union{Nothing,Int64}[]), _pt_lpn(Union{Nothing,Int64}[n])), Int64(0)),
+    ("flow_analysis_null_check_in_guard", (n::Int64) -> _dw_facts(
         _pt_ncg_stmt(n), !_pt_ncg_stmt(nothing), !_pt_ncg_stmt(""), _pt_ncg_expr(n), !_pt_ncg_expr(nothing), !_pt_ncg_expr(""),
         _pt_ncg_if(n), !_pt_ncg_if(nothing), !_pt_ncg_if(""), _pt_ncg_list(n), !_pt_ncg_list(nothing), !_pt_ncg_list(""),
         _pt_ncg_map(n), !_pt_ncg_map(nothing), !_pt_ncg_map(""), _pt_ncg_set(n), !_pt_ncg_set(nothing), !_pt_ncg_set("")), Int64(0)),
-    ("flow_analysis_pattern_assignment_lookahead", (t::String) -> ncodeunits(_pt_pal(t)) + 1, ""),
-    ("guard_capture", (s::String) -> _pt_gc_single([s, "two"]) * 256 + _pt_gc_single(String[s, "two"]) * 16 + _pt_gc_shared([s, "two", "three"]), "one"),
+    ("flow_analysis_pattern_assignment_lookahead", (t::String) -> ncodeunits(_pt_pal(t)), ""),
+    ("guard_capture", (s::String) -> (_pt_gc_single([s, "two"]), _pt_gc_single(String[s, "two"]), _pt_gc_shared([s, "two", "three"])), "one"),
     ("guard_scope", (s::String) -> _pt_gs(s), "value"),
     ("identifier_when_not", (n::Int64) -> _pt_iwn(n), Int64(1)),
-    ("implicit_instantiation", (n::Int64) -> (a = _pt_ii_inst(); (b,) = (_pt_ii_inst(),); (c,) = [_pt_ii_inst()]; d = Dict("x" => _pt_ii_inst())["x"];
-        e = _PtBox(_pt_ii_inst()).value;
-        _dw_bits(!_pt_ii_lt(_PtIiCompare(), _pt_ii_inst()), _pt_ii_is_intfn(a), !_pt_ii_is_tfn(a), _pt_ii_is_intfn(b), !_pt_ii_is_tfn(b),
-                 _pt_ii_is_intfn(c), !_pt_ii_is_tfn(c), _pt_ii_is_intfn(d), !_pt_ii_is_tfn(d), _pt_ii_is_intfn(e), !_pt_ii_is_tfn(e), a(n) == n,
-                 !_pt_ii_is_intfn((_pt_ii_id,)[1]), !_pt_ii_is_intfn([_pt_ii_id][1]), !_pt_ii_is_intfn(Dict("x" => _pt_ii_id)["x"]),
-                 !_pt_ii_is_intfn(_PtBox(_pt_ii_id).value))), Int64(1)),
+    ("implicit_instantiation", (n::Int64) -> (g = n == 1 ? _PT_II_ID : _PT_II_ID2; a = _pt_ii_inst(g); (b,) = (_pt_ii_inst(g),);
+        (c,) = [_pt_ii_inst(g)]; d = Dict("x" => _pt_ii_inst(g))["x"]; e = _PtBox(_pt_ii_inst(g)).value;
+        _dw_facts(!_pt_ii_lt(_PtIiCompare(), _pt_ii_inst(g)), _pt_ii_is_intfn(a), !_pt_ii_is_tfn(a), _pt_ii_is_intfn(b), !_pt_ii_is_tfn(b),
+                 _pt_ii_is_intfn(c), !_pt_ii_is_tfn(c), _pt_ii_is_intfn(d), !_pt_ii_is_tfn(d), _pt_ii_is_intfn(e), !_pt_ii_is_tfn(e),
+                 _pt_ii_call(a, n) == n, !_pt_ii_is_intfn((g,)[1]), !_pt_ii_is_intfn([g][1]), !_pt_ii_is_intfn(Dict("x" => g)["x"]),
+                 !_pt_ii_is_intfn(_PtBox(g).value))), Int64(1)),
     ("int_to_double", (n::Int64) -> _pt_itd(n), Int64(123)),
-    ("invalid_inside_unary_pattern_parentheses", (n::Int64) -> _dw_bits(_pt_iup_cc(n), _pt_iup_cna(n), _pt_iup_cnc(n), _pt_iup_nac(n), _pt_iup_nana(n),
+    ("invalid_inside_unary_pattern_parentheses", (n::Int64) -> _dw_facts(_pt_iup_cc(n), _pt_iup_cna(n), _pt_iup_cnc(n), _pt_iup_nac(n), _pt_iup_nana(n),
         _pt_iup_nanc(n), _pt_iup_ncc(n), _pt_iup_ncna(n), _pt_iup_ncnc(n), _pt_iup_eq(n + 1), _pt_iup_gt(n + 2),
         _pt_throws(() -> _pt_iup_nana(nothing)) == 4), Int64(0)),
-    ("issue_52439", (n::Int64) -> ((x, y) = _pt_i52439_sw(n); _dw_bits(x == 42, y === nothing)), Int64(84)),
-    ("issue52409", (n::Int64) -> _pt_i52409_f(n) + n, Int64(0)),
-    ("issue54559", (s::String) -> _dw_bits(_pt_i54559(s)), "hello world"),
-    ("non_interface_object_pattern", (n::Int64) -> (s = Int64(0);
-        for r in (_pt_nio(Any, _pt_nio_function), _pt_nio(Any, _pt_nio_int), _pt_nio(Any, _pt_nio_string), _pt_nio(Bool, _pt_nio_bool),
-                  _pt_nio(Any, _pt_nio_bool), _pt_nio(Number, _pt_nio_bool), _pt_nio(Any, _pt_nio_dynamic), _pt_nio(Any, _pt_nio_dynamic),
-                  _pt_nio(Bool, _pt_nio_dynamic), _pt_nio(Any, _pt_nio_multi), _pt_nio(Any, nothing), _pt_nio(Any, n));
-            s = 8s + r;
-        end; s), Int64(0)),
-    ("nullable_object_pattern", (n::Int64) -> _dw_bits(
+    ("issue_52439", (n::Int64) -> ((x, y) = _pt_i52439_sw(n); _dw_facts(x == 42, y === nothing)), Int64(84)),
+    ("issue52409", (n::Int64) -> _pt_i52409_f(n == 0 ? n : _PtI52409A()), Int64(0)),
+    ("issue54559", (s::String) -> _pt_i54559(s), "hello world"),
+    ("non_interface_object_pattern", (n::Int64) -> (_pt_nio(Any, _pt_nio_pick(n, _PT_NIO_FUNCTION)), _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_INT)),
+        _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_STRING)), _pt_nio(Bool, _pt_nio_pick(n, _PT_NIO_BOOL)), _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_BOOL)),
+        _pt_nio(Number, _pt_nio_pick(n, _PT_NIO_BOOL)), _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_DYNAMIC)), _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_DYNAMIC)),
+        _pt_nio(Bool, _pt_nio_pick(n, _PT_NIO_DYNAMIC)), _pt_nio(Any, _pt_nio_pick(n, _PT_NIO_MULTI)), _pt_nio(Any, n == 1 ? nothing : n),
+        _pt_nio(Any, n == 1 ? n : nothing)), Int64(1)),
+    ("nullable_object_pattern", (n::Int64) -> _dw_facts(
         _pt_nop_without(nothing), _pt_nop_without(n), !_pt_nop_without(""),
         _pt_nop_potential(_PtNopA, nothing), _pt_nop_potential(_PtNopA, n), !_pt_nop_potential(_PtNopA, ""),
         !_pt_nop_potential(Int64, nothing), _pt_nop_potential(Int64, n), !_pt_nop_potential(Int64, ""),
@@ -5939,51 +6245,49 @@ _g("dart_patterns", Any[
         !_pt_nop_nonnull(Int64, nothing), _pt_nop_nonnull(Int64, n), !_pt_nop_nonnull(Int64, n + 1), !_pt_nop_nonnull(Int64, ""),
         !_pt_nop_nonnull(Union{}, nothing), !_pt_nop_nonnull(Union{}, n), !_pt_nop_nonnull(Union{}, n + 1), !_pt_nop_nonnull(Union{}, ""),
         _pt_nop_fields(nothing), _pt_nop_fields(n), !_pt_nop_fields("")), Int64(0)),
-    ("object_pattern_inference", (n::Int64) -> _dw_bits(_pt_opi_explicit(_PtOpiC(n)), _pt_opi_simple(_PtOpiC(n)), _pt_opi_dynamic(_PtOpiC(n)),
+    ("object_pattern_inference", (n::Int64) -> _dw_facts(_pt_opi_explicit(_PtOpiC(n)), _pt_opi_simple(_PtOpiC(n)), _pt_opi_dynamic(_PtOpiC(n)),
         !_pt_opi_dynamic(n), _pt_opi_bound(_PtOpiD(n)), !_pt_opi_bound(n), _pt_opi_enclosing(_PtOpiE{Int64,String}(n, ""), _PtOpiE(Set([""]), Set([n]))),
         _pt_opi_fbounded(_PtOpiF2()), !_pt_opi_fbounded(n), _pt_opi_partial(_PtOpiG2(n, Set([n]))), !_pt_opi_partial(_PtOpiG1(n)),
         _pt_opi_alias(_PtOpiH1{Int64,String}(n, "")), _pt_opi_alias(_PtOpiH1{Number,String}(n, "")), !_pt_opi_alias(_PtOpiH1{Any,String}(n, "")),
-        _pt_opi_fntype((o::Any) -> string(o)), _pt_opi_fntype((m::Number) -> string(m)), !_pt_opi_fntype((i::Int64) -> string(i))), Int64(0)),
-    ("primitive_switch", (n::Int64) -> (s = Int64(n);
-        for a in instances(_PtPsA); s = 6s + _pt_ps_expr_a(a); end;
-        for a in instances(_PtPsA); s = 6s + _pt_ps_stmt_a(a); end;
-        for b in instances(_PtPsB); s = 6s + _pt_ps_expr_b(b); end;
-        for b in instances(_PtPsB); s = 6s + _pt_ps_stmt_b(b); end;
-        for i in (instances(_PtPsA)..., instances(_PtPsB)...); s = 6s + _pt_ps_expr_i(i); end;
-        for i in (instances(_PtPsA)..., instances(_PtPsB)...); s = 6s + _pt_ps_stmt_i(i); end; s), Int64(0)),
+        _pt_opi_fntype(_pt_nio_pick(n + 1, _PT_OPI_FN_OBJECT)), _pt_opi_fntype(_pt_nio_pick(n + 1, _PT_OPI_FN_NUM)),
+        !_pt_opi_fntype(_pt_nio_pick(n + 1, _PT_OPI_FN_INT))), Int64(0)),
+    ("primitive_switch", (n::Int64) -> (xa = collect(instances(_PtPsA))[n:end]; xb = collect(instances(_PtPsB))[n:end];
+        xi = _PtPsI[xa; xb]; r = Int64[];
+        for a in xa; push!(r, _pt_ps_expr_a(a)); end; for a in xa; push!(r, _pt_ps_stmt_a(a)); end;
+        for b in xb; push!(r, _pt_ps_expr_b(b)); end; for b in xb; push!(r, _pt_ps_stmt_b(b)); end;
+        for i in xi; push!(r, _pt_ps_expr_i(i)); end; for i in xi; push!(r, _pt_ps_stmt_i(i)); end; r), Int64(1)),
     ("record_type_object_pattern", (n::Int64) -> _pt_rto(n), Int64(1)),
     ("regress_59613", (x::Float64) -> _pt_r59613(x), 42.42),
-    ("relational_pattern_expression_precedence", (n::Int64) -> (s = Int64(0);
-        for b in (_pt_rpe_eq(==, n), _pt_rpe_eq(!=, n), _pt_rpe_ord(<=, n), _pt_rpe_ord(<, n), _pt_rpe_ord(>=, n), _pt_rpe_ord(>, n));
-            s = s * 65537 + b;
-        end; s), Int64(0)),
+    ("relational_pattern_expression_precedence", (n::Int64) -> (_pt_rpe_eq(==, n), _pt_rpe_eq(!=, n), _pt_rpe_ord(<=, n), _pt_rpe_ord(<, n),
+        _pt_rpe_ord(>=, n), _pt_rpe_ord(>, n)), Int64(0)),
     ("schema", (n::Int64) -> _pt_schema(n), Int64(1)),
-    ("shared_case_variable", (n::Int64) -> _dw_bits(
+    ("shared_case_variable", (n::Int64) -> _dw_facts(
         _pt_scv_finality(n, n) == "0: int", _pt_scv_finality(n + 1, n + 1) == "1: final int", _pt_scv_finality(n + 2, n + 2) == "2: var",
         _pt_scv_finality(n + 3, n + 3) == "3: final",
         _pt_scv_type(n, n) == "0: int", _pt_scv_type(n + 1, true) == "true: bool", _pt_scv_type(n + 2, "s") == "s: var",
         _pt_scv_variable(n, "unique") == "unique: unique", _pt_scv_variable(n + 1, "in") == "in: inTwo", _pt_scv_variable(n + 2, "two") == "two: inTwo",
         _pt_scv_annotated(n, "one") == "one: var", _pt_scv_annotated(n + 1, "two") == "two: Object",
         _pt_scv_promoted(n, "one") == "one: var", _pt_scv_promoted(n + 1, "two") == "two: String",
-        _pt_scv_context(Union{Int64,Bool}[n, true]) == "0: 0: list", _pt_scv_context(Dict{String,Union{Int64,Bool}}("a" => n + 1, "b" => true)) == "1: 1: map",
+        _pt_scv_context(Union{Int64,Bool}[n, true]) == "0: 0: list", _pt_scv_context(_pt_scv_map(n + 1, true)) == "1: 1: map",
         _pt_scv_context((a = n + 2, b = true)) == "2: 2: record", _pt_scv_context((a = n + 3, b = [true])) == "3: 3: nested"), Int64(0)),
-    ("switch_case_scope", (s::String) -> _dw_bits(_pt_scs_body(s), _pt_scs_unshared(("pat", "tern")), _pt_scs_shared(("pat", "tern"), Int64(0)),
-        _pt_scs_shared(("pat", "tern"), Int64(1))), "pattern"),
-    ("type_question_before_when", (n::Int64) -> _dw_bits(_pt_tqw_matched(nothing, true), _pt_tqw_matched(n, true), !_pt_tqw_matched(n, false),
+    ("switch_case_scope", (s::String) -> (t = (first(s, 3), s[4:end]);
+        (_pt_scs_body(s), _pt_scs_unshared(t), _pt_scs_shared(t, ncodeunits(s) - 7), _pt_scs_shared(t, ncodeunits(s) - 6))), "pattern"),
+    ("type_question_before_when", (n::Int64) -> _dw_facts(_pt_tqw_matched(nothing, true), _pt_tqw_matched(n, true), !_pt_tqw_matched(n, false),
         _pt_throws(() -> _pt_tqw_matched("", true)) == 1, _pt_tqw_as(true, "a", "b") == "a", _pt_tqw_as(false, "a", "b") == "b",
         _pt_tqw_is(n, "a", "b") == "a", _pt_tqw_is("x", "a", "b") == "b"), Int64(0)),
     ("version_2_29_changes", (n::Int64) -> (m = Dict("a" => n, "b" => n + 1);
-        _dw_bits(_pt_v229_has_a(_PtNoLengthMap(m)), _pt_v229_ab(m) == "a b", _pt_throws(() -> length(_PtNoLengthMap(m))) == 2)), Int64(1)),
+        _dw_facts(_pt_v229_has_a(_PtNoLengthMap(m)), _pt_v229_ab(m) == "a b", _pt_throws(() -> length(_PtNoLengthMap(m))) == 2)), Int64(1)),
     ("wildcard_in_matching_context", (n::Int64) -> (v = [n];
-        _dw_bits(length(v) == 1, length(v) == 1, length(v) == 1 && v[1] isa Int64, length(v) == 1 && v[1] isa Int64, length(v) == 1)), Int64(0)),
+        _dw_facts(length(v) == 1, length(v) == 1, length(v) == 1 && v[1] isa Int64, length(v) == 1 && v[1] isa Int64, length(v) == 1)), Int64(0)),
     ("wildcard_in_pattern_assignment", (n::Int64) -> (x = Int64(-1); (x, _) = [n, n + 1]; x), Int64(0)),
-    ("wildcard_in_pattern_variable_declaration", (n::Int64) -> ((x, _) = [n, n + 1]; (y, w) = [n, n + 1]; _dw_bits(x == 0, y == 0, w isa Int64)), Int64(0)),
+    ("wildcard_in_pattern_variable_declaration", (n::Int64) -> ((x, _) = [n, n + 1]; (y, w) = [n, n + 1]; _dw_facts(x == 0, y == 0, w isa Int64)), Int64(0)),
 ])
 
 # ---- tests/language/function_type: the generated function_type<N> tests, function types as values ----
 # Each case takes 5 of the file's typedefs covering its distinct shapes: [x] -> a default, {x} -> a keyword,
 # <A>/<B extends int> -> a Type argument, a function-typed return -> a closure; each is called, and
 # applicable/hasmethod answer dart's `is F_i`; a typedef taking List<T> also gets a method on _FtU{T}.
+# A helper returns its facts as a tuple: each call's result, then _dw_facts of its applicability checks.
 struct _FtU{T} end
 _ft_id(x) = x
 _ft_w(x::Int64) = x
@@ -5991,7 +6295,6 @@ _ft_w(x::Vector{Int64}) = sum(x)
 _ft_w(x::Vector{Function}) = Int64(length(x))
 _ft_w(x::Vector{Bool}) = Int64(length(x))
 _ft_w(x::Function) = Int64(7)
-_ft_mix(hs::Int64...) = foldl((a, b) -> 1000003 * a + b, hs; init = Int64(0))
 
 # function_type0: F1 = Function Function(List<T> x); F2 = core.List<core.int> Function(int y, {List<Function> x}); F3 = Function(int, {Function x}); F11 = List<Function> Function(int y, [List<T> x]) Function(); F23 = void Function<A>(core.List<core.int> x) Function()
 function _ft_f0_1(p1_1::Vector{Int64})
@@ -6000,39 +6303,26 @@ function _ft_f0_1(p1_1::Vector{Int64})
 end
 _ft_m0_1(u::_FtU{T}, p1_1::Vector{T}) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t0_1(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f0_1(Int64[n, 1])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f0_1, Int64[n, 1]), !applicable(_ft_f0_1, Int64[n, 1], n), hasmethod(_ft_f0_1, Tuple{Vector{Int64}}), !applicable(_ft_f0_1, Bool[true]))
-    h = 31h + _ft_m0_1(_FtU{Int64}(), Int64[n, 201]) + _ft_m0_1(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m0_1, _FtU{Bool}(), Bool[true]), !applicable(_ft_m0_1, _FtU{Int64}(), Bool[true]))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f0_1, Int64[n, 1]), !applicable(_ft_f0_1, Int64[n, 1], n), hasmethod(_ft_f0_1, Tuple{Vector{Int64}}), !applicable(_ft_f0_1, Bool[true])), _ft_m0_1(_FtU{Int64}(), Int64[n, 201]), _ft_m0_1(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m0_1, _FtU{Bool}(), Bool[true]), !applicable(_ft_m0_1, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f0_2(p1_1::Int64; x::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return Int64[s1]
 end
 function _ft_t0_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f0_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f0_2((n + 1); x = Function[_ft_id])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f0_2, (n + 1)), !applicable(_ft_f0_2, (n + 1), n), hasmethod(_ft_f0_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f0_2, (n + 1)), !applicable(_ft_f0_2, (n + 1), n), hasmethod(_ft_f0_2, Tuple{Int64})))
 end
 function _ft_f0_3(p1_1::Int64; x::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return s1
 end
 function _ft_t0_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f0_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f0_3((n + 1); x = _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f0_3, (n + 1)), !applicable(_ft_f0_3, (n + 1), n), hasmethod(_ft_f0_3, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f0_3, (n + 1)), !applicable(_ft_f0_3, (n + 1), n), hasmethod(_ft_f0_3, Tuple{Int64})))
 end
 function _ft_f0_11()
     s1 = Int64(0)
@@ -6042,15 +6332,10 @@ function _ft_f0_11()
     end
 end
 function _ft_t0_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f0_11()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f0_11), !applicable(_ft_f0_11, n), hasmethod(_ft_f0_11, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f0_11), !applicable(_ft_f0_11, n), hasmethod(_ft_f0_11, Tuple{})))
 end
 function _ft_f0_23()
     s1 = Int64(0)
@@ -6060,13 +6345,9 @@ function _ft_f0_23()
     end
 end
 function _ft_t0_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f0_23()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f0_23), !applicable(_ft_f0_23, n), hasmethod(_ft_f0_23, Tuple{}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f0_23), !applicable(_ft_f0_23, n), hasmethod(_ft_f0_23, Tuple{})))
 end
 
 # function_type1: F3 = Function(int y, {Function x}); F4 = Function Function<A>(Function x); F11 = List<Function> Function(int y, [List<T> x]) Function(int x); F19 = void Function([List<Function> x]) Function(int x); F22 = Function<A>(List<Function> x) Function(int x)
@@ -6075,24 +6356,17 @@ function _ft_f1_3(p1_1::Int64; x::Function = _ft_id)
     return s1
 end
 function _ft_t1_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f1_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f1_3((n + 1); x = _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f1_3, (n + 1)), !applicable(_ft_f1_3, (n + 1), n), hasmethod(_ft_f1_3, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f1_3, (n + 1)), !applicable(_ft_f1_3, (n + 1), n), hasmethod(_ft_f1_3, Tuple{Int64})))
 end
 function _ft_f1_4(::Type{A}, p1_1::Function) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return () -> s1
 end
 function _ft_t1_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f1_4(Int64, _ft_id)
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f1_4, Int64, _ft_id), !applicable(_ft_f1_4, Int64, _ft_id, n), hasmethod(_ft_f1_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f1_4, Int64, _ft_id), !applicable(_ft_f1_4, Int64, _ft_id, n), hasmethod(_ft_f1_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f1_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6102,15 +6376,10 @@ function _ft_f1_11(p1_1::Int64)
     end
 end
 function _ft_t1_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f1_11((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f1_11, (n + 1)), !applicable(_ft_f1_11, (n + 1), n), hasmethod(_ft_f1_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f1_11, (n + 1)), !applicable(_ft_f1_11, (n + 1), n), hasmethod(_ft_f1_11, Tuple{Int64})))
 end
 function _ft_f1_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6120,15 +6389,10 @@ function _ft_f1_19(p1_1::Int64)
     end
 end
 function _ft_t1_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f1_19((n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f1_19, (n + 1)), !applicable(_ft_f1_19, (n + 1), n), hasmethod(_ft_f1_19, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f1_19, (n + 1)), !applicable(_ft_f1_19, (n + 1), n), hasmethod(_ft_f1_19, Tuple{Int64})))
 end
 function _ft_f1_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6138,13 +6402,9 @@ function _ft_f1_22(p1_1::Int64)
     end
 end
 function _ft_t1_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f1_22((n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f1_22, (n + 1)), !applicable(_ft_f1_22, (n + 1), n), hasmethod(_ft_f1_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f1_22, (n + 1)), !applicable(_ft_f1_22, (n + 1), n), hasmethod(_ft_f1_22, Tuple{Int64})))
 end
 
 # function_type2: F0 = int Function(int, [int x]); F5 = int Function(int, {int x}) Function<B extends core.int>(); F11 = List<Function> Function(int y, [List<T> x]) Function<B extends core.int>(); F19 = void Function([List<Function> x]) Function<B extends core.int>(); F22 = Function<A>(List<Function> x) Function<B extends core.int>()
@@ -6153,13 +6413,9 @@ function _ft_f2_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return s1
 end
 function _ft_t2_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f2_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f2_0((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f2_0, (n + 1)), !applicable(_ft_f2_0, (n + 1), (n + 2), n), hasmethod(_ft_f2_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f2_0, (n + 1)), !applicable(_ft_f2_0, (n + 1), (n + 2), n), hasmethod(_ft_f2_0, Tuple{Int64})))
 end
 function _ft_f2_5(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6169,15 +6425,10 @@ function _ft_f2_5(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t2_5(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f2_5(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = (n + 3))
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f2_5, Int64), !applicable(_ft_f2_5, Int64, n), hasmethod(_ft_f2_5, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f2_5, Int64), !applicable(_ft_f2_5, Int64, n), hasmethod(_ft_f2_5, Tuple{Type{Int64}})))
 end
 function _ft_f2_11(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6187,15 +6438,10 @@ function _ft_f2_11(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t2_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f2_11(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f2_11, Int64), !applicable(_ft_f2_11, Int64, n), hasmethod(_ft_f2_11, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f2_11, Int64), !applicable(_ft_f2_11, Int64, n), hasmethod(_ft_f2_11, Tuple{Type{Int64}})))
 end
 function _ft_f2_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6205,15 +6451,10 @@ function _ft_f2_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t2_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f2_19(Int64)
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1(Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f2_19, Int64), !applicable(_ft_f2_19, Int64, n), hasmethod(_ft_f2_19, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f2_19, Int64), !applicable(_ft_f2_19, Int64, n), hasmethod(_ft_f2_19, Tuple{Type{Int64}})))
 end
 function _ft_f2_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6223,13 +6464,9 @@ function _ft_f2_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t2_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f2_22(Int64)
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f2_22, Int64), !applicable(_ft_f2_22, Int64, n), hasmethod(_ft_f2_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f2_22, Int64), !applicable(_ft_f2_22, Int64, n), hasmethod(_ft_f2_22, Tuple{Type{Int64}})))
 end
 
 # function_type3: F0 = int Function(int y, [int x]); F5 = int Function(int, {int x}) Function<B extends core.int>(int x); F11 = List<Function> Function(int y, [List<T> x]) Function<B extends core.int>( int x, ); F19 = void Function([List<Function> x]) Function<B extends core.int>( int x, ); F22 = Function<A>(List<Function> x) Function<B extends core.int>( int x, )
@@ -6238,13 +6475,9 @@ function _ft_f3_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return s1
 end
 function _ft_t3_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f3_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f3_0((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f3_0, (n + 1)), !applicable(_ft_f3_0, (n + 1), (n + 2), n), hasmethod(_ft_f3_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f3_0, (n + 1)), !applicable(_ft_f3_0, (n + 1), (n + 2), n), hasmethod(_ft_f3_0, Tuple{Int64})))
 end
 function _ft_f3_5(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6254,15 +6487,10 @@ function _ft_f3_5(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t3_5(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f3_5(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = (n + 4))
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f3_5, Int64, (n + 1)), !applicable(_ft_f3_5, Int64, (n + 1), n), hasmethod(_ft_f3_5, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f3_5, Int64, (n + 1)), !applicable(_ft_f3_5, Int64, (n + 1), n), hasmethod(_ft_f3_5, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f3_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6272,15 +6500,10 @@ function _ft_f3_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t3_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f3_11(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f3_11, Int64, (n + 1)), !applicable(_ft_f3_11, Int64, (n + 1), n), hasmethod(_ft_f3_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f3_11, Int64, (n + 1)), !applicable(_ft_f3_11, Int64, (n + 1), n), hasmethod(_ft_f3_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f3_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6290,15 +6513,10 @@ function _ft_f3_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t3_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f3_19(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f3_19, Int64, (n + 1)), !applicable(_ft_f3_19, Int64, (n + 1), n), hasmethod(_ft_f3_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f3_19, Int64, (n + 1)), !applicable(_ft_f3_19, Int64, (n + 1), n), hasmethod(_ft_f3_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f3_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6308,13 +6526,9 @@ function _ft_f3_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t3_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f3_22(Int64, (n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f3_22, Int64, (n + 1)), !applicable(_ft_f3_22, Int64, (n + 1), n), hasmethod(_ft_f3_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f3_22, Int64, (n + 1)), !applicable(_ft_f3_22, Int64, (n + 1), n), hasmethod(_ft_f3_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type4: F2 = core.List<core.int> Function(int y, [core.List<core.int> x]); F4 = Function Function<A>(List<T> x); F17 = Function({List<Function> x}) Function(); F19 = void Function(int, [List<Function> x]) Function(); F21 = List<Function> Function<A>(List<Function> x) Function()
@@ -6323,13 +6537,9 @@ function _ft_f4_2(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return Int64[s1]
 end
 function _ft_t4_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f4_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f4_2((n + 1), Int64[n, 2])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f4_2, (n + 1)), !applicable(_ft_f4_2, (n + 1), Int64[n, 2], n), hasmethod(_ft_f4_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f4_2, (n + 1)), !applicable(_ft_f4_2, (n + 1), Int64[n, 2], n), hasmethod(_ft_f4_2, Tuple{Int64})))
 end
 function _ft_f4_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6337,13 +6547,8 @@ function _ft_f4_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m4_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t4_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f4_4(Int64, Int64[n, 1])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f4_4, Int64, Int64[n, 1]), !applicable(_ft_f4_4, Int64, Int64[n, 1], n), hasmethod(_ft_f4_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f4_4, Int64, Bool[true]))
-    h = 31h + _ft_m4_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m4_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m4_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m4_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f4_4, Int64, Int64[n, 1]), !applicable(_ft_f4_4, Int64, Int64[n, 1], n), hasmethod(_ft_f4_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f4_4, Int64, Bool[true])), _ft_m4_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m4_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m4_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m4_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f4_17()
     s1 = Int64(0)
@@ -6353,15 +6558,10 @@ function _ft_f4_17()
     end
 end
 function _ft_t4_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f4_17()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f4_17), !applicable(_ft_f4_17, n), hasmethod(_ft_f4_17, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f4_17), !applicable(_ft_f4_17, n), hasmethod(_ft_f4_17, Tuple{})))
 end
 function _ft_f4_19()
     s1 = Int64(0)
@@ -6371,15 +6571,10 @@ function _ft_f4_19()
     end
 end
 function _ft_t4_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f4_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f4_19), !applicable(_ft_f4_19, n), hasmethod(_ft_f4_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f4_19), !applicable(_ft_f4_19, n), hasmethod(_ft_f4_19, Tuple{})))
 end
 function _ft_f4_21()
     s1 = Int64(0)
@@ -6389,13 +6584,9 @@ function _ft_f4_21()
     end
 end
 function _ft_t4_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f4_21()
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f4_21), !applicable(_ft_f4_21, n), hasmethod(_ft_f4_21, Tuple{}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f4_21), !applicable(_ft_f4_21, n), hasmethod(_ft_f4_21, Tuple{})))
 end
 
 # function_type5: F0 = int Function([int]); F4 = Function Function<A>(); F9 = Function Function(int y, {List<T> x}) Function(int x); F19 = void Function(int, [List<Function> x]) Function(int x); F22 = Function<A>(core.List<core.int> x) Function(int x)
@@ -6404,24 +6595,17 @@ function _ft_f5_0(p1_1::Int64 = Int64(0))
     return s1
 end
 function _ft_t5_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f5_0()
-    h = 31h + v2
     local v3 = _ft_f5_0((n + 1))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f5_0), !applicable(_ft_f5_0, (n + 1), n), hasmethod(_ft_f5_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f5_0), !applicable(_ft_f5_0, (n + 1), n), hasmethod(_ft_f5_0, Tuple{})))
 end
 function _ft_f5_4(::Type{A}) where {A}
     s1 = Int64(0)
     return () -> s1
 end
 function _ft_t5_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f5_4(Int64)
-    h = 31h + Int64(v1 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f5_4, Int64), !applicable(_ft_f5_4, Int64, n), hasmethod(_ft_f5_4, Tuple{Type{Int64}}))
-    return h
+    return ((v1 isa Function), _dw_facts(applicable(_ft_f5_4, Int64), !applicable(_ft_f5_4, Int64, n), hasmethod(_ft_f5_4, Tuple{Type{Int64}})))
 end
 function _ft_f5_9(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6431,15 +6615,10 @@ function _ft_f5_9(p1_1::Int64)
     end
 end
 function _ft_t5_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f5_9((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 isa Function)
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(v6 isa Function)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f5_9, (n + 1)), !applicable(_ft_f5_9, (n + 1), n), hasmethod(_ft_f5_9, Tuple{Int64}))
-    return h
+    return ((v5 isa Function), (v6 isa Function), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f5_9, (n + 1)), !applicable(_ft_f5_9, (n + 1), n), hasmethod(_ft_f5_9, Tuple{Int64})))
 end
 function _ft_f5_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6449,15 +6628,10 @@ function _ft_f5_19(p1_1::Int64)
     end
 end
 function _ft_t5_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f5_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f5_19, (n + 1)), !applicable(_ft_f5_19, (n + 1), n), hasmethod(_ft_f5_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f5_19, (n + 1)), !applicable(_ft_f5_19, (n + 1), n), hasmethod(_ft_f5_19, Tuple{Int64})))
 end
 function _ft_f5_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6467,13 +6641,9 @@ function _ft_f5_22(p1_1::Int64)
     end
 end
 function _ft_t5_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f5_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f5_22, (n + 1)), !applicable(_ft_f5_22, (n + 1), n), hasmethod(_ft_f5_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f5_22, (n + 1)), !applicable(_ft_f5_22, (n + 1), n), hasmethod(_ft_f5_22, Tuple{Int64})))
 end
 
 # function_type6: F0 = int Function(int, [int]); F4 = Function Function<A>(A x); F9 = Function Function(int y, {List<T> x}) Function<B extends core.int>(); F19 = void Function(int, [List<Function> x]) Function<B extends core.int>(); F22 = Function<A>(core.List<core.int> x) Function<B extends core.int>()
@@ -6482,24 +6652,17 @@ function _ft_f6_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return s1
 end
 function _ft_t6_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f6_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f6_0((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f6_0, (n + 1)), !applicable(_ft_f6_0, (n + 1), (n + 2), n), hasmethod(_ft_f6_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f6_0, (n + 1)), !applicable(_ft_f6_0, (n + 1), (n + 2), n), hasmethod(_ft_f6_0, Tuple{Int64})))
 end
 function _ft_f6_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return () -> s1
 end
 function _ft_t6_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f6_4(Int64, (n + 1))
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f6_4, Int64, (n + 1)), !applicable(_ft_f6_4, Int64, (n + 1), n), hasmethod(_ft_f6_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f6_4, Int64, (n + 1)), !applicable(_ft_f6_4, Int64, (n + 1), n), hasmethod(_ft_f6_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f6_9(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6509,15 +6672,10 @@ function _ft_f6_9(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t6_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f6_9(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 isa Function)
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(v5 isa Function)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f6_9, Int64), !applicable(_ft_f6_9, Int64, n), hasmethod(_ft_f6_9, Tuple{Type{Int64}}))
-    return h
+    return ((v4 isa Function), (v5 isa Function), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f6_9, Int64), !applicable(_ft_f6_9, Int64, n), hasmethod(_ft_f6_9, Tuple{Type{Int64}})))
 end
 function _ft_f6_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6527,15 +6685,10 @@ function _ft_f6_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t6_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f6_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f6_19, Int64), !applicable(_ft_f6_19, Int64, n), hasmethod(_ft_f6_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f6_19, Int64), !applicable(_ft_f6_19, Int64, n), hasmethod(_ft_f6_19, Tuple{Type{Int64}})))
 end
 function _ft_f6_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6545,13 +6698,9 @@ function _ft_f6_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t6_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f6_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f6_22, Int64), !applicable(_ft_f6_22, Int64, n), hasmethod(_ft_f6_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f6_22, Int64), !applicable(_ft_f6_22, Int64, n), hasmethod(_ft_f6_22, Tuple{Type{Int64}})))
 end
 
 # function_type7: F0 = int Function(int x, [int]); F4 = Function Function<A>(List<A> x); F9 = Function Function(int y, {List<T> x}) Function<B extends core.int>(int x); F18 = Function() Function<B extends core.int>(int x); F19 = void Function(int, [List<Function> x]) Function<B extends core.int>(int x)
@@ -6560,24 +6709,17 @@ function _ft_f7_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return s1
 end
 function _ft_t7_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f7_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f7_0((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f7_0, (n + 1)), !applicable(_ft_f7_0, (n + 1), (n + 2), n), hasmethod(_ft_f7_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f7_0, (n + 1)), !applicable(_ft_f7_0, (n + 1), (n + 2), n), hasmethod(_ft_f7_0, Tuple{Int64})))
 end
 function _ft_f7_4(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return () -> s1
 end
 function _ft_t7_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f7_4(Int64, Int64[n, 1])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f7_4, Int64, Int64[n, 1]), !applicable(_ft_f7_4, Int64, Int64[n, 1], n), hasmethod(_ft_f7_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f7_4, Int64, Int64[n, 1]), !applicable(_ft_f7_4, Int64, Int64[n, 1], n), hasmethod(_ft_f7_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f7_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6587,15 +6729,10 @@ function _ft_f7_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t7_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f7_9(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 isa Function)
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(v6 isa Function)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f7_9, Int64, (n + 1)), !applicable(_ft_f7_9, Int64, (n + 1), n), hasmethod(_ft_f7_9, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 isa Function), (v6 isa Function), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f7_9, Int64, (n + 1)), !applicable(_ft_f7_9, Int64, (n + 1), n), hasmethod(_ft_f7_9, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f7_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6605,13 +6742,9 @@ function _ft_f7_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t7_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f7_18(Int64, (n + 1))
     local v3 = v2()
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f7_18, Int64, (n + 1)), !applicable(_ft_f7_18, Int64, (n + 1), n), hasmethod(_ft_f7_18, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f7_18, Int64, (n + 1)), !applicable(_ft_f7_18, Int64, (n + 1), n), hasmethod(_ft_f7_18, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f7_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6621,15 +6754,10 @@ function _ft_f7_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t7_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f7_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f7_19, Int64, (n + 1)), !applicable(_ft_f7_19, Int64, (n + 1), n), hasmethod(_ft_f7_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f7_19, Int64, (n + 1)), !applicable(_ft_f7_19, Int64, (n + 1), n), hasmethod(_ft_f7_19, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type8: F0 = int Function({int x}); F4 = List<Function> Function<A>(int x); F17 = Function(int, {List<Function> x}) Function(); F20 = void Function(int, [List<T>]) Function(); F21 = List<Function> Function<A>(core.List<core.int> x) Function()
@@ -6638,24 +6766,17 @@ function _ft_f8_0(; x::Int64 = Int64(0))
     return s1
 end
 function _ft_t8_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f8_0()
-    h = 31h + v2
     local v3 = _ft_f8_0(; x = (n + 1))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f8_0), !applicable(_ft_f8_0, n), hasmethod(_ft_f8_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f8_0), !applicable(_ft_f8_0, n), hasmethod(_ft_f8_0, Tuple{})))
 end
 function _ft_f8_4(::Type{A}, p1_1::Int64) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t8_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f8_4(Int64, (n + 1))
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f8_4, Int64, (n + 1)), !applicable(_ft_f8_4, Int64, (n + 1), n), hasmethod(_ft_f8_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f8_4, Int64, (n + 1)), !applicable(_ft_f8_4, Int64, (n + 1), n), hasmethod(_ft_f8_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f8_17()
     s1 = Int64(0)
@@ -6665,15 +6786,10 @@ function _ft_f8_17()
     end
 end
 function _ft_t8_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f8_17()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f8_17), !applicable(_ft_f8_17, n), hasmethod(_ft_f8_17, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f8_17), !applicable(_ft_f8_17, n), hasmethod(_ft_f8_17, Tuple{})))
 end
 function _ft_f8_20()
     s1 = Int64(0)
@@ -6683,15 +6799,10 @@ function _ft_f8_20()
     end
 end
 function _ft_t8_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f8_20()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f8_20), !applicable(_ft_f8_20, n), hasmethod(_ft_f8_20, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f8_20), !applicable(_ft_f8_20, n), hasmethod(_ft_f8_20, Tuple{})))
 end
 function _ft_f8_21()
     s1 = Int64(0)
@@ -6701,13 +6812,9 @@ function _ft_f8_21()
     end
 end
 function _ft_t8_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f8_21()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f8_21), !applicable(_ft_f8_21, n), hasmethod(_ft_f8_21, Tuple{}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f8_21), !applicable(_ft_f8_21, n), hasmethod(_ft_f8_21, Tuple{})))
 end
 
 # function_type9: F0 = int Function(int, {int x}); F4 = List<Function> Function<A>(Function x); F17 = Function(int, {List<Function> x}) Function(int x); F20 = void Function(int, [List<T>]) Function(int x); F23 = void Function<A>() Function(int x)
@@ -6716,24 +6823,17 @@ function _ft_f9_0(p1_1::Int64; x::Int64 = Int64(0))
     return s1
 end
 function _ft_t9_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f9_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f9_0((n + 1); x = (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f9_0, (n + 1)), !applicable(_ft_f9_0, (n + 1), n), hasmethod(_ft_f9_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f9_0, (n + 1)), !applicable(_ft_f9_0, (n + 1), n), hasmethod(_ft_f9_0, Tuple{Int64})))
 end
 function _ft_f9_4(::Type{A}, p1_1::Function) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t9_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f9_4(Int64, _ft_id)
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f9_4, Int64, _ft_id), !applicable(_ft_f9_4, Int64, _ft_id, n), hasmethod(_ft_f9_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f9_4, Int64, _ft_id), !applicable(_ft_f9_4, Int64, _ft_id, n), hasmethod(_ft_f9_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f9_17(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6743,15 +6843,10 @@ function _ft_f9_17(p1_1::Int64)
     end
 end
 function _ft_t9_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f9_17((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f9_17, (n + 1)), !applicable(_ft_f9_17, (n + 1), n), hasmethod(_ft_f9_17, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f9_17, (n + 1)), !applicable(_ft_f9_17, (n + 1), n), hasmethod(_ft_f9_17, Tuple{Int64})))
 end
 function _ft_f9_20(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6761,15 +6856,10 @@ function _ft_f9_20(p1_1::Int64)
     end
 end
 function _ft_t9_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f9_20((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f9_20, (n + 1)), !applicable(_ft_f9_20, (n + 1), n), hasmethod(_ft_f9_20, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f9_20, (n + 1)), !applicable(_ft_f9_20, (n + 1), n), hasmethod(_ft_f9_20, Tuple{Int64})))
 end
 function _ft_f9_23(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6779,13 +6869,9 @@ function _ft_f9_23(p1_1::Int64)
     end
 end
 function _ft_t9_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f9_23((n + 1))
     local v3 = v2(Int64)
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f9_23, (n + 1)), !applicable(_ft_f9_23, (n + 1), n), hasmethod(_ft_f9_23, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f9_23, (n + 1)), !applicable(_ft_f9_23, (n + 1), n), hasmethod(_ft_f9_23, Tuple{Int64})))
 end
 
 # function_type10: F0 = int Function(int y, {int x}); F4 = List<Function> Function<A>(List<Function> x); F17 = Function(int, {List<Function> x}) Function<B extends core.int>(); F20 = void Function(int, [List<T>]) Function<B extends core.int>(); F21 = List<Function> Function<A>(core.List<core.int> x) Function<B extends core.int>()
@@ -6794,24 +6880,17 @@ function _ft_f10_0(p1_1::Int64; x::Int64 = Int64(0))
     return s1
 end
 function _ft_t10_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f10_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f10_0((n + 1); x = (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f10_0, (n + 1)), !applicable(_ft_f10_0, (n + 1), n), hasmethod(_ft_f10_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f10_0, (n + 1)), !applicable(_ft_f10_0, (n + 1), n), hasmethod(_ft_f10_0, Tuple{Int64})))
 end
 function _ft_f10_4(::Type{A}, p1_1::Vector{Function}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t10_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f10_4(Int64, Function[_ft_id])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f10_4, Int64, Function[_ft_id]), !applicable(_ft_f10_4, Int64, Function[_ft_id], n), hasmethod(_ft_f10_4, Tuple{Type{Int64}, Vector{Function}}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f10_4, Int64, Function[_ft_id]), !applicable(_ft_f10_4, Int64, Function[_ft_id], n), hasmethod(_ft_f10_4, Tuple{Type{Int64}, Vector{Function}})))
 end
 function _ft_f10_17(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6821,15 +6900,10 @@ function _ft_f10_17(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t10_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f10_17(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f10_17, Int64), !applicable(_ft_f10_17, Int64, n), hasmethod(_ft_f10_17, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f10_17, Int64), !applicable(_ft_f10_17, Int64, n), hasmethod(_ft_f10_17, Tuple{Type{Int64}})))
 end
 function _ft_f10_20(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6839,15 +6913,10 @@ function _ft_f10_20(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t10_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f10_20(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f10_20, Int64), !applicable(_ft_f10_20, Int64, n), hasmethod(_ft_f10_20, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f10_20, Int64), !applicable(_ft_f10_20, Int64, n), hasmethod(_ft_f10_20, Tuple{Type{Int64}})))
 end
 function _ft_f10_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -6857,13 +6926,9 @@ function _ft_f10_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t10_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f10_21(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f10_21, Int64), !applicable(_ft_f10_21, Int64, n), hasmethod(_ft_f10_21, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f10_21, Int64), !applicable(_ft_f10_21, Int64, n), hasmethod(_ft_f10_21, Tuple{Type{Int64}})))
 end
 
 # function_type11: F0 = int Function(Function x); F4 = List<Function> Function<A>(core.List<core.int> x); F17 = Function(int, {List<Function> x}) Function<B extends core.int>( int x, ); F20 = void Function(int, [List<T>]) Function<B extends core.int>( int x, ); F23 = void Function<A>() Function<B extends core.int>(int x)
@@ -6872,22 +6937,16 @@ function _ft_f11_0(p1_1::Function)
     return s1
 end
 function _ft_t11_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f11_0(_ft_id)
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f11_0, _ft_id), !applicable(_ft_f11_0, _ft_id, n), hasmethod(_ft_f11_0, Tuple{typeof(_ft_id)}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f11_0, _ft_id), !applicable(_ft_f11_0, _ft_id, n), hasmethod(_ft_f11_0, Tuple{typeof(_ft_id)})))
 end
 function _ft_f11_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t11_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f11_4(Int64, Int64[n, 1])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f11_4, Int64, Int64[n, 1]), !applicable(_ft_f11_4, Int64, Int64[n, 1], n), hasmethod(_ft_f11_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f11_4, Int64, Int64[n, 1]), !applicable(_ft_f11_4, Int64, Int64[n, 1], n), hasmethod(_ft_f11_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f11_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6897,15 +6956,10 @@ function _ft_f11_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t11_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f11_17(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f11_17, Int64, (n + 1)), !applicable(_ft_f11_17, Int64, (n + 1), n), hasmethod(_ft_f11_17, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f11_17, Int64, (n + 1)), !applicable(_ft_f11_17, Int64, (n + 1), n), hasmethod(_ft_f11_17, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f11_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6915,15 +6969,10 @@ function _ft_f11_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t11_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f11_20(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f11_20, Int64, (n + 1)), !applicable(_ft_f11_20, Int64, (n + 1), n), hasmethod(_ft_f11_20, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f11_20, Int64, (n + 1)), !applicable(_ft_f11_20, Int64, (n + 1), n), hasmethod(_ft_f11_20, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f11_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6933,13 +6982,9 @@ function _ft_f11_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t11_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f11_23(Int64, (n + 1))
     local v3 = v2(Int64)
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f11_23, Int64, (n + 1)), !applicable(_ft_f11_23, Int64, (n + 1), n), hasmethod(_ft_f11_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f11_23, Int64, (n + 1)), !applicable(_ft_f11_23, Int64, (n + 1), n), hasmethod(_ft_f11_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type12: F0 = int Function([Function x]); F3 = Function(int y, {List<Function> x}); F4 = List<Function> Function<A>(List<T> x); F11 = List<Function> Function(int, [List<T>]) Function(); F23 = void Function<A>(A x) Function()
@@ -6948,26 +6993,18 @@ function _ft_f12_0(p1_1::Function = _ft_id)
     return s1
 end
 function _ft_t12_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f12_0()
-    h = 31h + v2
     local v3 = _ft_f12_0(_ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f12_0), !applicable(_ft_f12_0, _ft_id, n), hasmethod(_ft_f12_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f12_0), !applicable(_ft_f12_0, _ft_id, n), hasmethod(_ft_f12_0, Tuple{})))
 end
 function _ft_f12_3(p1_1::Int64; x::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return s1
 end
 function _ft_t12_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f12_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f12_3((n + 1); x = Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f12_3, (n + 1)), !applicable(_ft_f12_3, (n + 1), n), hasmethod(_ft_f12_3, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f12_3, (n + 1)), !applicable(_ft_f12_3, (n + 1), n), hasmethod(_ft_f12_3, Tuple{Int64})))
 end
 function _ft_f12_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -6975,13 +7012,8 @@ function _ft_f12_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m12_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t12_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f12_4(Int64, Int64[n, 1])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f12_4, Int64, Int64[n, 1]), !applicable(_ft_f12_4, Int64, Int64[n, 1], n), hasmethod(_ft_f12_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f12_4, Int64, Bool[true]))
-    h = 31h + _ft_m12_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m12_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m12_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m12_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f12_4, Int64, Int64[n, 1]), !applicable(_ft_f12_4, Int64, Int64[n, 1], n), hasmethod(_ft_f12_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f12_4, Int64, Bool[true])), _ft_m12_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m12_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m12_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m12_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f12_11()
     s1 = Int64(0)
@@ -6991,15 +7023,10 @@ function _ft_f12_11()
     end
 end
 function _ft_t12_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f12_11()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f12_11), !applicable(_ft_f12_11, n), hasmethod(_ft_f12_11, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f12_11), !applicable(_ft_f12_11, n), hasmethod(_ft_f12_11, Tuple{})))
 end
 function _ft_f12_23()
     s1 = Int64(0)
@@ -7009,13 +7036,9 @@ function _ft_f12_23()
     end
 end
 function _ft_t12_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f12_23()
     local v3 = v1(Int64, (n + 2))
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f12_23), !applicable(_ft_f12_23, n), hasmethod(_ft_f12_23, Tuple{}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f12_23), !applicable(_ft_f12_23, n), hasmethod(_ft_f12_23, Tuple{})))
 end
 
 # function_type13: F0 = int Function(int, [Function x]); F8 = Function Function(int, {List<Function> x}) Function(int x); F11 = List<Function> Function(int, [List<T>]) Function(int x); F18 = void Function([int x]) Function(int x); F22 = Function<A>() Function(int x)
@@ -7024,13 +7047,9 @@ function _ft_f13_0(p1_1::Int64, p1_2::Function = _ft_id)
     return s1
 end
 function _ft_t13_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f13_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f13_0((n + 1), _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f13_0, (n + 1)), !applicable(_ft_f13_0, (n + 1), _ft_id, n), hasmethod(_ft_f13_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f13_0, (n + 1)), !applicable(_ft_f13_0, (n + 1), _ft_id, n), hasmethod(_ft_f13_0, Tuple{Int64})))
 end
 function _ft_f13_8(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7040,15 +7059,10 @@ function _ft_f13_8(p1_1::Int64)
     end
 end
 function _ft_t13_8(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f13_8((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 isa Function)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 isa Function)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f13_8, (n + 1)), !applicable(_ft_f13_8, (n + 1), n), hasmethod(_ft_f13_8, Tuple{Int64}))
-    return h
+    return ((v5 isa Function), (v6 isa Function), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f13_8, (n + 1)), !applicable(_ft_f13_8, (n + 1), n), hasmethod(_ft_f13_8, Tuple{Int64})))
 end
 function _ft_f13_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7058,15 +7072,10 @@ function _ft_f13_11(p1_1::Int64)
     end
 end
 function _ft_t13_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f13_11((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f13_11, (n + 1)), !applicable(_ft_f13_11, (n + 1), n), hasmethod(_ft_f13_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f13_11, (n + 1)), !applicable(_ft_f13_11, (n + 1), n), hasmethod(_ft_f13_11, Tuple{Int64})))
 end
 function _ft_f13_18(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7076,15 +7085,10 @@ function _ft_f13_18(p1_1::Int64)
     end
 end
 function _ft_t13_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f13_18((n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f13_18, (n + 1)), !applicable(_ft_f13_18, (n + 1), n), hasmethod(_ft_f13_18, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f13_18, (n + 1)), !applicable(_ft_f13_18, (n + 1), n), hasmethod(_ft_f13_18, Tuple{Int64})))
 end
 function _ft_f13_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7094,13 +7098,9 @@ function _ft_f13_22(p1_1::Int64)
     end
 end
 function _ft_t13_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f13_22((n + 1))
     local v3 = v2(Int64)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f13_22, (n + 1)), !applicable(_ft_f13_22, (n + 1), n), hasmethod(_ft_f13_22, Tuple{Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f13_22, (n + 1)), !applicable(_ft_f13_22, (n + 1), n), hasmethod(_ft_f13_22, Tuple{Int64})))
 end
 
 # function_type14: F0 = int Function(int y, [Function x]); F4 = List<Function> Function<A>(A x); F11 = List<Function> Function(int, [List<T>]) Function<B extends core.int>(); F17 = Function(int y, {List<Function> x}) Function<B extends core.int>(); F23 = void Function<A>(A x) Function<B extends core.int>()
@@ -7109,24 +7109,17 @@ function _ft_f14_0(p1_1::Int64, p1_2::Function = _ft_id)
     return s1
 end
 function _ft_t14_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f14_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f14_0((n + 1), _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f14_0, (n + 1)), !applicable(_ft_f14_0, (n + 1), _ft_id, n), hasmethod(_ft_f14_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f14_0, (n + 1)), !applicable(_ft_f14_0, (n + 1), _ft_id, n), hasmethod(_ft_f14_0, Tuple{Int64})))
 end
 function _ft_f14_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t14_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f14_4(Int64, (n + 1))
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f14_4, Int64, (n + 1)), !applicable(_ft_f14_4, Int64, (n + 1), n), hasmethod(_ft_f14_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f14_4, Int64, (n + 1)), !applicable(_ft_f14_4, Int64, (n + 1), n), hasmethod(_ft_f14_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f14_11(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7136,15 +7129,10 @@ function _ft_f14_11(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t14_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f14_11(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f14_11, Int64), !applicable(_ft_f14_11, Int64, n), hasmethod(_ft_f14_11, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f14_11, Int64), !applicable(_ft_f14_11, Int64, n), hasmethod(_ft_f14_11, Tuple{Type{Int64}})))
 end
 function _ft_f14_17(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7154,15 +7142,10 @@ function _ft_f14_17(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t14_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f14_17(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f14_17, Int64), !applicable(_ft_f14_17, Int64, n), hasmethod(_ft_f14_17, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f14_17, Int64), !applicable(_ft_f14_17, Int64, n), hasmethod(_ft_f14_17, Tuple{Type{Int64}})))
 end
 function _ft_f14_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7172,13 +7155,9 @@ function _ft_f14_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t14_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f14_23(Int64)
     local v3 = v1(Int64, (n + 2))
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f14_23, Int64), !applicable(_ft_f14_23, Int64, n), hasmethod(_ft_f14_23, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f14_23, Int64), !applicable(_ft_f14_23, Int64, n), hasmethod(_ft_f14_23, Tuple{Type{Int64}})))
 end
 
 # function_type15: F4 = List<Function> Function<A>(List<A> x); F8 = Function Function(int, {List<Function> x}) Function<B extends core.int>( int x, ); F11 = List<Function> Function(int, [List<T>]) Function<B extends core.int>(int x); F18 = void Function([int x]) Function<B extends core.int>(int x); F22 = Function<A>() Function<B extends core.int>(int x)
@@ -7187,11 +7166,8 @@ function _ft_f15_4(::Type{A}, p1_1::Vector{A}) where {A}
     return Function[_ft_id]
 end
 function _ft_t15_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f15_4(Int64, Int64[n, 1])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f15_4, Int64, Int64[n, 1]), !applicable(_ft_f15_4, Int64, Int64[n, 1], n), hasmethod(_ft_f15_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f15_4, Int64, Int64[n, 1]), !applicable(_ft_f15_4, Int64, Int64[n, 1], n), hasmethod(_ft_f15_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f15_8(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7201,15 +7177,10 @@ function _ft_f15_8(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t15_8(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f15_8(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 isa Function)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 isa Function)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f15_8, Int64, (n + 1)), !applicable(_ft_f15_8, Int64, (n + 1), n), hasmethod(_ft_f15_8, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 isa Function), (v6 isa Function), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f15_8, Int64, (n + 1)), !applicable(_ft_f15_8, Int64, (n + 1), n), hasmethod(_ft_f15_8, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f15_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7219,15 +7190,10 @@ function _ft_f15_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t15_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f15_11(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f15_11, Int64, (n + 1)), !applicable(_ft_f15_11, Int64, (n + 1), n), hasmethod(_ft_f15_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f15_11, Int64, (n + 1)), !applicable(_ft_f15_11, Int64, (n + 1), n), hasmethod(_ft_f15_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f15_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7237,15 +7203,10 @@ function _ft_f15_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t15_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f15_18(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f15_18, Int64, (n + 1)), !applicable(_ft_f15_18, Int64, (n + 1), n), hasmethod(_ft_f15_18, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f15_18, Int64, (n + 1)), !applicable(_ft_f15_18, Int64, (n + 1), n), hasmethod(_ft_f15_18, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f15_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7255,13 +7216,9 @@ function _ft_f15_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t15_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f15_22(Int64, (n + 1))
     local v3 = v2(Int64)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f15_22, Int64, (n + 1)), !applicable(_ft_f15_22, Int64, (n + 1), n), hasmethod(_ft_f15_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f15_22, Int64, (n + 1)), !applicable(_ft_f15_22, Int64, (n + 1), n), hasmethod(_ft_f15_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type16: F0 = int Function([Function]); F3 = Function(int y, [core.List<core.int> x]); F11 = List<Function> Function(int x, [List<T>]) Function(); F16 = Function({int x}) Function(); F23 = void Function<A>(List<A> x) Function()
@@ -7270,26 +7227,18 @@ function _ft_f16_0(p1_1::Function = _ft_id)
     return s1
 end
 function _ft_t16_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f16_0()
-    h = 31h + v2
     local v3 = _ft_f16_0(_ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f16_0), !applicable(_ft_f16_0, _ft_id, n), hasmethod(_ft_f16_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f16_0), !applicable(_ft_f16_0, _ft_id, n), hasmethod(_ft_f16_0, Tuple{})))
 end
 function _ft_f16_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return s1
 end
 function _ft_t16_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f16_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f16_3((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f16_3, (n + 1)), !applicable(_ft_f16_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f16_3, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f16_3, (n + 1)), !applicable(_ft_f16_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f16_3, Tuple{Int64})))
 end
 function _ft_f16_11()
     s1 = Int64(0)
@@ -7299,15 +7248,10 @@ function _ft_f16_11()
     end
 end
 function _ft_t16_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f16_11()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f16_11), !applicable(_ft_f16_11, n), hasmethod(_ft_f16_11, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f16_11), !applicable(_ft_f16_11, n), hasmethod(_ft_f16_11, Tuple{})))
 end
 function _ft_f16_16()
     s1 = Int64(0)
@@ -7317,15 +7261,10 @@ function _ft_f16_16()
     end
 end
 function _ft_t16_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f16_16()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f16_16), !applicable(_ft_f16_16, n), hasmethod(_ft_f16_16, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f16_16), !applicable(_ft_f16_16, n), hasmethod(_ft_f16_16, Tuple{})))
 end
 function _ft_f16_23()
     s1 = Int64(0)
@@ -7335,13 +7274,9 @@ function _ft_f16_23()
     end
 end
 function _ft_t16_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f16_23()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f16_23), !applicable(_ft_f16_23, n), hasmethod(_ft_f16_23, Tuple{}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f16_23), !applicable(_ft_f16_23, n), hasmethod(_ft_f16_23, Tuple{})))
 end
 
 # function_type17: F4 = core.List<core.int> Function<A>(Function x); F11 = List<Function> Function(int x, [List<T>]) Function(int x); F16 = Function({int x}) Function(int x); F21 = List<Function> Function<A>() Function(int x); F23 = void Function<A>(List<A> x) Function(int x)
@@ -7350,11 +7285,8 @@ function _ft_f17_4(::Type{A}, p1_1::Function) where {A}
     return Int64[s1]
 end
 function _ft_t17_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f17_4(Int64, _ft_id)
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f17_4, Int64, _ft_id), !applicable(_ft_f17_4, Int64, _ft_id, n), hasmethod(_ft_f17_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f17_4, Int64, _ft_id), !applicable(_ft_f17_4, Int64, _ft_id, n), hasmethod(_ft_f17_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f17_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7364,15 +7296,10 @@ function _ft_f17_11(p1_1::Int64)
     end
 end
 function _ft_t17_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f17_11((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f17_11, (n + 1)), !applicable(_ft_f17_11, (n + 1), n), hasmethod(_ft_f17_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f17_11, (n + 1)), !applicable(_ft_f17_11, (n + 1), n), hasmethod(_ft_f17_11, Tuple{Int64})))
 end
 function _ft_f17_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7382,15 +7309,10 @@ function _ft_f17_16(p1_1::Int64)
     end
 end
 function _ft_t17_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f17_16((n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(; x = (n + 3))
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f17_16, (n + 1)), !applicable(_ft_f17_16, (n + 1), n), hasmethod(_ft_f17_16, Tuple{Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f17_16, (n + 1)), !applicable(_ft_f17_16, (n + 1), n), hasmethod(_ft_f17_16, Tuple{Int64})))
 end
 function _ft_f17_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7400,13 +7322,9 @@ function _ft_f17_21(p1_1::Int64)
     end
 end
 function _ft_t17_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f17_21((n + 1))
     local v3 = v2(Int64)
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f17_21, (n + 1)), !applicable(_ft_f17_21, (n + 1), n), hasmethod(_ft_f17_21, Tuple{Int64}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f17_21, (n + 1)), !applicable(_ft_f17_21, (n + 1), n), hasmethod(_ft_f17_21, Tuple{Int64})))
 end
 function _ft_f17_23(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7416,13 +7334,9 @@ function _ft_f17_23(p1_1::Int64)
     end
 end
 function _ft_t17_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f17_23((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f17_23, (n + 1)), !applicable(_ft_f17_23, (n + 1), n), hasmethod(_ft_f17_23, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f17_23, (n + 1)), !applicable(_ft_f17_23, (n + 1), n), hasmethod(_ft_f17_23, Tuple{Int64})))
 end
 
 # function_type18: F0 = int Function(int x, [Function]); F4 = core.List<core.int> Function<A>(List<Function> x); F11 = List<Function> Function(int x, [List<T>]) Function<B extends core.int>(); F16 = Function({int x}) Function<B extends core.int>(); F23 = void Function<A>(List<A> x) Function<B extends core.int>()
@@ -7431,24 +7345,17 @@ function _ft_f18_0(p1_1::Int64, p1_2::Function = _ft_id)
     return s1
 end
 function _ft_t18_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f18_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f18_0((n + 1), _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f18_0, (n + 1)), !applicable(_ft_f18_0, (n + 1), _ft_id, n), hasmethod(_ft_f18_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f18_0, (n + 1)), !applicable(_ft_f18_0, (n + 1), _ft_id, n), hasmethod(_ft_f18_0, Tuple{Int64})))
 end
 function _ft_f18_4(::Type{A}, p1_1::Vector{Function}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Int64[s1]
 end
 function _ft_t18_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f18_4(Int64, Function[_ft_id])
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f18_4, Int64, Function[_ft_id]), !applicable(_ft_f18_4, Int64, Function[_ft_id], n), hasmethod(_ft_f18_4, Tuple{Type{Int64}, Vector{Function}}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f18_4, Int64, Function[_ft_id]), !applicable(_ft_f18_4, Int64, Function[_ft_id], n), hasmethod(_ft_f18_4, Tuple{Type{Int64}, Vector{Function}})))
 end
 function _ft_f18_11(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7458,15 +7365,10 @@ function _ft_f18_11(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t18_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f18_11(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f18_11, Int64), !applicable(_ft_f18_11, Int64, n), hasmethod(_ft_f18_11, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f18_11, Int64), !applicable(_ft_f18_11, Int64, n), hasmethod(_ft_f18_11, Tuple{Type{Int64}})))
 end
 function _ft_f18_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7476,15 +7378,10 @@ function _ft_f18_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t18_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f18_16(Int64)
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f18_16, Int64), !applicable(_ft_f18_16, Int64, n), hasmethod(_ft_f18_16, Tuple{Type{Int64}}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f18_16, Int64), !applicable(_ft_f18_16, Int64, n), hasmethod(_ft_f18_16, Tuple{Type{Int64}})))
 end
 function _ft_f18_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7494,13 +7391,9 @@ function _ft_f18_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t18_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f18_23(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f18_23, Int64), !applicable(_ft_f18_23, Int64, n), hasmethod(_ft_f18_23, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f18_23, Int64), !applicable(_ft_f18_23, Int64, n), hasmethod(_ft_f18_23, Tuple{Type{Int64}})))
 end
 
 # function_type19: F0 = int Function({Function x}); F11 = List<Function> Function(int x, [List<T>]) Function<B extends core.int>( int x, ); F16 = Function({int x}) Function<B extends core.int>(int x); F21 = List<Function> Function<A>() Function<B extends core.int>( int x, ); F23 = void Function<A>(List<A> x) Function<B extends core.int>( int x, )
@@ -7509,13 +7402,9 @@ function _ft_f19_0(; x::Function = _ft_id)
     return s1
 end
 function _ft_t19_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f19_0()
-    h = 31h + v2
     local v3 = _ft_f19_0(; x = _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f19_0), !applicable(_ft_f19_0, n), hasmethod(_ft_f19_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f19_0), !applicable(_ft_f19_0, n), hasmethod(_ft_f19_0, Tuple{})))
 end
 function _ft_f19_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7525,15 +7414,10 @@ function _ft_f19_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t19_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f19_11(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f19_11, Int64, (n + 1)), !applicable(_ft_f19_11, Int64, (n + 1), n), hasmethod(_ft_f19_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f19_11, Int64, (n + 1)), !applicable(_ft_f19_11, Int64, (n + 1), n), hasmethod(_ft_f19_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f19_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7543,15 +7427,10 @@ function _ft_f19_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t19_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f19_16(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(; x = (n + 3))
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f19_16, Int64, (n + 1)), !applicable(_ft_f19_16, Int64, (n + 1), n), hasmethod(_ft_f19_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f19_16, Int64, (n + 1)), !applicable(_ft_f19_16, Int64, (n + 1), n), hasmethod(_ft_f19_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f19_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7561,13 +7440,9 @@ function _ft_f19_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t19_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f19_21(Int64, (n + 1))
     local v3 = v2(Int64)
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f19_21, Int64, (n + 1)), !applicable(_ft_f19_21, Int64, (n + 1), n), hasmethod(_ft_f19_21, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f19_21, Int64, (n + 1)), !applicable(_ft_f19_21, Int64, (n + 1), n), hasmethod(_ft_f19_21, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f19_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7577,13 +7452,9 @@ function _ft_f19_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t19_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f19_23(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f19_23, Int64, (n + 1)), !applicable(_ft_f19_23, Int64, (n + 1), n), hasmethod(_ft_f19_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f19_23, Int64, (n + 1)), !applicable(_ft_f19_23, Int64, (n + 1), n), hasmethod(_ft_f19_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type20: F0 = int Function(int, {Function x}); F2 = core.List<core.int> Function({List<T> x}); F19 = void Function(int, [List<Function>]) Function(); F22 = Function<A>(List<A> x) Function(); F23 = int Function(B x) Function<B extends core.int>()
@@ -7592,13 +7463,9 @@ function _ft_f20_0(p1_1::Int64; x::Function = _ft_id)
     return s1
 end
 function _ft_t20_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f20_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f20_0((n + 1); x = _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f20_0, (n + 1)), !applicable(_ft_f20_0, (n + 1), n), hasmethod(_ft_f20_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f20_0, (n + 1)), !applicable(_ft_f20_0, (n + 1), n), hasmethod(_ft_f20_0, Tuple{Int64})))
 end
 function _ft_f20_2(; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(x)
@@ -7606,15 +7473,9 @@ function _ft_f20_2(; x::Vector{Int64} = Int64[])
 end
 _ft_m20_2(u::_FtU{T}; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(x)
 function _ft_t20_2(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f20_2()
-    h = 31h + sum(v2)
     local v3 = _ft_f20_2(; x = Int64[n, 1])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(_ft_f20_2), !applicable(_ft_f20_2, n), hasmethod(_ft_f20_2, Tuple{}))
-    h = 31h + _ft_m20_2(_FtU{Int64}()) + _ft_m20_2(_FtU{Bool}(); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m20_2, _FtU{Bool}()))
-    return h
+    return (sum(v2), sum(v3), _dw_facts(applicable(_ft_f20_2), !applicable(_ft_f20_2, n), hasmethod(_ft_f20_2, Tuple{})), _ft_m20_2(_FtU{Int64}()), _ft_m20_2(_FtU{Bool}(); x = Bool[true]), _dw_facts(applicable(_ft_m20_2, _FtU{Bool}())))
 end
 function _ft_f20_19()
     s1 = Int64(0)
@@ -7624,15 +7485,10 @@ function _ft_f20_19()
     end
 end
 function _ft_t20_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f20_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f20_19), !applicable(_ft_f20_19, n), hasmethod(_ft_f20_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f20_19), !applicable(_ft_f20_19, n), hasmethod(_ft_f20_19, Tuple{})))
 end
 function _ft_f20_22()
     s1 = Int64(0)
@@ -7642,13 +7498,9 @@ function _ft_f20_22()
     end
 end
 function _ft_t20_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f20_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f20_22), !applicable(_ft_f20_22, n), hasmethod(_ft_f20_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f20_22), !applicable(_ft_f20_22, n), hasmethod(_ft_f20_22, Tuple{})))
 end
 function _ft_f20_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7658,13 +7510,9 @@ function _ft_f20_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t20_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f20_23(Int64)
     local v3 = v1((n + 2))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f20_23, Int64), !applicable(_ft_f20_23, Int64, n), hasmethod(_ft_f20_23, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f20_23, Int64), !applicable(_ft_f20_23, Int64, n), hasmethod(_ft_f20_23, Tuple{Type{Int64}})))
 end
 
 # function_type21: F2 = core.List<core.int> Function(int, {List<T> x}); F4 = core.List<core.int> Function<A>(); F19 = void Function(int, [List<Function>]) Function(int x); F22 = Function<A>(List<A> x) Function(int x); F23 = int Function(B x) Function<B extends core.int>(int x)
@@ -7674,26 +7522,17 @@ function _ft_f21_2(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m21_2(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t21_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f21_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f21_2((n + 1); x = Int64[n, 2])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f21_2, (n + 1)), !applicable(_ft_f21_2, (n + 1), n), hasmethod(_ft_f21_2, Tuple{Int64}))
-    h = 31h + _ft_m21_2(_FtU{Int64}(), (n + 201)) + _ft_m21_2(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m21_2, _FtU{Bool}(), (n + 202)))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f21_2, (n + 1)), !applicable(_ft_f21_2, (n + 1), n), hasmethod(_ft_f21_2, Tuple{Int64})), _ft_m21_2(_FtU{Int64}(), (n + 201)), _ft_m21_2(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m21_2, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f21_4(::Type{A}) where {A}
     s1 = Int64(0)
     return Int64[s1]
 end
 function _ft_t21_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f21_4(Int64)
-    h = 31h + sum(v1)
-    h = 31h + _dw_bits(applicable(_ft_f21_4, Int64), !applicable(_ft_f21_4, Int64, n), hasmethod(_ft_f21_4, Tuple{Type{Int64}}))
-    return h
+    return (sum(v1), _dw_facts(applicable(_ft_f21_4, Int64), !applicable(_ft_f21_4, Int64, n), hasmethod(_ft_f21_4, Tuple{Type{Int64}})))
 end
 function _ft_f21_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7703,15 +7542,10 @@ function _ft_f21_19(p1_1::Int64)
     end
 end
 function _ft_t21_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f21_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f21_19, (n + 1)), !applicable(_ft_f21_19, (n + 1), n), hasmethod(_ft_f21_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f21_19, (n + 1)), !applicable(_ft_f21_19, (n + 1), n), hasmethod(_ft_f21_19, Tuple{Int64})))
 end
 function _ft_f21_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7721,13 +7555,9 @@ function _ft_f21_22(p1_1::Int64)
     end
 end
 function _ft_t21_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f21_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f21_22, (n + 1)), !applicable(_ft_f21_22, (n + 1), n), hasmethod(_ft_f21_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f21_22, (n + 1)), !applicable(_ft_f21_22, (n + 1), n), hasmethod(_ft_f21_22, Tuple{Int64})))
 end
 function _ft_f21_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7737,13 +7567,9 @@ function _ft_f21_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t21_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f21_23(Int64, (n + 1))
     local v4 = v2((n + 3))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f21_23, Int64, (n + 1)), !applicable(_ft_f21_23, Int64, (n + 1), n), hasmethod(_ft_f21_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f21_23, Int64, (n + 1)), !applicable(_ft_f21_23, Int64, (n + 1), n), hasmethod(_ft_f21_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type22: F0 = int Function(List<Function> x); F1 = List<Function> Function(int y, {int x}); F2 = core.List<core.int> Function(int y, {List<T> x}); F19 = void Function(int, [List<Function>]) Function<B extends core.int>(); F22 = Function<A>(List<A> x) Function<B extends core.int>()
@@ -7752,24 +7578,17 @@ function _ft_f22_0(p1_1::Vector{Function})
     return s1
 end
 function _ft_t22_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f22_0(Function[_ft_id])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f22_0, Function[_ft_id]), !applicable(_ft_f22_0, Function[_ft_id], n), hasmethod(_ft_f22_0, Tuple{Vector{Function}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f22_0, Function[_ft_id]), !applicable(_ft_f22_0, Function[_ft_id], n), hasmethod(_ft_f22_0, Tuple{Vector{Function}})))
 end
 function _ft_f22_1(p1_1::Int64; x::Int64 = Int64(0))
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return Function[_ft_id]
 end
 function _ft_t22_1(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f22_1((n + 1))
-    h = 31h + Int64(length(v3))
     local v4 = _ft_f22_1((n + 1); x = (n + 2))
-    h = 31h + Int64(length(v4))
-    h = 31h + _dw_bits(applicable(_ft_f22_1, (n + 1)), !applicable(_ft_f22_1, (n + 1), n), hasmethod(_ft_f22_1, Tuple{Int64}))
-    return h
+    return (Int64(length(v3)), Int64(length(v4)), _dw_facts(applicable(_ft_f22_1, (n + 1)), !applicable(_ft_f22_1, (n + 1), n), hasmethod(_ft_f22_1, Tuple{Int64})))
 end
 function _ft_f22_2(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
@@ -7777,15 +7596,9 @@ function _ft_f22_2(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m22_2(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t22_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f22_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f22_2((n + 1); x = Int64[n, 2])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f22_2, (n + 1)), !applicable(_ft_f22_2, (n + 1), n), hasmethod(_ft_f22_2, Tuple{Int64}))
-    h = 31h + _ft_m22_2(_FtU{Int64}(), (n + 201)) + _ft_m22_2(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m22_2, _FtU{Bool}(), (n + 202)))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f22_2, (n + 1)), !applicable(_ft_f22_2, (n + 1), n), hasmethod(_ft_f22_2, Tuple{Int64})), _ft_m22_2(_FtU{Int64}(), (n + 201)), _ft_m22_2(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m22_2, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f22_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7795,15 +7608,10 @@ function _ft_f22_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t22_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f22_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f22_19, Int64), !applicable(_ft_f22_19, Int64, n), hasmethod(_ft_f22_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f22_19, Int64), !applicable(_ft_f22_19, Int64, n), hasmethod(_ft_f22_19, Tuple{Type{Int64}})))
 end
 function _ft_f22_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7813,13 +7621,9 @@ function _ft_f22_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t22_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f22_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f22_22, Int64), !applicable(_ft_f22_22, Int64, n), hasmethod(_ft_f22_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f22_22, Int64), !applicable(_ft_f22_22, Int64, n), hasmethod(_ft_f22_22, Tuple{Type{Int64}})))
 end
 
 # function_type23: F0 = int Function([List<Function> x]); F2 = core.List<core.int> Function(); F11 = List<Function> Function({List<T> x}) Function<B extends core.int>(int x); F19 = void Function(int, [List<Function>]) Function<B extends core.int>(int x); F22 = Function<A>(List<A> x) Function<B extends core.int>(int x)
@@ -7828,24 +7632,17 @@ function _ft_f23_0(p1_1::Vector{Function} = Function[])
     return s1
 end
 function _ft_t23_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f23_0()
-    h = 31h + v2
     local v3 = _ft_f23_0(Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f23_0), !applicable(_ft_f23_0, Function[_ft_id], n), hasmethod(_ft_f23_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f23_0), !applicable(_ft_f23_0, Function[_ft_id], n), hasmethod(_ft_f23_0, Tuple{})))
 end
 function _ft_f23_2()
     s1 = Int64(0)
     return Int64[s1]
 end
 function _ft_t23_2(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f23_2()
-    h = 31h + sum(v1)
-    h = 31h + _dw_bits(applicable(_ft_f23_2), !applicable(_ft_f23_2, n), hasmethod(_ft_f23_2, Tuple{}))
-    return h
+    return (sum(v1), _dw_facts(applicable(_ft_f23_2), !applicable(_ft_f23_2, n), hasmethod(_ft_f23_2, Tuple{})))
 end
 function _ft_f23_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7855,15 +7652,10 @@ function _ft_f23_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t23_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f23_11(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(length(v4))
     local v5 = v2(; x = Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f23_11, Int64, (n + 1)), !applicable(_ft_f23_11, Int64, (n + 1), n), hasmethod(_ft_f23_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f23_11, Int64, (n + 1)), !applicable(_ft_f23_11, Int64, (n + 1), n), hasmethod(_ft_f23_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f23_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7873,15 +7665,10 @@ function _ft_f23_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t23_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f23_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f23_19, Int64, (n + 1)), !applicable(_ft_f23_19, Int64, (n + 1), n), hasmethod(_ft_f23_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f23_19, Int64, (n + 1)), !applicable(_ft_f23_19, Int64, (n + 1), n), hasmethod(_ft_f23_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f23_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -7891,13 +7678,9 @@ function _ft_f23_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t23_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f23_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f23_22, Int64, (n + 1)), !applicable(_ft_f23_22, Int64, (n + 1), n), hasmethod(_ft_f23_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f23_22, Int64, (n + 1)), !applicable(_ft_f23_22, Int64, (n + 1), n), hasmethod(_ft_f23_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type24: F11 = List<Function> Function(int, {List<T> x}) Function(); F17 = Function(int, [core.List<core.int> x]) Function(); F19 = void Function(int x, [List<Function>]) Function(); F21 = List<Function> Function<A>(List<A> x) Function(); F23 = List<Function> Function(B x) Function<B extends core.int>()
@@ -7909,15 +7692,10 @@ function _ft_f24_11()
     end
 end
 function _ft_t24_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f24_11()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f24_11), !applicable(_ft_f24_11, n), hasmethod(_ft_f24_11, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f24_11), !applicable(_ft_f24_11, n), hasmethod(_ft_f24_11, Tuple{})))
 end
 function _ft_f24_17()
     s1 = Int64(0)
@@ -7927,15 +7705,10 @@ function _ft_f24_17()
     end
 end
 function _ft_t24_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f24_17()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f24_17), !applicable(_ft_f24_17, n), hasmethod(_ft_f24_17, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n)), _dw_facts(applicable(_ft_f24_17), !applicable(_ft_f24_17, n), hasmethod(_ft_f24_17, Tuple{})))
 end
 function _ft_f24_19()
     s1 = Int64(0)
@@ -7945,15 +7718,10 @@ function _ft_f24_19()
     end
 end
 function _ft_t24_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f24_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f24_19), !applicable(_ft_f24_19, n), hasmethod(_ft_f24_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f24_19), !applicable(_ft_f24_19, n), hasmethod(_ft_f24_19, Tuple{})))
 end
 function _ft_f24_21()
     s1 = Int64(0)
@@ -7963,13 +7731,9 @@ function _ft_f24_21()
     end
 end
 function _ft_t24_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f24_21()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f24_21), !applicable(_ft_f24_21, n), hasmethod(_ft_f24_21, Tuple{}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f24_21), !applicable(_ft_f24_21, n), hasmethod(_ft_f24_21, Tuple{})))
 end
 function _ft_f24_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -7979,13 +7743,9 @@ function _ft_f24_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t24_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f24_23(Int64)
     local v3 = v1((n + 2))
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f24_23, Int64), !applicable(_ft_f24_23, Int64, n), hasmethod(_ft_f24_23, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f24_23, Int64), !applicable(_ft_f24_23, Int64, n), hasmethod(_ft_f24_23, Tuple{Type{Int64}})))
 end
 
 # function_type25: F3 = Function([List<T> x]); F11 = List<Function> Function(int, {List<T> x}) Function(int x); F19 = void Function(int x, [List<Function>]) Function(int x); F21 = List<Function> Function<A>(List<A> x) Function(int x); F23 = List<Function> Function(B x) Function<B extends core.int>( int x, )
@@ -7995,15 +7755,9 @@ function _ft_f25_3(p1_1::Vector{Int64} = Int64[])
 end
 _ft_m25_3(u::_FtU{T}, p1_1::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t25_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f25_3()
-    h = 31h + v2
     local v3 = _ft_f25_3(Int64[n, 1])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f25_3), !applicable(_ft_f25_3, Int64[n, 1], n), hasmethod(_ft_f25_3, Tuple{}), !applicable(_ft_f25_3, Bool[true]))
-    h = 31h + _ft_m25_3(_FtU{Int64}(), Int64[n, 201]) + _ft_m25_3(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m25_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m25_3, _FtU{Int64}(), Bool[true]))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f25_3), !applicable(_ft_f25_3, Int64[n, 1], n), hasmethod(_ft_f25_3, Tuple{}), !applicable(_ft_f25_3, Bool[true])), _ft_m25_3(_FtU{Int64}(), Int64[n, 201]), _ft_m25_3(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m25_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m25_3, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f25_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8013,15 +7767,10 @@ function _ft_f25_11(p1_1::Int64)
     end
 end
 function _ft_t25_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f25_11((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f25_11, (n + 1)), !applicable(_ft_f25_11, (n + 1), n), hasmethod(_ft_f25_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f25_11, (n + 1)), !applicable(_ft_f25_11, (n + 1), n), hasmethod(_ft_f25_11, Tuple{Int64})))
 end
 function _ft_f25_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8031,15 +7780,10 @@ function _ft_f25_19(p1_1::Int64)
     end
 end
 function _ft_t25_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f25_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f25_19, (n + 1)), !applicable(_ft_f25_19, (n + 1), n), hasmethod(_ft_f25_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f25_19, (n + 1)), !applicable(_ft_f25_19, (n + 1), n), hasmethod(_ft_f25_19, Tuple{Int64})))
 end
 function _ft_f25_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8049,13 +7793,9 @@ function _ft_f25_21(p1_1::Int64)
     end
 end
 function _ft_t25_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f25_21((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(length(v4))
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f25_21, (n + 1)), !applicable(_ft_f25_21, (n + 1), n), hasmethod(_ft_f25_21, Tuple{Int64}))
-    return h
+    return (Int64(length(v4)), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f25_21, (n + 1)), !applicable(_ft_f25_21, (n + 1), n), hasmethod(_ft_f25_21, Tuple{Int64})))
 end
 function _ft_f25_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8065,13 +7805,9 @@ function _ft_f25_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t25_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f25_23(Int64, (n + 1))
     local v4 = v2((n + 3))
-    h = 31h + Int64(length(v4))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f25_23, Int64, (n + 1)), !applicable(_ft_f25_23, Int64, (n + 1), n), hasmethod(_ft_f25_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v4)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f25_23, Int64, (n + 1)), !applicable(_ft_f25_23, Int64, (n + 1), n), hasmethod(_ft_f25_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type26: F3 = Function(int, [List<T> x]); F11 = List<Function> Function(int, {List<T> x}) Function<B extends core.int>(); F19 = void Function(int x, [List<Function>]) Function<B extends core.int>(); F21 = List<Function> Function<A>(List<A> x) Function<B extends core.int>(); F22 = A Function<A>(int x) Function<B extends core.int>()
@@ -8081,15 +7817,9 @@ function _ft_f26_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m26_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t26_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f26_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f26_3((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f26_3, (n + 1)), !applicable(_ft_f26_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f26_3, Tuple{Int64}), !applicable(_ft_f26_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m26_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m26_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m26_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m26_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f26_3, (n + 1)), !applicable(_ft_f26_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f26_3, Tuple{Int64}), !applicable(_ft_f26_3, (n + 101), Bool[true])), _ft_m26_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m26_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m26_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m26_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f26_11(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8099,15 +7829,10 @@ function _ft_f26_11(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t26_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f26_11(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f26_11, Int64), !applicable(_ft_f26_11, Int64, n), hasmethod(_ft_f26_11, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f26_11, Int64), !applicable(_ft_f26_11, Int64, n), hasmethod(_ft_f26_11, Tuple{Type{Int64}})))
 end
 function _ft_f26_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8117,15 +7842,10 @@ function _ft_f26_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t26_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f26_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f26_19, Int64), !applicable(_ft_f26_19, Int64, n), hasmethod(_ft_f26_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f26_19, Int64), !applicable(_ft_f26_19, Int64, n), hasmethod(_ft_f26_19, Tuple{Type{Int64}})))
 end
 function _ft_f26_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8135,13 +7855,9 @@ function _ft_f26_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t26_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f26_21(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f26_21, Int64), !applicable(_ft_f26_21, Int64, n), hasmethod(_ft_f26_21, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f26_21, Int64), !applicable(_ft_f26_21, Int64, n), hasmethod(_ft_f26_21, Tuple{Type{Int64}})))
 end
 function _ft_f26_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8151,13 +7867,9 @@ function _ft_f26_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t26_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f26_22(Int64)
     local v3 = v1(Int64, (n + 2))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f26_22, Int64), !applicable(_ft_f26_22, Int64, n), hasmethod(_ft_f26_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f26_22, Int64), !applicable(_ft_f26_22, Int64, n), hasmethod(_ft_f26_22, Tuple{Type{Int64}})))
 end
 
 # function_type27: F3 = Function(int y, [List<T> x]); F11 = List<Function> Function(int, {List<T> x}) Function<B extends core.int>( int x, ); F19 = void Function(int x, [List<Function>]) Function<B extends core.int>(int x); F21 = List<Function> Function<A>(List<A> x) Function<B extends core.int>(int x); F22 = A Function<A>(int x) Function<B extends core.int>(int x)
@@ -8167,15 +7879,9 @@ function _ft_f27_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m27_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t27_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f27_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f27_3((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f27_3, (n + 1)), !applicable(_ft_f27_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f27_3, Tuple{Int64}), !applicable(_ft_f27_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m27_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m27_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m27_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m27_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f27_3, (n + 1)), !applicable(_ft_f27_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f27_3, Tuple{Int64}), !applicable(_ft_f27_3, (n + 101), Bool[true])), _ft_m27_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m27_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m27_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m27_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f27_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8185,15 +7891,10 @@ function _ft_f27_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t27_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f27_11(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f27_11, Int64, (n + 1)), !applicable(_ft_f27_11, Int64, (n + 1), n), hasmethod(_ft_f27_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f27_11, Int64, (n + 1)), !applicable(_ft_f27_11, Int64, (n + 1), n), hasmethod(_ft_f27_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f27_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8203,15 +7904,10 @@ function _ft_f27_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t27_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f27_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f27_19, Int64, (n + 1)), !applicable(_ft_f27_19, Int64, (n + 1), n), hasmethod(_ft_f27_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f27_19, Int64, (n + 1)), !applicable(_ft_f27_19, Int64, (n + 1), n), hasmethod(_ft_f27_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f27_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8221,13 +7917,9 @@ function _ft_f27_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t27_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f27_21(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(length(v4))
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f27_21, Int64, (n + 1)), !applicable(_ft_f27_21, Int64, (n + 1), n), hasmethod(_ft_f27_21, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v4)), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f27_21, Int64, (n + 1)), !applicable(_ft_f27_21, Int64, (n + 1), n), hasmethod(_ft_f27_21, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f27_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8237,13 +7929,9 @@ function _ft_f27_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t27_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f27_22(Int64, (n + 1))
     local v4 = v2(Int64, (n + 3))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f27_22, Int64, (n + 1)), !applicable(_ft_f27_22, Int64, (n + 1), n), hasmethod(_ft_f27_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n)), _dw_facts(applicable(_ft_f27_22, Int64, (n + 1)), !applicable(_ft_f27_22, Int64, (n + 1), n), hasmethod(_ft_f27_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type28: F11 = List<Function> Function(int y, {List<T> x}) Function(); F17 = Function(int y, [core.List<core.int> x]) Function(); F18 = void Function([int]) Function(); F22 = A Function<A>(Function x) Function(); F23 = List<T> Function(B x) Function<B extends core.int>()
@@ -8255,15 +7943,10 @@ function _ft_f28_11()
     end
 end
 function _ft_t28_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f28_11()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f28_11), !applicable(_ft_f28_11, n), hasmethod(_ft_f28_11, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f28_11), !applicable(_ft_f28_11, n), hasmethod(_ft_f28_11, Tuple{})))
 end
 function _ft_f28_17()
     s1 = Int64(0)
@@ -8273,15 +7956,10 @@ function _ft_f28_17()
     end
 end
 function _ft_t28_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f28_17()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f28_17), !applicable(_ft_f28_17, n), hasmethod(_ft_f28_17, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n)), _dw_facts(applicable(_ft_f28_17), !applicable(_ft_f28_17, n), hasmethod(_ft_f28_17, Tuple{})))
 end
 function _ft_f28_18()
     s1 = Int64(0)
@@ -8291,15 +7969,10 @@ function _ft_f28_18()
     end
 end
 function _ft_t28_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f28_18()
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f28_18), !applicable(_ft_f28_18, n), hasmethod(_ft_f28_18, Tuple{}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f28_18), !applicable(_ft_f28_18, n), hasmethod(_ft_f28_18, Tuple{})))
 end
 function _ft_f28_22()
     s1 = Int64(0)
@@ -8309,13 +7982,9 @@ function _ft_f28_22()
     end
 end
 function _ft_t28_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f28_22()
     local v3 = v1(Int64, _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f28_22), !applicable(_ft_f28_22, n), hasmethod(_ft_f28_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f28_22), !applicable(_ft_f28_22, n), hasmethod(_ft_f28_22, Tuple{})))
 end
 function _ft_f28_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8325,13 +7994,9 @@ function _ft_f28_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t28_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f28_23(Int64)
     local v3 = v1((n + 2))
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f28_23, Int64), !applicable(_ft_f28_23, Int64, n), hasmethod(_ft_f28_23, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f28_23, Int64), !applicable(_ft_f28_23, Int64, n), hasmethod(_ft_f28_23, Tuple{Type{Int64}})))
 end
 
 # function_type29: F3 = Function([List<T>]); F11 = List<Function> Function(int y, {List<T> x}) Function(int x); F20 = void Function() Function(int x); F22 = A Function<A>(Function x) Function(int x); F23 = List<T> Function(B x) Function<B extends core.int>(int x)
@@ -8341,15 +8006,9 @@ function _ft_f29_3(p1_1::Vector{Int64} = Int64[])
 end
 _ft_m29_3(u::_FtU{T}, p1_1::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t29_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f29_3()
-    h = 31h + v2
     local v3 = _ft_f29_3(Int64[n, 1])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f29_3), !applicable(_ft_f29_3, Int64[n, 1], n), hasmethod(_ft_f29_3, Tuple{}), !applicable(_ft_f29_3, Bool[true]))
-    h = 31h + _ft_m29_3(_FtU{Int64}(), Int64[n, 201]) + _ft_m29_3(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m29_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m29_3, _FtU{Int64}(), Bool[true]))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f29_3), !applicable(_ft_f29_3, Int64[n, 1], n), hasmethod(_ft_f29_3, Tuple{}), !applicable(_ft_f29_3, Bool[true])), _ft_m29_3(_FtU{Int64}(), Int64[n, 201]), _ft_m29_3(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m29_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m29_3, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f29_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8359,15 +8018,10 @@ function _ft_f29_11(p1_1::Int64)
     end
 end
 function _ft_t29_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f29_11((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f29_11, (n + 1)), !applicable(_ft_f29_11, (n + 1), n), hasmethod(_ft_f29_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f29_11, (n + 1)), !applicable(_ft_f29_11, (n + 1), n), hasmethod(_ft_f29_11, Tuple{Int64})))
 end
 function _ft_f29_20(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8377,13 +8031,9 @@ function _ft_f29_20(p1_1::Int64)
     end
 end
 function _ft_t29_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f29_20((n + 1))
     local v3 = v2()
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f29_20, (n + 1)), !applicable(_ft_f29_20, (n + 1), n), hasmethod(_ft_f29_20, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f29_20, (n + 1)), !applicable(_ft_f29_20, (n + 1), n), hasmethod(_ft_f29_20, Tuple{Int64})))
 end
 function _ft_f29_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8393,13 +8043,9 @@ function _ft_f29_22(p1_1::Int64)
     end
 end
 function _ft_t29_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f29_22((n + 1))
     local v4 = v2(Int64, _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f29_22, (n + 1)), !applicable(_ft_f29_22, (n + 1), n), hasmethod(_ft_f29_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f29_22, (n + 1)), !applicable(_ft_f29_22, (n + 1), n), hasmethod(_ft_f29_22, Tuple{Int64})))
 end
 function _ft_f29_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8409,13 +8055,9 @@ function _ft_f29_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t29_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f29_23(Int64, (n + 1))
     local v4 = v2((n + 3))
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f29_23, Int64, (n + 1)), !applicable(_ft_f29_23, Int64, (n + 1), n), hasmethod(_ft_f29_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f29_23, Int64, (n + 1)), !applicable(_ft_f29_23, Int64, (n + 1), n), hasmethod(_ft_f29_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type30: F3 = Function(int, [List<T>]); F4 = List<T> Function<A>(A x); F11 = List<Function> Function(int y, {List<T> x}) Function<B extends core.int>(); F18 = void Function([int]) Function<B extends core.int>(); F22 = A Function<A>(Function x) Function<B extends core.int>()
@@ -8425,26 +8067,17 @@ function _ft_f30_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m30_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t30_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f30_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f30_3((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f30_3, (n + 1)), !applicable(_ft_f30_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f30_3, Tuple{Int64}), !applicable(_ft_f30_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m30_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m30_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m30_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m30_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f30_3, (n + 1)), !applicable(_ft_f30_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f30_3, Tuple{Int64}), !applicable(_ft_f30_3, (n + 101), Bool[true])), _ft_m30_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m30_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m30_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m30_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f30_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Int64[s1]
 end
 function _ft_t30_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f30_4(Int64, (n + 1))
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f30_4, Int64, (n + 1)), !applicable(_ft_f30_4, Int64, (n + 1), n), hasmethod(_ft_f30_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f30_4, Int64, (n + 1)), !applicable(_ft_f30_4, Int64, (n + 1), n), hasmethod(_ft_f30_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f30_11(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8454,15 +8087,10 @@ function _ft_f30_11(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t30_11(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f30_11(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f30_11, Int64), !applicable(_ft_f30_11, Int64, n), hasmethod(_ft_f30_11, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f30_11, Int64), !applicable(_ft_f30_11, Int64, n), hasmethod(_ft_f30_11, Tuple{Type{Int64}})))
 end
 function _ft_f30_18(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8472,15 +8100,10 @@ function _ft_f30_18(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t30_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f30_18(Int64)
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f30_18, Int64), !applicable(_ft_f30_18, Int64, n), hasmethod(_ft_f30_18, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f30_18, Int64), !applicable(_ft_f30_18, Int64, n), hasmethod(_ft_f30_18, Tuple{Type{Int64}})))
 end
 function _ft_f30_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8490,13 +8113,9 @@ function _ft_f30_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t30_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f30_22(Int64)
     local v3 = v1(Int64, _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f30_22, Int64), !applicable(_ft_f30_22, Int64, n), hasmethod(_ft_f30_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f30_22, Int64), !applicable(_ft_f30_22, Int64, n), hasmethod(_ft_f30_22, Tuple{Type{Int64}})))
 end
 
 # function_type31: F3 = Function(int x, [List<T>]); F4 = List<T> Function<A>(List<A> x); F11 = List<Function> Function(int y, {List<T> x}) Function<B extends core.int>( int x, ); F20 = void Function() Function<B extends core.int>(int x); F22 = A Function<A>(Function x) Function<B extends core.int>(int x)
@@ -8506,26 +8125,17 @@ function _ft_f31_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m31_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t31_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f31_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f31_3((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f31_3, (n + 1)), !applicable(_ft_f31_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f31_3, Tuple{Int64}), !applicable(_ft_f31_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m31_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m31_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m31_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m31_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f31_3, (n + 1)), !applicable(_ft_f31_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f31_3, Tuple{Int64}), !applicable(_ft_f31_3, (n + 101), Bool[true])), _ft_m31_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m31_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m31_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m31_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f31_4(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return Int64[s1]
 end
 function _ft_t31_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f31_4(Int64, Int64[n, 1])
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f31_4, Int64, Int64[n, 1]), !applicable(_ft_f31_4, Int64, Int64[n, 1], n), hasmethod(_ft_f31_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f31_4, Int64, Int64[n, 1]), !applicable(_ft_f31_4, Int64, Int64[n, 1], n), hasmethod(_ft_f31_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f31_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8535,15 +8145,10 @@ function _ft_f31_11(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t31_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f31_11(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f31_11, Int64, (n + 1)), !applicable(_ft_f31_11, Int64, (n + 1), n), hasmethod(_ft_f31_11, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f31_11, Int64, (n + 1)), !applicable(_ft_f31_11, Int64, (n + 1), n), hasmethod(_ft_f31_11, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f31_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8553,13 +8158,9 @@ function _ft_f31_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t31_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f31_20(Int64, (n + 1))
     local v3 = v2()
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f31_20, Int64, (n + 1)), !applicable(_ft_f31_20, Int64, (n + 1), n), hasmethod(_ft_f31_20, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f31_20, Int64, (n + 1)), !applicable(_ft_f31_20, Int64, (n + 1), n), hasmethod(_ft_f31_20, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f31_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8569,13 +8170,9 @@ function _ft_f31_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t31_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f31_22(Int64, (n + 1))
     local v4 = v2(Int64, _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f31_22, Int64, (n + 1)), !applicable(_ft_f31_22, Int64, (n + 1), n), hasmethod(_ft_f31_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f31_22, Int64, (n + 1)), !applicable(_ft_f31_22, Int64, (n + 1), n), hasmethod(_ft_f31_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type32: F4 = Function<A>(int x); F13 = core.List<core.int> Function([List<T>]) Function(); F19 = void Function(int, {List<Function> x}) Function(); F22 = A Function<A>(List<Function> x) Function(); F23 = B Function(B x) Function<B extends core.int>()
@@ -8584,11 +8181,8 @@ function _ft_f32_4(::Type{A}, p1_1::Int64) where {A}
     return s1
 end
 function _ft_t32_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f32_4(Int64, (n + 1))
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f32_4, Int64, (n + 1)), !applicable(_ft_f32_4, Int64, (n + 1), n), hasmethod(_ft_f32_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f32_4, Int64, (n + 1)), !applicable(_ft_f32_4, Int64, (n + 1), n), hasmethod(_ft_f32_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f32_13()
     s1 = Int64(0)
@@ -8598,15 +8192,10 @@ function _ft_f32_13()
     end
 end
 function _ft_t32_13(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f32_13()
     local v3 = v1()
-    h = 31h + sum(v3)
     local v4 = v1(Int64[n, 2])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f32_13), !applicable(_ft_f32_13, n), hasmethod(_ft_f32_13, Tuple{}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true])), _dw_facts(applicable(_ft_f32_13), !applicable(_ft_f32_13, n), hasmethod(_ft_f32_13, Tuple{})))
 end
 function _ft_f32_19()
     s1 = Int64(0)
@@ -8616,15 +8205,10 @@ function _ft_f32_19()
     end
 end
 function _ft_t32_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f32_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f32_19), !applicable(_ft_f32_19, n), hasmethod(_ft_f32_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f32_19), !applicable(_ft_f32_19, n), hasmethod(_ft_f32_19, Tuple{})))
 end
 function _ft_f32_22()
     s1 = Int64(0)
@@ -8634,13 +8218,9 @@ function _ft_f32_22()
     end
 end
 function _ft_t32_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f32_22()
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f32_22), !applicable(_ft_f32_22, n), hasmethod(_ft_f32_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f32_22), !applicable(_ft_f32_22, n), hasmethod(_ft_f32_22, Tuple{})))
 end
 function _ft_f32_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8650,13 +8230,9 @@ function _ft_f32_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t32_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f32_23(Int64)
     local v3 = v1((n + 2))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f32_23, Int64), !applicable(_ft_f32_23, Int64, n), hasmethod(_ft_f32_23, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f32_23, Int64), !applicable(_ft_f32_23, Int64, n), hasmethod(_ft_f32_23, Tuple{Type{Int64}})))
 end
 
 # function_type33: F4 = Function<A>(Function x); F11 = List<Function> Function() Function(int x); F13 = core.List<core.int> Function([List<T>]) Function(int x); F19 = void Function(int, {List<Function> x}) Function(int x); F23 = B Function(B x) Function<B extends core.int>(int x)
@@ -8665,11 +8241,8 @@ function _ft_f33_4(::Type{A}, p1_1::Function) where {A}
     return s1
 end
 function _ft_t33_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f33_4(Int64, _ft_id)
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f33_4, Int64, _ft_id), !applicable(_ft_f33_4, Int64, _ft_id, n), hasmethod(_ft_f33_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f33_4, Int64, _ft_id), !applicable(_ft_f33_4, Int64, _ft_id, n), hasmethod(_ft_f33_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f33_11(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8679,13 +8252,9 @@ function _ft_f33_11(p1_1::Int64)
     end
 end
 function _ft_t33_11(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f33_11((n + 1))
     local v3 = v2()
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f33_11, (n + 1)), !applicable(_ft_f33_11, (n + 1), n), hasmethod(_ft_f33_11, Tuple{Int64}))
-    return h
+    return (Int64(length(v3)), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f33_11, (n + 1)), !applicable(_ft_f33_11, (n + 1), n), hasmethod(_ft_f33_11, Tuple{Int64})))
 end
 function _ft_f33_13(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8695,15 +8264,10 @@ function _ft_f33_13(p1_1::Int64)
     end
 end
 function _ft_t33_13(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f33_13((n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Int64[n, 3])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f33_13, (n + 1)), !applicable(_ft_f33_13, (n + 1), n), hasmethod(_ft_f33_13, Tuple{Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f33_13, (n + 1)), !applicable(_ft_f33_13, (n + 1), n), hasmethod(_ft_f33_13, Tuple{Int64})))
 end
 function _ft_f33_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8713,15 +8277,10 @@ function _ft_f33_19(p1_1::Int64)
     end
 end
 function _ft_t33_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f33_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f33_19, (n + 1)), !applicable(_ft_f33_19, (n + 1), n), hasmethod(_ft_f33_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f33_19, (n + 1)), !applicable(_ft_f33_19, (n + 1), n), hasmethod(_ft_f33_19, Tuple{Int64})))
 end
 function _ft_f33_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8731,13 +8290,9 @@ function _ft_f33_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t33_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f33_23(Int64, (n + 1))
     local v4 = v2((n + 3))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f33_23, Int64, (n + 1)), !applicable(_ft_f33_23, Int64, (n + 1), n), hasmethod(_ft_f33_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f33_23, Int64, (n + 1)), !applicable(_ft_f33_23, Int64, (n + 1), n), hasmethod(_ft_f33_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type34: F0 = int Function([core.List<core.int> x]); F1 = List<Function> Function(List<Function> x); F3 = Function(int y, {List<T> x}); F19 = void Function(int, {List<Function> x}) Function<B extends core.int>(); F22 = A Function<A>(List<Function> x) Function<B extends core.int>()
@@ -8746,24 +8301,17 @@ function _ft_f34_0(p1_1::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t34_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f34_0()
-    h = 31h + v2
     local v3 = _ft_f34_0(Int64[n, 1])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f34_0), !applicable(_ft_f34_0, Int64[n, 1], n), hasmethod(_ft_f34_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f34_0), !applicable(_ft_f34_0, Int64[n, 1], n), hasmethod(_ft_f34_0, Tuple{})))
 end
 function _ft_f34_1(p1_1::Vector{Function})
     s1 = Int64(0) + _ft_w(p1_1)
     return Function[_ft_id]
 end
 function _ft_t34_1(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f34_1(Function[_ft_id])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f34_1, Function[_ft_id]), !applicable(_ft_f34_1, Function[_ft_id], n), hasmethod(_ft_f34_1, Tuple{Vector{Function}}))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f34_1, Function[_ft_id]), !applicable(_ft_f34_1, Function[_ft_id], n), hasmethod(_ft_f34_1, Tuple{Vector{Function}})))
 end
 function _ft_f34_3(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
@@ -8771,15 +8319,9 @@ function _ft_f34_3(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m34_3(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t34_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f34_3((n + 1))
-    h = 31h + v3
     local v4 = _ft_f34_3((n + 1); x = Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f34_3, (n + 1)), !applicable(_ft_f34_3, (n + 1), n), hasmethod(_ft_f34_3, Tuple{Int64}))
-    h = 31h + _ft_m34_3(_FtU{Int64}(), (n + 201)) + _ft_m34_3(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m34_3, _FtU{Bool}(), (n + 202)))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f34_3, (n + 1)), !applicable(_ft_f34_3, (n + 1), n), hasmethod(_ft_f34_3, Tuple{Int64})), _ft_m34_3(_FtU{Int64}(), (n + 201)), _ft_m34_3(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m34_3, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f34_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8789,15 +8331,10 @@ function _ft_f34_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t34_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f34_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f34_19, Int64), !applicable(_ft_f34_19, Int64, n), hasmethod(_ft_f34_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f34_19, Int64), !applicable(_ft_f34_19, Int64, n), hasmethod(_ft_f34_19, Tuple{Type{Int64}})))
 end
 function _ft_f34_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8807,13 +8344,9 @@ function _ft_f34_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t34_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f34_22(Int64)
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f34_22, Int64), !applicable(_ft_f34_22, Int64, n), hasmethod(_ft_f34_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f34_22, Int64), !applicable(_ft_f34_22, Int64, n), hasmethod(_ft_f34_22, Tuple{Type{Int64}})))
 end
 
 # function_type35: F3 = Function(); F4 = Function<A>(core.List<core.int> x); F13 = core.List<core.int> Function([List<T>]) Function<B extends core.int>(int x); F19 = void Function(int, {List<Function> x}) Function<B extends core.int>(int x); F22 = A Function<A>(List<Function> x) Function<B extends core.int>( int x, )
@@ -8822,22 +8355,16 @@ function _ft_f35_3()
     return s1
 end
 function _ft_t35_3(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f35_3()
-    h = 31h + v1
-    h = 31h + _dw_bits(applicable(_ft_f35_3), !applicable(_ft_f35_3, n), hasmethod(_ft_f35_3, Tuple{}))
-    return h
+    return (v1, _dw_facts(applicable(_ft_f35_3), !applicable(_ft_f35_3, n), hasmethod(_ft_f35_3, Tuple{})))
 end
 function _ft_f35_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t35_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f35_4(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f35_4, Int64, Int64[n, 1]), !applicable(_ft_f35_4, Int64, Int64[n, 1], n), hasmethod(_ft_f35_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f35_4, Int64, Int64[n, 1]), !applicable(_ft_f35_4, Int64, Int64[n, 1], n), hasmethod(_ft_f35_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f35_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8847,15 +8374,10 @@ function _ft_f35_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t35_13(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f35_13(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Int64[n, 3])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f35_13, Int64, (n + 1)), !applicable(_ft_f35_13, Int64, (n + 1), n), hasmethod(_ft_f35_13, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f35_13, Int64, (n + 1)), !applicable(_ft_f35_13, Int64, (n + 1), n), hasmethod(_ft_f35_13, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f35_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8865,15 +8387,10 @@ function _ft_f35_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t35_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f35_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f35_19, Int64, (n + 1)), !applicable(_ft_f35_19, Int64, (n + 1), n), hasmethod(_ft_f35_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f35_19, Int64, (n + 1)), !applicable(_ft_f35_19, Int64, (n + 1), n), hasmethod(_ft_f35_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f35_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8883,13 +8400,9 @@ function _ft_f35_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t35_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f35_22(Int64, (n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f35_22, Int64, (n + 1)), !applicable(_ft_f35_22, Int64, (n + 1), n), hasmethod(_ft_f35_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f35_22, Int64, (n + 1)), !applicable(_ft_f35_22, Int64, (n + 1), n), hasmethod(_ft_f35_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type36: F0 = int Function(int y, [core.List<core.int> x]); F4 = Function<A>(List<T> x); F19 = void Function(int y, {List<Function> x}) Function(); F22 = A Function<A>(core.List<core.int> x) Function(); F23 = void Function(B x) Function<B extends core.int>()
@@ -8898,13 +8411,9 @@ function _ft_f36_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t36_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f36_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f36_0((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f36_0, (n + 1)), !applicable(_ft_f36_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f36_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f36_0, (n + 1)), !applicable(_ft_f36_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f36_0, Tuple{Int64})))
 end
 function _ft_f36_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -8912,13 +8421,8 @@ function _ft_f36_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m36_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t36_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f36_4(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f36_4, Int64, Int64[n, 1]), !applicable(_ft_f36_4, Int64, Int64[n, 1], n), hasmethod(_ft_f36_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f36_4, Int64, Bool[true]))
-    h = 31h + _ft_m36_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m36_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m36_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m36_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f36_4, Int64, Int64[n, 1]), !applicable(_ft_f36_4, Int64, Int64[n, 1], n), hasmethod(_ft_f36_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f36_4, Int64, Bool[true])), _ft_m36_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m36_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m36_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m36_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f36_19()
     s1 = Int64(0)
@@ -8928,15 +8432,10 @@ function _ft_f36_19()
     end
 end
 function _ft_t36_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f36_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f36_19), !applicable(_ft_f36_19, n), hasmethod(_ft_f36_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f36_19), !applicable(_ft_f36_19, n), hasmethod(_ft_f36_19, Tuple{})))
 end
 function _ft_f36_22()
     s1 = Int64(0)
@@ -8946,13 +8445,9 @@ function _ft_f36_22()
     end
 end
 function _ft_t36_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f36_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f36_22), !applicable(_ft_f36_22, n), hasmethod(_ft_f36_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f36_22), !applicable(_ft_f36_22, n), hasmethod(_ft_f36_22, Tuple{})))
 end
 function _ft_f36_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -8962,13 +8457,9 @@ function _ft_f36_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t36_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f36_23(Int64)
     local v3 = v1((n + 2))
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f36_23, Int64), !applicable(_ft_f36_23, Int64, n), hasmethod(_ft_f36_23, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f36_23, Int64), !applicable(_ft_f36_23, Int64, n), hasmethod(_ft_f36_23, Tuple{Type{Int64}})))
 end
 
 # function_type37: F2 = List<T> Function(int, [Function x]); F4 = Function<A>(); F19 = void Function(int y, {List<Function> x}) Function(int x); F22 = A Function<A>(core.List<core.int> x) Function(int x); F23 = void Function(B x) Function<B extends core.int>(int x)
@@ -8977,24 +8468,17 @@ function _ft_f37_2(p1_1::Int64, p1_2::Function = _ft_id)
     return Int64[s1]
 end
 function _ft_t37_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f37_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f37_2((n + 1), _ft_id)
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f37_2, (n + 1)), !applicable(_ft_f37_2, (n + 1), _ft_id, n), hasmethod(_ft_f37_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f37_2, (n + 1)), !applicable(_ft_f37_2, (n + 1), _ft_id, n), hasmethod(_ft_f37_2, Tuple{Int64})))
 end
 function _ft_f37_4(::Type{A}) where {A}
     s1 = Int64(0)
     return s1
 end
 function _ft_t37_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f37_4(Int64)
-    h = 31h + v1
-    h = 31h + _dw_bits(applicable(_ft_f37_4, Int64), !applicable(_ft_f37_4, Int64, n), hasmethod(_ft_f37_4, Tuple{Type{Int64}}))
-    return h
+    return (v1, _dw_facts(applicable(_ft_f37_4, Int64), !applicable(_ft_f37_4, Int64, n), hasmethod(_ft_f37_4, Tuple{Type{Int64}})))
 end
 function _ft_f37_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9004,15 +8488,10 @@ function _ft_f37_19(p1_1::Int64)
     end
 end
 function _ft_t37_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f37_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f37_19, (n + 1)), !applicable(_ft_f37_19, (n + 1), n), hasmethod(_ft_f37_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f37_19, (n + 1)), !applicable(_ft_f37_19, (n + 1), n), hasmethod(_ft_f37_19, Tuple{Int64})))
 end
 function _ft_f37_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9022,13 +8501,9 @@ function _ft_f37_22(p1_1::Int64)
     end
 end
 function _ft_t37_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f37_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f37_22, (n + 1)), !applicable(_ft_f37_22, (n + 1), n), hasmethod(_ft_f37_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f37_22, (n + 1)), !applicable(_ft_f37_22, (n + 1), n), hasmethod(_ft_f37_22, Tuple{Int64})))
 end
 function _ft_f37_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9038,13 +8513,9 @@ function _ft_f37_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t37_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f37_23(Int64, (n + 1))
     local v4 = v2((n + 3))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f37_23, Int64, (n + 1)), !applicable(_ft_f37_23, Int64, (n + 1), n), hasmethod(_ft_f37_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f37_23, Int64, (n + 1)), !applicable(_ft_f37_23, Int64, (n + 1), n), hasmethod(_ft_f37_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type38: F0 = int Function([core.List<core.int>]); F2 = List<T> Function(int y, [Function x]); F4 = Function<A>(A x); F19 = void Function(int y, {List<Function> x}) Function<B extends core.int>(); F22 = A Function<A>(core.List<core.int> x) Function<B extends core.int>()
@@ -9053,37 +8524,26 @@ function _ft_f38_0(p1_1::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t38_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f38_0()
-    h = 31h + v2
     local v3 = _ft_f38_0(Int64[n, 1])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f38_0), !applicable(_ft_f38_0, Int64[n, 1], n), hasmethod(_ft_f38_0, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f38_0), !applicable(_ft_f38_0, Int64[n, 1], n), hasmethod(_ft_f38_0, Tuple{})))
 end
 function _ft_f38_2(p1_1::Int64, p1_2::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return Int64[s1]
 end
 function _ft_t38_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f38_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f38_2((n + 1), _ft_id)
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f38_2, (n + 1)), !applicable(_ft_f38_2, (n + 1), _ft_id, n), hasmethod(_ft_f38_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f38_2, (n + 1)), !applicable(_ft_f38_2, (n + 1), _ft_id, n), hasmethod(_ft_f38_2, Tuple{Int64})))
 end
 function _ft_f38_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t38_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f38_4(Int64, (n + 1))
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f38_4, Int64, (n + 1)), !applicable(_ft_f38_4, Int64, (n + 1), n), hasmethod(_ft_f38_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f38_4, Int64, (n + 1)), !applicable(_ft_f38_4, Int64, (n + 1), n), hasmethod(_ft_f38_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f38_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9093,15 +8553,10 @@ function _ft_f38_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t38_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f38_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f38_19, Int64), !applicable(_ft_f38_19, Int64, n), hasmethod(_ft_f38_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f38_19, Int64), !applicable(_ft_f38_19, Int64, n), hasmethod(_ft_f38_19, Tuple{Type{Int64}})))
 end
 function _ft_f38_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9111,13 +8566,9 @@ function _ft_f38_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t38_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f38_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f38_22, Int64), !applicable(_ft_f38_22, Int64, n), hasmethod(_ft_f38_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f38_22, Int64), !applicable(_ft_f38_22, Int64, n), hasmethod(_ft_f38_22, Tuple{Type{Int64}})))
 end
 
 # function_type39: F0 = int Function(int, [core.List<core.int>]); F4 = Function<A>(List<A> x); F13 = core.List<core.int> Function(int, [List<T>]) Function<B extends core.int>( int x, ); F19 = void Function(int y, {List<Function> x}) Function<B extends core.int>( int x, ); F22 = A Function<A>(core.List<core.int> x) Function<B extends core.int>(int x)
@@ -9126,24 +8577,17 @@ function _ft_f39_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t39_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f39_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f39_0((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f39_0, (n + 1)), !applicable(_ft_f39_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f39_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f39_0, (n + 1)), !applicable(_ft_f39_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f39_0, Tuple{Int64})))
 end
 function _ft_f39_4(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t39_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f39_4(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f39_4, Int64, Int64[n, 1]), !applicable(_ft_f39_4, Int64, Int64[n, 1], n), hasmethod(_ft_f39_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f39_4, Int64, Int64[n, 1]), !applicable(_ft_f39_4, Int64, Int64[n, 1], n), hasmethod(_ft_f39_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f39_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9153,15 +8597,10 @@ function _ft_f39_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t39_13(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f39_13(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f39_13, Int64, (n + 1)), !applicable(_ft_f39_13, Int64, (n + 1), n), hasmethod(_ft_f39_13, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f39_13, Int64, (n + 1)), !applicable(_ft_f39_13, Int64, (n + 1), n), hasmethod(_ft_f39_13, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f39_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9171,15 +8610,10 @@ function _ft_f39_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t39_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f39_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f39_19, Int64, (n + 1)), !applicable(_ft_f39_19, Int64, (n + 1), n), hasmethod(_ft_f39_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f39_19, Int64, (n + 1)), !applicable(_ft_f39_19, Int64, (n + 1), n), hasmethod(_ft_f39_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f39_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9189,13 +8623,9 @@ function _ft_f39_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t39_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f39_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f39_22, Int64, (n + 1)), !applicable(_ft_f39_22, Int64, (n + 1), n), hasmethod(_ft_f39_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f39_22, Int64, (n + 1)), !applicable(_ft_f39_22, Int64, (n + 1), n), hasmethod(_ft_f39_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type40: F9 = List<Function> Function(int x, [int]) Function(); F16 = Function(int y, [Function x]) Function(); F18 = void Function({int x}) Function(); F22 = A Function<A>(List<T> x) Function(); F23 = B Function(Function x) Function<B extends core.int>()
@@ -9207,15 +8637,10 @@ function _ft_f40_9()
     end
 end
 function _ft_t40_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f40_9()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f40_9), !applicable(_ft_f40_9, n), hasmethod(_ft_f40_9, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), (n + 3), n)), _dw_facts(applicable(_ft_f40_9), !applicable(_ft_f40_9, n), hasmethod(_ft_f40_9, Tuple{})))
 end
 function _ft_f40_16()
     s1 = Int64(0)
@@ -9225,15 +8650,10 @@ function _ft_f40_16()
     end
 end
 function _ft_t40_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f40_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f40_16), !applicable(_ft_f40_16, n), hasmethod(_ft_f40_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n)), _dw_facts(applicable(_ft_f40_16), !applicable(_ft_f40_16, n), hasmethod(_ft_f40_16, Tuple{})))
 end
 function _ft_f40_18()
     s1 = Int64(0)
@@ -9243,15 +8663,10 @@ function _ft_f40_18()
     end
 end
 function _ft_t40_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f40_18()
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1(; x = (n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f40_18), !applicable(_ft_f40_18, n), hasmethod(_ft_f40_18, Tuple{}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f40_18), !applicable(_ft_f40_18, n), hasmethod(_ft_f40_18, Tuple{})))
 end
 function _ft_f40_22()
     s1 = Int64(0)
@@ -9261,13 +8676,9 @@ function _ft_f40_22()
     end
 end
 function _ft_t40_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f40_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f40_22), !applicable(_ft_f40_22, n), hasmethod(_ft_f40_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true])), _dw_facts(applicable(_ft_f40_22), !applicable(_ft_f40_22, n), hasmethod(_ft_f40_22, Tuple{})))
 end
 function _ft_f40_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9277,13 +8688,9 @@ function _ft_f40_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t40_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f40_23(Int64)
     local v3 = v1(_ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, _ft_id), !applicable(v1, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f40_23, Int64), !applicable(_ft_f40_23, Int64, n), hasmethod(_ft_f40_23, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, _ft_id), !applicable(v1, _ft_id, n)), _dw_facts(applicable(_ft_f40_23, Int64), !applicable(_ft_f40_23, Int64, n), hasmethod(_ft_f40_23, Tuple{Type{Int64}})))
 end
 
 # function_type41: F9 = List<Function> Function(int x, [int]) Function(int x); F16 = Function(int y, [Function x]) Function(int x); F18 = void Function({int x}) Function(int x); F22 = A Function<A>(List<T> x) Function(int x); F23 = B Function(Function x) Function<B extends core.int>(int x)
@@ -9295,15 +8702,10 @@ function _ft_f41_9(p1_1::Int64)
     end
 end
 function _ft_t41_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f41_9((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), (n + 4))
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), (n + 4), n))
-    h = 31h + _dw_bits(applicable(_ft_f41_9, (n + 1)), !applicable(_ft_f41_9, (n + 1), n), hasmethod(_ft_f41_9, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), (n + 4), n)), _dw_facts(applicable(_ft_f41_9, (n + 1)), !applicable(_ft_f41_9, (n + 1), n), hasmethod(_ft_f41_9, Tuple{Int64})))
 end
 function _ft_f41_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9313,15 +8715,10 @@ function _ft_f41_16(p1_1::Int64)
     end
 end
 function _ft_t41_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f41_16((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), _ft_id)
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f41_16, (n + 1)), !applicable(_ft_f41_16, (n + 1), n), hasmethod(_ft_f41_16, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n)), _dw_facts(applicable(_ft_f41_16, (n + 1)), !applicable(_ft_f41_16, (n + 1), n), hasmethod(_ft_f41_16, Tuple{Int64})))
 end
 function _ft_f41_18(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9331,15 +8728,10 @@ function _ft_f41_18(p1_1::Int64)
     end
 end
 function _ft_t41_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f41_18((n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(; x = (n + 3))
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f41_18, (n + 1)), !applicable(_ft_f41_18, (n + 1), n), hasmethod(_ft_f41_18, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f41_18, (n + 1)), !applicable(_ft_f41_18, (n + 1), n), hasmethod(_ft_f41_18, Tuple{Int64})))
 end
 function _ft_f41_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9349,13 +8741,9 @@ function _ft_f41_22(p1_1::Int64)
     end
 end
 function _ft_t41_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f41_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f41_22, (n + 1)), !applicable(_ft_f41_22, (n + 1), n), hasmethod(_ft_f41_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true])), _dw_facts(applicable(_ft_f41_22, (n + 1)), !applicable(_ft_f41_22, (n + 1), n), hasmethod(_ft_f41_22, Tuple{Int64})))
 end
 function _ft_f41_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9365,13 +8753,9 @@ function _ft_f41_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t41_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f41_23(Int64, (n + 1))
     local v4 = v2(_ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, _ft_id), !applicable(v2, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f41_23, Int64, (n + 1)), !applicable(_ft_f41_23, Int64, (n + 1), n), hasmethod(_ft_f41_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, _ft_id), !applicable(v2, _ft_id, n)), _dw_facts(applicable(_ft_f41_23, Int64, (n + 1)), !applicable(_ft_f41_23, Int64, (n + 1), n), hasmethod(_ft_f41_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type42: F0 = int Function(int, {core.List<core.int> x}); F9 = List<Function> Function(int x, [int]) Function<B extends core.int>(); F16 = Function(int y, [Function x]) Function<B extends core.int>(); F18 = void Function({int x}) Function<B extends core.int>(); F22 = A Function<A>(List<T> x) Function<B extends core.int>()
@@ -9380,13 +8764,9 @@ function _ft_f42_0(p1_1::Int64; x::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t42_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f42_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f42_0((n + 1); x = Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f42_0, (n + 1)), !applicable(_ft_f42_0, (n + 1), n), hasmethod(_ft_f42_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f42_0, (n + 1)), !applicable(_ft_f42_0, (n + 1), n), hasmethod(_ft_f42_0, Tuple{Int64})))
 end
 function _ft_f42_9(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9396,15 +8776,10 @@ function _ft_f42_9(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t42_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f42_9(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f42_9, Int64), !applicable(_ft_f42_9, Int64, n), hasmethod(_ft_f42_9, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), (n + 3), n)), _dw_facts(applicable(_ft_f42_9, Int64), !applicable(_ft_f42_9, Int64, n), hasmethod(_ft_f42_9, Tuple{Type{Int64}})))
 end
 function _ft_f42_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9414,15 +8789,10 @@ function _ft_f42_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t42_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f42_16(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f42_16, Int64), !applicable(_ft_f42_16, Int64, n), hasmethod(_ft_f42_16, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n)), _dw_facts(applicable(_ft_f42_16, Int64), !applicable(_ft_f42_16, Int64, n), hasmethod(_ft_f42_16, Tuple{Type{Int64}})))
 end
 function _ft_f42_18(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9432,15 +8802,10 @@ function _ft_f42_18(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t42_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f42_18(Int64)
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1(; x = (n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f42_18, Int64), !applicable(_ft_f42_18, Int64, n), hasmethod(_ft_f42_18, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f42_18, Int64), !applicable(_ft_f42_18, Int64, n), hasmethod(_ft_f42_18, Tuple{Type{Int64}})))
 end
 function _ft_f42_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9450,13 +8815,9 @@ function _ft_f42_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t42_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f42_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f42_22, Int64), !applicable(_ft_f42_22, Int64, n), hasmethod(_ft_f42_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true])), _dw_facts(applicable(_ft_f42_22, Int64), !applicable(_ft_f42_22, Int64, n), hasmethod(_ft_f42_22, Tuple{Type{Int64}})))
 end
 
 # function_type43: F0 = int Function(int y, {core.List<core.int> x}); F9 = List<Function> Function(int x, [int]) Function<B extends core.int>(int x); F16 = Function(int y, [Function x]) Function<B extends core.int>( int x, ); F18 = void Function({int x}) Function<B extends core.int>(int x); F22 = A Function<A>(List<T> x) Function<B extends core.int>(int x)
@@ -9465,13 +8826,9 @@ function _ft_f43_0(p1_1::Int64; x::Vector{Int64} = Int64[])
     return s1
 end
 function _ft_t43_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f43_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f43_0((n + 1); x = Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f43_0, (n + 1)), !applicable(_ft_f43_0, (n + 1), n), hasmethod(_ft_f43_0, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f43_0, (n + 1)), !applicable(_ft_f43_0, (n + 1), n), hasmethod(_ft_f43_0, Tuple{Int64})))
 end
 function _ft_f43_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9481,15 +8838,10 @@ function _ft_f43_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t43_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f43_9(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), (n + 4))
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), (n + 4), n))
-    h = 31h + _dw_bits(applicable(_ft_f43_9, Int64, (n + 1)), !applicable(_ft_f43_9, Int64, (n + 1), n), hasmethod(_ft_f43_9, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), (n + 4), n)), _dw_facts(applicable(_ft_f43_9, Int64, (n + 1)), !applicable(_ft_f43_9, Int64, (n + 1), n), hasmethod(_ft_f43_9, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f43_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9499,15 +8851,10 @@ function _ft_f43_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t43_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f43_16(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), _ft_id)
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f43_16, Int64, (n + 1)), !applicable(_ft_f43_16, Int64, (n + 1), n), hasmethod(_ft_f43_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n)), _dw_facts(applicable(_ft_f43_16, Int64, (n + 1)), !applicable(_ft_f43_16, Int64, (n + 1), n), hasmethod(_ft_f43_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f43_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9517,15 +8864,10 @@ function _ft_f43_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t43_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f43_18(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(; x = (n + 3))
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f43_18, Int64, (n + 1)), !applicable(_ft_f43_18, Int64, (n + 1), n), hasmethod(_ft_f43_18, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f43_18, Int64, (n + 1)), !applicable(_ft_f43_18, Int64, (n + 1), n), hasmethod(_ft_f43_18, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f43_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9535,13 +8877,9 @@ function _ft_f43_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t43_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f43_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f43_22, Int64, (n + 1)), !applicable(_ft_f43_22, Int64, (n + 1), n), hasmethod(_ft_f43_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true])), _dw_facts(applicable(_ft_f43_22, Int64, (n + 1)), !applicable(_ft_f43_22, Int64, (n + 1), n), hasmethod(_ft_f43_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type44: F3 = void Function({int x}); F4 = A Function<A>(List<T> x); F12 = core.List<core.int> Function([List<Function>]) Function(); F14 = List<T> Function(int y, {Function x}) Function(); F23 = B Function(core.List<core.int> x) Function<B extends core.int>()
@@ -9550,13 +8888,9 @@ function _ft_f44_3(; x::Int64 = Int64(0))
     return nothing
 end
 function _ft_t44_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f44_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f44_3(; x = (n + 1))
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f44_3), !applicable(_ft_f44_3, n), hasmethod(_ft_f44_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f44_3), !applicable(_ft_f44_3, n), hasmethod(_ft_f44_3, Tuple{})))
 end
 function _ft_f44_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9564,13 +8898,8 @@ function _ft_f44_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m44_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t44_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f44_4(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f44_4, Int64, Int64[n, 1]), !applicable(_ft_f44_4, Int64, Int64[n, 1], n), hasmethod(_ft_f44_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f44_4, Int64, Bool[true]))
-    h = 31h + _ft_m44_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m44_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m44_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m44_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f44_4, Int64, Int64[n, 1]), !applicable(_ft_f44_4, Int64, Int64[n, 1], n), hasmethod(_ft_f44_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f44_4, Int64, Bool[true])), _ft_m44_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m44_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m44_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m44_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f44_12()
     s1 = Int64(0)
@@ -9580,15 +8909,10 @@ function _ft_f44_12()
     end
 end
 function _ft_t44_12(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f44_12()
     local v3 = v1()
-    h = 31h + sum(v3)
     local v4 = v1(Function[_ft_id])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f44_12), !applicable(_ft_f44_12, n), hasmethod(_ft_f44_12, Tuple{}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(v1), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f44_12), !applicable(_ft_f44_12, n), hasmethod(_ft_f44_12, Tuple{})))
 end
 function _ft_f44_14()
     s1 = Int64(0)
@@ -9598,15 +8922,10 @@ function _ft_f44_14()
     end
 end
 function _ft_t44_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f44_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = _ft_id)
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f44_14), !applicable(_ft_f44_14, n), hasmethod(_ft_f44_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f44_14), !applicable(_ft_f44_14, n), hasmethod(_ft_f44_14, Tuple{})))
 end
 function _ft_f44_23(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9616,13 +8935,9 @@ function _ft_f44_23(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t44_23(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f44_23(Int64)
     local v3 = v1(Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f44_23, Int64), !applicable(_ft_f44_23, Int64, n), hasmethod(_ft_f44_23, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n)), _dw_facts(applicable(_ft_f44_23, Int64), !applicable(_ft_f44_23, Int64, n), hasmethod(_ft_f44_23, Tuple{Type{Int64}})))
 end
 
 # function_type45: F3 = void Function(int, {int x}); F4 = A Function<A>(); F12 = core.List<core.int> Function([List<Function>]) Function(int x); F14 = List<T> Function(int y, {Function x}) Function(int x); F23 = B Function(core.List<core.int> x) Function<B extends core.int>( int x, )
@@ -9631,24 +8946,17 @@ function _ft_f45_3(p1_1::Int64; x::Int64 = Int64(0))
     return nothing
 end
 function _ft_t45_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f45_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f45_3((n + 1); x = (n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f45_3, (n + 1)), !applicable(_ft_f45_3, (n + 1), n), hasmethod(_ft_f45_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f45_3, (n + 1)), !applicable(_ft_f45_3, (n + 1), n), hasmethod(_ft_f45_3, Tuple{Int64})))
 end
 function _ft_f45_4(::Type{A}) where {A}
     s1 = Int64(0)
     return A(s1)
 end
 function _ft_t45_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f45_4(Int64)
-    h = 31h + v1
-    h = 31h + _dw_bits(applicable(_ft_f45_4, Int64), !applicable(_ft_f45_4, Int64, n), hasmethod(_ft_f45_4, Tuple{Type{Int64}}))
-    return h
+    return (v1, _dw_facts(applicable(_ft_f45_4, Int64), !applicable(_ft_f45_4, Int64, n), hasmethod(_ft_f45_4, Tuple{Type{Int64}})))
 end
 function _ft_f45_12(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9658,15 +8966,10 @@ function _ft_f45_12(p1_1::Int64)
     end
 end
 function _ft_t45_12(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f45_12((n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f45_12, (n + 1)), !applicable(_ft_f45_12, (n + 1), n), hasmethod(_ft_f45_12, Tuple{Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f45_12, (n + 1)), !applicable(_ft_f45_12, (n + 1), n), hasmethod(_ft_f45_12, Tuple{Int64})))
 end
 function _ft_f45_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9676,15 +8979,10 @@ function _ft_f45_14(p1_1::Int64)
     end
 end
 function _ft_t45_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f45_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f45_14, (n + 1)), !applicable(_ft_f45_14, (n + 1), n), hasmethod(_ft_f45_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f45_14, (n + 1)), !applicable(_ft_f45_14, (n + 1), n), hasmethod(_ft_f45_14, Tuple{Int64})))
 end
 function _ft_f45_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9694,13 +8992,9 @@ function _ft_f45_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t45_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f45_23(Int64, (n + 1))
     local v4 = v2(Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f45_23, Int64, (n + 1)), !applicable(_ft_f45_23, Int64, (n + 1), n), hasmethod(_ft_f45_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n)), _dw_facts(applicable(_ft_f45_23, Int64, (n + 1)), !applicable(_ft_f45_23, Int64, (n + 1), n), hasmethod(_ft_f45_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type46: F1 = List<Function> Function([core.List<core.int> x]); F3 = void Function(int y, {int x}); F4 = A Function<A>(A x); F14 = List<T> Function(int y, {Function x}) Function<B extends core.int>(); F16 = Function(Function) Function<B extends core.int>()
@@ -9709,37 +9003,26 @@ function _ft_f46_1(p1_1::Vector{Int64} = Int64[])
     return Function[_ft_id]
 end
 function _ft_t46_1(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f46_1()
-    h = 31h + Int64(length(v2))
     local v3 = _ft_f46_1(Int64[n, 1])
-    h = 31h + Int64(length(v3))
-    h = 31h + _dw_bits(applicable(_ft_f46_1), !applicable(_ft_f46_1, Int64[n, 1], n), hasmethod(_ft_f46_1, Tuple{}))
-    return h
+    return (Int64(length(v2)), Int64(length(v3)), _dw_facts(applicable(_ft_f46_1), !applicable(_ft_f46_1, Int64[n, 1], n), hasmethod(_ft_f46_1, Tuple{})))
 end
 function _ft_f46_3(p1_1::Int64; x::Int64 = Int64(0))
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return nothing
 end
 function _ft_t46_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f46_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f46_3((n + 1); x = (n + 2))
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f46_3, (n + 1)), !applicable(_ft_f46_3, (n + 1), n), hasmethod(_ft_f46_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f46_3, (n + 1)), !applicable(_ft_f46_3, (n + 1), n), hasmethod(_ft_f46_3, Tuple{Int64})))
 end
 function _ft_f46_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A(s1)
 end
 function _ft_t46_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f46_4(Int64, (n + 1))
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f46_4, Int64, (n + 1)), !applicable(_ft_f46_4, Int64, (n + 1), n), hasmethod(_ft_f46_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f46_4, Int64, (n + 1)), !applicable(_ft_f46_4, Int64, (n + 1), n), hasmethod(_ft_f46_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f46_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9749,15 +9032,10 @@ function _ft_f46_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t46_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f46_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = _ft_id)
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f46_14, Int64), !applicable(_ft_f46_14, Int64, n), hasmethod(_ft_f46_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f46_14, Int64), !applicable(_ft_f46_14, Int64, n), hasmethod(_ft_f46_14, Tuple{Type{Int64}})))
 end
 function _ft_f46_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -9767,13 +9045,9 @@ function _ft_f46_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t46_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f46_16(Int64)
     local v3 = v1(_ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, _ft_id), !applicable(v1, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f46_16, Int64), !applicable(_ft_f46_16, Int64, n), hasmethod(_ft_f46_16, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, _ft_id), !applicable(v1, _ft_id, n)), _dw_facts(applicable(_ft_f46_16, Int64), !applicable(_ft_f46_16, Int64, n), hasmethod(_ft_f46_16, Tuple{Type{Int64}})))
 end
 
 # function_type47: F1 = List<Function> Function(int, [core.List<core.int> x]); F3 = void Function(Function x); F4 = A Function<A>(List<A> x); F14 = List<T> Function(int y, {Function x}) Function<B extends core.int>(int x); F16 = Function(Function) Function<B extends core.int>(int x)
@@ -9782,35 +9056,25 @@ function _ft_f47_1(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return Function[_ft_id]
 end
 function _ft_t47_1(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f47_1((n + 1))
-    h = 31h + Int64(length(v3))
     local v4 = _ft_f47_1((n + 1), Int64[n, 2])
-    h = 31h + Int64(length(v4))
-    h = 31h + _dw_bits(applicable(_ft_f47_1, (n + 1)), !applicable(_ft_f47_1, (n + 1), Int64[n, 2], n), hasmethod(_ft_f47_1, Tuple{Int64}))
-    return h
+    return (Int64(length(v3)), Int64(length(v4)), _dw_facts(applicable(_ft_f47_1, (n + 1)), !applicable(_ft_f47_1, (n + 1), Int64[n, 2], n), hasmethod(_ft_f47_1, Tuple{Int64})))
 end
 function _ft_f47_3(p1_1::Function)
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t47_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f47_3(_ft_id)
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f47_3, _ft_id), !applicable(_ft_f47_3, _ft_id, n), hasmethod(_ft_f47_3, Tuple{typeof(_ft_id)}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f47_3, _ft_id), !applicable(_ft_f47_3, _ft_id, n), hasmethod(_ft_f47_3, Tuple{typeof(_ft_id)})))
 end
 function _ft_f47_4(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A(s1)
 end
 function _ft_t47_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f47_4(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f47_4, Int64, Int64[n, 1]), !applicable(_ft_f47_4, Int64, Int64[n, 1], n), hasmethod(_ft_f47_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f47_4, Int64, Int64[n, 1]), !applicable(_ft_f47_4, Int64, Int64[n, 1], n), hasmethod(_ft_f47_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f47_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9820,15 +9084,10 @@ function _ft_f47_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t47_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f47_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f47_14, Int64, (n + 1)), !applicable(_ft_f47_14, Int64, (n + 1), n), hasmethod(_ft_f47_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f47_14, Int64, (n + 1)), !applicable(_ft_f47_14, Int64, (n + 1), n), hasmethod(_ft_f47_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f47_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9838,13 +9097,9 @@ function _ft_f47_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t47_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f47_16(Int64, (n + 1))
     local v4 = v2(_ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, _ft_id), !applicable(v2, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f47_16, Int64, (n + 1)), !applicable(_ft_f47_16, Int64, (n + 1), n), hasmethod(_ft_f47_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, _ft_id), !applicable(v2, _ft_id, n)), _dw_facts(applicable(_ft_f47_16, Int64, (n + 1)), !applicable(_ft_f47_16, Int64, (n + 1), n), hasmethod(_ft_f47_16, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type48: F2 = List<T> Function(int, [List<Function> x]); F3 = void Function([Function x]); F4 = List<A> Function<A>(int x); F9 = List<Function> Function(int, {int x}) Function(); F22 = A Function<A>(A x) Function()
@@ -9853,37 +9108,26 @@ function _ft_f48_2(p1_1::Int64, p1_2::Vector{Function} = Function[])
     return Int64[s1]
 end
 function _ft_t48_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f48_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f48_2((n + 1), Function[_ft_id])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f48_2, (n + 1)), !applicable(_ft_f48_2, (n + 1), Function[_ft_id], n), hasmethod(_ft_f48_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f48_2, (n + 1)), !applicable(_ft_f48_2, (n + 1), Function[_ft_id], n), hasmethod(_ft_f48_2, Tuple{Int64})))
 end
 function _ft_f48_3(p1_1::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t48_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f48_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f48_3(_ft_id)
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f48_3), !applicable(_ft_f48_3, _ft_id, n), hasmethod(_ft_f48_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f48_3), !applicable(_ft_f48_3, _ft_id, n), hasmethod(_ft_f48_3, Tuple{})))
 end
 function _ft_f48_4(::Type{A}, p1_1::Int64) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A[A(s1)]
 end
 function _ft_t48_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f48_4(Int64, (n + 1))
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f48_4, Int64, (n + 1)), !applicable(_ft_f48_4, Int64, (n + 1), n), hasmethod(_ft_f48_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f48_4, Int64, (n + 1)), !applicable(_ft_f48_4, Int64, (n + 1), n), hasmethod(_ft_f48_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f48_9()
     s1 = Int64(0)
@@ -9893,15 +9137,10 @@ function _ft_f48_9()
     end
 end
 function _ft_t48_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f48_9()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f48_9), !applicable(_ft_f48_9, n), hasmethod(_ft_f48_9, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f48_9), !applicable(_ft_f48_9, n), hasmethod(_ft_f48_9, Tuple{})))
 end
 function _ft_f48_22()
     s1 = Int64(0)
@@ -9911,13 +9150,9 @@ function _ft_f48_22()
     end
 end
 function _ft_t48_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f48_22()
     local v3 = v1(Int64, (n + 2))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f48_22), !applicable(_ft_f48_22, n), hasmethod(_ft_f48_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f48_22), !applicable(_ft_f48_22, n), hasmethod(_ft_f48_22, Tuple{})))
 end
 
 # function_type49: F0 = int Function([List<T>]); F3 = void Function(int, [Function x]); F4 = List<A> Function<A>(Function x); F9 = List<Function> Function(int, {int x}) Function(int x); F23 = B Function() Function<B extends core.int>(int x)
@@ -9927,39 +9162,26 @@ function _ft_f49_0(p1_1::Vector{Int64} = Int64[])
 end
 _ft_m49_0(u::_FtU{T}, p1_1::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t49_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f49_0()
-    h = 31h + v2
     local v3 = _ft_f49_0(Int64[n, 1])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f49_0), !applicable(_ft_f49_0, Int64[n, 1], n), hasmethod(_ft_f49_0, Tuple{}), !applicable(_ft_f49_0, Bool[true]))
-    h = 31h + _ft_m49_0(_FtU{Int64}(), Int64[n, 201]) + _ft_m49_0(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m49_0, _FtU{Bool}(), Bool[true]), !applicable(_ft_m49_0, _FtU{Int64}(), Bool[true]))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f49_0), !applicable(_ft_f49_0, Int64[n, 1], n), hasmethod(_ft_f49_0, Tuple{}), !applicable(_ft_f49_0, Bool[true])), _ft_m49_0(_FtU{Int64}(), Int64[n, 201]), _ft_m49_0(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m49_0, _FtU{Bool}(), Bool[true]), !applicable(_ft_m49_0, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f49_3(p1_1::Int64, p1_2::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t49_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f49_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f49_3((n + 1), _ft_id)
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f49_3, (n + 1)), !applicable(_ft_f49_3, (n + 1), _ft_id, n), hasmethod(_ft_f49_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f49_3, (n + 1)), !applicable(_ft_f49_3, (n + 1), _ft_id, n), hasmethod(_ft_f49_3, Tuple{Int64})))
 end
 function _ft_f49_4(::Type{A}, p1_1::Function) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A[A(s1)]
 end
 function _ft_t49_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f49_4(Int64, _ft_id)
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f49_4, Int64, _ft_id), !applicable(_ft_f49_4, Int64, _ft_id, n), hasmethod(_ft_f49_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f49_4, Int64, _ft_id), !applicable(_ft_f49_4, Int64, _ft_id, n), hasmethod(_ft_f49_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f49_9(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9969,15 +9191,10 @@ function _ft_f49_9(p1_1::Int64)
     end
 end
 function _ft_t49_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f49_9((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = (n + 4))
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f49_9, (n + 1)), !applicable(_ft_f49_9, (n + 1), n), hasmethod(_ft_f49_9, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f49_9, (n + 1)), !applicable(_ft_f49_9, (n + 1), n), hasmethod(_ft_f49_9, Tuple{Int64})))
 end
 function _ft_f49_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -9987,13 +9204,9 @@ function _ft_f49_23(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t49_23(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f49_23(Int64, (n + 1))
     local v3 = v2()
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f49_23, Int64, (n + 1)), !applicable(_ft_f49_23, Int64, (n + 1), n), hasmethod(_ft_f49_23, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f49_23, Int64, (n + 1)), !applicable(_ft_f49_23, Int64, (n + 1), n), hasmethod(_ft_f49_23, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type50: F0 = int Function(int, [List<T>]); F3 = void Function(int y, [Function x]); F4 = List<A> Function<A>(List<Function> x); F9 = List<Function> Function(int, {int x}) Function<B extends core.int>(); F22 = A Function<A>(A x) Function<B extends core.int>()
@@ -10003,39 +9216,26 @@ function _ft_f50_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m50_0(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t50_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f50_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f50_0((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f50_0, (n + 1)), !applicable(_ft_f50_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f50_0, Tuple{Int64}), !applicable(_ft_f50_0, (n + 101), Bool[true]))
-    h = 31h + _ft_m50_0(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m50_0(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m50_0, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m50_0, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f50_0, (n + 1)), !applicable(_ft_f50_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f50_0, Tuple{Int64}), !applicable(_ft_f50_0, (n + 101), Bool[true])), _ft_m50_0(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m50_0(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m50_0, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m50_0, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f50_3(p1_1::Int64, p1_2::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t50_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f50_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f50_3((n + 1), _ft_id)
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f50_3, (n + 1)), !applicable(_ft_f50_3, (n + 1), _ft_id, n), hasmethod(_ft_f50_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f50_3, (n + 1)), !applicable(_ft_f50_3, (n + 1), _ft_id, n), hasmethod(_ft_f50_3, Tuple{Int64})))
 end
 function _ft_f50_4(::Type{A}, p1_1::Vector{Function}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A[A(s1)]
 end
 function _ft_t50_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f50_4(Int64, Function[_ft_id])
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f50_4, Int64, Function[_ft_id]), !applicable(_ft_f50_4, Int64, Function[_ft_id], n), hasmethod(_ft_f50_4, Tuple{Type{Int64}, Vector{Function}}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f50_4, Int64, Function[_ft_id]), !applicable(_ft_f50_4, Int64, Function[_ft_id], n), hasmethod(_ft_f50_4, Tuple{Type{Int64}, Vector{Function}})))
 end
 function _ft_f50_9(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10045,15 +9245,10 @@ function _ft_f50_9(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t50_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f50_9(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f50_9, Int64), !applicable(_ft_f50_9, Int64, n), hasmethod(_ft_f50_9, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f50_9, Int64), !applicable(_ft_f50_9, Int64, n), hasmethod(_ft_f50_9, Tuple{Type{Int64}})))
 end
 function _ft_f50_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10063,13 +9258,9 @@ function _ft_f50_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t50_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f50_22(Int64)
     local v3 = v1(Int64, (n + 2))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f50_22, Int64), !applicable(_ft_f50_22, Int64, n), hasmethod(_ft_f50_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f50_22, Int64), !applicable(_ft_f50_22, Int64, n), hasmethod(_ft_f50_22, Tuple{Type{Int64}})))
 end
 
 # function_type51: F0 = int Function(int x, [List<T>]); F3 = void Function(Function); F4 = List<A> Function<A>(core.List<core.int> x); F9 = List<Function> Function(int, {int x}) Function<B extends core.int>(int x); F22 = A Function<A>(A x) Function<B extends core.int>(int x)
@@ -10079,37 +9270,25 @@ function _ft_f51_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m51_0(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t51_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f51_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f51_0((n + 1), Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f51_0, (n + 1)), !applicable(_ft_f51_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f51_0, Tuple{Int64}), !applicable(_ft_f51_0, (n + 101), Bool[true]))
-    h = 31h + _ft_m51_0(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m51_0(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m51_0, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m51_0, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f51_0, (n + 1)), !applicable(_ft_f51_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f51_0, Tuple{Int64}), !applicable(_ft_f51_0, (n + 101), Bool[true])), _ft_m51_0(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m51_0(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m51_0, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m51_0, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f51_3(p1_1::Function)
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t51_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f51_3(_ft_id)
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f51_3, _ft_id), !applicable(_ft_f51_3, _ft_id, n), hasmethod(_ft_f51_3, Tuple{typeof(_ft_id)}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f51_3, _ft_id), !applicable(_ft_f51_3, _ft_id, n), hasmethod(_ft_f51_3, Tuple{typeof(_ft_id)})))
 end
 function _ft_f51_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return A[A(s1)]
 end
 function _ft_t51_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f51_4(Int64, Int64[n, 1])
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f51_4, Int64, Int64[n, 1]), !applicable(_ft_f51_4, Int64, Int64[n, 1], n), hasmethod(_ft_f51_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f51_4, Int64, Int64[n, 1]), !applicable(_ft_f51_4, Int64, Int64[n, 1], n), hasmethod(_ft_f51_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f51_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10119,15 +9298,10 @@ function _ft_f51_9(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t51_9(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f51_9(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3); x = (n + 4))
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f51_9, Int64, (n + 1)), !applicable(_ft_f51_9, Int64, (n + 1), n), hasmethod(_ft_f51_9, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f51_9, Int64, (n + 1)), !applicable(_ft_f51_9, Int64, (n + 1), n), hasmethod(_ft_f51_9, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f51_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10137,13 +9311,9 @@ function _ft_f51_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t51_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f51_22(Int64, (n + 1))
     local v4 = v2(Int64, (n + 3))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f51_22, Int64, (n + 1)), !applicable(_ft_f51_22, Int64, (n + 1), n), hasmethod(_ft_f51_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n)), _dw_facts(applicable(_ft_f51_22, Int64, (n + 1)), !applicable(_ft_f51_22, Int64, (n + 1), n), hasmethod(_ft_f51_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type52: F3 = void Function([Function]); F4 = List<A> Function<A>(List<T> x); F9 = List<Function> Function(int y, {int x}) Function(); F16 = Function(int, [Function]) Function(); F22 = A Function<A>(List<A> x) Function()
@@ -10152,13 +9322,9 @@ function _ft_f52_3(p1_1::Function = _ft_id)
     return nothing
 end
 function _ft_t52_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f52_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f52_3(_ft_id)
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f52_3), !applicable(_ft_f52_3, _ft_id, n), hasmethod(_ft_f52_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f52_3), !applicable(_ft_f52_3, _ft_id, n), hasmethod(_ft_f52_3, Tuple{})))
 end
 function _ft_f52_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10166,13 +9332,8 @@ function _ft_f52_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m52_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t52_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f52_4(Int64, Int64[n, 1])
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(_ft_f52_4, Int64, Int64[n, 1]), !applicable(_ft_f52_4, Int64, Int64[n, 1], n), hasmethod(_ft_f52_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f52_4, Int64, Bool[true]))
-    h = 31h + _ft_m52_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m52_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m52_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m52_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return (sum(v2), _dw_facts(applicable(_ft_f52_4, Int64, Int64[n, 1]), !applicable(_ft_f52_4, Int64, Int64[n, 1], n), hasmethod(_ft_f52_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f52_4, Int64, Bool[true])), _ft_m52_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m52_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m52_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m52_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f52_9()
     s1 = Int64(0)
@@ -10182,15 +9343,10 @@ function _ft_f52_9()
     end
 end
 function _ft_t52_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f52_9()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f52_9), !applicable(_ft_f52_9, n), hasmethod(_ft_f52_9, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f52_9), !applicable(_ft_f52_9, n), hasmethod(_ft_f52_9, Tuple{})))
 end
 function _ft_f52_16()
     s1 = Int64(0)
@@ -10200,15 +9356,10 @@ function _ft_f52_16()
     end
 end
 function _ft_t52_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f52_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f52_16), !applicable(_ft_f52_16, n), hasmethod(_ft_f52_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n)), _dw_facts(applicable(_ft_f52_16), !applicable(_ft_f52_16, n), hasmethod(_ft_f52_16, Tuple{})))
 end
 function _ft_f52_22()
     s1 = Int64(0)
@@ -10218,13 +9369,9 @@ function _ft_f52_22()
     end
 end
 function _ft_t52_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f52_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f52_22), !applicable(_ft_f52_22, n), hasmethod(_ft_f52_22, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f52_22), !applicable(_ft_f52_22, n), hasmethod(_ft_f52_22, Tuple{})))
 end
 
 # function_type53: F3 = void Function(int, [Function]); F4 = List<A> Function<A>(); F14 = List<T> Function([List<Function> x]) Function(int x); F17 = Function(int, {core.List<core.int> x}) Function(int x); F22 = A Function<A>(List<A> x) Function(int x)
@@ -10233,24 +9380,17 @@ function _ft_f53_3(p1_1::Int64, p1_2::Function = _ft_id)
     return nothing
 end
 function _ft_t53_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f53_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f53_3((n + 1), _ft_id)
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f53_3, (n + 1)), !applicable(_ft_f53_3, (n + 1), _ft_id, n), hasmethod(_ft_f53_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f53_3, (n + 1)), !applicable(_ft_f53_3, (n + 1), _ft_id, n), hasmethod(_ft_f53_3, Tuple{Int64})))
 end
 function _ft_f53_4(::Type{A}) where {A}
     s1 = Int64(0)
     return A[A(s1)]
 end
 function _ft_t53_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f53_4(Int64)
-    h = 31h + sum(v1)
-    h = 31h + _dw_bits(applicable(_ft_f53_4, Int64), !applicable(_ft_f53_4, Int64, n), hasmethod(_ft_f53_4, Tuple{Type{Int64}}))
-    return h
+    return (sum(v1), _dw_facts(applicable(_ft_f53_4, Int64), !applicable(_ft_f53_4, Int64, n), hasmethod(_ft_f53_4, Tuple{Type{Int64}})))
 end
 function _ft_f53_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10260,15 +9400,10 @@ function _ft_f53_14(p1_1::Int64)
     end
 end
 function _ft_t53_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f53_14((n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f53_14, (n + 1)), !applicable(_ft_f53_14, (n + 1), n), hasmethod(_ft_f53_14, Tuple{Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f53_14, (n + 1)), !applicable(_ft_f53_14, (n + 1), n), hasmethod(_ft_f53_14, Tuple{Int64})))
 end
 function _ft_f53_17(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10278,15 +9413,10 @@ function _ft_f53_17(p1_1::Int64)
     end
 end
 function _ft_t53_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f53_17((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f53_17, (n + 1)), !applicable(_ft_f53_17, (n + 1), n), hasmethod(_ft_f53_17, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f53_17, (n + 1)), !applicable(_ft_f53_17, (n + 1), n), hasmethod(_ft_f53_17, Tuple{Int64})))
 end
 function _ft_f53_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10296,13 +9426,9 @@ function _ft_f53_22(p1_1::Int64)
     end
 end
 function _ft_t53_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f53_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f53_22, (n + 1)), !applicable(_ft_f53_22, (n + 1), n), hasmethod(_ft_f53_22, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f53_22, (n + 1)), !applicable(_ft_f53_22, (n + 1), n), hasmethod(_ft_f53_22, Tuple{Int64})))
 end
 
 # function_type54: F0 = int Function(int y, {List<T> x}); F3 = void Function(int x, [Function]); F9 = List<Function> Function(int y, {int x}) Function<B extends core.int>(); F16 = Function(int, [Function]) Function<B extends core.int>(); F22 = A Function<A>(List<A> x) Function<B extends core.int>()
@@ -10312,28 +9438,18 @@ function _ft_f54_0(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m54_0(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t54_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f54_0((n + 1))
-    h = 31h + v3
     local v4 = _ft_f54_0((n + 1); x = Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f54_0, (n + 1)), !applicable(_ft_f54_0, (n + 1), n), hasmethod(_ft_f54_0, Tuple{Int64}))
-    h = 31h + _ft_m54_0(_FtU{Int64}(), (n + 201)) + _ft_m54_0(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m54_0, _FtU{Bool}(), (n + 202)))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f54_0, (n + 1)), !applicable(_ft_f54_0, (n + 1), n), hasmethod(_ft_f54_0, Tuple{Int64})), _ft_m54_0(_FtU{Int64}(), (n + 201)), _ft_m54_0(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m54_0, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f54_3(p1_1::Int64, p1_2::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t54_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f54_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f54_3((n + 1), _ft_id)
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f54_3, (n + 1)), !applicable(_ft_f54_3, (n + 1), _ft_id, n), hasmethod(_ft_f54_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f54_3, (n + 1)), !applicable(_ft_f54_3, (n + 1), _ft_id, n), hasmethod(_ft_f54_3, Tuple{Int64})))
 end
 function _ft_f54_9(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10343,15 +9459,10 @@ function _ft_f54_9(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t54_9(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f54_9(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2); x = (n + 3))
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f54_9, Int64), !applicable(_ft_f54_9, Int64, n), hasmethod(_ft_f54_9, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f54_9, Int64), !applicable(_ft_f54_9, Int64, n), hasmethod(_ft_f54_9, Tuple{Type{Int64}})))
 end
 function _ft_f54_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10361,15 +9472,10 @@ function _ft_f54_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t54_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f54_16(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f54_16, Int64), !applicable(_ft_f54_16, Int64, n), hasmethod(_ft_f54_16, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n)), _dw_facts(applicable(_ft_f54_16, Int64), !applicable(_ft_f54_16, Int64, n), hasmethod(_ft_f54_16, Tuple{Type{Int64}})))
 end
 function _ft_f54_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10379,13 +9485,9 @@ function _ft_f54_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t54_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f54_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f54_22, Int64), !applicable(_ft_f54_22, Int64, n), hasmethod(_ft_f54_22, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f54_22, Int64), !applicable(_ft_f54_22, Int64, n), hasmethod(_ft_f54_22, Tuple{Type{Int64}})))
 end
 
 # function_type55: F0 = int Function(); F3 = void Function({Function x}); F14 = List<T> Function([List<Function> x]) Function<B extends core.int>(int x); F16 = Function(int, [Function]) Function<B extends core.int>(int x); F22 = A Function<A>(List<A> x) Function<B extends core.int>(int x)
@@ -10394,24 +9496,17 @@ function _ft_f55_0()
     return s1
 end
 function _ft_t55_0(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f55_0()
-    h = 31h + v1
-    h = 31h + _dw_bits(applicable(_ft_f55_0), !applicable(_ft_f55_0, n), hasmethod(_ft_f55_0, Tuple{}))
-    return h
+    return (v1, _dw_facts(applicable(_ft_f55_0), !applicable(_ft_f55_0, n), hasmethod(_ft_f55_0, Tuple{})))
 end
 function _ft_f55_3(; x::Function = _ft_id)
     s1 = Int64(0) + _ft_w(x)
     return nothing
 end
 function _ft_t55_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f55_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f55_3(; x = _ft_id)
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f55_3), !applicable(_ft_f55_3, n), hasmethod(_ft_f55_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f55_3), !applicable(_ft_f55_3, n), hasmethod(_ft_f55_3, Tuple{})))
 end
 function _ft_f55_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10421,15 +9516,10 @@ function _ft_f55_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t55_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f55_14(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f55_14, Int64, (n + 1)), !applicable(_ft_f55_14, Int64, (n + 1), n), hasmethod(_ft_f55_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f55_14, Int64, (n + 1)), !applicable(_ft_f55_14, Int64, (n + 1), n), hasmethod(_ft_f55_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f55_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10439,15 +9529,10 @@ function _ft_f55_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t55_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f55_16(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), _ft_id)
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f55_16, Int64, (n + 1)), !applicable(_ft_f55_16, Int64, (n + 1), n), hasmethod(_ft_f55_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), _ft_id, n)), _dw_facts(applicable(_ft_f55_16, Int64, (n + 1)), !applicable(_ft_f55_16, Int64, (n + 1), n), hasmethod(_ft_f55_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f55_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10457,13 +9542,9 @@ function _ft_f55_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t55_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f55_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f55_22, Int64, (n + 1)), !applicable(_ft_f55_22, Int64, (n + 1), n), hasmethod(_ft_f55_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f55_22, Int64, (n + 1)), !applicable(_ft_f55_22, Int64, (n + 1), n), hasmethod(_ft_f55_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type56: F1 = List<Function> Function(List<T> x); F3 = void Function(int, {Function x}); F14 = List<T> Function(int, [List<Function> x]) Function(); F16 = Function(int x, [Function]) Function(); F21 = core.List<core.int> Function<A>(List<A> x) Function()
@@ -10473,26 +9554,17 @@ function _ft_f56_1(p1_1::Vector{Int64})
 end
 _ft_m56_1(u::_FtU{T}, p1_1::Vector{T}) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t56_1(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f56_1(Int64[n, 1])
-    h = 31h + Int64(length(v2))
-    h = 31h + _dw_bits(applicable(_ft_f56_1, Int64[n, 1]), !applicable(_ft_f56_1, Int64[n, 1], n), hasmethod(_ft_f56_1, Tuple{Vector{Int64}}), !applicable(_ft_f56_1, Bool[true]))
-    h = 31h + _ft_m56_1(_FtU{Int64}(), Int64[n, 201]) + _ft_m56_1(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m56_1, _FtU{Bool}(), Bool[true]), !applicable(_ft_m56_1, _FtU{Int64}(), Bool[true]))
-    return h
+    return (Int64(length(v2)), _dw_facts(applicable(_ft_f56_1, Int64[n, 1]), !applicable(_ft_f56_1, Int64[n, 1], n), hasmethod(_ft_f56_1, Tuple{Vector{Int64}}), !applicable(_ft_f56_1, Bool[true])), _ft_m56_1(_FtU{Int64}(), Int64[n, 201]), _ft_m56_1(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m56_1, _FtU{Bool}(), Bool[true]), !applicable(_ft_m56_1, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f56_3(p1_1::Int64; x::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return nothing
 end
 function _ft_t56_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f56_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f56_3((n + 1); x = _ft_id)
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f56_3, (n + 1)), !applicable(_ft_f56_3, (n + 1), n), hasmethod(_ft_f56_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f56_3, (n + 1)), !applicable(_ft_f56_3, (n + 1), n), hasmethod(_ft_f56_3, Tuple{Int64})))
 end
 function _ft_f56_14()
     s1 = Int64(0)
@@ -10502,15 +9574,10 @@ function _ft_f56_14()
     end
 end
 function _ft_t56_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f56_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f56_14), !applicable(_ft_f56_14, n), hasmethod(_ft_f56_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f56_14), !applicable(_ft_f56_14, n), hasmethod(_ft_f56_14, Tuple{})))
 end
 function _ft_f56_16()
     s1 = Int64(0)
@@ -10520,15 +9587,10 @@ function _ft_f56_16()
     end
 end
 function _ft_t56_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f56_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f56_16), !applicable(_ft_f56_16, n), hasmethod(_ft_f56_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), _ft_id, n)), _dw_facts(applicable(_ft_f56_16), !applicable(_ft_f56_16, n), hasmethod(_ft_f56_16, Tuple{})))
 end
 function _ft_f56_21()
     s1 = Int64(0)
@@ -10538,13 +9600,9 @@ function _ft_f56_21()
     end
 end
 function _ft_t56_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f56_21()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f56_21), !applicable(_ft_f56_21, n), hasmethod(_ft_f56_21, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f56_21), !applicable(_ft_f56_21, n), hasmethod(_ft_f56_21, Tuple{})))
 end
 
 # function_type57: F4 = void Function<A>(Function x); F13 = core.List<core.int> Function() Function(int x); F14 = List<T> Function(int, [List<Function> x]) Function(int x); F17 = Function(int y, {core.List<core.int> x}) Function(int x); F21 = core.List<core.int> Function<A>(List<A> x) Function(int x)
@@ -10553,11 +9611,8 @@ function _ft_f57_4(::Type{A}, p1_1::Function) where {A}
     return nothing
 end
 function _ft_t57_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f57_4(Int64, _ft_id)
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f57_4, Int64, _ft_id), !applicable(_ft_f57_4, Int64, _ft_id, n), hasmethod(_ft_f57_4, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f57_4, Int64, _ft_id), !applicable(_ft_f57_4, Int64, _ft_id, n), hasmethod(_ft_f57_4, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f57_13(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10567,13 +9622,9 @@ function _ft_f57_13(p1_1::Int64)
     end
 end
 function _ft_t57_13(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f57_13((n + 1))
     local v3 = v2()
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f57_13, (n + 1)), !applicable(_ft_f57_13, (n + 1), n), hasmethod(_ft_f57_13, Tuple{Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f57_13, (n + 1)), !applicable(_ft_f57_13, (n + 1), n), hasmethod(_ft_f57_13, Tuple{Int64})))
 end
 function _ft_f57_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10583,15 +9634,10 @@ function _ft_f57_14(p1_1::Int64)
     end
 end
 function _ft_t57_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f57_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f57_14, (n + 1)), !applicable(_ft_f57_14, (n + 1), n), hasmethod(_ft_f57_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f57_14, (n + 1)), !applicable(_ft_f57_14, (n + 1), n), hasmethod(_ft_f57_14, Tuple{Int64})))
 end
 function _ft_f57_17(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10601,15 +9647,10 @@ function _ft_f57_17(p1_1::Int64)
     end
 end
 function _ft_t57_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f57_17((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f57_17, (n + 1)), !applicable(_ft_f57_17, (n + 1), n), hasmethod(_ft_f57_17, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f57_17, (n + 1)), !applicable(_ft_f57_17, (n + 1), n), hasmethod(_ft_f57_17, Tuple{Int64})))
 end
 function _ft_f57_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10619,13 +9660,9 @@ function _ft_f57_21(p1_1::Int64)
     end
 end
 function _ft_t57_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f57_21((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f57_21, (n + 1)), !applicable(_ft_f57_21, (n + 1), n), hasmethod(_ft_f57_21, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f57_21, (n + 1)), !applicable(_ft_f57_21, (n + 1), n), hasmethod(_ft_f57_21, Tuple{Int64})))
 end
 
 # function_type58: F0 = Function Function(int, [int x]); F4 = void Function<A>(List<Function> x); F14 = List<T> Function(int, [List<Function> x]) Function<B extends core.int>(); F17 = Function(int y, {core.List<core.int> x}) Function<B extends core.int>(); F21 = core.List<core.int> Function<A>(List<A> x) Function<B extends core.int>()
@@ -10634,24 +9671,17 @@ function _ft_f58_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t58_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f58_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f58_0((n + 1), (n + 2))
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f58_0, (n + 1)), !applicable(_ft_f58_0, (n + 1), (n + 2), n), hasmethod(_ft_f58_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f58_0, (n + 1)), !applicable(_ft_f58_0, (n + 1), (n + 2), n), hasmethod(_ft_f58_0, Tuple{Int64})))
 end
 function _ft_f58_4(::Type{A}, p1_1::Vector{Function}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t58_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f58_4(Int64, Function[_ft_id])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f58_4, Int64, Function[_ft_id]), !applicable(_ft_f58_4, Int64, Function[_ft_id], n), hasmethod(_ft_f58_4, Tuple{Type{Int64}, Vector{Function}}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f58_4, Int64, Function[_ft_id]), !applicable(_ft_f58_4, Int64, Function[_ft_id], n), hasmethod(_ft_f58_4, Tuple{Type{Int64}, Vector{Function}})))
 end
 function _ft_f58_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10661,15 +9691,10 @@ function _ft_f58_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t58_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f58_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f58_14, Int64), !applicable(_ft_f58_14, Int64, n), hasmethod(_ft_f58_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f58_14, Int64), !applicable(_ft_f58_14, Int64, n), hasmethod(_ft_f58_14, Tuple{Type{Int64}})))
 end
 function _ft_f58_17(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10679,15 +9704,10 @@ function _ft_f58_17(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t58_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f58_17(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f58_17, Int64), !applicable(_ft_f58_17, Int64, n), hasmethod(_ft_f58_17, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f58_17, Int64), !applicable(_ft_f58_17, Int64, n), hasmethod(_ft_f58_17, Tuple{Type{Int64}})))
 end
 function _ft_f58_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10697,13 +9717,9 @@ function _ft_f58_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t58_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f58_21(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f58_21, Int64), !applicable(_ft_f58_21, Int64, n), hasmethod(_ft_f58_21, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f58_21, Int64), !applicable(_ft_f58_21, Int64, n), hasmethod(_ft_f58_21, Tuple{Type{Int64}})))
 end
 
 # function_type59: F4 = void Function<A>(core.List<core.int> x); F13 = core.List<core.int> Function() Function<B extends core.int>( int x, ); F14 = List<T> Function(int, [List<Function> x]) Function<B extends core.int>( int x, ); F17 = Function(int y, {core.List<core.int> x}) Function<B extends core.int>( int x, ); F21 = core.List<core.int> Function<A>(List<A> x) Function<B extends core.int>( int x, )
@@ -10712,11 +9728,8 @@ function _ft_f59_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     return nothing
 end
 function _ft_t59_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f59_4(Int64, Int64[n, 1])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f59_4, Int64, Int64[n, 1]), !applicable(_ft_f59_4, Int64, Int64[n, 1], n), hasmethod(_ft_f59_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f59_4, Int64, Int64[n, 1]), !applicable(_ft_f59_4, Int64, Int64[n, 1], n), hasmethod(_ft_f59_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f59_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10726,13 +9739,9 @@ function _ft_f59_13(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t59_13(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f59_13(Int64, (n + 1))
     local v3 = v2()
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f59_13, Int64, (n + 1)), !applicable(_ft_f59_13, Int64, (n + 1), n), hasmethod(_ft_f59_13, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f59_13, Int64, (n + 1)), !applicable(_ft_f59_13, Int64, (n + 1), n), hasmethod(_ft_f59_13, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f59_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10742,15 +9751,10 @@ function _ft_f59_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t59_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f59_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f59_14, Int64, (n + 1)), !applicable(_ft_f59_14, Int64, (n + 1), n), hasmethod(_ft_f59_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f59_14, Int64, (n + 1)), !applicable(_ft_f59_14, Int64, (n + 1), n), hasmethod(_ft_f59_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f59_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10760,15 +9764,10 @@ function _ft_f59_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t59_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f59_17(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f59_17, Int64, (n + 1)), !applicable(_ft_f59_17, Int64, (n + 1), n), hasmethod(_ft_f59_17, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f59_17, Int64, (n + 1)), !applicable(_ft_f59_17, Int64, (n + 1), n), hasmethod(_ft_f59_17, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f59_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10778,13 +9777,9 @@ function _ft_f59_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t59_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f59_21(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f59_21, Int64, (n + 1)), !applicable(_ft_f59_21, Int64, (n + 1), n), hasmethod(_ft_f59_21, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f59_21, Int64, (n + 1)), !applicable(_ft_f59_21, Int64, (n + 1), n), hasmethod(_ft_f59_21, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type60: F2 = List<T> Function(int y, [core.List<core.int> x]); F4 = void Function<A>(List<T> x); F14 = List<T> Function(int y, [List<Function> x]) Function(); F16 = Function({Function x}) Function(); F20 = int Function<A>(List<A> x) Function()
@@ -10793,13 +9788,9 @@ function _ft_f60_2(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return Int64[s1]
 end
 function _ft_t60_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f60_2((n + 1))
-    h = 31h + sum(v3)
     local v4 = _ft_f60_2((n + 1), Int64[n, 2])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(_ft_f60_2, (n + 1)), !applicable(_ft_f60_2, (n + 1), Int64[n, 2], n), hasmethod(_ft_f60_2, Tuple{Int64}))
-    return h
+    return (sum(v3), sum(v4), _dw_facts(applicable(_ft_f60_2, (n + 1)), !applicable(_ft_f60_2, (n + 1), Int64[n, 2], n), hasmethod(_ft_f60_2, Tuple{Int64})))
 end
 function _ft_f60_4(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10807,13 +9798,8 @@ function _ft_f60_4(::Type{A}, p1_1::Vector{Int64}) where {A}
 end
 _ft_m60_4(u::_FtU{T}, ::Type{A}, p1_1::Vector{T}) where {T, A} = Int64(0) + _ft_w(p1_1)
 function _ft_t60_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f60_4(Int64, Int64[n, 1])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f60_4, Int64, Int64[n, 1]), !applicable(_ft_f60_4, Int64, Int64[n, 1], n), hasmethod(_ft_f60_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f60_4, Int64, Bool[true]))
-    h = 31h + _ft_m60_4(_FtU{Int64}(), Int64, Int64[n, 201]) + _ft_m60_4(_FtU{Bool}(), Int64, Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m60_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m60_4, _FtU{Int64}(), Int64, Bool[true]))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f60_4, Int64, Int64[n, 1]), !applicable(_ft_f60_4, Int64, Int64[n, 1], n), hasmethod(_ft_f60_4, Tuple{Type{Int64}, Vector{Int64}}), !applicable(_ft_f60_4, Int64, Bool[true])), _ft_m60_4(_FtU{Int64}(), Int64, Int64[n, 201]), _ft_m60_4(_FtU{Bool}(), Int64, Bool[true]), _dw_facts(applicable(_ft_m60_4, _FtU{Bool}(), Int64, Bool[true]), !applicable(_ft_m60_4, _FtU{Int64}(), Int64, Bool[true])))
 end
 function _ft_f60_14()
     s1 = Int64(0)
@@ -10823,15 +9809,10 @@ function _ft_f60_14()
     end
 end
 function _ft_t60_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f60_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f60_14), !applicable(_ft_f60_14, n), hasmethod(_ft_f60_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f60_14), !applicable(_ft_f60_14, n), hasmethod(_ft_f60_14, Tuple{})))
 end
 function _ft_f60_16()
     s1 = Int64(0)
@@ -10841,15 +9822,10 @@ function _ft_f60_16()
     end
 end
 function _ft_t60_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f60_16()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f60_16), !applicable(_ft_f60_16, n), hasmethod(_ft_f60_16, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f60_16), !applicable(_ft_f60_16, n), hasmethod(_ft_f60_16, Tuple{})))
 end
 function _ft_f60_20()
     s1 = Int64(0)
@@ -10859,13 +9835,9 @@ function _ft_f60_20()
     end
 end
 function _ft_t60_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f60_20()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f60_20), !applicable(_ft_f60_20, n), hasmethod(_ft_f60_20, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f60_20), !applicable(_ft_f60_20, n), hasmethod(_ft_f60_20, Tuple{})))
 end
 
 # function_type61: F0 = Function Function([int]); F4 = void Function<A>(); F14 = List<T> Function(int y, [List<Function> x]) Function(int x); F16 = Function({Function x}) Function(int x); F20 = int Function<A>(List<A> x) Function(int x)
@@ -10874,24 +9846,17 @@ function _ft_f61_0(p1_1::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t61_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f61_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f61_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f61_0), !applicable(_ft_f61_0, (n + 1), n), hasmethod(_ft_f61_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f61_0), !applicable(_ft_f61_0, (n + 1), n), hasmethod(_ft_f61_0, Tuple{})))
 end
 function _ft_f61_4(::Type{A}) where {A}
     s1 = Int64(0)
     return nothing
 end
 function _ft_t61_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f61_4(Int64)
-    h = 31h + Int64(v1 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f61_4, Int64), !applicable(_ft_f61_4, Int64, n), hasmethod(_ft_f61_4, Tuple{Type{Int64}}))
-    return h
+    return ((v1 === nothing), _dw_facts(applicable(_ft_f61_4, Int64), !applicable(_ft_f61_4, Int64, n), hasmethod(_ft_f61_4, Tuple{Type{Int64}})))
 end
 function _ft_f61_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10901,15 +9866,10 @@ function _ft_f61_14(p1_1::Int64)
     end
 end
 function _ft_t61_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f61_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f61_14, (n + 1)), !applicable(_ft_f61_14, (n + 1), n), hasmethod(_ft_f61_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f61_14, (n + 1)), !applicable(_ft_f61_14, (n + 1), n), hasmethod(_ft_f61_14, Tuple{Int64})))
 end
 function _ft_f61_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10919,15 +9879,10 @@ function _ft_f61_16(p1_1::Int64)
     end
 end
 function _ft_t61_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f61_16((n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(; x = _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f61_16, (n + 1)), !applicable(_ft_f61_16, (n + 1), n), hasmethod(_ft_f61_16, Tuple{Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f61_16, (n + 1)), !applicable(_ft_f61_16, (n + 1), n), hasmethod(_ft_f61_16, Tuple{Int64})))
 end
 function _ft_f61_20(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -10937,13 +9892,9 @@ function _ft_f61_20(p1_1::Int64)
     end
 end
 function _ft_t61_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f61_20((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f61_20, (n + 1)), !applicable(_ft_f61_20, (n + 1), n), hasmethod(_ft_f61_20, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f61_20, (n + 1)), !applicable(_ft_f61_20, (n + 1), n), hasmethod(_ft_f61_20, Tuple{Int64})))
 end
 
 # function_type62: F0 = Function Function(int, [int]); F4 = void Function<A>(A x); F14 = List<T> Function(int y, [List<Function> x]) Function<B extends core.int>(); F16 = Function({Function x}) Function<B extends core.int>(); F20 = int Function<A>(List<A> x) Function<B extends core.int>()
@@ -10952,24 +9903,17 @@ function _ft_f62_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t62_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f62_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f62_0((n + 1), (n + 2))
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f62_0, (n + 1)), !applicable(_ft_f62_0, (n + 1), (n + 2), n), hasmethod(_ft_f62_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f62_0, (n + 1)), !applicable(_ft_f62_0, (n + 1), (n + 2), n), hasmethod(_ft_f62_0, Tuple{Int64})))
 end
 function _ft_f62_4(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t62_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f62_4(Int64, (n + 1))
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f62_4, Int64, (n + 1)), !applicable(_ft_f62_4, Int64, (n + 1), n), hasmethod(_ft_f62_4, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f62_4, Int64, (n + 1)), !applicable(_ft_f62_4, Int64, (n + 1), n), hasmethod(_ft_f62_4, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f62_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10979,15 +9923,10 @@ function _ft_f62_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t62_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f62_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f62_14, Int64), !applicable(_ft_f62_14, Int64, n), hasmethod(_ft_f62_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f62_14, Int64), !applicable(_ft_f62_14, Int64, n), hasmethod(_ft_f62_14, Tuple{Type{Int64}})))
 end
 function _ft_f62_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -10997,15 +9936,10 @@ function _ft_f62_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t62_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f62_16(Int64)
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f62_16, Int64), !applicable(_ft_f62_16, Int64, n), hasmethod(_ft_f62_16, Tuple{Type{Int64}}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f62_16, Int64), !applicable(_ft_f62_16, Int64, n), hasmethod(_ft_f62_16, Tuple{Type{Int64}})))
 end
 function _ft_f62_20(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11015,13 +9949,9 @@ function _ft_f62_20(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t62_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f62_20(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f62_20, Int64), !applicable(_ft_f62_20, Int64, n), hasmethod(_ft_f62_20, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f62_20, Int64), !applicable(_ft_f62_20, Int64, n), hasmethod(_ft_f62_20, Tuple{Type{Int64}})))
 end
 
 # function_type63: F0 = Function Function(int x, [int]); F4 = void Function<A>(List<A> x); F14 = List<T> Function(int y, [List<Function> x]) Function<B extends core.int>( int x, ); F16 = Function({Function x}) Function<B extends core.int>(int x); F20 = int Function<A>(List<A> x) Function<B extends core.int>(int x)
@@ -11030,24 +9960,17 @@ function _ft_f63_0(p1_1::Int64, p1_2::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t63_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f63_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f63_0((n + 1), (n + 2))
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f63_0, (n + 1)), !applicable(_ft_f63_0, (n + 1), (n + 2), n), hasmethod(_ft_f63_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f63_0, (n + 1)), !applicable(_ft_f63_0, (n + 1), (n + 2), n), hasmethod(_ft_f63_0, Tuple{Int64})))
 end
 function _ft_f63_4(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t63_4(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f63_4(Int64, Int64[n, 1])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f63_4, Int64, Int64[n, 1]), !applicable(_ft_f63_4, Int64, Int64[n, 1], n), hasmethod(_ft_f63_4, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f63_4, Int64, Int64[n, 1]), !applicable(_ft_f63_4, Int64, Int64[n, 1], n), hasmethod(_ft_f63_4, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f63_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11057,15 +9980,10 @@ function _ft_f63_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t63_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f63_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f63_14, Int64, (n + 1)), !applicable(_ft_f63_14, Int64, (n + 1), n), hasmethod(_ft_f63_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f63_14, Int64, (n + 1)), !applicable(_ft_f63_14, Int64, (n + 1), n), hasmethod(_ft_f63_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f63_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11075,15 +9993,10 @@ function _ft_f63_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t63_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f63_16(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(; x = _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f63_16, Int64, (n + 1)), !applicable(_ft_f63_16, Int64, (n + 1), n), hasmethod(_ft_f63_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f63_16, Int64, (n + 1)), !applicable(_ft_f63_16, Int64, (n + 1), n), hasmethod(_ft_f63_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f63_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11093,13 +10006,9 @@ function _ft_f63_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t63_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f63_20(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f63_20, Int64, (n + 1)), !applicable(_ft_f63_20, Int64, (n + 1), n), hasmethod(_ft_f63_20, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f63_20, Int64, (n + 1)), !applicable(_ft_f63_20, Int64, (n + 1), n), hasmethod(_ft_f63_20, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type64: F0 = Function Function({int x}); F3 = void Function(int, [List<Function>]); F12 = core.List<core.int> Function(int y, {List<Function> x}) Function(); F17 = Function([List<T> x]) Function(); F22 = List<A> Function<A>(List<Function> x) Function()
@@ -11108,26 +10017,18 @@ function _ft_f64_0(; x::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t64_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f64_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f64_0(; x = (n + 1))
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f64_0), !applicable(_ft_f64_0, n), hasmethod(_ft_f64_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f64_0), !applicable(_ft_f64_0, n), hasmethod(_ft_f64_0, Tuple{})))
 end
 function _ft_f64_3(p1_1::Int64, p1_2::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t64_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f64_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f64_3((n + 1), Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f64_3, (n + 1)), !applicable(_ft_f64_3, (n + 1), Function[_ft_id], n), hasmethod(_ft_f64_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f64_3, (n + 1)), !applicable(_ft_f64_3, (n + 1), Function[_ft_id], n), hasmethod(_ft_f64_3, Tuple{Int64})))
 end
 function _ft_f64_12()
     s1 = Int64(0)
@@ -11137,15 +10038,10 @@ function _ft_f64_12()
     end
 end
 function _ft_t64_12(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f64_12()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f64_12), !applicable(_ft_f64_12, n), hasmethod(_ft_f64_12, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f64_12), !applicable(_ft_f64_12, n), hasmethod(_ft_f64_12, Tuple{})))
 end
 function _ft_f64_17()
     s1 = Int64(0)
@@ -11155,15 +10051,10 @@ function _ft_f64_17()
     end
 end
 function _ft_t64_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f64_17()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f64_17), !applicable(_ft_f64_17, n), hasmethod(_ft_f64_17, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true])), _dw_facts(applicable(_ft_f64_17), !applicable(_ft_f64_17, n), hasmethod(_ft_f64_17, Tuple{})))
 end
 function _ft_f64_22()
     s1 = Int64(0)
@@ -11173,13 +10064,9 @@ function _ft_f64_22()
     end
 end
 function _ft_t64_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f64_22()
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f64_22), !applicable(_ft_f64_22, n), hasmethod(_ft_f64_22, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f64_22), !applicable(_ft_f64_22, n), hasmethod(_ft_f64_22, Tuple{})))
 end
 
 # function_type65: F0 = Function Function(int, {int x}); F3 = void Function(int x, [List<Function>]); F12 = core.List<core.int> Function(int y, {List<Function> x}) Function(int x); F17 = Function([List<T> x]) Function(int x); F22 = List<A> Function<A>(List<Function> x) Function(int x)
@@ -11188,26 +10075,18 @@ function _ft_f65_0(p1_1::Int64; x::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t65_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f65_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f65_0((n + 1); x = (n + 2))
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f65_0, (n + 1)), !applicable(_ft_f65_0, (n + 1), n), hasmethod(_ft_f65_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f65_0, (n + 1)), !applicable(_ft_f65_0, (n + 1), n), hasmethod(_ft_f65_0, Tuple{Int64})))
 end
 function _ft_f65_3(p1_1::Int64, p1_2::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t65_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f65_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f65_3((n + 1), Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f65_3, (n + 1)), !applicable(_ft_f65_3, (n + 1), Function[_ft_id], n), hasmethod(_ft_f65_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f65_3, (n + 1)), !applicable(_ft_f65_3, (n + 1), Function[_ft_id], n), hasmethod(_ft_f65_3, Tuple{Int64})))
 end
 function _ft_f65_12(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11217,15 +10096,10 @@ function _ft_f65_12(p1_1::Int64)
     end
 end
 function _ft_t65_12(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f65_12((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f65_12, (n + 1)), !applicable(_ft_f65_12, (n + 1), n), hasmethod(_ft_f65_12, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f65_12, (n + 1)), !applicable(_ft_f65_12, (n + 1), n), hasmethod(_ft_f65_12, Tuple{Int64})))
 end
 function _ft_f65_17(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11235,15 +10109,10 @@ function _ft_f65_17(p1_1::Int64)
     end
 end
 function _ft_t65_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f65_17((n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f65_17, (n + 1)), !applicable(_ft_f65_17, (n + 1), n), hasmethod(_ft_f65_17, Tuple{Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f65_17, (n + 1)), !applicable(_ft_f65_17, (n + 1), n), hasmethod(_ft_f65_17, Tuple{Int64})))
 end
 function _ft_f65_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11253,13 +10122,9 @@ function _ft_f65_22(p1_1::Int64)
     end
 end
 function _ft_t65_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f65_22((n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f65_22, (n + 1)), !applicable(_ft_f65_22, (n + 1), n), hasmethod(_ft_f65_22, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f65_22, (n + 1)), !applicable(_ft_f65_22, (n + 1), n), hasmethod(_ft_f65_22, Tuple{Int64})))
 end
 
 # function_type66: F0 = Function Function(int y, {int x}); F3 = void Function({List<Function> x}); F5 = int Function(int y, [List<Function> x]) Function<B extends core.int>(); F17 = Function([List<T> x]) Function<B extends core.int>(); F22 = List<A> Function<A>(List<Function> x) Function<B extends core.int>()
@@ -11268,26 +10133,18 @@ function _ft_f66_0(p1_1::Int64; x::Int64 = Int64(0))
     return () -> s1
 end
 function _ft_t66_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f66_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f66_0((n + 1); x = (n + 2))
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f66_0, (n + 1)), !applicable(_ft_f66_0, (n + 1), n), hasmethod(_ft_f66_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f66_0, (n + 1)), !applicable(_ft_f66_0, (n + 1), n), hasmethod(_ft_f66_0, Tuple{Int64})))
 end
 function _ft_f66_3(; x::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(x)
     return nothing
 end
 function _ft_t66_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f66_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f66_3(; x = Function[_ft_id])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f66_3), !applicable(_ft_f66_3, n), hasmethod(_ft_f66_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f66_3), !applicable(_ft_f66_3, n), hasmethod(_ft_f66_3, Tuple{})))
 end
 function _ft_f66_5(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11297,15 +10154,10 @@ function _ft_f66_5(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t66_5(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f66_5(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f66_5, Int64), !applicable(_ft_f66_5, Int64, n), hasmethod(_ft_f66_5, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f66_5, Int64), !applicable(_ft_f66_5, Int64, n), hasmethod(_ft_f66_5, Tuple{Type{Int64}})))
 end
 function _ft_f66_17(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11315,15 +10167,10 @@ function _ft_f66_17(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t66_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f66_17(Int64)
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(Int64[n, 2])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f66_17, Int64), !applicable(_ft_f66_17, Int64, n), hasmethod(_ft_f66_17, Tuple{Type{Int64}}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true])), _dw_facts(applicable(_ft_f66_17, Int64), !applicable(_ft_f66_17, Int64, n), hasmethod(_ft_f66_17, Tuple{Type{Int64}})))
 end
 function _ft_f66_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11333,13 +10180,9 @@ function _ft_f66_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t66_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f66_22(Int64)
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f66_22, Int64), !applicable(_ft_f66_22, Int64, n), hasmethod(_ft_f66_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f66_22, Int64), !applicable(_ft_f66_22, Int64, n), hasmethod(_ft_f66_22, Tuple{Type{Int64}})))
 end
 
 # function_type67: F1 = List<Function> Function(); F3 = void Function(int, {List<Function> x}); F5 = int Function(int y, [List<Function> x]) Function<B extends core.int>(int x); F17 = Function([List<T> x]) Function<B extends core.int>(int x); F22 = List<A> Function<A>(List<Function> x) Function<B extends core.int>(int x)
@@ -11348,24 +10191,17 @@ function _ft_f67_1()
     return Function[_ft_id]
 end
 function _ft_t67_1(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f67_1()
-    h = 31h + Int64(length(v1))
-    h = 31h + _dw_bits(applicable(_ft_f67_1), !applicable(_ft_f67_1, n), hasmethod(_ft_f67_1, Tuple{}))
-    return h
+    return (Int64(length(v1)), _dw_facts(applicable(_ft_f67_1), !applicable(_ft_f67_1, n), hasmethod(_ft_f67_1, Tuple{})))
 end
 function _ft_f67_3(p1_1::Int64; x::Vector{Function} = Function[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return nothing
 end
 function _ft_t67_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f67_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f67_3((n + 1); x = Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f67_3, (n + 1)), !applicable(_ft_f67_3, (n + 1), n), hasmethod(_ft_f67_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f67_3, (n + 1)), !applicable(_ft_f67_3, (n + 1), n), hasmethod(_ft_f67_3, Tuple{Int64})))
 end
 function _ft_f67_5(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11375,15 +10211,10 @@ function _ft_f67_5(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t67_5(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f67_5(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f67_5, Int64, (n + 1)), !applicable(_ft_f67_5, Int64, (n + 1), n), hasmethod(_ft_f67_5, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f67_5, Int64, (n + 1)), !applicable(_ft_f67_5, Int64, (n + 1), n), hasmethod(_ft_f67_5, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f67_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11393,15 +10224,10 @@ function _ft_f67_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t67_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f67_17(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2(Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f67_17, Int64, (n + 1)), !applicable(_ft_f67_17, Int64, (n + 1), n), hasmethod(_ft_f67_17, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f67_17, Int64, (n + 1)), !applicable(_ft_f67_17, Int64, (n + 1), n), hasmethod(_ft_f67_17, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f67_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11411,13 +10237,9 @@ function _ft_f67_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t67_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f67_22(Int64, (n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f67_22, Int64, (n + 1)), !applicable(_ft_f67_22, Int64, (n + 1), n), hasmethod(_ft_f67_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f67_22, Int64, (n + 1)), !applicable(_ft_f67_22, Int64, (n + 1), n), hasmethod(_ft_f67_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type68: F3 = void Function(int y, {List<Function> x}); F16 = Function(int y, {Function x}) Function(); F19 = void Function(int x, [core.List<core.int>]) Function(); F21 = List<T> Function<A>(List<Function> x) Function(); F22 = List<A> Function<A>(core.List<core.int> x) Function()
@@ -11426,13 +10248,9 @@ function _ft_f68_3(p1_1::Int64; x::Vector{Function} = Function[])
     return nothing
 end
 function _ft_t68_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f68_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f68_3((n + 1); x = Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f68_3, (n + 1)), !applicable(_ft_f68_3, (n + 1), n), hasmethod(_ft_f68_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f68_3, (n + 1)), !applicable(_ft_f68_3, (n + 1), n), hasmethod(_ft_f68_3, Tuple{Int64})))
 end
 function _ft_f68_16()
     s1 = Int64(0)
@@ -11442,15 +10260,10 @@ function _ft_f68_16()
     end
 end
 function _ft_t68_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f68_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f68_16), !applicable(_ft_f68_16, n), hasmethod(_ft_f68_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f68_16), !applicable(_ft_f68_16, n), hasmethod(_ft_f68_16, Tuple{})))
 end
 function _ft_f68_19()
     s1 = Int64(0)
@@ -11460,15 +10273,10 @@ function _ft_f68_19()
     end
 end
 function _ft_t68_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f68_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f68_19), !applicable(_ft_f68_19, n), hasmethod(_ft_f68_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n)), _dw_facts(applicable(_ft_f68_19), !applicable(_ft_f68_19, n), hasmethod(_ft_f68_19, Tuple{})))
 end
 function _ft_f68_21()
     s1 = Int64(0)
@@ -11478,13 +10286,9 @@ function _ft_f68_21()
     end
 end
 function _ft_t68_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f68_21()
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f68_21), !applicable(_ft_f68_21, n), hasmethod(_ft_f68_21, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f68_21), !applicable(_ft_f68_21, n), hasmethod(_ft_f68_21, Tuple{})))
 end
 function _ft_f68_22()
     s1 = Int64(0)
@@ -11494,13 +10298,9 @@ function _ft_f68_22()
     end
 end
 function _ft_t68_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f68_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f68_22), !applicable(_ft_f68_22, n), hasmethod(_ft_f68_22, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f68_22), !applicable(_ft_f68_22, n), hasmethod(_ft_f68_22, Tuple{})))
 end
 
 # function_type69: F0 = Function Function(int, [Function x]); F3 = void Function(core.List<core.int> x); F14 = List<T> Function([List<Function>]) Function(int x); F16 = Function(int y, {Function x}) Function(int x); F22 = List<A> Function<A>(core.List<core.int> x) Function(int x)
@@ -11509,24 +10309,17 @@ function _ft_f69_0(p1_1::Int64, p1_2::Function = _ft_id)
     return () -> s1
 end
 function _ft_t69_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f69_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f69_0((n + 1), _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f69_0, (n + 1)), !applicable(_ft_f69_0, (n + 1), _ft_id, n), hasmethod(_ft_f69_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f69_0, (n + 1)), !applicable(_ft_f69_0, (n + 1), _ft_id, n), hasmethod(_ft_f69_0, Tuple{Int64})))
 end
 function _ft_f69_3(p1_1::Vector{Int64})
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t69_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f69_3(Int64[n, 1])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f69_3, Int64[n, 1]), !applicable(_ft_f69_3, Int64[n, 1], n), hasmethod(_ft_f69_3, Tuple{Vector{Int64}}))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f69_3, Int64[n, 1]), !applicable(_ft_f69_3, Int64[n, 1], n), hasmethod(_ft_f69_3, Tuple{Vector{Int64}})))
 end
 function _ft_f69_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11536,15 +10329,10 @@ function _ft_f69_14(p1_1::Int64)
     end
 end
 function _ft_t69_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f69_14((n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f69_14, (n + 1)), !applicable(_ft_f69_14, (n + 1), n), hasmethod(_ft_f69_14, Tuple{Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f69_14, (n + 1)), !applicable(_ft_f69_14, (n + 1), n), hasmethod(_ft_f69_14, Tuple{Int64})))
 end
 function _ft_f69_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11554,15 +10342,10 @@ function _ft_f69_16(p1_1::Int64)
     end
 end
 function _ft_t69_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f69_16((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f69_16, (n + 1)), !applicable(_ft_f69_16, (n + 1), n), hasmethod(_ft_f69_16, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f69_16, (n + 1)), !applicable(_ft_f69_16, (n + 1), n), hasmethod(_ft_f69_16, Tuple{Int64})))
 end
 function _ft_f69_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11572,13 +10355,9 @@ function _ft_f69_22(p1_1::Int64)
     end
 end
 function _ft_t69_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f69_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f69_22, (n + 1)), !applicable(_ft_f69_22, (n + 1), n), hasmethod(_ft_f69_22, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f69_22, (n + 1)), !applicable(_ft_f69_22, (n + 1), n), hasmethod(_ft_f69_22, Tuple{Int64})))
 end
 
 # function_type70: F0 = Function Function(int y, [Function x]); F3 = void Function([core.List<core.int> x]); F16 = Function(int y, {Function x}) Function<B extends core.int>(); F21 = List<T> Function<A>(List<Function> x) Function<B extends core.int>(); F22 = List<A> Function<A>(core.List<core.int> x) Function<B extends core.int>()
@@ -11587,26 +10366,18 @@ function _ft_f70_0(p1_1::Int64, p1_2::Function = _ft_id)
     return () -> s1
 end
 function _ft_t70_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f70_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f70_0((n + 1), _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f70_0, (n + 1)), !applicable(_ft_f70_0, (n + 1), _ft_id, n), hasmethod(_ft_f70_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f70_0, (n + 1)), !applicable(_ft_f70_0, (n + 1), _ft_id, n), hasmethod(_ft_f70_0, Tuple{Int64})))
 end
 function _ft_f70_3(p1_1::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1)
     return nothing
 end
 function _ft_t70_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f70_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f70_3(Int64[n, 1])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f70_3), !applicable(_ft_f70_3, Int64[n, 1], n), hasmethod(_ft_f70_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f70_3), !applicable(_ft_f70_3, Int64[n, 1], n), hasmethod(_ft_f70_3, Tuple{})))
 end
 function _ft_f70_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11616,15 +10387,10 @@ function _ft_f70_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t70_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f70_16(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = _ft_id)
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f70_16, Int64), !applicable(_ft_f70_16, Int64, n), hasmethod(_ft_f70_16, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f70_16, Int64), !applicable(_ft_f70_16, Int64, n), hasmethod(_ft_f70_16, Tuple{Type{Int64}})))
 end
 function _ft_f70_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11634,13 +10400,9 @@ function _ft_f70_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t70_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f70_21(Int64)
     local v3 = v1(Int64, Function[_ft_id])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f70_21, Int64), !applicable(_ft_f70_21, Int64, n), hasmethod(_ft_f70_21, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Function[_ft_id]), !applicable(v1, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f70_21, Int64), !applicable(_ft_f70_21, Int64, n), hasmethod(_ft_f70_21, Tuple{Type{Int64}})))
 end
 function _ft_f70_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11650,13 +10412,9 @@ function _ft_f70_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t70_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f70_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f70_22, Int64), !applicable(_ft_f70_22, Int64, n), hasmethod(_ft_f70_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f70_22, Int64), !applicable(_ft_f70_22, Int64, n), hasmethod(_ft_f70_22, Tuple{Type{Int64}})))
 end
 
 # function_type71: F0 = Function Function(Function); F3 = void Function(int, [core.List<core.int> x]); F14 = List<T> Function([List<Function>]) Function<B extends core.int>(int x); F16 = Function(int y, {Function x}) Function<B extends core.int>( int x, ); F22 = List<A> Function<A>(core.List<core.int> x) Function<B extends core.int>( int x, )
@@ -11665,24 +10423,17 @@ function _ft_f71_0(p1_1::Function)
     return () -> s1
 end
 function _ft_t71_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f71_0(_ft_id)
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f71_0, _ft_id), !applicable(_ft_f71_0, _ft_id, n), hasmethod(_ft_f71_0, Tuple{typeof(_ft_id)}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f71_0, _ft_id), !applicable(_ft_f71_0, _ft_id, n), hasmethod(_ft_f71_0, Tuple{typeof(_ft_id)})))
 end
 function _ft_f71_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return nothing
 end
 function _ft_t71_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f71_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f71_3((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f71_3, (n + 1)), !applicable(_ft_f71_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f71_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f71_3, (n + 1)), !applicable(_ft_f71_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f71_3, Tuple{Int64})))
 end
 function _ft_f71_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11692,15 +10443,10 @@ function _ft_f71_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t71_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f71_14(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + sum(v4)
     local v5 = v2(Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f71_14, Int64, (n + 1)), !applicable(_ft_f71_14, Int64, (n + 1), n), hasmethod(_ft_f71_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v2), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f71_14, Int64, (n + 1)), !applicable(_ft_f71_14, Int64, (n + 1), n), hasmethod(_ft_f71_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f71_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11710,15 +10456,10 @@ function _ft_f71_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t71_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f71_16(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f71_16, Int64, (n + 1)), !applicable(_ft_f71_16, Int64, (n + 1), n), hasmethod(_ft_f71_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f71_16, Int64, (n + 1)), !applicable(_ft_f71_16, Int64, (n + 1), n), hasmethod(_ft_f71_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f71_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11728,13 +10469,9 @@ function _ft_f71_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t71_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f71_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f71_22, Int64, (n + 1)), !applicable(_ft_f71_22, Int64, (n + 1), n), hasmethod(_ft_f71_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f71_22, Int64, (n + 1)), !applicable(_ft_f71_22, Int64, (n + 1), n), hasmethod(_ft_f71_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type72: F3 = void Function(int y, [core.List<core.int> x]); F14 = List<T> Function(int, [List<Function>]) Function(); F16 = Function(List<Function> x) Function(); F19 = void Function({core.List<core.int> x}) Function(); F22 = List<A> Function<A>(List<T> x) Function()
@@ -11743,13 +10480,9 @@ function _ft_f72_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return nothing
 end
 function _ft_t72_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f72_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f72_3((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f72_3, (n + 1)), !applicable(_ft_f72_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f72_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f72_3, (n + 1)), !applicable(_ft_f72_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f72_3, Tuple{Int64})))
 end
 function _ft_f72_14()
     s1 = Int64(0)
@@ -11759,15 +10492,10 @@ function _ft_f72_14()
     end
 end
 function _ft_t72_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f72_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f72_14), !applicable(_ft_f72_14, n), hasmethod(_ft_f72_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f72_14), !applicable(_ft_f72_14, n), hasmethod(_ft_f72_14, Tuple{})))
 end
 function _ft_f72_16()
     s1 = Int64(0)
@@ -11777,13 +10505,9 @@ function _ft_f72_16()
     end
 end
 function _ft_t72_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f72_16()
     local v3 = v1(Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f72_16), !applicable(_ft_f72_16, n), hasmethod(_ft_f72_16, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f72_16), !applicable(_ft_f72_16, n), hasmethod(_ft_f72_16, Tuple{})))
 end
 function _ft_f72_19()
     s1 = Int64(0)
@@ -11793,15 +10517,10 @@ function _ft_f72_19()
     end
 end
 function _ft_t72_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f72_19()
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1(; x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f72_19), !applicable(_ft_f72_19, n), hasmethod(_ft_f72_19, Tuple{}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f72_19), !applicable(_ft_f72_19, n), hasmethod(_ft_f72_19, Tuple{})))
 end
 function _ft_f72_22()
     s1 = Int64(0)
@@ -11811,13 +10530,9 @@ function _ft_f72_22()
     end
 end
 function _ft_t72_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f72_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f72_22), !applicable(_ft_f72_22, n), hasmethod(_ft_f72_22, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true])), _dw_facts(applicable(_ft_f72_22), !applicable(_ft_f72_22, n), hasmethod(_ft_f72_22, Tuple{})))
 end
 
 # function_type73: F0 = Function Function(int, [Function]); F14 = List<T> Function(int, [List<Function>]) Function(int x); F16 = Function(List<Function> x) Function(int x); F19 = void Function({core.List<core.int> x}) Function(int x); F22 = List<A> Function<A>(List<T> x) Function(int x)
@@ -11826,13 +10541,9 @@ function _ft_f73_0(p1_1::Int64, p1_2::Function = _ft_id)
     return () -> s1
 end
 function _ft_t73_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f73_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f73_0((n + 1), _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f73_0, (n + 1)), !applicable(_ft_f73_0, (n + 1), _ft_id, n), hasmethod(_ft_f73_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f73_0, (n + 1)), !applicable(_ft_f73_0, (n + 1), _ft_id, n), hasmethod(_ft_f73_0, Tuple{Int64})))
 end
 function _ft_f73_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11842,15 +10553,10 @@ function _ft_f73_14(p1_1::Int64)
     end
 end
 function _ft_t73_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f73_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f73_14, (n + 1)), !applicable(_ft_f73_14, (n + 1), n), hasmethod(_ft_f73_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f73_14, (n + 1)), !applicable(_ft_f73_14, (n + 1), n), hasmethod(_ft_f73_14, Tuple{Int64})))
 end
 function _ft_f73_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11860,13 +10566,9 @@ function _ft_f73_16(p1_1::Int64)
     end
 end
 function _ft_t73_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f73_16((n + 1))
     local v4 = v2(Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f73_16, (n + 1)), !applicable(_ft_f73_16, (n + 1), n), hasmethod(_ft_f73_16, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f73_16, (n + 1)), !applicable(_ft_f73_16, (n + 1), n), hasmethod(_ft_f73_16, Tuple{Int64})))
 end
 function _ft_f73_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11876,15 +10578,10 @@ function _ft_f73_19(p1_1::Int64)
     end
 end
 function _ft_t73_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f73_19((n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(; x = Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f73_19, (n + 1)), !applicable(_ft_f73_19, (n + 1), n), hasmethod(_ft_f73_19, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f73_19, (n + 1)), !applicable(_ft_f73_19, (n + 1), n), hasmethod(_ft_f73_19, Tuple{Int64})))
 end
 function _ft_f73_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -11894,13 +10591,9 @@ function _ft_f73_22(p1_1::Int64)
     end
 end
 function _ft_t73_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f73_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f73_22, (n + 1)), !applicable(_ft_f73_22, (n + 1), n), hasmethod(_ft_f73_22, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true])), _dw_facts(applicable(_ft_f73_22, (n + 1)), !applicable(_ft_f73_22, (n + 1), n), hasmethod(_ft_f73_22, Tuple{Int64})))
 end
 
 # function_type74: F0 = Function Function(int x, [Function]); F14 = List<T> Function(int, [List<Function>]) Function<B extends core.int>(); F16 = Function(List<Function> x) Function<B extends core.int>(); F19 = void Function({core.List<core.int> x}) Function<B extends core.int>(); F22 = List<A> Function<A>(List<T> x) Function<B extends core.int>()
@@ -11909,13 +10602,9 @@ function _ft_f74_0(p1_1::Int64, p1_2::Function = _ft_id)
     return () -> s1
 end
 function _ft_t74_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f74_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f74_0((n + 1), _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f74_0, (n + 1)), !applicable(_ft_f74_0, (n + 1), _ft_id, n), hasmethod(_ft_f74_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f74_0, (n + 1)), !applicable(_ft_f74_0, (n + 1), _ft_id, n), hasmethod(_ft_f74_0, Tuple{Int64})))
 end
 function _ft_f74_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11925,15 +10614,10 @@ function _ft_f74_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t74_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f74_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f74_14, Int64), !applicable(_ft_f74_14, Int64, n), hasmethod(_ft_f74_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f74_14, Int64), !applicable(_ft_f74_14, Int64, n), hasmethod(_ft_f74_14, Tuple{Type{Int64}})))
 end
 function _ft_f74_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11943,13 +10627,9 @@ function _ft_f74_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t74_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f74_16(Int64)
     local v3 = v1(Function[_ft_id])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f74_16, Int64), !applicable(_ft_f74_16, Int64, n), hasmethod(_ft_f74_16, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f74_16, Int64), !applicable(_ft_f74_16, Int64, n), hasmethod(_ft_f74_16, Tuple{Type{Int64}})))
 end
 function _ft_f74_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11959,15 +10639,10 @@ function _ft_f74_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t74_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f74_19(Int64)
     local v3 = v1()
-    h = 31h + Int64(v3 === nothing)
     local v4 = v1(; x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f74_19, Int64), !applicable(_ft_f74_19, Int64, n), hasmethod(_ft_f74_19, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f74_19, Int64), !applicable(_ft_f74_19, Int64, n), hasmethod(_ft_f74_19, Tuple{Type{Int64}})))
 end
 function _ft_f74_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -11977,13 +10652,9 @@ function _ft_f74_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t74_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f74_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f74_22, Int64), !applicable(_ft_f74_22, Int64, n), hasmethod(_ft_f74_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true])), _dw_facts(applicable(_ft_f74_22, Int64), !applicable(_ft_f74_22, Int64, n), hasmethod(_ft_f74_22, Tuple{Type{Int64}})))
 end
 
 # function_type75: F0 = Function Function({Function x}); F14 = List<T> Function(int, [List<Function>]) Function<B extends core.int>(int x); F16 = Function(List<Function> x) Function<B extends core.int>(int x); F19 = void Function({core.List<core.int> x}) Function<B extends core.int>(int x); F22 = List<A> Function<A>(List<T> x) Function<B extends core.int>( int x, )
@@ -11992,13 +10663,9 @@ function _ft_f75_0(; x::Function = _ft_id)
     return () -> s1
 end
 function _ft_t75_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f75_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f75_0(; x = _ft_id)
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f75_0), !applicable(_ft_f75_0, n), hasmethod(_ft_f75_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f75_0), !applicable(_ft_f75_0, n), hasmethod(_ft_f75_0, Tuple{})))
 end
 function _ft_f75_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12008,15 +10675,10 @@ function _ft_f75_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t75_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f75_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f75_14, Int64, (n + 1)), !applicable(_ft_f75_14, Int64, (n + 1), n), hasmethod(_ft_f75_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f75_14, Int64, (n + 1)), !applicable(_ft_f75_14, Int64, (n + 1), n), hasmethod(_ft_f75_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f75_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12026,13 +10688,9 @@ function _ft_f75_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t75_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f75_16(Int64, (n + 1))
     local v4 = v2(Function[_ft_id])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f75_16, Int64, (n + 1)), !applicable(_ft_f75_16, Int64, (n + 1), n), hasmethod(_ft_f75_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f75_16, Int64, (n + 1)), !applicable(_ft_f75_16, Int64, (n + 1), n), hasmethod(_ft_f75_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f75_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12042,15 +10700,10 @@ function _ft_f75_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t75_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f75_19(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(v4 === nothing)
     local v5 = v2(; x = Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f75_19, Int64, (n + 1)), !applicable(_ft_f75_19, Int64, (n + 1), n), hasmethod(_ft_f75_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f75_19, Int64, (n + 1)), !applicable(_ft_f75_19, Int64, (n + 1), n), hasmethod(_ft_f75_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f75_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12060,13 +10713,9 @@ function _ft_f75_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t75_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f75_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f75_22, Int64, (n + 1)), !applicable(_ft_f75_22, Int64, (n + 1), n), hasmethod(_ft_f75_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n), !applicable(v2, Int64, Bool[true])), _dw_facts(applicable(_ft_f75_22, Int64, (n + 1)), !applicable(_ft_f75_22, Int64, (n + 1), n), hasmethod(_ft_f75_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type76: F0 = Function Function(int, {Function x}); F14 = List<T> Function(int x, [List<Function>]) Function(); F17 = Function(List<T>) Function(); F19 = void Function(int, {core.List<core.int> x}) Function(); F22 = List<A> Function<A>() Function()
@@ -12075,13 +10724,9 @@ function _ft_f76_0(p1_1::Int64; x::Function = _ft_id)
     return () -> s1
 end
 function _ft_t76_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f76_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f76_0((n + 1); x = _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f76_0, (n + 1)), !applicable(_ft_f76_0, (n + 1), n), hasmethod(_ft_f76_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f76_0, (n + 1)), !applicable(_ft_f76_0, (n + 1), n), hasmethod(_ft_f76_0, Tuple{Int64})))
 end
 function _ft_f76_14()
     s1 = Int64(0)
@@ -12091,15 +10736,10 @@ function _ft_f76_14()
     end
 end
 function _ft_t76_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f76_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f76_14), !applicable(_ft_f76_14, n), hasmethod(_ft_f76_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f76_14), !applicable(_ft_f76_14, n), hasmethod(_ft_f76_14, Tuple{})))
 end
 function _ft_f76_17()
     s1 = Int64(0)
@@ -12109,13 +10749,9 @@ function _ft_f76_17()
     end
 end
 function _ft_t76_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f76_17()
     local v3 = v1(Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f76_17), !applicable(_ft_f76_17, n), hasmethod(_ft_f76_17, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true])), _dw_facts(applicable(_ft_f76_17), !applicable(_ft_f76_17, n), hasmethod(_ft_f76_17, Tuple{})))
 end
 function _ft_f76_19()
     s1 = Int64(0)
@@ -12125,15 +10761,10 @@ function _ft_f76_19()
     end
 end
 function _ft_t76_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f76_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f76_19), !applicable(_ft_f76_19, n), hasmethod(_ft_f76_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f76_19), !applicable(_ft_f76_19, n), hasmethod(_ft_f76_19, Tuple{})))
 end
 function _ft_f76_22()
     s1 = Int64(0)
@@ -12143,13 +10774,9 @@ function _ft_f76_22()
     end
 end
 function _ft_t76_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f76_22()
     local v2 = v1(Int64)
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(v1, Int64), !applicable(v1, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f76_22), !applicable(_ft_f76_22, n), hasmethod(_ft_f76_22, Tuple{}))
-    return h
+    return (sum(v2), _dw_facts(applicable(v1, Int64), !applicable(v1, Int64, n)), _dw_facts(applicable(_ft_f76_22), !applicable(_ft_f76_22, n), hasmethod(_ft_f76_22, Tuple{})))
 end
 
 # function_type77: F0 = Function Function(int y, {Function x}); F3 = void Function({core.List<core.int> x}); F14 = List<T> Function(int x, [List<Function>]) Function(int x); F17 = Function(List<T>) Function(int x); F22 = List<A> Function<A>() Function(int x)
@@ -12158,26 +10785,18 @@ function _ft_f77_0(p1_1::Int64; x::Function = _ft_id)
     return () -> s1
 end
 function _ft_t77_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f77_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f77_0((n + 1); x = _ft_id)
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f77_0, (n + 1)), !applicable(_ft_f77_0, (n + 1), n), hasmethod(_ft_f77_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f77_0, (n + 1)), !applicable(_ft_f77_0, (n + 1), n), hasmethod(_ft_f77_0, Tuple{Int64})))
 end
 function _ft_f77_3(; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(x)
     return nothing
 end
 function _ft_t77_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f77_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f77_3(; x = Int64[n, 1])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f77_3), !applicable(_ft_f77_3, n), hasmethod(_ft_f77_3, Tuple{}))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f77_3), !applicable(_ft_f77_3, n), hasmethod(_ft_f77_3, Tuple{})))
 end
 function _ft_f77_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12187,15 +10806,10 @@ function _ft_f77_14(p1_1::Int64)
     end
 end
 function _ft_t77_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f77_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f77_14, (n + 1)), !applicable(_ft_f77_14, (n + 1), n), hasmethod(_ft_f77_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f77_14, (n + 1)), !applicable(_ft_f77_14, (n + 1), n), hasmethod(_ft_f77_14, Tuple{Int64})))
 end
 function _ft_f77_17(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12205,13 +10819,9 @@ function _ft_f77_17(p1_1::Int64)
     end
 end
 function _ft_t77_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f77_17((n + 1))
     local v4 = v2(Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f77_17, (n + 1)), !applicable(_ft_f77_17, (n + 1), n), hasmethod(_ft_f77_17, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f77_17, (n + 1)), !applicable(_ft_f77_17, (n + 1), n), hasmethod(_ft_f77_17, Tuple{Int64})))
 end
 function _ft_f77_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12221,13 +10831,9 @@ function _ft_f77_22(p1_1::Int64)
     end
 end
 function _ft_t77_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f77_22((n + 1))
     local v3 = v2(Int64)
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f77_22, (n + 1)), !applicable(_ft_f77_22, (n + 1), n), hasmethod(_ft_f77_22, Tuple{Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f77_22, (n + 1)), !applicable(_ft_f77_22, (n + 1), n), hasmethod(_ft_f77_22, Tuple{Int64})))
 end
 
 # function_type78: F0 = Function Function(List<Function> x); F3 = void Function(int, {core.List<core.int> x}); F14 = List<T> Function(int x, [List<Function>]) Function<B extends core.int>(); F17 = Function(List<T>) Function<B extends core.int>(); F22 = List<A> Function<A>() Function<B extends core.int>()
@@ -12236,24 +10842,17 @@ function _ft_f78_0(p1_1::Vector{Function})
     return () -> s1
 end
 function _ft_t78_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f78_0(Function[_ft_id])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f78_0, Function[_ft_id]), !applicable(_ft_f78_0, Function[_ft_id], n), hasmethod(_ft_f78_0, Tuple{Vector{Function}}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f78_0, Function[_ft_id]), !applicable(_ft_f78_0, Function[_ft_id], n), hasmethod(_ft_f78_0, Tuple{Vector{Function}})))
 end
 function _ft_f78_3(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return nothing
 end
 function _ft_t78_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f78_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f78_3((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f78_3, (n + 1)), !applicable(_ft_f78_3, (n + 1), n), hasmethod(_ft_f78_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f78_3, (n + 1)), !applicable(_ft_f78_3, (n + 1), n), hasmethod(_ft_f78_3, Tuple{Int64})))
 end
 function _ft_f78_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12263,15 +10862,10 @@ function _ft_f78_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t78_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f78_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f78_14, Int64), !applicable(_ft_f78_14, Int64, n), hasmethod(_ft_f78_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f78_14, Int64), !applicable(_ft_f78_14, Int64, n), hasmethod(_ft_f78_14, Tuple{Type{Int64}})))
 end
 function _ft_f78_17(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12281,13 +10875,9 @@ function _ft_f78_17(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t78_17(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f78_17(Int64)
     local v3 = v1(Int64[n, 2])
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f78_17, Int64), !applicable(_ft_f78_17, Int64, n), hasmethod(_ft_f78_17, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64[n, 2]), !applicable(v1, Int64[n, 2], n), !applicable(v1, Bool[true])), _dw_facts(applicable(_ft_f78_17, Int64), !applicable(_ft_f78_17, Int64, n), hasmethod(_ft_f78_17, Tuple{Type{Int64}})))
 end
 function _ft_f78_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12297,13 +10887,9 @@ function _ft_f78_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t78_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f78_22(Int64)
     local v2 = v1(Int64)
-    h = 31h + sum(v2)
-    h = 31h + _dw_bits(applicable(v1, Int64), !applicable(v1, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f78_22, Int64), !applicable(_ft_f78_22, Int64, n), hasmethod(_ft_f78_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v2), _dw_facts(applicable(v1, Int64), !applicable(v1, Int64, n)), _dw_facts(applicable(_ft_f78_22, Int64), !applicable(_ft_f78_22, Int64, n), hasmethod(_ft_f78_22, Tuple{Type{Int64}})))
 end
 
 # function_type79: F0 = Function Function([List<Function> x]); F3 = void Function(int y, {core.List<core.int> x}); F14 = List<T> Function(int x, [List<Function>]) Function<B extends core.int>( int x, ); F17 = Function(List<T>) Function<B extends core.int>(int x); F22 = List<A> Function<A>() Function<B extends core.int>(int x)
@@ -12312,26 +10898,18 @@ function _ft_f79_0(p1_1::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t79_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f79_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f79_0(Function[_ft_id])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f79_0), !applicable(_ft_f79_0, Function[_ft_id], n), hasmethod(_ft_f79_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f79_0), !applicable(_ft_f79_0, Function[_ft_id], n), hasmethod(_ft_f79_0, Tuple{})))
 end
 function _ft_f79_3(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
     return nothing
 end
 function _ft_t79_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f79_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f79_3((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f79_3, (n + 1)), !applicable(_ft_f79_3, (n + 1), n), hasmethod(_ft_f79_3, Tuple{Int64}))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f79_3, (n + 1)), !applicable(_ft_f79_3, (n + 1), n), hasmethod(_ft_f79_3, Tuple{Int64})))
 end
 function _ft_f79_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12341,15 +10919,10 @@ function _ft_f79_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t79_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f79_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f79_14, Int64, (n + 1)), !applicable(_ft_f79_14, Int64, (n + 1), n), hasmethod(_ft_f79_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f79_14, Int64, (n + 1)), !applicable(_ft_f79_14, Int64, (n + 1), n), hasmethod(_ft_f79_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f79_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12359,13 +10932,9 @@ function _ft_f79_17(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t79_17(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f79_17(Int64, (n + 1))
     local v4 = v2(Int64[n, 3])
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f79_17, Int64, (n + 1)), !applicable(_ft_f79_17, Int64, (n + 1), n), hasmethod(_ft_f79_17, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64[n, 3]), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f79_17, Int64, (n + 1)), !applicable(_ft_f79_17, Int64, (n + 1), n), hasmethod(_ft_f79_17, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f79_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12375,13 +10944,9 @@ function _ft_f79_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t79_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f79_22(Int64, (n + 1))
     local v3 = v2(Int64)
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f79_22, Int64, (n + 1)), !applicable(_ft_f79_22, Int64, (n + 1), n), hasmethod(_ft_f79_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f79_22, Int64, (n + 1)), !applicable(_ft_f79_22, Int64, (n + 1), n), hasmethod(_ft_f79_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type80: F0 = Function Function(int, [List<Function> x]); F16 = Function(int, [List<Function> x]) Function(); F19 = void Function(int y, {core.List<core.int> x}) Function(); F20 = Function Function<A>(List<T> x) Function(); F22 = List<A> Function<A>(A x) Function()
@@ -12390,13 +10955,9 @@ function _ft_f80_0(p1_1::Int64, p1_2::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t80_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f80_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f80_0((n + 1), Function[_ft_id])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f80_0, (n + 1)), !applicable(_ft_f80_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f80_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f80_0, (n + 1)), !applicable(_ft_f80_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f80_0, Tuple{Int64})))
 end
 function _ft_f80_16()
     s1 = Int64(0)
@@ -12406,15 +10967,10 @@ function _ft_f80_16()
     end
 end
 function _ft_t80_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f80_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f80_16), !applicable(_ft_f80_16, n), hasmethod(_ft_f80_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f80_16), !applicable(_ft_f80_16, n), hasmethod(_ft_f80_16, Tuple{})))
 end
 function _ft_f80_19()
     s1 = Int64(0)
@@ -12424,15 +10980,10 @@ function _ft_f80_19()
     end
 end
 function _ft_t80_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f80_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f80_19), !applicable(_ft_f80_19, n), hasmethod(_ft_f80_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f80_19), !applicable(_ft_f80_19, n), hasmethod(_ft_f80_19, Tuple{})))
 end
 function _ft_f80_20()
     s1 = Int64(0)
@@ -12442,13 +10993,9 @@ function _ft_f80_20()
     end
 end
 function _ft_t80_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f80_20()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f80_20), !applicable(_ft_f80_20, n), hasmethod(_ft_f80_20, Tuple{}))
-    return h
+    return ((v3 isa Function), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n), !applicable(v1, Int64, Bool[true])), _dw_facts(applicable(_ft_f80_20), !applicable(_ft_f80_20, n), hasmethod(_ft_f80_20, Tuple{})))
 end
 function _ft_f80_22()
     s1 = Int64(0)
@@ -12458,13 +11005,9 @@ function _ft_f80_22()
     end
 end
 function _ft_t80_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f80_22()
     local v3 = v1(Int64, (n + 2))
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f80_22), !applicable(_ft_f80_22, n), hasmethod(_ft_f80_22, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f80_22), !applicable(_ft_f80_22, n), hasmethod(_ft_f80_22, Tuple{})))
 end
 
 # function_type81: F0 = Function Function(int y, [List<Function> x]); F16 = Function(int, [List<Function> x]) Function(int x); F19 = void Function(int y, {core.List<core.int> x}) Function(int x); F21 = List<T> Function<A>() Function(int x); F22 = List<A> Function<A>(A x) Function(int x)
@@ -12473,13 +11016,9 @@ function _ft_f81_0(p1_1::Int64, p1_2::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t81_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f81_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f81_0((n + 1), Function[_ft_id])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f81_0, (n + 1)), !applicable(_ft_f81_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f81_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f81_0, (n + 1)), !applicable(_ft_f81_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f81_0, Tuple{Int64})))
 end
 function _ft_f81_16(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12489,15 +11028,10 @@ function _ft_f81_16(p1_1::Int64)
     end
 end
 function _ft_t81_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f81_16((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f81_16, (n + 1)), !applicable(_ft_f81_16, (n + 1), n), hasmethod(_ft_f81_16, Tuple{Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f81_16, (n + 1)), !applicable(_ft_f81_16, (n + 1), n), hasmethod(_ft_f81_16, Tuple{Int64})))
 end
 function _ft_f81_19(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12507,15 +11041,10 @@ function _ft_f81_19(p1_1::Int64)
     end
 end
 function _ft_t81_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f81_19((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f81_19, (n + 1)), !applicable(_ft_f81_19, (n + 1), n), hasmethod(_ft_f81_19, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f81_19, (n + 1)), !applicable(_ft_f81_19, (n + 1), n), hasmethod(_ft_f81_19, Tuple{Int64})))
 end
 function _ft_f81_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12525,13 +11054,9 @@ function _ft_f81_21(p1_1::Int64)
     end
 end
 function _ft_t81_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f81_21((n + 1))
     local v3 = v2(Int64)
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f81_21, (n + 1)), !applicable(_ft_f81_21, (n + 1), n), hasmethod(_ft_f81_21, Tuple{Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f81_21, (n + 1)), !applicable(_ft_f81_21, (n + 1), n), hasmethod(_ft_f81_21, Tuple{Int64})))
 end
 function _ft_f81_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12541,13 +11066,9 @@ function _ft_f81_22(p1_1::Int64)
     end
 end
 function _ft_t81_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f81_22((n + 1))
     local v4 = v2(Int64, (n + 3))
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f81_22, (n + 1)), !applicable(_ft_f81_22, (n + 1), n), hasmethod(_ft_f81_22, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n)), _dw_facts(applicable(_ft_f81_22, (n + 1)), !applicable(_ft_f81_22, (n + 1), n), hasmethod(_ft_f81_22, Tuple{Int64})))
 end
 
 # function_type82: F0 = Function Function(List<Function>); F3 = void Function(int, [List<T> x]); F6 = int Function(int y, {List<T> x}) Function<B extends core.int>(); F16 = Function(int, [List<Function> x]) Function<B extends core.int>(); F22 = List<A> Function<A>(A x) Function<B extends core.int>()
@@ -12556,11 +11077,8 @@ function _ft_f82_0(p1_1::Vector{Function})
     return () -> s1
 end
 function _ft_t82_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f82_0(Function[_ft_id])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f82_0, Function[_ft_id]), !applicable(_ft_f82_0, Function[_ft_id], n), hasmethod(_ft_f82_0, Tuple{Vector{Function}}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f82_0, Function[_ft_id]), !applicable(_ft_f82_0, Function[_ft_id], n), hasmethod(_ft_f82_0, Tuple{Vector{Function}})))
 end
 function _ft_f82_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
@@ -12568,15 +11086,9 @@ function _ft_f82_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m82_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t82_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f82_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f82_3((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f82_3, (n + 1)), !applicable(_ft_f82_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f82_3, Tuple{Int64}), !applicable(_ft_f82_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m82_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m82_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m82_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m82_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f82_3, (n + 1)), !applicable(_ft_f82_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f82_3, Tuple{Int64}), !applicable(_ft_f82_3, (n + 101), Bool[true])), _ft_m82_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m82_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m82_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m82_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f82_6(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12586,15 +11098,10 @@ function _ft_f82_6(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t82_6(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f82_6(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Int64[n, 3])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f82_6, Int64), !applicable(_ft_f82_6, Int64, n), hasmethod(_ft_f82_6, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f82_6, Int64), !applicable(_ft_f82_6, Int64, n), hasmethod(_ft_f82_6, Tuple{Type{Int64}})))
 end
 function _ft_f82_16(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12604,15 +11111,10 @@ function _ft_f82_16(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t82_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f82_16(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f82_16, Int64), !applicable(_ft_f82_16, Int64, n), hasmethod(_ft_f82_16, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f82_16, Int64), !applicable(_ft_f82_16, Int64, n), hasmethod(_ft_f82_16, Tuple{Type{Int64}})))
 end
 function _ft_f82_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12622,13 +11124,9 @@ function _ft_f82_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t82_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f82_22(Int64)
     local v3 = v1(Int64, (n + 2))
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f82_22, Int64), !applicable(_ft_f82_22, Int64, n), hasmethod(_ft_f82_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, (n + 2)), !applicable(v1, Int64, (n + 2), n)), _dw_facts(applicable(_ft_f82_22, Int64), !applicable(_ft_f82_22, Int64, n), hasmethod(_ft_f82_22, Tuple{Type{Int64}})))
 end
 
 # function_type83: F0 = Function Function([List<Function>]); F16 = Function(int, [List<Function> x]) Function<B extends core.int>( int x, ); F19 = void Function(int y, {core.List<core.int> x}) Function<B extends core.int>( int x, ); F21 = List<T> Function<A>() Function<B extends core.int>(int x); F22 = List<A> Function<A>(A x) Function<B extends core.int>(int x)
@@ -12637,13 +11135,9 @@ function _ft_f83_0(p1_1::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t83_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f83_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f83_0(Function[_ft_id])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f83_0), !applicable(_ft_f83_0, Function[_ft_id], n), hasmethod(_ft_f83_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f83_0), !applicable(_ft_f83_0, Function[_ft_id], n), hasmethod(_ft_f83_0, Tuple{})))
 end
 function _ft_f83_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12653,15 +11147,10 @@ function _ft_f83_16(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t83_16(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f83_16(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + v5
     local v6 = v2((n + 3), Function[_ft_id])
-    h = 31h + v6
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f83_16, Int64, (n + 1)), !applicable(_ft_f83_16, Int64, (n + 1), n), hasmethod(_ft_f83_16, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v5, v6, _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Function[_ft_id], n)), _dw_facts(applicable(_ft_f83_16, Int64, (n + 1)), !applicable(_ft_f83_16, Int64, (n + 1), n), hasmethod(_ft_f83_16, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f83_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12671,15 +11160,10 @@ function _ft_f83_19(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t83_19(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f83_19(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = Int64[n, 4])
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f83_19, Int64, (n + 1)), !applicable(_ft_f83_19, Int64, (n + 1), n), hasmethod(_ft_f83_19, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f83_19, Int64, (n + 1)), !applicable(_ft_f83_19, Int64, (n + 1), n), hasmethod(_ft_f83_19, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f83_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12689,13 +11173,9 @@ function _ft_f83_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t83_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f83_21(Int64, (n + 1))
     local v3 = v2(Int64)
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v2, Int64), !applicable(v2, Int64, n))
-    h = 31h + _dw_bits(applicable(_ft_f83_21, Int64, (n + 1)), !applicable(_ft_f83_21, Int64, (n + 1), n), hasmethod(_ft_f83_21, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v2, Int64), !applicable(v2, Int64, n)), _dw_facts(applicable(_ft_f83_21, Int64, (n + 1)), !applicable(_ft_f83_21, Int64, (n + 1), n), hasmethod(_ft_f83_21, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f83_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12705,13 +11185,9 @@ function _ft_f83_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t83_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f83_22(Int64, (n + 1))
     local v4 = v2(Int64, (n + 3))
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f83_22, Int64, (n + 1)), !applicable(_ft_f83_22, Int64, (n + 1), n), hasmethod(_ft_f83_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, (n + 3)), !applicable(v2, Int64, (n + 3), n)), _dw_facts(applicable(_ft_f83_22, Int64, (n + 1)), !applicable(_ft_f83_22, Int64, (n + 1), n), hasmethod(_ft_f83_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type84: F0 = Function Function(int, [List<Function>]); F3 = void Function(List<T>); F14 = List<T> Function(int, {List<Function> x}) Function(); F16 = Function(int y, [List<Function> x]) Function(); F22 = List<A> Function<A>(List<A> x) Function()
@@ -12720,13 +11196,9 @@ function _ft_f84_0(p1_1::Int64, p1_2::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t84_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f84_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f84_0((n + 1), Function[_ft_id])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f84_0, (n + 1)), !applicable(_ft_f84_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f84_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f84_0, (n + 1)), !applicable(_ft_f84_0, (n + 1), Function[_ft_id], n), hasmethod(_ft_f84_0, Tuple{Int64})))
 end
 function _ft_f84_3(p1_1::Vector{Int64})
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12734,13 +11206,8 @@ function _ft_f84_3(p1_1::Vector{Int64})
 end
 _ft_m84_3(u::_FtU{T}, p1_1::Vector{T}) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t84_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f84_3(Int64[n, 1])
-    h = 31h + Int64(v2 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f84_3, Int64[n, 1]), !applicable(_ft_f84_3, Int64[n, 1], n), hasmethod(_ft_f84_3, Tuple{Vector{Int64}}), !applicable(_ft_f84_3, Bool[true]))
-    h = 31h + _ft_m84_3(_FtU{Int64}(), Int64[n, 201]) + _ft_m84_3(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m84_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m84_3, _FtU{Int64}(), Bool[true]))
-    return h
+    return ((v2 === nothing), _dw_facts(applicable(_ft_f84_3, Int64[n, 1]), !applicable(_ft_f84_3, Int64[n, 1], n), hasmethod(_ft_f84_3, Tuple{Vector{Int64}}), !applicable(_ft_f84_3, Bool[true])), _ft_m84_3(_FtU{Int64}(), Int64[n, 201]), _ft_m84_3(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m84_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m84_3, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f84_14()
     s1 = Int64(0)
@@ -12750,15 +11217,10 @@ function _ft_f84_14()
     end
 end
 function _ft_t84_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f84_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f84_14), !applicable(_ft_f84_14, n), hasmethod(_ft_f84_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f84_14), !applicable(_ft_f84_14, n), hasmethod(_ft_f84_14, Tuple{})))
 end
 function _ft_f84_16()
     s1 = Int64(0)
@@ -12768,15 +11230,10 @@ function _ft_f84_16()
     end
 end
 function _ft_t84_16(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f84_16()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2), Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f84_16), !applicable(_ft_f84_16, n), hasmethod(_ft_f84_16, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Function[_ft_id], n)), _dw_facts(applicable(_ft_f84_16), !applicable(_ft_f84_16, n), hasmethod(_ft_f84_16, Tuple{})))
 end
 function _ft_f84_22()
     s1 = Int64(0)
@@ -12786,13 +11243,9 @@ function _ft_f84_22()
     end
 end
 function _ft_t84_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f84_22()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f84_22), !applicable(_ft_f84_22, n), hasmethod(_ft_f84_22, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f84_22), !applicable(_ft_f84_22, n), hasmethod(_ft_f84_22, Tuple{})))
 end
 
 # function_type85: F2 = Function([int]); F3 = void Function([List<T>]); F6 = int Function() Function(int x); F14 = List<T> Function(int, {List<Function> x}) Function(int x); F22 = List<A> Function<A>(List<A> x) Function(int x)
@@ -12801,13 +11254,9 @@ function _ft_f85_2(p1_1::Int64 = Int64(0))
     return s1
 end
 function _ft_t85_2(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f85_2()
-    h = 31h + v2
     local v3 = _ft_f85_2((n + 1))
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f85_2), !applicable(_ft_f85_2, (n + 1), n), hasmethod(_ft_f85_2, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f85_2), !applicable(_ft_f85_2, (n + 1), n), hasmethod(_ft_f85_2, Tuple{})))
 end
 function _ft_f85_3(p1_1::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12815,15 +11264,9 @@ function _ft_f85_3(p1_1::Vector{Int64} = Int64[])
 end
 _ft_m85_3(u::_FtU{T}, p1_1::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1)
 function _ft_t85_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f85_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f85_3(Int64[n, 1])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f85_3), !applicable(_ft_f85_3, Int64[n, 1], n), hasmethod(_ft_f85_3, Tuple{}), !applicable(_ft_f85_3, Bool[true]))
-    h = 31h + _ft_m85_3(_FtU{Int64}(), Int64[n, 201]) + _ft_m85_3(_FtU{Bool}(), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m85_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m85_3, _FtU{Int64}(), Bool[true]))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f85_3), !applicable(_ft_f85_3, Int64[n, 1], n), hasmethod(_ft_f85_3, Tuple{}), !applicable(_ft_f85_3, Bool[true])), _ft_m85_3(_FtU{Int64}(), Int64[n, 201]), _ft_m85_3(_FtU{Bool}(), Bool[true]), _dw_facts(applicable(_ft_m85_3, _FtU{Bool}(), Bool[true]), !applicable(_ft_m85_3, _FtU{Int64}(), Bool[true])))
 end
 function _ft_f85_6(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12833,13 +11276,9 @@ function _ft_f85_6(p1_1::Int64)
     end
 end
 function _ft_t85_6(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f85_6((n + 1))
     local v3 = v2()
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f85_6, (n + 1)), !applicable(_ft_f85_6, (n + 1), n), hasmethod(_ft_f85_6, Tuple{Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f85_6, (n + 1)), !applicable(_ft_f85_6, (n + 1), n), hasmethod(_ft_f85_6, Tuple{Int64})))
 end
 function _ft_f85_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12849,15 +11288,10 @@ function _ft_f85_14(p1_1::Int64)
     end
 end
 function _ft_t85_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f85_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f85_14, (n + 1)), !applicable(_ft_f85_14, (n + 1), n), hasmethod(_ft_f85_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f85_14, (n + 1)), !applicable(_ft_f85_14, (n + 1), n), hasmethod(_ft_f85_14, Tuple{Int64})))
 end
 function _ft_f85_22(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12867,13 +11301,9 @@ function _ft_f85_22(p1_1::Int64)
     end
 end
 function _ft_t85_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f85_22((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f85_22, (n + 1)), !applicable(_ft_f85_22, (n + 1), n), hasmethod(_ft_f85_22, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f85_22, (n + 1)), !applicable(_ft_f85_22, (n + 1), n), hasmethod(_ft_f85_22, Tuple{Int64})))
 end
 
 # function_type86: F0 = Function Function({List<Function> x}); F2 = Function(int, [int]); F3 = void Function(int, [List<T>]); F14 = List<T> Function(int, {List<Function> x}) Function<B extends core.int>(); F22 = List<A> Function<A>(List<A> x) Function<B extends core.int>()
@@ -12882,26 +11312,18 @@ function _ft_f86_0(; x::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t86_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f86_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f86_0(; x = Function[_ft_id])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f86_0), !applicable(_ft_f86_0, n), hasmethod(_ft_f86_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f86_0), !applicable(_ft_f86_0, n), hasmethod(_ft_f86_0, Tuple{})))
 end
 function _ft_f86_2(p1_1::Int64, p1_2::Int64 = Int64(0))
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
     return s1
 end
 function _ft_t86_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f86_2((n + 1))
-    h = 31h + v3
     local v4 = _ft_f86_2((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f86_2, (n + 1)), !applicable(_ft_f86_2, (n + 1), (n + 2), n), hasmethod(_ft_f86_2, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f86_2, (n + 1)), !applicable(_ft_f86_2, (n + 1), (n + 2), n), hasmethod(_ft_f86_2, Tuple{Int64})))
 end
 function _ft_f86_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
@@ -12909,15 +11331,9 @@ function _ft_f86_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m86_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t86_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f86_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f86_3((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f86_3, (n + 1)), !applicable(_ft_f86_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f86_3, Tuple{Int64}), !applicable(_ft_f86_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m86_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m86_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m86_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m86_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f86_3, (n + 1)), !applicable(_ft_f86_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f86_3, Tuple{Int64}), !applicable(_ft_f86_3, (n + 101), Bool[true])), _ft_m86_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m86_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m86_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m86_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f86_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12927,15 +11343,10 @@ function _ft_f86_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t86_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f86_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f86_14, Int64), !applicable(_ft_f86_14, Int64, n), hasmethod(_ft_f86_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f86_14, Int64), !applicable(_ft_f86_14, Int64, n), hasmethod(_ft_f86_14, Tuple{Type{Int64}})))
 end
 function _ft_f86_22(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -12945,13 +11356,9 @@ function _ft_f86_22(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t86_22(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f86_22(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f86_22, Int64), !applicable(_ft_f86_22, Int64, n), hasmethod(_ft_f86_22, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f86_22, Int64), !applicable(_ft_f86_22, Int64, n), hasmethod(_ft_f86_22, Tuple{Type{Int64}})))
 end
 
 # function_type87: F2 = Function(int x, [int]); F3 = void Function(int x, [List<T>]); F6 = int Function() Function<B extends core.int>(int x); F14 = List<T> Function(int, {List<Function> x}) Function<B extends core.int>( int x, ); F22 = List<A> Function<A>(List<A> x) Function<B extends core.int>( int x, )
@@ -12960,13 +11367,9 @@ function _ft_f87_2(p1_1::Int64, p1_2::Int64 = Int64(0))
     return s1
 end
 function _ft_t87_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f87_2((n + 1))
-    h = 31h + v3
     local v4 = _ft_f87_2((n + 1), (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f87_2, (n + 1)), !applicable(_ft_f87_2, (n + 1), (n + 2), n), hasmethod(_ft_f87_2, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f87_2, (n + 1)), !applicable(_ft_f87_2, (n + 1), (n + 2), n), hasmethod(_ft_f87_2, Tuple{Int64})))
 end
 function _ft_f87_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
@@ -12974,15 +11377,9 @@ function _ft_f87_3(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
 end
 _ft_m87_3(u::_FtU{T}, p1_1::Int64, p1_2::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(p1_2)
 function _ft_t87_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f87_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f87_3((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f87_3, (n + 1)), !applicable(_ft_f87_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f87_3, Tuple{Int64}), !applicable(_ft_f87_3, (n + 101), Bool[true]))
-    h = 31h + _ft_m87_3(_FtU{Int64}(), (n + 201), Int64[n, 202]) + _ft_m87_3(_FtU{Bool}(), (n + 203), Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m87_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m87_3, _FtU{Int64}(), (n + 203), Bool[true]))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f87_3, (n + 1)), !applicable(_ft_f87_3, (n + 1), Int64[n, 2], n), hasmethod(_ft_f87_3, Tuple{Int64}), !applicable(_ft_f87_3, (n + 101), Bool[true])), _ft_m87_3(_FtU{Int64}(), (n + 201), Int64[n, 202]), _ft_m87_3(_FtU{Bool}(), (n + 203), Bool[true]), _dw_facts(applicable(_ft_m87_3, _FtU{Bool}(), (n + 203), Bool[true]), !applicable(_ft_m87_3, _FtU{Int64}(), (n + 203), Bool[true])))
 end
 function _ft_f87_6(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -12992,13 +11389,9 @@ function _ft_f87_6(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t87_6(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f87_6(Int64, (n + 1))
     local v3 = v2()
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, n))
-    h = 31h + _dw_bits(applicable(_ft_f87_6, Int64, (n + 1)), !applicable(_ft_f87_6, Int64, (n + 1), n), hasmethod(_ft_f87_6, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v3, _dw_facts(applicable(v2), !applicable(v2, n)), _dw_facts(applicable(_ft_f87_6, Int64, (n + 1)), !applicable(_ft_f87_6, Int64, (n + 1), n), hasmethod(_ft_f87_6, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f87_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13008,15 +11401,10 @@ function _ft_f87_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t87_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f87_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f87_14, Int64, (n + 1)), !applicable(_ft_f87_14, Int64, (n + 1), n), hasmethod(_ft_f87_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f87_14, Int64, (n + 1)), !applicable(_ft_f87_14, Int64, (n + 1), n), hasmethod(_ft_f87_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f87_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13026,13 +11414,9 @@ function _ft_f87_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t87_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f87_22(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f87_22, Int64, (n + 1)), !applicable(_ft_f87_22, Int64, (n + 1), n), hasmethod(_ft_f87_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f87_22, Int64, (n + 1)), !applicable(_ft_f87_22, Int64, (n + 1), n), hasmethod(_ft_f87_22, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type88: F0 = Function Function(int y, {List<Function> x}); F3 = void Function({List<T> x}); F14 = List<T> Function(int y, {List<Function> x}) Function(); F15 = Function([int x]) Function(); F21 = List<T> Function<A>(List<A> x) Function()
@@ -13041,13 +11425,9 @@ function _ft_f88_0(p1_1::Int64; x::Vector{Function} = Function[])
     return () -> s1
 end
 function _ft_t88_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f88_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f88_0((n + 1); x = Function[_ft_id])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f88_0, (n + 1)), !applicable(_ft_f88_0, (n + 1), n), hasmethod(_ft_f88_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f88_0, (n + 1)), !applicable(_ft_f88_0, (n + 1), n), hasmethod(_ft_f88_0, Tuple{Int64})))
 end
 function _ft_f88_3(; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(x)
@@ -13055,15 +11435,9 @@ function _ft_f88_3(; x::Vector{Int64} = Int64[])
 end
 _ft_m88_3(u::_FtU{T}; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(x)
 function _ft_t88_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f88_3()
-    h = 31h + Int64(v2 === nothing)
     local v3 = _ft_f88_3(; x = Int64[n, 1])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f88_3), !applicable(_ft_f88_3, n), hasmethod(_ft_f88_3, Tuple{}))
-    h = 31h + _ft_m88_3(_FtU{Int64}()) + _ft_m88_3(_FtU{Bool}(); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m88_3, _FtU{Bool}()))
-    return h
+    return ((v2 === nothing), (v3 === nothing), _dw_facts(applicable(_ft_f88_3), !applicable(_ft_f88_3, n), hasmethod(_ft_f88_3, Tuple{})), _ft_m88_3(_FtU{Int64}()), _ft_m88_3(_FtU{Bool}(); x = Bool[true]), _dw_facts(applicable(_ft_m88_3, _FtU{Bool}())))
 end
 function _ft_f88_14()
     s1 = Int64(0)
@@ -13073,15 +11447,10 @@ function _ft_f88_14()
     end
 end
 function _ft_t88_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f88_14()
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f88_14), !applicable(_ft_f88_14, n), hasmethod(_ft_f88_14, Tuple{}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f88_14), !applicable(_ft_f88_14, n), hasmethod(_ft_f88_14, Tuple{})))
 end
 function _ft_f88_15()
     s1 = Int64(0)
@@ -13091,15 +11460,10 @@ function _ft_f88_15()
     end
 end
 function _ft_t88_15(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f88_15()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1((n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f88_15), !applicable(_ft_f88_15, n), hasmethod(_ft_f88_15, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f88_15), !applicable(_ft_f88_15, n), hasmethod(_ft_f88_15, Tuple{})))
 end
 function _ft_f88_21()
     s1 = Int64(0)
@@ -13109,13 +11473,9 @@ function _ft_f88_21()
     end
 end
 function _ft_t88_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f88_21()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f88_21), !applicable(_ft_f88_21, n), hasmethod(_ft_f88_21, Tuple{}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f88_21), !applicable(_ft_f88_21, n), hasmethod(_ft_f88_21, Tuple{})))
 end
 
 # function_type89: F0 = Function Function(core.List<core.int> x); F3 = void Function(int, {List<T> x}); F14 = List<T> Function(int y, {List<Function> x}) Function(int x); F15 = Function([int x]) Function(int x); F21 = List<T> Function<A>(List<A> x) Function(int x)
@@ -13124,11 +11484,8 @@ function _ft_f89_0(p1_1::Vector{Int64})
     return () -> s1
 end
 function _ft_t89_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f89_0(Int64[n, 1])
-    h = 31h + Int64(v2 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f89_0, Int64[n, 1]), !applicable(_ft_f89_0, Int64[n, 1], n), hasmethod(_ft_f89_0, Tuple{Vector{Int64}}))
-    return h
+    return ((v2 isa Function), _dw_facts(applicable(_ft_f89_0, Int64[n, 1]), !applicable(_ft_f89_0, Int64[n, 1], n), hasmethod(_ft_f89_0, Tuple{Vector{Int64}})))
 end
 function _ft_f89_3(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
@@ -13136,15 +11493,9 @@ function _ft_f89_3(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m89_3(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t89_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f89_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f89_3((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f89_3, (n + 1)), !applicable(_ft_f89_3, (n + 1), n), hasmethod(_ft_f89_3, Tuple{Int64}))
-    h = 31h + _ft_m89_3(_FtU{Int64}(), (n + 201)) + _ft_m89_3(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m89_3, _FtU{Bool}(), (n + 202)))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f89_3, (n + 1)), !applicable(_ft_f89_3, (n + 1), n), hasmethod(_ft_f89_3, Tuple{Int64})), _ft_m89_3(_FtU{Int64}(), (n + 201)), _ft_m89_3(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m89_3, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f89_14(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13154,15 +11505,10 @@ function _ft_f89_14(p1_1::Int64)
     end
 end
 function _ft_t89_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f89_14((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f89_14, (n + 1)), !applicable(_ft_f89_14, (n + 1), n), hasmethod(_ft_f89_14, Tuple{Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f89_14, (n + 1)), !applicable(_ft_f89_14, (n + 1), n), hasmethod(_ft_f89_14, Tuple{Int64})))
 end
 function _ft_f89_15(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13172,15 +11518,10 @@ function _ft_f89_15(p1_1::Int64)
     end
 end
 function _ft_t89_15(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f89_15((n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2((n + 3))
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f89_15, (n + 1)), !applicable(_ft_f89_15, (n + 1), n), hasmethod(_ft_f89_15, Tuple{Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f89_15, (n + 1)), !applicable(_ft_f89_15, (n + 1), n), hasmethod(_ft_f89_15, Tuple{Int64})))
 end
 function _ft_f89_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13190,13 +11531,9 @@ function _ft_f89_21(p1_1::Int64)
     end
 end
 function _ft_t89_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f89_21((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f89_21, (n + 1)), !applicable(_ft_f89_21, (n + 1), n), hasmethod(_ft_f89_21, Tuple{Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f89_21, (n + 1)), !applicable(_ft_f89_21, (n + 1), n), hasmethod(_ft_f89_21, Tuple{Int64})))
 end
 
 # function_type90: F0 = Function Function([core.List<core.int> x]); F3 = void Function(int y, {List<T> x}); F14 = List<T> Function(int y, {List<Function> x}) Function<B extends core.int>(); F15 = Function([int x]) Function<B extends core.int>(); F21 = List<T> Function<A>(List<A> x) Function<B extends core.int>()
@@ -13205,13 +11542,9 @@ function _ft_f90_0(p1_1::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t90_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f90_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f90_0(Int64[n, 1])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f90_0), !applicable(_ft_f90_0, Int64[n, 1], n), hasmethod(_ft_f90_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f90_0), !applicable(_ft_f90_0, Int64[n, 1], n), hasmethod(_ft_f90_0, Tuple{})))
 end
 function _ft_f90_3(p1_1::Int64; x::Vector{Int64} = Int64[])
     s1 = Int64(0) + _ft_w(p1_1) + _ft_w(x)
@@ -13219,15 +11552,9 @@ function _ft_f90_3(p1_1::Int64; x::Vector{Int64} = Int64[])
 end
 _ft_m90_3(u::_FtU{T}, p1_1::Int64; x::Vector{T} = T[]) where {T} = Int64(0) + _ft_w(p1_1) + _ft_w(x)
 function _ft_t90_3(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f90_3((n + 1))
-    h = 31h + Int64(v3 === nothing)
     local v4 = _ft_f90_3((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f90_3, (n + 1)), !applicable(_ft_f90_3, (n + 1), n), hasmethod(_ft_f90_3, Tuple{Int64}))
-    h = 31h + _ft_m90_3(_FtU{Int64}(), (n + 201)) + _ft_m90_3(_FtU{Bool}(), (n + 202); x = Bool[true])
-    h = 31h + _dw_bits(applicable(_ft_m90_3, _FtU{Bool}(), (n + 202)))
-    return h
+    return ((v3 === nothing), (v4 === nothing), _dw_facts(applicable(_ft_f90_3, (n + 1)), !applicable(_ft_f90_3, (n + 1), n), hasmethod(_ft_f90_3, Tuple{Int64})), _ft_m90_3(_FtU{Int64}(), (n + 201)), _ft_m90_3(_FtU{Bool}(), (n + 202); x = Bool[true]), _dw_facts(applicable(_ft_m90_3, _FtU{Bool}(), (n + 202))))
 end
 function _ft_f90_14(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13237,15 +11564,10 @@ function _ft_f90_14(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t90_14(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f90_14(Int64)
     local v4 = v1((n + 2))
-    h = 31h + sum(v4)
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + sum(v5)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f90_14, Int64), !applicable(_ft_f90_14, Int64, n), hasmethod(_ft_f90_14, Tuple{Type{Int64}}))
-    return h
+    return (sum(v4), sum(v5), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f90_14, Int64), !applicable(_ft_f90_14, Int64, n), hasmethod(_ft_f90_14, Tuple{Type{Int64}})))
 end
 function _ft_f90_15(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13255,15 +11577,10 @@ function _ft_f90_15(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t90_15(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f90_15(Int64)
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1((n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f90_15, Int64), !applicable(_ft_f90_15, Int64, n), hasmethod(_ft_f90_15, Tuple{Type{Int64}}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f90_15, Int64), !applicable(_ft_f90_15, Int64, n), hasmethod(_ft_f90_15, Tuple{Type{Int64}})))
 end
 function _ft_f90_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13273,13 +11590,9 @@ function _ft_f90_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t90_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f90_21(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + sum(v3)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f90_21, Int64), !applicable(_ft_f90_21, Int64, n), hasmethod(_ft_f90_21, Tuple{Type{Int64}}))
-    return h
+    return (sum(v3), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f90_21, Int64), !applicable(_ft_f90_21, Int64, n), hasmethod(_ft_f90_21, Tuple{Type{Int64}})))
 end
 
 # function_type91: F0 = Function Function(int, [core.List<core.int> x]); F3 = void Function(); F14 = List<T> Function(int y, {List<Function> x}) Function<B extends core.int>( int x, ); F15 = Function([int x]) Function<B extends core.int>(int x); F21 = List<T> Function<A>(List<A> x) Function<B extends core.int>( int x, )
@@ -13288,24 +11601,17 @@ function _ft_f91_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t91_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f91_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f91_0((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f91_0, (n + 1)), !applicable(_ft_f91_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f91_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f91_0, (n + 1)), !applicable(_ft_f91_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f91_0, Tuple{Int64})))
 end
 function _ft_f91_3()
     s1 = Int64(0)
     return nothing
 end
 function _ft_t91_3(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f91_3()
-    h = 31h + Int64(v1 === nothing)
-    h = 31h + _dw_bits(applicable(_ft_f91_3), !applicable(_ft_f91_3, n), hasmethod(_ft_f91_3, Tuple{}))
-    return h
+    return ((v1 === nothing), _dw_facts(applicable(_ft_f91_3), !applicable(_ft_f91_3, n), hasmethod(_ft_f91_3, Tuple{})))
 end
 function _ft_f91_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13315,15 +11621,10 @@ function _ft_f91_14(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t91_14(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f91_14(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + sum(v5)
     local v6 = v2((n + 3); x = Function[_ft_id])
-    h = 31h + sum(v6)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f91_14, Int64, (n + 1)), !applicable(_ft_f91_14, Int64, (n + 1), n), hasmethod(_ft_f91_14, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v5), sum(v6), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f91_14, Int64, (n + 1)), !applicable(_ft_f91_14, Int64, (n + 1), n), hasmethod(_ft_f91_14, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f91_15(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13333,15 +11634,10 @@ function _ft_f91_15(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t91_15(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f91_15(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + v4
     local v5 = v2((n + 3))
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f91_15, Int64, (n + 1)), !applicable(_ft_f91_15, Int64, (n + 1), n), hasmethod(_ft_f91_15, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v2), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f91_15, Int64, (n + 1)), !applicable(_ft_f91_15, Int64, (n + 1), n), hasmethod(_ft_f91_15, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f91_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13351,13 +11647,9 @@ function _ft_f91_21(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t91_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f91_21(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + sum(v4)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f91_21, Int64, (n + 1)), !applicable(_ft_f91_21, Int64, (n + 1), n), hasmethod(_ft_f91_21, Tuple{Type{Int64}, Int64}))
-    return h
+    return (sum(v4), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f91_21, Int64, (n + 1)), !applicable(_ft_f91_21, Int64, (n + 1), n), hasmethod(_ft_f91_21, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type92: F0 = Function Function(int y, [core.List<core.int> x]); F2 = Function([Function x]); F5 = int Function(int y, {List<Function> x}) Function(); F19 = void Function(int, [List<T> x]) Function(); F20 = Function Function<A>(List<A> x) Function()
@@ -13366,26 +11658,18 @@ function _ft_f92_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t92_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f92_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f92_0((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f92_0, (n + 1)), !applicable(_ft_f92_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f92_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f92_0, (n + 1)), !applicable(_ft_f92_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f92_0, Tuple{Int64})))
 end
 function _ft_f92_2(p1_1::Function = _ft_id)
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t92_2(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f92_2()
-    h = 31h + v2
     local v3 = _ft_f92_2(_ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f92_2), !applicable(_ft_f92_2, _ft_id, n), hasmethod(_ft_f92_2, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f92_2), !applicable(_ft_f92_2, _ft_id, n), hasmethod(_ft_f92_2, Tuple{})))
 end
 function _ft_f92_5()
     s1 = Int64(0)
@@ -13395,15 +11679,10 @@ function _ft_f92_5()
     end
 end
 function _ft_t92_5(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f92_5()
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f92_5), !applicable(_ft_f92_5, n), hasmethod(_ft_f92_5, Tuple{}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f92_5), !applicable(_ft_f92_5, n), hasmethod(_ft_f92_5, Tuple{})))
 end
 function _ft_f92_19()
     s1 = Int64(0)
@@ -13413,15 +11692,10 @@ function _ft_f92_19()
     end
 end
 function _ft_t92_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f92_19()
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f92_19), !applicable(_ft_f92_19, n), hasmethod(_ft_f92_19, Tuple{}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f92_19), !applicable(_ft_f92_19, n), hasmethod(_ft_f92_19, Tuple{})))
 end
 function _ft_f92_20()
     s1 = Int64(0)
@@ -13431,13 +11705,9 @@ function _ft_f92_20()
     end
 end
 function _ft_t92_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f92_20()
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f92_20), !applicable(_ft_f92_20, n), hasmethod(_ft_f92_20, Tuple{}))
-    return h
+    return ((v3 isa Function), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f92_20), !applicable(_ft_f92_20, n), hasmethod(_ft_f92_20, Tuple{})))
 end
 
 # function_type93: F2 = Function(int, [Function x]); F3 = int Function<A>(Function x); F10 = List<Function> Function([List<T> x]) Function(int x); F18 = void Function(int y, {Function x}) Function(int x); F20 = Function Function<A>(List<A> x) Function(int x)
@@ -13446,24 +11716,17 @@ function _ft_f93_2(p1_1::Int64, p1_2::Function = _ft_id)
     return s1
 end
 function _ft_t93_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f93_2((n + 1))
-    h = 31h + v3
     local v4 = _ft_f93_2((n + 1), _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f93_2, (n + 1)), !applicable(_ft_f93_2, (n + 1), _ft_id, n), hasmethod(_ft_f93_2, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f93_2, (n + 1)), !applicable(_ft_f93_2, (n + 1), _ft_id, n), hasmethod(_ft_f93_2, Tuple{Int64})))
 end
 function _ft_f93_3(::Type{A}, p1_1::Function) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t93_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f93_3(Int64, _ft_id)
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f93_3, Int64, _ft_id), !applicable(_ft_f93_3, Int64, _ft_id, n), hasmethod(_ft_f93_3, Tuple{Type{Int64}, typeof(_ft_id)}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f93_3, Int64, _ft_id), !applicable(_ft_f93_3, Int64, _ft_id, n), hasmethod(_ft_f93_3, Tuple{Type{Int64}, typeof(_ft_id)})))
 end
 function _ft_f93_10(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13473,15 +11736,10 @@ function _ft_f93_10(p1_1::Int64)
     end
 end
 function _ft_t93_10(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f93_10((n + 1))
     local v4 = v2()
-    h = 31h + Int64(length(v4))
     local v5 = v2(Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f93_10, (n + 1)), !applicable(_ft_f93_10, (n + 1), n), hasmethod(_ft_f93_10, Tuple{Int64}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f93_10, (n + 1)), !applicable(_ft_f93_10, (n + 1), n), hasmethod(_ft_f93_10, Tuple{Int64})))
 end
 function _ft_f93_18(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13491,15 +11749,10 @@ function _ft_f93_18(p1_1::Int64)
     end
 end
 function _ft_t93_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f93_18((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f93_18, (n + 1)), !applicable(_ft_f93_18, (n + 1), n), hasmethod(_ft_f93_18, Tuple{Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f93_18, (n + 1)), !applicable(_ft_f93_18, (n + 1), n), hasmethod(_ft_f93_18, Tuple{Int64})))
 end
 function _ft_f93_20(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13509,13 +11762,9 @@ function _ft_f93_20(p1_1::Int64)
     end
 end
 function _ft_t93_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f93_20((n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f93_20, (n + 1)), !applicable(_ft_f93_20, (n + 1), n), hasmethod(_ft_f93_20, Tuple{Int64}))
-    return h
+    return ((v4 isa Function), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f93_20, (n + 1)), !applicable(_ft_f93_20, (n + 1), n), hasmethod(_ft_f93_20, Tuple{Int64})))
 end
 
 # function_type94: F2 = Function(int y, [Function x]); F3 = int Function<A>(List<Function> x); F5 = int Function(int y, {List<Function> x}) Function<B extends core.int>(); F19 = void Function(int, [List<T> x]) Function<B extends core.int>(); F20 = Function Function<A>(List<A> x) Function<B extends core.int>()
@@ -13524,24 +11773,17 @@ function _ft_f94_2(p1_1::Int64, p1_2::Function = _ft_id)
     return s1
 end
 function _ft_t94_2(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f94_2((n + 1))
-    h = 31h + v3
     local v4 = _ft_f94_2((n + 1), _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(_ft_f94_2, (n + 1)), !applicable(_ft_f94_2, (n + 1), _ft_id, n), hasmethod(_ft_f94_2, Tuple{Int64}))
-    return h
+    return (v3, v4, _dw_facts(applicable(_ft_f94_2, (n + 1)), !applicable(_ft_f94_2, (n + 1), _ft_id, n), hasmethod(_ft_f94_2, Tuple{Int64})))
 end
 function _ft_f94_3(::Type{A}, p1_1::Vector{Function}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t94_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f94_3(Int64, Function[_ft_id])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f94_3, Int64, Function[_ft_id]), !applicable(_ft_f94_3, Int64, Function[_ft_id], n), hasmethod(_ft_f94_3, Tuple{Type{Int64}, Vector{Function}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f94_3, Int64, Function[_ft_id]), !applicable(_ft_f94_3, Int64, Function[_ft_id], n), hasmethod(_ft_f94_3, Tuple{Type{Int64}, Vector{Function}})))
 end
 function _ft_f94_5(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13551,15 +11793,10 @@ function _ft_f94_5(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t94_5(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f94_5(Int64)
     local v4 = v1((n + 2))
-    h = 31h + v4
     local v5 = v1((n + 2); x = Function[_ft_id])
-    h = 31h + v5
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n))
-    h = 31h + _dw_bits(applicable(_ft_f94_5, Int64), !applicable(_ft_f94_5, Int64, n), hasmethod(_ft_f94_5, Tuple{Type{Int64}}))
-    return h
+    return (v4, v5, _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), n)), _dw_facts(applicable(_ft_f94_5, Int64), !applicable(_ft_f94_5, Int64, n), hasmethod(_ft_f94_5, Tuple{Type{Int64}})))
 end
 function _ft_f94_19(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13569,15 +11806,10 @@ function _ft_f94_19(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t94_19(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f94_19(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(v4 === nothing)
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(v5 === nothing)
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f94_19, Int64), !applicable(_ft_f94_19, Int64, n), hasmethod(_ft_f94_19, Tuple{Type{Int64}}))
-    return h
+    return ((v4 === nothing), (v5 === nothing), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f94_19, Int64), !applicable(_ft_f94_19, Int64, n), hasmethod(_ft_f94_19, Tuple{Type{Int64}})))
 end
 function _ft_f94_20(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13587,13 +11819,9 @@ function _ft_f94_20(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t94_20(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f94_20(Int64)
     local v3 = v1(Int64, Int64[n, 2])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n))
-    h = 31h + _dw_bits(applicable(_ft_f94_20, Int64), !applicable(_ft_f94_20, Int64, n), hasmethod(_ft_f94_20, Tuple{Type{Int64}}))
-    return h
+    return ((v3 isa Function), _dw_facts(applicable(v1, Int64, Int64[n, 2]), !applicable(v1, Int64, Int64[n, 2], n)), _dw_facts(applicable(_ft_f94_20, Int64), !applicable(_ft_f94_20, Int64, n), hasmethod(_ft_f94_20, Tuple{Type{Int64}})))
 end
 
 # function_type95: F2 = Function(Function); F3 = int Function<A>(core.List<core.int> x); F10 = List<Function> Function([List<T> x]) Function<B extends core.int>(int x); F18 = void Function(int y, {Function x}) Function<B extends core.int>(int x); F20 = Function Function<A>(List<A> x) Function<B extends core.int>( int x, )
@@ -13602,22 +11830,16 @@ function _ft_f95_2(p1_1::Function)
     return s1
 end
 function _ft_t95_2(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f95_2(_ft_id)
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f95_2, _ft_id), !applicable(_ft_f95_2, _ft_id, n), hasmethod(_ft_f95_2, Tuple{typeof(_ft_id)}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f95_2, _ft_id), !applicable(_ft_f95_2, _ft_id, n), hasmethod(_ft_f95_2, Tuple{typeof(_ft_id)})))
 end
 function _ft_f95_3(::Type{A}, p1_1::Vector{Int64}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t95_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f95_3(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f95_3, Int64, Int64[n, 1]), !applicable(_ft_f95_3, Int64, Int64[n, 1], n), hasmethod(_ft_f95_3, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f95_3, Int64, Int64[n, 1]), !applicable(_ft_f95_3, Int64, Int64[n, 1], n), hasmethod(_ft_f95_3, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f95_10(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13627,15 +11849,10 @@ function _ft_f95_10(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t95_10(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f95_10(Int64, (n + 1))
     local v4 = v2()
-    h = 31h + Int64(length(v4))
     local v5 = v2(Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f95_10, Int64, (n + 1)), !applicable(_ft_f95_10, Int64, (n + 1), n), hasmethod(_ft_f95_10, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v2), !applicable(v2, Int64[n, 3], n), !applicable(v2, Bool[true])), _dw_facts(applicable(_ft_f95_10, Int64, (n + 1)), !applicable(_ft_f95_10, Int64, (n + 1), n), hasmethod(_ft_f95_10, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f95_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13645,15 +11862,10 @@ function _ft_f95_18(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t95_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f95_18(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(v5 === nothing)
     local v6 = v2((n + 3); x = _ft_id)
-    h = 31h + Int64(v6 === nothing)
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n))
-    h = 31h + _dw_bits(applicable(_ft_f95_18, Int64, (n + 1)), !applicable(_ft_f95_18, Int64, (n + 1), n), hasmethod(_ft_f95_18, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v5 === nothing), (v6 === nothing), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), n)), _dw_facts(applicable(_ft_f95_18, Int64, (n + 1)), !applicable(_ft_f95_18, Int64, (n + 1), n), hasmethod(_ft_f95_18, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f95_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13663,13 +11875,9 @@ function _ft_f95_20(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t95_20(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f95_20(Int64, (n + 1))
     local v4 = v2(Int64, Int64[n, 3])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n))
-    h = 31h + _dw_bits(applicable(_ft_f95_20, Int64, (n + 1)), !applicable(_ft_f95_20, Int64, (n + 1), n), hasmethod(_ft_f95_20, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 isa Function), _dw_facts(applicable(v2, Int64, Int64[n, 3]), !applicable(v2, Int64, Int64[n, 3], n)), _dw_facts(applicable(_ft_f95_20, Int64, (n + 1)), !applicable(_ft_f95_20, Int64, (n + 1), n), hasmethod(_ft_f95_20, Tuple{Type{Int64}, Int64})))
 end
 
 # function_type96: F0 = Function Function(int x, [core.List<core.int>]); F4 = int Function({int x}) Function(); F10 = List<Function> Function(int, [List<T> x]) Function(); F18 = void Function(List<Function> x) Function(); F21 = Function<A>(Function x) Function()
@@ -13678,13 +11886,9 @@ function _ft_f96_0(p1_1::Int64, p1_2::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t96_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f96_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f96_0((n + 1), Int64[n, 2])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f96_0, (n + 1)), !applicable(_ft_f96_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f96_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f96_0, (n + 1)), !applicable(_ft_f96_0, (n + 1), Int64[n, 2], n), hasmethod(_ft_f96_0, Tuple{Int64})))
 end
 function _ft_f96_4()
     s1 = Int64(0)
@@ -13694,15 +11898,10 @@ function _ft_f96_4()
     end
 end
 function _ft_t96_4(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f96_4()
     local v3 = v1()
-    h = 31h + v3
     local v4 = v1(; x = (n + 2))
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v1), !applicable(v1, n))
-    h = 31h + _dw_bits(applicable(_ft_f96_4), !applicable(_ft_f96_4, n), hasmethod(_ft_f96_4, Tuple{}))
-    return h
+    return (v3, v4, _dw_facts(applicable(v1), !applicable(v1, n)), _dw_facts(applicable(_ft_f96_4), !applicable(_ft_f96_4, n), hasmethod(_ft_f96_4, Tuple{})))
 end
 function _ft_f96_10()
     s1 = Int64(0)
@@ -13712,15 +11911,10 @@ function _ft_f96_10()
     end
 end
 function _ft_t96_10(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f96_10()
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f96_10), !applicable(_ft_f96_10, n), hasmethod(_ft_f96_10, Tuple{}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f96_10), !applicable(_ft_f96_10, n), hasmethod(_ft_f96_10, Tuple{})))
 end
 function _ft_f96_18()
     s1 = Int64(0)
@@ -13730,13 +11924,9 @@ function _ft_f96_18()
     end
 end
 function _ft_t96_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f96_18()
     local v3 = v1(Function[_ft_id])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f96_18), !applicable(_ft_f96_18, n), hasmethod(_ft_f96_18, Tuple{}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f96_18), !applicable(_ft_f96_18, n), hasmethod(_ft_f96_18, Tuple{})))
 end
 function _ft_f96_21()
     s1 = Int64(0)
@@ -13746,13 +11936,9 @@ function _ft_f96_21()
     end
 end
 function _ft_t96_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f96_21()
     local v3 = v1(Int64, _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f96_21), !applicable(_ft_f96_21, n), hasmethod(_ft_f96_21, Tuple{}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f96_21), !applicable(_ft_f96_21, n), hasmethod(_ft_f96_21, Tuple{})))
 end
 
 # function_type97: F0 = Function Function({core.List<core.int> x}); F3 = int Function<A>(); F10 = List<Function> Function(int, [List<T> x]) Function(int x); F18 = void Function(List<Function> x) Function(int x); F21 = Function<A>(Function x) Function(int x)
@@ -13761,24 +11947,17 @@ function _ft_f97_0(; x::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t97_0(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f97_0()
-    h = 31h + Int64(v2 isa Function)
     local v3 = _ft_f97_0(; x = Int64[n, 1])
-    h = 31h + Int64(v3 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f97_0), !applicable(_ft_f97_0, n), hasmethod(_ft_f97_0, Tuple{}))
-    return h
+    return ((v2 isa Function), (v3 isa Function), _dw_facts(applicable(_ft_f97_0), !applicable(_ft_f97_0, n), hasmethod(_ft_f97_0, Tuple{})))
 end
 function _ft_f97_3(::Type{A}) where {A}
     s1 = Int64(0)
     return s1
 end
 function _ft_t97_3(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f97_3(Int64)
-    h = 31h + v1
-    h = 31h + _dw_bits(applicable(_ft_f97_3, Int64), !applicable(_ft_f97_3, Int64, n), hasmethod(_ft_f97_3, Tuple{Type{Int64}}))
-    return h
+    return (v1, _dw_facts(applicable(_ft_f97_3, Int64), !applicable(_ft_f97_3, Int64, n), hasmethod(_ft_f97_3, Tuple{Type{Int64}})))
 end
 function _ft_f97_10(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13788,15 +11967,10 @@ function _ft_f97_10(p1_1::Int64)
     end
 end
 function _ft_t97_10(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f97_10((n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f97_10, (n + 1)), !applicable(_ft_f97_10, (n + 1), n), hasmethod(_ft_f97_10, Tuple{Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f97_10, (n + 1)), !applicable(_ft_f97_10, (n + 1), n), hasmethod(_ft_f97_10, Tuple{Int64})))
 end
 function _ft_f97_18(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13806,13 +11980,9 @@ function _ft_f97_18(p1_1::Int64)
     end
 end
 function _ft_t97_18(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f97_18((n + 1))
     local v4 = v2(Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f97_18, (n + 1)), !applicable(_ft_f97_18, (n + 1), n), hasmethod(_ft_f97_18, Tuple{Int64}))
-    return h
+    return ((v4 === nothing), _dw_facts(applicable(v2, Function[_ft_id]), !applicable(v2, Function[_ft_id], n)), _dw_facts(applicable(_ft_f97_18, (n + 1)), !applicable(_ft_f97_18, (n + 1), n), hasmethod(_ft_f97_18, Tuple{Int64})))
 end
 function _ft_f97_21(p1_1::Int64)
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13822,13 +11992,9 @@ function _ft_f97_21(p1_1::Int64)
     end
 end
 function _ft_t97_21(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f97_21((n + 1))
     local v4 = v2(Int64, _ft_id)
-    h = 31h + v4
-    h = 31h + _dw_bits(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f97_21, (n + 1)), !applicable(_ft_f97_21, (n + 1), n), hasmethod(_ft_f97_21, Tuple{Int64}))
-    return h
+    return (v4, _dw_facts(applicable(v2, Int64, _ft_id), !applicable(v2, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f97_21, (n + 1)), !applicable(_ft_f97_21, (n + 1), n), hasmethod(_ft_f97_21, Tuple{Int64})))
 end
 
 # function_type98: F0 = Function Function(int, {core.List<core.int> x}); F3 = int Function<A>(A x); F10 = List<Function> Function(int, [List<T> x]) Function<B extends core.int>(); F18 = void Function(List<Function> x) Function<B extends core.int>(); F21 = Function<A>(Function x) Function<B extends core.int>()
@@ -13837,24 +12003,17 @@ function _ft_f98_0(p1_1::Int64; x::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t98_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f98_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f98_0((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f98_0, (n + 1)), !applicable(_ft_f98_0, (n + 1), n), hasmethod(_ft_f98_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f98_0, (n + 1)), !applicable(_ft_f98_0, (n + 1), n), hasmethod(_ft_f98_0, Tuple{Int64})))
 end
 function _ft_f98_3(::Type{A}, p1_1::A) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t98_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f98_3(Int64, (n + 1))
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f98_3, Int64, (n + 1)), !applicable(_ft_f98_3, Int64, (n + 1), n), hasmethod(_ft_f98_3, Tuple{Type{Int64}, Int64}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f98_3, Int64, (n + 1)), !applicable(_ft_f98_3, Int64, (n + 1), n), hasmethod(_ft_f98_3, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f98_10(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13864,15 +12023,10 @@ function _ft_f98_10(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t98_10(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f98_10(Int64)
     local v4 = v1((n + 2))
-    h = 31h + Int64(length(v4))
     local v5 = v1((n + 2), Int64[n, 3])
-    h = 31h + Int64(length(v5))
-    h = 31h + _dw_bits(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f98_10, Int64), !applicable(_ft_f98_10, Int64, n), hasmethod(_ft_f98_10, Tuple{Type{Int64}}))
-    return h
+    return (Int64(length(v4)), Int64(length(v5)), _dw_facts(applicable(v1, (n + 2)), !applicable(v1, (n + 2), Int64[n, 3], n), !applicable(v1, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f98_10, Int64), !applicable(_ft_f98_10, Int64, n), hasmethod(_ft_f98_10, Tuple{Type{Int64}})))
 end
 function _ft_f98_18(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13882,13 +12036,9 @@ function _ft_f98_18(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t98_18(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f98_18(Int64)
     local v3 = v1(Function[_ft_id])
-    h = 31h + Int64(v3 === nothing)
-    h = 31h + _dw_bits(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f98_18, Int64), !applicable(_ft_f98_18, Int64, n), hasmethod(_ft_f98_18, Tuple{Type{Int64}}))
-    return h
+    return ((v3 === nothing), _dw_facts(applicable(v1, Function[_ft_id]), !applicable(v1, Function[_ft_id], n)), _dw_facts(applicable(_ft_f98_18, Int64), !applicable(_ft_f98_18, Int64, n), hasmethod(_ft_f98_18, Tuple{Type{Int64}})))
 end
 function _ft_f98_21(::Type{B}) where {B<:Integer}
     s1 = Int64(0)
@@ -13898,13 +12048,9 @@ function _ft_f98_21(::Type{B}) where {B<:Integer}
     end
 end
 function _ft_t98_21(n::Int64)
-    local h = Int64(0)
     local v1 = _ft_f98_21(Int64)
     local v3 = v1(Int64, _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n))
-    h = 31h + _dw_bits(applicable(_ft_f98_21, Int64), !applicable(_ft_f98_21, Int64, n), hasmethod(_ft_f98_21, Tuple{Type{Int64}}))
-    return h
+    return (v3, _dw_facts(applicable(v1, Int64, _ft_id), !applicable(v1, Int64, _ft_id, n)), _dw_facts(applicable(_ft_f98_21, Int64), !applicable(_ft_f98_21, Int64, n), hasmethod(_ft_f98_21, Tuple{Type{Int64}})))
 end
 
 # function_type99: F0 = Function Function(int y, {core.List<core.int> x}); F2 = Function({Function x}); F3 = int Function<A>(List<A> x); F10 = List<Function> Function(int, [List<T> x]) Function<B extends core.int>( int x, ); F22 = void Function<A>(List<Function> x) Function<B extends core.int>(int x)
@@ -13913,37 +12059,26 @@ function _ft_f99_0(p1_1::Int64; x::Vector{Int64} = Int64[])
     return () -> s1
 end
 function _ft_t99_0(n::Int64)
-    local h = Int64(0)
     local v3 = _ft_f99_0((n + 1))
-    h = 31h + Int64(v3 isa Function)
     local v4 = _ft_f99_0((n + 1); x = Int64[n, 2])
-    h = 31h + Int64(v4 isa Function)
-    h = 31h + _dw_bits(applicable(_ft_f99_0, (n + 1)), !applicable(_ft_f99_0, (n + 1), n), hasmethod(_ft_f99_0, Tuple{Int64}))
-    return h
+    return ((v3 isa Function), (v4 isa Function), _dw_facts(applicable(_ft_f99_0, (n + 1)), !applicable(_ft_f99_0, (n + 1), n), hasmethod(_ft_f99_0, Tuple{Int64})))
 end
 function _ft_f99_2(; x::Function = _ft_id)
     s1 = Int64(0) + _ft_w(x)
     return s1
 end
 function _ft_t99_2(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f99_2()
-    h = 31h + v2
     local v3 = _ft_f99_2(; x = _ft_id)
-    h = 31h + v3
-    h = 31h + _dw_bits(applicable(_ft_f99_2), !applicable(_ft_f99_2, n), hasmethod(_ft_f99_2, Tuple{}))
-    return h
+    return (v2, v3, _dw_facts(applicable(_ft_f99_2), !applicable(_ft_f99_2, n), hasmethod(_ft_f99_2, Tuple{})))
 end
 function _ft_f99_3(::Type{A}, p1_1::Vector{A}) where {A}
     s1 = Int64(0) + _ft_w(p1_1)
     return s1
 end
 function _ft_t99_3(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f99_3(Int64, Int64[n, 1])
-    h = 31h + v2
-    h = 31h + _dw_bits(applicable(_ft_f99_3, Int64, Int64[n, 1]), !applicable(_ft_f99_3, Int64, Int64[n, 1], n), hasmethod(_ft_f99_3, Tuple{Type{Int64}, Vector{Int64}}))
-    return h
+    return (v2, _dw_facts(applicable(_ft_f99_3, Int64, Int64[n, 1]), !applicable(_ft_f99_3, Int64, Int64[n, 1], n), hasmethod(_ft_f99_3, Tuple{Type{Int64}, Vector{Int64}})))
 end
 function _ft_f99_10(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13953,15 +12088,10 @@ function _ft_f99_10(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t99_10(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f99_10(Int64, (n + 1))
     local v5 = v2((n + 3))
-    h = 31h + Int64(length(v5))
     local v6 = v2((n + 3), Int64[n, 4])
-    h = 31h + Int64(length(v6))
-    h = 31h + _dw_bits(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true]))
-    h = 31h + _dw_bits(applicable(_ft_f99_10, Int64, (n + 1)), !applicable(_ft_f99_10, Int64, (n + 1), n), hasmethod(_ft_f99_10, Tuple{Type{Int64}, Int64}))
-    return h
+    return (Int64(length(v5)), Int64(length(v6)), _dw_facts(applicable(v2, (n + 3)), !applicable(v2, (n + 3), Int64[n, 4], n), !applicable(v2, (n + 101), Bool[true])), _dw_facts(applicable(_ft_f99_10, Int64, (n + 1)), !applicable(_ft_f99_10, Int64, (n + 1), n), hasmethod(_ft_f99_10, Tuple{Type{Int64}, Int64})))
 end
 function _ft_f99_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     s1 = Int64(0) + _ft_w(p1_1)
@@ -13971,116 +12101,112 @@ function _ft_f99_22(::Type{B}, p1_1::Int64) where {B<:Integer}
     end
 end
 function _ft_t99_22(n::Int64)
-    local h = Int64(0)
     local v2 = _ft_f99_22(Int64, (n + 1))
     local v4 = v2(Int64, Function[_ft_id])
-    h = 31h + Int64(v4 === nothing)
-    h = 31h + _dw_bits(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n))
-    h = 31h + _dw_bits(applicable(_ft_f99_22, Int64, (n + 1)), !applicable(_ft_f99_22, Int64, (n + 1), n), hasmethod(_ft_f99_22, Tuple{Type{Int64}, Int64}))
-    return h
+    return ((v4 === nothing), _dw_facts(applicable(v2, Int64, Function[_ft_id]), !applicable(v2, Int64, Function[_ft_id], n)), _dw_facts(applicable(_ft_f99_22, Int64, (n + 1)), !applicable(_ft_f99_22, Int64, (n + 1), n), hasmethod(_ft_f99_22, Tuple{Type{Int64}, Int64})))
 end
 
 _g("dart_function_type", Any[
-    ("function_type0", (n::Int64) -> _ft_mix(_ft_t0_1(n), _ft_t0_2(n), _ft_t0_3(n), _ft_t0_11(n), _ft_t0_23(n)), Int64(1)),
-    ("function_type1", (n::Int64) -> _ft_mix(_ft_t1_3(n), _ft_t1_4(n), _ft_t1_11(n), _ft_t1_19(n), _ft_t1_22(n)), Int64(1)),
-    ("function_type2", (n::Int64) -> _ft_mix(_ft_t2_0(n), _ft_t2_5(n), _ft_t2_11(n), _ft_t2_19(n), _ft_t2_22(n)), Int64(1)),
-    ("function_type3", (n::Int64) -> _ft_mix(_ft_t3_0(n), _ft_t3_5(n), _ft_t3_11(n), _ft_t3_19(n), _ft_t3_22(n)), Int64(1)),
-    ("function_type4", (n::Int64) -> _ft_mix(_ft_t4_2(n), _ft_t4_4(n), _ft_t4_17(n), _ft_t4_19(n), _ft_t4_21(n)), Int64(1)),
-    ("function_type5", (n::Int64) -> _ft_mix(_ft_t5_0(n), _ft_t5_4(n), _ft_t5_9(n), _ft_t5_19(n), _ft_t5_22(n)), Int64(1)),
-    ("function_type6", (n::Int64) -> _ft_mix(_ft_t6_0(n), _ft_t6_4(n), _ft_t6_9(n), _ft_t6_19(n), _ft_t6_22(n)), Int64(1)),
-    ("function_type7", (n::Int64) -> _ft_mix(_ft_t7_0(n), _ft_t7_4(n), _ft_t7_9(n), _ft_t7_18(n), _ft_t7_19(n)), Int64(1)),
-    ("function_type8", (n::Int64) -> _ft_mix(_ft_t8_0(n), _ft_t8_4(n), _ft_t8_17(n), _ft_t8_20(n), _ft_t8_21(n)), Int64(1)),
-    ("function_type9", (n::Int64) -> _ft_mix(_ft_t9_0(n), _ft_t9_4(n), _ft_t9_17(n), _ft_t9_20(n), _ft_t9_23(n)), Int64(1)),
-    ("function_type10", (n::Int64) -> _ft_mix(_ft_t10_0(n), _ft_t10_4(n), _ft_t10_17(n), _ft_t10_20(n), _ft_t10_21(n)), Int64(1)),
-    ("function_type11", (n::Int64) -> _ft_mix(_ft_t11_0(n), _ft_t11_4(n), _ft_t11_17(n), _ft_t11_20(n), _ft_t11_23(n)), Int64(1)),
-    ("function_type12", (n::Int64) -> _ft_mix(_ft_t12_0(n), _ft_t12_3(n), _ft_t12_4(n), _ft_t12_11(n), _ft_t12_23(n)), Int64(1)),
-    ("function_type13", (n::Int64) -> _ft_mix(_ft_t13_0(n), _ft_t13_8(n), _ft_t13_11(n), _ft_t13_18(n), _ft_t13_22(n)), Int64(1)),
-    ("function_type14", (n::Int64) -> _ft_mix(_ft_t14_0(n), _ft_t14_4(n), _ft_t14_11(n), _ft_t14_17(n), _ft_t14_23(n)), Int64(1)),
-    ("function_type15", (n::Int64) -> _ft_mix(_ft_t15_4(n), _ft_t15_8(n), _ft_t15_11(n), _ft_t15_18(n), _ft_t15_22(n)), Int64(1)),
-    ("function_type16", (n::Int64) -> _ft_mix(_ft_t16_0(n), _ft_t16_3(n), _ft_t16_11(n), _ft_t16_16(n), _ft_t16_23(n)), Int64(1)),
-    ("function_type17", (n::Int64) -> _ft_mix(_ft_t17_4(n), _ft_t17_11(n), _ft_t17_16(n), _ft_t17_21(n), _ft_t17_23(n)), Int64(1)),
-    ("function_type18", (n::Int64) -> _ft_mix(_ft_t18_0(n), _ft_t18_4(n), _ft_t18_11(n), _ft_t18_16(n), _ft_t18_23(n)), Int64(1)),
-    ("function_type19", (n::Int64) -> _ft_mix(_ft_t19_0(n), _ft_t19_11(n), _ft_t19_16(n), _ft_t19_21(n), _ft_t19_23(n)), Int64(1)),
-    ("function_type20", (n::Int64) -> _ft_mix(_ft_t20_0(n), _ft_t20_2(n), _ft_t20_19(n), _ft_t20_22(n), _ft_t20_23(n)), Int64(1)),
-    ("function_type21", (n::Int64) -> _ft_mix(_ft_t21_2(n), _ft_t21_4(n), _ft_t21_19(n), _ft_t21_22(n), _ft_t21_23(n)), Int64(1)),
-    ("function_type22", (n::Int64) -> _ft_mix(_ft_t22_0(n), _ft_t22_1(n), _ft_t22_2(n), _ft_t22_19(n), _ft_t22_22(n)), Int64(1)),
-    ("function_type23", (n::Int64) -> _ft_mix(_ft_t23_0(n), _ft_t23_2(n), _ft_t23_11(n), _ft_t23_19(n), _ft_t23_22(n)), Int64(1)),
-    ("function_type24", (n::Int64) -> _ft_mix(_ft_t24_11(n), _ft_t24_17(n), _ft_t24_19(n), _ft_t24_21(n), _ft_t24_23(n)), Int64(1)),
-    ("function_type25", (n::Int64) -> _ft_mix(_ft_t25_3(n), _ft_t25_11(n), _ft_t25_19(n), _ft_t25_21(n), _ft_t25_23(n)), Int64(1)),
-    ("function_type26", (n::Int64) -> _ft_mix(_ft_t26_3(n), _ft_t26_11(n), _ft_t26_19(n), _ft_t26_21(n), _ft_t26_22(n)), Int64(1)),
-    ("function_type27", (n::Int64) -> _ft_mix(_ft_t27_3(n), _ft_t27_11(n), _ft_t27_19(n), _ft_t27_21(n), _ft_t27_22(n)), Int64(1)),
-    ("function_type28", (n::Int64) -> _ft_mix(_ft_t28_11(n), _ft_t28_17(n), _ft_t28_18(n), _ft_t28_22(n), _ft_t28_23(n)), Int64(1)),
-    ("function_type29", (n::Int64) -> _ft_mix(_ft_t29_3(n), _ft_t29_11(n), _ft_t29_20(n), _ft_t29_22(n), _ft_t29_23(n)), Int64(1)),
-    ("function_type30", (n::Int64) -> _ft_mix(_ft_t30_3(n), _ft_t30_4(n), _ft_t30_11(n), _ft_t30_18(n), _ft_t30_22(n)), Int64(1)),
-    ("function_type31", (n::Int64) -> _ft_mix(_ft_t31_3(n), _ft_t31_4(n), _ft_t31_11(n), _ft_t31_20(n), _ft_t31_22(n)), Int64(1)),
-    ("function_type32", (n::Int64) -> _ft_mix(_ft_t32_4(n), _ft_t32_13(n), _ft_t32_19(n), _ft_t32_22(n), _ft_t32_23(n)), Int64(1)),
-    ("function_type33", (n::Int64) -> _ft_mix(_ft_t33_4(n), _ft_t33_11(n), _ft_t33_13(n), _ft_t33_19(n), _ft_t33_23(n)), Int64(1)),
-    ("function_type34", (n::Int64) -> _ft_mix(_ft_t34_0(n), _ft_t34_1(n), _ft_t34_3(n), _ft_t34_19(n), _ft_t34_22(n)), Int64(1)),
-    ("function_type35", (n::Int64) -> _ft_mix(_ft_t35_3(n), _ft_t35_4(n), _ft_t35_13(n), _ft_t35_19(n), _ft_t35_22(n)), Int64(1)),
-    ("function_type36", (n::Int64) -> _ft_mix(_ft_t36_0(n), _ft_t36_4(n), _ft_t36_19(n), _ft_t36_22(n), _ft_t36_23(n)), Int64(1)),
-    ("function_type37", (n::Int64) -> _ft_mix(_ft_t37_2(n), _ft_t37_4(n), _ft_t37_19(n), _ft_t37_22(n), _ft_t37_23(n)), Int64(1)),
-    ("function_type38", (n::Int64) -> _ft_mix(_ft_t38_0(n), _ft_t38_2(n), _ft_t38_4(n), _ft_t38_19(n), _ft_t38_22(n)), Int64(1)),
-    ("function_type39", (n::Int64) -> _ft_mix(_ft_t39_0(n), _ft_t39_4(n), _ft_t39_13(n), _ft_t39_19(n), _ft_t39_22(n)), Int64(1)),
-    ("function_type40", (n::Int64) -> _ft_mix(_ft_t40_9(n), _ft_t40_16(n), _ft_t40_18(n), _ft_t40_22(n), _ft_t40_23(n)), Int64(1)),
-    ("function_type41", (n::Int64) -> _ft_mix(_ft_t41_9(n), _ft_t41_16(n), _ft_t41_18(n), _ft_t41_22(n), _ft_t41_23(n)), Int64(1)),
-    ("function_type42", (n::Int64) -> _ft_mix(_ft_t42_0(n), _ft_t42_9(n), _ft_t42_16(n), _ft_t42_18(n), _ft_t42_22(n)), Int64(1)),
-    ("function_type43", (n::Int64) -> _ft_mix(_ft_t43_0(n), _ft_t43_9(n), _ft_t43_16(n), _ft_t43_18(n), _ft_t43_22(n)), Int64(1)),
-    ("function_type44", (n::Int64) -> _ft_mix(_ft_t44_3(n), _ft_t44_4(n), _ft_t44_12(n), _ft_t44_14(n), _ft_t44_23(n)), Int64(1)),
-    ("function_type45", (n::Int64) -> _ft_mix(_ft_t45_3(n), _ft_t45_4(n), _ft_t45_12(n), _ft_t45_14(n), _ft_t45_23(n)), Int64(1)),
-    ("function_type46", (n::Int64) -> _ft_mix(_ft_t46_1(n), _ft_t46_3(n), _ft_t46_4(n), _ft_t46_14(n), _ft_t46_16(n)), Int64(1)),
-    ("function_type47", (n::Int64) -> _ft_mix(_ft_t47_1(n), _ft_t47_3(n), _ft_t47_4(n), _ft_t47_14(n), _ft_t47_16(n)), Int64(1)),
-    ("function_type48", (n::Int64) -> _ft_mix(_ft_t48_2(n), _ft_t48_3(n), _ft_t48_4(n), _ft_t48_9(n), _ft_t48_22(n)), Int64(1)),
-    ("function_type49", (n::Int64) -> _ft_mix(_ft_t49_0(n), _ft_t49_3(n), _ft_t49_4(n), _ft_t49_9(n), _ft_t49_23(n)), Int64(1)),
-    ("function_type50", (n::Int64) -> _ft_mix(_ft_t50_0(n), _ft_t50_3(n), _ft_t50_4(n), _ft_t50_9(n), _ft_t50_22(n)), Int64(1)),
-    ("function_type51", (n::Int64) -> _ft_mix(_ft_t51_0(n), _ft_t51_3(n), _ft_t51_4(n), _ft_t51_9(n), _ft_t51_22(n)), Int64(1)),
-    ("function_type52", (n::Int64) -> _ft_mix(_ft_t52_3(n), _ft_t52_4(n), _ft_t52_9(n), _ft_t52_16(n), _ft_t52_22(n)), Int64(1)),
-    ("function_type53", (n::Int64) -> _ft_mix(_ft_t53_3(n), _ft_t53_4(n), _ft_t53_14(n), _ft_t53_17(n), _ft_t53_22(n)), Int64(1)),
-    ("function_type54", (n::Int64) -> _ft_mix(_ft_t54_0(n), _ft_t54_3(n), _ft_t54_9(n), _ft_t54_16(n), _ft_t54_22(n)), Int64(1)),
-    ("function_type55", (n::Int64) -> _ft_mix(_ft_t55_0(n), _ft_t55_3(n), _ft_t55_14(n), _ft_t55_16(n), _ft_t55_22(n)), Int64(1)),
-    ("function_type56", (n::Int64) -> _ft_mix(_ft_t56_1(n), _ft_t56_3(n), _ft_t56_14(n), _ft_t56_16(n), _ft_t56_21(n)), Int64(1)),
-    ("function_type57", (n::Int64) -> _ft_mix(_ft_t57_4(n), _ft_t57_13(n), _ft_t57_14(n), _ft_t57_17(n), _ft_t57_21(n)), Int64(1)),
-    ("function_type58", (n::Int64) -> _ft_mix(_ft_t58_0(n), _ft_t58_4(n), _ft_t58_14(n), _ft_t58_17(n), _ft_t58_21(n)), Int64(1)),
-    ("function_type59", (n::Int64) -> _ft_mix(_ft_t59_4(n), _ft_t59_13(n), _ft_t59_14(n), _ft_t59_17(n), _ft_t59_21(n)), Int64(1)),
-    ("function_type60", (n::Int64) -> _ft_mix(_ft_t60_2(n), _ft_t60_4(n), _ft_t60_14(n), _ft_t60_16(n), _ft_t60_20(n)), Int64(1)),
-    ("function_type61", (n::Int64) -> _ft_mix(_ft_t61_0(n), _ft_t61_4(n), _ft_t61_14(n), _ft_t61_16(n), _ft_t61_20(n)), Int64(1)),
-    ("function_type62", (n::Int64) -> _ft_mix(_ft_t62_0(n), _ft_t62_4(n), _ft_t62_14(n), _ft_t62_16(n), _ft_t62_20(n)), Int64(1)),
-    ("function_type63", (n::Int64) -> _ft_mix(_ft_t63_0(n), _ft_t63_4(n), _ft_t63_14(n), _ft_t63_16(n), _ft_t63_20(n)), Int64(1)),
-    ("function_type64", (n::Int64) -> _ft_mix(_ft_t64_0(n), _ft_t64_3(n), _ft_t64_12(n), _ft_t64_17(n), _ft_t64_22(n)), Int64(1)),
-    ("function_type65", (n::Int64) -> _ft_mix(_ft_t65_0(n), _ft_t65_3(n), _ft_t65_12(n), _ft_t65_17(n), _ft_t65_22(n)), Int64(1)),
-    ("function_type66", (n::Int64) -> _ft_mix(_ft_t66_0(n), _ft_t66_3(n), _ft_t66_5(n), _ft_t66_17(n), _ft_t66_22(n)), Int64(1)),
-    ("function_type67", (n::Int64) -> _ft_mix(_ft_t67_1(n), _ft_t67_3(n), _ft_t67_5(n), _ft_t67_17(n), _ft_t67_22(n)), Int64(1)),
-    ("function_type68", (n::Int64) -> _ft_mix(_ft_t68_3(n), _ft_t68_16(n), _ft_t68_19(n), _ft_t68_21(n), _ft_t68_22(n)), Int64(1)),
-    ("function_type69", (n::Int64) -> _ft_mix(_ft_t69_0(n), _ft_t69_3(n), _ft_t69_14(n), _ft_t69_16(n), _ft_t69_22(n)), Int64(1)),
-    ("function_type70", (n::Int64) -> _ft_mix(_ft_t70_0(n), _ft_t70_3(n), _ft_t70_16(n), _ft_t70_21(n), _ft_t70_22(n)), Int64(1)),
-    ("function_type71", (n::Int64) -> _ft_mix(_ft_t71_0(n), _ft_t71_3(n), _ft_t71_14(n), _ft_t71_16(n), _ft_t71_22(n)), Int64(1)),
-    ("function_type72", (n::Int64) -> _ft_mix(_ft_t72_3(n), _ft_t72_14(n), _ft_t72_16(n), _ft_t72_19(n), _ft_t72_22(n)), Int64(1)),
-    ("function_type73", (n::Int64) -> _ft_mix(_ft_t73_0(n), _ft_t73_14(n), _ft_t73_16(n), _ft_t73_19(n), _ft_t73_22(n)), Int64(1)),
-    ("function_type74", (n::Int64) -> _ft_mix(_ft_t74_0(n), _ft_t74_14(n), _ft_t74_16(n), _ft_t74_19(n), _ft_t74_22(n)), Int64(1)),
-    ("function_type75", (n::Int64) -> _ft_mix(_ft_t75_0(n), _ft_t75_14(n), _ft_t75_16(n), _ft_t75_19(n), _ft_t75_22(n)), Int64(1)),
-    ("function_type76", (n::Int64) -> _ft_mix(_ft_t76_0(n), _ft_t76_14(n), _ft_t76_17(n), _ft_t76_19(n), _ft_t76_22(n)), Int64(1)),
-    ("function_type77", (n::Int64) -> _ft_mix(_ft_t77_0(n), _ft_t77_3(n), _ft_t77_14(n), _ft_t77_17(n), _ft_t77_22(n)), Int64(1)),
-    ("function_type78", (n::Int64) -> _ft_mix(_ft_t78_0(n), _ft_t78_3(n), _ft_t78_14(n), _ft_t78_17(n), _ft_t78_22(n)), Int64(1)),
-    ("function_type79", (n::Int64) -> _ft_mix(_ft_t79_0(n), _ft_t79_3(n), _ft_t79_14(n), _ft_t79_17(n), _ft_t79_22(n)), Int64(1)),
-    ("function_type80", (n::Int64) -> _ft_mix(_ft_t80_0(n), _ft_t80_16(n), _ft_t80_19(n), _ft_t80_20(n), _ft_t80_22(n)), Int64(1)),
-    ("function_type81", (n::Int64) -> _ft_mix(_ft_t81_0(n), _ft_t81_16(n), _ft_t81_19(n), _ft_t81_21(n), _ft_t81_22(n)), Int64(1)),
-    ("function_type82", (n::Int64) -> _ft_mix(_ft_t82_0(n), _ft_t82_3(n), _ft_t82_6(n), _ft_t82_16(n), _ft_t82_22(n)), Int64(1)),
-    ("function_type83", (n::Int64) -> _ft_mix(_ft_t83_0(n), _ft_t83_16(n), _ft_t83_19(n), _ft_t83_21(n), _ft_t83_22(n)), Int64(1)),
-    ("function_type84", (n::Int64) -> _ft_mix(_ft_t84_0(n), _ft_t84_3(n), _ft_t84_14(n), _ft_t84_16(n), _ft_t84_22(n)), Int64(1)),
-    ("function_type85", (n::Int64) -> _ft_mix(_ft_t85_2(n), _ft_t85_3(n), _ft_t85_6(n), _ft_t85_14(n), _ft_t85_22(n)), Int64(1)),
-    ("function_type86", (n::Int64) -> _ft_mix(_ft_t86_0(n), _ft_t86_2(n), _ft_t86_3(n), _ft_t86_14(n), _ft_t86_22(n)), Int64(1)),
-    ("function_type87", (n::Int64) -> _ft_mix(_ft_t87_2(n), _ft_t87_3(n), _ft_t87_6(n), _ft_t87_14(n), _ft_t87_22(n)), Int64(1)),
-    ("function_type88", (n::Int64) -> _ft_mix(_ft_t88_0(n), _ft_t88_3(n), _ft_t88_14(n), _ft_t88_15(n), _ft_t88_21(n)), Int64(1)),
-    ("function_type89", (n::Int64) -> _ft_mix(_ft_t89_0(n), _ft_t89_3(n), _ft_t89_14(n), _ft_t89_15(n), _ft_t89_21(n)), Int64(1)),
-    ("function_type90", (n::Int64) -> _ft_mix(_ft_t90_0(n), _ft_t90_3(n), _ft_t90_14(n), _ft_t90_15(n), _ft_t90_21(n)), Int64(1)),
-    ("function_type91", (n::Int64) -> _ft_mix(_ft_t91_0(n), _ft_t91_3(n), _ft_t91_14(n), _ft_t91_15(n), _ft_t91_21(n)), Int64(1)),
-    ("function_type92", (n::Int64) -> _ft_mix(_ft_t92_0(n), _ft_t92_2(n), _ft_t92_5(n), _ft_t92_19(n), _ft_t92_20(n)), Int64(1)),
-    ("function_type93", (n::Int64) -> _ft_mix(_ft_t93_2(n), _ft_t93_3(n), _ft_t93_10(n), _ft_t93_18(n), _ft_t93_20(n)), Int64(1)),
-    ("function_type94", (n::Int64) -> _ft_mix(_ft_t94_2(n), _ft_t94_3(n), _ft_t94_5(n), _ft_t94_19(n), _ft_t94_20(n)), Int64(1)),
-    ("function_type95", (n::Int64) -> _ft_mix(_ft_t95_2(n), _ft_t95_3(n), _ft_t95_10(n), _ft_t95_18(n), _ft_t95_20(n)), Int64(1)),
-    ("function_type96", (n::Int64) -> _ft_mix(_ft_t96_0(n), _ft_t96_4(n), _ft_t96_10(n), _ft_t96_18(n), _ft_t96_21(n)), Int64(1)),
-    ("function_type97", (n::Int64) -> _ft_mix(_ft_t97_0(n), _ft_t97_3(n), _ft_t97_10(n), _ft_t97_18(n), _ft_t97_21(n)), Int64(1)),
-    ("function_type98", (n::Int64) -> _ft_mix(_ft_t98_0(n), _ft_t98_3(n), _ft_t98_10(n), _ft_t98_18(n), _ft_t98_21(n)), Int64(1)),
-    ("function_type99", (n::Int64) -> _ft_mix(_ft_t99_0(n), _ft_t99_2(n), _ft_t99_3(n), _ft_t99_10(n), _ft_t99_22(n)), Int64(1)),
+    ("function_type0", (n::Int64) -> (_ft_t0_1(n), _ft_t0_2(n), _ft_t0_3(n), _ft_t0_11(n), _ft_t0_23(n)), Int64(1)),
+    ("function_type1", (n::Int64) -> (_ft_t1_3(n), _ft_t1_4(n), _ft_t1_11(n), _ft_t1_19(n), _ft_t1_22(n)), Int64(1)),
+    ("function_type2", (n::Int64) -> (_ft_t2_0(n), _ft_t2_5(n), _ft_t2_11(n), _ft_t2_19(n), _ft_t2_22(n)), Int64(1)),
+    ("function_type3", (n::Int64) -> (_ft_t3_0(n), _ft_t3_5(n), _ft_t3_11(n), _ft_t3_19(n), _ft_t3_22(n)), Int64(1)),
+    ("function_type4", (n::Int64) -> (_ft_t4_2(n), _ft_t4_4(n), _ft_t4_17(n), _ft_t4_19(n), _ft_t4_21(n)), Int64(1)),
+    ("function_type5", (n::Int64) -> (_ft_t5_0(n), _ft_t5_4(n), _ft_t5_9(n), _ft_t5_19(n), _ft_t5_22(n)), Int64(1)),
+    ("function_type6", (n::Int64) -> (_ft_t6_0(n), _ft_t6_4(n), _ft_t6_9(n), _ft_t6_19(n), _ft_t6_22(n)), Int64(1)),
+    ("function_type7", (n::Int64) -> (_ft_t7_0(n), _ft_t7_4(n), _ft_t7_9(n), _ft_t7_18(n), _ft_t7_19(n)), Int64(1)),
+    ("function_type8", (n::Int64) -> (_ft_t8_0(n), _ft_t8_4(n), _ft_t8_17(n), _ft_t8_20(n), _ft_t8_21(n)), Int64(1)),
+    ("function_type9", (n::Int64) -> (_ft_t9_0(n), _ft_t9_4(n), _ft_t9_17(n), _ft_t9_20(n), _ft_t9_23(n)), Int64(1)),
+    ("function_type10", (n::Int64) -> (_ft_t10_0(n), _ft_t10_4(n), _ft_t10_17(n), _ft_t10_20(n), _ft_t10_21(n)), Int64(1)),
+    ("function_type11", (n::Int64) -> (_ft_t11_0(n), _ft_t11_4(n), _ft_t11_17(n), _ft_t11_20(n), _ft_t11_23(n)), Int64(1)),
+    ("function_type12", (n::Int64) -> (_ft_t12_0(n), _ft_t12_3(n), _ft_t12_4(n), _ft_t12_11(n), _ft_t12_23(n)), Int64(1)),
+    ("function_type13", (n::Int64) -> (_ft_t13_0(n), _ft_t13_8(n), _ft_t13_11(n), _ft_t13_18(n), _ft_t13_22(n)), Int64(1)),
+    ("function_type14", (n::Int64) -> (_ft_t14_0(n), _ft_t14_4(n), _ft_t14_11(n), _ft_t14_17(n), _ft_t14_23(n)), Int64(1)),
+    ("function_type15", (n::Int64) -> (_ft_t15_4(n), _ft_t15_8(n), _ft_t15_11(n), _ft_t15_18(n), _ft_t15_22(n)), Int64(1)),
+    ("function_type16", (n::Int64) -> (_ft_t16_0(n), _ft_t16_3(n), _ft_t16_11(n), _ft_t16_16(n), _ft_t16_23(n)), Int64(1)),
+    ("function_type17", (n::Int64) -> (_ft_t17_4(n), _ft_t17_11(n), _ft_t17_16(n), _ft_t17_21(n), _ft_t17_23(n)), Int64(1)),
+    ("function_type18", (n::Int64) -> (_ft_t18_0(n), _ft_t18_4(n), _ft_t18_11(n), _ft_t18_16(n), _ft_t18_23(n)), Int64(1)),
+    ("function_type19", (n::Int64) -> (_ft_t19_0(n), _ft_t19_11(n), _ft_t19_16(n), _ft_t19_21(n), _ft_t19_23(n)), Int64(1)),
+    ("function_type20", (n::Int64) -> (_ft_t20_0(n), _ft_t20_2(n), _ft_t20_19(n), _ft_t20_22(n), _ft_t20_23(n)), Int64(1)),
+    ("function_type21", (n::Int64) -> (_ft_t21_2(n), _ft_t21_4(n), _ft_t21_19(n), _ft_t21_22(n), _ft_t21_23(n)), Int64(1)),
+    ("function_type22", (n::Int64) -> (_ft_t22_0(n), _ft_t22_1(n), _ft_t22_2(n), _ft_t22_19(n), _ft_t22_22(n)), Int64(1)),
+    ("function_type23", (n::Int64) -> (_ft_t23_0(n), _ft_t23_2(n), _ft_t23_11(n), _ft_t23_19(n), _ft_t23_22(n)), Int64(1)),
+    ("function_type24", (n::Int64) -> (_ft_t24_11(n), _ft_t24_17(n), _ft_t24_19(n), _ft_t24_21(n), _ft_t24_23(n)), Int64(1)),
+    ("function_type25", (n::Int64) -> (_ft_t25_3(n), _ft_t25_11(n), _ft_t25_19(n), _ft_t25_21(n), _ft_t25_23(n)), Int64(1)),
+    ("function_type26", (n::Int64) -> (_ft_t26_3(n), _ft_t26_11(n), _ft_t26_19(n), _ft_t26_21(n), _ft_t26_22(n)), Int64(1)),
+    ("function_type27", (n::Int64) -> (_ft_t27_3(n), _ft_t27_11(n), _ft_t27_19(n), _ft_t27_21(n), _ft_t27_22(n)), Int64(1)),
+    ("function_type28", (n::Int64) -> (_ft_t28_11(n), _ft_t28_17(n), _ft_t28_18(n), _ft_t28_22(n), _ft_t28_23(n)), Int64(1)),
+    ("function_type29", (n::Int64) -> (_ft_t29_3(n), _ft_t29_11(n), _ft_t29_20(n), _ft_t29_22(n), _ft_t29_23(n)), Int64(1)),
+    ("function_type30", (n::Int64) -> (_ft_t30_3(n), _ft_t30_4(n), _ft_t30_11(n), _ft_t30_18(n), _ft_t30_22(n)), Int64(1)),
+    ("function_type31", (n::Int64) -> (_ft_t31_3(n), _ft_t31_4(n), _ft_t31_11(n), _ft_t31_20(n), _ft_t31_22(n)), Int64(1)),
+    ("function_type32", (n::Int64) -> (_ft_t32_4(n), _ft_t32_13(n), _ft_t32_19(n), _ft_t32_22(n), _ft_t32_23(n)), Int64(1)),
+    ("function_type33", (n::Int64) -> (_ft_t33_4(n), _ft_t33_11(n), _ft_t33_13(n), _ft_t33_19(n), _ft_t33_23(n)), Int64(1)),
+    ("function_type34", (n::Int64) -> (_ft_t34_0(n), _ft_t34_1(n), _ft_t34_3(n), _ft_t34_19(n), _ft_t34_22(n)), Int64(1)),
+    ("function_type35", (n::Int64) -> (_ft_t35_3(n), _ft_t35_4(n), _ft_t35_13(n), _ft_t35_19(n), _ft_t35_22(n)), Int64(1)),
+    ("function_type36", (n::Int64) -> (_ft_t36_0(n), _ft_t36_4(n), _ft_t36_19(n), _ft_t36_22(n), _ft_t36_23(n)), Int64(1)),
+    ("function_type37", (n::Int64) -> (_ft_t37_2(n), _ft_t37_4(n), _ft_t37_19(n), _ft_t37_22(n), _ft_t37_23(n)), Int64(1)),
+    ("function_type38", (n::Int64) -> (_ft_t38_0(n), _ft_t38_2(n), _ft_t38_4(n), _ft_t38_19(n), _ft_t38_22(n)), Int64(1)),
+    ("function_type39", (n::Int64) -> (_ft_t39_0(n), _ft_t39_4(n), _ft_t39_13(n), _ft_t39_19(n), _ft_t39_22(n)), Int64(1)),
+    ("function_type40", (n::Int64) -> (_ft_t40_9(n), _ft_t40_16(n), _ft_t40_18(n), _ft_t40_22(n), _ft_t40_23(n)), Int64(1)),
+    ("function_type41", (n::Int64) -> (_ft_t41_9(n), _ft_t41_16(n), _ft_t41_18(n), _ft_t41_22(n), _ft_t41_23(n)), Int64(1)),
+    ("function_type42", (n::Int64) -> (_ft_t42_0(n), _ft_t42_9(n), _ft_t42_16(n), _ft_t42_18(n), _ft_t42_22(n)), Int64(1)),
+    ("function_type43", (n::Int64) -> (_ft_t43_0(n), _ft_t43_9(n), _ft_t43_16(n), _ft_t43_18(n), _ft_t43_22(n)), Int64(1)),
+    ("function_type44", (n::Int64) -> (_ft_t44_3(n), _ft_t44_4(n), _ft_t44_12(n), _ft_t44_14(n), _ft_t44_23(n)), Int64(1)),
+    ("function_type45", (n::Int64) -> (_ft_t45_3(n), _ft_t45_4(n), _ft_t45_12(n), _ft_t45_14(n), _ft_t45_23(n)), Int64(1)),
+    ("function_type46", (n::Int64) -> (_ft_t46_1(n), _ft_t46_3(n), _ft_t46_4(n), _ft_t46_14(n), _ft_t46_16(n)), Int64(1)),
+    ("function_type47", (n::Int64) -> (_ft_t47_1(n), _ft_t47_3(n), _ft_t47_4(n), _ft_t47_14(n), _ft_t47_16(n)), Int64(1)),
+    ("function_type48", (n::Int64) -> (_ft_t48_2(n), _ft_t48_3(n), _ft_t48_4(n), _ft_t48_9(n), _ft_t48_22(n)), Int64(1)),
+    ("function_type49", (n::Int64) -> (_ft_t49_0(n), _ft_t49_3(n), _ft_t49_4(n), _ft_t49_9(n), _ft_t49_23(n)), Int64(1)),
+    ("function_type50", (n::Int64) -> (_ft_t50_0(n), _ft_t50_3(n), _ft_t50_4(n), _ft_t50_9(n), _ft_t50_22(n)), Int64(1)),
+    ("function_type51", (n::Int64) -> (_ft_t51_0(n), _ft_t51_3(n), _ft_t51_4(n), _ft_t51_9(n), _ft_t51_22(n)), Int64(1)),
+    ("function_type52", (n::Int64) -> (_ft_t52_3(n), _ft_t52_4(n), _ft_t52_9(n), _ft_t52_16(n), _ft_t52_22(n)), Int64(1)),
+    ("function_type53", (n::Int64) -> (_ft_t53_3(n), _ft_t53_4(n), _ft_t53_14(n), _ft_t53_17(n), _ft_t53_22(n)), Int64(1)),
+    ("function_type54", (n::Int64) -> (_ft_t54_0(n), _ft_t54_3(n), _ft_t54_9(n), _ft_t54_16(n), _ft_t54_22(n)), Int64(1)),
+    ("function_type55", (n::Int64) -> (_ft_t55_0(n), _ft_t55_3(n), _ft_t55_14(n), _ft_t55_16(n), _ft_t55_22(n)), Int64(1)),
+    ("function_type56", (n::Int64) -> (_ft_t56_1(n), _ft_t56_3(n), _ft_t56_14(n), _ft_t56_16(n), _ft_t56_21(n)), Int64(1)),
+    ("function_type57", (n::Int64) -> (_ft_t57_4(n), _ft_t57_13(n), _ft_t57_14(n), _ft_t57_17(n), _ft_t57_21(n)), Int64(1)),
+    ("function_type58", (n::Int64) -> (_ft_t58_0(n), _ft_t58_4(n), _ft_t58_14(n), _ft_t58_17(n), _ft_t58_21(n)), Int64(1)),
+    ("function_type59", (n::Int64) -> (_ft_t59_4(n), _ft_t59_13(n), _ft_t59_14(n), _ft_t59_17(n), _ft_t59_21(n)), Int64(1)),
+    ("function_type60", (n::Int64) -> (_ft_t60_2(n), _ft_t60_4(n), _ft_t60_14(n), _ft_t60_16(n), _ft_t60_20(n)), Int64(1)),
+    ("function_type61", (n::Int64) -> (_ft_t61_0(n), _ft_t61_4(n), _ft_t61_14(n), _ft_t61_16(n), _ft_t61_20(n)), Int64(1)),
+    ("function_type62", (n::Int64) -> (_ft_t62_0(n), _ft_t62_4(n), _ft_t62_14(n), _ft_t62_16(n), _ft_t62_20(n)), Int64(1)),
+    ("function_type63", (n::Int64) -> (_ft_t63_0(n), _ft_t63_4(n), _ft_t63_14(n), _ft_t63_16(n), _ft_t63_20(n)), Int64(1)),
+    ("function_type64", (n::Int64) -> (_ft_t64_0(n), _ft_t64_3(n), _ft_t64_12(n), _ft_t64_17(n), _ft_t64_22(n)), Int64(1)),
+    ("function_type65", (n::Int64) -> (_ft_t65_0(n), _ft_t65_3(n), _ft_t65_12(n), _ft_t65_17(n), _ft_t65_22(n)), Int64(1)),
+    ("function_type66", (n::Int64) -> (_ft_t66_0(n), _ft_t66_3(n), _ft_t66_5(n), _ft_t66_17(n), _ft_t66_22(n)), Int64(1)),
+    ("function_type67", (n::Int64) -> (_ft_t67_1(n), _ft_t67_3(n), _ft_t67_5(n), _ft_t67_17(n), _ft_t67_22(n)), Int64(1)),
+    ("function_type68", (n::Int64) -> (_ft_t68_3(n), _ft_t68_16(n), _ft_t68_19(n), _ft_t68_21(n), _ft_t68_22(n)), Int64(1)),
+    ("function_type69", (n::Int64) -> (_ft_t69_0(n), _ft_t69_3(n), _ft_t69_14(n), _ft_t69_16(n), _ft_t69_22(n)), Int64(1)),
+    ("function_type70", (n::Int64) -> (_ft_t70_0(n), _ft_t70_3(n), _ft_t70_16(n), _ft_t70_21(n), _ft_t70_22(n)), Int64(1)),
+    ("function_type71", (n::Int64) -> (_ft_t71_0(n), _ft_t71_3(n), _ft_t71_14(n), _ft_t71_16(n), _ft_t71_22(n)), Int64(1)),
+    ("function_type72", (n::Int64) -> (_ft_t72_3(n), _ft_t72_14(n), _ft_t72_16(n), _ft_t72_19(n), _ft_t72_22(n)), Int64(1)),
+    ("function_type73", (n::Int64) -> (_ft_t73_0(n), _ft_t73_14(n), _ft_t73_16(n), _ft_t73_19(n), _ft_t73_22(n)), Int64(1)),
+    ("function_type74", (n::Int64) -> (_ft_t74_0(n), _ft_t74_14(n), _ft_t74_16(n), _ft_t74_19(n), _ft_t74_22(n)), Int64(1)),
+    ("function_type75", (n::Int64) -> (_ft_t75_0(n), _ft_t75_14(n), _ft_t75_16(n), _ft_t75_19(n), _ft_t75_22(n)), Int64(1)),
+    ("function_type76", (n::Int64) -> (_ft_t76_0(n), _ft_t76_14(n), _ft_t76_17(n), _ft_t76_19(n), _ft_t76_22(n)), Int64(1)),
+    ("function_type77", (n::Int64) -> (_ft_t77_0(n), _ft_t77_3(n), _ft_t77_14(n), _ft_t77_17(n), _ft_t77_22(n)), Int64(1)),
+    ("function_type78", (n::Int64) -> (_ft_t78_0(n), _ft_t78_3(n), _ft_t78_14(n), _ft_t78_17(n), _ft_t78_22(n)), Int64(1)),
+    ("function_type79", (n::Int64) -> (_ft_t79_0(n), _ft_t79_3(n), _ft_t79_14(n), _ft_t79_17(n), _ft_t79_22(n)), Int64(1)),
+    ("function_type80", (n::Int64) -> (_ft_t80_0(n), _ft_t80_16(n), _ft_t80_19(n), _ft_t80_20(n), _ft_t80_22(n)), Int64(1)),
+    ("function_type81", (n::Int64) -> (_ft_t81_0(n), _ft_t81_16(n), _ft_t81_19(n), _ft_t81_21(n), _ft_t81_22(n)), Int64(1)),
+    ("function_type82", (n::Int64) -> (_ft_t82_0(n), _ft_t82_3(n), _ft_t82_6(n), _ft_t82_16(n), _ft_t82_22(n)), Int64(1)),
+    ("function_type83", (n::Int64) -> (_ft_t83_0(n), _ft_t83_16(n), _ft_t83_19(n), _ft_t83_21(n), _ft_t83_22(n)), Int64(1)),
+    ("function_type84", (n::Int64) -> (_ft_t84_0(n), _ft_t84_3(n), _ft_t84_14(n), _ft_t84_16(n), _ft_t84_22(n)), Int64(1)),
+    ("function_type85", (n::Int64) -> (_ft_t85_2(n), _ft_t85_3(n), _ft_t85_6(n), _ft_t85_14(n), _ft_t85_22(n)), Int64(1)),
+    ("function_type86", (n::Int64) -> (_ft_t86_0(n), _ft_t86_2(n), _ft_t86_3(n), _ft_t86_14(n), _ft_t86_22(n)), Int64(1)),
+    ("function_type87", (n::Int64) -> (_ft_t87_2(n), _ft_t87_3(n), _ft_t87_6(n), _ft_t87_14(n), _ft_t87_22(n)), Int64(1)),
+    ("function_type88", (n::Int64) -> (_ft_t88_0(n), _ft_t88_3(n), _ft_t88_14(n), _ft_t88_15(n), _ft_t88_21(n)), Int64(1)),
+    ("function_type89", (n::Int64) -> (_ft_t89_0(n), _ft_t89_3(n), _ft_t89_14(n), _ft_t89_15(n), _ft_t89_21(n)), Int64(1)),
+    ("function_type90", (n::Int64) -> (_ft_t90_0(n), _ft_t90_3(n), _ft_t90_14(n), _ft_t90_15(n), _ft_t90_21(n)), Int64(1)),
+    ("function_type91", (n::Int64) -> (_ft_t91_0(n), _ft_t91_3(n), _ft_t91_14(n), _ft_t91_15(n), _ft_t91_21(n)), Int64(1)),
+    ("function_type92", (n::Int64) -> (_ft_t92_0(n), _ft_t92_2(n), _ft_t92_5(n), _ft_t92_19(n), _ft_t92_20(n)), Int64(1)),
+    ("function_type93", (n::Int64) -> (_ft_t93_2(n), _ft_t93_3(n), _ft_t93_10(n), _ft_t93_18(n), _ft_t93_20(n)), Int64(1)),
+    ("function_type94", (n::Int64) -> (_ft_t94_2(n), _ft_t94_3(n), _ft_t94_5(n), _ft_t94_19(n), _ft_t94_20(n)), Int64(1)),
+    ("function_type95", (n::Int64) -> (_ft_t95_2(n), _ft_t95_3(n), _ft_t95_10(n), _ft_t95_18(n), _ft_t95_20(n)), Int64(1)),
+    ("function_type96", (n::Int64) -> (_ft_t96_0(n), _ft_t96_4(n), _ft_t96_10(n), _ft_t96_18(n), _ft_t96_21(n)), Int64(1)),
+    ("function_type97", (n::Int64) -> (_ft_t97_0(n), _ft_t97_3(n), _ft_t97_10(n), _ft_t97_18(n), _ft_t97_21(n)), Int64(1)),
+    ("function_type98", (n::Int64) -> (_ft_t98_0(n), _ft_t98_3(n), _ft_t98_10(n), _ft_t98_18(n), _ft_t98_21(n)), Int64(1)),
+    ("function_type99", (n::Int64) -> (_ft_t99_0(n), _ft_t99_2(n), _ft_t99_3(n), _ft_t99_10(n), _ft_t99_22(n)), Int64(1)),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/super -------------------------------------------
@@ -14092,7 +12218,7 @@ _su_sget(::Type{S}, o, i::Int64) where {S} = invoke(getindex, Tuple{S,Int64}, o,
 _su_sset(::Type{S}, o, i::Int64, v::Int64) where {S} = (invoke(setindex!, Tuple{S,Int64,Int64}, o, v, i); v)
 _su_sadd(::Type{S}, o, i::Int64, d::Int64) where {S} = _su_sset(S, o, i, (_su_sget(S, o, i)::Int64) + d)
 _su_spostinc(::Type{S}, o, i::Int64) where {S} = (old = _su_sget(S, o, i)::Int64; _su_sset(S, o, i, old + 1); old)
-_su_index_seq(::Type{S}, o) where {S} = _dw_bits(
+_su_index_seq(::Type{S}, o) where {S} = _dw_facts(
     _su_sset(S, o, 0, 42) == 42, _su_sget(S, o, 0) == 42, _su_sadd(S, o, 0, 1) == 43, _su_sget(S, o, 0) == 43,
     _su_spostinc(S, o, 0) == 43, _su_sget(S, o, 0) == 44, _su_sset(S, o, 0, 2) == 2, _su_sget(S, o, 0) == 2,
     _su_sadd(S, o, 0, 1) == 3, _su_sget(S, o, 0) == 3, _su_spostinc(S, o, 0) == 3, _su_sget(S, o, 0) == 4)
@@ -14105,7 +12231,8 @@ struct _SuAmB <: _SuAmA end
 _su_am_foo(::_SuAmBase) = Int64(42)
 _su_am_foo(::_SuAmB) = Int64(42)
 _su_am_test_super_call(b::_SuAmB) = invoke(_su_am_foo, Tuple{_SuAmA}, b)
-# all_named_constructor: a constructor with an optional default calls its supertype's, also defaulted
+# all_named_constructor: a constructor whose only parameter is optional (dart's [int v = 2]) implicitly
+# calls the supertype's constructor, whose only parameter is also optional, with no arguments
 const _SU_ANC_RES = Ref(Int64(0))
 abstract type _SuAncA end
 _su_anc_a_init(v::Int64 = Int64(1)) = (_SU_ANC_RES[] += v; nothing)
@@ -14280,7 +12407,7 @@ _su_fa_raw(o::_SuFaA) = _su_fa_foo(o)
 _su_fa_this(o::_SuFaA) = _su_fa_foo(o)
 _su_fa_super(o::_SuFaB) = invoke(_su_fa_foo, Tuple{_SuFaA}, o)
 _su_fa_sum(o::_SuFaB) = _su_fa_foo(o) + invoke(_su_fa_foo, Tuple{_SuFaA}, o)
-_su_fa_test(b::_SuFaB) = _dw_bits(_su_fa_foo(b) == 10, _su_fa_raw(b) == 10, _su_fa_this(b) == 10, _su_fa_super(b) == 100, _su_fa_sum(b) == 110)
+_su_fa_test(b::_SuFaB) = _dw_facts(_su_fa_foo(b), _su_fa_raw(b), _su_fa_this(b), _su_fa_super(b), _su_fa_sum(b))
 # field: a chain of super calls and a getter overriding a field, reading it through super
 abstract type _SuFiA end
 abstract type _SuFiAbsB <: _SuFiA end
@@ -14328,17 +12455,18 @@ _su_ic_new(y::Int64, j::Int64) = _SuIcDerived(j, y)
 _su_ic_foo(o::_SuIcBase) = o.i
 _su_ic_foo(o::_SuIcDerived) = o.y
 _su_ic_get_super(o::_SuIcDerived) = () -> invoke(_su_ic_foo, Tuple{_SuIcBase}, o)
-# in_constructor: a super setter and a super field read inside a constructor
+# in_constructor: a super setter and a super field read inside a constructor (the value set is the
+# constructor's argument, dart's constant true)
 abstract type _SuInFoo end
 _su_in_set_foo!(o::_SuInFoo, b::Bool) = (o.myBoolean = b; nothing)
 _su_in_my_boolean(o::_SuInFoo) = o.myBoolean
 mutable struct _SuInBaz <: _SuInFoo
     myBoolean::Bool
     checked::Bool
-    function _SuInBaz()
+    function _SuInBaz(v::Bool)
         o = new(false, false)
-        invoke(_su_in_set_foo!, Tuple{_SuInFoo,Bool}, o, true)
-        o.checked = invoke(_su_in_my_boolean, Tuple{_SuInFoo}, o) == true
+        invoke(_su_in_set_foo!, Tuple{_SuInFoo,Bool}, o, v)
+        o.checked = invoke(_su_in_my_boolean, Tuple{_SuInFoo}, o) == v
         return o
     end
 end
@@ -14445,8 +12573,8 @@ end
 _SuOi2B() = _SuOi2B(Dict{Int64,Int64}())
 Base.setindex!(o::_SuOi2A, b, a) = (o.map[a] = b)
 Base.getindex(o::_SuOi2A, a) = o.map[a]
-_su_oi2_foo(o::_SuOi2B) = (_su_sset(_SuOi2A, o, 4, 42); r1 = _su_sget(_SuOi2A, o, 4) == 42;
-    _su_sadd(_SuOi2A, o, 4, 5); _dw_bits(r1, _su_sget(_SuOi2A, o, 4) == 47))
+_su_oi2_foo(o::_SuOi2B) = (_su_sset(_SuOi2A, o, 4, 42); v1 = _su_sget(_SuOi2A, o, 4)::Int64;
+    _su_sadd(_SuOi2A, o, 4, 5); _dw_facts(v1, _su_sget(_SuOi2A, o, 4)::Int64))
 # operator_index3: super[] from the parent and super[]= from the grandparent
 abstract type _SuOi3A end
 abstract type _SuOi3B <: _SuOi3A end
@@ -14537,7 +12665,7 @@ Base.getindex(o::_SuOi8A, index) = _su_oi8_nsm(o, _SU_NSM_GET, (index,))
 const _SU_OI8_GLOBAL = Ref(Int64(0))
 _su_oi8_f() = (@assert _SU_OI8_GLOBAL[] == 0; _SU_OI8_GLOBAL[] += 1; Int64(0))
 _su_oi8_g() = (@assert _SU_OI8_GLOBAL[] == 1; _SU_OI8_GLOBAL[] += 1; Int64(42))
-_su_oi8_test(o::_SuOi8B) = _dw_bits(_su_sset(_SuOi8A, o, _su_oi8_f(), _su_oi8_g()) == 42, _SU_OI8_GLOBAL[] == 2)
+_su_oi8_test(o::_SuOi8B) = _dw_facts(_su_sset(_SuOi8A, o, _su_oi8_f(), _su_oi8_g()), _SU_OI8_GLOBAL[])
 # operator: super +, [] and []= operators, the compound super[i++] += v evaluating its index once
 abstract type _SuOpA end
 mutable struct _SuOpAc <: _SuOpA
@@ -14627,7 +12755,7 @@ function _su_si_test(o::_SuSiB)
     _SU_SI_EXPECTED[] = 42; r5 = (old = _su_si_sget(o); _su_si_sset(o, old + 1); old) == 41
     _SU_SI_EXPECTED[] = 40; r6 = (old = _su_si_sget(o); _su_si_sset(o, old - 1); old) == 41
     r7 = _su_si_sget(o) == 41
-    return _dw_bits(r1, r2, r3, r4, r5, r6, r7, _SU_SI_OK[])
+    return _dw_facts(r1, r2, r3, r4, r5, r6, r7, _SU_SI_OK[])
 end
 # setter: an overriding setter and getter calling the supertype's through super
 abstract type _SuStBase end
@@ -14671,70 +12799,69 @@ mutable struct _SuSuSub <: _SuSuSup
     end
 end
 _g("dart_super", Any[
-    ("abstract_method", (n::Int64) -> _dw_bits(_su_am_foo(_SuAmB()) == 42, _su_am_test_super_call(_SuAmB()) == 42) + n, Int64(0)),
-    ("all_named_constructor", (n::Int64) -> (_SU_ANC_RES[] = 0; _SuAncB(); _SU_ANC_RES[] + n), Int64(0)),
-    ("assign_runtime", (n::Int64) -> (a = _SuAsC(); a.x = 37 * n; r1 = a.x; _su_as_setx!(a, 42 * n); r1 * 100 + a.x), Int64(1)),
-    ("bound_closure", (n::Int64) -> (b = _SuBcB(); c = _su_bc_confuse;
-        t = _su_bc_bar(b) + _su_bc_bar2(b) + _su_bc_bar3(b, 9n) + _su_bc_bar4(b, 19n);
-        _dw_bits(t == -4,
-            c(_su_bc_super_bar(b))() == 499, c(_su_bc_super_bar(b))(2n) == 500, c(_su_bc_super_bar2(b))() == 42,
-            c(_su_bc_super_bar2(b))(namedOptional = 77n) == 117, c(_su_bc_super_bar3(b))(-3n) == 498, c(_su_bc_super_bar3(b))(-11n, -19n) == 468,
-            c(_su_bc_super_bar4(b))(0n) == 426, c(_su_bc_super_bar4(b))(3n, namedOptional = 77n) == 502,
-            c(_su_bc_super_add(b))() == 1267, c(_su_bc_super_add(b))(2n) == 1236, c(_su_bc_super_trim(b))() == 1335,
-            c(_su_bc_super_trim(b))(namedOptional = 77n) == 1390, c(_su_bc_super_sublist(b))(-3n) == 4362, c(_su_bc_super_sublist(b))(-11n, -19n) == 4291,
-            c(_su_bc_super_split(b))(0n) == 232, c(_su_bc_super_split(b))(3n, onMatch = 77n, onNonMatch = 8n) == 199)), Int64(1)),
-    ("call", (n::Int64) -> (b = _SuCaB(); _su_ca_incr!(b); _dw_bits(b.field == 2, _su_ca_timesx(b, 2n) == 12)), Int64(1)),
+    ("abstract_method", (n::Int64) -> (o = (_SuAmB(),)[n]; _dw_facts(_su_am_foo(o), _su_am_test_super_call(o))), Int64(1)),
+    ("all_named_constructor", (n::Int64) -> (_SU_ANC_RES[] = 0; n == 1 ? _SuAncB() : _SuAncB(n); _SU_ANC_RES[]), Int64(1)),
+    ("assign_runtime", (n::Int64) -> (a = _SuAsC(); a.x = 37n; r1 = a.x; _su_as_setx!(a, 42n); _dw_facts(r1, a.x)), Int64(1)),
+    ("bound_closure", (n::Int64) -> (b = (_SuBcB(),)[n]; c = _su_bc_confuse;
+        _dw_facts(_su_bc_bar(b) + _su_bc_bar2(b) + _su_bc_bar3(b, 9) + _su_bc_bar4(b, 19),
+            c(_su_bc_super_bar(b))(), c(_su_bc_super_bar(b))(2), c(_su_bc_super_bar2(b))(),
+            c(_su_bc_super_bar2(b))(namedOptional = 77), c(_su_bc_super_bar3(b))(-3), c(_su_bc_super_bar3(b))(-11, -19),
+            c(_su_bc_super_bar4(b))(0), c(_su_bc_super_bar4(b))(3, namedOptional = 77),
+            c(_su_bc_super_add(b))(), c(_su_bc_super_add(b))(2), c(_su_bc_super_trim(b))(),
+            c(_su_bc_super_trim(b))(namedOptional = 77), c(_su_bc_super_sublist(b))(-3), c(_su_bc_super_sublist(b))(-11, -19),
+            c(_su_bc_super_split(b))(0), c(_su_bc_super_split(b))(3, onMatch = 77, onNonMatch = 8))), Int64(1)),
+    ("call", (n::Int64) -> (b = _SuCaB(); _su_ca_incr!(b); _dw_facts(b.field, _su_ca_timesx(b, 2n))), Int64(1)),
     ("call2", (n::Int64) -> (_SU_C2_VALUE[] = -1; d = _SuC2D{Union{Nothing,Int64}}(); _su_c2_foo(d, nothing); b = _SuC2B(); _su_c2_m(b, 41n); _SU_C2_VALUE[]), Int64(1)),
-    ("call3_runtime", (n::Int64) -> _dw_bits(_SuC3B().foo == 499, _SuC3B2().foo == 499, _su_c3_b2_named().foo == 499,
-        _SuC3D().foo == 499, _SuC3D2().foo == 499, _su_c3_d2_named().foo == 499) + n, Int64(0)),
-    ("call4", (n::Int64) -> (d = _SuC4D(); _dw_bits(_su_c4_test1(d) == false, _su_c4_test2(d) == false, _su_c4_test3(d) == false, _su_c4_test4(d) == false) + n), Int64(0)),
-    ("closure", (s::String) -> (c = _su_cl_build(_SuClSub("super", s)); _dw_bits(length(c) == 3, c[1]() == "sub", c[2]() == "sub", c[3]() == "super")), "sub"),
-    ("conditional_operator_runtime", (n::Int64) -> (c = _SuCoC(); _su_co_test(c) === nothing ? c.field + _su_co_method(c) + n : Int64(-1)), Int64(0)),
+    ("call3_runtime", (n::Int64) -> (b = n == 1 ? _SuC3B() : _SuC3B2(); b2 = n == 1 ? _SuC3B2() : _SuC3B(); b2n = n == 1 ? _su_c3_b2_named() : _SuC3B();
+        d = n == 1 ? _SuC3D() : _SuC3D2(); d2 = n == 1 ? _SuC3D2() : _SuC3D(); d2n = n == 1 ? _su_c3_d2_named() : _SuC3D();
+        _dw_facts(b.foo, b2.foo, b2n.foo, d.foo, d2.foo, d2n.foo)), Int64(1)),
+    ("call4", (n::Int64) -> (d = (_SuC4D(),)[n]; _dw_facts(_su_c4_test1(d), _su_c4_test2(d), _su_c4_test3(d), _su_c4_test4(d))), Int64(1)),
+    ("closure", (s::String) -> (c = _su_cl_build(_SuClSub("super", s)); _dw_facts(length(c), c[1]() == "sub", c[2]() == "sub", c[3]() == "super")), "sub"),
+    ("conditional_operator_runtime", (n::Int64) -> (c = (_SuCoC(),)[n]; _dw_facts(_su_co_test(c) === nothing, c.field, _su_co_method(c))), Int64(1)),
     ("field_2", (n::Int64) -> (b = _SuF2B("Ba"); c = _SuF2C("Ca", "Cc"); d = _SuF2D("Da", "Dc"); insc = x -> x;
         b_bc = insc(n == 1) ? b : c; c_bc = insc(n == 1) ? c : b;
-        _dw_bits(_su_f2_foo(b) == "Ba", _su_f2_foo(c) == "Cc", _su_f2_foo(d) == "Dc", _su_f2_foo(b_bc) == "Ba", _su_f2_foo(c_bc) == "Cc",
-                 _su_f2_b_sfoo(b) == "Ba", _su_f2_b_sfoo(c) == "Ca", _su_f2_b_sfoo(d) == "Da",
-                 _su_f2_bc_sfoo(b) == "Ba", _su_f2_bc_sfoo(c) == "Ca", _su_f2_bc_sfoo(d) == "Da",
-                 _su_f2_bcd_sfoo(b) == "Ba", _su_f2_bcd_sfoo(c) == "Ca", _su_f2_bcd_sfoo(d) == "Dc",
-                 _su_f2_b_sfoo(insc(b_bc)) == "Ba", _su_f2_bcd_sfoo(insc(c_bc)) == "Ca")), Int64(1)),
-    ("field_access", (n::Int64) -> _su_fa_test(_SuFaB(100n, 10n)) * 1024 + _su_fa_test(_su_fa_b2(100n, 10n)) * 32 + _su_fa_test(_su_fa_b2(100n, 10n)), Int64(1)),
+        _dw_facts(_su_f2_foo(b) == "Ba", _su_f2_foo(c) == "Cc", _su_f2_foo(d) == "Dc", _su_f2_foo(b_bc) == "Ba", _su_f2_foo(c_bc) == "Cc",
+                  _su_f2_b_sfoo(b) == "Ba", _su_f2_b_sfoo(c) == "Ca", _su_f2_b_sfoo(d) == "Da",
+                  _su_f2_bc_sfoo(b) == "Ba", _su_f2_bc_sfoo(c) == "Ca", _su_f2_bc_sfoo(d) == "Da",
+                  _su_f2_bcd_sfoo(b) == "Ba", _su_f2_bcd_sfoo(c) == "Ca", _su_f2_bcd_sfoo(d) == "Dc",
+                  _su_f2_b_sfoo(insc(b_bc)) == "Ba", _su_f2_bcd_sfoo(insc(c_bc)) == "Ca")), Int64(1)),
+    ("field_access", (n::Int64) -> (_su_fa_test(_SuFaB(100n, 10n)), _su_fa_test(_su_fa_b2(100n, 10n)), _su_fa_test(_su_fa_b2(100n, 10n))), Int64(1)),
     ("field", (s::String) -> (a = _SuFiAc("Bern"); b = _SuFiB("Bern"); c = _SuFiC("Bern");
-        r = _dw_bits(_su_fi_greeting(a) == "Gruezi", _su_fi_greeting(b) == "Hola Gruezi", _su_fi_greeting(c) == "Servus Hola Gruezi",
-                     _su_fi_city(a) == "Bern", _su_fi_city(b) == "Bern", _su_fi_city(c) == "Basel Bern");
-        c.city = s; r * 2 + (_su_fi_city(c) == "Basel Zurich")), "Zurich"),
+        r = _dw_facts(_su_fi_greeting(a) == "Gruezi", _su_fi_greeting(b) == "Hola Gruezi", _su_fi_greeting(c) == "Servus Hola Gruezi",
+                      _su_fi_city(a) == "Bern", _su_fi_city(b) == "Bern", _su_fi_city(c) == "Basel Bern");
+        c.city = s; (r, _su_fi_city(c) == "Basel Zurich")), "Zurich"),
     ("from_constructor", (n::Int64) -> (empty!(_SU_FC_RESULTS); c = _SuFcC(Int64[1, 2, 3] .* n);
-        _dw_bits(_SU_FC_RESULTS == [1, 2, 3], c.f == [1, 2, 3], c.z == 42)), Int64(1)),
-    ("implicit_closure", (n::Int64) -> (obj = _su_ic_new(20n, 10n); ib = () -> _su_ic_foo(obj); r1 = ib() == obj.y; ib2 = _su_ic_get_super(obj);
-        _dw_bits(r1, ib2() == obj.i)), Int64(1)),
-    ("in_constructor", (b::Bool) -> (o = _SuInBaz(); _dw_bits(o.checked, o.myBoolean == b)), true),
-    ("in_finally", (n::Int64) -> _su_if_bar(_SuIfB()) + n, Int64(0)),
-    ("inferrer", (n::Int64) -> _dw_bits(_su_inf_foo(_SU_INF_A[1], 42n) == 84, (try; _su_inf_bar(_SuInfB()); false; catch e; e isa MethodError; end)), Int64(1)),
-    ("mixin_legacy", (n::Int64) -> _su_mxl_method(_SuMxlSubclass()) + n, Int64(0)),
-    ("mixin", (n::Int64) -> _su_mx_method(_SuMxSubclass()) + n, Int64(0)),
-    ("no_such_method1", (n::Int64) -> _su_ns1_foo(_SuNs1B()) + n, Int64(0)),
-    ("no_such_method2", (n::Int64) -> _su_ns2_foo(_SuNs2B()) + n, Int64(0)),
+        _dw_facts(_SU_FC_RESULTS == [1, 2, 3], c.f == [1, 2, 3], c.z == 42)), Int64(1)),
+    ("implicit_closure", (n::Int64) -> (obj = _su_ic_new(20n, 10n); ib = () -> _su_ic_foo(obj); r1 = ib(); ib2 = _su_ic_get_super(obj);
+        _dw_facts(r1, ib2())), Int64(1)),
+    ("in_constructor", (b::Bool) -> (o = _SuInBaz(b); _dw_facts(o.checked, o.myBoolean)), true),
+    ("in_finally", (n::Int64) -> _su_if_bar((_SuIfB(),)[n]), Int64(1)),
+    ("inferrer", (n::Int64) -> _dw_facts(_su_inf_foo(_SU_INF_A[n], 42), (try; _su_inf_bar(_SuInfB()); false; catch e; e isa MethodError; end)), Int64(1)),
+    ("mixin_legacy", (n::Int64) -> _su_mxl_method((_SuMxlSubclass(),)[n]), Int64(1)),
+    ("mixin", (n::Int64) -> _su_mx_method((_SuMxSubclass(),)[n]), Int64(1)),
+    ("no_such_method1", (n::Int64) -> _su_ns1_foo((_SuNs1B(),)[n]), Int64(1)),
+    ("no_such_method2", (n::Int64) -> _su_ns2_foo((_SuNs2B(),)[n]), Int64(1)),
     ("no_such_method3", (n::Int64) -> (_SU_NS3_RESULT[] = 0; _su_ns3_set_foo!(_SuNs3B(), n); _SU_NS3_RESULT[]), Int64(0)),
-    ("no_such_method4_runtime_legacy", (n::Int64) -> _su_ns4l_foo(_SuNs4lB()) + n, Int64(0)),
-    ("no_such_method4_runtime", (n::Int64) -> _dw_bits(_su_ns4_foo(_SuNs4Ac()) == 42, _su_ns4_foo(_SuNs4B()) == 87) + n, Int64(0)),
-    ("no_such_method5_runtime_legacy", (n::Int64) -> _su_ns5l_foo(_SuNs5lB()) + n, Int64(0)),
-    ("no_such_method5_runtime", (n::Int64) -> _dw_bits(_su_ns5_foo(_SuNs5Ac()) == 42, _su_ns5_foo(_SuNs5B()) == 42) + n, Int64(0)),
-    ("operator_index", (n::Int64) -> _dw_bits(_su_oi_bfoo(_SuOiB()) === nothing, _su_oi_dfoo(_SuOiD()) === nothing, _su_oi_efoo(_SuOiE()) === nothing) + n, Int64(0)),
-    ("operator_index2", (n::Int64) -> _su_oi2_foo(_SuOi2B()) + n, Int64(0)),
-    ("operator_index3", (n::Int64) -> _su_index_seq(_SuOi3B, _SuOi3C()) + n, Int64(0)),
-    ("operator_index4", (n::Int64) -> _su_index_seq(_SuOi4B, _SuOi4C()) + n, Int64(0)),
-    ("operator_index5", (n::Int64) -> _su_index_seq(_SuOi5A, _SuOi5B()) + n, Int64(0)),
-    ("operator_index6", (n::Int64) -> _su_index_seq(_SuOi6A, _SuOi6B()) + n, Int64(0)),
-    ("operator_index7", (n::Int64) -> _su_index_seq(_SuOi7A, _SuOi7B()) + n, Int64(0)),
-    ("operator_index8", (n::Int64) -> (_SU_OI8_GLOBAL[] = 0; _su_oi8_test(_SuOi8B()) + n), Int64(0)),
+    ("no_such_method4_runtime_legacy", (n::Int64) -> _su_ns4l_foo((_SuNs4lB(),)[n]), Int64(1)),
+    ("no_such_method4_runtime", (n::Int64) -> _dw_facts(_su_ns4_foo((_SuNs4Ac(),)[n]), _su_ns4_foo((_SuNs4B(),)[n])), Int64(1)),
+    ("no_such_method5_runtime_legacy", (n::Int64) -> _su_ns5l_foo((_SuNs5lB(),)[n]), Int64(1)),
+    ("no_such_method5_runtime", (n::Int64) -> _dw_facts(_su_ns5_foo((_SuNs5Ac(),)[n]), _su_ns5_foo((_SuNs5B(),)[n])), Int64(1)),
+    ("operator_index", (n::Int64) -> _dw_facts(_su_oi_bfoo((_SuOiB(),)[n]) === nothing, _su_oi_dfoo((_SuOiD(),)[n]) === nothing, _su_oi_efoo((_SuOiE(),)[n]) === nothing), Int64(1)),
+    ("operator_index2", (n::Int64) -> _su_oi2_foo((_SuOi2B(),)[n]), Int64(1)),
+    ("operator_index3", (n::Int64) -> _su_index_seq(_SuOi3B, (_SuOi3C(),)[n]), Int64(1)),
+    ("operator_index4", (n::Int64) -> _su_index_seq(_SuOi4B, (_SuOi4C(),)[n]), Int64(1)),
+    ("operator_index5", (n::Int64) -> _su_index_seq(_SuOi5A, (_SuOi5B(),)[n]), Int64(1)),
+    ("operator_index6", (n::Int64) -> _su_index_seq(_SuOi6A, (_SuOi6B(),)[n]), Int64(1)),
+    ("operator_index7", (n::Int64) -> _su_index_seq(_SuOi7A, (_SuOi7B(),)[n]), Int64(1)),
+    ("operator_index8", (n::Int64) -> (_SU_OI8_GLOBAL[] = 0; _su_oi8_test((_SuOi8B(),)[n])), Int64(1)),
     ("operator", (s::String) -> (a1 = _SuOpAc(); a1 = a1 + s; r1 = a1.val == "William"; r2 = a1[2] == "r";
         a2 = _SuOpB(); a2 += "Tell"; r3 = a2.val == "TellTell"; r4 = a2[2] == "rr"; a2[4] = 1;
-        _dw_bits(r1, r2, r3, r4, a2.things[5] == 43, a2[4] == 86)), "William"),
-    ("regress47698", (n::Int64) -> _dw_bits(_SuRgC(n).i == 111, _SuRgD(n).i == 111, _SuRgE(n)._j == 111, _SuRgF(n)._j == 111), Int64(1)),
-    ("setter_interceptor", (n::Int64) -> _su_si_test(_SuSiB()) + n, Int64(0)),
+        _dw_facts(r1, r2, r3, r4, a2.things[5] == 43, a2[4] == 86)), "William"),
+    ("regress47698", (n::Int64) -> _dw_facts(_SuRgC(n).i, _SuRgD(n).i, _SuRgE(n)._j, _SuRgF(n)._j), Int64(1)),
+    ("setter_interceptor", (n::Int64) -> _su_si_test((_SuSiB(),)[n]), Int64(1)),
     ("setter", (s::String) -> (b = _SuStDerived(); _su_st_set_value!(b, s); _su_st_value(b) == "Base:Derived:foo"), "foo"),
-    ("super", (n::Int64) -> (_SU_SU_I[] = 0; s = _SuSuSub(1n, 2n);
-        b1 = _dw_bits(s.x == 1, s.y == 2, s.z == 3, s.v == 1, s.w == 2, s.u == 3); s = _SuSuSub();
-        b1 * 64 + _dw_bits(s.x == 2, s.y == 3, s.v == 0, s.w == 1, s.z == 4, s.u == 5)), Int64(1)),
+    ("super", (n::Int64) -> (_SU_SU_I[] = 0; s = _SuSuSub(1n, 2n); f1 = _dw_facts(s.x, s.y, s.z, s.v, s.w, s.u); s = _SuSuSub();
+        (f1, _dw_facts(s.x, s.y, s.v, s.w, s.z, s.u))), Int64(1)),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/switch ------------------------------------------
@@ -14879,87 +13006,87 @@ end
 const _SW_EC_STRINGS = String["cat", "dog", "mouse", "lion", "duck"]
 const _SW_EC_INTS = Int64[1, 2, 3, 4, 5]
 const _SW_EC_BOOLS = Bool[true, false]
-function _sw_ec_switches(longEnum::_SwEcLong)
-    local ok = Int64(0)
+function _sw_ec_switches(longEnum::_SwEcLong)::Vector{Bool}
+    local facts = Bool[]
     for animal in instances(_SwEcAnimal)
         if animal == _sw_ec_cat
-            ok += animal == _sw_ec_cat
+            push!(facts, animal == _sw_ec_cat)
         elseif animal == _sw_ec_dog
-            ok += animal == _sw_ec_dog
+            push!(facts, animal == _sw_ec_dog)
         elseif animal == _sw_ec_mouse
-            ok += animal == _sw_ec_mouse
+            push!(facts, animal == _sw_ec_mouse)
         elseif animal == _sw_ec_lion
-            ok += animal == _sw_ec_lion
+            push!(facts, animal == _sw_ec_lion)
         elseif animal == _sw_ec_duck
-            ok += animal == _sw_ec_duck
+            push!(facts, animal == _sw_ec_duck)
         end
     end
     if longEnum == _sw_ecl_a
-        ok += _sw_ecl_a == _sw_ecl_a
+        push!(facts, _sw_ecl_a == _sw_ecl_a)
     elseif longEnum == _sw_ecl_b
-        ok += _sw_ecl_b == _sw_ecl_b
+        push!(facts, _sw_ecl_b == _sw_ecl_b)
     else
-        ok += longEnum == _sw_ecl_ad
+        push!(facts, longEnum == _sw_ecl_ad)
     end
-    for string in _SW_EC_STRINGS
-        if string == "cat"
-            ok += string == "cat"
-        elseif string == "dog"
-            ok += string == "dog"
-        elseif string == "mouse"
-            ok += string == "mouse"
-        elseif string == "lion"
-            ok += string == "lion"
-        elseif string == "duck"
-            ok += string == "duck"
+    for str in _SW_EC_STRINGS
+        if str == "cat"
+            push!(facts, str == "cat")
+        elseif str == "dog"
+            push!(facts, str == "dog")
+        elseif str == "mouse"
+            push!(facts, str == "mouse")
+        elseif str == "lion"
+            push!(facts, str == "lion")
+        elseif str == "duck"
+            push!(facts, str == "duck")
         else
-            ok -= 100
+            push!(facts, false)
         end
     end
     for i in _SW_EC_INTS
         if i == 1
-            ok += i == 1
+            push!(facts, i == 1)
         elseif i == 2
-            ok += i == 2
+            push!(facts, i == 2)
         elseif i == 3
-            ok += i == 3
+            push!(facts, i == 3)
         elseif i == 4
-            ok += i == 4
+            push!(facts, i == 4)
         elseif i == 5
-            ok += i == 5
+            push!(facts, i == 5)
         else
-            ok -= 100
+            push!(facts, false)
         end
     end
     for b in _SW_EC_BOOLS
         if b == true
-            ok += b
+            push!(facts, b)
         elseif b == false
-            ok += !b
+            push!(facts, !b)
         end
     end
-    return ok
+    return facts
 end
-# equality_side_effect: each case constant's custom == is called, in order, until one matches
-const _SW_ES_EFFECTS = String[]
+# equality_side_effect: each case constant's custom == is called, in order, until one matches; each
+# call records (receiver, argument) and the taken case records -1, -2 or -3 (dart's effects list)
+const _SW_ES_EFFECTS = Int64[]
 struct _SwEsSideEffect
     value::Int64
 end
-_sw_es_str(s::_SwEsSideEffect) = "S($(s.value))"
-Base.:(==)(a::_SwEsSideEffect, other::_SwEsSideEffect) = (push!(_SW_ES_EFFECTS, string(_sw_es_str(a), " == ", _sw_es_str(other))); a.value == other.value)
+Base.:(==)(a::_SwEsSideEffect, other::_SwEsSideEffect) = (push!(_SW_ES_EFFECTS, a.value); push!(_SW_ES_EFFECTS, other.value); a.value == other.value)
 const _SW_ES_ONE = _SwEsSideEffect(1)
 const _SW_ES_TWO = _SwEsSideEffect(2)
-function _sw_es_test(value::Int64)::String
+function _sw_es_test(value::Int64)::Vector{Int64}
     empty!(_SW_ES_EFFECTS)
     local v = _SwEsSideEffect(value)
     if _SW_ES_ONE == v
-        push!(_SW_ES_EFFECTS, "match one")
+        push!(_SW_ES_EFFECTS, Int64(-1))
     elseif _SW_ES_TWO == v
-        push!(_SW_ES_EFFECTS, "match two")
+        push!(_SW_ES_EFFECTS, Int64(-2))
     else
-        push!(_SW_ES_EFFECTS, "no match")
+        push!(_SW_ES_EFFECTS, Int64(-3))
     end
-    return join(_SW_ES_EFFECTS, ", ")
+    return copy(_SW_ES_EFFECTS)
 end
 # infinite_switch_label: cases continuing to each other until a list grows past 10, then thrown
 function _sw_isl_do(target::Int64)
@@ -15492,59 +13619,58 @@ Base.:(==)(::_SwTcFoo, other) = true
 Base.:(==)(::_SwTcBar, other) = true
 _g("dart_switch", Any[
     ("aborting_switch_case", (x::Int64) -> (exception = Int64(0); try; if x == 42; _sw_ab_foo(); _sw_ab_foo(); end; catch e; exception = e isa Int64 ? e : Int64(-1); end; exception), Int64(42)),
-    ("backward_jump", (n::Int64) -> _dw_bits(_sw_bj_test(5n) == "a", _sw_bj_test(10n) == "a through b", _sw_bj_test(7n) == "b"), Int64(1)),
-    ("bad_case_runtime", (n::Int64) -> _dw_bits(_sw_bc_caesar(4n) == "IV", _sw_bc_caesar(2n) === nothing, _sw_bc_archimedes(3.14 * n) === nothing), Int64(1)),
-    ("case_expression_with_assignment_runtime", (n::Int64) -> _dw_bits(_sw_cea_to_string(_SW_CEA_ERROR_A * n) == "ERROR_A",
+    ("backward_jump", (n::Int64) -> _dw_facts(_sw_bj_test(5n) == "a", _sw_bj_test(10n) == "a through b", _sw_bj_test(7n) == "b"), Int64(1)),
+    ("bad_case_runtime", (n::Int64) -> _dw_facts(_sw_bc_caesar(4n) == "IV", _sw_bc_caesar(2n) === nothing, _sw_bc_archimedes(3.14 * n) === nothing), Int64(1)),
+    ("case_expression_with_assignment_runtime", (n::Int64) -> _dw_facts(_sw_cea_to_string(_SW_CEA_ERROR_A * n) == "ERROR_A",
         _sw_cea_to_string(_SW_CEA_ERROR_B * n) == "ERROR_B", _sw_cea_to_string(55n) == "Unknown error"), Int64(1)),
-    ("case_fallthrough", (n::Int64) -> (s = Int64(0); for i in 0:100; s += _sw_cf_switch(i + n) * (i + 1); end; s), Int64(0)),
+    ("case_fallthrough", (n::Int64) -> (v = Int64[]; for i in 0:100; push!(v, _sw_cf_switch(i + n)); end; v), Int64(0)),
     ("case_runtime", (n::Int64) -> (c1 = _SwCrC(n); c2 = _SwCrC(n); c3 = _SwCrC(n); a = _SwCrA();
-        _dw_bits(_SW_CR_C != c1, (_SW_CR_C::_SwCrC) != c2, (_SW_CR_C2::_SwCrC) != c3, _SW_CR_A != a)), Int64(0)),
-    ("case_static_const", (s::String) -> _sw_csc_foo(s) * 1000 + _sw_csc_foo("S") * 100 + _sw_csc_foo("A.S") * 10 + _sw_csc_foo("abc"), "p"),
+        _dw_facts(_SW_CR_C != c1, (_SW_CR_C::_SwCrC) != c2, (_SW_CR_C2::_SwCrC) != c3, _SW_CR_A != a)), Int64(0)),
+    ("case_static_const", (s::String) -> _dw_facts(_sw_csc_foo(s), _sw_csc_foo("S"), _sw_csc_foo("A.S"), _sw_csc_foo("abc")), "p"),
     ("enum_compare", (n::Int64) -> _sw_ec_switches(_SwEcLong(29 + n)), Int64(0)),
-    ("equality_side_effect", (n::Int64) -> _dw_bits(_sw_es_test(1n) == "S(1) == S(1), match one", _sw_es_test(2n) == "S(1) == S(2), S(2) == S(2), match two",
-        _sw_es_test(3n) == "S(1) == S(3), S(2) == S(3), no match"), Int64(1)),
-    ("infinite_switch_label", (n::Int64) -> _dw_bits(_sw_isl_throws(0n, Int64[0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]), _sw_isl_throws(2n, Int64[2, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0])), Int64(1)),
+    ("equality_side_effect", (n::Int64) -> (v = Int64[]; for k in (1n, 2n, 3n); append!(v, _sw_es_test(k)); end; v), Int64(1)),
+    ("infinite_switch_label", (n::Int64) -> _dw_facts(_sw_isl_throws(0n, Int64[0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0]), _sw_isl_throws(2n, Int64[2, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0])), Int64(1)),
     ("issue_60375", (n::Int64) -> (c1 = _SwRtC(n); c2 = _SwRtC(""); _SW_RT_RETURN_NULL[] = false;
-        b = _dw_bits(_sw_rt_test1(c1) == "int", _sw_rt_test1(c2) == "String", _sw_rt_test2(c1) == "int", _sw_rt_test2(c2) == "String");
-        _SW_RT_RETURN_NULL[] = true; b2 = _dw_bits(_sw_rt_test2(c1) == "null", _sw_rt_test2(c2) == "null"); _SW_RT_RETURN_NULL[] = false; b * 4 + b2), Int64(1)),
-    ("label", (s::String) -> _dw_bits(_sw_lb_say1(s) == 100, _sw_lb_say1("woof") == 100, _sw_lb_say1("cockadoodledoo") == 300,
-        _sw_lb_say2(s) == 200, _sw_lb_say2("woof") == 200, _sw_lb_say2("") == 300,
-        _sw_lb_say3("cow", s) == 100, _sw_lb_say3("cow", "muh") == 200, _sw_lb_say3("cow", "boeh") == 400, _sw_lb_say3("dog", "woof") == 300,
-        _sw_lb_say3("dog", "boj") == 400, _sw_lb_say3("unicorn", "") == 400, _sw_lb_say3("angry bird", "whoooo") == 500), "moo"),
-    ("label2", (n::Int64) -> _dw_bits(_sw_l2_do(0n) == [0, 2], _sw_l2_do(1n) == [1], _sw_l2_do(2n) == [2], _sw_l2_do(3n) == [3, 1]), Int64(1)),
-    ("label3", (n::Int64) -> _dw_bits(_sw_l3_get_value(_sw_l3_sweet, _sw_l3_blue) == 1, _sw_l3_get_value(_sw_l3_bitter, _sw_l3_blue) == 1,
-        _sw_l3_get_value(_sw_l3_salty, _sw_l3_red) == 2, _sw_l3_get_value(_sw_l3_salty, _sw_l3_blue) == 4,
-        _sw_l3_get_value(_sw_l3_salty, _sw_l3_green) == 3, _sw_l3_get_value(_sw_l3_umami, _sw_l3_red) == 4) + n, Int64(0)),
-    ("nested_switch_label", (n::Int64) -> _dw_bits(_sw_ns_do(0n) == ["0", "2:0", "1", "default"], _sw_ns_do(2n) == ["2:2", "2:1", "2", "1", "default"]), Int64(1)),
-    ("non_primitive_equality", (n::Int64) -> _dw_bits(_sw_np_value_test(1n) == "one", _sw_np_value_test(2n) == "two", _sw_np_value_test(3n) == "other",
+        f1 = _dw_facts(_sw_rt_test1(c1) == "int", _sw_rt_test1(c2) == "String", _sw_rt_test2(c1) == "int", _sw_rt_test2(c2) == "String");
+        _SW_RT_RETURN_NULL[] = true; f2 = _dw_facts(_sw_rt_test2(c1) == "null", _sw_rt_test2(c2) == "null"); _SW_RT_RETURN_NULL[] = false; (f1, f2)), Int64(1)),
+    ("label", (s::String) -> _dw_facts(_sw_lb_say1(s), _sw_lb_say1("woof"), _sw_lb_say1("cockadoodledoo"),
+        _sw_lb_say2(s), _sw_lb_say2("woof"), _sw_lb_say2(""),
+        _sw_lb_say3("cow", s), _sw_lb_say3("cow", "muh"), _sw_lb_say3("cow", "boeh"), _sw_lb_say3("dog", "woof"),
+        _sw_lb_say3("dog", "boj"), _sw_lb_say3("unicorn", ""), _sw_lb_say3("angry bird", "whoooo")), "moo"),
+    ("label2", (n::Int64) -> _dw_facts(_sw_l2_do(0n) == [0, 2], _sw_l2_do(1n) == [1], _sw_l2_do(2n) == [2], _sw_l2_do(3n) == [3, 1]), Int64(1)),
+    ("label3", (n::Int64) -> _dw_facts(_sw_l3_get_value(_SwL3Taste(n), _sw_l3_blue), _sw_l3_get_value(_sw_l3_bitter, _sw_l3_blue),
+        _sw_l3_get_value(_sw_l3_salty, _sw_l3_red), _sw_l3_get_value(_sw_l3_salty, _sw_l3_blue),
+        _sw_l3_get_value(_sw_l3_salty, _sw_l3_green), _sw_l3_get_value(_sw_l3_umami, _sw_l3_red)), Int64(0)),
+    ("nested_switch_label", (n::Int64) -> _dw_facts(_sw_ns_do(0n) == ["0", "2:0", "1", "default"], _sw_ns_do(2n) == ["2:2", "2:1", "2", "1", "default"]), Int64(1)),
+    ("non_primitive_equality", (n::Int64) -> _dw_facts(_sw_np_value_test(1n) == "one", _sw_np_value_test(2n) == "two", _sw_np_value_test(3n) == "other",
         _sw_np_ets_test("ape") == "primate", _sw_np_ets_test("bat") == "chiroptera", _sw_np_ets_test("cat") == "other",
         _sw_np_double(0.0 * n) == "nothing", _sw_np_double(-0.0 * n) == "nothing", _sw_np_double(1.1 * n) == "one-ish",
         _sw_np_double(2.2 * n) == "two-ish", _sw_np_double(3.3 * n) == "other"), Int64(1)),
     ("null_int_case", (n::Int64) -> (nn = n == 1 ? nothing : n;
-        _dw_bits(_sw_ni_test1(55n) == "55", _sw_ni_test1(352n) == "352", _sw_ni_test1(nn) == "null", _sw_ni_test1(38792n) == "no match",
-                 _sw_ni_test2(0n) == "no match", _sw_ni_test2(nn) == "null", _sw_ni_test3(10n) == "null or 10", _sw_ni_test3(nn) == "null or 10",
-                 _sw_ni_test3(20n) == "20", _sw_ni_test3(28132n) == "no match", _sw_ni_test4(_SW_NI_NULL_CONSTANT) == "null", _sw_ni_test4(2189n) == "no match")), Int64(1)),
-    ("scope", (n::Int64) -> _sw_sc_test(n) * 100 + _sw_sc_test(Int64(2)) * 10 + _sw_sc_test(Int64(7)), Int64(1)),
-    ("switch_comparisons_1", (n::Int64) -> (_SW_SC1_OPTION[] = String(copy(_SW_SC_BYTES));
-        _dw_bits(_sw_sc1_with_null(), _sw_sc1_without_null(), _sw_sc1_expression(), _sw_sc1_if_case(), _sw_sc1_if_equals()) + n), Int64(0)),
-    ("switch_comparisons_2", (n::Int64) -> (s = String(copy(_SW_SC_BYTES)); i = parse(Int64, "123") + n;
-        _dw_bits(_sw_sc2_test1(s), _sw_sc2_test2(s), _sw_sc2_test3(s), _sw_sc2_test4(s), _sw_sc2_test5(i), _sw_sc2_test6(i), _sw_sc2_test7(i), _sw_sc2_test8(i))), Int64(0)),
+        _dw_facts(_sw_ni_test1(55n) == "55", _sw_ni_test1(352n) == "352", _sw_ni_test1(nn) == "null", _sw_ni_test1(38792n) == "no match",
+                  _sw_ni_test2(0n) == "no match", _sw_ni_test2(nn) == "null", _sw_ni_test3(10n) == "null or 10", _sw_ni_test3(nn) == "null or 10",
+                  _sw_ni_test3(20n) == "20", _sw_ni_test3(28132n) == "no match", _sw_ni_test4(_SW_NI_NULL_CONSTANT) == "null", _sw_ni_test4(2189n) == "no match")), Int64(1)),
+    ("scope", (n::Int64) -> _dw_facts(_sw_sc_test(n), _sw_sc_test(Int64(2)), _sw_sc_test(Int64(7))), Int64(1)),
+    ("switch_comparisons_1", (n::Int64) -> (_SW_SC1_OPTION[] = String(_SW_SC_BYTES[1:(end - n)]);
+        _dw_facts(_sw_sc1_with_null(), _sw_sc1_without_null(), _sw_sc1_expression(), _sw_sc1_if_case(), _sw_sc1_if_equals())), Int64(0)),
+    ("switch_comparisons_2", (n::Int64) -> (s = String(_SW_SC_BYTES[1:(end - n)]); i = parse(Int64, "123") + n;
+        _dw_facts(_sw_sc2_test1(s), _sw_sc2_test2(s), _sw_sc2_test3(s), _sw_sc2_test4(s), _sw_sc2_test5(i), _sw_sc2_test6(i), _sw_sc2_test7(i), _sw_sc2_test8(i))), Int64(0)),
     ("switch_dynamic", (x::Float64) -> (try; _sw_sd_test(x); catch e; e isa ErrorException ? Int64(-1) : Int64(-2); end), 3.0),
-    ("switch_legacy", (n::Int64) -> _dw_bits(_sw_sl_test(2n) == 11, _sw_sl_test(3n) == 11, _sw_sl_test(4n) == 21, _sw_sl_test(5n) == 21,
+    ("switch_legacy", (n::Int64) -> _dw_facts(_sw_sl_test(2n) == 11, _sw_sl_test(3n) == 11, _sw_sl_test(4n) == 21, _sw_sl_test(5n) == 21,
         _sw_sl_test(6n) == 31, _sw_sl_test(7n) === nothing), Int64(1)),
-    ("switch", (n::Int64) -> _dw_bits(_sw_st_test1(1n) == 100, _sw_st_test1(2n) == 200, _sw_st_test1(3n) == 200, _sw_st_test1(4n) == 400,
-        _sw_st_test1(5n) == 400, _sw_st_test2(1n) == 200, _sw_st_test2(2n) == 400,
+    ("switch", (n::Int64) -> _dw_facts(_sw_st_test1(1n), _sw_st_test1(2n), _sw_st_test1(3n), _sw_st_test1(4n),
+        _sw_st_test1(5n), _sw_st_test2(1n), _sw_st_test2(2n),
         _sw_st_enum(_SW_ST_E1) == 10, _sw_st_enum(_SW_ST_E2) == 20, _sw_st_enum(_SW_ST_E3) == 30, _sw_st_enum(nothing) == 40,
         _sw_st_bool(n == 1) == 12, _sw_st_bool(n != 1) == 22,
         _sw_st_string(nothing) === nothing, _sw_st_string("one") == 1, _sw_st_string("two") == 2, _sw_st_string("three") === nothing,
         _sw_st_const_string() == "aa"), Int64(1)),
     ("switch6", (n::Int64) -> _sw_s6_test(n), Int64(0)),
     ("switch8", (n::Int64) -> (v = Union{Nothing,_SwS8A}[nothing][n]; _SW_S8_A == v ? Int64(-1) : Int64(0)), Int64(1)),
-    ("try_catch", (x::Int64) -> (log = String[]; r = (try; _sw_tc_test(x, log); Int64(0); catch e; e isa Int64 && e == 555 ? Int64(1) : Int64(2); end);
-        r * 10 + length(log)), Int64(0)),
+    ("try_catch", (x::Int64) -> (log = String[]; thrown = (try; _sw_tc_test(x, log); false; catch e; e isa Int64 && e == 555; end);
+        _dw_facts(thrown, length(log), log == ["_0", "_5", "_6"])), Int64(0)),
     ("type_compare", (s::String) -> (c = parse(Int64, s) == 1; se1 = c ? _SwTcFoo() : _SwTcBar(); se2 = c ? Vector{Int64} : _SwTcBar();
         se4 = c ? Vector{String} : _SwTcFoo(); se5 = c ? Vector{Any} : Int64;
-        _dw_bits(!(Any == se1), Vector{Int64} == se2, !(Any == se2), Vector{String} == se4, Vector{Any} == se5)), "1"),
+        _dw_facts(!(Any == se1), Vector{Int64} == se2, !(Any == se2), Vector{String} == se4, Vector{Any} == se5)), "1"),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/const ------------------------------------------
@@ -15739,7 +13865,7 @@ const _co_diio_i1 = 3
 const _co_diio_i2 = 2
 const _co_diio_sum = 0 + (_co_diio_i1 | _co_diio_i2) + (_co_diio_i1 & _co_diio_i2) + (_co_diio_i1 ⊻ _co_diio_i2) +
     (_co_diio_i1 << _co_diio_i2) + (_co_diio_i1 >> _co_diio_i2) + (_co_diio_i1 >>> _co_diio_i2) + 0
-# dynamic_type_literal: type literals as constants, identical to themselves and distinct map keys
+# dynamic_type_literal: type literals as constants, identical to themselves and distinct from each other
 const _co_dtl_d = Any
 const _co_dtl_i = Int64
 # escape_frog: a field initialized to a constant instance of a type parameterized by its owner
@@ -15764,7 +13890,7 @@ function _co_ev_test(c::_CoEvC, z::Int64)
     local local_const = -0.0 === 0
     local local_final = -0.0 === 0
     local local_var = -0.0 === z
-    return _dw_bits((-0.0 === z) == _co_ev_top_const, _co_ev_top_const == _co_ev_top_final, _co_ev_top_final == _co_ev_top_var,
+    return _dw_facts((-0.0 === z) == _co_ev_top_const, _co_ev_top_const == _co_ev_top_final, _co_ev_top_final == _co_ev_top_var,
         _co_ev_top_var == _co_ev_static_const, _co_ev_static_const == _co_ev_static_final, _co_ev_static_final == _co_ev_static_var,
         _co_ev_static_var == c.instance_final, c.instance_final == c.instance_var, c.instance_var == local_const,
         local_const == local_final, local_final == local_var, _co_ev_top_const)
@@ -15849,7 +13975,7 @@ function _co_lo_check(mn::Int64, mx::Int64, mask::Int64)
     local cf1 = _CoLoFoo(mask)
     local cf2 = _CoLoFoo(s)
     local cf3 = _CoLoFoo("MIN = $mn  MAX = $mx  MASK = $mask")
-    return _dw_bits(mn == 1, mx == 16, mask == 65535, s === "MIN = $mn  MAX = $mx  MASK = $mask", s == "MIN = 1  MAX = 16  MASK = 65535",
+    return _dw_facts(mn == 1, mx == 16, mask == 65535, s === "MIN = $mn  MAX = $mx  MASK = $mask", s == "MIN = 1  MAX = 16  MASK = 65535",
         cf2 === cf3, !(cf2 === cf1))
 end
 # nested: the same local constants captured by a closure returned from their function
@@ -15868,7 +13994,7 @@ Base.hash(::_CoNasty, ::UInt) = throw(ErrorException("Evil hashCode"))
 const _co_nasty_map = IdDict{Union{Int64,String,_CoNasty},Union{Int64,String}}((1 => 42, "foo" => 499, 2 => "bar", _CoNasty(1) => "baz"))
 function _co_nasty_check(x::Int64)
     local m = _co_nasty_map
-    return _dw_bits(get(m, _co_gv(1.0), nothing) == 42, get(m, _co_gv(String(['f', 'o', 'o'])), nothing) == 499,
+    return _dw_facts(get(m, _co_gv(1.0), nothing) == 42, get(m, _co_gv(String(['f', 'o', 'o'])), nothing) == 499,
         get(m, _co_gv(2x), nothing) == "bar", get(m, _co_gv(_CoNasty(x)), nothing) === nothing, get(m, _co_gv(_CoNasty(1)), nothing) == "baz")
 end
 # map_hashcode_override2(_legacy), set_hashcode_override2(_legacy): keys of a mutable type (identity
@@ -15886,7 +14012,7 @@ function _co_mc_map_check(x::Int64)
     local cm = _co_mc_const_map
     local m2 = Dict{_CoMyClass,Int64}(ci => 11)
     local m3 = Dict{_CoMyClass,Int64}(nci => 11)
-    return _dw_bits(ci != nci, haskey(cm, _co_gv(ci)), haskey(cm, _co_gv(nci)), haskey(m2, _co_gv(ci)), haskey(m2, _co_gv(nci)),
+    return _dw_facts(ci != nci, haskey(cm, _co_gv(ci)), haskey(cm, _co_gv(nci)), haskey(m2, _co_gv(ci)), haskey(m2, _co_gv(nci)),
         haskey(m3, _co_gv(ci)), haskey(m3, _co_gv(nci)), get(cm, _co_gv(ci), nothing) == 11, get(cm, _co_gv(nci), nothing) === nothing,
         get(m2, _co_gv(ci), nothing) == 11, get(m2, _co_gv(nci), nothing) === nothing, get(m3, _co_gv(ci), nothing) === nothing,
         get(m3, _co_gv(nci), nothing) == 11)
@@ -15896,7 +14022,7 @@ function _co_mc_set_check(x::Int64)
     local nci = _CoMyClass(x)
     local s2 = Set{_CoMyClass}((ci,))
     local s3 = Set{_CoMyClass}((nci,))
-    return _dw_bits(ci != nci, _co_gv(ci) in _co_mc_const_set, _co_gv(nci) in _co_mc_const_set, _co_gv(ci) in s2, _co_gv(nci) in s2,
+    return _dw_facts(ci != nci, _co_gv(ci) in _co_mc_const_set, _co_gv(nci) in _co_mc_const_set, _co_gv(ci) in s2, _co_gv(nci) in s2,
         _co_gv(ci) in s3, _co_gv(nci) in s3)
 end
 # map_null_lookup: constant maps with and without a nothing key, looked up with nothing
@@ -15909,7 +14035,7 @@ const _co_mt_map = let d = Base.ImmutableDict{Union{Int64,String},Union{Int64,St
     d = Base.ImmutableDict(d, "foo" => 499)
     Base.ImmutableDict(d, 2 => "bar")
 end
-_co_mt_lookups(m) = _dw_bits(get(m, _co_gv(1.0), nothing) == 42, get(m, _co_gv(String(['f', 'o', 'o'])), nothing) == 499,
+_co_mt_lookups(m) = _dw_facts(get(m, _co_gv(1.0), nothing) == 42, get(m, _co_gv(String(['f', 'o', 'o'])), nothing) == 499,
     get(m, _co_gv(2), nothing) == "bar", get(m, 1024, nothing) === nothing)
 _co_mt_modify(m, f::Symbol) = (try; setfield!(m, f, 1024); false; catch e; e isa ErrorException; end)
 # map4: maps compared by ==, fresh ones and constants of differing key and value types
@@ -16075,85 +14201,84 @@ struct _CoVarFoo{E} end
 _g("dart_const", Any[
     ("cast1", (x::Int64) -> _co_cast1(x + 1).n, Int64(1)),
     ("cast2", (x::Int64) -> _co_cast2(x + 1).n, Int64(1)),
-    ("cast3", (x::Int64) -> (m = _co_cast3_m(_CoCast3B, _CoCast3B()); _dw_bits(m isa _CoCast3M{_CoCast3B}, m.a === _CoCast3B()) * x), Int64(1)),
-    ("cast4", (x::Int64) -> (n = _CoCast4N{_CoCast3B}(_CoCast3B()); _dw_bits(n isa _CoCast4N{_CoCast3B}, n.m isa _CoCast3M{_CoCast3B}, n.m.a === _CoCast3B()) * x), Int64(1)),
+    ("cast3", (x::Int64) -> (m = _co_cast3_m(_CoCast3B, _CoCast3B()); _dw_facts(m isa _CoCast3M{_CoCast3B}, m.a === _CoCast3B())), Int64(1)),
+    ("cast4", (x::Int64) -> (n = _CoCast4N{_CoCast3B}(_CoCast3B()); _dw_facts(n isa _CoCast4N{_CoCast3B}, n.m isa _CoCast3M{_CoCast3B}, n.m.a === _CoCast3B())), Int64(1)),
     ("conditional", (x::Int64) -> (var0 = _CoMarker(x - 1); var1 = _CoMarker(x); cond3 = x > 0 ? _co_cond_const0 : _co_cond_const1;
-        _dw_bits(var0 === _co_cond1, var1 === _co_cond2, var0 === cond3)), Int64(1)),
-    ("const", (x::Int64) -> (r = Int64(0); for _ in 1:20; o = _CoAConst(); b = _CoBConst(); t = _co_bconst_foo(b); _co_bconst_set_foo!(b, t + x);
-        y = b[5]; b[5] = y + x; r = o.b_ * 100 + t * 10 + y; end; r), Int64(1)),
-    ("const2", (x::Int64) -> Float64(sum(_co_c2_ints) * x + _dw_bits(_co_c2_bools...) + length(_co_c2_amap) + sum(_co_c2_alist) + _co_c2_h + _co_c2_i +
-        ncodeunits(_co_c2_s) + (_co_c2_b ? 1 : 0) + (_co_c2_n === nothing ? 1 : 0)) + sum(_co_c2_floats) * x + _co_c2_d, Int64(1)),
-    ("const3", (x::Int64) -> _dw_bits(_co_const3_n == 1, _co_const3_o == 4, _co_const3_p == 6) * x, Int64(1)),
+        _dw_facts(var0 === _co_cond1, var1 === _co_cond2, var0 === cond3)), Int64(1)),
+    ("const", (x::Int64) -> (r = (Int64(0), Int64(0), Int64(0)); for _ in 1:20; o = _CoAConst(); b = _CoBConst(); t = _co_bconst_foo(b); _co_bconst_set_foo!(b, t + x);
+        y = b[5]; b[5] = y + x; r = (o.b_, t, y); end; r), Int64(1)),
+    ("const2", (x::Int64) -> (map(v -> v * x, _co_c2_ints), _co_c2_floats, _co_c2_bools, _co_c2_alist,
+        _dw_facts(_co_c2_b, ncodeunits(_co_c2_s), _co_c2_i, _co_c2_d, _co_c2_h, _co_c2_n === nothing, length(_co_c2_amap))), Int64(1)),
+    ("const3", (x::Int64) -> _dw_facts(_co_const3_n == 1, _co_const3_o == 4, _co_const3_p == 6), Int64(1)),
     ("const4", (x::Int64) -> _co_const4_a * x, Int64(1)),
-    ("constant_dag", (x::Int64) -> _co_node_length_a(_co_dag_n40) * 100 + _co_node_length_b(_co_dag_n40) * x, Int64(1)),
-    ("constant_type_variable", (x::Int64) -> (a = _CoCtvA{Int64}(); _dw_bits(a.t1 === Int64, a.t2 === Vector{Int64}, a.x1, a.x2 isa Vector{Union{}}) * x), Int64(1)),
-    ("constructor_mixin", (x::Int64) -> _dw_bits(_CoMixB(x) isa _CoMixin, _CoMixB(x) === _CoMixB(42)), Int64(42)),
-    ("constructor_mixin3", (x::Int64) -> _dw_bits(_CoMix3B() isa _CoMixin, _CoMix3B() === _CoMix3B()) * x, Int64(1)),
-    ("constructor_super2", (x::Int64) -> _dw_bits(_co_cs2_foo() != _co_cs2_bar(), _co_cs2_foo().a != _co_cs2_bar().a, _co_cs2_foo().b == _co_cs2_bar().b) * x, Int64(1)),
-    ("constructor", (x::Int64) -> _co_ct_named(Int64).x * 10 * x + _CoCtA{Int64}().x, Int64(1)),
+    ("constant_dag", (x::Int64) -> _dw_facts(_co_node_length_a(_co_dag_n40), _co_node_length_b(_co_dag_n40) * x), Int64(1)),
+    ("constant_type_variable", (x::Int64) -> (a = _CoCtvA{Int64}(); _dw_facts(a.t1 === Int64, a.t2 === Vector{Int64}, a.x1, a.x2 isa Vector{Union{}})), Int64(1)),
+    ("constructor_mixin", (x::Int64) -> _dw_facts(_CoMixB(x) isa _CoMixin, _CoMixB(x) === _CoMixB(42)), Int64(42)),
+    ("constructor_mixin3", (x::Int64) -> _dw_facts(_CoMix3B() isa _CoMixin, _CoMix3B() === _CoMix3B()), Int64(1)),
+    ("constructor_super2", (x::Int64) -> _dw_facts(_co_cs2_foo() != _co_cs2_bar(), _co_cs2_foo().a != _co_cs2_bar().a, _co_cs2_foo().b == _co_cs2_bar().b), Int64(1)),
+    ("constructor", (x::Int64) -> _dw_facts(_co_ct_named(Int64).x, _CoCtA{Int64}(42x).x, _CoCtA{Int64}().x), Int64(1)),
     ("constructor2", (x::Int64) -> (a = _CoC2B{Int64}();
-        _dw_bits(_co_c2_c(a) isa _CoC2C{Int64}, _co_c2_optional(a) isa _CoC2C{Int64}, _co_c2_optional() isa _CoC2C{Any}, _co_c2_named(a = a) isa _CoC2C{Int64},
+        _dw_facts(_co_c2_c(a) isa _CoC2C{Int64}, _co_c2_optional(a) isa _CoC2C{Int64}, _co_c2_optional() isa _CoC2C{Any}, _co_c2_named(a = a) isa _CoC2C{Int64},
                  _co_c2_untyped(a) isa _CoC2C{Int64}, _CoC2C{Int64}(a).a === a, _co_c2_e_redirecting1(x) isa _CoC2F{Int64},
                  _co_c2_e_redirecting2(x) isa _CoC2G{Int64}, _co_c2_e_redirecting3(Float64(x)) isa _CoC2G{Float64}, _co_c2_e_redirecting2(x).field == x)), Int64(1)),
-    ("constructor3", (x::Float64) -> (_co_ctor3_e isa _CoCtor3Abs ? 1.0 : 0.0) + _co_ctor3_c.d + _co_ctor3_e.d + x, 1.0),
+    ("constructor3", (x::Float64) -> _dw_facts(_co_ctor3_c.d + x, _co_ctor3_e.d, _co_ctor3_e isa _CoCtor3Abs), 0.0),
     ("ct_const", (x::Int64) -> (p2 = _CoCtPoint(0, _co_ct_get_zero() * x); l1 = _CoCtLine(_co_ct_origin, _CoCtPoint(1, 1)); l2 = _CoCtLine(_CoCtPoint(0, 0), _CoCtPoint(x, 1));
         evens = (2, 2 * 2, 2 * 3, 2 * 4, 2 * 5); germany1 = (black = 1, red = 2, yellow = 3); germany2 = (black = 1, red = 2, yellow = 3);
         belgium = (black = 1, yellow = 2, red = 3); italy = (green = x, red = 3, white = 2);
-        _dw_bits(_co_ct_zero == 0, _co_ct_origin.x_ == 0, _co_ct_origin === _co_ct_origin2, _co_ct_origin === _CoCtPoint(0, 0), !(_co_ct_origin == _CoCtPoint(1, 1)),
+        _dw_facts(_co_ct_zero == 0, _co_ct_origin.x_ == 0, _co_ct_origin === _co_ct_origin2, _co_ct_origin === _CoCtPoint(0, 0), !(_co_ct_origin == _CoCtPoint(1, 1)),
                  !(_co_ct_origin === _CoCtPoint(1, 1)), _co_ct_origin == p2, _co_ct_point_x(5) === _CoCtPoint(5, 0), l1 === l2, evens === (2, 4, 6, 8, 10),
                  germany1 === (black = 1, red = 2, yellow = 3), germany1 === germany2, !(germany1 == belgium), !(germany1 === belgium),
                  italy === (green = 1, red = 3, white = 2), italy === _co_ct_viva_italia, length(italy) == 3, length(keys(italy)) == 3,
                  haskey(italy, :white), !haskey(italy, :black), _co_ct_set_green(italy), italy.green == 1, nothing == _co_ct_naught)), Int64(1)),
-    ("double_in_int_op", (x::Int64) -> _co_diio_sum + ((3x | 2x) + (3x & 2x) + (3x ⊻ 2x) + (3x << 2x) + (3x >> 2x) + (3x >>> 2x)), Int64(1)),
-    ("dynamic_type_literal", (x::Int64) -> _dw_bits(_co_dtl_d === Any, length(Dict{DataType,Int64}(_co_dtl_d => 1, _co_dtl_i => x)) == 2), Int64(2)),
-    ("escape_frog", (x::Int64) -> (_CoFrogFoo().bar == _CoFrogBar{_CoFrogFoo}() ? x : Int64(0)), Int64(1)),
+    ("double_in_int_op", (x::Int64) -> _dw_facts(_co_diio_sum, 0 + (3x | 2x) + (3x & 2x) + (3x ⊻ 2x) + (3x << 2x) + (3x >> 2x) + (3x >>> 2x) + 0), Int64(1)),
+    ("dynamic_type_literal", (x::Int64) -> (ts = (_co_dtl_d, _co_dtl_i); _dw_facts(_co_dtl_d === Any, ts[x] === Any, !(ts[x] === ts[x + 1]), ts[x + 1] === Int64)), Int64(1)),
+    ("escape_frog", (x::Int64) -> _CoFrogFoo().bar == _CoFrogBar{_CoFrogFoo}(), Int64(1)),
     ("evaluation", (x::Int64) -> _co_ev_test(_CoEvC(), x - 1), Int64(1)),
-    ("factory_member", (x::Int64) -> _dw_bits(_CoFmB(0.57721566490153286) === _CoFmA(), _CoFmB(2.1).x5 == 2.1, _co_fm_x3(_CoFmA()) == 42,
-        _co_fm_x4(_CoFmB()) == -42, _co_fm_x2(_CoFmB()) == "B.x2", isempty(_CoFmB().x1)) * x, Int64(1)),
+    ("factory_member", (x::Int64) -> _dw_facts(_CoFmB(0.57721566490153286) === _CoFmA(), _CoFmB(2.1).x5 == 2.1, _co_fm_x3(_CoFmA()) == 42,
+        _co_fm_x4(_CoFmB()) == -42, _co_fm_x2(_CoFmB()) == "B.x2", isempty(_CoFmB().x1)), Int64(1)),
     ("factory_redirection", (x::Int64) -> (c = _CoFrC(x); d = c::_CoFrD; d2 = _CoFrC(x)::_CoFrD;
-        _dw_bits(d.i == 42, _co_fr_m(d) == "called m", d2.i == 42, _co_fr_m(d2) == "called m", d === d2)), Int64(42)),
+        _dw_facts(d.i == 42, _co_fr_m(d) == "called m", d2.i == 42, _co_fr_m(d2) == "called m", d === d2)), Int64(42)),
     ("for_in_variable", (x::Int64) -> (r = Int64(0); for v in (1, 2, 3); r = v + x; break; end; r), Int64(1)),
-    ("global", (x::Int64) -> _dw_bits(_co_gl_a == 1, _CoGlA(_co_gl_a * x).a == 1, (_CoGlA(_co_gl_a),)[x].a == 1), Int64(1)),
-    ("inference", (x::Int64) -> _dw_bits(_co_inf_get_c(Int64) isa _CoInfC{Union{}}, _co_inf_get_c(String) isa _CoInfC{Union{}},
+    ("global", (x::Int64) -> _dw_facts(_co_gl_a == 1, _CoGlA(_co_gl_a * x).a == 1, (_CoGlA(_co_gl_a),)[x].a == 1), Int64(1)),
+    ("inference", (x::Int64) -> _dw_facts(_co_inf_get_c(Int64) isa _CoInfC{Union{}}, _co_inf_get_c(String) isa _CoInfC{Union{}},
         _co_inf_get_c(Int64).fn === _co_inf_const_function, _co_inf_get_list(Int64) isa Vector{Union{}}, _co_inf_get_list(Int64) isa AbstractVector{<:Int64},
         _co_inf_get_list(String) isa AbstractVector{<:String}, _co_inf_get_implicit_list(Int64) isa Vector{Union{}}, _co_inf_get_set(Int64) isa AbstractSet{<:Int64},
-        _co_inf_get_map(Int64, String) isa AbstractDict{<:Int64,<:String}, _co_inf_get_function(Int64, Int64) === _co_inf_const_function) * x, Int64(1)),
-    ("init", (x::Int64) -> _dw_bits(_co_init_n == 1, _co_init_o == 4, _co_init_p == 6, _co_init_q.x_ == 0, _co_init_q.y_ == 0, _co_init_q === _co_init_q2) * x, Int64(1)),
+        _co_inf_get_map(Int64, String) isa AbstractDict{<:Int64,<:String}, _co_inf_get_function(Int64, Int64) === _co_inf_const_function), Int64(1)),
+    ("init", (x::Int64) -> _dw_facts(_co_init_n == 1, _co_init_o == 4, _co_init_p == 6, _co_init_q.x_ == 0, _co_init_q.y_ == 0, _co_init_q === _co_init_q2), Int64(1)),
     ("init2", (x::Float64) -> _co_init2_c + x, 1.0),
     ("instantiated_function_constant", (b::Bool) -> (a = _CoIfcA{Float64}(b); a2 = _CoIfcA{Number}(!b);
-        _dw_bits(a.x1 === _co_ifc_f1, a2.x1 === _co_ifc_f2, a.x2 === _co_ifc_c01, a2.x2 === _co_ifc_f2, a.x5 === _co_ifc_f1, a.x7 === _co_ifc_f1,
+        _dw_facts(a.x1 === _co_ifc_f1, a2.x1 === _co_ifc_f2, a.x2 === _co_ifc_c01, a2.x2 === _co_ifc_f2, a.x5 === _co_ifc_f1, a.x7 === _co_ifc_f1,
                  a2.x7 === _co_ifc_f2, a.x9 === _co_ifc_f2, _co_ifc_c01 === _co_ifc_f1, _co_ifc_f1(1.0) === nothing, _co_ifc_f2(1, 2) === nothing)), true),
     ("list", (x::Int64) -> (fixed = fill(-x, 4); fixed2 = fill(-x, 4); gl = Int64[]; gl2 = Int64[];
         for i in 0:3; fixed[i + 1] = i; fixed2[i + 1] = i; push!(gl, i); push!(gl2, i); end;
         b1 = (gl == gl, gl != gl2, fixed == fixed, fixed != fixed2, fixed != gl);
         push!(gl, 4); b2 = fixed != gl; b3 = pop!(gl) == 4; b4 = fixed != gl; fixed[4] = 0; b5 = fixed != gl;
         a = [1, 2, 3.1]; b = [1, 2, 3.1];
-        _dw_bits(b1..., b2, b3, b4, b5, a != b, (1, 2, 3.1) === (x, 2, 3.1), Union{Int64,Float64}[1, 2, 3.1] != [1, 2, 3.1])), Int64(1)),
-    ("local", (x::Int64) -> (a = 1; _dw_bits(a == 1, _CoGlA(a * x).a == 1, (_CoGlA(a),)[x].a == 1)), Int64(1)),
+        _dw_facts(b1..., b2, b3, b4, b5, a != b, (1, 2, 3.1) === (x, 2, 3.1), Union{Int64,Float64}[1, 2, 3.1] != [1, 2, 3.1])), Int64(1)),
+    ("local", (x::Int64) -> (a = 1; _dw_facts(a == 1, _CoGlA(a * x).a == 1, (_CoGlA(a),)[x].a == 1)), Int64(1)),
     ("locals", (x::Int64) -> (mn = 2 - x; mx = _co_lo_n * 2; mask = (1 << (mx - mn + 1)) - 1; _co_lo_check(mn, mx, mask)), Int64(1)),
     ("map_hashcode_override_legacy", (x::Int64) -> _co_nasty_check(x), Int64(1)),
     ("map_hashcode_override", (x::Int64) -> _co_nasty_check(x), Int64(1)),
     ("map_hashcode_override2_legacy", (x::Int64) -> _co_mc_map_check(x), Int64(1)),
     ("map_hashcode_override2", (x::Int64) -> _co_mc_map_check(x), Int64(1)),
-    ("map_null_lookup", (x::Int64) -> _dw_bits(get(_co_mnl_map1, _co_gv(nothing), nothing) == 2, haskey(_co_mnl_map1, nothing),
-        get(_co_mnl_map2, _co_gv(nothing), nothing) === nothing, !haskey(_co_mnl_map2, nothing)) * x, Int64(1)),
-    ("map", (x::Int64) -> (before = _co_mt_lookups(_co_mt_map) * x; mods = _dw_bits(_co_mt_modify(_co_mt_map, :value), _co_mt_modify(_co_mt_map, :key));
-        after = _co_mt_lookups(_co_mt_map); (before * 4 + mods) * 16 + after), Int64(1)),
+    ("map_null_lookup", (x::Int64) -> _dw_facts(get(_co_mnl_map1, _co_gv(nothing), nothing) == 2, haskey(_co_mnl_map1, nothing),
+        get(_co_mnl_map2, _co_gv(nothing), nothing) === nothing, !haskey(_co_mnl_map2, nothing)), Int64(1)),
+    ("map", (x::Int64) -> (before = _co_mt_lookups(_co_mt_map); mods = _dw_facts(_co_mt_modify(_co_mt_map, :value), _co_mt_modify(_co_mt_map, :key));
+        after = _co_mt_lookups(_co_mt_map); (before, mods, after, get(_co_mt_map, _co_gv(x), nothing) == 42)), Int64(1)),
     ("map4", (x::Int64) -> (a = Dict(x => "a", 2 => "b", 3 => "c"); b = Dict(1 => "a", 2 => "b", 3 => "c");
-        _dw_bits(a == b, _co_map4_ca == _co_map4_cb, _co_map4_ctyped == _co_map4_cb, _co_map4_cnum == _co_map4_cb, _co_map4_cdyn == _co_map4_cb,
+        _dw_facts(a == b, _co_map4_ca == _co_map4_cb, _co_map4_ctyped == _co_map4_cb, _co_map4_cnum == _co_map4_cb, _co_map4_cdyn == _co_map4_cb,
                  _co_map4_ca === _co_map4_cb)), Int64(1)),
-    ("map5", (x::Int64) -> (m = _co_m5_map; _dw_bits(m[_co_gv_t(_CoM5A)] == 42, m[_co_gv_t(_co_m5_a_type)] == 42, m[_co_gv_t(_CoM5F)] == 2, m[_co_gv_t(_co_m5_f_type)] == 2,
+    ("map5", (x::Int64) -> (m = _co_m5_map; _dw_facts(m[_co_gv_t(_CoM5A)] == 42, m[_co_gv_t(_co_m5_a_type)] == 42, m[_co_gv_t(_CoM5F)] == 2, m[_co_gv_t(_co_m5_f_type)] == 2,
         m[_co_gv_t(_CoM5Cint)] == "foo", m[_co_gv_t(_co_m5_cint_type)] == "foo", haskey(m, _co_gv_t(_CoM5A)), haskey(m, _co_gv_t(_co_m5_a_type)), haskey(m, _co_gv_t(_CoM5F)),
-        haskey(m, _co_gv_t(_co_m5_f_type)), haskey(m, _co_gv_t(_CoM5Cint)), haskey(m, _co_gv_t(_co_m5_cint_type)), haskey(m, _co_gv_t(_CoM5C{Float64}))) * x), Int64(1)),
+        haskey(m, _co_gv_t(_co_m5_f_type)), haskey(m, _co_gv_t(_CoM5Cint)), haskey(m, _co_gv_t(_co_m5_cint_type)), haskey(m, _co_gv_t(_CoM5C{Float64})))), Int64(1)),
     ("named", (x::Int64) -> _co_in_milliseconds(_CoDuration(milliseconds = 499 + x)), Int64(0)),
     ("nested", (x::Int64) -> _co_nested_closure(x)(), Int64(1)),
     ("objects_are_immutable", (x::Int64) -> (list = (x, 2); m = (foo = 499,); a1 = _CoOaiA(x, 2); a2 = _CoOaiA(1, 2);
-        _dw_bits(_co_oai_set_list(list), list[1] == 1, _co_oai_set_map(m), m.foo == 499, _co_oai_set_a(a1), a1.x == 1, _co_oai_set_a(a2), a2.x == 1, a1 === a2)), Int64(1)),
-    ("primitive_equality", (x::Int64) -> length(_co_pe_set) * x + (_co_pe_one in _co_pe_set ? 100 : 0) + (0 in _co_pe_set ? 1000 : 0) +
-        (Symbol(" ") in _co_pe_set ? 10000 : 0), Int64(1)),
+        _dw_facts(_co_oai_set_list(list), list[1] == 1, _co_oai_set_map(m), m.foo == 499, _co_oai_set_a(a1), a1.x == 1, _co_oai_set_a(a2), a2.x == 1, a1 === a2)), Int64(1)),
+    ("primitive_equality", (x::Int64) -> _dw_facts(length(_co_pe_set), _co_pe_one in _co_pe_set, (x - 1) in _co_pe_set, Symbol(" ") in _co_pe_set, nothing in _co_pe_set), Int64(1)),
     ("qq", (x::Int64) -> (nn = _co_qq_not_null; c1 = _co_qq_c(nothing); c2 = _co_qq_c(42x); l1 = _co_qq_method_local(c1); e1 = _co_qq_expression_local(c1);
         l2 = _co_qq_method_local(c2); e2 = _co_qq_expression_local(c2);
-        _dw_bits(nn === _co_qq_test1, nn === _co_qq_test2, nn === _co_qq_test3, nothing === _co_qq_test4,
+        _dw_facts(nn === _co_qq_test1, nn === _co_qq_test2, nn === _co_qq_test3, nothing === _co_qq_test4,
                  nn === _co_qq_static[1], nn === _co_qq_static[2], nn === _co_qq_static[3], nothing === _co_qq_static[4],
                  nn === c1.test9, nn === c1.test10, nn === c1.test11, nothing === c1.test12, nothing === c1.test13, nn === c1.test14, nn === c1.test15,
                  nothing === c1.test16, nn === c1.test17,
@@ -16161,29 +14286,29 @@ _g("dart_const", Any[
                  nn === c2.test9, nn === c2.test10, nn === c2.test11, nothing === c2.test12, 42 === c2.test13, nn === c2.test14, 42 === c2.test15,
                  42 === c2.test16, 42 === c2.test17,
                  nn === l2[1], nn === l2[2], nn === l2[3], nothing === l2[4], nn === e2[1], nn === e2[2], nn === e2[3], nothing === e2[4])), Int64(1)),
-    ("redirect_skips_supertype", (x::Int64) -> (_co_rss_y.x === nothing ? x : Int64(0)) + (_co_rss_y === _CoRssC() ? 10 : 0), Int64(1)),
-    ("redirecting_factory", (x::Int64) -> _dw_bits(_co_rf_is(_co_rf_l1, 42, true), _co_rf_is(_co_rf_l2a, 42, true), _co_rf_is(_co_rf_l2b, 87, true),
+    ("redirect_skips_supertype", (x::Int64) -> _dw_facts(_co_rss_y.x === nothing, _co_rss_y === _CoRssC()), Int64(1)),
+    ("redirecting_factory", (x::Int64) -> _dw_facts(_co_rf_is(_co_rf_l1, 42, true), _co_rf_is(_co_rf_l2a, 42, true), _co_rf_is(_co_rf_l2b, 87, true),
         _co_rf_is(_co_rf_l2c, 42, false), _co_rf_is(_co_rf_l2d, 87, false), _co_rf_is(_co_rf_l2e, 87, false), _co_rf_is(_co_rf_l3a, 42, true),
         _co_rf_is(_co_rf_l3b, 87, true), _co_rf_is(_co_rf_l3c, 42, false), _co_rf_is(_co_rf_l3d, 87, false), _co_rf_is(_co_rf_l3e, 87, false),
         _co_rf_is(_co_rf_l_named2(field1 = 87x), 87, true)), Int64(1)),
     ("set_hashcode_override2_legacy", (x::Int64) -> _co_mc_set_check(x), Int64(1)),
     ("set_hashcode_override2", (x::Int64) -> _co_mc_set_check(x), Int64(1)),
     ("set_null_lookup", (x::Int64) -> (s1 = Set{Union{Nothing,Int64,String}}((nothing, x, "asdf")); s2 = Set{Union{Nothing,Int64,String}}((42, x, "asdf"));
-        _dw_bits(_co_gv(nothing) in s1, _co_gv(nothing) in s2)), Int64(1)),
-    ("set5", (x::Int64) -> (s = _co_s5_set; _dw_bits(_co_gv_t(_CoM5A) in s, _co_gv_t(_co_m5_a_type) in s, _co_gv_t(_CoM5F) in s, _co_gv_t(_co_m5_f_type) in s,
+        _dw_facts(_co_gv(nothing) in s1, _co_gv(nothing) in s2)), Int64(1)),
+    ("set5", (x::Int64) -> (s = _co_s5_set; _dw_facts(_co_gv_t(_CoM5A) in s, _co_gv_t(_co_m5_a_type) in s, _co_gv_t(_CoM5F) in s, _co_gv_t(_co_m5_f_type) in s,
         _co_gv_t(_CoM5Cint) in s, _co_gv_t(_co_m5_cint_type) in s, _co_gv(x) in s, _co_gv_t(_CoM5C{Float64}) in s)), Int64(1)),
-    ("string", (s::String) -> (yz = _co_str_yz; _dw_bits("abcd" === "abcd", "ab\"cd" === "ab\"cd", "ab'cd" === "ab'cd", "abcd" === "ab" * "cd",
+    ("string", (s::String) -> (yz = _co_str_yz; _dw_facts("abcd" === "abcd", "ab\"cd" === "ab\"cd", "ab'cd" === "ab'cd", "abcd" === "ab" * "cd",
         "abcd" === s * "b" * "cd", "abcd" === s * "b" * "c" * "d", "a'b'cd" === s * "'b'" * "c" * "d", "a\"b\"cd" === s * "\"b\"" * "c" * "d",
         "ab" === s * "b", "xyz" === "x" * yz, "12" === "1" * "2", "zyz" === "z$yz")), "a"),
-    ("switch", (x::Int64) -> (l = (_co_sw_c1, _co_sw_c2, _co_sw_c3, _co_sw_c4); s = Int64(0); for i in x:4; s = 10s + _co_sw_test(l[i]); end; s), Int64(1)),
-    ("syntax", (x::Int64) -> (f0 = 42x; f2 = 87x; _dw_bits(f0 == 42, f2 == 87, _co_sy_f0 == 42, _co_sy_f2 == 87, _co_sy_p0 isa _CoSyPoint, _co_sy_a0 isa Int64,
+    ("switch", (x::Int64) -> (l = (_co_sw_c1, _co_sw_c2, _co_sw_c3, _co_sw_c4); s = Int64[]; for i in x:4; push!(s, _co_sw_test(l[i])); end; s), Int64(1)),
+    ("syntax", (x::Int64) -> (f0 = 42x; f2 = 87x; _dw_facts(f0 == 42, f2 == 87, _co_sy_f0 == 42, _co_sy_f2 == 87, _co_sy_p0 isa _CoSyPoint, _co_sy_a0 isa Int64,
         _co_sy_a1 isa Int64, _co_sy_b2 == "Hello 42", _CoSyPoint(1, 2) === _CoSyPoint(x, 2), !_co_sy_b5)), Int64(1)),
-    ("tree", (x::Int64) -> length(_co_tree_b.children) * 10 + length(_co_tree_b.children[x].children) + (_co_tree_a.children === _co_tree_empty ? 100 : 0), Int64(1)),
-    ("types", (x::Int64) -> _dw_bits(_CoTyClass{Any}() isa _CoTySupertype, isempty(()), isempty(_CoTyClass[]), isempty(_CoTyClass{Int64}[]),
+    ("tree", (x::Int64) -> _dw_facts(length(_co_tree_b.children), length(_co_tree_b.children[x].children), _co_tree_a.children === _co_tree_empty), Int64(1)),
+    ("types", (x::Int64) -> _dw_facts(_CoTyClass{Any}() isa _CoTySupertype, isempty(()), isempty(_CoTyClass[]), isempty(_CoTyClass{Int64}[]),
         isempty(Dict{String,_CoTyClass}()), isempty(Dict{String,_CoTyClass{Int64}}()), _CoTyClass{Int64}() === _CoTyClass{Int64}(),
-        _co_ty_class_named(Int64) === _CoTyClass{Int64}(), _CoTySupertype() isa _CoTyClass{Any}, _co_ty_generic_supertype(Int64) isa _CoTyClass{Int64}) * x, Int64(1)),
+        _co_ty_class_named(Int64) === _CoTyClass{Int64}(), _CoTySupertype() isa _CoTyClass{Any}, _co_ty_generic_supertype(Int64) isa _CoTyClass{Int64}), Int64(1)),
     ("var", (x::Int64) -> (untyped_local = 3x; typed_local::Int64 = 4x; generic_local = Dict{String,String}();
-        _dw_bits(_co_var_untyped_top == 1, _co_var_typed_top == 2, isempty(_co_var_generic_top), untyped_local == 3, typed_local == 4, isempty(generic_local),
+        _dw_facts(_co_var_untyped_top == 1, _co_var_typed_top == 2, isempty(_co_var_generic_top), untyped_local == 3, typed_local == 4, isempty(generic_local),
                  isempty(()), isempty(Int64[]), isempty(Dict{String,Int64}()), _CoVarFoo{Any}() === _CoVarFoo{Any}(), _CoVarFoo{Int64}() isa _CoVarFoo,
                  _CoVarHelper._CoVarHelperFoo{Int64}() isa _CoVarHelper._CoVarHelperFoo, !(_CoVarFoo{Int64}() isa _CoVarHelper._CoVarHelperFoo))), Int64(1)),
 ])
@@ -16248,7 +14373,7 @@ function _cl_break(n::Int64)
         break
     end
     ok &= foo()
-    return _dw_bits(ok, o1.field == 4)
+    return _dw_facts(ok, o1.field == 4)
 end
 function _cl_break1(n::Int64)
     o1 = _ClBrk(n)
@@ -16276,7 +14401,7 @@ function _cl_break1(n::Int64)
         ok &= foo1()
     end
     ok &= foo()
-    return _dw_bits(ok, o1.field == 4, calls == 0)
+    return _dw_facts(ok, o1.field == 4, calls == 0)
 end
 function _cl_break2(n::Int64)
     o1 = _ClBrk(n)
@@ -16297,7 +14422,7 @@ function _cl_break2(n::Int64)
         brk && break
     end
     ok &= foo()
-    return _dw_bits(ok, o1.field == 4)
+    return _dw_facts(ok, o1.field == 4)
 end
 # call_wrong_argument_count: a two-argument closure called with three
 _cl_cwac_melke(f) = f(1, 2, 3)
@@ -16360,7 +14485,7 @@ function _cl_c7(n::Int64)
     totoA = _ClC7Tear(_cl_c7_toto, a); totoB = _ClC7Tear(_cl_c7_toto, b)
     fiskA = _ClC7Tear(_cl_c7_fisk, a); fiskB = _ClC7Tear(_cl_c7_fisk, b)
     titiA = _ClC7Tear(_cl_c7_titi, a); titiB = _ClC7Tear(_cl_c7_titi, b)
-    return _dw_bits(_ClBound(_cl_c7_foo, a)() == 499, _ClBound(_cl_c7_foo, b)() == 4990, _ClBound(_cl_c7_fooo, a)() == 4999,
+    return _dw_facts(_ClBound(_cl_c7_foo, a)() == 499, _ClBound(_cl_c7_foo, b)() == 4990, _ClBound(_cl_c7_fooo, a)() == 4999,
                     _ClBound(_cl_c7_fooo, b)() == 49990, barA(n) == "1 33 8 10", barB(n) == "1B 33 8 10", geeA(n) == "2 33 9 11",
                     geeB(n) == "2B 33 9 11", totoA(n) == "3 33 8 10", totoB(n) == "3B 33 8 10", barA(35, z = 77) == "1 35 8 77",
                     geeB(35, z = 77) == "2B 35 9 77", totoA(35, z = 77) == "3 35 8 77", fiskA(311, zz = 987) == "4 311 8 987",
@@ -16368,10 +14493,14 @@ function _cl_c7(n::Int64)
                     fiskA(311, y = 765, zz = 987) == "4 311 765 987", titiB(311, y = 765, zz = 987) == "5B 311 765 987")
 end
 # closure8: a generic class's tear-off passed as another generic class's callback
-struct _ClC8C{E} end
-struct _ClC8D{E} end
-_cl_c8_for_each(::_ClC8C{E}, callback) where {E} = nothing
-_cl_c8_lala(::_ClC8D{E}, element::E) where {E} = nothing
+struct _ClC8C{E}
+    items::Vector{E}
+end
+struct _ClC8D{E}
+    seen::Vector{E}
+end
+_cl_c8_for_each(c::_ClC8C{E}, callback) where {E} = (for e in c.items; callback(e); end; nothing)
+_cl_c8_lala(d::_ClC8D{E}, element::E) where {E} = (push!(d.seen, element); nothing)
 # closures_initializer: a constructor storing closures that build a T[] and return T
 struct _ClCiA{T,F}
     t::F
@@ -16402,7 +14531,7 @@ function _cl_cwcp(n::Int64)
     f2 = (pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> pr.snd.fst + 2
     ap1 = (f, pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> f(pr) * 10
     ap2 = (f, pr::_ClPair{Int64,_ClPair{Int64,Int64}}) -> f(pr) * 100
-    return _dw_bits(cdar1(e) == 200, cdar2(e) == 200, ocdar1(e) == 200, ocdar2(e) == 200, ocdar1() == -2,
+    return _dw_facts(cdar1(e) == 200, cdar2(e) == 200, ocdar1(e) == 200, ocdar2(e) == 200, ocdar1() == -2,
                     ap1(f1, e) == 2010, ap1(f2, e) == 2020, ap2(f1, e) == 20100, ap2(f2, e) == 20200)
 end
 # dynamic_closure_param: a tear-off of a method with optional positionals called with one argument
@@ -16411,8 +14540,8 @@ abstract type _ClDcpBase{T} end
 abstract type _ClDcpAbsA <: _ClDcpBase{_ClDcpArg} end
 struct _ClDcpA <: _ClDcpAbsA end
 struct _ClDcpB <: _ClDcpAbsA end
-_cl_dcp_foo(::_ClDcpA, a::_ClDcpArg, b::Union{Nothing,String} = nothing) = b === nothing ? Int64(1) : Int64(2)
-_cl_dcp_foo(::_ClDcpB, a::_ClDcpArg, b::Union{Nothing,String} = nothing, c::Int64 = Int64(0)) = (b === nothing ? Int64(10) : Int64(20)) + c
+_cl_dcp_foo(::_ClDcpA, a::_ClDcpArg, b::Union{Nothing,String} = nothing) = b === nothing
+_cl_dcp_foo(::_ClDcpB, a::_ClDcpArg, b::Union{Nothing,String} = nothing, c::Int64 = Int64(0)) = (b === nothing, c)
 _cl_dcp_check(closure) = closure(_ClDcpArg())
 # dynamic: a closure with typed positionals and keywords called with keyword permutations, subtypes,
 # missing or unknown arguments and wrongly typed ones
@@ -16428,16 +14557,16 @@ struct _ClDynB
 end
 _cl_dyn_try(g) = try; g(); Int64(0); catch e; e isa MethodError ? Int64(1) : e isa TypeError ? Int64(2) : Int64(3); end
 _cl_dyn_f(a1::String, a2::Int64, a3::_ClDynAbsA; n1::String = "default_named", n2::Int64 = -1, n3::_ClDynAbsA = _ClDynA(-1)) =
-    ncodeunits(a1) + a2 + a3.nonce + ncodeunits(n1) + n2 + n3.nonce
+    (ncodeunits(a1), a2, a3.nonce, ncodeunits(n1), n2, n3.nonce)
 function _cl_dyn(n::Int64)
     f = _cl_dyn_f
-    s = f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)) +
-        f("test_fixed", n, _ClDynA(1), n1 = "test_named", n3 = _ClDynA(2), n2 = 2) +
-        f("test_fixed", n, _ClDynA(1), n2 = 2, n1 = "test_named", n3 = _ClDynA(2)) +
-        f("test_fixed", n, _ClDynA(1), n3 = _ClDynA(2), n2 = 2, n1 = "test_named") +
-        f("test_fixed", n, _ClDynC(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)) +
-        f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynC(2)) +
-        f("test_fixed", n, _ClDynA(1))
+    calls = (f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)),
+             f("test_fixed", n, _ClDynA(1), n1 = "test_named", n3 = _ClDynA(2), n2 = 2),
+             f("test_fixed", n, _ClDynA(1), n2 = 2, n1 = "test_named", n3 = _ClDynA(2)),
+             f("test_fixed", n, _ClDynA(1), n3 = _ClDynA(2), n2 = 2, n1 = "test_named"),
+             f("test_fixed", n, _ClDynC(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2)),
+             f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynC(2)),
+             f("test_fixed", n, _ClDynA(1)))
     codes = (_cl_dyn_try(() -> f()),
              _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n4 = 4)),
              _cl_dyn_try(() -> f(100, n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynA(2))),
@@ -16446,11 +14575,7 @@ function _cl_dyn(n::Int64)
              _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = 100, n2 = 2, n3 = _ClDynA(2))),
              _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2.2, n3 = _ClDynA(2))),
              _cl_dyn_try(() -> f("test_fixed", n, _ClDynA(1), n1 = "test_named", n2 = 2, n3 = _ClDynB(2))))
-    k = s
-    for c in codes
-        k = 4k + c
-    end
-    return k
+    return (calls, codes)
 end
 # forwarding_stub_tearoff: one method torn off through a class and two supertypes; a wrong argument
 # type is rejected when the tear-off is called
@@ -16464,7 +14589,7 @@ _cl_fs_f(::_ClFsC, x::_ClFsB) = Int64(1)
 function _cl_fs_check(tearoff)
     ok = tearoff(_ClFsB()) == 1
     threw = try; tearoff(_ClFsAA()); false; catch e; e isa MethodError; end
-    return _dw_bits(applicable(tearoff, _ClFsAA()), ok, threw)
+    return _dw_facts(applicable(tearoff, _ClFsAA()), ok, threw)
 end
 # forwarding_stub_tearoff_generic: the same through a parametric interface I{T} with T = B
 abstract type _ClFsgA end
@@ -16478,7 +14603,7 @@ _cl_fsg_f(::_ClFsgC, x::_ClFsgB) = Int64(1)
 function _cl_fsg_check(tearoff)
     ok = tearoff(_ClFsgB()) == 1
     threw = try; tearoff(_ClFsgAA()); false; catch e; e isa MethodError; end
-    return _dw_bits(applicable(tearoff, _ClFsgAA()), ok, threw)
+    return _dw_facts(applicable(tearoff, _ClFsgAA()), ok, threw)
 end
 # identity_equality_tearoff, identity_equality_nosuchmethod_tearoff, identity_equality_tostring_tearoff:
 # A, A-with-M, AM, AM-with-M, AMM as a supertype chain; M's method calls its super's (invoke)
@@ -16530,7 +14655,7 @@ function _cl_ie(n::Int64)
     s1 = _ClSuper{_ClIeAwM}(_cl_ie_super, amm)
     s2 = _ClSuper{_ClIeAMwM}(_cl_ie_super, amm)
     ns = _ClBound(_cl_ie_super, amm)
-    return _dw_bits(_cl_ie_top === _cl_ie_top, _cl_ie_static === _cl_ie_static, vInst == _ClBound(_cl_ie_instance, a),
+    return _dw_facts(_cl_ie_top === _cl_ie_top, _cl_ie_static === _cl_ie_static, vInst == _ClBound(_cl_ie_instance, a),
                     _cl_ie_gen_top === _CL_IE_CGEN_TOP, _cl_ie_top === vTop && _CL_IE_CTOP === vTop, _cl_ie_static === _CL_IE_CSTATIC,
                     _cl_ie_top != _cl_ie_gen_top && _cl_ie_top !== _cl_ie_gen_top, vTop != vStatic, vTop != vInst, vInst != vGenInst,
                     vInst != _ClBound(_cl_ie_instance, a2), _CL_IE_CINT_TOP1 === _CL_IE_CINT_TOP2, _CL_IE_CINT_STATIC1 === _CL_IE_CINT_STATIC2,
@@ -16552,7 +14677,7 @@ function _cl_iens(n::Int64)
     s1 = _ClSuper{_ClIeAwM}(_cl_iens_nsm, amm); s1b = _ClSuper{_ClIeAwM}(_cl_iens_nsm, amm)
     s2 = _ClSuper{_ClIeAMwM}(_cl_iens_nsm, amm); s2b = _ClSuper{_ClIeAMwM}(_cl_iens_nsm, amm)
     ns = _ClBound(_cl_iens_nsm, amm); nsb = _ClBound(_cl_iens_nsm, amm)
-    return _dw_bits(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
+    return _dw_facts(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
                     s1 != ns && ns != s1 && s1 !== ns, s2 != ns, s1(i) == "A M on A", s2(i) == "A M on A M on A", ns(i) == "A M on A M on A")
 end
 _cl_iets_str(::_ClIeA) = "A"
@@ -16563,7 +14688,7 @@ function _cl_iets(n::Int64)
     s1 = _ClSuper{_ClIeAwM}(_cl_iets_str, amm); s1b = _ClSuper{_ClIeAwM}(_cl_iets_str, amm)
     s2 = _ClSuper{_ClIeAMwM}(_cl_iets_str, amm); s2b = _ClSuper{_ClIeAMwM}(_cl_iets_str, amm)
     ns = _ClBound(_cl_iets_str, amm); nsb = _ClBound(_cl_iets_str, amm)
-    return _dw_bits(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
+    return _dw_facts(s1 == s1b && s1b == s1, s2 == s2b && s2b == s2, s1 != s2 && s2 != s1 && s1 !== s2, ns == nsb && nsb == ns,
                     s1 != ns && ns != s1 && s1 !== ns, s2 != ns, s1() == "A M on A", s2() == "A M on A M on A", ns() == "A M on A M on A")
 end
 # implicit_closure: a closure stored in an untyped field, a method returning a local closure, a tear-off
@@ -16634,7 +14759,7 @@ function _cl_ice(n::Int64)
     agree = (f[1] == f[2]) == (_ClBound(f[1], Int64) == _ClBound(f[2], Int64))
     f[1](Int64)
     _ClBound(f[2], Int64)()
-    return _dw_bits(agree, x == 2)
+    return _dw_facts(agree, x == 2)
 end
 # invoked_through_interface_target_field: a field holding a bound generic method, called as the
 # interface's method, rejects a String and accepts an Int64
@@ -16647,9 +14772,11 @@ end
 _cl_itf_bar(d::_ClItfD{Int64}) = _ClBound(_cl_itf_m, d)
 _cl_itf_foo(a::_ClItfC, x) = a.foo(x)
 function _cl_itf_baz(a::_ClItfA, n::Int64)
-    threw = try; _cl_itf_foo(a, "hi"); false; catch e; e isa MethodError; end
-    _cl_itf_foo(a, n)
-    return threw
+    bad::Union{String,Int64} = n == 1 ? "hi" : n
+    good::Union{String,Int64} = n == 1 ? n : "hi"
+    threw = try; _cl_itf_foo(a, bad); false; catch e; e isa MethodError; end
+    ok = try; _cl_itf_foo(a, good); true; catch e; false; end
+    return (threw, ok)
 end
 # invoked_through_interface_target_getter: the same through a getter returning the bound method
 abstract type _ClItgA end
@@ -16660,9 +14787,11 @@ _cl_itg_bar(d::_ClItgD{Int64}) = _ClBound(_cl_itg_m, d)
 _cl_itg_foo_getter(::_ClItgC) = _cl_itg_bar(_ClItgD{Int64}())
 _cl_itg_foo(a::_ClItgC, x) = _cl_itg_foo_getter(a)(x)
 function _cl_itg_baz(a::_ClItgA, n::Int64)
-    threw = try; _cl_itg_foo(a, "hi"); false; catch e; e isa MethodError; end
-    _cl_itg_foo(a, n)
-    return threw
+    bad::Union{String,Int64} = n == 1 ? "hi" : n
+    good::Union{String,Int64} = n == 1 ? n : "hi"
+    threw = try; _cl_itg_foo(a, bad); false; catch e; e isa MethodError; end
+    ok = try; _cl_itg_foo(a, good); true; catch e; false; end
+    return (threw, ok)
 end
 # minify_closure_variable_collision: a closure over 14 locals compared with a class whose == is always true
 struct _ClMcvA end
@@ -16671,7 +14800,9 @@ function _cl_mcv_foo(x::Int64)
     a = x; b = x; c = x; d = x; e = x; f = x; g = x; h = x; i = x; j = x; k = x; l = x; m = x; n = x
     return () -> a + b + c + d + e + f + g + h + i + j + k + l + m + n
 end
-# param_null_to_object: closures with an untyped, a String and a Nothing parameter asked what they accept
+# param_null_to_object: closures with an untyped, a String and a Nothing parameter asked what they accept,
+# the probe's type chosen at run time (each arm narrows it, so applicable stays static)
+_cl_pnto_app(f, v::Union{Nothing,String,Int64}) = v isa Nothing ? applicable(f, v) : v isa String ? applicable(f, v) : applicable(f, v::Int64)
 # parameter_default_type_inference: local functions whose optional and keyword defaults are constant lists
 const _CL_PDTI_NUM = Real[]
 const _CL_PDTI_INT = Int64[]
@@ -16682,7 +14813,7 @@ function _cl_pdti(n::Int64)
     named_explicit(; x::Vector{Real} = _CL_PDTI_NUM) = x isa Vector{Real} && x === _CL_PDTI_NUM
     named_from_required(; x::Vector{Int64} = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
     named_from_optional(; x = _CL_PDTI_INT) = x isa Vector{Int64} && x === _CL_PDTI_INT
-    return _dw_bits(pos_explicit(), pos_from_required(), pos_from_optional(), named_explicit(), named_from_required(),
+    return _dw_facts(pos_explicit(), pos_from_required(), pos_from_optional(), named_explicit(), named_from_required(),
                     named_from_optional(), !pos_from_required(Int64[n]))
 end
 # parameter_types: a closure counting its calls, called with a String and then through a field with an Int64
@@ -16696,7 +14827,7 @@ function _cl_pt(n::Int64)
     closure = a -> (c = invokeCount; invokeCount = c + 1; c == 1 && (ok = ok & (a isa Int64)); nothing)
     closure("s")
     _cl_pt_do(_ClPtA(closure))
-    return _dw_bits(ok, invokeCount == 2)
+    return _dw_facts(ok, invokeCount == 2)
 end
 # parse_closures_in_initializers: closures stored by constructors directly, in a list, in a Dict and as an argument
 struct _ClPciA{X}
@@ -16741,7 +14872,7 @@ function _cl_pti(n::Int64)
     y.f(String, "hello6"); r7 = _CL_PTI_LATEST[] == "hello6"
     y.f(Int64, 43n); r8 = _CL_PTI_LATEST[] == 43
     e4 = try; y.f(Int64, _cl_pti_foo()); false; catch e; e isa MethodError; end
-    return _dw_bits(r1, r2, r3, r4, e2, r5, r6, r7, r8, e4)
+    return _dw_facts(r1, r2, r3, r4, e2, r5, r6, r7, r8, e4)
 end
 # regress46568: two constant instantiations of different generic functions differ and count their calls
 const _CL_R46_TOP_COUNT = Ref(Int64(0))
@@ -16759,7 +14890,7 @@ function _cl_r46(n::Int64)
     c = _CL_R46_TOP_COUNT[] - t0 == n && _CL_R46_STATIC_COUNT[] - s0 == 0
     _CL_R46_CINT_STATIC()
     d = _CL_R46_TOP_COUNT[] - t0 == n && _CL_R46_STATIC_COUNT[] - s0 == n
-    return _dw_bits(a, b, c, d)
+    return _dw_facts(a, b, c, d)
 end
 # regression_62319: a nullable receiver of a never-made class whose method returns a closure, never called
 struct _ClR62Foo
@@ -16780,7 +14911,7 @@ end
 function _cl_sr(n::Int64)
     local counter::Int64 = 0
     inner = (self, value::Int64) -> begin
-        value == 0 && return Int64(0)
+        value == 0 && return value
         try
             return self(self, value - 1)::Int64
         finally
@@ -16788,7 +14919,7 @@ function _cl_sr(n::Int64)
         end
     end
     r = inner(inner, n)
-    return _dw_bits(r == 0, counter == 199)
+    return (r, counter)
 end
 # shared_state: two closures sharing one mutable binding, made plainly, in a loop and in a nested loop
 function _cl_ss_plain()
@@ -16817,7 +14948,7 @@ function _cl_ss_nested()
     end
     error("unreachable")
 end
-_cl_ss_test(fg) = (f = fg[1]; g = fg[2]; _dw_bits(f(100) == 1000, f(200) == 100, f(300) == 200, g(400) == 300, g(500) == 400))
+_cl_ss_test(fg) = (f = fg[1]; g = fg[2]; _dw_facts(f(100) == 1000, f(200) == 100, f(300) == 200, g(400) == 300, g(500) == 400))
 # side_effect: a global closure and a local closure writing a global, called from methods
 const _CL_SE_B = Ref{Union{Nothing,Int64}}(nothing)
 const _CL_SE_A = () -> (_CL_SE_B[] = 42; nothing)
@@ -16835,7 +14966,7 @@ function _cl_se(n::Int64)
     r3 = _CL_SE_B[] === nothing
     _cl_se_non_inlinable2(temp)
     r4 = _CL_SE_B[] == 42
-    return _dw_bits(r1, r2, r3, r4)
+    return _dw_facts(r1, r2, r3, r4)
 end
 # tearoff_dynamic: tear-offs and super tear-offs compared by == and hash, called with a wrong argument
 # type, and string tear-offs of several values
@@ -16867,7 +14998,7 @@ function _cl_td(n::Int64)
            _cl_td_eq(_cl_td_super_g(d), _cl_td_super_g(d)), _ClBound(_cl_td_f, d)(41) == 82)
     str = (_cl_td_eq(_ClBound(string, n), _ClBound(string, n)), _ClBound(string, n)() == string(n),
            _cl_td_eq(_ClBound(string, "hi"), _ClBound(string, "hi")), _ClBound(string, true)() == "true")
-    return _dw_bits(dyn..., sup..., str...)
+    return _dw_facts(dyn..., sup..., str...)
 end
 # tearoff_super_default: a super tear-off and super calls of a method whose override has another
 # positional default (Julia's default forwards through dispatch, so a one-argument super call
@@ -16919,7 +15050,7 @@ function _cl_tsd(n::Int64)
           _cl_tsd_callsuperfoo2(_ClTsdB2(), 65, "xxxx") == "B2(200).A2.foo(65, xxxx)")
     b2superfoo = _cl_tsd_getsuperfoo(_ClTsdB2())
     r4 = (b2superfoo(66) == "B2(200).B2.foo(66, A2.s)", b2superfoo(67, "xxxx") == "B2(200).A2.foo(67, xxxx)")
-    return _dw_bits(r1..., r2..., r3..., r4...)
+    return _dw_facts(r1..., r2..., r3..., r4...)
 end
 # type_arguments: a method's type parameters, bounded by the struct's, passed explicitly, at their
 # bounds and through a closure instantiating them; a nested function bounded by both levels
@@ -16948,7 +15079,7 @@ function _cl_ta(n::Int64)
     _cl_ta_foo(a, AbstractVector, Int64, Vector{Int64}, Float64, _ClTaMyIterable)
     e = _ClTaC{Int64}(Type[])
     _cl_ta_cfoo(e, Real)
-    return _dw_bits(length(a.args) == 6, a.args[1] === Int64, a.args[2] === Vector{Int64}, a.args[3] === Real,
+    return _dw_facts(length(a.args) == 6, a.args[1] === Int64, a.args[2] === Vector{Int64}, a.args[3] === Real,
                     a.args[4] === AbstractVector, a.args[5] === Float64, a.args[6] === _ClTaMyIterable,
                     length(e.args) == n, e.args[1] === Dict{Real,Int64})
 end
@@ -16997,18 +15128,18 @@ end
 _g("dart_closure", Any[
     ("bound_closure_equality", (n::Int64) -> (a1 = _ClBceA(n); a2 = _ClBceA(n); b1 = _ClBceB(n);
         t1 = _ClBound(_cl_bce_foo, a1); s1 = _ClBound(_cl_bce_index_of, "foo"); l1 = _ClBound(_cl_bce_index_of, Int64[]);
-        _dw_bits(t1 == _ClBound(_cl_bce_foo, a1), hash(t1) == hash(_ClBound(_cl_bce_foo, a1)), t1 != _ClBound(_cl_bce_foo, a2),
+        _dw_facts(t1 == _ClBound(_cl_bce_foo, a1), hash(t1) == hash(_ClBound(_cl_bce_foo, a1)), t1 != _ClBound(_cl_bce_foo, a2),
                  t1 != _ClBound(_cl_bce_foo, b1), t1() == 42, _ClBound(_cl_bce_foo, _ClBceK()) == _ClBound(_cl_bce_foo, _ClBceK()),
                  s1 == _ClBound(_cl_bce_index_of, "foo"), s1 != _ClBound(_cl_bce_index_of, "bar"), l1 == l1,
                  l1 != _ClBound(_cl_bce_index_of, Int64[]), s1('o') == 1)), Int64(1)),
     ("bound_closure_primitives", (n::Int64) -> (v = Int64[]; m1 = _ClBound(push!, v); m1(n); m2 = _ClBound(_cl_bcp_foo, _ClBcpA());
-        _dw_bits(m2(n) == 42, length(v) == 1, n in v)), Int64(42)),
+        _dw_facts(m2(n) == 42, length(v) == 1, n in v)), Int64(42)),
     ("break", (n::Int64) -> _cl_break(n), Int64(3)),
     ("break1", (n::Int64) -> _cl_break1(n), Int64(3)),
     ("break2", (n::Int64) -> _cl_break2(n), Int64(3)),
     ("call_wrong_argument_count", (n::Int64) -> (kuh = (a::Int64, b::Int64) -> a + b + n;
         try; _cl_cwac_melke(kuh); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end), Int64(1)),
-    ("closure", (n::Int64) -> (o = _ClCA(n); foo = () -> (v = o.field; o.field += 1; v); _dw_bits(foo() == 3, o.field == 4)), Int64(3)),
+    ("closure", (n::Int64) -> (o = _ClCA(n); foo = () -> (v = o.field; o.field += 1; v); _dw_facts(foo() == 3, o.field == 4)), Int64(3)),
     ("closure2", (s::String) -> _cl_c2_demo(s) == "Bounce!", "Bounce!"),
     ("closure3", (n::Int64) -> (x = n > 0 ? nothing : n;
         try; _cl_c3_test(x, 2); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end), Int64(1)),
@@ -17016,65 +15147,69 @@ _g("dart_closure", Any[
     ("closure5", (n::Int64) -> _cl_c5(n), Int64(1)),
     ("closure6", (n::Int64) -> _cl_c6_foo(_ClC6A(), n), Int64(1)),
     ("closure7", (n::Int64) -> _cl_c7(n), Int64(33)),
-    ("closure8", (n::Int64) -> (c = _ClC8C{Int64}(); _cl_c8_for_each(c, _ClBound(_cl_c8_lala, _ClC8D{Int64}())); n), Int64(1)),
-    ("closures_initializer", (n::Int64) -> _dw_bits(_ClCiA{Int64}().t() isa Vector{Int64}, _ClCiA{String}().t() isa Vector{Int64},
-        _ClCiB{Int64}().t() isa Type, _ClCiB{Int64}().t() === Int64), Int64(1)),
-    ("closures_initializer2", (n::Int64) -> (k = Int64(0); for i in 1:n; k += _ClCi2A{Int64}().t() isa Type; end; k), Int64(1)),
+    ("closure8", (n::Int64) -> (c = _ClC8C{Int64}(Int64[n, 2n]); d = _ClC8D{Int64}(Int64[]); _cl_c8_for_each(c, _ClBound(_cl_c8_lala, d)); d.seen), Int64(1)),
+    ("closures_initializer", (n::Int64) -> (a1 = n == 1 ? _ClCiA{Int64}() : _ClCiA{String}(); a2 = n == 1 ? _ClCiA{String}() : _ClCiA{Int64}();
+        b = n == 1 ? _ClCiB{Int64}() : _ClCiB{String}();
+        _dw_facts(a1.t() isa Vector{Int64}, a2.t() isa Vector{Int64}, b.t() isa Type, b.t() === Int64)), Int64(1)),
+    ("closures_initializer2", (n::Int64) -> (v = Bool[]; for i in 1:n; push!(v, _ClCi2A{Int64}().t() isa Type); end; v), Int64(1)),
     ("closures_with_complex_params", (n::Int64) -> _cl_cwcp(n), Int64(1)),
-    ("dynamic_closure_param", (n::Int64) -> _cl_dcp_check(_ClBound(_cl_dcp_foo, _ClDcpA())) * 100 + _cl_dcp_foo(_ClDcpB(), _ClDcpArg(), "b", 3n), Int64(1)),
+    ("dynamic_closure_param", (n::Int64) -> (_cl_dcp_check(_ClBound(_cl_dcp_foo, _ClDcpA())), _cl_dcp_foo(_ClDcpB(), _ClDcpArg(), "b", 3n)), Int64(1)),
     ("dynamic", (n::Int64) -> _cl_dyn(n), Int64(1)),
     ("forwarding_stub_tearoff_generic", (n::Int64) -> (d = _ClFsgD(); c::_ClFsgC = d; i::_ClFsgI{_ClFsgB} = d;
-        _cl_fsg_check(_ClBound(_cl_fsg_f, d)) * 100 + _cl_fsg_check(_ClBound(_cl_fsg_f, c)) * 10 + _cl_fsg_check(_ClBound(_cl_fsg_f, i)) + n), Int64(0)),
+        (_cl_fsg_check(_ClBound(_cl_fsg_f, d)), _cl_fsg_check(_ClBound(_cl_fsg_f, c)), _cl_fsg_check(_ClBound(_cl_fsg_f, i)))), Int64(0)),
     ("forwarding_stub_tearoff", (n::Int64) -> (d = _ClFsD(); c::_ClFsC = d; i::_ClFsI = d;
-        _cl_fs_check(_ClBound(_cl_fs_f, d)) * 100 + _cl_fs_check(_ClBound(_cl_fs_f, c)) * 10 + _cl_fs_check(_ClBound(_cl_fs_f, i)) + n), Int64(0)),
+        (_cl_fs_check(_ClBound(_cl_fs_f, d)), _cl_fs_check(_ClBound(_cl_fs_f, c)), _cl_fs_check(_ClBound(_cl_fs_f, i)))), Int64(0)),
     ("identity_equality_nosuchmethod_tearoff", (n::Int64) -> _cl_iens(n), Int64(1)),
     ("identity_equality_tearoff", (n::Int64) -> _cl_ie(n), Int64(1)),
     ("identity_equality_tostring_tearoff", (n::Int64) -> _cl_iets(n), Int64(1)),
     ("implicit_closure", (n::Int64) -> (obj = _ClIcFirst(n, nothing); func = () -> obj.i; obj.b = func; ib1 = _cl_ic_foo1(obj);
-        ib = _ClBound(_cl_ic_foo, obj); _dw_bits((obj.b::typeof(func))() == 20, ib1() == obj.i, ib() == obj.i)), Int64(20)),
-    ("implicit1", (b::Bool) -> (h = _ClI1Hello(); _cl_i1_add_event_listener(h, "click", _cl_i1_handler1, b) * 100 +
-        _cl_i1_add_event_listener(h, "click", _ClBound(_cl_i1_handler2, h), b)), false),
-    ("implicit2", (n::Int64) -> (a = _ClI2A(); f = _ClBound(_cl_i2_afoo, a); _dw_bits(_cl_i2_afoo(a, 11n) == 510, f(22n) == 521)), Int64(1)),
-    ("in_constructor", (n::Int64) -> _dw_bits(_cl_inc_factory(Any).closure() isa Vector, _ClIncA{Any}().closure() isa Vector,
-        _cl_inc_factory(Int64).closure() isa Vector{Int64}, _ClIncA{Int64}().closure() isa Vector{Int64},
-        _cl_inc_factory(Int64).closure() isa Vector{String}, _ClIncA{Int64}().closure() isa Vector{String}), Int64(1)),
+        ib = _ClBound(_cl_ic_foo, obj); _dw_facts((obj.b::typeof(func))() == 20, ib1() == obj.i, ib() == obj.i)), Int64(20)),
+    ("implicit1", (b::Bool) -> (h = _ClI1Hello(); (_cl_i1_add_event_listener(h, "click", _cl_i1_handler1, b),
+        _cl_i1_add_event_listener(h, "click", _ClBound(_cl_i1_handler2, h), b))), false),
+    ("implicit2", (n::Int64) -> (a = _ClI2A(); f = _ClBound(_cl_i2_afoo, a); _dw_facts(_cl_i2_afoo(a, 11n) == 510, f(22n) == 521)), Int64(1)),
+    ("in_constructor", (n::Int64) -> (fa = n == 1 ? _cl_inc_factory(Any) : _cl_inc_factory(Int64); ca = n == 1 ? _ClIncA{Any}() : _ClIncA{Int64}();
+        fi = n == 1 ? _cl_inc_factory(Int64) : _cl_inc_factory(String); ci = n == 1 ? _ClIncA{Int64}() : _ClIncA{String}();
+        _dw_facts(fa.closure() isa Vector, ca.closure() isa Vector, fi.closure() isa Vector{Int64}, ci.closure() isa Vector{Int64},
+                  fi.closure() isa Vector{String}, ci.closure() isa Vector{String})), Int64(1)),
     ("in_field_initializer", (n::Int64) -> (closures = _ClIfiFoo().closures; closures["a"](4n, 2)), Int64(1)),
     ("in_initializer", (n::Int64) -> (x = _cl_ini_a(n); y = _cl_ini_b(); (h, z) = _cl_ini_c(n - 1);
-        _dw_bits(x.f() == 46, x.g() == 5, x.f() == 47, y.f() == 46, y.g() == 5, y.f() == 47, z.f() == 46, z.g() == 5, z.f() == 47,
+        _dw_facts(x.f() == 46, x.g() == 5, x.f() == 47, y.f() == 46, y.g() == 5, y.f() == 47, z.f() == 46, z.g() == 5, z.f() == 47,
                  h() == 1, h() == 2, z.f() == 47, z.g() == 6, z.f() == 48)), Int64(1)),
-    ("in_initializer2", (n::Int64) -> ((a, s, b) = _cl_ini2_a(n); _dw_bits(s, b, a.f() == 3)), Int64(1)),
+    ("in_initializer2", (n::Int64) -> ((a, s, b) = _cl_ini2_a(n); _dw_facts(s, b, a.f() == 3)), Int64(1)),
     ("instantiation_closure_equality", (n::Int64) -> _cl_ice(n), Int64(1)),
     ("invoked_through_interface_target_field", (n::Int64) -> _cl_itf_baz(_ClItfC(_cl_itf_bar(_ClItfD{Int64}())), n), Int64(1)),
     ("invoked_through_interface_target_getter", (n::Int64) -> _cl_itg_baz(_ClItgC(), n), Int64(1)),
-    ("minify_closure_variable_collision", (x::Int64) -> (arr = [_cl_mcv_foo(x)]; _dw_bits(arr[1] == _ClMcvA(), arr[1]() == 42 * 14)), Int64(42)),
+    ("minify_closure_variable_collision", (x::Int64) -> (arr = [_cl_mcv_foo(x)]; _dw_facts(arr[1] == _ClMcvA(), arr[1]() == 42 * 14)), Int64(42)),
     ("param_null_to_object", (n::Int64) -> (f = x -> 1; h = (x::String) -> 1; i = (x::Nothing) -> 1;
-        _dw_bits(applicable(f, nothing), applicable(f, "s"), applicable(f, n), applicable(h, nothing), applicable(h, "s"), applicable(h, n),
-                 applicable(i, nothing), applicable(i, "s"), applicable(i, n), f(nothing) + h("s") + i(nothing) == 3)), Int64(1)),
+        vnull = n == 1 ? nothing : n; vstr = n == 1 ? "s" : nothing; vint = n == 1 ? n : nothing;
+        _dw_facts(_cl_pnto_app(f, vnull), _cl_pnto_app(f, vstr), _cl_pnto_app(f, vint), _cl_pnto_app(h, vnull), _cl_pnto_app(h, vstr),
+                  _cl_pnto_app(h, vint), _cl_pnto_app(i, vnull), _cl_pnto_app(i, vstr), _cl_pnto_app(i, vint), f(vnull), h(string(n)), i(nothing))), Int64(1)),
     ("parameter_default_type_inference", (n::Int64) -> _cl_pdti(n), Int64(1)),
     ("parameter_types", (n::Int64) -> _cl_pt(n), Int64(1)),
     ("parse_closures_in_initializers", (n::Int64) -> (a1 = _cl_pci_parenthesized(499n); a3 = _cl_pci_list(99n); a4 = _cl_pci_map(314n);
-        a5 = _cl_pci_arg(123n); _dw_bits(a1.x isa Function, a1.x() == 499, a3.x[1] isa Function, a3.x[1]() == 99,
+        a5 = _cl_pci_arg(123n); _dw_facts(a1.x isa Function, a1.x() == 499, a3.x[1] isa Function, a3.x[1]() == 99,
                                          a4.x["fun"] isa Function, a4.x["fun"]() == 314, a5.x == 123)), Int64(1)),
     ("partial_instantiation_eager_bounds_check", (n::Int64) -> (c = _ClPiebC{Int64}(); fi = _ClPiebFn{Int64}(c); fi(n);
-        code = try; _ClPiebFn{String}(c); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; code * 10 + (fi isa _ClPiebFn)), Int64(1)),
+        code = try; _ClPiebFn{String}(c); Int64(0); catch e; e isa MethodError ? Int64(-1) : Int64(-2); end; (code, fi isa _ClPiebFn)), Int64(1)),
     ("partial_tearoff_instantiation", (n::Int64) -> _cl_pti(n), Int64(1)),
     ("regress46568", (n::Int64) -> _cl_r46(n), Int64(1)),
     ("regression_62319", (s::String) -> _cl_r62(s), "1"),
     ("self_reference", (n::Int64) -> _cl_sr(n), Int64(199)),
-    ("shared_state", (n::Int64) -> _cl_ss_test(_cl_ss_plain()) * 1024 + _cl_ss_test(_cl_ss_loop()) * 32 + _cl_ss_test(_cl_ss_nested()) + n, Int64(0)),
+    ("shared_state", (n::Int64) -> (_cl_ss_test(_cl_ss_plain()), _cl_ss_test(_cl_ss_loop()), _cl_ss_test(_cl_ss_nested())), Int64(0)),
     ("side_effect", (n::Int64) -> _cl_se(n), Int64(1)),
     ("tearoff_dynamic", (n::Int64) -> _cl_td(n), Int64(1)),
     ("tearoff_super_default", (n::Int64) -> _cl_tsd(n), Int64(1)),
     ("type_arguments", (n::Int64) -> _cl_ta(n), Int64(1)),
-    ("type_test", (n::Int64) -> _dw_bits(_cl_tt_test(_cl_tt_aclosure, "foo"), _cl_tt_test(bar -> _cl_tt_bclosure(), "baz")) + n, Int64(0)),
-    ("type_variable", (n::Int64) -> _cl_tv_foo(_ClTvA{Int64}()) === Int64, Int64(1)),
-    ("type_variables", (n::Int64) -> _dw_bits(_cl_tvs_foo(_ClTvsA{Int64}()) isa _ClTvsA{Int64}, _cl_tvs_foo(_cl_tvs_bar(Int64)) isa _ClTvsA{Int64}) + n, Int64(0)),
+    ("type_test", (n::Int64) -> _dw_facts(_cl_tt_test(_cl_tt_aclosure, "foo"), _cl_tt_test(bar -> _cl_tt_bclosure(), "baz")), Int64(0)),
+    ("type_variable", (n::Int64) -> _cl_tv_foo(n == 1 ? _ClTvA{Int64}() : _ClTvA{String}()) === Int64, Int64(1)),
+    ("type_variables", (n::Int64) -> (a = n == 1 ? _ClTvsA{Int64}() : _ClTvsA{String}(); b = n == 1 ? _cl_tvs_bar(Int64) : _cl_tvs_bar(String);
+        _dw_facts(_cl_tvs_foo(a) isa _ClTvsA{Int64}, _cl_tvs_foo(b) isa _ClTvsA{Int64})), Int64(1)),
     ("unnamed_closure", (n::Int64) -> (() -> (res = Int64(0); while true; a = _cl_uc_get_non_array(); res = a[42n]; break; end; res))(), Int64(1)),
     ("variable_shadow", (n::Int64) -> _cl_vs_foo(10n)(20n), Int64(1)),
-    ("with_super_field", (n::Int64) -> (b = _ClWsfB(); _dw_bits(_cl_wsf_a(b) == 54, _cl_wsf_return_super(b) == 42,
-        _cl_wsf_return_super_in_closure(b)() == 42) + n), Int64(0)),
-    ("with_super_send", (n::Int64) -> _dw_bits(_cl_wss_test(_ClWssSub()) == "super", _cl_wss_m(_ClWssSuperC()) == "super",
-        _cl_wss_m(_ClWssSub()) == "sub") + n, Int64(0)),
+    ("with_super_field", (n::Int64) -> (b = _ClWsfB(42n); _dw_facts(_cl_wsf_a(b) == 54, _cl_wsf_return_super(b) == 42,
+        _cl_wsf_return_super_in_closure(b)() == 42)), Int64(1)),
+    ("with_super_send", (n::Int64) -> _dw_facts(_cl_wss_test(_ClWssSub()) == "super", _cl_wss_m(_ClWssSuperC()) == "super",
+        _cl_wss_m(_ClWssSub()) == "sub"), Int64(0)),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/exception ----------------------------------------
@@ -17124,20 +15259,20 @@ struct _ExTcMy2 <: _ExTcBase end
 
 # catch_liveness: a local assigned after a throwing call keeps its old value in catch and after
 _ex_cl_foo(n::Int64) = n
-_ex_cl_throw() = throw("x")
+_ex_cl_throw(t::Int64) = throw(t == 1 ? "x" : string(t))
 function _ex_catch_liveness(n::Int64)
     x = Int64(10)
     e2 = nothing
     incatch = false
     try
         t = _ex_cl_foo(n)
-        _ex_cl_throw()
+        t > 0 && _ex_cl_throw(t)
         x = 3 + t
     catch e
         incatch = x == 10
         e2 = e
     end
-    return _dw_bits(incatch, x == 10, e2 isa String && e2 == "x")
+    return _dw_facts(incatch, x == 10, e2 isa String && e2 == "x")
 end
 # code_after_try_is_executed: code after a try/catch runs; a later throw escapes
 function _ex_cat(b::Bool)
@@ -17178,7 +15313,7 @@ function _ex_exception(n::Int64)
             correct = false
         end
     end
-    return _dw_bits(i == 20, correct)
+    return _dw_facts(i == 20, correct)
 end
 # finally: a field updated in try is seen by finally
 function _ex_finally_foo(a::_ExCell)
@@ -17192,39 +15327,49 @@ function _ex_finally_foo(a::_ExCell)
             executed = true
         end
     end
-    return _dw_bits(seen == 12, executed)
+    return _dw_facts(seen == 12, executed)
 end
+# finally1..finally6 record the order of their steps in a Vector{Int64}: a try body pushes the value
+# it sets, each finally pushes the amount it adds, and dead code pushes its own amount
 # finally1: return in try; the finally updates the field after the value is taken
-function _ex_finally1_f1(h::_ExCell)
+function _ex_finally1_f1(h::_ExCell, ord::Vector{Int64})
     try
         j = _ex_func()
         h.i = 1
+        push!(ord, 1)
         return h.i
     finally
+        push!(ord, 800)
         h.i = h.i + 800
     end
+    push!(ord, 200)
     return h.i + 200
 end
 # finally2: return through two nested finally blocks
-function _ex_finally2_f1(h::_ExCell)
+function _ex_finally2_f1(h::_ExCell, ord::Vector{Int64})
     try
         j = _ex_func()
         try
             h.i = 1
+            push!(ord, 1)
             return h.i
         finally
+            push!(ord, 400)
             h.i = h.i + 400
         end
         h.i = 2
+        push!(ord, 2)
         return h.i
     finally
+        push!(ord, 800)
         h.i = h.i + 800
     end
+    push!(ord, 200)
     return h.i + 200
 end
 # finally3: continue of an outer loop out of two nested try/finally (a flag; Julia's continue is
 # innermost), then a return through a finally
-function _ex_finally3_f1(h::_ExCell)
+function _ex_finally3_f1(h::_ExCell, ord::Vector{Int64})
     try
         try
             j = _ex_func()
@@ -17232,6 +15377,7 @@ function _ex_finally3_f1(h::_ExCell)
                 if h.i == 0
                     try
                         h.i = 1
+                        push!(ord, 1)
                         _ex_func()
                         try
                             j2 = _ex_func()
@@ -17243,75 +15389,93 @@ function _ex_finally3_f1(h::_ExCell)
                                     break
                                 end
                             end
-                            cont || (h.i = 200000)
+                            cont || (push!(ord, 200000); h.i = 200000)
                         finally
+                            push!(ord, 200)
                             h.i = h.i + 200
                         end
                     finally
+                        push!(ord, 400)
                         h.i = h.i + 400
                     end
                 end
             end
         finally
+            push!(ord, 800)
             h.i = h.i + 800
         end
         return h.i
     finally
+        push!(ord, 1600)
         h.i = h.i + 1600
     end
+    push!(ord, 2000000)
     h.i = h.i + 2000000
     return Int64(1)
 end
 # finally4: a return after a try/finally; a later try/finally never runs
-function _ex_finally4_f1(h::_ExCell)
+function _ex_finally4_f1(h::_ExCell, ord::Vector{Int64})
     try
         j = _ex_func()
         h.i = 1
+        push!(ord, 1)
     finally
+        push!(ord, 10)
         h.i = h.i + 10
     end
     return h.i + 200
     try
         j = _ex_func()
     finally
+        push!(ord, -10)
         h.i = h.i + 10
     end
 end
 # finally5: returns through nested finally blocks on two paths chosen by a parameter
-function _ex_finally5_f1(h::_ExCell, param::Int64)
+function _ex_finally5_f1(h::_ExCell, param::Int64, ord::Vector{Int64})
     if param == 0
         try
             j = _ex_func()
             try
                 h.i = 1
+                push!(ord, 1)
                 return h.i
             finally
+                push!(ord, 400)
                 h.i = h.i + 400
             end
             h.i = 2
+            push!(ord, 2)
             return h.i
         finally
+            push!(ord, 800)
             h.i = h.i + 800
         end
+        push!(ord, -200)
         return h.i + 200
     end
     try
         j = _ex_func()
         try
             h.i = 4
+            push!(ord, 4)
             return h.i
         finally
+            push!(ord, 100)
             h.i = h.i + 100
         end
         h.i = 2
+        push!(ord, 2)
         return h.i
     finally
+        push!(ord, 200)
         h.i = h.i + 200
     end
+    push!(ord, -200)
     return h.i + 200
 end
 # finally6: break of the inner loop inside nested try/finally, normal flow through every finally
-function _ex_finally6_f1(h::_ExCell)
+function _ex_finally6_f1(h::_ExCell, ord::Vector{Int64})
     try
         try
             j = _ex_func()
@@ -17319,6 +15483,7 @@ function _ex_finally6_f1(h::_ExCell)
                 if h.i == 0
                     try
                         h.i = 1
+                        push!(ord, 1)
                         _ex_func()
                         try
                             j2 = _ex_func()
@@ -17328,29 +15493,36 @@ function _ex_finally6_f1(h::_ExCell)
                                     break
                                 end
                             end
+                            push!(ord, 200000)
                             h.i += 200000
                         finally
+                            push!(ord, 200)
                             h.i = h.i + 200
                         end
                     finally
+                        push!(ord, 400)
                         h.i = h.i + 400
                     end
                 end
             end
         finally
+            push!(ord, 800)
             h.i = h.i + 800
         end
         return h.i
     finally
+        push!(ord, 1600)
         h.i = h.i + 1600
     end
+    push!(ord, 2000000)
     h.i = h.i + 2000000
     return Int64(1)
 end
 # finally7: an exception thrown from a closure capturing a variable; catch and finally call another
-function _ex_finally7_f1(k0::Int64)
+# (the order recorded: each closure call pushes its j, the catch 100, the finally 1000)
+function _ex_finally7_f1(k0::Int64, ord::Vector{Int64})
     k = Ref(k0)
-    mk = (j::Int64) -> (() -> (j == 5 && throw(_ExPlainEx("Test for exception being thrown")); k[] += 10; j))
+    mk = (j::Int64) -> (() -> (j == 5 && throw(_ExPlainEx("Test for exception being thrown")); k[] += 10; push!(ord, j); j))
     a = [mk(i) for i in 0:9]
     b = a[1]
     try
@@ -17359,9 +15531,11 @@ function _ex_finally7_f1(k0::Int64)
         end
     catch exception
         exception isa _ExPlainEx || rethrow()
+        push!(ord, 100)
         k[] += 100
         b()
     finally
+        push!(ord, 1000)
         k[] += 1000
         b()
     end
@@ -17430,7 +15604,7 @@ function _ex_finally8_main(s::_ExCell)
     catch e
         thrown = e isa String && e == "ball"
     end
-    return _dw_bits(s1 == 2, s2 == 2, s3 == 2, s.i == 2, r1 === nothing, r2 === Int64(10), r3 === Int64(10), thrown)
+    return _dw_facts(s1 == 2, s2 == 2, s3 == 2, s.i == 2, r1 === nothing, r2 === Int64(10), r3 === Int64(10), thrown)
 end
 # finally9: a throw in finally after try/catch, and a break out of a loop from a nested
 # try/catch/finally inside a finally (a flag; Julia's break is innermost)
@@ -17486,7 +15660,7 @@ function _ex_finally9_main(s::_ExCell)
     catch e
         thrown = true
     end
-    return _dw_bits(s1 == 3, r1 === nothing, thrown, s.i == 2)
+    return _dw_facts(s1 == 3, r1 === nothing, thrown, s.i == 2)
 end
 # finally10 / finally11: a catch that rethrows (after a nested try/catch in finally11) still runs finally
 mutable struct _ExF10A
@@ -17576,7 +15750,7 @@ function _ex_in_increment(n::Int64)
             e isa MethodError && (caught += 1)
         end
     end
-    return caught * 10 + (a.field isa _ExIiA ? 1 : 0)
+    return _dw_facts(caught, a.field isa _ExIiA)
 end
 # multiple_breaks_crossing_finally: breaks to two different labeled blocks cross one finally (a
 # loop for block b and a flag for block a)
@@ -17682,7 +15856,7 @@ function _ex_rt_rethrow(t::_ExRtT)
     catch e
         outer = e === t.cur
     end
-    return _dw_bits(inner, outer)
+    return _dw_facts(inner, outer)
 end
 function _ex_rt_past(t::_ExRtT)
     inner = false
@@ -17703,7 +15877,7 @@ function _ex_rt_past(t::_ExRtT)
     catch e
         outer = e === t.cur
     end
-    return _dw_bits(inner, !mid, outer)
+    return _dw_facts(inner, !mid, outer)
 end
 # throw_expr: throw of an assignment, an increment, a sum, a nested throw, a throwing argument,
 # a throwing interpolation, a throwing cascade store and a throwing getter
@@ -17781,7 +15955,7 @@ function _ex_throw_expr(n::Int64)
         c5 = e === Int64(77) && q.qqq === Int64(11)
     end
     d1 = try; _ex_te_nono(q); false; catch e; e isa String && e == "nono"; end
-    return _dw_bits(a1, a2, a3, a4, b1, b2, c1, c2, c3, c4, c5, d1)
+    return _dw_facts(a1, a2, a3, a4, b1, b2, c1, c2, c3, c4, c5, d1)
 end
 # throw: a thrown MyException caught by on MyException, then finally
 function _ex_throw_f1(i::Int64)
@@ -17992,13 +16166,13 @@ function _ex_throw8_main(c::_ExCell)
         hasThrown = true
         count1 = c.i == 1
     end
-    return _dw_bits(count1, hasThrown)
+    return _dw_facts(count1, hasThrown)
 end
 # try_catch_on_syntax: on-clauses tried in order against a subclass; a catch with error and trace
 function _ex_tcos_test1(n::Int64)
     foo = Int64(0)
     try
-        throw(_ExTcMy1())
+        throw(n == 1 ? _ExTcMy1() : _ExTcMy2())
     catch e
         if e isa _ExTcMy2
             foo = 1
@@ -18012,7 +16186,7 @@ function _ex_tcos_test1(n::Int64)
     end
     return foo
 end
-_ex_tcos_final() = try; throw("catch this!"); false; catch e; e isa String && e == "catch this!"; end
+_ex_tcos_final(n::Int64) = try; throw(n == 1 ? "catch this!" : string(n)); false; catch e; e isa String && e == "catch this!"; end
 # try_catch_optimized1: locals, parameters and the caught value read in catch after a throw
 _ex_tco1_maythrow(x::Union{Nothing,String}) = (x === nothing && throw(42); Int64(99))
 struct _ExTco1A end
@@ -18101,11 +16275,16 @@ function _ex_tco1_f13(x::Union{Nothing,String})
     return result
 end
 function _ex_try_catch_optimized1(s::String)
-    return _dw_bits(_ex_tco1_f1(s) == 99, _ex_tco1_f1(nothing) == 0, _ex_tco1_f2(s) === Int64(99), _ex_tco1_f2(nothing) === nothing,
-        _ex_tco1_f3("123", Int64(0)) == 99, _ex_tco1_f3(nothing, Int64(0x3fffffff)) == 0x40000000,
-        _ex_tco1_f7(1.2) == false, _ex_tco1_f7(Inf) == true, _ex_tco1_f7(-Inf) == true, _ex_tco1_f7(123456789012345.0) == false,
-        _ex_tco1_f10(nothing, 1.0) == 0, _ex_tco1_f10(s, 1.0) == 99, _ex_tco1_f11(s) == 99, _ex_tco1_f11(nothing) == 0,
-        _ex_tco1_f13(s) == 99, _ex_tco1_f13(nothing) == 1)
+    # opaque inputs from the argument ("abc"): xs holds s, xn holds nothing, both Union{Nothing,String}
+    m = ncodeunits(s)
+    xs = m == 3 ? s : nothing
+    xn = m == 3 ? nothing : s
+    z = m - 3
+    return _dw_facts(_ex_tco1_f1(xs) == 99, _ex_tco1_f1(xn) == 0, _ex_tco1_f2(xs) === Int64(99), _ex_tco1_f2(xn) === nothing,
+        _ex_tco1_f3(xs, z) == 99, _ex_tco1_f3(xn, Int64(0x3fffffff) + z) == 0x40000000,
+        _ex_tco1_f7(m * 0.4) == false, _ex_tco1_f7(m * Inf) == true, _ex_tco1_f7(-m * Inf) == true, _ex_tco1_f7(m * 41152263004115.0) == false,
+        _ex_tco1_f10(xn, m / 3.0) == 0, _ex_tco1_f10(xs, m / 3.0) == 99, _ex_tco1_f11(xs) == 99, _ex_tco1_f11(xn) == 0,
+        _ex_tco1_f13(xs) == 99, _ex_tco1_f13(xn) == 1)
 end
 # try_catch_optimized2: a loop's sum survives a call through try/finally
 _ex_tco2_bar() = (try; nothing; finally; nothing; end; nothing)
@@ -18751,33 +16930,33 @@ function _ex_tfr25654_main(c::_ExCell)
     catch e
         caught = e isa String && e == "ex"
     end
-    return _dw_bits(caught, c.i == 1)
+    return _dw_facts(caught, c.i == 1)
 end
 
 _g("dart_exception", Any[
     ("catch_liveness", (n::Int64) -> _ex_catch_liveness(n), Int64(1)),
-    ("code_after_try_is_executed", (b::Bool) -> _dw_bits(_ex_cat(b), (try; _ex_cat(!b); false; catch e; e isa String; end)), false),
+    ("code_after_try_is_executed", (b::Bool) -> _dw_facts(_ex_cat(b), (try; _ex_cat(!b); false; catch e; e isa String; end)), false),
     ("exception", (n::Int64) -> _ex_exception(n), Int64(1)),
     ("finally", (n::Int64) -> _ex_finally_foo(_ExCell(42 * n)), Int64(1)),
-    ("finally1", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally1_f1(h); _dw_bits(r == 1, h.i == 801)), Int64(1)),
-    ("finally2", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally2_f1(h); _dw_bits(r == 1, h.i == 1201)), Int64(1)),
-    ("finally3", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally3_f1(h); _dw_bits(r == 1401, h.i == 3001)), Int64(1)),
-    ("finally4", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally4_f1(h); _dw_bits(r == 211, h.i == 11)), Int64(1)),
-    ("finally5", (n::Int64) -> (h = _ExCell(0); r1 = _ex_finally5_f1(h, n - 1); i1 = h.i; r2 = _ex_finally5_f1(h, n);
-        _dw_bits(r1 == 1, i1 == 1201, r2 == 4, h.i == 304)), Int64(1)),
-    ("finally6", (n::Int64) -> (h = _ExCell(n - 1); r = _ex_finally6_f1(h); _dw_bits(r == 201401, h.i == 203001)), Int64(1)),
-    ("finally7", (n::Int64) -> _ex_finally7_f1(n), Int64(1)),
+    ("finally1", (n::Int64) -> (h = _ExCell(n - 1); ord = Int64[]; r = _ex_finally1_f1(h, ord); (_dw_facts(r, h.i), ord)), Int64(1)),
+    ("finally2", (n::Int64) -> (h = _ExCell(n - 1); ord = Int64[]; r = _ex_finally2_f1(h, ord); (_dw_facts(r, h.i), ord)), Int64(1)),
+    ("finally3", (n::Int64) -> (h = _ExCell(n - 1); ord = Int64[]; r = _ex_finally3_f1(h, ord); (_dw_facts(r, h.i), ord)), Int64(1)),
+    ("finally4", (n::Int64) -> (h = _ExCell(n - 1); ord = Int64[]; r = _ex_finally4_f1(h, ord); (_dw_facts(r, h.i), ord)), Int64(1)),
+    ("finally5", (n::Int64) -> (h = _ExCell(0); ord1 = Int64[]; r1 = _ex_finally5_f1(h, n - 1, ord1); i1 = h.i;
+        ord2 = Int64[]; r2 = _ex_finally5_f1(h, n, ord2); (_dw_facts(r1, i1, r2, h.i), ord1, ord2)), Int64(1)),
+    ("finally6", (n::Int64) -> (h = _ExCell(n - 1); ord = Int64[]; r = _ex_finally6_f1(h, ord); (_dw_facts(r, h.i), ord)), Int64(1)),
+    ("finally7", (n::Int64) -> (ord = Int64[]; k = _ex_finally7_f1(n, ord); (k, ord)), Int64(1)),
     ("finally8", (n::Int64) -> _ex_finally8_main(_ExCell(n)), Int64(1)),
     ("finally9", (n::Int64) -> _ex_finally9_main(_ExCell(n)), Int64(1)),
     ("finally10", (n::Int64) -> _ex_finally10_main(_ex_finally10_run, n), Int64(1)),
     ("finally11", (n::Int64) -> _ex_finally10_main(_ex_finally11_run, n), Int64(1)),
     ("finally12", (n::Int64) -> _ex_finally12_foo(_ExCell(n)) === true, Int64(0)),
-    ("identity", (n::Int64) -> _dw_bits(_ex_id_check("str"), _ex_id_check(_ExIdA()), _ex_id_check(n), _ex_id_check(1.2)), Int64(1)),
+    ("identity", (n::Int64) -> _dw_facts(_ex_id_check("str"), _ex_id_check(_ExIdA()), _ex_id_check(n), _ex_id_check(1.2)), Int64(1)),
     ("in_increment", (n::Int64) -> _ex_in_increment(n), Int64(0)),
-    ("multiple_breaks_crossing_finally", (n::Int64) -> _dw_bits(_ex_mbcf(n) == "1-a", _ex_mbcf(n + 1) == "2-b"), Int64(1)),
-    ("nested_catch_rethrow", (n::Int64) -> _dw_bits(_ex_ncr_caught(_ex_ncr_t1) == "outer", _ex_ncr_caught(_ex_ncr_t2) == "outer",
-        _ex_ncr_caught(_ex_ncr_t3) == "outer", _ex_ncr_caught(_ex_ncr_t4) == "inner") + n, Int64(0)),
-    ("rethrow", (n::Int64) -> (t = _ExRtT(nothing); _ex_rt_rethrow(t) * 8 + _ex_rt_past(t) + n), Int64(0)),
+    ("multiple_breaks_crossing_finally", (n::Int64) -> _dw_facts(_ex_mbcf(n) == "1-a", _ex_mbcf(n + 1) == "2-b"), Int64(1)),
+    ("nested_catch_rethrow", (n::Int64) -> _dw_facts(_ex_ncr_caught(_ex_ncr_t1) == "outer", _ex_ncr_caught(_ex_ncr_t2) == "outer",
+        _ex_ncr_caught(_ex_ncr_t3) == "outer", _ex_ncr_caught(_ex_ncr_t4) == "inner"), Int64(0)),
+    ("rethrow", (n::Int64) -> (t = _ExRtT(nothing); (_ex_rt_rethrow(t), _ex_rt_past(t))), Int64(0)),
     ("throw_expr", (n::Int64) -> _ex_throw_expr(n), Int64(1)),
     ("throw", (n::Int64) -> _ex_throw_f1(n), Int64(1)),
     ("throw1", (n::Int64) -> _ex_throw1_f1(n), Int64(1)),
@@ -18787,31 +16966,32 @@ _g("dart_exception", Any[
     ("throw5", (n::Int64) -> _ex_throw5_f1(n), Int64(1)),
     ("throw6", (n::Int64) -> _ex_throw6_f1(_ExCell(n - 1)), Int64(1)),
     ("throw8", (n::Int64) -> _ex_throw8_main(_ExCell(n)), Int64(0)),
-    ("try_catch_on_syntax", (n::Int64) -> _ex_tcos_test1(n) * 10 + (_ex_tcos_final() ? 1 : 0), Int64(1)),
+    ("try_catch_on_syntax", (n::Int64) -> _dw_facts(_ex_tcos_test1(n), _ex_tcos_final(n)), Int64(1)),
     ("try_catch_optimized1", (s::String) -> _ex_try_catch_optimized1(s), "abc"),
     ("try_catch_optimized2", (n::Int64) -> (a = Int64[n, 2, 3]; r = Int64(0); for _ in 1:20; r = _ex_tco2_foo(a); end; r), Int64(1)),
-    ("try_catch_optimized3", (x::Float64) -> (r = _ex_tco3_test(x, true); _dw_bits(_ex_tco3_test(x, false) === nothing, something(r, -1.0) == 1.0)), 1.0),
-    ("try_catch_optimized4", (n::Int64) -> (a = Int64[n, 2, 3, 4, 5]; s = Int64(0); for _ in 1:20; s += _ex_tco4_loop(a); end; s), Int64(1)),
-    ("try_catch_optimized5", (n::Int64) -> _dw_bits(_ex_tco5_test1(n) == "no throw", _ex_tco5_test1(n + 1) == 123, _ex_tco5_test1(n + 2) == 456,
+    ("try_catch_optimized3", (x::Float64) -> (r = _ex_tco3_test(x, true); _dw_facts(_ex_tco3_test(x, false) === nothing, something(r, -1.0) == 1.0)), 1.0),
+    ("try_catch_optimized4", (n::Int64) -> (a = Int64[n, 2, 3, 4, 5]; v = Int64[]; for _ in 1:20; push!(v, _ex_tco4_loop(a)); end; v), Int64(1)),
+    ("try_catch_optimized5", (n::Int64) -> _dw_facts(_ex_tco5_test1(n) == "no throw", _ex_tco5_test1(n + 1) == 123, _ex_tco5_test1(n + 2) == 456,
         _ex_tco5_test2(n) == "no throw", _ex_tco5_test2(n + 1) == 123, _ex_tco5_test2(n + 2) == 456), Int64(0)),
-    ("try_catch_osr", (n::Int64) -> _dw_bits(_ex_tcosr_f1() == 211, _ex_tcosr_f2() == 19, something(_ex_tcosr_f3(), Int64(-1)) == 210,
-        _ex_tcosr_f4() == 9 * 17 + 1, _ex_tcosr_f5() == 210) + n, Int64(0)),
-    ("try_catch_regress_27483", (n::Int64) -> _dw_bits(_ex_tcr27483_test(n) == "no throw", _ex_tcr27483_test(n + 1) == 123, _ex_tcr27483_test(n + 2) == 456), Int64(0)),
-    ("try_catch", (n::Int64) -> _dw_bits(_ex_tc_test1(), _ex_tc_test2(), _ex_tc_test3(), _ex_tc_test4(), _ex_tc_test5(), _ex_tc_test6(),
-        _ex_tc_test7(), _ex_tc_test8(), _ex_tc_test9(), _ex_tc_test10(), _ex_tc_test11()) + n, Int64(0)),
+    ("try_catch_osr", (n::Int64) -> _dw_facts(_ex_tcosr_f1() == 211, _ex_tcosr_f2() == 19, something(_ex_tcosr_f3(), Int64(-1)) == 210,
+        _ex_tcosr_f4() == 9 * 17 + 1, _ex_tcosr_f5() == 210), Int64(0)),
+    ("try_catch_regress_27483", (n::Int64) -> _dw_facts(_ex_tcr27483_test(n) == "no throw", _ex_tcr27483_test(n + 1) == 123, _ex_tcr27483_test(n + 2) == 456), Int64(0)),
+    ("try_catch", (n::Int64) -> _dw_facts(_ex_tc_test1(), _ex_tc_test2(), _ex_tc_test3(), _ex_tc_test4(), _ex_tc_test5(), _ex_tc_test6(),
+        _ex_tc_test7(), _ex_tc_test8(), _ex_tc_test9(), _ex_tc_test10(), _ex_tc_test11()), Int64(0)),
     ("try_catch2", (n::Int64) -> _ex_tc2_f1(n), Int64(1)),
     ("try_catch3", (n::Int64) -> _ex_tc3_test1(n), Int64(1)),
-    ("try_catch4", (n::Int64) -> (a = _ExCell(n); _dw_bits(_ex_tc4_run(_ex_tc4_foo1, a), _ex_tc4_run(_ex_tc4_foo2, a), _ex_tc4_run(_ex_tc4_foo3, a),
+    ("try_catch4", (n::Int64) -> (a = _ExCell(n); _dw_facts(_ex_tc4_run(_ex_tc4_foo1, a), _ex_tc4_run(_ex_tc4_foo2, a), _ex_tc4_run(_ex_tc4_foo3, a),
         _ex_tc4_run(_ex_tc4_foo4, a), _ex_tc4_run(_ex_tc4_foo5, a), _ex_tc4_run(_ex_tc4_foo6, a), _ex_tc4_run(_ex_tc4_foo7, a),
         _ex_tc4_run(_ex_tc4_foo8, a), _ex_tc4_run(_ex_tc4_foo9, a))), Int64(0)),
     ("try_catch5", (n::Int64) -> (a = _ExCell(n); _ex_tc4_run(_ex_tc5_foo1, a)), Int64(0)),
-    ("try_finally_regress_25333", (n::Int64) -> (c = _ExCell(n); _dw_bits(_ex_tfr25333_main(_ex_tfr25333_test1, c), _ex_tfr25333_main(_ex_tfr25333_test2, c), c.i == 2)), Int64(0)),
+    ("try_finally_regress_25333", (n::Int64) -> (c = _ExCell(n); _dw_facts(_ex_tfr25333_main(_ex_tfr25333_test1, c), _ex_tfr25333_main(_ex_tfr25333_test2, c), c.i == 2)), Int64(0)),
     ("try_finally_regress_25654", (n::Int64) -> _ex_tfr25654_main(_ExCell(n)), Int64(0)),
 ])
 
 # ---- dart2wasm's tests at the pin, tests/language/generic (group dart_generic) -----------------
 # Each case is named by the dart file's path under tests/language/generic, `/` written `_`, less
-# `_test`; dart's covariant generics are Julia's invariant ones, and Julia's answer is expected.
+# `_test`; a case returns its facts as a tuple. dart's covariant generics are Julia's invariant
+# ones, and Julia's answer is expected.
 # cascaded_forwarding_stubs_generic: a method whose parameters an interface's type argument narrows,
 # called with a value outside it
 abstract type _GeCfA end
@@ -18881,9 +17061,11 @@ _ge_d_even(s::_GeDS{<:_GeDS}) = _ge_d_even(_ge_d_sub1(_ge_d_sub1(s)))
 # f_bounded_equality: a struct whose supertype's parameter is itself, read back as a type
 abstract type _GeFeMagnitude{T} end
 struct _GeFeReal <: _GeFeMagnitude{_GeFeReal} end
+struct _GeFeComplex <: _GeFeMagnitude{_GeFeComplex} end
 _ge_fe_t(::_GeFeMagnitude{T}) where {T} = T
 abstract type _GeFeFBound{F} end
 struct _GeFeBar <: _GeFeFBound{_GeFeBar} end
+struct _GeFeBaz <: _GeFeFBound{_GeFeBaz} end
 _ge_fe_f(::_GeFeFBound{F}) where {F} = F
 # f_bounded_quantification2: an F-bounded parametric struct below two abstract interfaces
 abstract type _GeFq2EntityApi{T} end
@@ -19061,7 +17243,7 @@ function _ge_io_main()
     ls = fill("s", 5)
     fs = _GeIoFoo{String}()
     fa = _GeIoFoo{Any}()
-    return _dw_bits(_ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)), _ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)),
+    return _dw_facts(_ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)), _ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)),
                     _ge_io_ist(fs, "string"), _ge_io_ist(fs, Int64(1)),
                     _ge_io_t5(fa, l0, lo, li, ln, ls)..., _ge_io_t5(_GeIoFoo{Vector}(), l0, lo, li, ln, ls)...,
                     _ge_io_t5(_GeIoFoo{Vector{Any}}(), l0, lo, li, ln, ls)..., _ge_io_t5(_GeIoFoo{Vector{Int64}}(), l0, lo, li, ln, ls)...,
@@ -19081,7 +17263,7 @@ function _ge_io2_all()
     fraw = _GeIo2Foo{Any,Any}()
     mn = _GeIo2Moo{Int64,Real}()
     mraw = _GeIo2Moo{Any,Any}()
-    return _dw_bits(fin isa _GeIo2Foo{Int64,Real}, !(fin isa _GeIo2Foo{Int64,String}),
+    return _dw_facts(fin isa _GeIo2Foo{Int64,Real}, !(fin isa _GeIo2Foo{Int64,String}),
                     !(_ge_io2_foostring(fin) isa _GeIo2Foo{Int64,Real}), _ge_io2_foostring(fin) isa _GeIo2Foo{Int64,String},
                     !(fraw isa _GeIo2Foo{Int64,Real}), !(fraw isa _GeIo2Foo{Int64,String}), fraw isa _GeIo2Foo{Any,Any},
                     !(_ge_io2_foostring(fraw) isa _GeIo2Foo{Int64,Real}), !(_ge_io2_foostring(fraw) isa _GeIo2Foo{Int64,String}),
@@ -19101,7 +17283,7 @@ abstract type _GeIo3K{T} end
 abstract type _GeIo3L{T} <: _GeIo3K{Bool} end
 struct _GeIo3C <: _GeIo3L{String} end
 struct _GeIo3D <: _GeIo3BAbs{String} end
-_ge_io3_all(a, b, c, d) = _dw_bits(a isa _GeIo3I{String}, a isa _GeIo3I{Bool}, b isa _GeIo3I{String}, c isa _GeIo3K{String},
+_ge_io3_all(a, b, c, d) = _dw_facts(a isa _GeIo3I{String}, a isa _GeIo3I{Bool}, b isa _GeIo3I{String}, c isa _GeIo3K{String},
                                    c isa _GeIo3K{String}, c isa _GeIo3L{String}, c isa _GeIo3L{Bool}, c isa _GeIo3K{Bool},
                                    c isa _GeIo3K{String}, d isa _GeIo3I{String}, d isa _GeIo3I{Bool})
 # instanceof4: isa against T where T is an abstract type a parametric struct implements
@@ -19118,7 +17300,7 @@ _ge_io5_foo(::_GeIo5D{T}, x) where {T} = x isa T
 # instantiate_tearoff: a generic function instantiated as Int64 and String closures, which reject
 # the other type, and a closure built inside a generic function reading its parameter
 _ge_it_f(x::T) where {T} = x
-_ge_it_test(fi::FI, fs::FS) where {FI,FS} = _dw_bits(applicable(fi, Int64(1)), !applicable(fi, "s"), fi(Int64(1)) == 1,
+_ge_it_test(fi::FI, fs::FS, n::Int64) where {FI,FS} = _dw_facts(applicable(fi, n), !applicable(fi, "s"), fi(n) == 1,
     (try; fi("oops"); false; catch e; e isa MethodError; end), applicable(fs, "s"), !applicable(fs, Int64(1)), fs("hello") == "hello",
     (try; fs(Int64(1)); false; catch e; e isa MethodError; end))
 _ge_it_bar(::Type{X}) where {X} = (x::X, t::Int64) -> (X, Int64)
@@ -19131,8 +17313,10 @@ struct _GeItcC{T} end
 _ge_itc_f(::_GeItcC{T}, x::U) where {T,U} = (y::T) -> nothing
 # instantiate_tearoff_of_call: a generic function value instantiated as Int64 and String closures
 _ge_itoc_f(x::T) where {T} = x
-_ge_itoc_test(f::F) where {F} = (intf = (x::Int64) -> f(x); strf = (x::String) -> f(x);
-    _dw_bits(applicable(intf, Int64(1)), !applicable(intf, "s"), intf(Int64(1)) == 1, (try; intf("oops"); false; catch e; e isa MethodError; end),
+_ge_itoc_g(x::Int64) = x + 1
+_ge_itoc_g(x::String) = x * "!"
+_ge_itoc_test(f::F, n::Int64) where {F} = (intf = (x::Int64) -> f(x); strf = (x::String) -> f(x);
+    _dw_facts(applicable(intf, n), !applicable(intf, "s"), intf(n) == 1, (try; intf("oops"); false; catch e; e isa MethodError; end),
              applicable(strf, "s"), !applicable(strf, Int64(1)), strf("hello") == "hello", (try; strf(Int64(1)); false; catch e; e isa MethodError; end)))
 # is_check: a method testing its receiver against one instantiation
 struct _GeIcA{T} end
@@ -19205,13 +17389,13 @@ _ge_ss_foo(x::T) where {T} = (x for i in 0:2)
 # syntax: a closure whose argument is typed by a five-parameter type, beside comparisons as arguments
 struct _GeSyTest{B,C,D,E,F} end
 abstract type _GeSyA{B,C,D,E,F} end
-_ge_sy_foo(x1, x2, x3, x4, x5) = _dw_bits(x1 == true, x2 == 3, x3 == 4, x4 == 5, x5 == false)
+_ge_sy_foo(x1, x2, x3, x4, x5) = _dw_facts(x1 == true, x2 == 3, x3 == 4, x4 == 5, x5 == false)
 _ge_sy_bar(x::X) where {X} = x(nothing) === nothing
-function _ge_sy_test(::_GeSyTest{B,C,D,E,F}) where {B,C,D,E,F}
-    a = 1; b = 2; c = 3; d = 4; e = 5; f = 6; g = 7; h = nothing
+function _ge_sy_test(::_GeSyTest{B,C,D,E,F}, n::Int64) where {B,C,D,E,F}
+    a = n; b = n + 1; c = n + 2; d = n + 3; e = n + 4; f = n + 5; g = n + 6; h = n == 1 ? nothing : n
     r1 = _ge_sy_bar((g::Union{Nothing,_GeSyA{B,C,D,E,F}}) -> h)
     r2 = _ge_sy_foo(a < b, c, d, e, f > g)
-    return r2 * 2 + Int64(r1)
+    return (r2, r1)
 end
 # tearoff: a generic min (Base's, a method's, a local one) taken as an Int64 two-argument closure,
 # which rejects a type argument
@@ -19219,7 +17403,7 @@ struct _GeToC end
 _ge_to_m(::_GeToC, x::T, y::T) where {T<:Real} = min(x, y)
 _ge_to_m2(::_GeToC, x::Int64, y::Int64) = min(x, y)
 _ge_to_int2(f::F) where {F} = (x::Int64, y::Int64) -> f(x, y)
-_ge_to_test(f::F) where {F} = (g = _ge_to_int2(f); _dw_bits(g(123, 456) == 123, (try; g(Int64, 123, 456); false; catch e; e isa MethodError; end)))
+_ge_to_test(f::F) where {F} = (g = _ge_to_int2(f); _dw_facts(g(123, 456) == 123, (try; g(Int64, 123, 456); false; catch e; e isa MethodError; end)))
 # type_argument_in_super_type: a field returned as the supertype's parameter and asserted Int64
 struct _GeTsC end
 abstract type _GeTsA{T} end
@@ -19249,72 +17433,80 @@ function _ge_td_gtest(::_GeTdG{Y,Z}, y1::Y, z1::Z) where {Y,Z}
     d2 = function (y::Y, s::S) where {S}
         (y, s)
     end
-    return _dw_bits(applicable(d, y1, y1), applicable(d, z1, z1) == (Y === Z), applicable(d2, y1, z1),
+    return _dw_facts(applicable(d, y1, y1), applicable(d, z1, z1) == (Y === Z), applicable(d2, y1, z1),
                     applicable(d2, z1, z1) == (Y === Z), applicable(d2, "k", z1) == (Y === String))
 end
 _g("dart_generic", Any[
     ("cascaded_forwarding_stubs_generic", (n::Int64) -> (e = _GeCfE(); a = n > 0 ? _GeCfAa() : _GeCfB(); b = n > 0 ? _GeCfB() : _GeCfAa();
-        _dw_bits(_ge_cf_try(e, b, b) == 1, _ge_cf_try(e, a, b) == -1, _ge_cf_try(e, b, a) == -1)), Int64(1)),
+        _dw_facts(_ge_cf_try(e, b, b) == 1, _ge_cf_try(e, a, b) == -1, _ge_cf_try(e, b, a) == -1)), Int64(1)),
     ("closure", (n::Int64) -> (ci = _GeClC{Int64}(); f = _ge_cl_f(ci); g = _ge_cl_g(ci); fb = _ge_cl_f(_GeClC{Bool}()); fd = _ge_cl_f(_GeClC{Any}());
-        _dw_bits(f(21n) == 21, g(14n) == 14, f isa Function, applicable(f, n), !applicable(f, true), applicable(g, n), !applicable(g, true),
+        _dw_facts(f(21n) == 21, g(14n) == 14, f isa Function, applicable(f, n), !applicable(f, true), applicable(g, n), !applicable(g, true),
                  applicable(fb, true), !applicable(fb, n), applicable(fd, n), applicable(fd, true))), Int64(1)),
     ("conflicting_generic_interfaces_no_conflict", (n::Int64) -> (c = n > 0 ? _GeCgC() : nothing;
-        _dw_bits(c isa _GeCgI{Int64}, c isa _GeCgA, c isa _GeCgI{String})), Int64(1)),
-    ("constructor_mixin", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCmC{Int64}, n) == 1, _ge_cm_try(_GeCmC{String}, n) < 0), Int64(0)),
-    ("constructor_mixin2", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCm2D{Int64}, n) == 1, _ge_cm_try(_GeCm2D{String}, n) < 0), Int64(0)),
-    ("constructor_mixin3", (n::Int64) -> _dw_bits(_ge_cm_try(_GeCm3C1, n) == 1, _ge_cm_try(_GeCm3C2, n) < 0), Int64(0)),
-    ("creation", (n::Int64) -> (a = _GeCrA{_GeCrU,_GeCrV,_GeCrW}(); b = _GeCrB(); c = _GeCrC{_GeCrV}(); d = _GeCrD{_GeCrU,_GeCrV,_GeCrW}();
-        _dw_bits(_ge_cr_same(_GeCrA{_GeCrW,_GeCrU,_GeCrV}(), _ge_cr_shift(a)), _ge_cr_same(_GeCrA{_GeCrW,_GeCrV,_GeCrU}(), _ge_cr_swap(a)),
+        _dw_facts(c isa _GeCgI{Int64}, c isa _GeCgA, c isa _GeCgI{String})), Int64(1)),
+    ("constructor_mixin", (n::Int64) -> _dw_facts(_ge_cm_try(n == 0 ? _GeCmC{Int64} : _GeCmC{String}, n) == 1,
+        _ge_cm_try(n == 0 ? _GeCmC{String} : _GeCmC{Int64}, n) < 0), Int64(0)),
+    ("constructor_mixin2", (n::Int64) -> _dw_facts(_ge_cm_try(n == 0 ? _GeCm2D{Int64} : _GeCm2D{String}, n) == 1,
+        _ge_cm_try(n == 0 ? _GeCm2D{String} : _GeCm2D{Int64}, n) < 0), Int64(0)),
+    ("constructor_mixin3", (n::Int64) -> _dw_facts(_ge_cm_try(n == 0 ? _GeCm3C1 : _GeCm3C2, n) == 1,
+        _ge_cm_try(n == 0 ? _GeCm3C2 : _GeCm3C1, n) < 0), Int64(0)),
+    ("creation", (n::Int64) -> (a = n == 1 ? _GeCrA{_GeCrU,_GeCrV,_GeCrW}() : _GeCrA{_GeCrW,_GeCrU,_GeCrV}();
+        b = n == 1 ? _GeCrB() : _GeCrC{_GeCrW}(); c = n == 1 ? _GeCrC{_GeCrV}() : _GeCrC{_GeCrU}();
+        d = n == 1 ? _GeCrD{_GeCrU,_GeCrV,_GeCrW}() : _GeCrD{_GeCrW,_GeCrV,_GeCrU}();
+        _dw_facts(_ge_cr_same(_GeCrA{_GeCrW,_GeCrU,_GeCrV}(), _ge_cr_shift(a)), _ge_cr_same(_GeCrA{_GeCrW,_GeCrV,_GeCrU}(), _ge_cr_swap(a)),
                  _ge_cr_same(_GeCrA{_GeCrU,_GeCrU,_GeCrU}(), _ge_cr_first(a)), _ge_cr_same(_GeCrA{_GeCrW,_GeCrW,_GeCrW}(), _ge_cr_last(a)),
                  _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(a)), _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(b)), _ge_cr_same(_GeCrUVW(), _ge_cr_wrap(c)),
                  _ge_cr_same(_GeCrA{_GeCrA{_GeCrV,_GeCrV,_GeCrV},_GeCrA{_GeCrW,_GeCrW,_GeCrW},_GeCrA{_GeCrU,_GeCrU,_GeCrU}}(), _ge_cr_wrap(d)))), Int64(1)),
-    ("deep", (n::Int64) -> (z = _GeDZ(); n1 = _ge_d_add1(z); n2 = _ge_d_add1(n1); n3 = _ge_d_add1(n2); n4 = _ge_d_add4(z);
-        n10 = _ge_d_add1(_ge_d_add1(_ge_d_add4(_ge_d_add4(z))));
-        _dw_bits(z isa _GeDZ, n1 isa _GeDS{_GeDZ}, n2 isa _GeDS{_GeDS{_GeDZ}}, n3 isa _GeDS{_GeDS{_GeDS{_GeDZ}}},
+    ("deep", (n::Int64) -> (z = n == 0 ? _GeDZ() : _ge_d_add1(_GeDZ()); n1 = _ge_d_add1(z); n2 = _ge_d_add1(n1); n3 = _ge_d_add1(n2);
+        n4 = _ge_d_add4(z); n10 = _ge_d_add1(_ge_d_add1(_ge_d_add4(_ge_d_add4(z))));
+        _dw_facts(z isa _GeDZ, n1 isa _GeDS{_GeDZ}, n2 isa _GeDS{_GeDS{_GeDZ}}, n3 isa _GeDS{_GeDS{_GeDS{_GeDZ}}},
                  n10 isa _GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDS{_GeDZ}}}}}}}}}},
                  !(z isa _GeDS), !(n1 isa _GeDZ), !(n1 isa _GeDS{<:_GeDS}), !(n2 isa _GeDZ), !(n2 isa _GeDS{_GeDZ}), !(n2 isa _GeDS{<:_GeDS{<:_GeDS}}),
                  n4 isa _GeDS{<:_GeDS}, n4 isa _GeDS{<:_GeDS{<:_GeDS}}, n4 isa _GeDS{<:_GeDS{<:_GeDS{<:_GeDS}}},
                  !(n4 isa _GeDS{<:_GeDS{<:_GeDS{<:_GeDS{<:_GeDS}}}}),
                  _ge_d_even(z), !_ge_d_even(n1), _ge_d_even(n2), !_ge_d_even(n3), _ge_d_even(n4),
-                 _ge_d_int(z) == 0, _ge_d_int(n1) == 1, _ge_d_int(n2) == 2) * 1000 + _ge_d_int(n10) + n), Int64(0)),
-    ("f_bounded_equality", (n::Int64) -> (r = _GeFeReal(); b = _GeFeBar();
-        _dw_bits(typeof(r) === _GeFeReal, _ge_fe_t(r) === _GeFeReal, typeof(r) === _ge_fe_t(r),
+                 _ge_d_int(z) == 0, _ge_d_int(n1) == 1, _ge_d_int(n2) == 2, _ge_d_int(n10) == 10)), Int64(0)),
+    ("f_bounded_equality", (n::Int64) -> (r = n == 1 ? _GeFeReal() : _GeFeComplex(); b = n == 1 ? _GeFeBar() : _GeFeBaz();
+        _dw_facts(typeof(r) === _GeFeReal, _ge_fe_t(r) === _GeFeReal, typeof(r) === _ge_fe_t(r),
                  typeof(b) === _GeFeBar, _ge_fe_f(b) === _GeFeBar, typeof(b) === _ge_fe_f(b))), Int64(1)),
-    ("f_bounded_quantification2", (n::Int64) -> (ce = _GeFq2ConceptEntity{_GeFq2Concept}();
-        _dw_bits(ce isa _GeFq2EntityApi{_GeFq2Concept}, _GeFq2Concept() isa _GeFq2EntityApi{_GeFq2Concept},
-                 _GeFq2Entities{_GeFq2Concept}() isa _GeFq2EntitiesApi{_GeFq2Concept})), Int64(1)),
-    ("f_bounded_quantification3", (n::Int64) -> (t1 = _ge_fq3_test(_GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}()); t2 = _ge_fq3_test(_GeFq3FBound2{_GeFq3Bar,_GeFq3Baz}());
-        _dw_bits(t1[1] isa _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}, t1[2] isa _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz},
+    ("f_bounded_quantification2", (n::Int64) -> (ce = n == 1 ? _GeFq2ConceptEntity{_GeFq2Concept}() : _GeFq2ConceptEntity{Int64}();
+        co = n == 1 ? _GeFq2Concept() : _GeFq2ConceptEntity{Int64}(); es = n == 1 ? _GeFq2Entities{_GeFq2Concept}() : _GeFq2Entities{Int64}();
+        _dw_facts(ce isa _GeFq2EntityApi{_GeFq2Concept}, co isa _GeFq2EntityApi{_GeFq2Concept}, es isa _GeFq2EntitiesApi{_GeFq2Concept})), Int64(1)),
+    ("f_bounded_quantification3", (n::Int64) -> (t1 = _ge_fq3_test(n == 1 ? _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}() : _GeFq3FBound1{_GeFq3Baz,_GeFq3Bar}());
+        t2 = _ge_fq3_test(n == 1 ? _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz}() : _GeFq3FBound2{_GeFq3Baz,_GeFq3Bar}());
+        _dw_facts(t1[1] isa _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}, t1[2] isa _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz},
                  t2[1] isa _GeFq3FBound1{_GeFq3Bar,_GeFq3Baz}, t2[2] isa _GeFq3FBound2{_GeFq3Bar,_GeFq3Baz})), Int64(1)),
-    ("f_bounded_quantification4", (n::Int64) -> (x = _GeFq4Foo{_GeFq4Foo}();
-        _dw_bits(typeof(x) === _GeFq4Foo{_GeFq4Foo}, x isa _GeFq4B{_GeFq4Foo{_GeFq4Foo}}, x isa _GeFq4A{_GeFq4Foo{_GeFq4Foo}})), Int64(1)),
-    ("f_bounded_quantification5", (n::Int64) -> typeof(_GeFq5A{_GeFq5B{Int64}}()) === _GeFq5A{_GeFq5B{Int64}}, Int64(1)),
-    ("field_mixin", (n::Int64) -> _dw_bits(_ge_fm_field(_GeFmC1{Int64}()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC1{Int64}()) isa _GeFmA{String},
-        _ge_fm_field(_GeFmC1{String}()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC1{String}()) isa _GeFmA{String},
-        _ge_fm_field(_GeFmC2()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC2()) isa _GeFmA{String},
-        _ge_fm_field(_GeFmC3()) isa _GeFmA{Int64}, _ge_fm_field(_GeFmC3()) isa _GeFmA{String}), Int64(1)),
-    ("field_mixin2", (n::Int64) -> _dw_bits(_ge_fm2_field(_GeFmC1{Int64}()) === Int64, _ge_fm2_field(_GeFmC1{String}()) === String,
-        _ge_fm2_field(_GeFmC2()) === Int64, _ge_fm2_field(_GeFmC3()) === String), Int64(1)),
-    ("field_mixin3", (n::Int64) -> _dw_bits(_ge_fm3_field(_GeFmC1{Int64}()), _ge_fm3_field(_GeFmC1{String}()),
-        _ge_fm3_field(_GeFmC2()), _ge_fm3_field(_GeFmC3())), Int64(1)),
-    ("field_mixin4", (n::Int64) -> _dw_bits(_ge_fm4_field(_GeFmC1{Int64}()), _ge_fm4_field(_GeFmC1{String}()),
-        _ge_fm4_field(_GeFmC2()), _ge_fm4_field(_GeFmC3())), Int64(1)),
-    ("field_mixin5", (n::Int64) -> _dw_bits(_ge_fm5_field(_GeFmC1{Int64}()) === Int64, _ge_fm5_field(_GeFmC1{String}()) === String,
-        _ge_fm5_field(_GeFmC2()) === Int64, _ge_fm5_field(_GeFmC3()) === String), Int64(1)),
-    ("field_mixin6", (n::Int64) -> _dw_bits(_ge_fm6_try(_GeFm6C1{Int64}) == 1, _ge_fm6_try(_GeFm6C2) == 1,
-        _ge_fm6_try(_GeFm6C1{String}) < 0, _ge_fm6_try(_GeFm6C3) < 0), Int64(1)),
+    ("f_bounded_quantification4", (n::Int64) -> (x = n == 1 ? _GeFq4Foo{_GeFq4Foo}() : _GeFq4Foo{Int64}();
+        _dw_facts(typeof(x) === _GeFq4Foo{_GeFq4Foo}, x isa _GeFq4B{_GeFq4Foo{_GeFq4Foo}}, x isa _GeFq4A{_GeFq4Foo{_GeFq4Foo}})), Int64(1)),
+    ("f_bounded_quantification5", (n::Int64) -> typeof(n == 1 ? _GeFq5A{_GeFq5B{Int64}}() : _GeFq5A{_GeFq5B{String}}()) === _GeFq5A{_GeFq5B{Int64}}, Int64(1)),
+    ("field_mixin", (n::Int64) -> (c1i = n == 1 ? _GeFmC1{Int64}() : _GeFmC1{String}(); c1s = n == 1 ? _GeFmC1{String}() : _GeFmC1{Int64}(); c2 = n == 1 ? _GeFmC2() : _GeFmC3(); c3 = n == 1 ? _GeFmC3() : _GeFmC2();
+        _dw_facts(_ge_fm_field(c1i) isa _GeFmA{Int64}, _ge_fm_field(c1i) isa _GeFmA{String},
+        _ge_fm_field(c1s) isa _GeFmA{Int64}, _ge_fm_field(c1s) isa _GeFmA{String}, _ge_fm_field(c2) isa _GeFmA{Int64}, _ge_fm_field(c2) isa _GeFmA{String},
+        _ge_fm_field(c3) isa _GeFmA{Int64}, _ge_fm_field(c3) isa _GeFmA{String})), Int64(1)),
+    ("field_mixin2", (n::Int64) -> (c1i = n == 1 ? _GeFmC1{Int64}() : _GeFmC1{String}(); c1s = n == 1 ? _GeFmC1{String}() : _GeFmC1{Int64}(); c2 = n == 1 ? _GeFmC2() : _GeFmC3(); c3 = n == 1 ? _GeFmC3() : _GeFmC2();
+        _dw_facts(_ge_fm2_field(c1i) === Int64, _ge_fm2_field(c1s) === String,
+        _ge_fm2_field(c2) === Int64, _ge_fm2_field(c3) === String)), Int64(1)),
+    ("field_mixin3", (n::Int64) -> (c1i = n == 1 ? _GeFmC1{Int64}() : _GeFmC1{String}(); c1s = n == 1 ? _GeFmC1{String}() : _GeFmC1{Int64}(); c2 = n == 1 ? _GeFmC2() : _GeFmC3(); c3 = n == 1 ? _GeFmC3() : _GeFmC2();
+        _dw_facts(_ge_fm3_field(c1i), _ge_fm3_field(c1s), _ge_fm3_field(c2), _ge_fm3_field(c3))), Int64(1)),
+    ("field_mixin4", (n::Int64) -> (c1i = n == 1 ? _GeFmC1{Int64}() : _GeFmC1{String}(); c1s = n == 1 ? _GeFmC1{String}() : _GeFmC1{Int64}(); c2 = n == 1 ? _GeFmC2() : _GeFmC3(); c3 = n == 1 ? _GeFmC3() : _GeFmC2();
+        _dw_facts(_ge_fm4_field(c1i), _ge_fm4_field(c1s), _ge_fm4_field(c2), _ge_fm4_field(c3))), Int64(1)),
+    ("field_mixin5", (n::Int64) -> (c1i = n == 1 ? _GeFmC1{Int64}() : _GeFmC1{String}(); c1s = n == 1 ? _GeFmC1{String}() : _GeFmC1{Int64}(); c2 = n == 1 ? _GeFmC2() : _GeFmC3(); c3 = n == 1 ? _GeFmC3() : _GeFmC2();
+        _dw_facts(_ge_fm5_field(c1i) === Int64, _ge_fm5_field(c1s) === String,
+        _ge_fm5_field(c2) === Int64, _ge_fm5_field(c3) === String)), Int64(1)),
+    ("field_mixin6", (n::Int64) -> _dw_facts(_ge_fm6_try(n == 1 ? _GeFm6C1{Int64} : _GeFm6C1{String}) == 1, _ge_fm6_try(n == 1 ? _GeFm6C2 : _GeFm6C3) == 1,
+        _ge_fm6_try(n == 1 ? _GeFm6C1{String} : _GeFm6C1{Int64}) < 0, _ge_fm6_try(n == 1 ? _GeFm6C3 : _GeFm6C2) < 0), Int64(1)),
     ("function_bounds", (x::Float64) -> (n = Int64(x);
-        _dw_bits(_ge_fb_h(-n, -n) === (Int64, Int64), _ge_fb_f(n) == 42, (try; _ge_fb_g(x, n) == x; catch e; !(e isa MethodError); end),
+        _dw_facts(_ge_fb_h(-n, -n) === (Int64, Int64), _ge_fb_f(n) == 42, (try; _ge_fb_g(x, n) == x; catch e; !(e isa MethodError); end),
                  _ge_fb_g(n, Int64(100)) == 42, (try; _ge_fb_f("42"); false; catch e; e isa MethodError; end),
                  (try; _ge_fb_g("hi", Int64(100)); false; catch e; e isa MethodError; end))), 42.0),
     ("function_dcall", (n::Int64) -> (l = Union{Int64,Float64}[n, 2n, 3n];
-        _dw_bits(_ge_dc_f(Int64, 40n, Int64(2)) == 42, _ge_dc_f(String, "hi", "!") == "hi!", _ge_dc_f(Any, 40n, Int64(2)) == 42,
+        _dw_facts(_ge_dc_f(Int64, 40n, Int64(2)) == 42, _ge_dc_f(String, "hi", "!") == "hi!", _ge_dc_f(Any, 40n, Int64(2)) == 42,
                  _ge_dc_f(Any, "hi", "!") == "hi!", (try; _ge_dc_foo1(_ge_dc_h, 42n); false; catch e; e isa MethodError; end),
                  (try; map(_ge_dc_h, l); false; catch e; e isa MethodError; end), map(x -> _ge_dc_h(Int64, x), l) == [1, 2, 3],
                  _ge_dc_foo(Int64, _ge_dc_h, 42n) == 42, _ge_dc_foo(Any, _ge_dc_h, 42n) == 42)), Int64(1)),
     ("function_type_as_type_argument", (n::Int64) -> (bar = _ge_ft_foo; dl = [_ge_ft_foo];
-        _dw_bits(_ge_ft_foo(n) == 42, bar(n) == 42, dl[1](n) == 42)), Int64(42)),
-    ("function_typedef", (n::Int64) -> _dw_bits(hasmethod(_ge_ftd_foo, Tuple{Vector{Any},Function,Real}), hasmethod(_ge_ftd_foo, Tuple{Vector{Int64},Function,Real}),
+        _dw_facts(_ge_ft_foo(n) == 42, bar(n) == 42, dl[1](n) == 42)), Int64(42)),
+    ("function_typedef", (n::Int64) -> _dw_facts(hasmethod(_ge_ftd_foo, Tuple{Vector{Any},Function,Real}), hasmethod(_ge_ftd_foo, Tuple{Vector{Int64},Function,Real}),
         hasmethod(_ge_ftd_foo, Tuple{Vector{Bool},Function,Real}), hasmethod(_ge_ftd_foo2, Tuple{Vector{Any},Function,Real}),
         hasmethod(_ge_ftd_foo2, Tuple{Vector{Int64},Function,Real}), hasmethod(_ge_ftd_foo2, Tuple{Vector{Bool},Function,Real}),
         hasmethod(_ge_ftd_foo3, Tuple{Vector{Any},Function,Real}), hasmethod(_ge_ftd_foo3, Tuple{Vector{Int64},Function,Real}),
@@ -19323,81 +17515,90 @@ _g("dart_generic", Any[
         t = _ge_fn_tinsert(t, n + 1, "  "); t = _ge_fn_tinsert(t, n + 2, "   "); it = _ge_fn_tmap(Int64, t, (s::String) -> Int64(ncodeunits(s)));
         _ge_fn_tfold(Int64, it, Int64(0), (i::Int64, s::Int64) -> i + s)), Int64(1)),
     ("generic_function_type_argument", (n::Int64) -> (list = [_ge_gfa_f]; push!(list, _ge_gfa_f(_ge_gfa_f)); list2 = [_ge_gfa_fb]; push!(list2, _ge_gfa_fb(_ge_gfa_fb));
-        _dw_bits(list isa Vector{typeof(_ge_gfa_f)}, eltype(list) <: Function, length(list) == 2 && list[2] === _ge_gfa_f,
+        _dw_facts(list isa Vector{typeof(_ge_gfa_f)}, eltype(list) <: Function, length(list) == 2 && list[2] === _ge_gfa_f,
                  length(list2) == 2 && list2[2] === _ge_gfa_fb, list[2](n) == n)), Int64(7)),
-    ("generic", (n::Int64) -> (d = _ge_g_mkd(); c = _ge_g_mkc(_GeGA, _GeGAA());
-        _dw_bits(d.caa_.b_ isa _GeGB{_GeGAA}, _ge_g_ist(d.caa_.b_, _GeGAA()), c isa _GeGC{_GeGA}, !(c isa _GeGC{_GeGAA}),
+    ("generic", (n::Int64) -> (bd = n == 1 ? _ge_g_mkd().caa_.b_ : _GeGB{_GeGA}(_GeGAA(), _GeGAA());
+        c = n == 1 ? _ge_g_mkc(_GeGA, _GeGAA()) : _ge_g_mkc(_GeGAA, _GeGAA());
+        _dw_facts(bd isa _GeGB{_GeGAA}, _ge_g_ist(bd, _GeGAA()), c isa _GeGC{_GeGA}, !(c isa _GeGC{_GeGAA}),
                  c.b_ isa _GeGB, !(c.b_ isa _GeGB{_GeGAA}), _ge_g_ist(c.b_, _GeGAA()), !_ge_g_ist(c.b_, _GeGAX()))), Int64(1)),
-    ("generic2", (n::Int64) -> _dw_bits(_ge_g2_foo(_GeG2A{Any}(), _GeG2B()), _ge_g2_foo(_GeG2A{Any}(), n), _ge_g2_foo(_GeG2A{Int64}(), _GeG2Obj()),
-        _ge_g2_foo(_GeG2A{Int64}(), "hest"), _ge_g2_foo(_GeG2A{_GeG2B}(), _GeG2B()), _ge_g2_foo(_GeG2A{_GeG2B}(), _GeG2Obj()),
-        _ge_g2_foo(_GeG2A{_GeG2B}(), n), _ge_g2_foo(_GeG2C(), n), _ge_g2_foo(_GeG2C(), _GeG2Obj()), _ge_g2_foo(_GeG2C(), "hest"),
-        _ge_g2_foo(_GeG2A{Vector{Int64}}(), Int64[]), _ge_g2_foo(_GeG2A{Vector{Int64}}(), String[])), Int64(1)),
+    ("generic2", (n::Int64) -> (ao = n == 1 ? _GeG2A{Any}() : _GeG2A{_GeG2B}(); ai = n == 1 ? _GeG2A{Int64}() : _GeG2A{Any}();
+        ab = n == 1 ? _GeG2A{_GeG2B}() : _GeG2A{Any}(); c = n == 1 ? _GeG2C() : _GeG2A{Any}(); al = n == 1 ? _GeG2A{Vector{Int64}}() : _GeG2A{Any}();
+        _dw_facts(_ge_g2_foo(ao, _GeG2B()), _ge_g2_foo(ao, n), _ge_g2_foo(ai, _GeG2Obj()), _ge_g2_foo(ai, "hest"), _ge_g2_foo(ab, _GeG2B()),
+                 _ge_g2_foo(ab, _GeG2Obj()), _ge_g2_foo(ab, n), _ge_g2_foo(c, n), _ge_g2_foo(c, _GeG2Obj()), _ge_g2_foo(c, "hest"),
+                 _ge_g2_foo(al, Int64[n]), _ge_g2_foo(al, String[]))), Int64(1)),
     ("generics", (n::Int64) -> (a = n; b = 2n; c = 3n; d = 4n; e = Dict{Int64,Int64}(); _ge_gs_takes_map(e);
         id = _GeGsLong{String,Int64,_GeGsLong{Int64,Vector{Int64},Dict{Int64,Dict{Int64,Int64}}}}();
-        _dw_bits(a < b, _ge_gs_myfunc(a < b, c > d) == 42, e[0] == 2, id isa _GeGsLong{String,Int64,<:_GeGsLong})), Int64(1)),
+        _dw_facts(a < b, _ge_gs_myfunc(a < b, c > d) == 42, e[0] == 2, id isa _GeGsLong{String,Int64,<:_GeGsLong})), Int64(1)),
     ("generics2", (n::Int64) -> (p1 = _GeGs2Pair{Int64,Int64}(n, Int64(2)); p2 = _GeGs2Pair{String,Int64}("1", Int64(2));
-        p1.fst + p1.snd + Int64(ncodeunits(p2.fst)) + p2.snd + (p1 isa _GeGs2A{Any} ? Int64(100) : Int64(0))), Int64(1)),
-    ("generics3", (n::Int64) -> (c4 = _GeG3C4{String}(); r = _ge_g3_f(c4);
-        _dw_bits(r isa _GeG3C5{_GeG3C1{String}}, r.x isa _GeG3C1{String}, c4 isa _GeG3C2{_GeG3C1{String}})), Int64(1)),
-    ("inheritance", (n::Int64) -> (a = _GeInA{String}(); b = _GeInB(); c = _GeInC();
-        _dw_bits(a isa Any, a isa _GeInAAbs{Any}, a isa _GeInAAbs{String}, !(a isa _GeInAAbs{Int64}), b isa Any, b isa _GeInAAbs{Any},
+        _dw_facts(p1.fst == n, p1.snd == 2, p2.fst == "1", p2.snd == 2, p1 isa _GeGs2A{Any}, p2 isa _GeGs2A{Any})), Int64(1)),
+    ("generics3", (n::Int64) -> (c4 = n == 1 ? _GeG3C4{String}() : _GeG3C4{Int64}(); r = _ge_g3_f(c4);
+        _dw_facts(r isa _GeG3C5{_GeG3C1{String}}, r.x isa _GeG3C1{String}, c4 isa _GeG3C2{_GeG3C1{String}})), Int64(1)),
+    ("inheritance", (n::Int64) -> (a = n == 1 ? _GeInA{String}() : _GeInA{Int64}(); b = n == 1 ? _GeInB() : _GeInA{String}();
+        c = n == 1 ? _GeInC() : _GeInA{String}();
+        _dw_facts(a isa Any, a isa _GeInAAbs{Any}, a isa _GeInAAbs{String}, !(a isa _GeInAAbs{Int64}), b isa Any, b isa _GeInAAbs{Any},
                  !(b isa _GeInAAbs{String}), c isa Any, c isa _GeInAAbs{Any}, !(c isa _GeInAAbs{String}), c isa _GeInBAbs)), Int64(1)),
-    ("instanceof", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io_main(); end; r), Int64(5)),
-    ("instanceof2", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io2_all(); end; r), Int64(5)),
-    ("instanceof3", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io3_all(_GeIo3A(), _GeIo3B{String}(), _GeIo3C(), _GeIo3D()); end; r), Int64(5)),
-    ("instanceof4", (n::Int64) -> _ge_io4_bfoo(_GeIo4B{_GeIo4BB}()), Int64(1)),
-    ("instanceof5", (n::Int64) -> _ge_io5_foo(_GeIo5D{_GeIo5B{Int64,Bool}}(), _GeIo5C{Bool,Int64}()), Int64(1)),
-    ("instantiate_tearoff_after_contravariance_check", (n::Int64) -> _dw_bits(applicable(_ge_itc_f(_GeItcC{_GeItcA}(), n), _GeItcAa()),
-        applicable(_ge_itc_f(_GeItcC{_GeItcB}(), n), _GeItcAa())), Int64(1)),
-    ("instantiate_tearoff_of_call", (n::Int64) -> _ge_itoc_test(_ge_itoc_f), Int64(1)),
-    ("instantiate_tearoff", (n::Int64) -> (if1 = (x::Int64) -> _ge_it_f(x); sf1 = (x::String) -> _ge_it_f(x); loc(x::T) where {T} = x;
-        if2 = (x::Int64) -> loc(x); sf2 = (x::String) -> loc(x); fn = _ge_it_bar(String);
-        (_ge_it_test(if1, sf1) * 256 + _ge_it_test(if2, sf2)) * 4 + 2 * Int64(fn("a", n) === (String, Int64)) + Int64(applicable(fn, n, n))), Int64(1)),
-    ("is_check", (n::Int64) -> _dw_bits(_ge_ic_foo(_GeIcA{Any}()), _ge_ic_foo(_GeIcA{Int64}()), _ge_ic_foo(_GeIcA{String}())), Int64(1)),
+    ("instanceof", (n::Int64) -> (r = _ge_io_main(); same = true; for i in 2:n; same &= _ge_io_main() == r; end; (r, same)), Int64(5)),
+    ("instanceof2", (n::Int64) -> (r = _ge_io2_all(); same = true; for i in 2:n; same &= _ge_io2_all() == r; end; (r, same)), Int64(5)),
+    ("instanceof3", (n::Int64) -> (r = _ge_io3_all(_GeIo3A(), _GeIo3B{String}(), _GeIo3C(), _GeIo3D()); same = true;
+        for i in 2:n; same &= _ge_io3_all(_GeIo3A(), _GeIo3B{String}(), _GeIo3C(), _GeIo3D()) == r; end; (r, same)), Int64(5)),
+    ("instanceof4", (n::Int64) -> _ge_io4_bfoo(n == 1 ? _GeIo4B{_GeIo4BB}() : _GeIo4B{Int64}()), Int64(1)),
+    ("instanceof5", (n::Int64) -> _ge_io5_foo(n == 1 ? _GeIo5D{_GeIo5B{Int64,Bool}}() : _GeIo5D{_GeIo5B{Bool,Int64}}(), _GeIo5C{Bool,Int64}()), Int64(1)),
+    ("instantiate_tearoff_after_contravariance_check", (n::Int64) -> _dw_facts(applicable(_ge_itc_f(n == 1 ? _GeItcC{_GeItcA}() : _GeItcC{_GeItcB}(), n), _GeItcAa()),
+        applicable(_ge_itc_f(n == 1 ? _GeItcC{_GeItcB}() : _GeItcC{_GeItcA}(), n), _GeItcAa())), Int64(1)),
+    ("instantiate_tearoff_of_call", (n::Int64) -> _ge_itoc_test(n == 1 ? _ge_itoc_f : _ge_itoc_g, n), Int64(1)),
+    ("instantiate_tearoff", (n::Int64) -> (if1 = n == 1 ? ((x::Int64) -> _ge_it_f(x)) : ((x::Int64) -> _ge_it_f(x) + 1);
+        sf1 = n == 1 ? ((x::String) -> _ge_it_f(x)) : ((x::String) -> _ge_it_f(x) * "!"); loc(x::T) where {T} = x;
+        if2 = n == 1 ? ((x::Int64) -> loc(x)) : ((x::Int64) -> loc(x) + 1); sf2 = n == 1 ? ((x::String) -> loc(x)) : ((x::String) -> loc(x) * "!");
+        fn = _ge_it_bar(n == 1 ? String : Any);
+        (_ge_it_test(if1, sf1, n), _ge_it_test(if2, sf2, n), _dw_facts(fn("a", n) === (String, Int64), applicable(fn, n, n)))), Int64(1)),
+    ("is_check", (n::Int64) -> _dw_facts(_ge_ic_foo(n == 1 ? _GeIcA{Any}() : _GeIcA{Int64}()), _ge_ic_foo(n == 1 ? _GeIcA{Int64}() : _GeIcA{String}()),
+        _ge_ic_foo(n == 1 ? _GeIcA{String}() : _GeIcA{Int64}())), Int64(1)),
     ("list_checked", (n::Int64) -> (v = n > 0 ? String[] : Int64[];
         try; t = v::Vector{Int64}; Int64(length(t)); catch e; e isa TypeError ? Int64(-1) : Int64(-2); end), Int64(1)),
     ("local_functions", (n::Int64) -> (h(m::Dict{X,Y}, x::X) where {X,Y} = m[x];
-        _dw_bits(_ge_lf_f(h) == 42, _ge_lf_f(function (m::Dict{X,Y}, x::X) where {X,Y}; m[x]; end) == 42)), Int64(1)),
-    ("many_generic_instanceof", (n::Int64) -> (r = Int64(0); for i in 1:n; r = _ge_io_main(); end; r), Int64(20)),
-    ("method_types", (n::Int64) -> _dw_bits(hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},Int64}), hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},String}),
+        _dw_facts(_ge_lf_f(h) == 42, _ge_lf_f(function (m::Dict{X,Y}, x::X) where {X,Y}; m[x]; end) == 42)), Int64(1)),
+    ("many_generic_instanceof", (n::Int64) -> (r = _ge_io_main(); same = true; for i in 2:n; same &= _ge_io_main() == r; end; (r, same)), Int64(20)),
+    ("method_types", (n::Int64) -> _dw_facts(hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},Int64}), hasmethod(_ge_mt_convert1, Tuple{_GeMtClass{String},String}),
         hasmethod(_ge_mt_convert2, Tuple{_GeMtClass{String},Type{Int64},String}), hasmethod(_ge_mt_convert2, Tuple{_GeMtClass{String},Type{Int64},Int64}),
         hasmethod(_ge_mt_convert3, Tuple{Type{Int64},String}), hasmethod(_ge_mt_convert3, Tuple{Any,Any,Any})), Int64(1)),
-    ("native", (n::Int64) -> _dw_bits(_ge_na_foo(_GeNaA{AbstractVector{_GeNaB}}(), _GeNaB[]), _ge_na_foo(_GeNaA{AbstractVector{_GeNaC}}(), _GeNaB[]),
-        _ge_na_foo(_GeNaA{Union{AbstractString,Regex}}(), "hest"), _ge_na_foo(_GeNaA{AbstractString}(), "hest"), _ge_na_foo(_GeNaA{_GeNaC}(), "hest")), Int64(1)),
+    ("native", (n::Int64) -> (vb = n == 1 ? _GeNaB[] : _GeNaC[]; h = n == 1 ? "hest" : n;
+        _dw_facts(_ge_na_foo(_GeNaA{AbstractVector{_GeNaB}}(), vb), _ge_na_foo(_GeNaA{AbstractVector{_GeNaC}}(), vb),
+                 _ge_na_foo(_GeNaA{Union{AbstractString,Regex}}(), h), _ge_na_foo(_GeNaA{AbstractString}(), h), _ge_na_foo(_GeNaA{_GeNaC}(), h))), Int64(1)),
     ("no_such_method_dispatcher", (n::Int64) -> (a = _GeNsAa(); b = _GeNsB(); c = _GeNsC();
-        _dw_bits(_ge_ns_foo(a, Int64, _GeNsA) == 123, _ge_ns_bar(b, Int64, _GeNsA, n) == 2, _ge_ns_bar(b, n) == 2, _ge_ns_bar(b, Int64, _GeNsA) == 123,
+        _dw_facts(_ge_ns_foo(a, Int64, _GeNsA) == 123, _ge_ns_bar(b, Int64, _GeNsA, n) == 2, _ge_ns_bar(b, n) == 2, _ge_ns_bar(b, Int64, _GeNsA) == 123,
                  _ge_ns_bar(b, Int64, _GeNsA, 2n) == 3, _ge_ns_bar(b, Int64, n) == 123, _ge_ns_bar(b, Int64, _GeNsA, n, 2, 3) == 123,
                  _ge_ns_bar(b, Int64, _GeNsA, n, 2; foo = 3) == 123, _ge_ns_cbar(c, Int64, _GeNsA, 100n; n1 = 101, n2 = 102) == 123,
                  _ge_ns_cbar(c, Int64, _GeNsA, 100n; n2 = 102, n1 = 101) == 123)), Int64(1)),
-    ("object_type", (n::Int64) -> _ge_ot_test(_GeOtTester{Any}(), _GeOtObject()), Int64(1)),
-    ("parameterized_extends", (n::Int64) -> (a = _GePeA{String}(); b = _GePeB{String,_GePeA{String}}(); c = _GePeC{_GePeA{String},String}();
-        _dw_bits(a isa Any, a isa _GePeA{Any}, a isa _GePeA{String}, !(a isa _GePeA{Int64}),
+    ("object_type", (n::Int64) -> _ge_ot_test(n == 1 ? _GeOtTester{Any}() : _GeOtTester{Int64}(), _GeOtObject()), Int64(1)),
+    ("parameterized_extends", (n::Int64) -> (a = n == 1 ? _GePeA{String}() : _GePeA{Int64}();
+        b = n == 1 ? _GePeB{String,_GePeA{String}}() : _GePeB{Int64,_GePeA{Int64}}(); c = n == 1 ? _GePeC{_GePeA{String},String}() : _GePeC{_GePeA{Int64},Int64}();
+        _dw_facts(a isa Any, a isa _GePeA{Any}, a isa _GePeA{String}, !(a isa _GePeA{Int64}),
                  b isa Any, b isa _GePeB{Any,_GePeA{Any}}, b isa _GePeB{String,_GePeA{String}}, !(b isa _GePeB{Int64,_GePeA{Int64}}),
                  c isa Any, c isa _GePeC{_GePeA{Any},Any}, c isa _GePeC{_GePeA{String},String}, !(c isa _GePeC{_GePeA{Int64},Int64}))), Int64(1)),
-    ("recursive_generic", (n::Int64) -> (c = _GeRgC{_GeRgD}(); e = _GeRgE{Int64,String}();
-        _dw_bits(typeof(e) === _ge_rg_type(_GeRgE{Int64,String}), e isa _GeRgF{_GeRgE{Int64,Any},String}, _ge_rg_m(c) == 456,
+    ("recursive_generic", (n::Int64) -> (c = n == 1 ? _GeRgC{_GeRgD}() : _GeRgC{Int64}(); e = n == 1 ? _GeRgE{Int64,String}() : _GeRgE{String,Int64}();
+        _dw_facts(typeof(e) === _ge_rg_type(_GeRgE{Int64,String}), e isa _GeRgF{_GeRgE{Int64,Any},String}, _ge_rg_m(c) == 456,
                  _ge_rg_ct(c) === _GeRgD, _ge_rg_st(c) === _GeRgC{_GeRgD})), Int64(1)),
-    ("regress_45767", (n::Int64) -> _dw_bits(_GeR45A{Bool}() isa _GeR45I{_GeR45A{Any}}, _GeR45B{Bool}() isa _GeR45I{_GeR45B{Union{Nothing,Bool}}},
-        _GeR45B{Bool}() isa _GeR45I{_GeR45B{Bool}}), Int64(1)),
-    ("reify_typevar_static", (b::Bool) -> _dw_bits(_ge_rt_factory(Any, b).x === nothing, _ge_rt_redirecting(Any, b).x === nothing,
+    ("regress_45767", (n::Int64) -> (a = n == 1 ? _GeR45A{Bool}() : _GeR45B{Bool}(); b = n == 1 ? _GeR45B{Bool}() : _GeR45A{Bool}();
+        _dw_facts(a isa _GeR45I{_GeR45A{Any}}, b isa _GeR45I{_GeR45B{Union{Nothing,Bool}}}, b isa _GeR45I{_GeR45B{Bool}})), Int64(1)),
+    ("reify_typevar_static", (b::Bool) -> _dw_facts(_ge_rt_factory(Any, b).x === nothing, _ge_rt_redirecting(Any, b).x === nothing,
         _ge_rt_ordinary(Any, b).x === nothing, _ge_rt_ordinary(Int64, !b).x === Int64), false),
-    ("self_reference", (n::Int64) -> (x = _GeSrFoo{Int64}(); _dw_bits(x isa _GeSrBar{_GeSrFoo{Int64}}, typeof(x) === _GeSrFoo{Int64})), Int64(1)),
+    ("self_reference", (n::Int64) -> (x = n == 1 ? _GeSrFoo{Int64}() : _GeSrFoo{String}(); _dw_facts(x isa _GeSrBar{_GeSrFoo{Int64}}, typeof(x) === _GeSrFoo{Int64})), Int64(1)),
     ("sends", (a::Int64) -> (b = a + 1; c = a + 2; d = a + 3;
-        _dw_bits(_ge_se_f(_ge_se_g(Int64, String, 3)) === nothing, _ge_se_f(_ge_se_g(Int64, Vector{String}, 3)) === nothing,
+        _dw_facts(_ge_se_f(_ge_se_g(Int64, String, 3)) === nothing, _ge_se_f(_ge_se_g(Int64, Vector{String}, 3)) === nothing,
                  _ge_se_f(_ge_se_g(Int64, String, 3), 4) === nothing, _ge_se_f(_ge_se_g(Int64, Vector{String}, 3), 4) === nothing,
                  _ge_se_f(a < b, c > 3) === nothing, a < b, c > 3, c >> 3 == 0, c < d >> 3)), Int64(0)),
-    ("sync_star", (n::Int64) -> (s = Int64(0); ok = true; for x in _ge_ss_foo(n); ok &= x == 1; s += 1; end; _dw_bits(ok, s == 3)), Int64(1)),
-    ("syntax", (n::Int64) -> _ge_sy_test(_GeSyTest{Any,Any,Any,Any,Any}()) + 0n, Int64(1)),
+    ("sync_star", (n::Int64) -> (s = Int64(0); ok = true; for x in _ge_ss_foo(n); ok &= x == 1; s += 1; end; _dw_facts(ok, s == 3)), Int64(1)),
+    ("syntax", (n::Int64) -> _ge_sy_test(_GeSyTest{Any,Any,Any,Any,Any}(), n), Int64(1)),
     ("tearoff", (n::Int64) -> (c = _GeToC(); m(x::T, y::T) where {T<:Real} = min(x, y); f = min;
-        _dw_bits(_ge_to_test(min) == 3, _ge_to_test(Base.min) == 3, _ge_to_test((x, y) -> _ge_to_m(c, x, y)) == 3, _ge_to_test(m) == 3,
-                 _ge_to_test(f) == 3, _ge_to_m(c, 123n, Int64(456)) == 123, (try; _ge_to_m2(c, Int64, 123n, 456); false; catch e; e isa MethodError; end))), Int64(1)),
+        (_ge_to_test(min), _ge_to_test(Base.min), _ge_to_test((x, y) -> _ge_to_m(c, x, y)), _ge_to_test(m), _ge_to_test(f),
+         _dw_facts(_ge_to_m(c, 123n, Int64(456)) == 123, (try; _ge_to_m2(c, Int64, 123n, 456); false; catch e; e isa MethodError; end)))), Int64(1)),
     ("type_argument_in_super_type", (n::Int64) -> (b = _GeTsB(_GeTsC());
-        _dw_bits(b.field === _ge_ts_foo(b), (try; _ge_ts_bar(b); false; catch e; e isa TypeError; end))), Int64(1)),
+        _dw_facts(b.field === _ge_ts_foo(b), (try; _ge_ts_bar(b); false; catch e; e isa TypeError; end))), Int64(1)),
     ("type_argument_substitution", (n::Int64) -> (v = n != 42 ? _GeTasX{_GeTasB}() : _GeTasX{_GeTasA{String}}(); v isa _GeTasX{_GeTasA{String}}), Int64(1)),
     ("type_parameter", (n::Int64) -> (s1 = _ge_tp_a(Any).closure(); s2 = _ge_tp_bar(Any).closure(); s3 = _ge_tp_a(Int64).closure(); s4 = _ge_tp_bar(Int64).closure();
-        _dw_bits(s1 isa Set, s2 isa Set, s3 isa Set{Int64}, s3 isa Set{Float64}, s4 isa Set{Int64}, s4 isa Set{Float64})), Int64(1)),
-    ("type_parameter_literal", (n::Int64) -> _ge_tpl_gett(_GeTplD{Int64}()) === Int64, Int64(1)),
+        _dw_facts(s1 isa Set, s2 isa Set, s3 isa Set{Int64}, s3 isa Set{Float64}, s4 isa Set{Int64}, s4 isa Set{Float64})), Int64(1)),
+    ("type_parameter_literal", (n::Int64) -> _ge_tpl_gett(n == 1 ? _GeTplD{Int64}() : _GeTplD{String}()) === Int64, Int64(1)),
     ("typedef", (n::Int64) -> (d = (x::Int64, y::Int64) -> x + y; b = function (x::S, y::S) where {S}; x isa String ? x : y; end;
-        _dw_bits(applicable(d, n, Int64(2)), d(n, Int64(2)) == 3, b(n, Int64(2)) == 2, b("a", "b") == "a",
-                 _ge_td_gtest(_GeTdG{Int64,String}(), n, "s") == 31, _ge_td_gtest(_GeTdG{String,String}(), "t", "s") == 31)), Int64(1)),
+        (_dw_facts(applicable(d, n, Int64(2)), d(n, Int64(2)) == 3, b(n, Int64(2)) == 2, b("a", "b") == "a"),
+         _ge_td_gtest(_GeTdG{Int64,String}(), n, "s"), _ge_td_gtest(_GeTdG{String,String}(), "t", "s"))), Int64(1)),
 ])

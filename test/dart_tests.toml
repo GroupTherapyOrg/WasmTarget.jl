@@ -140,7 +140,7 @@ cases = ["dart_structural/always_throws"]
 
 ["pkg/dart2wasm/test/ir_tests/constant_string_ops.dart"]
 kind = "structural"
-what = "length and codeUnitAt of a constant string fold to constants; constant strings concatenate"
+what = "length and codeUnitAt of a constant string fold to constants; constant strings concatenate (constant by design: the golden pins that these fold to constants)"
 property = "a query Julia's optimizer folds on a constant string (its length, a code unit) is a constant in the module, no call; concatenation of constant strings emits one concatenation"
 cases = ["dart_structural/constant_string_ops"]
 
@@ -632,7 +632,7 @@ reason = "JS interop; WT's host contract is its own import set (1.F)"
 
 ["tests/web/wasm/large_const_set_test.dart"]
 kind = "structural"
-what = "a const set of 10,001 ints, more elements than array.new_fixed allows"
+what = "a const set of 10,001 ints, more elements than array.new_fixed allows (Julia has no constant set literal: the case builds the Set from a range, and its property is checked on the array WT emits for the set)"
 property = "a constant array longer than array.new_fixed's limit of 10,000 elements is allocated with array.new and filled, never one array.new_fixed past the limit"
 cases = ["dart_structural/large_const_set"]
 
@@ -653,7 +653,7 @@ reason = "JS interop and the host page; WT's host contract is its own import set
 
 ["tests/web/wasm/long_string_import_test.dart"]
 kind = "structural"
-what = "printing a string literal of 100,001 bytes, one past the JS shells' limit on import names"
+what = "printing a string literal of 100,001 bytes, one past the JS shells' limit on import names (constant by design: the string is a literal)"
 property = "a string constant longer than 100,000 bytes is emitted in a form every host loads, never as an import name past that limit"
 cases = ["dart_structural/long_string_import"]
 
@@ -744,7 +744,7 @@ reason = "JS interop; WT's host contract is its own import set (1.F)"
 
 ["tests/web/wasm/source_map_simple_test.dart"]
 kind = "structural"
-what = "the source map maps a thrown error's stack frames to dart file, line, column and function"
+what = "the source map maps a thrown error's stack frames to dart file, line, column and function (the case is the program that throws two calls deep; the frames are read once WT emits a module and its source map)"
 property = "WT's source map maps each frame of a thrown error's stack to the Julia file, line and function of its statement"
 cases = ["dart_structural/source_map_simple"]
 
@@ -1047,7 +1047,7 @@ cases = ["dart_closure/closure7"]
 
 ["tests/language/closure/closure8_test.dart"]
 kind = "behavior"
-what = "a generic class's tear-off passed as a callback parameter of another generic class (regression, no assertion)"
+what = "a generic class's tear-off passed as a callback parameter of another generic class (regression, no assertion; the port's forEach calls the callback on each item so the tear-off runs)"
 cases = ["dart_closure/closure8"]
 
 ["tests/language/closure/closure_test.dart"]
@@ -1082,32 +1082,32 @@ cases = ["dart_closure/dynamic_closure_param"]
 
 ["tests/language/closure/dynamic_test.dart"]
 kind = "behavior"
-what = "a closure with typed positional and named parameters invoked dynamically with named permutations, subtypes, missing/unknown arguments and wrong types"
+what = "a closure with typed positional and named parameters invoked dynamically with named permutations, subtypes, missing/unknown arguments and wrong types; Julia differs: a wrongly typed positional is a MethodError, a wrongly typed keyword a TypeError"
 cases = ["dart_closure/dynamic"]
 
 ["tests/language/closure/forwarding_stub_tearoff_generic_test.dart"]
 kind = "behavior"
-what = "a forwarding-stub tear-off through a generic interface accepts B and rejects A at call time"
+what = "a forwarding-stub tear-off through a generic interface accepts B and rejects A at call time; is void Function(Object) answered by applicable, true since the bound tear-off accepts any argument"
 cases = ["dart_closure/forwarding_stub_tearoff_generic"]
 
 ["tests/language/closure/forwarding_stub_tearoff_test.dart"]
 kind = "behavior"
-what = "a forwarding-stub tear-off through a covariant interface accepts B and rejects A at call time"
+what = "a forwarding-stub tear-off through a covariant interface accepts B and rejects A at call time; is void Function(Object) answered by applicable, true since the bound tear-off accepts any argument"
 cases = ["dart_closure/forwarding_stub_tearoff"]
 
 ["tests/language/closure/identity_equality_nosuchmethod_tearoff_test.dart"]
 kind = "behavior"
-what = "identity and equality of noSuchMethod super tear-offs from the two copies of a mixin and a plain tear-off"
+what = "identity and equality of noSuchMethod super tear-offs from the two copies of a mixin and a plain tear-off; Julia differs: the second mixin copy super tear-off and the plain tear-off are different types, so not =="
 cases = ["dart_closure/identity_equality_nosuchmethod_tearoff"]
 
 ["tests/language/closure/identity_equality_tearoff_test.dart"]
 kind = "behavior"
-what = "identity and equality of top-level, static, instance, generic-instantiated, const and mixin super tear-offs"
+what = "identity and equality of top-level, static, instance, generic-instantiated, const and mixin super tear-offs; Julia differs: the second mixin copy super tear-off and the plain tear-off are different types, so not =="
 cases = ["dart_closure/identity_equality_tearoff"]
 
 ["tests/language/closure/identity_equality_tostring_tearoff_test.dart"]
 kind = "behavior"
-what = "identity and equality of toString super tear-offs from the two copies of a mixin and a plain tear-off"
+what = "identity and equality of toString super tear-offs from the two copies of a mixin and a plain tear-off; Julia differs: the second mixin copy super tear-off and the plain tear-off are different types, so not =="
 cases = ["dart_closure/identity_equality_tostring_tearoff"]
 
 ["tests/language/closure/implicit1_test.dart"]
@@ -1177,7 +1177,7 @@ reason = "its only checks are reified rank-2 generic function types; Julia funct
 
 ["tests/language/closure/param_null_to_object_test.dart"]
 kind = "behavior"
-what = "closures whose Null/Never/String parameter types are weakened to Object? checked against function types"
+what = "closures whose Null/Never/String parameter types are weakened to Object? checked against function types; Julia differs: applicable answers by the parameter annotation, with no Null weakening and no Never case"
 cases = ["dart_closure/param_null_to_object"]
 
 ["tests/language/closure/parameter_default_type_checking_error_test.dart"]
@@ -1247,12 +1247,12 @@ reason = "its only check compares printed reified function types; Julia function
 
 ["tests/language/closure/tearoff_dynamic_test.dart"]
 kind = "behavior"
-what = "tear-offs and super tear-offs through static and dynamic receivers: equality, hashCode, wrong-argument throws, toString and noSuchMethod tear-offs (noSuchMethod part omitted)"
+what = "tear-offs and super tear-offs through static and dynamic receivers: equality, hashCode, wrong-argument throws, toString and noSuchMethod tear-offs (noSuchMethod part omitted); d.g == d.superG omitted since in Julia a super tear-off and a plain one are different types"
 cases = ["dart_closure/tearoff_dynamic"]
 
 ["tests/language/closure/tearoff_super_default_test.dart"]
 kind = "behavior"
-what = "a super tear-off and super calls of a method whose override has a different optional-positional default"
+what = "a super tear-off and super calls of a method whose override has a different optional-positional default; Julia differs: a one-argument super call forwards its default through dispatch and reaches the override"
 cases = ["dart_closure/tearoff_super_default"]
 
 ["tests/language/closure/type_arguments_test.dart"]
@@ -1312,12 +1312,12 @@ cases = ["dart_const/cast2"]
 
 ["tests/language/const/cast3_test.dart"]
 kind = "behavior"
-what = "a const generic class bounded by A whose field gets an implicit cast to T"
+what = "a const generic class bounded by A whose field gets an implicit cast to T (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/cast3"]
 
 ["tests/language/const/cast4_test.dart"]
 kind = "behavior"
-what = "a const subclass constructor forwarding an implicitly cast argument to a generic superclass"
+what = "a const subclass constructor forwarding an implicitly cast argument to a generic superclass (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/cast4"]
 
 ["tests/language/const/conditional_test.dart"]
@@ -1332,7 +1332,7 @@ cases = ["dart_const/const2"]
 
 ["tests/language/const/const3_test.dart"]
 kind = "behavior"
-what = "top-level constants computed from constants declared after them"
+what = "top-level constants computed from constants declared after them (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/const3"]
 
 ["tests/language/const/const4_lib.dart"]
@@ -1367,7 +1367,7 @@ reason = "every initializer is a CONST_TYPE_PARAMETER or CONST_WITH_TYPE_PARAMET
 
 ["tests/language/const/constant_type_variable_test.dart"]
 kind = "behavior"
-what = "a type parameter as a potentially constant expression: X, List<X>, 1 is X and a cast to List<X> in a const constructor"
+what = "a type parameter as a potentially constant expression: X, List<X>, 1 is X and a cast to List<X> in a const constructor (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/constant_type_variable"]
 
 ["tests/language/const/constants_test.dart"]
@@ -1392,12 +1392,12 @@ reason = "the only const constructor is a CONST_CONSTRUCTOR_WITH_MIXIN_WITH_FIEL
 
 ["tests/language/const/constructor_mixin3_test.dart"]
 kind = "behavior"
-what = "a zero-argument const constructor of a class with an empty mixin"
+what = "a zero-argument const constructor of a class with an empty mixin (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/constructor_mixin3"]
 
 ["tests/language/const/constructor_mixin_test.dart"]
 kind = "behavior"
-what = "a const constructor of a class with an empty mixin forwarding an argument to super"
+what = "a const constructor of a class with an empty mixin forwarding an argument to super (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/constructor_mixin"]
 
 ["tests/language/const/constructor_nonconst_field_test.dart"]
@@ -1412,7 +1412,7 @@ reason = "the initializer and the const invocation are INVALID_CONSTANT compile-
 
 ["tests/language/const/constructor_super2_test.dart"]
 kind = "behavior"
-what = "const subclass instances with distinct super fields are distinct and their own fields compare equal"
+what = "const subclass instances with distinct super fields are distinct and their own fields compare equal (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/constructor_super2"]
 
 ["tests/language/const/constructor_super_test.dart"]
@@ -1447,7 +1447,7 @@ cases = ["dart_const/double_in_int_op"]
 
 ["tests/language/const/dynamic_type_literal_test.dart"]
 kind = "behavior"
-what = "type literals as constants: identical to themselves and distinct const map keys (the duplicate-key map is a compile-time error)"
+what = "type literals as constants: identical to themselves and distinct from each other, compared with === (dart counts them as distinct const map keys; the duplicate-key map is a compile-time error)"
 cases = ["dart_const/dynamic_type_literal"]
 
 ["tests/language/const/error_multiply_initialized_test.dart"]
@@ -1457,17 +1457,17 @@ reason = "every multitest section is a compile-time error and the base program h
 
 ["tests/language/const/escape_frog_test.dart"]
 kind = "behavior"
-what = "a field initialized to a const instance of a generic class bounded by the owner, equal to another const instance"
+what = "a field initialized to a const instance of a generic class bounded by the owner, equal to another const instance (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/escape_frog"]
 
 ["tests/language/const/evaluation_test.dart"]
 kind = "behavior"
-what = "identical(-0.0, 0) evaluated as a const, final and var at top level, static, instance and local scope agree"
+what = "identical(-0.0, 0) evaluated as a const, final and var at top level, static, instance and local scope agree (Julia: -0.0 === 0 is false)"
 cases = ["dart_const/evaluation"]
 
 ["tests/language/const/factory_member_test.dart"]
 kind = "behavior"
-what = "a const redirecting factory of an abstract class with mutable members; its instance is identical to the subclass const instance with the default argument"
+what = "a const redirecting factory of an abstract class with mutable members; its instance is identical to the subclass const instance with the default argument (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/factory_member"]
 
 ["tests/language/const/factory_redirection_test.dart"]
@@ -1497,7 +1497,7 @@ cases = ["dart_const/global"]
 
 ["tests/language/const/inference_test.dart"]
 kind = "behavior"
-what = "constants inferred inside generic functions use the least closure of their type parameters (List<Never>, Never Function(Object?))"
+what = "constants inferred inside generic functions use the least closure of their type parameters (List<Never>, Never Function(Object?)) (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/inference"]
 
 ["tests/language/const/init2_test.dart"]
@@ -1507,7 +1507,7 @@ cases = ["dart_const/init2"]
 
 ["tests/language/const/init_test.dart"]
 kind = "behavior"
-what = "static const fields initialized from one another and from a const constructor"
+what = "static const fields initialized from one another and from a const constructor (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/init"]
 
 ["tests/language/const/instance_field_test.dart"]
@@ -1527,7 +1527,7 @@ cases = ["dart_const/instantiated_function_constant"]
 
 ["tests/language/const/list_test.dart"]
 kind = "behavior"
-what = "list equality of fixed and growable lists and identity of canonicalized const list literals"
+what = "list equality of fixed and growable lists and identity of canonicalized const list literals (Julia: == on vectors compares elements, so equal fresh lists are ==)"
 cases = ["dart_const/list"]
 
 ["tests/language/const/local_test.dart"]
@@ -1552,7 +1552,7 @@ reason = "both const maps are CONST_MAP_KEY_NOT_PRIMITIVE_EQUALITY compile-time 
 
 ["tests/language/const/map4_test.dart"]
 kind = "behavior"
-what = "equality of fresh maps and of canonicalized const maps with differing type arguments"
+what = "equality of fresh maps and of const maps with differing type arguments (Julia: == on Dicts compares contents, so all are ==)"
 cases = ["dart_const/map4"]
 
 ["tests/language/const/map5_test.dart"]
@@ -1572,12 +1572,12 @@ cases = ["dart_const/map_hashcode_override2"]
 
 ["tests/language/const/map_hashcode_override_legacy_test.dart"]
 kind = "behavior"
-what = "a const map whose key class overrides hashCode to throw uses identity hashing, at language version 2.19"
+what = "a const map whose key class overrides hashCode to throw uses identity hashing, at language version 2.19 (Julia: an IdDict, so 1.0 misses and Nasty(1) is identical to the const key)"
 cases = ["dart_const/map_hashcode_override_legacy"]
 
 ["tests/language/const/map_hashcode_override_test.dart"]
 kind = "behavior"
-what = "a const map whose key class overrides hashCode to throw uses identity hashing, at language version 2.19"
+what = "a const map whose key class overrides hashCode to throw uses identity hashing, at language version 2.19 (Julia: an IdDict, so 1.0 misses and Nasty(1) is identical to the const key)"
 cases = ["dart_const/map_hashcode_override"]
 
 ["tests/language/const/map_null_lookup_test.dart"]
@@ -1617,8 +1617,8 @@ reason = "the default is a NON_CONSTANT_DEFAULT_VALUE compile-time error and mai
 
 ["tests/language/const/prefixed_static.dart"]
 kind = "not_portable"
-what = "library-prefixed static members (a const field, a static method, a constructor tear-off) as constant expressions; no main"
-reason = "a compile-only file of dart library prefixes with no main and no runtime check, imported by no test at the pin"
+what = "library-prefixed static members (a const field, a static method, a constructor tear-off) as constant expressions"
+reason = "a compile-only file with no main that no test imports; nothing runs"
 
 ["tests/language/const/primitive_equality_error_test.dart"]
 kind = "not_portable"
@@ -1627,7 +1627,7 @@ reason = "every const collection is a NOT_PRIMITIVE_EQUALITY compile-time error 
 
 ["tests/language/const/primitive_equality_test.dart"]
 kind = "behavior"
-what = "a const set and map of objects with primitive equality (null, bools, ints, strings, symbols, types, instances, enum values)"
+what = "a const set of objects with primitive equality (null, bools, ints, strings, symbols, instances, enum values) (Julia: isequal makes false and 0 one element)"
 cases = ["dart_const/primitive_equality"]
 
 ["tests/language/const/qq_test.dart"]
@@ -1637,7 +1637,7 @@ cases = ["dart_const/qq"]
 
 ["tests/language/const/redirect_skips_supertype_test.dart"]
 kind = "behavior"
-what = "a const constructor redirecting to a named one that skips the cyclic super initializer"
+what = "a const constructor redirecting to a named one that skips the cyclic super initializer (constant by design: dart's const evaluation, which Julia's inference folds)"
 cases = ["dart_const/redirect_skips_supertype"]
 
 ["tests/language/const/redirecting_factory_test.dart"]
@@ -1762,7 +1762,7 @@ reason = "the test is dart front-end diagnostics of literals (its expectations a
 
 ["tests/language/double_literals/double_literal_coercion_test.dart"]
 kind = "behavior"
-what = "integer literals passed where a double is expected are the double of the same value, signed zero and powers of two included"
+what = "integer literals assigned where a double is expected are the double of the same value: 112 of the file's 116 checks, its four literals past Int128 (BigInt in Julia) left out; Julia's -0 is the integer 0 and its hex literals are unsigned, so native answers false for -0 and every negative hex literal"
 cases = ["dart_language/double_literals_double_literal_coercion"]
 
 ["tests/language/double_literals/implicit_double_context_test.dart"]
@@ -1812,37 +1812,37 @@ cases = ["dart_exception/finally12"]
 
 ["tests/language/exception/finally1_test.dart"]
 kind = "behavior"
-what = "return in try runs finally after the return value is taken"
+what = "return in try runs finally after the return value is taken (step order recorded)"
 cases = ["dart_exception/finally1"]
 
 ["tests/language/exception/finally2_test.dart"]
 kind = "behavior"
-what = "return through two nested finally blocks"
+what = "return through two nested finally blocks (step order recorded)"
 cases = ["dart_exception/finally2"]
 
 ["tests/language/exception/finally3_test.dart"]
 kind = "behavior"
-what = "labeled continue of an outer loop out of nested try/finally, then return through finally"
+what = "labeled continue of an outer loop out of nested try/finally, then return through finally (step order recorded)"
 cases = ["dart_exception/finally3"]
 
 ["tests/language/exception/finally4_test.dart"]
 kind = "behavior"
-what = "return after a try/finally; a later try/finally never runs"
+what = "return after a try/finally; a later try/finally never runs (step order recorded)"
 cases = ["dart_exception/finally4"]
 
 ["tests/language/exception/finally5_test.dart"]
 kind = "behavior"
-what = "returns through nested finally blocks on two parameter-chosen paths"
+what = "returns through nested finally blocks on two parameter-chosen paths (step order recorded)"
 cases = ["dart_exception/finally5"]
 
 ["tests/language/exception/finally6_test.dart"]
 kind = "behavior"
-what = "break of an inner labeled loop inside nested try/finally"
+what = "break of an inner labeled loop inside nested try/finally (step order recorded)"
 cases = ["dart_exception/finally6"]
 
 ["tests/language/exception/finally7_test.dart"]
 kind = "behavior"
-what = "exception thrown from a closure capturing a variable; catch and finally call another closure"
+what = "exception thrown from a closure capturing a variable; catch and finally call another closure (step order recorded)"
 cases = ["dart_exception/finally7"]
 
 ["tests/language/exception/finally8_test.dart"]
@@ -2067,502 +2067,502 @@ cases = []
 
 ["tests/language/function_type/function_type0_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F2 F3 F11 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F2 F3 F11 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type0"]
 
 ["tests/language/function_type/function_type10_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type10"]
 
 ["tests/language/function_type/function_type11_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type11"]
 
 ["tests/language/function_type/function_type12_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F4 F11 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F4 F11 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type12"]
 
 ["tests/language/function_type/function_type13_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F8 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F8 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type13"]
 
 ["tests/language/function_type/function_type14_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F11 F17 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F11 F17 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type14"]
 
 ["tests/language/function_type/function_type15_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F8 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F8 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type15"]
 
 ["tests/language/function_type/function_type16_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F11 F16 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F11 F16 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type16"]
 
 ["tests/language/function_type/function_type17_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F11 F16 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F11 F16 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type17"]
 
 ["tests/language/function_type/function_type18_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F11 F16 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F11 F16 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type18"]
 
 ["tests/language/function_type/function_type19_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F11 F16 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F11 F16 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type19"]
 
 ["tests/language/function_type/function_type1_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F19 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F19 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type1"]
 
 ["tests/language/function_type/function_type20_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type20"]
 
 ["tests/language/function_type/function_type21_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type21"]
 
 ["tests/language/function_type/function_type22_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F1 F2 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F1 F2 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type22"]
 
 ["tests/language/function_type/function_type23_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F11 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F11 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type23"]
 
 ["tests/language/function_type/function_type24_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F11 F17 F19 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F11 F17 F19 F21 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type24"]
 
 ["tests/language/function_type/function_type25_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F23) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F23) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type25"]
 
 ["tests/language/function_type/function_type26_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type26"]
 
 ["tests/language/function_type/function_type27_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F19 F21 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type27"]
 
 ["tests/language/function_type/function_type28_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F11 F17 F18 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F11 F17 F18 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type28"]
 
 ["tests/language/function_type/function_type29_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F20 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F11 F20 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type29"]
 
 ["tests/language/function_type/function_type2_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F5 F11 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F5 F11 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type2"]
 
 ["tests/language/function_type/function_type30_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type30"]
 
 ["tests/language/function_type/function_type31_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F20 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F11 F20 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type31"]
 
 ["tests/language/function_type/function_type32_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F13 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F13 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type32"]
 
 ["tests/language/function_type/function_type33_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F11 F13 F19 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F4 F11 F13 F19 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type33"]
 
 ["tests/language/function_type/function_type34_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F1 F3 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F1 F3 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type34"]
 
 ["tests/language/function_type/function_type35_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F13 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F13 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type35"]
 
 ["tests/language/function_type/function_type36_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type36"]
 
 ["tests/language/function_type/function_type37_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F19 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type37"]
 
 ["tests/language/function_type/function_type38_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F4 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F2 F4 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type38"]
 
 ["tests/language/function_type/function_type39_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F13 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F13 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type39"]
 
 ["tests/language/function_type/function_type3_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F5 F11 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F5 F11 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type3"]
 
 ["tests/language/function_type/function_type40_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F9 F16 F18 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F9 F16 F18 F22 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type40"]
 
 ["tests/language/function_type/function_type41_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F9 F16 F18 F22 F23) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F9 F16 F18 F22 F23) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type41"]
 
 ["tests/language/function_type/function_type42_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F9 F16 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F9 F16 F18 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type42"]
 
 ["tests/language/function_type/function_type43_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F9 F16 F18 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F9 F16 F18 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type43"]
 
 ["tests/language/function_type/function_type44_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F12 F14 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F12 F14 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type44"]
 
 ["tests/language/function_type/function_type45_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F12 F14 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F3 F4 F12 F14 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type45"]
 
 ["tests/language/function_type/function_type46_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F3 F4 F14 F16) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F3 F4 F14 F16) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type46"]
 
 ["tests/language/function_type/function_type47_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F3 F4 F14 F16) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F1 F3 F4 F14 F16) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type47"]
 
 ["tests/language/function_type/function_type48_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F3 F4 F9 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F3 F4 F9 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type48"]
 
 ["tests/language/function_type/function_type49_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F4 F9 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F3 F4 F9 F23) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type49"]
 
 ["tests/language/function_type/function_type4_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F17 F19 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F2 F4 F17 F19 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type4"]
 
 ["tests/language/function_type/function_type50_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F4 F9 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F4 F9 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type50"]
 
 ["tests/language/function_type/function_type51_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F4 F9 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F4 F9 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type51"]
 
 ["tests/language/function_type/function_type52_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F4 F9 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F4 F9 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type52"]
 
 ["tests/language/function_type/function_type53_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F4 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F4 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type53"]
 
 ["tests/language/function_type/function_type54_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F9 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F9 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type54"]
 
 ["tests/language/function_type/function_type55_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, type-variable return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type55"]
 
 ["tests/language/function_type/function_type56_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F1 F3 F14 F16 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F1 F3 F14 F16 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type56"]
 
 ["tests/language/function_type/function_type57_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F4 F13 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F4 F13 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type57"]
 
 ["tests/language/function_type/function_type58_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type58"]
 
 ["tests/language/function_type/function_type59_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F4 F13 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F4 F13 F14 F17 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type59"]
 
 ["tests/language/function_type/function_type5_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type5"]
 
 ["tests/language/function_type/function_type60_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type60"]
 
 ["tests/language/function_type/function_type61_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type61"]
 
 ["tests/language/function_type/function_type62_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type62"]
 
 ["tests/language/function_type/function_type63_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F14 F16 F20) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type63"]
 
 ["tests/language/function_type/function_type64_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F12 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F12 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type64"]
 
 ["tests/language/function_type/function_type65_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F12 F17 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F12 F17 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type65"]
 
 ["tests/language/function_type/function_type66_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F5 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F5 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type66"]
 
 ["tests/language/function_type/function_type67_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F1 F3 F5 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F1 F3 F5 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type67"]
 
 ["tests/language/function_type/function_type68_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type68"]
 
 ["tests/language/function_type/function_type69_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type69"]
 
 ["tests/language/function_type/function_type6_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type6"]
 
 ["tests/language/function_type/function_type70_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F16 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F16 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type70"]
 
 ["tests/language/function_type/function_type71_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type71"]
 
 ["tests/language/function_type/function_type72_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F14 F16 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F3 F14 F16 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type72"]
 
 ["tests/language/function_type/function_type73_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type73"]
 
 ["tests/language/function_type/function_type74_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type74"]
 
 ["tests/language/function_type/function_type75_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F16 F19 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type75"]
 
 ["tests/language/function_type/function_type76_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F17 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F14 F17 F19 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type76"]
 
 ["tests/language/function_type/function_type77_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type77"]
 
 ["tests/language/function_type/function_type78_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type78"]
 
 ["tests/language/function_type/function_type79_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F17 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type79"]
 
 ["tests/language/function_type/function_type7_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F18 F19) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F9 F18 F19) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type7"]
 
 ["tests/language/function_type/function_type80_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F20 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F20 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type80"]
 
 ["tests/language/function_type/function_type81_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type81"]
 
 ["tests/language/function_type/function_type82_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F6 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F6 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type82"]
 
 ["tests/language/function_type/function_type83_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F16 F19 F21 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type83"]
 
 ["tests/language/function_type/function_type84_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F16 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type84"]
 
 ["tests/language/function_type/function_type85_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F6 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F6 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type85"]
 
 ["tests/language/function_type/function_type86_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F3 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F3 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type86"]
 
 ["tests/language/function_type/function_type87_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F6 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F6 F14 F22) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type87"]
 
 ["tests/language/function_type/function_type88_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type88"]
 
 ["tests/language/function_type/function_type89_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type89"]
 
 ["tests/language/function_type/function_type8_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type8"]
 
 ["tests/language/function_type/function_type90_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type90"]
 
 ["tests/language/function_type/function_type91_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F14 F15 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type91"]
 
 ["tests/language/function_type/function_type92_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F5 F19 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F5 F19 F20) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type92"]
 
 ["tests/language/function_type/function_type93_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F10 F18 F20) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F10 F18 F20) covering: positional, optional positional, named, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type93"]
 
 ["tests/language/function_type/function_type94_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F5 F19 F20) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F5 F19 F20) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type94"]
 
 ["tests/language/function_type/function_type95_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F10 F18 F20) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F2 F3 F10 F18 F20) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type95"]
 
 ["tests/language/function_type/function_type96_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F4 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type96"]
 
 ["tests/language/function_type/function_type97_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type97"]
 
 ["tests/language/function_type/function_type98_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F3 F10 F18 F21) covering: positional, optional positional, named, no parameters, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type98"]
 
 ["tests/language/function_type/function_type99_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F3 F10 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 23 typedefs (F0 F2 F3 F10 F22) covering: positional, optional positional, named, generic <A>, bounded generic <B extends int>, function-returning, void return, dynamic return, Function value, List<Function>, List<A>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type99"]
 
 ["tests/language/function_type/function_type9_test.dart"]
 kind = "behavior"
-what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter"
+what = "generated function-type instance tests; ported 5 of 24 typedefs (F0 F4 F17 F20 F23) covering: positional, optional positional, named, no parameters, generic <A>, function-returning, void return, dynamic return, Function value, List<Function>, List<T> class parameter; differs from dart: applicable checks only argument count and types, not the return type, named-parameter names or generic bounds that dart function subtyping compares"
 cases = ["dart_function_type/function_type9"]
 
 ["tests/language/function_type/test_generator.dart"]
@@ -2587,7 +2587,7 @@ cases = ["dart_generic/cascaded_forwarding_stubs_generic"]
 
 ["tests/language/generic/closure_test.dart"]
 kind = "behavior"
-what = "a generic class's closure over T and its torn-off method: runtime types and is-checks against generic typedefs"
+what = "a generic class's closure over T and its torn-off method: runtime types and is-checks against generic typedefs (Julia: the bound method accepts only T, where dart widens it to Object?)"
 cases = ["dart_generic/closure"]
 
 ["tests/language/generic/conflicting_generic_interfaces_hierarchy_loop_infinite_test.dart"]
@@ -2732,7 +2732,7 @@ reason = "every runtime check names a typedef that is a compile-time error (L, M
 
 ["tests/language/generic/function_typedef_test.dart"]
 kind = "behavior"
-what = "is-checks of functions against parameterized function typedefs"
+what = "is-checks of functions against parameterized function typedefs (hasmethod; Julia: foo3 accepts every F<S>, dart rejects them)"
 cases = ["dart_generic/function_typedef"]
 
 ["tests/language/generic/functions_test.dart"]
@@ -2812,17 +2812,17 @@ cases = ["dart_generic/instanceof"]
 
 ["tests/language/generic/instantiate_tearoff_after_contravariance_check_test.dart"]
 kind = "behavior"
-what = "a generic method tear-off instantiated after a contravariance type check"
+what = "a generic method tear-off instantiated after a contravariance type check (applicable; Julia: C<B> is not a C<A>, so no cast is checked, the closure just rejects an A)"
 cases = ["dart_generic/instantiate_tearoff_after_contravariance_check"]
 
 ["tests/language/generic/instantiate_tearoff_of_call_test.dart"]
 kind = "behavior"
-what = "f.call of a generic function instantiated as int and String functions, rejecting the other type"
+what = "f.call of a generic function instantiated as int and String functions, rejecting the other type (applicable; Julia: a wrong argument is a MethodError, dart a TypeError)"
 cases = ["dart_generic/instantiate_tearoff_of_call"]
 
 ["tests/language/generic/instantiate_tearoff_test.dart"]
 kind = "behavior"
-what = "generic functions (top-level, local, nested) instantiated by assignment to non-generic function types"
+what = "generic functions (top-level, local, nested) instantiated by assignment to non-generic function types (applicable; Julia: a wrong argument is a MethodError, dart a TypeError)"
 cases = ["dart_generic/instantiate_tearoff"]
 
 ["tests/language/generic/instantiate_to_bounds_super_bounded_test.dart"]
@@ -2867,7 +2867,7 @@ reason = "whole file is the annotation-type-argument syntactic error; main is em
 
 ["tests/language/generic/method_types_test.dart"]
 kind = "behavior"
-what = "generic methods (mixin, class, top-level) checked against generic function typedefs"
+what = "generic methods (mixin, class, top-level) checked against generic function typedefs (hasmethod on the methods; Julia has no generic function types to compare)"
 cases = ["dart_generic/method_types"]
 
 ["tests/language/generic/mock_test.dart"]
@@ -2882,7 +2882,7 @@ cases = ["dart_generic/native"]
 
 ["tests/language/generic/no_such_method_dispatcher_test.dart"]
 kind = "behavior"
-what = "noSuchMethod reached by generic calls of the wrong shape, with type, positional and named arguments"
+what = "noSuchMethod reached by generic calls of the wrong shape, with type, positional and named arguments (a varargs fallback method stands in for noSuchMethod)"
 cases = ["dart_generic/no_such_method_dispatcher"]
 
 ["tests/language/generic/object_type_test.dart"]
@@ -2982,7 +2982,7 @@ cases = ["dart_generic/type_parameter"]
 
 ["tests/language/generic/typedef_test.dart"]
 kind = "behavior"
-what = "is and as on generic function typedefs, with type parameters from an enclosing class"
+what = "is and as on generic function typedefs, with type parameters from an enclosing class (applicable on closures; Julia has no generic function types, so the B/C checks are by argument types)"
 cases = ["dart_generic/typedef"]
 
 ["tests/language/generic/wrong_number_type_arguments_test.dart"]
@@ -3017,7 +3017,7 @@ cases = ["dart_language/identity_closure"]
 
 ["tests/language/identity/const_test.dart"]
 kind = "behavior"
-what = "identical of constant functions and ints in constants (its compile-time error sections are dart diagnostics)"
+what = "identical of constant functions and ints in constants (its compile-time error sections are dart diagnostics) (constant by design: dart's identical of constants is a compile-time constant)"
 cases = ["dart_language/identity_const"]
 
 ["tests/language/identity/identical_test.dart"]
@@ -3257,7 +3257,7 @@ reason = "static error test: every expectation is an analyzer or CFE diagnostic 
 
 ["tests/language/nnbd/const/potentially_constant_types_test.dart"]
 kind = "behavior"
-what = "const constructors of a generic class testing is T, is List<T> and casting, with canonical identity"
+what = "const constructors of C<T> evaluating x is T, x is List<T>, x as T, x as List<T> and their combination, checked block by block (identity, isT, isListT, t, l); Julia: an immutable struct compares by ===, Vector{T} is invariant so C<num> of an int list is not isListT and its cast raises TypeError"
 cases = ["dart_nnbd/const_potentially_constant_types"]
 
 ["tests/language/nnbd/const/regress43281_test.dart"]
@@ -3577,7 +3577,7 @@ cases = ["dart_nnbd/inference_variables_initialized_to_null"]
 
 ["tests/language/nnbd/is_type_test/null_is_test.dart"]
 kind = "behavior"
-what = "null is-tested against Never, Null, Object, dynamic and the built-in types and their nullable forms"
+what = "null is-tested against Never, Null, Object, dynamic and the built-in types and their nullable forms; Julia: Object maps to Any, which nothing is an instance of"
 cases = ["dart_nnbd/is_type_test_null_is"]
 
 ["tests/language/nnbd/late/chained_assignment_test.dart"]
@@ -3587,7 +3587,7 @@ cases = ["dart_nnbd/late_chained_assignment"]
 
 ["tests/language/nnbd/late/covariant_instance_field_test.dart"]
 kind = "behavior"
-what = "covariant late num fields narrowed to int in a subclass, a double written through the supertype throws"
+what = "covariant late num fields narrowed to int in a subclass, a double written through the supertype throws; Julia: the write raises InexactError"
 cases = ["dart_nnbd/late_covariant_instance_field"]
 
 ["tests/language/nnbd/late/dynamic_instance_field_test.dart"]
@@ -3597,12 +3597,12 @@ cases = ["dart_nnbd/late_dynamic_instance_field"]
 
 ["tests/language/nnbd/late/generic_covariant_instance_field_test.dart"]
 kind = "behavior"
-what = "late T fields of Foo<num> and Foo<int>, a double written through Foo<num> throws"
+what = "late T fields of Foo<num> and Foo<int>, a double written through Foo<num> throws; Julia: the write raises InexactError"
 cases = ["dart_nnbd/late_generic_covariant_instance_field"]
 
 ["tests/language/nnbd/late/instance_field_initializers_test.dart"]
 kind = "behavior"
-what = "late fields set by initializer lists and initializing formals versus lazy initializers, logged in order"
+what = "late fields set by initializer lists (Foo) and initializing formals (Bar), with and without c, versus lazy initializers of c and d, a second write of final b throwing, and the logged evaluation order; Julia: b is a const field, c and d lazy cells"
 cases = ["dart_nnbd/late_instance_field_initializers"]
 
 ["tests/language/nnbd/never/never_error_test.dart"]
@@ -3622,7 +3622,7 @@ of = ["tests/language/nnbd/never/never_null_assignability_error_test.dart", "tes
 
 ["tests/language/nnbd/never/never_null_assignability_strong_test.dart"]
 kind = "behavior"
-what = "calls of functions taking Null, Never, int, Object and Object? directly, via casts and dynamically"
+what = "calls of functions taking Null, Never, int, Object and Object? directly, via casts and dynamically; Julia: a call with no matching method raises MethodError where dart raises TypeError"
 cases = ["dart_nnbd/never_never_null_assignability_strong"]
 
 ["tests/language/nnbd/normalization/future_or_never_normalization_test.dart"]
@@ -3657,7 +3657,7 @@ reason = "a library of dart's legacy-mode constructor forwarding that no file at
 
 ["tests/language/nnbd/required_named_parameters/missing_required_argument_dynamic_test.dart"]
 kind = "behavior"
-what = "dynamic calls omitting required named arguments, mixed with optional ones and past 32 optional ones, throw"
+what = "dynamic calls omitting required named arguments, mixed with optional ones and past 32 optional ones, throw; Julia: keyword arguments without defaults raise UndefKeywordError; the 36-keyword sum is a loop"
 cases = ["dart_nnbd/required_named_parameters_missing_required_argument_dynamic"]
 
 ["tests/language/nnbd/required_named_parameters/required_named_args_lib.dart"]
@@ -3882,7 +3882,7 @@ reason = "subtyping of structural generic function types by their bounds (and ha
 
 ["tests/language/nnbd/subtyping/function_type_required_params_test.dart"]
 kind = "behavior"
-what = "runtime types and is-tests of functions with required versus optional named parameters"
+what = "runtime types and is-tests of functions with required versus optional named parameters; Julia: typeof is nominal and is-tests become calls with and without the keyword"
 cases = ["dart_nnbd/subtyping_function_type_required_params"]
 
 ["tests/language/nnbd/subtyping/regress41272_test.dart"]
@@ -3897,7 +3897,7 @@ reason = "compile-time assignability of generic function tear-offs; main only as
 
 ["tests/language/nnbd/subtyping/type_casts_strong_test.dart"]
 kind = "behavior"
-what = "casts to T, T?, X<T>, X<T>? and X<T?> with Y, Z, null, C and X<dynamic> arguments"
+what = "casts to T, T?, X<T>, X<T>? and X<T?> with Y, Z, null, C and X<dynamic> arguments; Julia: X{Z} is not an X{Y} (invariant), so those casts raise TypeError"
 cases = ["dart_nnbd/subtyping_type_casts_strong"]
 
 ["tests/language/nnbd/syntax/cascade_nullcheck_test.dart"]
@@ -4052,7 +4052,7 @@ of = ["tests/language/nnbd/type_equality/function_type_equality_test.dart"]
 
 ["tests/language/nnbd/type_equality/function_type_equality_test.dart"]
 kind = "behavior"
-what = "runtime types of same-signature functions are equal; required named differs from optional named"
+what = "runtime types of same-signature functions are equal; required named differs from optional named; Julia: functions are nominal, so each is wrapped in _NbFn whose type parameter _NbFt{Ret,Positional,Optional,Named,Required} is its dart function type, compared with ==, plus a call missing the required keyword"
 cases = ["dart_nnbd/type_equality_function_type_equality"]
 
 ["tests/language/nnbd/type_equality/futureOr_normalization_null_safe_lib.dart"]
@@ -4072,17 +4072,17 @@ of = ["tests/language/nnbd/type_equality/generic_function_type_equality_test.dar
 
 ["tests/language/nnbd/type_equality/generic_function_type_equality_test.dart"]
 kind = "behavior"
-what = "runtime types of generic functions equal under renaming; required named differs from optional named"
+what = "runtime types of generic functions equal under renaming; required named differs from optional named; Julia: each is wrapped in _NbFn with its dart function type as _NbFt, type parameters numbered (_NbTv{1}) so renaming T to S gives the same type"
 cases = ["dart_nnbd/type_equality_generic_function_type_equality"]
 
 ["tests/language/nnbd/type_equality/regress42246_test.dart"]
 kind = "behavior"
-what = "torn-off methods of A<int> keep the nullability of T? and S? in their types"
+what = "torn-off methods of A<int> keep the nullability of T? and S? in their types; Julia: checked on the returned values and with applicable, not on a function type"
 cases = ["dart_nnbd/type_equality_regress42246"]
 
 ["tests/language/nnbd/type_object/equality_test.dart"]
 kind = "behavior"
-what = "Type objects compared with ==, from literals, runtimeType and a generic function, with nullable types"
+what = "Type objects compared with ==, from literals, runtimeType and a generic function, with nullable types; Julia: 0x8000000000000000 is a UInt64"
 cases = ["dart_nnbd/type_object_equality"]
 
 ["tests/language/nnbd/type_promotion/assignment_inference_after_null_check_test.dart"]
@@ -4268,11 +4268,11 @@ cases = []
 ["tests/language/patterns/call_tear_off_error_test.dart"]
 kind = "not_portable"
 what = "destructuring a callable object into a function-typed pattern is a type mismatch"
-reason = "every statement of main is a PATTERN_TYPE_MISMATCH compile-time error; nothing remains to run"
+reason = "each destructuring of a callable C into an IntFn pattern in main is a PATTERN_TYPE_MISMATCH_IN_IRREFUTABLE_CONTEXT error; with them removed main only builds the record, list, map and box"
 
 ["tests/language/patterns/call_tear_off_test.dart"]
 kind = "behavior"
-what = "implicit call tear-off of a callable object in value context but not when destructuring a record, list, map or object"
+what = "implicit call tear-off of a callable object in value context but not when destructuring a record, list, map or object; Julia has no implicit tear-off, so a closure stands for it and isa Function for the IntFn test"
 cases = ["dart_patterns/call_tear_off"]
 
 ["tests/language/patterns/cast_from_dynamic_test.dart"]
@@ -4283,22 +4283,22 @@ cases = ["dart_patterns/cast_from_dynamic"]
 ["tests/language/patterns/declared_variable_in_pattern_assignment_error_test.dart"]
 kind = "not_portable"
 what = "var/final/typed variable declared inside a pattern assignment"
-reason = "static errors only; main is empty"
+reason = "the var, final and typed variables inside pattern assignments are PATTERN_ASSIGNMENT_DECLARES_VARIABLE syntax errors; main is empty"
 
 ["tests/language/patterns/empty_switch_expression_test.dart"]
 kind = "not_portable"
 what = "an empty switch expression on a sealed class with no subtypes has type Never"
-reason = "static type and flow checks only; main is empty"
+reason = "the two functions holding the empty switch on a sealed class without subtypes are never called; main is empty, and the file checks only that the switch has static type Never"
 
 ["tests/language/patterns/exhaustiveness/bool_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switch statements and expressions over bool and bool constants"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over bool and bool constants with NON_EXHAUSTIVE_SWITCH and UNREACHABLE_SWITCH_CASE markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/cast_error_test.dart"]
 kind = "not_portable"
 what = "switches whose cast cases do not exhaust dynamic or a sealed type"
-reason = "NON_EXHAUSTIVE_SWITCH_EXPRESSION diagnostics only; main is empty"
+reason = "the four switches over dynamic and the sealed M are NON_EXHAUSTIVE_SWITCH_EXPRESSION errors; main is empty"
 
 ["tests/language/patterns/exhaustiveness/cast_test.dart"]
 kind = "behavior"
@@ -4308,21 +4308,21 @@ cases = ["dart_patterns/exhaustiveness_cast"]
 ["tests/language/patterns/exhaustiveness/enum_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over enum values, nullable enums and aliased constants"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over enum values, nullable enums and aliased enum constants with NON_EXHAUSTIVE_SWITCH markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/extension_type_test.dart"]
 kind = "behavior"
-what = "switches over extension types erased to a nullable String, num, bool and a sealed class"
+what = "switches over extension types erased to a nullable String, num, bool and a sealed class; Julia writes each extension type as an alias of its representation type"
 cases = ["dart_patterns/exhaustiveness_extension_type"]
 
 ["tests/language/patterns/exhaustiveness/fallback_error_test.dart"]
 kind = "not_portable"
 what = "switches the pre-patterns fallback exhaustiveness algorithm rejected (sealed classes, || and && of enum values, guards)"
-reason = "only the NON_EXHAUSTIVE diagnostics of its last switches are checked; main runs the switches without any Expect, the same switches fallback_test ports"
+reason = "its last two switches over E with a guard are NON_EXHAUSTIVE errors, and main calls the other switches with no Expect; fallback_test ports those switches"
 
 ["tests/language/patterns/exhaustiveness/fallback_test.dart"]
 kind = "behavior"
-what = "switches exhaustive by default, wildcard, variable, type, object pattern, ||, &&, cast, null assert, null, parentheses, record, nullable and enum factoring"
+what = "switches exhaustive by default, wildcard, variable, type, object pattern, ||, &&, cast, null assert, null, parentheses, record, nullable and enum factoring; the FutureOr switch is dropped"
 cases = ["dart_patterns/exhaustiveness_fallback"]
 
 ["tests/language/patterns/exhaustiveness/issue52048_test.dart"]
@@ -4338,92 +4338,92 @@ cases = ["dart_patterns/exhaustiveness_list_constant"]
 ["tests/language/patterns/exhaustiveness/null_type_test.dart"]
 kind = "not_portable"
 what = "a Null-typed variable pattern and a null literal pattern both cover null in exhaustiveness"
-reason = "exhaustiveness and unreachable-case diagnostics only; the file has no main"
+reason = "the switches of test(int?) carry NON_EXHAUSTIVE and UNREACHABLE_SWITCH_CASE markers, and the file has no main to call test"
 
 ["tests/language/patterns/exhaustiveness/nullable_cast_error_test.dart"]
 kind = "not_portable"
 what = "nullable casts that do not make switches exhaustive"
-reason = "NON_EXHAUSTIVE_SWITCH diagnostics only; the file has no main"
+reason = "the eight switches casting int? and FutureOr values are NON_EXHAUSTIVE_SWITCH_EXPRESSION errors, and the file has no main"
 
 ["tests/language/patterns/exhaustiveness/nullable_cast_test.dart"]
 kind = "behavior"
-what = "a nullable int cast to a non-nullable type, type parameter or supertype before an object pattern; null throws"
+what = "a nullable int cast to a non-nullable type, type parameter or supertype before an object pattern; null throws; the FutureOr and Future cases are dropped"
 cases = ["dart_patterns/exhaustiveness_nullable_cast"]
 
 ["tests/language/patterns/exhaustiveness/object_pattern_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over object patterns with fields"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over object patterns with fields with NON_EXHAUSTIVE_SWITCH and UNREACHABLE_SWITCH_CASE markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/record_literal_named_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over records with named fields of literal patterns"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over records with named literal fields with NON_EXHAUSTIVE_SWITCH markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/record_literal_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over positional records of literal patterns"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over positional records of literals with NON_EXHAUSTIVE_SWITCH markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/record_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over record patterns of sealed types"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over record patterns of sealed types with NON_EXHAUSTIVE_SWITCH markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/restrictive_cast_pattern_3_2_test.dart"]
 kind = "behavior"
-what = "at language 3.2 a switch of cast-then-field cases is unsound: a class implementing both cast types matches none and throws"
+what = "at language 3.2 a switch of cast-then-field cases is unsound: a class implementing both cast types matches none and throws; Julia writes implements A, B as one Union per interface"
 cases = ["dart_patterns/exhaustiveness_restrictive_cast_pattern_3_2"]
 
 ["tests/language/patterns/exhaustiveness/restrictive_cast_pattern_error_test.dart"]
 kind = "behavior"
-what = "the same restrictive cast switch, reported non-exhaustive from 3.3; main runs it on a class implementing both types"
+what = "the same restrictive cast switch, reported non-exhaustive from 3.3; main runs it on a class implementing both types (one Union per interface in Julia)"
 cases = ["dart_patterns/exhaustiveness_restrictive_cast_pattern_error"]
 
 ["tests/language/patterns/exhaustiveness/sealed_cast_3_2_test.dart"]
 kind = "behavior"
-what = "a case A() as B over a sealed class at language 3.2: the cast throws for A and C, passes for a class implementing A and B"
+what = "a case A() as B over a sealed class at language 3.2: the cast throws for A and C, passes for a class implementing A and B (one Union per interface in Julia)"
 cases = ["dart_patterns/exhaustiveness_sealed_cast_3_2"]
 
 ["tests/language/patterns/exhaustiveness/sealed_cast_error_test.dart"]
 kind = "behavior"
-what = "the same A() as B switch, reported non-exhaustive from 3.3; main checks the same four results"
+what = "the same A() as B switch, reported non-exhaustive from 3.3; main checks the same four results (one Union per interface in Julia)"
 cases = ["dart_patterns/exhaustiveness_sealed_cast_error"]
 
 ["tests/language/patterns/exhaustiveness/sealed_class_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over sealed class hierarchies"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over a sealed class hierarchy with NON_EXHAUSTIVE_SWITCH and UNREACHABLE_SWITCH_CASE markers and has no main"
 
 ["tests/language/patterns/exhaustiveness/shared_sealed_supertypes_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness over a sealed hierarchy that is a DAG, not a tree"
-reason = "exhaustiveness diagnostics only; the file has no main"
+reason = "test(A) over the DAG-shaped sealed hierarchy carries NON_EXHAUSTIVE_SWITCH markers, and the file has no main to call it"
 
 ["tests/language/patterns/exhaustiveness/type_test_type_parameter_test.dart"]
 kind = "not_portable"
 what = "a type parameter used as a type test does not count as its bound for exhaustiveness"
-reason = "NON_EXHAUSTIVE_SWITCH_EXPRESSION diagnostics only; the file has no main"
+reason = "the two switches of test<T extends int>(num) are NON_EXHAUSTIVE_SWITCH_EXPRESSION errors, and the file has no main"
 
 ["tests/language/patterns/exhaustiveness/unreachable_switch_case_when_error_test.dart"]
 kind = "not_portable"
 what = "UNREACHABLE_SWITCH_CASE for an enum case with a guard after the same case unguarded"
-reason = "analyzer warnings only; main is empty"
+reason = "the four functions with a guarded E.e1 case are never called; main is empty, and the file checks only UNREACHABLE_SWITCH_CASE warnings"
 
 ["tests/language/patterns/exhaustiveness/unsound_cast_3_2_test.dart"]
 kind = "behavior"
-what = "cases X() as A and Y() as B at language 3.2: a class implementing A and B passes both casts and matches neither"
+what = "cases X() as A and Y() as B at language 3.2: a class implementing A and B passes both casts and matches neither (one Union per interface in Julia)"
 cases = ["dart_patterns/exhaustiveness_unsound_cast_3_2"]
 
 ["tests/language/patterns/exhaustiveness/unsound_cast_error_test.dart"]
 kind = "not_portable"
 what = "the same X() as A switch reported non-exhaustive from 3.3"
-reason = "static error only; the file has no main (test() is never called)"
+reason = "the switch with cases X() as A and Y() as B is a NON_EXHAUSTIVE_SWITCH_EXPRESSION error, and the file has no main (test() is never called)"
 
 ["tests/language/patterns/exhaustiveness/variable_pattern_switch_test.dart"]
 kind = "not_portable"
 what = "exhaustiveness of switches over typed and untyped variable patterns"
-reason = "NON_EXHAUSTIVE_SWITCH and unreachable-case diagnostics only; the file has no main"
+reason = "the file defines switches over typed and untyped variable patterns with NON_EXHAUSTIVE_SWITCH markers and has no main"
 
 ["tests/language/patterns/flow_analysis/boolean_condition_test.dart"]
 kind = "behavior"
@@ -4433,37 +4433,37 @@ cases = ["dart_patterns/flow_analysis_boolean_condition"]
 ["tests/language/patterns/flow_analysis/cast_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through cast patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through cast patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/constant_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through constant patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through constant patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart"]
 kind = "not_portable"
 what = "a pattern for-in collection element over List<dynamic> does not promote the iterable"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through pattern for-in collection elements over List<dynamic> with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/for_in_statement_error_test.dart"]
 kind = "not_portable"
 what = "a pattern for-in statement over List<dynamic> does not promote the iterable"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through pattern for-in statements over List<dynamic> with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/if_case_element_error_test.dart"]
 kind = "not_portable"
 what = "static types and reachability in if-case collection elements"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through if-case collection elements with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/if_case_statement_error_test.dart"]
 kind = "not_portable"
 what = "static types and reachability in if-case statements"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through if-case statements with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/list_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through list patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through list patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart"]
 kind = "behavior"
@@ -4473,22 +4473,22 @@ cases = ["dart_patterns/flow_analysis_list_pattern_with_nullable_list_scrutinee"
 ["tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through logical-and patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through logical-and patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through logical-or patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through logical-or patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/map_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through map patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through map patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through null-assert patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through null-assert patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/null_check_in_guard_test.dart"]
 kind = "behavior"
@@ -4498,22 +4498,22 @@ cases = ["dart_patterns/flow_analysis_null_check_in_guard"]
 ["tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through null-check patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through null-check patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/object_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through object patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through object patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart"]
 kind = "not_portable"
 what = "static types, promotion and demotion through pattern assignments"
-reason = "expectStaticType checks and compile-time errors only; main is empty"
+reason = "the functions checking static types and promotion through pattern assignments with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/pattern_assignment_lookahead_error_test.dart"]
 kind = "not_portable"
 what = "a variable assigned by a pattern assignment later in a loop is demoted at the loop start"
-reason = "the only statement of interest is an ARGUMENT_TYPE_NOT_ASSIGNABLE compile-time error; removing it leaves a loop with no check"
+reason = "k += i is an ARGUMENT_TYPE_NOT_ASSIGNABLE error because i is demoted by the later pattern assignment (i,) = (null,); main prints f(0) with no check"
 
 ["tests/language/patterns/flow_analysis/pattern_assignment_lookahead_test.dart"]
 kind = "behavior"
@@ -4523,52 +4523,52 @@ cases = ["dart_patterns/flow_analysis_pattern_assignment_lookahead"]
 ["tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart"]
 kind = "not_portable"
 what = "promotion by a pattern inside a guard"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through patterns inside guards with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart"]
 kind = "not_portable"
 what = "static types of pattern variable declarations"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through pattern variable declarations with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/record_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through record patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through record patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/relational_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types and promotion through relational patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through relational patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/split_point_test.dart"]
 kind = "not_portable"
 what = "the flow-analysis split point of a pattern is the start of the top-level pattern"
-reason = "expectStaticType checks only; main is empty"
+reason = "guarded(f, i) and logicalOr(x), which check the split point of a pattern join with expectStaticType, are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/switch_expression_error_test.dart"]
 kind = "not_portable"
 what = "static types and reachability in switch expressions"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through switch expressions with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/switch_statement_error_test.dart"]
 kind = "not_portable"
 what = "static types, reachability and promotion in switch statements"
-reason = "expectStaticType checks and compile-time errors only; main is empty"
+reason = "the functions checking static types and promotion through switch statements with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/variable_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types of variable patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through variable patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart"]
 kind = "not_portable"
 what = "static types of wildcard patterns"
-reason = "expectStaticType checks only; main is empty"
+reason = "the functions checking static types and promotion through wildcard patterns with expectStaticType are never called; main is empty"
 
 ["tests/language/patterns/for_in_nullable_error_test.dart"]
 kind = "not_portable"
 what = "pattern for-in statements and elements reject a nullable iterable"
-reason = "compile-time errors only; main is empty"
+reason = "each pattern for-in over a nullable iterable is an UNCHECKED_USE_OF_NULLABLE_VALUE error; main is empty"
 
 ["tests/language/patterns/guard_capture_test.dart"]
 kind = "behavior"
@@ -4578,7 +4578,7 @@ cases = ["dart_patterns/guard_capture"]
 ["tests/language/patterns/guard_error_test.dart"]
 kind = "not_portable"
 what = "assigning a pattern variable inside its guard"
-reason = "every switch in main is a PATTERN_VARIABLE_ASSIGNMENT_INSIDE_GUARD compile-time error; nothing remains to run"
+reason = "each switch and if-case in main assigns its pattern variable in the guard, a PATTERN_VARIABLE_ASSIGNMENT_INSIDE_GUARD error; with them removed main is empty"
 
 ["tests/language/patterns/guard_scope_test.dart"]
 kind = "behavior"
@@ -4593,17 +4593,17 @@ cases = ["dart_patterns/identifier_when_not"]
 ["tests/language/patterns/implicit_instantiation_error_test.dart"]
 kind = "not_portable"
 what = "destructuring a generic function into a non-generic function-typed pattern is a type mismatch"
-reason = "every statement of main is a PATTERN_TYPE_MISMATCH compile-time error; nothing remains to run"
+reason = "each destructuring of the generic id into an IntFn pattern in main is a PATTERN_TYPE_MISMATCH_IN_IRREFUTABLE_CONTEXT error; with them removed main only builds the record, list, map and box"
 
 ["tests/language/patterns/implicit_instantiation_test.dart"]
 kind = "behavior"
-what = "implicit generic function instantiation in value context but not when destructuring"
+what = "implicit generic function instantiation in value context but not when destructuring; Julia has no function types, so the generic id is a _PtGenFn value, its instantiation at int is a _PtNioFn{Tuple{Int64},Int64} value (dart's IntFn), and each is-test is an isa on those wrappers"
 cases = ["dart_patterns/implicit_instantiation"]
 
 ["tests/language/patterns/int_to_double_error_test.dart"]
 kind = "not_portable"
 what = "no int-to-double coercion when destructuring a record or in an uncoerced switch"
-reason = "every statement of main is a compile-time error (type mismatch, non-exhaustive switch); nothing remains to run"
+reason = "main's record destructuring into double patterns is a PATTERN_TYPE_MISMATCH error and its switch on 123 with a double case is a NON_EXHAUSTIVE error; nothing else is in main"
 
 ["tests/language/patterns/int_to_double_test.dart"]
 kind = "behavior"
@@ -4613,17 +4613,17 @@ cases = ["dart_patterns/int_to_double"]
 ["tests/language/patterns/invalid_const_pattern_binary_test.dart"]
 kind = "not_portable"
 what = "binary operator expressions that are not valid constant patterns"
-reason = "compile-time errors only; the file has no main"
+reason = "the switch cases with binary operator constants are INVALID_CONSTANT_PATTERN_BINARY and INVALID_CONSTANT_CONST_PREFIX errors, and the file has no main"
 
 ["tests/language/patterns/invalid_const_pattern_test.dart"]
 kind = "not_portable"
 what = "expressions that are not valid constant patterns"
-reason = "compile-time errors only; the file has no main"
+reason = "the switch cases with non-constant and doubly const expressions are CONSTANT_PATTERN_WITH_NON_CONSTANT_EXPRESSION and INVALID_CONSTANT errors, and the file has no main"
 
 ["tests/language/patterns/invalid_inside_unary_pattern_error_test.dart"]
 kind = "not_portable"
 what = "a unary or relational pattern inside a unary pattern without parentheses is a syntax error"
-reason = "syntax errors only; main is empty"
+reason = "each unary or relational pattern inside a unary pattern without parentheses is an INVALID_INSIDE_UNARY_PATTERN syntax error; main is empty"
 
 ["tests/language/patterns/invalid_inside_unary_pattern_parentheses_test.dart"]
 kind = "behavior"
@@ -4633,7 +4633,7 @@ cases = ["dart_patterns/invalid_inside_unary_pattern_parentheses"]
 ["tests/language/patterns/issue52202_error_test.dart"]
 kind = "not_portable"
 what = "an object pattern of a nullable typedef reading a getter int? lacks"
-reason = "compile-time error only; the file has no main"
+reason = "the object pattern A(foo: 0) on typedef A = int? is an UNCHECKED_USE_OF_NULLABLE_VALUE error, and the file has no main to call f"
 
 ["tests/language/patterns/issue52409_test.dart"]
 kind = "behavior"
@@ -4653,17 +4653,17 @@ cases = ["dart_patterns/issue_52439"]
 ["tests/language/patterns/keyword_in_pattern_variable_declaration_error_test.dart"]
 kind = "not_portable"
 what = "var or final inside a pattern variable declaration"
-reason = "static errors only; main is empty"
+reason = "var and final inside a pattern variable declaration are VARIABLE_PATTERN_KEYWORD_IN_DECLARATION_CONTEXT syntax errors; main is empty"
 
 ["tests/language/patterns/non_interface_object_pattern_test.dart"]
 kind = "behavior"
-what = "object patterns of function types, generic function types, Null, FutureOr and dynamic"
+what = "object patterns of function types, generic function types, Null, FutureOr and dynamic; Julia has no function types, so each function value carries its argument and result types in a wrapper struct tested by isa (invariant parameters, so no function subtyping), and the Future value is dropped"
 cases = ["dart_patterns/non_interface_object_pattern"]
 
 ["tests/language/patterns/nullable_object_pattern_error_test.dart"]
 kind = "not_portable"
 what = "an object pattern of a nullable type reading a field the type lacks"
-reason = "static errors only; main is empty"
+reason = "the object patterns of a nullable typedef reading isEven are UNCHECKED_USE_OF_NULLABLE_VALUE errors; main is empty"
 
 ["tests/language/patterns/nullable_object_pattern_test.dart"]
 kind = "behavior"
@@ -4672,13 +4672,13 @@ cases = ["dart_patterns/nullable_object_pattern"]
 
 ["tests/language/patterns/object_pattern_inference_test.dart"]
 kind = "behavior"
-what = "inferred type arguments of object patterns: explicit, simple, dynamic, bound, f-bounded, partial, typedefs"
+what = "inferred type arguments of object patterns: explicit, simple, dynamic, bound, f-bounded, partial, typedefs; Julia parameters are invariant, so <: stands for dart's covariance; the function typedef I<num> is the wrapper type _PtNioFn{>:Tuple{Number},<:String}, dart's contravariant argument and covariant result"
 cases = ["dart_patterns/object_pattern_inference"]
 
 ["tests/language/patterns/pattern_variable_constant_scope_test.dart"]
 kind = "not_portable"
 what = "a pattern variable is in scope but not usable in a constant expression in its pattern"
-reason = "compile-time errors only; the file has no main"
+reason = "each pattern using its own variable in a constant or relational expression is a REFERENCED_BEFORE_DECLARATION or NON_CONSTANT_RELATIONAL_PATTERN_EXPRESSION error, and the file has no main"
 
 ["tests/language/patterns/primitive_switch_test.dart"]
 kind = "behavior"
@@ -4698,7 +4698,7 @@ cases = ["dart_patterns/regress_59613"]
 ["tests/language/patterns/relational_pattern_expression_precedence_error_test.dart"]
 kind = "not_portable"
 what = "expression kinds not allowed as a relational pattern operand"
-reason = "syntax and compile-time errors only; main is empty"
+reason = "the relational operands of disallowed expression kinds are EXPECTED_TOKEN and INVALID_INSIDE_UNARY_PATTERN syntax errors; main is empty"
 
 ["tests/language/patterns/relational_pattern_expression_precedence_test.dart"]
 kind = "behavior"
@@ -4713,7 +4713,7 @@ cases = ["dart_patterns/schema"]
 ["tests/language/patterns/shared_case_variable_error_test.dart"]
 kind = "not_portable"
 what = "variables in shared cases used in the body must agree in type and finality"
-reason = "every switch in main is an INVALID_PATTERN_VARIABLE_IN_SHARED_CASE_SCOPE compile-time error; nothing remains to run"
+reason = "each switch in main uses a shared case variable that differs in type or finality, an INVALID_PATTERN_VARIABLE_IN_SHARED_CASE_SCOPE error; with them removed main is empty"
 
 ["tests/language/patterns/shared_case_variable_test.dart"]
 kind = "behavior"
@@ -4723,7 +4723,7 @@ cases = ["dart_patterns/shared_case_variable"]
 ["tests/language/patterns/switch_case_scope_error_test.dart"]
 kind = "not_portable"
 what = "a shared case variable disagreeing in type or finality is in scope and an error to use"
-reason = "every switch in main is a compile-time error; nothing remains to run"
+reason = "each switch in main reads a shared case variable that differs in type or finality, an INVALID_PATTERN_VARIABLE_IN_SHARED_CASE_SCOPE error; with them removed only a local declaration is left"
 
 ["tests/language/patterns/switch_case_scope_test.dart"]
 kind = "behavior"
@@ -4733,12 +4733,12 @@ cases = ["dart_patterns/switch_case_scope"]
 ["tests/language/patterns/switch_expression_using_statement_syntax_error_test.dart"]
 kind = "not_portable"
 what = "case, default, colon and semicolon tokens in a switch expression"
-reason = "syntax errors only; main is empty"
+reason = "case, default, colon and semicolon tokens in switch expressions are EXPECTED_TOKEN and DEFAULT_IN_SWITCH_EXPRESSION syntax errors; main is empty"
 
 ["tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart"]
 kind = "not_portable"
 what = "flow analysis treats a switch statement with a fully covering case as trivially exhaustive"
-reason = "expectStaticType checks and compile-time errors only; main is empty"
+reason = "the switch statements are checked only by expectStaticType on a promoted bool? and by UNREACHABLE_SWITCH_CASE warnings; main is empty"
 
 ["tests/language/patterns/type_question_before_when_test.dart"]
 kind = "behavior"
@@ -4748,17 +4748,17 @@ cases = ["dart_patterns/type_question_before_when"]
 ["tests/language/patterns/var_keyword_in_typed_variable_pattern_error_test.dart"]
 kind = "not_portable"
 what = "var together with a type in a declared variable pattern"
-reason = "syntax errors only; main is empty"
+reason = "var together with a type in a variable pattern is a VAR_AND_TYPE syntax error; main is empty"
 
 ["tests/language/patterns/var_keyword_in_typed_wildcard_pattern_error_test.dart"]
 kind = "not_portable"
 what = "var together with a type in a wildcard pattern"
-reason = "syntax errors only; main is empty"
+reason = "var together with a type in a wildcard pattern is a VAR_AND_TYPE syntax error; main is empty"
 
 ["tests/language/patterns/version_2_29_changes_error_test.dart"]
 kind = "not_portable"
 what = "a rest element in a map pattern is an error since patterns 2.29"
-reason = "every switch in main is a REST_ELEMENT_IN_MAP_PATTERN compile-time error; nothing remains to run"
+reason = "each case in main's switch on a map has a rest element, a REST_ELEMENT_IN_MAP_PATTERN error; with them removed main only builds the map"
 
 ["tests/language/patterns/version_2_29_changes_test.dart"]
 kind = "behavior"
@@ -4768,7 +4768,7 @@ cases = ["dart_patterns/version_2_29_changes"]
 ["tests/language/patterns/version_2_32_changes_error_test.dart"]
 kind = "not_portable"
 what = "variables named when or as in refutable patterns are syntax errors since patterns 2.32"
-reason = "syntax errors only; the remaining statements each call expr(), which throws UnimplementedError, with no check"
+reason = "the patterns using when or as as variable names are MISSING_IDENTIFIER and EXPECTED_TYPE_NAME syntax errors; every other statement switches on expr(), which throws UnimplementedError, with no check"
 
 ["tests/language/patterns/wildcard_in_matching_context_test.dart"]
 kind = "behavior"
@@ -4778,7 +4778,7 @@ cases = ["dart_patterns/wildcard_in_matching_context"]
 ["tests/language/patterns/wildcard_in_pattern_assignment_error_test.dart"]
 kind = "not_portable"
 what = "malformed wildcard patterns in a pattern assignment"
-reason = "static errors only; main is empty"
+reason = "var, final and typed wildcards in pattern assignments are PATTERN_ASSIGNMENT_DECLARES_VARIABLE syntax errors; main is empty"
 
 ["tests/language/patterns/wildcard_in_pattern_assignment_test.dart"]
 kind = "behavior"
@@ -4788,7 +4788,7 @@ cases = ["dart_patterns/wildcard_in_pattern_assignment"]
 ["tests/language/patterns/wildcard_in_pattern_variable_declaration_error_test.dart"]
 kind = "not_portable"
 what = "malformed wildcard patterns in a pattern variable declaration"
-reason = "static errors only; main is empty"
+reason = "var and final wildcards in pattern variable declarations are VARIABLE_PATTERN_KEYWORD_IN_DECLARATION_CONTEXT syntax errors; main is empty"
 
 ["tests/language/patterns/wildcard_in_pattern_variable_declaration_test.dart"]
 kind = "behavior"
@@ -4937,7 +4937,7 @@ reason = "static error only: EXTRA_POSITIONAL_ARGUMENTS on super.foo(x); the fil
 
 ["tests/language/super/all_named_constructor_test.dart"]
 kind = "behavior"
-what = "constructors with optional defaults chaining to the super constructor"
+what = "implicit super constructor call where both constructors take only an optional positional parameter with a default (the file says named); res must be 3"
 cases = ["dart_super/all_named_constructor"]
 
 ["tests/language/super/assign_runtime_test.dart"]
@@ -4952,7 +4952,7 @@ reason = "static error only: UNDEFINED_METHOD setX on static type A; the runtime
 
 ["tests/language/super/bound_closure_test.dart"]
 kind = "behavior"
-what = "super methods with optional positional and named defaults torn off and called"
+what = "super methods with optional positional and named defaults torn off and called; the port is the same construct, and where it records -1 dart gives 499 (Julia's optional-default forwarder dispatches to the subclass override)"
 cases = ["dart_super/bound_closure"]
 
 ["tests/language/super/call2_test.dart"]
@@ -5052,7 +5052,7 @@ reason = "depends on dart async/Future semantics (await super.foo(x, y, z)), a d
 
 ["tests/language/super/in_constructor_test.dart"]
 kind = "behavior"
-what = "a super setter and super field read inside a constructor"
+what = "a super setter and super field read inside a constructor (the port sets the argument where dart sets true)"
 cases = ["dart_super/in_constructor"]
 
 ["tests/language/super/in_finally_test.dart"]
@@ -5292,7 +5292,7 @@ cases = ["dart_switch/enum_compare"]
 
 ["tests/language/switch/equality_side_effect_test.dart"]
 kind = "behavior"
-what = "case constants with a side-effecting == called in order until one matches"
+what = "case constants with a side-effecting == called in order until one matches; effects recorded as Int64 pairs (receiver, argument) then the case marker"
 cases = ["dart_switch/equality_side_effect"]
 
 ["tests/language/switch/fallthru_legacy_test.dart"]
@@ -5649,12 +5649,12 @@ reason = "a dart pragma, and a dynamic call outside Julia's strict subset (D32)"
 
 ["tests/language/dynamic_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/function_subtype/", "tests/language/generic/constructor_mixin2_test.dart", "tests/language/generic/constructor_mixin3_test.dart", "tests/language/generic/constructor_mixin_test.dart", "tests/language/mixin_legacy/", "tests/language/mixin/"]
+of = ["tests/language/function_subtype/", "tests/language/generic/constructor_mixin2_test.dart", "tests/language/generic/constructor_mixin3_test.dart", "tests/language/generic/constructor_mixin_test.dart", "tests/language/mixin/", "tests/language/mixin_legacy/"]
 what = "checks of a value's dynamic type"
 
 ["tests/language/static_type_helper.dart"]
 kind = "helper"
-of = ["tests/language/anonymous_methods/", "tests/language/async_star/", "tests/language/async/", "tests/language/await/", "tests/language/call/", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic_methods/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/if_null/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/inference/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware_elements/", "tests/language/null_aware/", "tests/language/operator/", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
+of = ["tests/language/anonymous_methods/", "tests/language/async/", "tests/language/async_star/", "tests/language/await/", "tests/language/call/", "tests/language/closure/parameter_default_type_inference_test.dart", "tests/language/constructor/", "tests/language/extension_methods/", "tests/language/extension_type/", "tests/language/generic/generic_function_type_argument_test.dart", "tests/language/generic_methods/", "tests/language/if_null/", "tests/language/inference/", "tests/language/inference_update_1/", "tests/language/inference_update_2/", "tests/language/inference_update_3/", "tests/language/inference_update_4/", "tests/language/inference_using_bounds/", "tests/language/least_upper_bound/", "tests/language/mixin/", "tests/language/nnbd/flow_analysis/boolean_parameter_test.dart", "tests/language/nnbd/flow_analysis/demotion_and_type_of_interest_promotion_test.dart", "tests/language/nnbd/flow_analysis/expr_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/identical_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_compound_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_defeated_by_capture_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_does_not_detect_aliases_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_expression_types_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_new_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_implicitly_typed_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_join_equivalent_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_logical_op_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_null_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_on_assignment_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_promoted_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_try_finally_test.dart", "tests/language/nnbd/flow_analysis/local_boolean_undefeated_by_assignment_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_cascade_test.dart", "tests/language/nnbd/flow_analysis/null_shorting_in_conditional_test.dart", "tests/language/nnbd/flow_analysis/postfix_increment_decrement_test.dart", "tests/language/nnbd/flow_analysis/this_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/this_property_not_promoted_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_expr_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_never_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_property_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_this_test.dart", "tests/language/nnbd/flow_analysis/unreachable_via_variable_property_test.dart", "tests/language/nnbd/flow_analysis/variable_property_not_promoted_test.dart", "tests/language/nnbd/inference/late_variable_type_for_promotion_test.dart", "tests/language/nnbd/inference/variable_initialization_promotion_test.dart", "tests/language/nonfunction_type_aliases/", "tests/language/null_aware/", "tests/language/null_aware_elements/", "tests/language/operator/", "tests/language/patterns/empty_switch_expression_test.dart", "tests/language/patterns/flow_analysis/boolean_condition_test.dart", "tests/language/patterns/flow_analysis/cast_pattern_error_test.dart", "tests/language/patterns/flow_analysis/constant_pattern_error_test.dart", "tests/language/patterns/flow_analysis/for_in_collection_element_error_test.dart", "tests/language/patterns/flow_analysis/for_in_statement_error_test.dart", "tests/language/patterns/flow_analysis/if_case_element_error_test.dart", "tests/language/patterns/flow_analysis/if_case_statement_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_error_test.dart", "tests/language/patterns/flow_analysis/list_pattern_with_nullable_list_scrutinee_test.dart", "tests/language/patterns/flow_analysis/logical_and_pattern_error_test.dart", "tests/language/patterns/flow_analysis/logical_or_pattern_error_test.dart", "tests/language/patterns/flow_analysis/map_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_assert_pattern_error_test.dart", "tests/language/patterns/flow_analysis/null_check_in_guard_test.dart", "tests/language/patterns/flow_analysis/null_check_pattern_error_test.dart", "tests/language/patterns/flow_analysis/object_pattern_error_test.dart", "tests/language/patterns/flow_analysis/pattern_assignment_error_test.dart", "tests/language/patterns/flow_analysis/pattern_inside_guard_error_test.dart", "tests/language/patterns/flow_analysis/pattern_variable_declaration_error_test.dart", "tests/language/patterns/flow_analysis/record_pattern_error_test.dart", "tests/language/patterns/flow_analysis/relational_pattern_error_test.dart", "tests/language/patterns/flow_analysis/split_point_test.dart", "tests/language/patterns/flow_analysis/switch_expression_error_test.dart", "tests/language/patterns/flow_analysis/switch_statement_error_test.dart", "tests/language/patterns/flow_analysis/variable_pattern_error_test.dart", "tests/language/patterns/flow_analysis/wildcard_pattern_error_test.dart", "tests/language/patterns/issue52409_test.dart", "tests/language/patterns/object_pattern_inference_test.dart", "tests/language/patterns/schema_test.dart", "tests/language/patterns/switch_trivial_exhaustiveness_error_test.dart", "tests/language/patterns/type_question_before_when_test.dart", "tests/language/primary_constructors/", "tests/language/private_named_parameters/", "tests/language/records/", "tests/language/regress/", "tests/language/sound_flow_analysis/", "tests/language/spread_collections/", "tests/language/switch/case_null_legacy_flow_analysis_test.dart", "tests/language/sync_star/", "tests/language/this_promotion/", "tests/language/type_object/", "tests/language/type_promotion/", "tests/language/typedef/"]
 what = "checks of an expression's static type"
 
 ["tests/language/syntax_helper.dart"]
