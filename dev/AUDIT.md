@@ -3638,13 +3638,49 @@ from optimization level 2, translator.dart:81) are ported (src/namer.jl:32, src/
 entry. Requirements: D3 (A41S2, A41S3); D5 (A41E4); D17 and D18 (A41E3); D19 (A41E5); D21 (A41E2); no lock fired inside
 its band.
 
+Recorded after landing, from this audit's three read-only sub-audits (their reports reached the lead and this
+log at 10:59, each finding resting on the command its report quotes) and the lead's rulings of 2026-10-28. Skeleton
+(44eade5c, 07aa7542; owner wt3-skeleton, which owns dev/skeleton.jl): (A41S5, high) dev/skeleton.jl's `declaring()`
+resolved an unprefixed name without dart's imports, so 29 stub parameters took WasmBuilder's Block, Expression, Throw,
+Rethrow and FunctionType where dart means Kernel's (`sed -n '768p' code_generator.dart`: `void visitBlock(Block node)`;
+src/code_generator.jl:186 `node::WasmBuilder.Block`), the orchestrator's H1, fixed by 1fabf0c0; (A41S6, medium) a Kernel
+type has no Julia counterpart, its parameters left untyped (`_create_struct_for_class(…, class_ids::Dict{Any,Int64}, cls;
+…)` for dart's `Map<Class, int>`), the table entry 43 files as A43S2, its rows the lead's to rule; (A41S7, medium) no gate
+runs `skeleton.jl diff` or `check` (`grep -rln skeleton dev/*.sh test/*.jl .github` lists dev/src_progress.sh alone);
+(A41S8, medium) the out-of-scope deserializer and printer keep 294 `_deserialize` and 101 print stubs, counted in the
+total and unportable with types; (A41S9, medium) nothing checks a ported struct keeps every dart field (serializer.dart:26's
+`_traces` is absent from serializer.jl:6–12); (A41S10, medium) CompilationTask, Table and _WithMutability, concrete dart
+classes others extend, are Julia abstract types, so `CompilationTask(function, codegen)` (functions.dart:228) has no
+concrete type to return; (A41S11, low) every optional named parameter defaults to `nothing` whatever dart's default
+(global.dart:35 `includeInitializer = true`); (A41S12, low) seven in-scope typedefs carry no anchor; (A41S13, low)
+`generated()` claims any one-line abstract type, @enum or @closed const as its own, so a deliberate edit of that form is
+regenerated; (A41S14, low) `snake` is written twice (skeleton.jl:586, parity.jl:657), and serializer.jl:126 hand-writes
+an anchor naming no symbol at the pin; (A41S15, low, unverified) an unported struct has no fields, so Julia makes it a
+singleton whose `T.instance` exists without the rejecting constructor. Its all-anchors read found every one of 3,897
+anchors declaring its symbol at the pin. Translator (owner wt3-translator): dart's sort of the root's children
+(class_info.dart:910–944) is dropped by the lead's ruling, no masquerades occurring, and the code cites it
+(src/class_info.jl:589); the Translator's loose-NirBody constructor is A41S2; (A41S16, medium) its subtype-range test
+skipped f_int32, the program that brings the kinds, A41S3's case; (A41S17, low) `module_name_to_id` parses with
+`base = 10`, where dart's `int.tryParse` without a radix also reads `0x` (int.dart:435–437):
+`julia -e 'println((tryparse(Int64, "0x10"; base=10), tryparse(Int64, "0x10")))'` gives (nothing, 16); (A41S18, low)
+ClassIdNumbering's `translator::KernelNodes` carries no precedent for its abstract type; the `class_id_numbering` field
+with no writer is written by 8c659360's collect (src/class_info.jl:434). Tests (owner wt3-tests): its 25-file sample of
+the five largest not_portable directories found 3 mis-labelled and 3 borderline, and L226's own negative plants a
+not_portable directory as a fault-free map (test/parity_ratchet.jl:1245, 1257), A41E6's evidence; (A41E8, medium) thin
+ports: double_literal_coercion checks 6 of dart's 117 `expectDouble`s, dropping 2^63, 2^64 and maxValue though its `what`
+says powers of two included; source_map_simple checks only that an error is caught, large_const_set one member and the
+length; (A41E9, low) bool_bool's `% 10^5` drops its `tf() && tf()` digits.
+
 Landing times: not measured since b3adca48, dev/ship.sh writing no landing log (A41E3); before it, 82ce1cf5 to 6fd28817
 landed through dev/land.sh as entry 40's landings did.
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E2 and A41E4 are fixed by 4bf77429
 (L148 checks the log's shape and reports the lag; the old landing path deleted), past this range, to be read in entry 42.
-A41S1 is open on MARCH 1.A4. A41S2 and A41S3 are open on MARCH 1.C. A41S4, A41E1, A41E3 and A41E5 are open on MARCH 1.L.
-A41E6 and A41E7 are open on MARCH 1.T.
+A41S1 is open on MARCH 1.A4. A41S2 and A41S3 are open on MARCH 1.C. A41S4, A41E1 and A41E3 are open on MARCH 1.L.
+A41E6 and A41E7 are open on MARCH 1.T. A41E5 is resolved by the lead's ruling of 2026-10-28: Dale's "can you build aggressively now"
+retired the landing machinery with dev/.block/charter_authorised, and a charter change is now authorised in its commit's
+`Charter-change:` trailer naming Dale's words, which the audit reads. A41S5 is fixed by 1fabf0c0; A41S6 to A41S15 are
+wt3-skeleton's, A41S16 to A41S18 wt3-translator's, A41E8 and A41E9 wt3-tests'.
 
 ## 2026-10-28 — audited through 1fabf0c0 (8f63b00c..1fabf0c0: CompilationQueue, RecordShape, L154's entry commit, the old landing path deleted, ClassInfo and its collector, wasm_builder's IR and sections, translateType, entry 41, a Translator only from a ClosedWorld, the skeleton's imports)
 
@@ -3749,7 +3785,8 @@ wall, its check 35 s.
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S2 is fixed by 653fbfc1, and A41E2
 and A41E4 by 4bf77429. A42S1, A42S2 and A42S3 are open on MARCH 1.C. A42S4 and A42S5 are open on MARCH 1.B. A42E1 is
-open on MARCH 1.L.
+resolved by 8bbf527d, which restores both bands in C10 and judges them (the lead's ruling: retiring the machinery
+was Dale's approval, dropping his numbers went beyond it).
 
 ## 2026-10-28 — audited through 11688e8b (1fabf0c0..11688e8b: the typejoin ruling, dev/gate.sh pushing nothing, the check's exit status and bands, check slots, entry 42, translateStatement)
 
@@ -3834,4 +3871,8 @@ the median of five 244 s (ship's own line).
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E1 is fixed by 8bbf527d; A41E3 by
 8bbf527d for D14 and every commit checked, its D13 half carried as A43E1. A43S1, A43S2, A43S3 and A43S4 are open on MARCH
-1.C. A43E1, A43E2, A43E3 and A43E4 are open on MARCH 1.L.
+1.C. A43E1 and A43E4 are open on MARCH 1.L. A43E2 is resolved by
+the lead's ruling (A41E5): 114b30a4's trailer and body name Dale's words of 2026-10-28, and 8bbf527d's restores his
+bands of 2026-10-21 and adds TLC under D11. A43E3 is resolved by fbb5e5da, past this range: over 120 s with the
+one-minute load above the core count, the band is unjudged, the time and load printed, never a scaled pass. A43S2
+is A41S6, owned by wt3-skeleton.
