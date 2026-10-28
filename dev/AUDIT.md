@@ -3490,3 +3490,158 @@ cold); 41faad3b 25 s (23.5, 1.5; cold); 24ed6a9e 49 s (48.3, 0.7; cold), unjudge
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A40S1 is open on MARCH 1.S. A40E1 is fixed by
 59ba9f14, which lands after this entry (a whitespace-kept content hash and a spent-once mark), and is open on MARCH 1.L
 until it does. A40E2, A40E4 and A40E5 are open on MARCH 1.L.
+
+## 2026-10-28 — audited through 8f63b00c (24ed6a9e..8f63b00c: entry 40, the loader's last fixes, the two skeletons, the restart on dev/ship.sh and dev/check.sh, the dart test map, Range, TranslatorOptions, ClassIdNumbering, FieldIndex, util and Namer)
+
+The forty-first audit runs beside the work (D21 as Dale restated it 2026-10-28) and covers 56eeec5e (entry 40; its
+author's), 82ce1cf5 (a package member function defined only from a prefixed library declared in the package module),
+9589972d (each mirror names its Julia form, L225; Fixes: A39S1), 1d56789d (A40E1's whitespace-kept content hash in
+dev/land.sh), 6fd28817 (check_typed_fields by field index; a `const` field orders its declaration), 44eade5c (dev/skeleton.jl
+and src/wasm_builder/'s 45 files, the source map and serializer filled), 07aa7542 (the dart2wasm skeleton, 1,405
+`@unported` definitions), b3adca48, c917ee6d and decdad82 (the restart: dev/ship.sh lands, dev/check.sh is the evidence,
+L148 listed open, D13 D14 D16 D21 D23 restated, every lane on wt2), 868ba6cc (test/dart_tests.toml and L226), 2c32af79
+(Range, normalize), 8ef0b817 (TranslatorOptions), 12e6e66a, 1bdcadf5 and 7e825dcb (46 behavior and 10 structural dart
+tests written as Julia cases), 95447a02 (ClassIdNumbering over the closed world's classes; Translator), 704d64b4
+(FieldIndex) and 8f63b00c (util.dart's helpers, Namer). The range starts at 24ed6a9e, where entry 40 ends, so the
+entries chain (L148). No wrong answer: WasmTarget compiles nothing yet. Every finding rests on one exact command, quoted.
+Rulings recorded on the lead's four points. Findings A41S1 to A41S4 and A41E1 to A41E7.
+
+Area: builder — 44eade5c's src/wasm_builder/: an unported definition is a construction, read in src/julia/parity.jl's
+`_unported` (686–706): a function's body must be empty and becomes `reject!(Unported(anchor), …)`; a struct must have no
+fields and no type parameters, and its one constructor rejects, so a stub can return no value. The filled serializer's
+test takes its bytes from the binary format, never from the code under test: `write_unsigned(s, 624485) == [0xe5, 0x8e,
+0x26]` is the LEB128 example the spec gives (test/wasm_builder/serializer.jl:27). Sound.
+
+Area: collection and planning — the lead's rulings, each read in the code at 8f63b00c. Translator's fields arrive with
+their pieces: `struct Translator <: KernelNodes` holds `options`, `component::Vector{NirBody}` and
+`class_id_numbering::Late{ClassIdNumbering}` (src/translator.jl), no placeholder, dart's other fields named in its
+docstring; sound. Class = DataType by identity: ClassIdNumbering's maps are `IdDict{DataType,…}`, class_superclass is
+`supertype` with Any the root, class_is_abstract `!isconcretetype`, and a covariant Tuple (neither concrete nor abstract)
+rejects, located (src/julia/classes.jl); sound as far as it goes, see A41S3. implementedTypes: `implementors` is built
+empty in `ClassIdNumbering__number`, Julia having no interfaces; `_get_transitive_implementors` and
+`get_concrete_class_id_range` keep dart's `?? const []` (class_info.dart:837–843), a faithful read of an empty map, no
+default past a gap. No masquerades: `first_non_masqueraded_interface_class_cid` is dart's late closure over `_masqueraded`,
+which arrives as the caller's set, ported 1:1 (class_info.dart:853); none is invented. Range and normalize, TranslatorOptions
+and its six getters (translator.dart:48–88: thirty fields, each initializer and each `??` getter, read side by side) and
+Namer (namer.dart:23–62) are dart's line for line; FieldIndex's 37 constants are dart's values. `_number` keeps dart's
+walk, its counts, its pre and post closures and even its never-updated `inDfsOrder` (class_info.dart:962–963), and drops
+only the `order` sort of the root's children, which its docstring names (dart's core-class preference). Is 1:1 becoming
+nominal where dart reads Kernel? Not in this range: each port keeps dart's body and swaps the Kernel read for one Julia
+answer at a quarantined seam (classes.jl's `closed_world_classes`, `class_superclass`, `class_is_abstract`); the anchors
+name the dart that the bodies follow. The risk is where a Kernel read has no Julia answer, and three findings sit there.
+
+(A41S1, medium) The skeleton's scope drops a whole dart file on a reason true of part of it. dev/skeleton_scope.toml:28
+lists `"dart2wasm/lib/modules.dart" = "deferred loading is out of scope"`, but modules.dart also holds the monolithic path
+every compile takes: `sed -n 182,195p pkg/dart2wasm/lib/modules.dart` shows DefaultModuleStrategy's
+buildModuleOutputData, "If deferred loading is not enabled then put every library in the main module", returning
+`ModuleOutputData.monolithic(mainModule)`, and translator.dart:417 holds `final ModuleOutputData _moduleOutputData;`, read
+by `translate` (translator.dart:524, `Map<ModuleMetadata, w.Module>`). The skeleton keeps the reader and drops the type:
+`git show 07aa7542:src/translator.jl | grep -n _module_output_data` gives line 139, Translator's stub taking
+`_module_output_data`. This is the pattern the lead ruled out for test directories (a group excluded only if every member
+is): modules.dart joins the pin table, its deferred-only definitions each rejecting as out of scope where they are
+written.
+
+(A41S2, medium) L220's typestate stops short of the Translator. The commit says "a translator exists only for a program
+Julia's trim verifier accepted"; the code lets any caller build one. Translator's inner constructor takes
+`component::Vector{NirBody}`, and NirBody has Julia's default constructor (src/julia/nir.jl:214–218, three fields, no
+inner constructor). Measured on 8f63b00c with this tree's depot, a script building a NirBody from `sin`'s CodeInstance and
+no ClosedWorld (`julia --project=. --startup-file=no tr.jl`): "built without a ClosedWorld:
+WasmTarget.Dart2Wasm.Translator with 1 body of MethodInstance for sin(::Float64)". L224 holds ClosedWorld's makers, not
+NirBody's. The fix by construction: NirBody's one inner constructor takes the ClosedWorld's token or is reachable only
+from build_nir, and L224's maker check covers it (precedent: Rust's private field making a type constructible only in its
+module).
+
+(A41S3, medium) A class's id ranges answer Julia's `<:` between DataTypes, and a value's membership is `isa`, which
+differs for the kinds. Measured, `julia --startup-file=no -e 'println((Int isa Type{Int}, DataType <: Type{Int},
+isabstracttype(Type{Int}), supertype(Type{Int})))'`: "(true, false, true, Any)". Type{Int} is an abstract class whose
+supertype is Any, so no concrete class sits under it and `get_concrete_class_id_range(Type{Int})` is empty, while the value
+Int, of class DataType, is a member. Nothing reads the ranges for `isa` yet; when a type test lowers to a class-id range
+check (dart's `isSubtype` by ranges), `x isa Type{Int}` answers false for Int, a wrong answer with no rejection. Type{T},
+like the covariant Tuple class_is_abstract already rejects, needs a located rejection at the range query until the classes
+implement it (D3: `isa` is Julia's answer, the supertype tree an approximation of it for the kinds).
+
+(A41S4, low) 82ce1cf5's `_generic_name(st)::Union{Tuple{Any,Symbol},Nothing}` (src/julia/parity.jl) types its module path
+Any, where the values are `nothing`, a Symbol or a dotted Expr (C4: no Any outside a named seam). 6fd28817 is sound:
+`Meta.isexpr(f, :const) && (f = f.args[1])` unwraps a mutable struct's const field, and the by-index loop asks Julia the
+same three facts.
+
+stopgap in disguise: the @unported stub is a construction (its body cannot be written); the ClosedWorld typestate is one
+for compile_world and, by A41S2, not yet for the Translator; L226 is a check over a map, as C2 says, and its directory
+entries carry coverage they have not earned (A41E6).
+precedent: the skeleton, Rust's todo!() (parity.jl:688); class ids, dart's DFS numbering (class_info.dart:864) over
+Julia's supertype tree; Late fields, dart's `late final` (late.jl).
+
+Area: emission and diagnostics — empty by diff for emission: code_generator.jl, intrinsics.jl and functions.jl are
+07aa7542's stubs. 8f63b00c's util.jl: `compiler_asserts_enabled()::Bool = true`, dart's flag fixed on, so every dart
+`assert` a port reaches is a located Internal rejection (Namer.reserveName's, intToMinString's): stricter than dart,
+named. Sound.
+
+Area: enforcement and prose — every hunk of b3adca48, c917ee6d, decdad82 (AGENTS.md, dev/LEDGER.md, dev/check.sh,
+dev/ship.sh, dev/lane.sh, test/ratchet_open.txt, test/src_tests.jl), 868ba6cc (dev/CHARTER.md, dev/LEDGER.md,
+dev/MARCH.md, test/dart_tests.toml, test/parity_ratchet.jl), 12e6e66a, 1bdcadf5, 7e825dcb, 9589972d's and 1d56789d's
+dev/ and test/ hunks. Both charter changes in the range are authorised: 9589972d's blobs 0d6556d4→17e4ab40 (C3) and
+868ba6cc's 17e4ab40→134fc9fa (C2 C3) are lines 40 and 43 of the main tree's dev/.block/charter_authorised. Ruling on
+"does dev/check.sh fail on what it claims": on a broken lock or ratchet, yes; on a stray baseline key, no (A41E1).
+dev/ship.sh pushes only the tree it checked: a push a faster lane beat is refused as non-fast-forward and the loop
+rebases and checks again. The dart cases record native Julia's answer and check it: `@test f(args...) === native`
+(test/dart_tests.jl), so Julia is the ground truth, as D3 asks; and a compile that moves past its recorded rejection fails
+the case until it is recorded again, so none passes silently.
+
+(A41E1, medium) dev/check.sh judges the ratchet by grepping its lines and never reads its exit status, so a failure
+printed in another form passes. The ratchet fails on a stray baseline key, printing `❌ STRAY baseline key [metrics]
+<key>: …, FAIL` (test/parity_ratchet.jl, run's last loop, `ok = false`). check.sh's pattern does not match it: `printf
+'%s\n' '❌ STRAY baseline key [metrics] R46_gone: names no METRICS ratchet, FAIL' 'R45_locks_owing_negatives       13  ❌
+RATCHET BROKEN (+1)' 'L148_changes_are_audited         1  ❌ LOCK BROKEN (want 0)' | grep -oE
+'^[LR][0-9]+_[a-z0-9_]+ +[^ ]+ +(❌|BROKEN)|^[LR][0-9]+_[a-z0-9_]+.*BROKEN'` prints the second and third lines alone.
+The fix: the ratchet's exit status decides, and test/ratchet_open.txt's locks are passed to the ratchet to exempt.
+
+(A41E2, medium) b3adca48 opened L148 whole (test/ratchet_open.txt: "L148 the audit window"), where D21's restatement
+frees the window alone: the chain, the four areas and the Resolution of every entry stopped binding with it, since
+check.sh exempts by lock id (`comm -23` on ids). The ratchet output the tests lane's check left at 10:09
+(.worktrees/wt3-tests/.wtd/ratchet.out) holds `L148_changes_are_audited 1 ❌ LOCK BROKEN (want 0)`, and its check passed.
+
+(A41E3, medium) The loop's timing has had no check since the restart, while a lock read as locked. L197 read the local
+`wt2` branch of the worktree holding it and that tree's landings.tsv (test/parity_ratchet.jl, `git -C $ROOT rev-parse
+wt2`), which ship.sh never advances or writes: `git -C WasmTarget.jl rev-parse --short wt2` gives 6fd28817, and the same
+lane's check printed "L197: 101 commits landed since 36e3966e; the window 56eeec5e 0.14, 82ce1cf5 0.13, 9589972d 0.16,
+1d56789d 0.75, 6fd28817 0.13" where `git rev-list --count --no-merges 36e3966e..7e825dcb` is 114. D13's band (a 300-s
+target for the median edit to landed of the last five landings) and D14's (a 60-s target for the check, red past 120 s)
+cite dev/ship.sh and dev/check.sh as their checks; both print seconds and judge none, and ship.sh lands any number of
+commits, checking only the head's tree, where D13 says one small commit (D17, D18: a band stated with no check).
+
+(A41E4, medium) One path: dev/land.sh, dev/land_queue.sh, dev/block.jl and `dev/gate.sh --block` stayed beside
+dev/ship.sh and dev/check.sh, their text held in place by L194, L195, L197 and L198 (`ls dev/land.sh dev/gate.sh
+dev/block.jl dev/land_queue.sh` on 8f63b00c lists all four), and D23's row still cited `L197` `dev/land.sh` (D5: the
+commit adding a path deletes the other).
+
+(A41E5, medium) A charter change lands unchecked. `grep -rln charter_authorised dev test src` on 8f63b00c lists
+dev/land.sh, dev/AUDIT.md and test/parity_ratchet.jl: only land.sh read the authorisations, and ship.sh never calls it,
+so since b3adca48 a commit changing dev/CHARTER.md under a `Charter-change: … authorised by Dale <date>` line lands on the
+line's word alone (D19: propose charter edits only). The precedent the lead had, a review recorded outside the tree and
+matched by content, needs a reader in dev/check.sh.
+
+(A41E6, medium) The test map's not_portable directories carry files that are portable. Counted at 8f63b00c with a
+python3 reading of test/dart_tests.toml against `git -C ~/.cache/wasmtarget/dart-sdk ls-tree -r --name-only 898a1e4b`:
+109 directory entries are not_portable and cover 3,081 files, 109 file entries 109 more, 3,190 of 4,716; seven directory
+reasons say so themselves, "mostly static diagnostics" or "largely static" (class_modifiers, const, dot_shorthands, nnbd,
+primary_constructors, type_variable, variable: 604 files). Of the 276 files under tests/language/nnbd/ and const/, 166
+carry no static-error marker (`grep -q 'compile-time error\|\[analyzer\]\|\[cfe\]'` fails), 86 of them with runtime
+`Expect.` checks; nnbd/late/chained_assignment_test.dart checks `b = a = 1` and `b = foo.x = 3`, a Julia program as it
+stands. L226 asks a not_portable entry only for `what` and `reason` (test/parity_ratchet.jl:1115), and its summary counts
+entries ("78 behavior (46 ported) … 218 not portable"), not the 3,190 files, so the map reads more complete than it is. As
+the lead ruled, a directory is not_portable only if every file in it is; the tests lane is splitting them, and L226 should
+refuse a not_portable directory entry holding a file without a static-error marker.
+
+(A41E7, low) test/dart_tests.toml's reason for tests/web/wasm/source_map_unminification_test.dart, "a dart2wasm option
+(--minify); WT does not minify names", is false since 8f63b00c: Namer's minified path and TranslatorOptions.minify (on
+from optimization level 2, translator.dart:81) are ported (src/namer.jl:32, src/translator.jl). The test is a behavior
+entry. Requirements: D3 (A41S2, A41S3); D5 (A41E4); D17 and D18 (A41E3); D19 (A41E5); D21 (A41E2); no lock fired inside
+its band.
+
+Landing times: not measured since b3adca48, dev/ship.sh writing no landing log (A41E3); before it, 82ce1cf5 to 6fd28817
+landed through dev/land.sh as entry 40's landings did.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E2 and A41E4 are fixed by 4bf77429
+(L148 checks the log's shape and reports the lag; the old landing path deleted), past this range, to be read in entry 42.
+A41S1 is open on MARCH 1.A4. A41S2 and A41S3 are open on MARCH 1.C. A41S4, A41E1, A41E3 and A41E5 are open on MARCH 1.L.
+A41E6 and A41E7 are open on MARCH 1.T.
