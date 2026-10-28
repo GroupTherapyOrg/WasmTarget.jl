@@ -69,8 +69,9 @@ end
 end
 
 # A class's place in the hierarchy, Julia's answers (ledger D3) where dart reads a Kernel Class:
-# `cls.superclass`, `cls.isAbstract`. Julia has single inheritance and no interfaces or mixins, so a
-# class implements nothing (`cls.implementedTypes` is empty) and none is an anonymous mixin.
+# `cls.superclass`, `cls.isAbstract`, `cls.implementedTypes`. Julia has single inheritance and no
+# interfaces or mixins: a class's supertype chain is its superclasses, none is an anonymous mixin,
+# and what dart's interfaces give, a subtype off the superclass tree, is Julia's covariant Tuple.
 
 """
     class_superclass(c) -> Union{DataType,Nothing}
@@ -81,17 +82,33 @@ dart's `cls.superclass`: Julia's `supertype`, `nothing` for `Any`, the root (Jul
 @quarantine "a class's parent is Julia's supertype; Any, the root, has none" Base.supertype class_superclass(c::DataType)::Union{DataType,Nothing} = c === Any ? nothing : supertype(c)
 
 """
-    class_is_abstract(c, at) -> Bool
+    class_is_abstract(c) -> Bool
 
-dart's `cls.isAbstract`, a class no value has exactly: Julia's `!isconcretetype`. A class neither
-concrete nor abstract (`isabstracttype`) is a covariant Tuple (`Tuple{Any}`, `Tuple{Vararg{Int}}`):
-its subtypes (`Tuple{Int}`) are not under it in the supertype tree, so no subtree range holds them,
-and it rejects, located, until the classes implement it (dart's `implementedTypes`).
+dart's `cls.isAbstract`, a class no value has exactly: Julia's `!isconcretetype` (an abstract type,
+or a covariant Tuple such as `Tuple{Any}`).
 """
-@quarantine "a class is abstract when no value has it exactly: Julia's isconcretetype; a covariant Tuple is neither" Base.isconcretetype function class_is_abstract(c::DataType, at::String)::Bool
-    isconcretetype(c) && return false
-    isabstracttype(c) && return true
-    reject!(Unquarantined("src/julia/classes.jl class_is_abstract: the covariant Tuple class $c, whose subtypes Julia's supertype tree does not hold"), at)
+@quarantine "a class is abstract when no value has it exactly: Julia's isconcretetype" Base.isconcretetype class_is_abstract(c::DataType)::Bool = !isconcretetype(c)
+
+"""
+    class_implemented_types(c, classes) -> Vector{DataType}
+
+dart's `cls.implementedTypes`, the classes `c` is a subtype of off its superclass chain, among
+`classes` (the closed world's), Julia's `<:` answering each: for a concrete class, every class of
+`classes` it is a subtype of that is not on its supertype chain (`Tuple{Int64}` implements
+`Tuple{Any}`; `Core.TypeofBottom` implements the open `Type{T}` that `DataType`'s chain holds). A
+class that is not concrete implements none: each concrete subtype of a class off the tree is that
+class's implementor itself, so a class's ranges (getConcreteClassIdRange) hold every concrete class
+Julia's `<:` says is its subtype.
+"""
+@quarantine "a class's subtypes off its supertype chain are Julia's <:, its covariant Tuples" Base.supertype function class_implemented_types(c::DataType, classes::Vector{DataType})::Vector{DataType}
+    isconcretetype(c) || return DataType[]
+    local chain = Base.IdSet{DataType}()
+    local s = c
+    while s !== Any
+        s = supertype(s)
+        push!(chain, s)
+    end
+    return DataType[t for t in classes if t !== c && !(t in chain) && c <: t]
 end
 
 """
@@ -120,7 +137,7 @@ none. A kind (a type as a value) and a class whose data Julia holds outside its 
 `Symbol`, `Core.SimpleVector`) reject, located, until their representation is written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
-    class_is_abstract(c, at) && return ClassField[]
+    class_is_abstract(c) && return ClassField[]
     isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
     Base.iskindtype(c) && reject!(Unquarantined("src/julia/classes.jl class_instance_fields: the kind $c, a type as a value, whose representation is not written"), at)
     if fieldcount(c) == 0

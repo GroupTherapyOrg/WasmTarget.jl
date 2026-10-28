@@ -31,7 +31,9 @@ end
     local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions(standalone = true))
     # the program is the closed world's NIR, the entry's body among it
     @test t.component isa Vector{W.NirBody} && !isempty(t.component)
-    @test D.is_standalone(t) && !D.is_standalone(D.Translator(t.component, D.TranslatorOptions()))
+    @test D.is_standalone(t) && !D.is_standalone(D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions()))
+    # a translator comes from a ClosedWorld alone, never from loose NIR bodies (audit M2)
+    @test all(m -> any(p -> p === W.ClosedWorld, Base.unwrap_unionall(m.sig).parameters), methods(D.Translator))
     # the constructor's body builds the queue over the translator; drained empty, it does nothing
     local q = t.compilation_queue[]
     @test q.translator === t && D.is_empty(q)

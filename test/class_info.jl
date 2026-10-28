@@ -35,6 +35,7 @@ f_vector(v::Vector{Int}) = sum(v)
 struct Holder; t::Tuple{Any}; end
 f_holder(h::Holder) = 1
 f_int32(n::Int) = Int32(n)
+f_cov(h::Holder, x::Tuple{Int}, n::Int) = Int32(n) + x[1]
 end
 
 @testset "class_info.dart: ClassIdNumbering on the closed world" begin
@@ -75,9 +76,20 @@ end
     local v = number(ClassInfoCases.f_int32, (Int,))
     @test v.class_ids[Core.TypeofBottom] != v.class_ids[Type{Union{}}]
     @test D.get_concrete_class_id_range(v, Type{Union{}}) == [D.Range(v.class_ids[Core.TypeofBottom], v.class_ids[Core.TypeofBottom])]
-    # a covariant Tuple class, whose subtypes the supertype tree does not hold, rejects, located
-    local e = try; number(ClassInfoCases.f_holder, (ClassInfoCases.Holder,)); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("Tuple{Any}", e.rejection.row)
+    # a world with Tuple covariance (Tuple{Int64} <: Tuple{Any} off its supertype chain) and with
+    # Type{Union{}} beside TypeofBottom: every class's ranges hold a concrete class's id exactly when
+    # Julia's <: says it is a subtype, the implementors' ranges merged in
+    local cov = number(ClassInfoCases.f_cov, (ClassInfoCases.Holder, Tuple{Int}, Int))
+    local cconc = filter(isconcretetype, cov.dfs_order)
+    @test Tuple{Any} in cov.dfs_order && Tuple{Int} in cov.dfs_order && Core.TypeofBottom in cov.dfs_order && Type{Union{}} in cov.dfs_order
+    @test Tuple{Int} <: Tuple{Any} && supertype(Tuple{Int}) === Any
+    @test cov._implementors[Tuple{Any}] == DataType[c for c in cconc if c <: Tuple{Any}]
+    @test all(((k, c),) -> (c <: k) == any(r -> contains(r, cov.class_ids[c]), D.get_concrete_class_id_range(cov, k)),
+              [(k, c) for k in cov.dfs_order for c in cconc])
+    @test any(r -> contains(r, cov.class_ids[Tuple{Int}]), D.get_concrete_class_id_range(cov, Tuple{Any}))
+    @test D.get_concrete_class_id_range(cov, Type{Union{}}) == [D.Range(cov.class_ids[Core.TypeofBottom], cov.class_ids[Core.TypeofBottom])]
+    # a covariant Tuple class is abstract: no value has it exactly
+    @test W.class_is_abstract(Tuple{Any}) && !W.class_is_abstract(Tuple{Int})
     # the translator's late classIdNumbering, read before ClassInfoCollector.collect assigns it
     local e2 = try; translator(ClassInfoCases.f_shapes, (Int,)).class_id_numbering[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classIdNumbering", e2.rejection.anchor)

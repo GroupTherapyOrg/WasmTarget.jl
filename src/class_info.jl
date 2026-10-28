@@ -68,8 +68,8 @@ end
 """
 The closed world's class ids: one depth-first pre-order walk of the class tree from `Any`, each
 concrete class the next concrete id from 1 (0 is the artificial top class), each abstract class an
-id after the last concrete one, and each class the ranges of the concrete ids under it (its model,
-dev/formal/ClassIdNumbering.tla). A class is a Julia `DataType`, keyed by identity: Julia calls
+id after the last concrete one, and each class the ranges of the concrete ids under it and under
+its implementors (the tree walk's model, dev/formal/ClassIdNumbering.tla). A class is a Julia `DataType`, keyed by identity: Julia calls
 `Core.TypeofBottom` and its supertype `Type{Union{}}` equal types, two classes all the same.
 
 The translator is held as `KernelNodes`, the mixin Translator alone applies (src/translator.jl).
@@ -297,7 +297,8 @@ end
 """
 The classes whose subtypes masquerade as another type. dart's runtime implementation classes (its
 int, double and String implementations, typed data) report their public interface as their
-runtime type; Julia's `typeof` is a value's own class, exactly, so no class masquerades.
+runtime type; Julia's `typeof` is a value's runtime type, its own class exactly (ledger D3: Julia's
+answer, ported), so no class masquerades and the set is empty.
 """
 @parity "dart2wasm/lib/class_info.dart:359 ClassInfoCollector._computeMasquerades" _compute_masquerades(self::ClassInfoCollector)::Base.IdSet{DataType} = Base.IdSet{DataType}()
 
@@ -344,6 +345,9 @@ counterpart: Julia's classes are instances, their parameters bound, and implemen
     else
         # Recursively initialize all supertypes before initializing this class.
         _create_struct_for_class(self, class_ids, superclass)
+        for interface in class_implemented_types(cls, translator.class_id_numbering[].dfs_order)
+            _create_struct_for_class(self, class_ids, interface)
+        end
 
         local super_info = isprimitivetype(cls) ? self.top_info[] : translator.class_info[superclass]
 
@@ -533,10 +537,10 @@ end
 Number the classes of `translator`'s program: the closed world's classes (src/julia/classes.jl), in
 the order its walk first meets them, where dart walks its component's libraries' classes.
 
-Julia's differs: a class's superclass is Julia's `supertype` and `Any` the root; Julia has no
-interfaces or mixins, so `implementors` stays empty and no class is an anonymous mixin; and the
-root's children keep program order, where dart sorts them by a fixed preference for its core
-classes and libraries (`order`), which a Julia program does not have.
+Julia's differs: a class's superclass is Julia's `supertype` and `Any` the root; a class's
+implemented types are its supertypes off that chain, Julia's covariant Tuples
+(`class_implemented_types`); no class is an anonymous mixin; and the root's children keep program
+order (dart's sort, below, is dropped).
 """
 @parity "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number" function ClassIdNumbering__number(translator::Translator, masqueraded::Base.IdSet{DataType})::ClassIdNumbering
     local at = "dart2wasm/lib/class_info.dart:864 ClassIdNumbering._number"
@@ -549,9 +553,10 @@ classes and libraries (`order`), which a Julia program does not have.
     local concrete_class_count = 0
     local abstract_class_count = 0
     local already_assigned_count = 0
-    for cls in closed_world_classes(translator.component, at)
+    local world = closed_world_classes(translator.component, at)
+    for cls in world
         if !haskey(class_ids, cls)
-            if class_is_abstract(cls, at)
+            if class_is_abstract(cls)
                 abstract_class_count += 1
             else
                 concrete_class_count += 1
@@ -565,8 +570,17 @@ classes and libraries (`order`), which a Julia program does not have.
         else
             push!(get!(() -> DataType[], subclasses, super_class), cls)
         end
+        for interface in class_implemented_types(cls, world)
+            push!(get!(() -> DataType[], implementors, interface), cls)
+        end
     end
     root === nothing && reject!(Internal("$at: the closed world has no root class, Any"), at)
+
+    # dart sorts the root's children by a fixed preference (class_info.dart:910-944: bool, num, its
+    # string, type, list and hash base classes first, then masqueraded classes, then by library), to
+    # keep the class ids of its core hierarchies and masqueraded classes low. A Julia program has
+    # none of those classes and no class masquerades (Julia's typeof is a value's own class), so the
+    # sort is dropped and the root's children keep program order.
 
     # Traverse class inheritence graph in depth-first pre-order.
     local dfs
@@ -601,7 +615,7 @@ classes and libraries (`order`), which a Julia program does not have.
         function (cls::DataType)
             cls in in_dfs_order || push!(dfs_order, cls)
             haskey(class_ids, cls) && return next_concrete_class_id
-            if class_is_abstract(cls, at)
+            if class_is_abstract(cls)
                 haskey(class_ids, cls) || (class_ids[cls] = (next_abstract_class_id += 1) - 1)
                 return next_concrete_class_id
             end
