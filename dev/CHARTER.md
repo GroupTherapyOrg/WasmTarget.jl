@@ -140,8 +140,8 @@ with the per-clause status. A clause is never closed by argument.
   on PR #128's merge head; a failure names its site. Checks: `L153` (the full matrix runs every
   test family CI runs, at clause closure, non-blocking; a landing pushes the march branch alone)
   `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's runners, gives its verdict within
-  its 20-minute budget per lane job) `L163` (the CI inner loop, `bash dev/gate.sh --fast`, is
-  never a landing's gate).
+  its 20-minute budget per lane job; `bash dev/gate.sh` pushes nothing, it reads the run a wt2
+  push started).
   Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
   Planned: dev/MARCH.md 1.Q — each case's derived outcome recorded, and a landing never turns a
   passing case loud.

@@ -1,6 +1,6 @@
 # seconds per smoke group on CI's runners, 1.12 then 1.13, for test/smoke.jl's dealing (a
 # fast-lane run's "smoke time:" lines, which dev/lanes.sh's smoke parts print; every group has
-# both, L163); WT1's measurements, carried for the dealing until the rebuild's are measured
+# both, L153); WT1's measurements, carried for the dealing until the rebuild's are measured
 10.8	7.9	abstract_isa
 8.4	7.4	abstract_receivers
 4.5	1.2	any_return_boundary

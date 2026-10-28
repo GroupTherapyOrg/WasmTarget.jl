@@ -33,7 +33,7 @@ _selected(list) = EXACT ? sort(filter(g -> _want(first(g)), list); by = g -> fin
 # Julia version, as runtests.jl deals the suite's phases by test/phase_times.tsv): the longest
 # first, each to the part whose load is least so far, then the xfail groups onto the loads the
 # groups left. A missing file, a duration that is no number and a group with no recorded
-# duration are errors, never a guess (L163 checks the file lists exactly the groups). The dealing
+# duration are errors, never a guess (L153 checks the file lists exactly the groups). The dealing
 # is a pure function of the file, the lists and N, so the N parts together run every group exactly
 # once. Unset: every group.
 const SMOKE_PART = let s = get(ENV, "WT_SMOKE_PART", "")

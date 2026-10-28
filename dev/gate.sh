@@ -1,61 +1,51 @@
 #!/usr/bin/env bash
-# The CI gates (AGENTS.md; dev/CHARTER.md C10). A landing's evidence is `bash dev/check.sh`, run by
-# `bash dev/ship.sh`, never these.
+# The full matrix's verdict (AGENTS.md; dev/CHARTER.md C10). A landing's evidence is `bash dev/check.sh`,
+# run by `bash dev/ship.sh`, never this.
 #
-# The full matrix on CI's runners, never a landing's gate: it runs at clause
-# closure (gate.yml on a wt2 head carrying `Closes: C<n>`, non-blocking), and the one final
-# full gate before PR #128 merges is this command on the exact merge head. It pushes a commit to
-# gate/<name>, where .github/workflows/gate.yml runs every lane of `bash dev/lanes.sh`'s default run as its own job
-# (the first red job cancels the rest), waits for the run, and prints one verdict line per lane,
-# the slowest lane job against the budget gate.yml's lane timeout sets (a job the budget cut off is
-# marked past it), and `LANES green` or `LANES red`. Exit 0 only on green. A verdict the GitHub API
-# would not give (every read retried three times, the waits between them growing) is `LANES unknown`,
-# exit 3: a lost connection is never read as a red run. It runs no Julia on this machine.
+#   bash dev/gate.sh [<rev>]   # <rev> (HEAD by default), a commit on origin's wt2
 #
-#   bash dev/gate.sh                 # HEAD, on gate/<current branch, / as ->
-#   bash dev/gate.sh <rev> [<name>]  # a branch or commit, on gate/<name>
-#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to
-#       gate-fast/<name>, where .github/workflows/gate-fast.yml runs only the ratchet and smoke
-#       on 1.12 and 1.13, and prints `FAST green` or `FAST red`; its budget is
-#       gate-fast.yml's lane timeout
-#
-# The commit is pushed as it is: uncommitted changes are not in it. A gate branch keeps its
-# julia caches from push to push (GitHub scopes a cache to its branch and the default branch);
-# re-gating the commit a branch already holds pushes it to gate/<name>-N, which starts cold.
+# The full matrix is .github/workflows/gate.yml on CI's runners, every lane of `bash dev/lanes.sh`'s
+# default run as its own job (the first red job cancels the rest). It runs at clause closure: on the
+# push of a wt2 head carrying `Closes: C<n>` (a landing, `bash dev/ship.sh`) or a dispatch, never
+# holding a landing; the one final full gate before PR #128 merges is that run on the exact merge
+# head. This command pushes nothing (one branch on origin, wt2: Dale 2026-10-28): it finds the
+# Gate run of the commit on wt2, says how to get one when there is none, waits for it, and prints
+# one verdict line per lane, the slowest lane job against the budget gate.yml's lane timeout sets
+# (a job the budget cut off is marked past it), and `LANES green` or `LANES red`. Exit 0 only on
+# green. A verdict the GitHub API would not give (every read retried three times, the waits between
+# them growing) is `LANES unknown`, exit 3: a lost connection is never read as a red run. It runs no
+# Julia on this machine.
 set -uo pipefail
 cd "$(dirname "$0")/.."
+MARCH=wt2
 command -v gh >/dev/null || { echo "gate: needs the GitHub CLI (gh)" >&2; exit 2; }
 # an API read, retried: three tries, 10 s then 30 s apart; its output, or nothing and status 1
 api() { local out k; for k in 1 2 3; do out=$("$@" 2>/dev/null) && { printf '%s' "$out"; return 0; }
           [ $k -lt 3 ] && sleep $((k == 1 ? 10 : 30)); done; return 1; }
-fast=0; [ "${1:-}" = --fast ] && { fast=1; shift; }
-prefix=gate; workflow=Gate; verdict=LANES
-[ $fast -eq 0 ] || { prefix=gate-fast; workflow="Gate fast"; verdict=FAST; }
+verdict=LANES
 rev=${1:-HEAD}
 sha=$(git rev-parse --verify -q "$rev^{commit}") || { echo "gate: no commit $rev" >&2; exit 2; }
-if [ -n "${2:-}" ]; then name=$2
-elif git show-ref --verify -q "refs/heads/$rev"; then name=$rev
-else name=$(git symbolic-ref --short -q HEAD || echo detached); fi
-name=${name#gate/}; name=${name#gate-fast/}; name=$prefix/${name//\//-}
-[ -z "$(git status --porcelain --untracked-files=no)" ] || echo "gate: uncommitted changes are not in the gated commit"
-t0=$(date -u +%Y-%m-%dT%H:%M:%SZ); s0=$(date +%s)
-# a push of the commit a gate branch already holds starts no run, so a re-gate goes to the first
-# gate/<name>-N (N = 2, 3, ...) that does not hold it (workflow_dispatch would need gate.yml on main)
-base=$name; n=1
-while [ "$(git ls-remote origin "refs/heads/$name" | cut -f1)" = "$sha" ]; do n=$((n + 1)); name=$base-$n; done
-git push -q --force origin "$sha:refs/heads/$name" || exit 2
-echo "gate: $(git log -1 --format='%h %s' "$sha" | cut -c1-80) on $name"
-id=""
-for _ in $(seq 60); do
-  # by name, not --workflow (which finds only a workflow on the default branch); a gate.yml that
-  # does not parse is named by its path, and its run is red
-  id=$(api gh run list --branch "$name" --limit 20 --json databaseId,headSha,createdAt,workflowName \
-       --jq "[.[] | select(.headSha == \"$sha\" and .createdAt >= \"$t0\" and
-                          (.workflowName == \"$workflow\" or .workflowName == \".github/workflows/$prefix.yml\"))][0].databaseId // empty")
-  [ -n "$id" ] && break
+s0=$(date +%s)
+git fetch -q origin "$MARCH" || { echo "gate: cannot fetch origin/$MARCH" >&2; exit 2; }
+git merge-base --is-ancestor "$sha" "origin/$MARCH" ||
+  { echo "gate: $(git log -1 --format='%h %s' "$sha" | cut -c1-80) is not on origin/$MARCH: land it with bash dev/ship.sh" >&2; exit 2; }
+echo "gate: $(git log -1 --format='%h %s' "$sha" | cut -c1-80) on $MARCH"
+# the run a wt2 push of this commit started, by name, not --workflow (which finds only a workflow on
+# the default branch; a gate.yml that does not parse is named by its path, and its run is red); a
+# push just made may take a minute to show its run
+run=""
+for _ in $(seq 12); do
+  run=$(api gh run list --branch "$MARCH" --limit 100 --json databaseId,headSha,workflowName,displayTitle \
+       --jq "[.[] | select(.headSha == \"$sha\" and (.workflowName == \"Gate\" or .workflowName == \".github/workflows/gate.yml\"))][0] |
+             select(. != null) | \"\\(.databaseId)\\t\\(.displayTitle)\"")
+  [ -n "$run" ] && break
   sleep 5
 done
-[ -n "$id" ] || { echo "gate: no $prefix.yml run for $sha on $name" >&2; exit 2; }
+[ -n "$run" ] || { echo "gate: no gate.yml run for ${sha:0:8} on $MARCH: the full matrix runs on the wt2 push of a head carrying \`Closes: C<n>\`; land one with bash dev/ship.sh" >&2; exit 2; }
+id=${run%%$'\t'*}; title=${run#*$'\t'}
+if [ "$title" = "Gate (no closure)" ]; then
+  echo "gate: run $id ran no matrix: ${sha:0:8} carries no \`Closes: C<n>\`; the full matrix runs on the wt2 push of a head that does (bash dev/ship.sh)" >&2; exit 2
+fi
 echo "gate: run $id  $(api gh run view "$id" --json url --jq .url)"
 # the run is done when the API says completed: a watch the connection drops is resumed, and a run
 # whose status the API will not give after the retries has no verdict
@@ -64,16 +54,10 @@ until [ "$(api gh run view "$id" --json status --jq .status)" = completed ]; do
   api gh run view "$id" --json status --jq .status >/dev/null ||
     { echo "gate: the API gives no status for run $id: no verdict"; echo "$verdict unknown"; exit 3; }
 done
-# the budget B, minutes per lane job: the lane job's timeout in gate.yml, the one source (L162);
-# under --fast B_fast, the lane job's timeout in gate-fast.yml, its one source (L163)
-if [ $fast -eq 0 ]; then
+# the budget B, minutes per lane job: the lane job's timeout in gate.yml, the one source (L162)
 budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }
               inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)
-else
-budget=$(awk '/^  lane:$/ { inlane = 1; next } /^  [a-z][a-z-]*:$/ { inlane = 0 }
-              inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate-fast.yml)
-fi
-[ -n "$budget" ] || { echo "gate: $prefix.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
+[ -n "$budget" ] || { echo "gate: gate.yml's lane job has no timeout-minutes, the budget" >&2; exit 2; }
 # a job whose step failed is red, though its own `Cancel the run` step leaves it cancelled
 api gh run view "$id" --json jobs --jq '.jobs[] | [(if any(.steps[]?; .conclusion == "failure") then "failure" else .conclusion end), .name,
     (if (.startedAt // "") != "" and (.completedAt // "") != "" and .startedAt < .completedAt

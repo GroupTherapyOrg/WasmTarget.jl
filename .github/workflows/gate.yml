@@ -7,12 +7,13 @@ name: Gate
 # It runs at clause closure only (Dale, 2026-10-21: large-scale runs happen only when a full clause
 # is closed out): on a push of wt2, the march branch, whose head commit carries a `Closes: C<n>` line (the commit that
 # closes clause n; dev/hooks/commit-msg refuses that line unless the ratchet reads C<n> CLOSED on
-# its tree), on a gate/** push and on workflow_dispatch; every other push runs
+# its tree), and on workflow_dispatch; every other push runs
 # the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/ship.sh`
 # pushes wt2 and nothing else, each landing one push (ci.yml, formal.yml and downstream.yml trigger
 # exactly as this file does, under the same closure predicate, A23E4), and is never gated by this run
-# (a landing's evidence is `bash dev/check.sh`); a red closure matrix is the next item. `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
-# verdict: the one final full gate before PR #128 merges is that run on the exact merge head.
+# (a landing's evidence is `bash dev/check.sh`); a red closure matrix is the next item. `bash dev/gate.sh`
+# pushes nothing: it finds this run for a wt2 commit and prints its verdict. The one final full gate
+# before PR #128 merges is this run on the exact merge head, landed on wt2 carrying `Closes: C<n>`.
 # The parts are sized from measured job times (each lane's work under ~12 min on ubuntu-latest):
 # smoke in 2 parts per version, TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
 # deals the instances round-robin, and at 5 the two largest, ExceptionStackDeep and
@@ -24,15 +25,15 @@ name: Gate
 # or rebalanced first.
 on:
   push:
-    branches: ['gate/**', 'wt2']
+    branches: ['wt2']
   workflow_dispatch:
 
 # the run's name says whether this run is a closure matrix ("Gate closure") or a push that runs nothing but the `closure` job: the closure predicate, the closure job's
-# text too (A23E6): a dispatch, a gate/** push, or a pushed head with a line `Closes: C<digit>…`
+# text too (A23E6): a dispatch, or a pushed head with a line `Closes: C<digit>…`
 # (grep's '^Closes: C[0-9]+', spelt for an expression: the message after a newline holds a newline
 # then `Closes: C` then a digit; fromJSON('"\n"') is the newline)
 run-name: >-
-  ${{ (github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"')))) && 'Gate closure' || 'Gate (no closure)' }}
+  ${{ (github.event_name != 'push' || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"')))) && 'Gate closure' || 'Gate (no closure)' }}
 
 # Only the newest push per branch runs; a superseded run is cancelled. A wt2 push's run is its head's
 # own group: every landing pushes wt2, and a later landing's push never cancels a closure matrix.
@@ -49,7 +50,7 @@ defaults:
     shell: bash
 
 jobs:
-  # the full matrix runs only at clause closure: a dispatch, a gate/** push, or a wt2 push whose
+  # the full matrix runs only at clause closure: a dispatch, or a wt2 push whose
   # head commit carries a `Closes: C<n>` line; any other push stops here and says so
   closure:
     runs-on: ubuntu-latest
@@ -61,7 +62,7 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF: ${{ github.ref }}
           RUN: >-
-            ${{ github.event_name != 'push' || startsWith(github.ref, 'refs/heads/gate/') || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
+            ${{ github.event_name != 'push' || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C0', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C1', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C2', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C3', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C4', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C5', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C6', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C7', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C8', fromJSON('"\n"'))) || contains(format('{0}{1}', fromJSON('"\n"'), github.event.head_commit.message), format('{0}Closes: C9', fromJSON('"\n"'))) }}
         run: |
           if [ "$RUN" = true ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"; echo "the full matrix runs ($EVENT, $REF)"
