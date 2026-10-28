@@ -1,5 +1,8 @@
 # The strict subset (dev/MARCH.md 1.A7; ledger D32): WasmTarget compiles exactly what Julia's own trim
-# verifier accepts, the static subset `juliac --trim=safe` compiles, and never re-guesses it. A compile
+# verifier accepts over Julia's unmodified Base, and never re-guesses it; outside it, a located
+# rejection. It is strictly smaller than what `juliac --trim=safe` compiles: juliac verifies after
+# patching Base and the stdlibs (juliac/juliac-trim-base.jl, juliac-trim-stdlib.jl: depwarn, stdio and
+# the active project stubbed out), which WasmTarget does not do. A compile
 # infers its program once, here, as trimming does: Core.Compiler's typeinf_ext_toplevel in TRIM_UNSAFE
 # mode over the closed world one entry reaches. Julia's TrimVerifier then judges what it inferred: an
 # error rejects the program as OutsideSubset with Julia's own text, which names the statement and its
@@ -73,7 +76,7 @@ closed world it accepts; rejects with `OutsideSubset`, Julia's text, when the en
 (Julia's `which` text) or no compileable specialization, or the verifier reports an error, each
 numbered as juliac numbers them.
 """
-@quarantine "the strict subset is the one Julia's trim verifier accepts (juliac --trim=safe), never re-guessed" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
+@quarantine "the strict subset is the one Julia's trim verifier accepts over unmodified Base, never re-guessed" Core.Compiler.TrimVerifier.get_verify_typeinf_trim function check_subset(@nospecialize(f), argtypes::Tuple, at::String)::ClosedWorld
     local sig = Base.signature_type(f, argtypes)
     local world = Base.get_world_counter()
     local mi = _entry_specialization(sig, world)
