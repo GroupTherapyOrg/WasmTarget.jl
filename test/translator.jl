@@ -21,3 +21,32 @@ const D = WasmTarget.Dart2Wasm
     @test !D.minify(o4) && D.omit_bounds_checks(o4) && D.omit_error_details(o4) && D.unique_types(o4)
     @test !D.inlining(O(inlining_override = false))
 end
+
+module TranslatorCases
+f_add(a::Int, b::Int) = a + b
+end
+
+@testset "translator.dart: the Translator, its queue and writeULEB128" begin
+    local W = WasmTarget
+    local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.TranslatorOptions(standalone = true))
+    # the program is the closed world's NIR, the entry's body among it
+    @test t.component isa Vector{W.NirBody} && !isempty(t.component)
+    @test D.is_standalone(t) && !D.is_standalone(D.Translator(t.component, D.TranslatorOptions()))
+    # the constructor's body builds the queue over the translator; drained empty, it does nothing
+    local q = t.compilation_queue[]
+    @test q.translator === t && D.is_empty(q)
+    @test D.drain_completion_queue(t) === nothing && D.is_empty(q)
+    local e = try; D.pop(q); nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Internal
+    # ULEB128, decoded by Julia's arithmetic: seven bits a byte, low first, the high bit continuing
+    local uleb(v) = (io = IOBuffer(); D.write_uleb128(io, v); take!(io))
+    local decode(bs) = sum(Int(b & 0x7f) << (7 * (k - 1)) for (k, b) in enumerate(bs))
+    for v in Int64[0, 1, 127, 128, 255, 300, 16383, 16384, 2^35 + 11, typemax(Int64)]
+        local bs = uleb(v)
+        @test decode(bs) == v && all(b -> b & 0x80 != 0, bs[1:end-1]) && bs[end] & 0x80 == 0
+        @test length(bs) == max(1, cld(64 - leading_zeros(v), 7))
+    end
+    @test uleb(624485) == UInt8[0xe5, 0x8e, 0x26]   # the LEB128 article's worked example
+    local e2 = try; uleb(-1); nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Internal
+end

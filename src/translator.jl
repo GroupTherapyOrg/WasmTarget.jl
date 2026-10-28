@@ -71,12 +71,12 @@ end
 The translation from the program to wasm, and the hub of the compiler's global state.
 
 Its fields arrive with the pieces that read them: `options`; `component`, the program, the NIR of
-the closed world Julia's trim verifier accepted (dart's Kernel `Component`); `classIdNumbering`.
+the closed world Julia's trim verifier accepted (dart's Kernel `Component`); `compilationQueue`;
+`classIdNumbering`.
 dart's fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
 `subtypes`, the TFA metadata maps (Julia's inference, held by the NIR), `index`, `closureLayouter`,
 `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`,
-`dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`, `_exceptionTags`,
-`compilationQueue`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, `classes`,
+`dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`, `_exceptionTags`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, `classes`,
 `classesSupersFirst`, `classInfo` and the maps and caches after it (translator.dart:181 on).
 
 A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
@@ -86,17 +86,22 @@ the translator holds each collaborator.
 @parity "dart2wasm/lib/translator.dart:96 Translator" struct Translator <: KernelNodes
     options::TranslatorOptions
     component::Vector{NirBody}
+    compilation_queue::Late{CompilationQueue}
     class_id_numbering::Late{ClassIdNumbering}
     # dart's field initializers and the constructor's initializer list; a late field is assigned by
-    # the code that builds it (ClassInfoCollector.collect)
+    # the code that builds it (the constructor's body at :470, ClassInfoCollector.collect)
     Translator(component::Vector{NirBody}, options::TranslatorOptions) =
-        new(options, component, Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"))
+        new(options, component, Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
+            Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"))
 end
 
-"""
-CompilationQueue's dart fields: `translator`, `_pending`.
-"""
-@parity "dart2wasm/lib/translator.dart:2661 CompilationQueue" @unported struct CompilationQueue end
+"""The functions whose code is still to generate, taken last in, first out."""
+@parity "dart2wasm/lib/translator.dart:2661 CompilationQueue" struct CompilationQueue
+    translator::KernelNodes
+    _pending::Vector{CompilationTask}
+    # the struct's one constructor, tagged; dart's constructor at :2665 is its outer function
+    CompilationQueue(::Val{:_}, translator::KernelNodes) = new(translator, CompilationTask[])
+end
 
 @parity "dart2wasm/lib/translator.dart:2675 CompilationTask" abstract type CompilationTask end
 
@@ -184,7 +189,7 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:88 TranslatorOptions.uniqueTypes" unique_types(self::TranslatorOptions)::Bool = something(self.enable_unique_types, self.optimization_level >= 2)
 
-@parity "dart2wasm/lib/translator.dart:112 Translator.isStandalone" @unported function is_standalone(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:112 Translator.isStandalone" is_standalone(self::Translator)::Bool = self.options.standalone
 
 @parity "dart2wasm/lib/translator.dart:214 Translator.ffiMemory" @unported function ffi_memory(self::Translator, using_module::WasmBuilder.ModuleBuilder) end
 
@@ -221,12 +226,23 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 # dart's constructor takes the Kernel component and its core types, index, record classes, loading
 # map and module output data; WasmTarget's program is the closed world Julia's trim verifier
 # accepted, read once as the NIR, and the rest arrive with the pieces that read them
-@parity "dart2wasm/lib/translator.dart:470 Translator" Translator(world::ClosedWorld, options::TranslatorOptions)::Translator =
-    Translator(build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"), options)
+@parity "dart2wasm/lib/translator.dart:470 Translator" function Translator(world::ClosedWorld, options::TranslatorOptions)::Translator
+    local self = Translator(build_nir(world, "dart2wasm/lib/translator.dart:470 Translator"), options)
+    # the constructor's body: each collaborator built over the translator, as its piece is ported
+    self.compilation_queue[] = CompilationQueue(self)
+    return self
+end
 
 @parity "dart2wasm/lib/translator.dart:499 Translator._initModules" @unported function _init_modules(self::Translator, source_map_url_generator) end
 
-@parity "dart2wasm/lib/translator.dart:517 Translator.drainCompletionQueue" @unported function drain_completion_queue(self::Translator) end
+@parity "dart2wasm/lib/translator.dart:517 Translator.drainCompletionQueue" function drain_completion_queue(self::Translator)::Nothing
+    local queue = self.compilation_queue[]
+    while !is_empty(queue)
+        local task = pop(queue)
+        run(task, self, self.options.print_kernel, self.options.print_wasm)
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/translator.dart:524 Translator.translate" @unported function translate(self::Translator, source_map_url_generator) end
 
@@ -392,13 +408,20 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" @unported function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType, name::String, instantiate_heap_type) end
 
-@parity "dart2wasm/lib/translator.dart:2665 CompilationQueue" @unported function CompilationQueue(translator) end
+@parity "dart2wasm/lib/translator.dart:2665 CompilationQueue" CompilationQueue(translator::KernelNodes)::CompilationQueue = CompilationQueue(Val(:_), translator)
 
-@parity "dart2wasm/lib/translator.dart:2667 CompilationQueue.isEmpty" @unported function is_empty(self::CompilationQueue) end
+@parity "dart2wasm/lib/translator.dart:2667 CompilationQueue.isEmpty" is_empty(self::CompilationQueue)::Bool = isempty(self._pending)
 
-@parity "dart2wasm/lib/translator.dart:2668 CompilationQueue.add" @unported function add(self::CompilationQueue, entry::CompilationTask) end
+@parity "dart2wasm/lib/translator.dart:2668 CompilationQueue.add" function add(self::CompilationQueue, entry::CompilationTask)::Nothing
+    push!(self._pending, entry)
+    return nothing
+end
 
-@parity "dart2wasm/lib/translator.dart:2672 CompilationQueue.pop" @unported function pop(self::CompilationQueue) end
+# dart's removeLast throws on an empty list; here a located rejection
+@parity "dart2wasm/lib/translator.dart:2672 CompilationQueue.pop" function pop(self::CompilationQueue)::CompilationTask
+    isempty(self._pending) && reject!(Internal("dart2wasm/lib/translator.dart:2672 CompilationQueue.pop: the queue is empty"), "CompilationQueue.pop")
+    return pop!(self._pending)
+end
 
 @parity "dart2wasm/lib/translator.dart:2679 CompilationTask" @unported function CompilationTask(function_, _code_generator) end
 
@@ -544,4 +567,16 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
 
 @parity "dart2wasm/lib/translator.dart:4069 SingleClosureTarget._" @unported function SingleClosureTarget__(call_target, param_info) end
 
-@parity "dart2wasm/lib/translator.dart:4073 writeULEB128" @unported function write_uleb128(self, value::Int64) end
+# dart's extension on BytesBuilder, its bytes appended to an IOBuffer, Julia's byte builder; dart's
+# assert on a negative value a located rejection
+@parity "dart2wasm/lib/translator.dart:4073 writeULEB128" function write_uleb128(self::IOBuffer, value::Int64)::Nothing
+    value >= 0 || reject!(Internal("dart2wasm/lib/translator.dart:4073 writeULEB128: the negative $value"), "writeULEB128")
+    while true
+        local byte = value & 0x7F
+        value >>>= 7
+        value != 0 && (byte |= 0x80)
+        write(self, byte % UInt8)
+        value != 0 || break
+    end
+    return nothing
+end
