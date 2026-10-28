@@ -22,8 +22,8 @@ _rejection(f) = try; f(); nothing; catch x; x isa WasmTarget.RejectionError ? x.
     local g = D.DartGlobals(Val(:_), GlobalsNodes())
     # a binding's initializer is the value it holds, Julia's own object (===), or none when unassigned
     local c = D.get_constant_initializer(g, GlobalRef(GlobalsCases, :C))
-    @test c isa Core.Const && c.val === GlobalsCases.C
-    @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, :v)) === Core.Const(3.5)
+    @test c isa WasmTarget.NirConst && c.c.val === GlobalsCases.C
+    @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, :v)) === WasmTarget.NirConst(Core.Const(3.5))
     @test D.get_constant_initializer(g, GlobalRef(GlobalsCases, :u)) === nothing
     @test D._member_name(g, GlobalRef(GlobalsCases, :v)) == string(GlobalRef(GlobalsCases, :v))
     @test D._initialize_at_startup(g, GlobalRef(GlobalsCases, :v))

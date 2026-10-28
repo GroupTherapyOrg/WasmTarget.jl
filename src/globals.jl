@@ -125,13 +125,13 @@ end
 """
 dart's literal initializer of a static field, its constant: a Julia global binding has no
 initializer expression, and the value it holds where the closed world was compiled is its value in
-the program, as Julia's own juliac image holds it (`Core.Const` of the value, compared by `===`).
+the program, as Julia's own juliac image holds it (the NIR's literal of the value, compared by `===`).
 A binding with no value has no initializer; a read of it is Julia's UndefVarError, which this
 `nothing` leaves to the lazy path.
 """
-@parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{Core.Const,Nothing}
+@parity "dart2wasm/lib/globals.dart:113 DartGlobals.getConstantInitializer" function get_constant_initializer(self::DartGlobals, variable::GlobalRef)::Union{NirConst,Nothing}
     isdefinedglobal(variable.mod, variable.name) || return nothing
-    return Core.Const(getglobal(variable.mod, variable.name))
+    return NirConst(Core.Const(getglobal(variable.mod, variable.name)))
 end
 
 @parity "dart2wasm/lib/globals.dart:126 DartGlobals.getDefinitionForStaticField" @unported function get_definition_for_static_field(self::DartGlobals, field) end
@@ -145,10 +145,10 @@ end
 end
 
 @parity "dart2wasm/lib/globals.dart:236 DartGlobals._defineTableBasedField" function _define_table_based_field(self::DartGlobals, field::GlobalRef, field_type::WasmBuilder.IR.RefType, module_::WasmBuilder.ModuleBuilder,
-        init::Union{Core.Const,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::TableBasedDartGlobal
+        init::Union{NirConst,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::TableBasedDartGlobal
     local table = get_table_for_type(self.translator.table_based_globals[], field_type.heap_type)
     # dart's NullConstant is Julia's nothing, the one value of Nothing
-    if init !== nothing && init.val !== nothing
+    if init !== nothing && init.c.val !== nothing
         return TableBasedDartGlobal(table, index_for_object(table, field, module_, function (ib::WasmBuilder.InstructionsBuilder)
             instantiate_constant(self.translator.constants[], ib, init, field_type)
             WasmBuilder.var"end"(ib)
@@ -158,7 +158,7 @@ end
 end
 
 @parity "dart2wasm/lib/globals.dart:262 DartGlobals._defineGlobalBasedField" function _define_global_based_field(self::DartGlobals, field::GlobalRef, field_type::WasmBuilder.IR.ValueType, module_::WasmBuilder.ModuleBuilder,
-        mutable_::Bool, init::Union{Core.Const,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::WasmGlobalDartGlobal
+        mutable_::Bool, init::Union{NirConst,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::WasmGlobalDartGlobal
     local member_name = _member_name(self, field)
     local global_ = WasmBuilder.define(module_.globals[], WasmBuilder.IR.GlobalType(field_type; mutable = mutable_), member_name)
     if init !== nothing

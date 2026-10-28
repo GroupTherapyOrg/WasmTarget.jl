@@ -46,7 +46,7 @@ modules the constant may still become lazy.
 (dart's function typedefs, Julia's `Function`).
 """
 @parity "dart2wasm/lib/constants.dart:76 ConstantInfo" mutable struct ConstantInfo
-    const constant::Constant
+    const constant::Union{NirConst,DummyValueConstant}
     const children::Vector{ConstantInfo}
     const _force_lazy::Function
     const can_be_eager::Bool
@@ -54,7 +54,7 @@ modules the constant may still become lazy.
     const _code_gen::Function
     _definition::Union{ConstantDefinition,Nothing}
     # the struct's one constructor, tagged; dart's constructor at :94 is its outer function
-    ConstantInfo(::Val{:_}, constant::Constant, children::Vector{ConstantInfo}, _force_lazy::Function, can_be_eager::Bool,
+    ConstantInfo(::Val{:_}, constant::Union{NirConst,DummyValueConstant}, children::Vector{ConstantInfo}, _force_lazy::Function, can_be_eager::Bool,
                  type::WasmBuilder.IR.RefType, _code_gen::Function) =
         new(constant, children, _force_lazy, can_be_eager, type, _code_gen, nothing)
 end
@@ -72,50 +72,50 @@ starts out uninitialized, and every use of the constant checks the global to see
 initialized and calls an initialization function otherwise. A constant is also forced to be lazy if
 any sub-constants (e.g. elements of a constant list) are lazy.
 
-A constant is a Julia value (`Constant`, src/julia/constant.jl), so `constantInfo` canonicalizes by
-Julia's identity. The cached runtime-type constants (`_cachedDynamicType` and the rest) and
+A constant is a Julia value as the NIR holds a literal (`NirConst`, Kernel's Constant), or a dummy
+value of the compiler's own, so `constantInfo` canonicalizes by Julia's identity (===). The cached runtime-type constants (`_cachedDynamicType` and the rest) and
 `typeInfo` are dart's late fields whose initializers lower Kernel types, read as unported until the
 runtime type representation is (types.dart).
 """
 @parity "dart2wasm/lib/constants.dart:152 Constants" mutable struct Constants
     const translator::KernelNodes
-    const constant_info::Dict{Constant,ConstantInfo}
-    const value_type_constants::Dict{Constant,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}
+    const constant_info::Dict{Union{NirConst,DummyValueConstant},ConstantInfo}
+    const value_type_constants::Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}
     const _byte_segments::LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.DataSegmentBuilder}
     const type_info::Late{ClassInfo}
     const _constant_accessor::Late{_ConstantAccessor}
     const _dummy_value_constants::Dict{WasmBuilder.IR.HeapType,DummyValueConstant}
-    const _lowered_type_constants::IdDict{Type,InstanceConstant}
-    const _cached_true_constant::Late{BoolConstant}
-    const _cached_false_constant::Late{BoolConstant}
-    const _cached_dynamic_type::Late{InstanceConstant}
-    const _cached_void_type::Late{InstanceConstant}
-    const _cached_never_type::Late{InstanceConstant}
-    const _cached_null_type::Late{InstanceConstant}
-    const _cached_nullable_object_type::Late{InstanceConstant}
-    const _cached_non_nullable_object_type::Late{InstanceConstant}
-    const _cached_nullable_function_type::Late{InstanceConstant}
-    const _cached_non_nullable_function_type::Late{InstanceConstant}
-    const _cached_nullable_record_type::Late{InstanceConstant}
-    const _cached_non_nullable_record_type::Late{InstanceConstant}
+    const _lowered_type_constants::IdDict{Type,NirConst}
+    const _cached_true_constant::Late{NirConst}
+    const _cached_false_constant::Late{NirConst}
+    const _cached_dynamic_type::Late{NirConst}
+    const _cached_void_type::Late{NirConst}
+    const _cached_never_type::Late{NirConst}
+    const _cached_null_type::Late{NirConst}
+    const _cached_nullable_object_type::Late{NirConst}
+    const _cached_non_nullable_object_type::Late{NirConst}
+    const _cached_nullable_function_type::Late{NirConst}
+    const _cached_non_nullable_function_type::Late{NirConst}
+    const _cached_nullable_record_type::Late{NirConst}
+    const _cached_non_nullable_record_type::Late{NirConst}
     currently_creating::Bool
     # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
     # :201 is its outer function; a late field with an initializer reads the constants themselves
     function Constants(::Val{:_}, translator::KernelNodes)
         local self
-        self = new(translator, Dict{Constant,ConstantInfo}(), Dict{Constant,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}(),
+        self = new(translator, Dict{Union{NirConst,DummyValueConstant},ConstantInfo}(), Dict{NirConst,LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}}(),
             LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.DataSegmentBuilder}(),
             Late{ClassInfo}("dart2wasm/lib/constants.dart:157 Constants.typeInfo"),
             Late{_ConstantAccessor}("dart2wasm/lib/constants.dart:159 Constants._constantAccessor", () -> _ConstantAccessor(self.translator)),
-            Dict{WasmBuilder.IR.HeapType,DummyValueConstant}(), IdDict{Type,InstanceConstant}(),
+            Dict{WasmBuilder.IR.HeapType,DummyValueConstant}(), IdDict{Type,NirConst}(),
             # Julia's `true` and `false`, each Julia's one object of its value
-            Late{BoolConstant}("dart2wasm/lib/constants.dart:163 Constants._cachedTrueConstant", () -> BoolConstant(Core.Const(true))),
-            Late{BoolConstant}("dart2wasm/lib/constants.dart:164 Constants._cachedFalseConstant", () -> BoolConstant(Core.Const(false))),
-            Late{InstanceConstant}("dart2wasm/lib/constants.dart:165 Constants._cachedDynamicType"), Late{InstanceConstant}("dart2wasm/lib/constants.dart:168 Constants._cachedVoidType"),
-            Late{InstanceConstant}("dart2wasm/lib/constants.dart:171 Constants._cachedNeverType"), Late{InstanceConstant}("dart2wasm/lib/constants.dart:174 Constants._cachedNullType"),
-            Late{InstanceConstant}("dart2wasm/lib/constants.dart:177 Constants._cachedNullableObjectType"), Late{InstanceConstant}("dart2wasm/lib/constants.dart:180 Constants._cachedNonNullableObjectType"),
-            Late{InstanceConstant}("dart2wasm/lib/constants.dart:182 Constants._cachedNullableFunctionType"), Late{InstanceConstant}("dart2wasm/lib/constants.dart:186 Constants._cachedNonNullableFunctionType"),
-            Late{InstanceConstant}("dart2wasm/lib/constants.dart:190 Constants._cachedNullableRecordType"), Late{InstanceConstant}("dart2wasm/lib/constants.dart:194 Constants._cachedNonNullableRecordType"),
+            Late{NirConst}("dart2wasm/lib/constants.dart:163 Constants._cachedTrueConstant", () -> NirConst(Core.Const(true))),
+            Late{NirConst}("dart2wasm/lib/constants.dart:164 Constants._cachedFalseConstant", () -> NirConst(Core.Const(false))),
+            Late{NirConst}("dart2wasm/lib/constants.dart:165 Constants._cachedDynamicType"), Late{NirConst}("dart2wasm/lib/constants.dart:168 Constants._cachedVoidType"),
+            Late{NirConst}("dart2wasm/lib/constants.dart:171 Constants._cachedNeverType"), Late{NirConst}("dart2wasm/lib/constants.dart:174 Constants._cachedNullType"),
+            Late{NirConst}("dart2wasm/lib/constants.dart:177 Constants._cachedNullableObjectType"), Late{NirConst}("dart2wasm/lib/constants.dart:180 Constants._cachedNonNullableObjectType"),
+            Late{NirConst}("dart2wasm/lib/constants.dart:182 Constants._cachedNullableFunctionType"), Late{NirConst}("dart2wasm/lib/constants.dart:186 Constants._cachedNonNullableFunctionType"),
+            Late{NirConst}("dart2wasm/lib/constants.dart:190 Constants._cachedNullableRecordType"), Late{NirConst}("dart2wasm/lib/constants.dart:194 Constants._cachedNonNullableRecordType"),
             false)
         return self
     end
@@ -142,7 +142,7 @@ end
 
 """
 A constant of the compiler's own, a dummy value of the heap type `type`: Kernel's AuxiliaryConstant,
-which reaches the constant visitors as an `AuxiliaryConstant` holding it (src/julia/constant.jl).
+beside the program's constants (`NirConst`) wherever a constant is taken.
 """
 @parity "dart2wasm/lib/constants.dart:1660 DummyValueConstant" struct DummyValueConstant
     type::WasmBuilder.IR.HeapType
@@ -222,7 +222,7 @@ end
 
 @parity "dart2wasm/lib/constants.dart:77 ConstantInfo.canBeEagerBit" ConstantInfo_can_be_eager_bit()::Int = 1 << 0
 
-@parity "dart2wasm/lib/constants.dart:94 ConstantInfo" ConstantInfo(constant::Constant, children::Vector{ConstantInfo}, _force_lazy::Function, can_be_eager::Bool,
+@parity "dart2wasm/lib/constants.dart:94 ConstantInfo" ConstantInfo(constant::Union{NirConst,DummyValueConstant}, children::Vector{ConstantInfo}, _force_lazy::Function, can_be_eager::Bool,
         type_::WasmBuilder.IR.RefType, _code_gen::Function)::ConstantInfo =
     ConstantInfo(Val(:_), constant, children, _force_lazy, can_be_eager, type_, _code_gen)
 
@@ -276,12 +276,10 @@ end
 
 @parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type, entries::Vector{Any}; mutable_ = nothing) end
 
-@parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::Constant =
+@parity "dart2wasm/lib/constants.dart:268 Constants.dummyStructConstant" dummy_struct_constant(self::Constants)::DummyValueConstant =
     _get_dummy_value_constant(self, WasmBuilder.IR.HeapType_struct; name = "#DummyStruct")
 
-# dart's DummyValueConstant is a Kernel AuxiliaryConstant; it reaches the visitors as the
-# AuxiliaryConstant holding it
-@parity "dart2wasm/lib/constants.dart:271 Constants._getDummyValueConstant" function _get_dummy_value_constant(self::Constants, heap_type::WasmBuilder.IR.HeapType; name::Union{String,Nothing} = nothing)::Constant
+@parity "dart2wasm/lib/constants.dart:271 Constants._getDummyValueConstant" function _get_dummy_value_constant(self::Constants, heap_type::WasmBuilder.IR.HeapType; name::Union{String,Nothing} = nothing)::DummyValueConstant
     if heap_type == WasmBuilder.IR.HeapType_eq || heap_type == WasmBuilder.IR.HeapType_any
         heap_type = WasmBuilder.IR.HeapType_struct
     end
@@ -289,7 +287,7 @@ end
     if d === nothing
         d = self._dummy_value_constants[heap_type] = DummyValueConstant(heap_type, name === nothing ? sprint(show, heap_type) : name)
     end
-    return julia_constant(Core.Const(d), "Constants._getDummyValueConstant"; auxiliary = true)
+    return d
 end
 
 @parity "dart2wasm/lib/constants.dart:281 Constants.instantiateDummyValueConstant" function instantiate_dummy_value_constant(self::Constants, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType)::Nothing
@@ -304,7 +302,7 @@ Ensure that the constant has a Wasm global assigned.
 Sub-constants must have Wasm globals assigned before the global for the composite constant is
 assigned, since global initializers can only refer to earlier globals.
 """
-@parity "dart2wasm/lib/constants.dart:298 Constants.ensureConstant" ensure_constant(self::Constants, constant::Constant)::Union{ConstantInfo,Nothing} =
+@parity "dart2wasm/lib/constants.dart:298 Constants.ensureConstant" ensure_constant(self::Constants, constant::Union{NirConst,DummyValueConstant})::Union{ConstantInfo,Nothing} =
     ensure_constant(ConstantCreator(self), constant)
 
 """
@@ -313,7 +311,7 @@ Whether the constant can be accessed eagerly (i.e. is non lazy) in a global init
 If the constant can be eager then it'll be immediatly placed in the main module and return we
 return `true`. Otherwise we return `false`.
 """
-@parity "dart2wasm/lib/constants.dart:307 Constants.tryInstantiateEagerlyFrom" function try_instantiate_eagerly_from(self::Constants, using_module::WasmBuilder.ModuleBuilder, constant::Constant, expected_type::WasmBuilder.IR.ValueType)::Bool
+@parity "dart2wasm/lib/constants.dart:307 Constants.tryInstantiateEagerlyFrom" function try_instantiate_eagerly_from(self::Constants, using_module::WasmBuilder.ModuleBuilder, constant::Union{NirConst,DummyValueConstant}, expected_type::WasmBuilder.IR.ValueType)::Bool
     constant_is_always_eager(self._constant_accessor[], constant) && return true
 
     local info = ensure_constant(self, constant)
@@ -344,7 +342,7 @@ return `true`. Otherwise we return `false`.
 end
 
 """Emit code to push a constant onto the stack."""
-@parity "dart2wasm/lib/constants.dart:346 Constants.instantiateConstant" function instantiate_constant(self::Constants, b::WasmBuilder.InstructionsBuilder, constant::Constant, expected_type::WasmBuilder.IR.ValueType;
+@parity "dart2wasm/lib/constants.dart:346 Constants.instantiateConstant" function instantiate_constant(self::Constants, b::WasmBuilder.InstructionsBuilder, constant::Union{NirConst,DummyValueConstant}, expected_type::WasmBuilder.IR.ValueType;
         deferred_module_guard::Union{WasmBuilder.ModuleBuilder,Nothing} = nothing)::Nothing
     expected_type == self.translator.void_marker[] && return nothing
     instantiate(ConstantInstantiator(self, b, expected_type, deferred_module_guard), constant)
@@ -356,7 +354,7 @@ A type as a value, lowered to the constant of its runtime type object, once per 
 type itself, an instance of its kind (`typeof(T)`), whose fields classes.jl lays out
 (`_kind_instance_fields`). Keyed by Julia's identity, Julia's types being canonical.
 """
-@parity "dart2wasm/lib/constants.dart:361 Constants._lowerTypeToConstant" function _lower_type_to_constant(self::Constants, type_::Type)::InstanceConstant
+@parity "dart2wasm/lib/constants.dart:361 Constants._lowerTypeToConstant" function _lower_type_to_constant(self::Constants, type_::Type)::NirConst
     local c = get(self._lowered_type_constants, type_, nothing)
     c === nothing || return c
     return self._lowered_type_constants[type_] = _lower_type_constant_impl(self, type_)
@@ -367,10 +365,10 @@ dart's switch over Kernel's type kinds, over Julia's: a `DataType` is dart's Int
 among them, dart's `Object?`), `Union{}` dart's Never, and a `Union` or `UnionAll`, which dart has no
 type of, its own kind's instance.
 """
-@parity "dart2wasm/lib/constants.dart:365 Constants._lowerTypeConstantImpl" function _lower_type_constant_impl(self::Constants, type_::Type)::InstanceConstant
+@parity "dart2wasm/lib/constants.dart:365 Constants._lowerTypeConstantImpl" function _lower_type_constant_impl(self::Constants, type_::Type)::NirConst
     type_ isa DataType && return _make_interface_type_constant(self, type_)
     type_ === Union{} && return _make_bottom_type_constant(self, type_)
-    type_ isa Union{Union,UnionAll} && return InstanceConstant(Core.Const(type_))
+    type_ isa Union{Union,UnionAll} && return NirConst(Core.Const(type_))
     reject!(Internal("dart2wasm/lib/constants.dart:387 Constants._lowerTypeConstantImpl: Unexpected DartType: $type_"), "Constants._lowerTypeConstantImpl")
 end
 
@@ -383,10 +381,10 @@ A class's type object: the instance of `DataType` whose class id is the class's,
 closed world (a class the closed world does not number rejects, located); a Julia class holds no
 type arguments, its parameters bound.
 """
-@parity "dart2wasm/lib/constants.dart:430 Constants._makeInterfaceTypeConstant" function _make_interface_type_constant(self::Constants, type_::DataType)::InstanceConstant
+@parity "dart2wasm/lib/constants.dart:430 Constants._makeInterfaceTypeConstant" function _make_interface_type_constant(self::Constants, type_::DataType)::NirConst
     haskey(self.translator.class_id_numbering[].class_ids, type_) ||
         reject!(Unquarantined("src/constants.jl _makeInterfaceTypeConstant: the type $type_ as a value, a class the closed world does not number"), "Constants._makeInterfaceTypeConstant")
-    return InstanceConstant(Core.Const(type_))
+    return NirConst(Core.Const(type_))
 end
 
 @parity "dart2wasm/lib/constants.dart:441 Constants._makeFutureOrTypeConstant" @unported function _make_future_or_type_constant(self::Constants, type_) end
@@ -401,9 +399,9 @@ end
 
 @parity "dart2wasm/lib/constants.dart:521 Constants._makeAbstractRecordTypeConstant" @unported function _make_abstract_record_type_constant(self::Constants, type_) end
 
-@parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" function _make_bottom_type_constant(self::Constants, type_::Type)::InstanceConstant
+@parity "dart2wasm/lib/constants.dart:530 Constants._makeBottomTypeConstant" function _make_bottom_type_constant(self::Constants, type_::Type)::NirConst
     type_ === Union{} || reject!(Internal("dart2wasm/lib/constants.dart:531 Constants._makeBottomTypeConstant: $type_ is no bottom type"), "Constants._makeBottomTypeConstant")
-    return InstanceConstant(Core.Const(type_))
+    return NirConst(Core.Const(type_))
 end
 
 @parity "dart2wasm/lib/constants.dart:539 Constants._makeTypeConstant" @unported function _make_type_constant(self::Constants, class_node, nullability, field_values::Dict{Any,Any}) end
@@ -414,20 +412,20 @@ end
 
 @parity "dart2wasm/lib/constants.dart:566 ConstantInstantiator.translator" translator(self::ConstantInstantiator)::KernelNodes = self.constants.translator
 
-# `constant.accept(this)`: Kernel's visitor calls the visit method of the constant's kind, a kind the
-# instantiator does not visit going to defaultConstant (ConstantVisitorDefaultMixin)
-@parity "dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate" function instantiate(self::ConstantInstantiator, constant::Constant)::Nothing
-    local result_type = @exhaustive constant::Constant begin
-        (c::NullConstant) => visit_null_constant(self, c)
-        (c::BoolConstant) => visit_bool_constant(self, c)
-        (c::IntConstant) => visit_int_constant(self, c)
-        (c::DoubleConstant) => visit_double_constant(self, c)
-        (c::InstanceConstant) => visit_instance_constant(self, c)
-        StringConstant => default_constant(self, constant)
-        SymbolConstant => default_constant(self, constant)
-        RecordConstant => default_constant(self, constant)
-        TypeLiteralConstant => default_constant(self, constant)
-        AuxiliaryConstant => default_constant(self, constant)
+# `constant.accept(this)`: Kernel's visitor calls the visit method of the constant's kind, the
+# value's Julia type, a kind the instantiator does not visit going to defaultConstant
+# (ConstantVisitorDefaultMixin)
+@parity "dart2wasm/lib/constants.dart:568 ConstantInstantiator.instantiate" function instantiate(self::ConstantInstantiator, constant::Union{NirConst,DummyValueConstant})::Nothing
+    local result_type = if constant isa DummyValueConstant
+        default_constant(self, constant)
+    else
+        local v = constant.c.val
+        v === nothing ? visit_null_constant(self, v) :
+        v isa Bool ? visit_bool_constant(self, v) :
+        v isa Union{Base.BitInteger64,Char} ? visit_int_constant(self, v) :
+        v isa Union{Float32,Float64} ? visit_double_constant(self, v) :
+        v isa Union{String,Symbol,Tuple,NamedTuple,Type} ? default_constant(self, constant) :
+        visit_instance_constant(self, constant)
     end
     local translator = self.constants.translator
     local b = self.b
@@ -440,7 +438,7 @@ end
         else
             # This only happens in invalid but unreachable code produced by the
             # TFA dead-code elimination.
-            WasmBuilder.comment(b, "Constant in incompatible context (constant: $(constant.c.val), " *
+            WasmBuilder.comment(b, "Constant in incompatible context (constant: $(constant isa NirConst ? constant.c.val : constant), " *
                 "expectedType: $expected_type, resultType: $result_type)")
             WasmBuilder.unreachable(b)
         end
@@ -448,12 +446,12 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/constants.dart:587 ConstantInstantiator.defaultConstant" default_constant(self::ConstantInstantiator, constant::Constant)::WasmBuilder.IR.ValueType =
+@parity "dart2wasm/lib/constants.dart:587 ConstantInstantiator.defaultConstant" default_constant(self::ConstantInstantiator, constant::Union{NirConst,DummyValueConstant})::WasmBuilder.IR.ValueType =
     load_constant(self.constants._constant_accessor[], self.b, constant, self.deferred_module_guard)
 
 @parity "dart2wasm/lib/constants.dart:596 ConstantInstantiator.visitUnevaluatedConstant" @unported function visit_unevaluated_constant(self::ConstantInstantiator, constant) end
 
-@parity "dart2wasm/lib/constants.dart:605 ConstantInstantiator.visitNullConstant" function visit_null_constant(self::ConstantInstantiator, node::NullConstant)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/constants.dart:605 ConstantInstantiator.visitNullConstant" function visit_null_constant(self::ConstantInstantiator, node::Nothing)::WasmBuilder.IR.ValueType
     local expected_type = self.expected_type
     if expected_type == WasmBuilder.IR.RefType_func(nullable = true)
         WasmBuilder.ref_null(self.b, (expected_type::WasmBuilder.IR.RefType).heap_type)
@@ -463,9 +461,9 @@ end
     return WasmBuilder.IR.RefType_none(nullable = true)
 end
 
-@parity "dart2wasm/lib/constants.dart:615 ConstantInstantiator.visitBoolConstant" function visit_bool_constant(self::ConstantInstantiator, constant::BoolConstant)::WasmBuilder.IR.ValueType
-    self.expected_type isa WasmBuilder.IR.RefType && return default_constant(self, constant)
-    WasmBuilder.i32_const(self.b, (constant.c.val::Bool) ? 1 : 0)
+@parity "dart2wasm/lib/constants.dart:615 ConstantInstantiator.visitBoolConstant" function visit_bool_constant(self::ConstantInstantiator, constant::Bool)::WasmBuilder.IR.ValueType
+    self.expected_type isa WasmBuilder.IR.RefType && return default_constant(self, NirConst(Core.Const(constant)))
+    WasmBuilder.i32_const(self.b, constant ? 1 : 0)
     return WasmBuilder.IR.NumType_i32
 end
 
@@ -476,22 +474,22 @@ reference is expected, the box of its class, one global per module, `valueTypeCo
 one integer class, boxed by `_BoxedInt`; each Julia integer type is its own class, whose struct
 holds the object header and the value.
 """
-@parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, constant::IntConstant)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/constants.dart:622 ConstantInstantiator.visitIntConstant" function visit_int_constant(self::ConstantInstantiator, constant::Union{Base.BitInteger64,Char})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
     local b = self.b
-    local v = constant.c.val
+    local v = constant
     # the value's bits as the wasm instruction's operand: a 64-bit value reinterpreted as Int64, a
     # 32-bit one (Char's bits among them) as Int32, an 8- or 16-bit one by its value
     local bits = sizeof(v) == 8 ? reinterpret(Int64, v) : sizeof(v) == 4 ? Int64(reinterpret(Int32, v)) : Int64(v)
     local num_type = WasmBuilder.unpacked(translator.builtin_types[][typeof(v)])
     if self.expected_type isa WasmBuilder.IR.RefType
-        local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, constant)
+        local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, NirConst(Core.Const(v)))
         local per_module_global = get(module_map, b.module_builder, nothing)
         if per_module_global === nothing
             local info = translator.class_info[typeof(v)]
             local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(info.struct_; nullable = false); mutable = false)
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
-                _constant_name(self.constants._constant_accessor[], constant))
+                _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
             local ib = defined_global.initializer
             push_object_header_fields(ib, translator, info)
             num_type == WasmBuilder.IR.NumType_i32 ? WasmBuilder.i32_const(ib, bits) : WasmBuilder.i64_const(ib, bits)
@@ -515,19 +513,19 @@ A float constant: unboxed, its value's own wasm type (`Float32` f32, `Float64` f
 reference is expected, the box of its class, one global per module. dart has one double class;
 each Julia float type is its own class.
 """
-@parity "dart2wasm/lib/constants.dart:658 ConstantInstantiator.visitDoubleConstant" function visit_double_constant(self::ConstantInstantiator, constant::DoubleConstant)::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/constants.dart:658 ConstantInstantiator.visitDoubleConstant" function visit_double_constant(self::ConstantInstantiator, constant::Union{Float32,Float64})::WasmBuilder.IR.ValueType
     local translator = self.constants.translator
     local b = self.b
-    local v = constant.c.val
+    local v = constant
     local push(ib::WasmBuilder.InstructionsBuilder) = v isa Float32 ? WasmBuilder.f32_const(ib, Float64(v)) : WasmBuilder.f64_const(ib, Float64(v))
     if self.expected_type isa WasmBuilder.IR.RefType
-        local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, constant)
+        local module_map = get!(() -> LinkedHashMap{WasmBuilder.ModuleBuilder,WasmBuilder.IR.Global}(), self.constants.value_type_constants, NirConst(Core.Const(v)))
         local per_module_global = get(module_map, b.module_builder, nothing)
         if per_module_global === nothing
             local info = translator.class_info[typeof(v)]
             local global_type = WasmBuilder.IR.GlobalType(WasmBuilder.IR.RefType(info.struct_; nullable = false); mutable = false)
             local defined_global = WasmBuilder.define(b.module_builder.globals[], global_type,
-                _constant_name(self.constants._constant_accessor[], constant))
+                _constant_name(self.constants._constant_accessor[], NirConst(Core.Const(v))))
             local ib = defined_global.initializer
             push_object_header_fields(ib, translator, info)
             push(ib)
@@ -547,7 +545,7 @@ dart's instances of its wasm value classes (WasmI32, WasmI64, WasmF32, WasmF64, 
 are pushed as wasm values; Julia has no such classes, its primitive values being the integer and
 float constants, so every instance is a heap constant, loaded by `defaultConstant`.
 """
-@parity "dart2wasm/lib/constants.dart:690 ConstantInstantiator.visitInstanceConstant" visit_instance_constant(self::ConstantInstantiator, constant::InstanceConstant)::WasmBuilder.IR.ValueType =
+@parity "dart2wasm/lib/constants.dart:690 ConstantInstantiator.visitInstanceConstant" visit_instance_constant(self::ConstantInstantiator, constant::NirConst)::WasmBuilder.IR.ValueType =
     default_constant(self, constant)
 
 @parity "dart2wasm/lib/constants.dart:784 ConstantCreator" ConstantCreator(constants::Constants)::ConstantCreator = ConstantCreator(Val(:_), constants)
@@ -560,54 +558,59 @@ float constants, so every instance is a heap constant, loaded by `defaultConstan
 
 # `constant.accept(this)`, one arm per kind as Kernel's visitor dispatches, and the type of the
 # created constant checked against TypeOfConstantVisitor's (dart's assert)
-@parity "dart2wasm/lib/constants.dart:793 ConstantCreator.ensureConstant" function ensure_constant(self::ConstantCreator, constant::Constant)::Union{ConstantInfo,Nothing}
+@parity "dart2wasm/lib/constants.dart:793 ConstantCreator.ensureConstant" function ensure_constant(self::ConstantCreator, constant::Union{NirConst,DummyValueConstant})::Union{ConstantInfo,Nothing}
     # Value types do not have identity and as such we don't need a unique box
     # for them. They are lazily created at instantiation time.
-    constant isa Union{IntConstant,DoubleConstant} && return nothing
+    constant isa NirConst && constant.c.val isa Union{Base.BitInteger64,Char,Float32,Float64} && return nothing
 
     # To properly canonicalize type literal constants, we normalize the type before
     # canonicalization: Julia's types are normal already (its type constructors canonicalize
     # them, `Union{Int,Int} === Int`).
-    if constant isa TypeLiteralConstant
-        constant = _lower_type_to_constant(self.constants, constant.c.val::Type)
+    if constant isa NirConst && constant.c.val isa Type
+        constant = _lower_type_to_constant(self.constants, constant.c.val)
     end
 
     local info = get(self.constants.constant_info, constant, nothing)
     if info === nothing
-        info = @exhaustive constant::Constant begin
-            NullConstant => default_constant(self, constant)
-            (c::BoolConstant) => visit_bool_constant(self, c)
-            (c::IntConstant) => visit_int_constant(self, c)
-            (c::DoubleConstant) => visit_double_constant(self, c)
-            (c::StringConstant) => visit_string_constant(self, c)
-            (c::SymbolConstant) => visit_symbol_constant(self, c)
-            (c::RecordConstant) => visit_record_constant(self, c)
-            (c::TypeLiteralConstant) => visit_type_literal_constant(self, c)
-            (c::InstanceConstant) => visit_instance_constant(self, c)
-            (c::AuxiliaryConstant) => visit_auxiliary_constant(self, c)
+        info = if constant isa DummyValueConstant
+            visit_auxiliary_constant(self, constant)
+        else
+            local v = constant.c.val
+            v === nothing ? default_constant(self, constant) :
+            v isa Bool ? visit_bool_constant(self, v) :
+            v isa Union{Base.BitInteger64,Char} ? visit_int_constant(self, v) :
+            v isa Union{Float32,Float64} ? visit_double_constant(self, v) :
+            v isa String ? visit_string_constant(self, v) :
+            v isa Symbol ? visit_symbol_constant(self, v) :
+            v isa Union{Tuple,NamedTuple} ? visit_record_constant(self, v) :
+            v isa Type ? visit_type_literal_constant(self, v) :
+            visit_instance_constant(self, constant)
         end
         if info !== nothing
             local tv = TypeOfConstantVisitor(self.constants.translator)
-            local t = @exhaustive info.constant::Constant begin
-                NullConstant => default_constant(tv, info.constant)
-                (c::BoolConstant) => visit_bool_constant(tv, c)
-                (c::IntConstant) => visit_int_constant(tv, c)
-                (c::DoubleConstant) => visit_double_constant(tv, c)
-                (c::StringConstant) => visit_string_constant(tv, c)
-                (c::SymbolConstant) => visit_symbol_constant(tv, c)
-                (c::RecordConstant) => visit_record_constant(tv, c)
-                (c::TypeLiteralConstant) => visit_type_literal_constant(tv, c)
-                (c::InstanceConstant) => visit_instance_constant(tv, c)
-                (c::AuxiliaryConstant) => visit_auxiliary_constant(tv, c)
+            local ic = info.constant
+            local t = if ic isa DummyValueConstant
+                visit_auxiliary_constant(tv, ic)
+            else
+                local v = ic.c.val
+                v === nothing ? default_constant(tv, ic) :
+                v isa Bool ? visit_bool_constant(tv, v) :
+                v isa Union{Base.BitInteger64,Char} ? visit_int_constant(tv, v) :
+                v isa Union{Float32,Float64} ? visit_double_constant(tv, v) :
+                v isa String ? visit_string_constant(tv, v) :
+                v isa Symbol ? visit_symbol_constant(tv, v) :
+                v isa Union{Tuple,NamedTuple} ? visit_record_constant(tv, v) :
+                v isa Type ? visit_type_literal_constant(tv, v) :
+                visit_instance_constant(tv, ic)
             end
-            t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant.c.val) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
+            t == info.type || reject!(Internal("dart2wasm/lib/constants.dart:808 ConstantCreator.ensureConstant: the constant $(info.constant) is created as $(info.type), its type $t"), "ConstantCreator.ensureConstant")
             self.constants.constant_info[constant] = info
         end
     end
     return info
 end
 
-@parity "dart2wasm/lib/constants.dart:820 ConstantCreator.createConstant" function create_constant(self::ConstantCreator, constant::Constant, child_constants::Vector{ConstantInfo}, type_::WasmBuilder.IR.RefType,
+@parity "dart2wasm/lib/constants.dart:820 ConstantCreator.createConstant" function create_constant(self::ConstantCreator, constant::Union{NirConst,DummyValueConstant}, child_constants::Vector{ConstantInfo}, type_::WasmBuilder.IR.RefType,
         generator::Function; can_be_eager::Bool, force_lazy_constant::Union{Function,Nothing} = nothing)::ConstantInfo
     type_.nullable && reject!(Internal("dart2wasm/lib/constants.dart:828 ConstantCreator.createConstant: the nullable type $type_"), "ConstantCreator.createConstant")
 
@@ -618,40 +621,40 @@ end
         can_be_eager, type_, generator)
 end
 
-@parity "dart2wasm/lib/constants.dart:843 ConstantCreator.defaultConstant" default_constant(self::ConstantCreator, constant::Constant)::Nothing = nothing
+@parity "dart2wasm/lib/constants.dart:843 ConstantCreator.defaultConstant" default_constant(self::ConstantCreator, constant::Union{NirConst,DummyValueConstant})::Nothing = nothing
 
 """
 A boxed `Bool`, the struct of Julia's class `Bool` (dart's `_BoxedBool`): the object header, then the
 value. Its header is the class's own, as class_info lays out every class below `Any`.
 """
-@parity "dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant" function visit_bool_constant(self::ConstantCreator, constant::BoolConstant)::Union{ConstantInfo,Nothing}
+@parity "dart2wasm/lib/constants.dart:846 ConstantCreator.visitBoolConstant" function visit_bool_constant(self::ConstantCreator, constant::Bool)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator
     local info = translator.class_info[Bool]
-    return create_constant(self, constant, ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
+    return create_constant(self, NirConst(Core.Const(constant)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         push_object_header_fields(b, translator, info)
-        WasmBuilder.i32_const(b, (constant.c.val::Bool) ? 1 : 0)
+        WasmBuilder.i32_const(b, constant ? 1 : 0)
         WasmBuilder.struct_new(b, info.struct_)
     end; can_be_eager = true)
 end
 
-@parity "dart2wasm/lib/constants.dart:862 ConstantCreator.visitIntConstant" visit_int_constant(self::ConstantCreator, constant::IntConstant)::Union{ConstantInfo,Nothing} =
+@parity "dart2wasm/lib/constants.dart:862 ConstantCreator.visitIntConstant" visit_int_constant(self::ConstantCreator, constant::Union{Base.BitInteger64,Char})::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:863 ConstantCreator.visitIntConstant: Int constants should be handled at instantiation"), "ConstantCreator.visitIntConstant")
 
-@parity "dart2wasm/lib/constants.dart:867 ConstantCreator.visitDoubleConstant" visit_double_constant(self::ConstantCreator, constant::DoubleConstant)::Union{ConstantInfo,Nothing} =
+@parity "dart2wasm/lib/constants.dart:867 ConstantCreator.visitDoubleConstant" visit_double_constant(self::ConstantCreator, constant::Union{Float32,Float64})::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:868 ConstantCreator.visitDoubleConstant: Double constants should be handled at instantiation"), "ConstantCreator.visitDoubleConstant")
 
 """A `String`: the struct of Julia's class `String` (dart's string implementation class)."""
-@parity "dart2wasm/lib/constants.dart:872 ConstantCreator.visitStringConstant" function visit_string_constant(self::ConstantCreator, constant::StringConstant)::Union{ConstantInfo,Nothing}
+@parity "dart2wasm/lib/constants.dart:872 ConstantCreator.visitStringConstant" function visit_string_constant(self::ConstantCreator, constant::String)::Union{ConstantInfo,Nothing}
     local translator = self.constants.translator
     local info = get(translator.class_info, String, nothing)
     info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:873 ConstantCreator.visitStringConstant: the class String has no class info"), "ConstantCreator.visitStringConstant")
     local standalone = translator.options.standalone
-    local value = constant.c.val::String
+    local value = constant
 
     # The standalone build doesn't use js-string imports, so we have to call
     # an imported function to turn a character array into a string. That call
     # is not a WebAssembly const expression, so the constant can't be eager.
-    return create_constant(self, constant, ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
+    return create_constant(self, NirConst(Core.Const(value)), ConstantInfo[], info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         push_object_header_fields(b, translator, info)
         if standalone
             push_standalone_string_constant(translator, b, byte_segment(self.constants, b.module_builder), value)
@@ -668,12 +671,13 @@ as a sub-constant; a type as a value, lowered (`_lowerTypeToConstant`), is its k
 stores no type arguments (its parameters are bound), so the type-argument slots dart fills are none.
 A field Julia holds no value in (`#undef`) rejects, located.
 """
-@parity "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" function visit_instance_constant(self::ConstantCreator, constant::InstanceConstant)::Union{ConstantInfo,Nothing}
+@parity "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant" function visit_instance_constant(self::ConstantCreator, constant::NirConst)::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:908 ConstantCreator.visitInstanceConstant"
     local translator = self.constants.translator
     local v = constant.c.val
     local cls = typeof(v)
 
+    isprimitivetype(cls) && reject!(Unquarantined("src/constants.jl visitInstanceConstant: a constant of the primitive type $cls, with no wasm representation"), at)
     local info = get(translator.class_info, cls, nothing)
     info === nothing && reject!(Internal("$at: the class $cls of the constant has no class info"), at)
     record_class_allocation(translator.functions[], info._class_id)
@@ -681,7 +685,7 @@ A field Julia holds no value in (`#undef`) rejects, located.
 
     # Collect sub-constants for field values.
     local field_count = length(info.struct_.fields)
-    local sub_constants = Union{Constant,Nothing}[nothing for _ in 1:field_count]
+    local sub_constants = Union{NirConst,Nothing}[nothing for _ in 1:field_count]
     local child_constants = ConstantInfo[]
     for field in class_instance_fields(cls, at)
         local index = translator.field_index[field]
@@ -699,7 +703,7 @@ A field Julia holds no value in (`#undef`) rejects, located.
             isdefined(v, field.index) || reject!(Unquarantined("src/constants.jl visitInstanceConstant: the field $(field.name) of the constant $cls holds no value (#undef)"), at)
             getfield(v, field.index)
         end
-        local sub_constant = julia_constant(Core.Const(field_value), at)
+        local sub_constant = NirConst(Core.Const(field_value))
         sub_constants[index + 1] = sub_constant
         local sub_info = ensure_constant(self, sub_constant)
         sub_info === nothing || push!(child_constants, sub_info)
@@ -734,7 +738,7 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1319 ConstantCreator.visitInstantiationConstant" @unported function visit_instantiation_constant(self::ConstantCreator, constant) end
 
-@parity "dart2wasm/lib/constants.dart:1551 ConstantCreator.visitTypeLiteralConstant" visit_type_literal_constant(self::ConstantCreator, constant::TypeLiteralConstant)::Union{ConstantInfo,Nothing} =
+@parity "dart2wasm/lib/constants.dart:1551 ConstantCreator.visitTypeLiteralConstant" visit_type_literal_constant(self::ConstantCreator, constant::Type)::Union{ConstantInfo,Nothing} =
     reject!(Internal("dart2wasm/lib/constants.dart:1552 ConstantCreator.visitTypeLiteralConstant: Unreachable - should have been lowered"), "ConstantCreator.visitTypeLiteralConstant")
 
 @parity "dart2wasm/lib/constants.dart:1556 ConstantCreator.visitSymbolConstant" @unported function visit_symbol_constant(self::ConstantCreator, constant) end
@@ -744,15 +748,15 @@ A tuple: the struct of its record class, the object header, then each field as t
 `Tuple`'s fields are positional; a `NamedTuple`'s are named, taken in the order of their names, as
 Kernel's RecordConstant holds them.
 """
-@parity "dart2wasm/lib/constants.dart:1583 ConstantCreator.visitRecordConstant" function visit_record_constant(self::ConstantCreator, constant::RecordConstant)::Union{ConstantInfo,Nothing}
+@parity "dart2wasm/lib/constants.dart:1583 ConstantCreator.visitRecordConstant" function visit_record_constant(self::ConstantCreator, constant::Union{Tuple,NamedTuple})::Union{ConstantInfo,Nothing}
     local at = "dart2wasm/lib/constants.dart:1583 ConstantCreator.visitRecordConstant"
     local translator = self.constants.translator
-    local v = constant.c.val
+    local v = constant
     local record_class_info = get_record_class_info(translator, typeof(v))
     record_class_allocation(translator.functions[], record_class_info._class_id)
 
     local values = v isa NamedTuple ? Any[v[k] for k in sort!(collect(keys(v)))] : Any[x for x in v]
-    local arguments = Constant[julia_constant(Core.Const(x), at) for x in values]
+    local arguments = NirConst[NirConst(Core.Const(x)) for x in values]
 
     local child_constants = ConstantInfo[]
     for argument in arguments
@@ -760,7 +764,7 @@ Kernel's RecordConstant holds them.
         info === nothing || push!(child_constants, info)
     end
 
-    return create_constant(self, constant, child_constants, record_class_info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
+    return create_constant(self, NirConst(Core.Const(v)), child_constants, record_class_info.non_nullable_type, function (_::ConstantInfo, b::WasmBuilder.InstructionsBuilder, _::Bool)
         push_object_header_fields(b, translator, record_class_info)
         for argument in arguments
             instantiate_constant(self.constants, b, argument, translator.top_type[])
@@ -769,8 +773,8 @@ Kernel's RecordConstant holds them.
     end; can_be_eager = true)
 end
 
-@parity "dart2wasm/lib/constants.dart:1616 ConstantCreator.visitAuxiliaryConstant" function visit_auxiliary_constant(self::ConstantCreator, constant::AuxiliaryConstant)::Union{ConstantInfo,Nothing}
-    local d = constant.c.val
+@parity "dart2wasm/lib/constants.dart:1616 ConstantCreator.visitAuxiliaryConstant" function visit_auxiliary_constant(self::ConstantCreator, constant::DummyValueConstant)::Union{ConstantInfo,Nothing}
+    local d = constant
     if d isa DummyValueConstant
         local type_ = d.type
         local translator = self.constants.translator
@@ -816,16 +820,16 @@ end
 
 # `constant.accept(this)`, one arm per kind; a kind the visitor does not visit is defaultConstant's.
 # An integer, float or Bool is its own class's box: each Julia primitive type is its own class.
-@parity "dart2wasm/lib/constants.dart:1694 TypeOfConstantVisitor.defaultConstant" default_constant(self::TypeOfConstantVisitor, constant::Constant)::WasmBuilder.IR.RefType =
-    reject!(Internal("dart2wasm/lib/constants.dart:1695 TypeOfConstantVisitor.defaultConstant: Unexpected $(constant.c.val)."), "TypeOfConstantVisitor.defaultConstant")
+@parity "dart2wasm/lib/constants.dart:1694 TypeOfConstantVisitor.defaultConstant" default_constant(self::TypeOfConstantVisitor, constant::Union{NirConst,DummyValueConstant})::WasmBuilder.IR.RefType =
+    reject!(Internal("dart2wasm/lib/constants.dart:1695 TypeOfConstantVisitor.defaultConstant: Unexpected $constant."), "TypeOfConstantVisitor.defaultConstant")
 
-@parity "dart2wasm/lib/constants.dart:1699 TypeOfConstantVisitor.visitBoolConstant" visit_bool_constant(self::TypeOfConstantVisitor, constant::BoolConstant)::WasmBuilder.IR.RefType = _type_of_class(self, Bool)
+@parity "dart2wasm/lib/constants.dart:1699 TypeOfConstantVisitor.visitBoolConstant" visit_bool_constant(self::TypeOfConstantVisitor, constant::Bool)::WasmBuilder.IR.RefType = _type_of_class(self, Bool)
 
-@parity "dart2wasm/lib/constants.dart:1704 TypeOfConstantVisitor.visitIntConstant" visit_int_constant(self::TypeOfConstantVisitor, constant::IntConstant)::WasmBuilder.IR.RefType = _type_of_class(self, typeof(constant.c.val))
+@parity "dart2wasm/lib/constants.dart:1704 TypeOfConstantVisitor.visitIntConstant" visit_int_constant(self::TypeOfConstantVisitor, constant::Union{Base.BitInteger64,Char})::WasmBuilder.IR.RefType = _type_of_class(self, typeof(constant))
 
-@parity "dart2wasm/lib/constants.dart:1709 TypeOfConstantVisitor.visitDoubleConstant" visit_double_constant(self::TypeOfConstantVisitor, constant::DoubleConstant)::WasmBuilder.IR.RefType = _type_of_class(self, typeof(constant.c.val))
+@parity "dart2wasm/lib/constants.dart:1709 TypeOfConstantVisitor.visitDoubleConstant" visit_double_constant(self::TypeOfConstantVisitor, constant::Union{Float32,Float64})::WasmBuilder.IR.RefType = _type_of_class(self, typeof(constant))
 
-@parity "dart2wasm/lib/constants.dart:1714 TypeOfConstantVisitor.visitStringConstant" visit_string_constant(self::TypeOfConstantVisitor, constant::StringConstant)::WasmBuilder.IR.RefType = _type_of_class(self, String)
+@parity "dart2wasm/lib/constants.dart:1714 TypeOfConstantVisitor.visitStringConstant" visit_string_constant(self::TypeOfConstantVisitor, constant::String)::WasmBuilder.IR.RefType = _type_of_class(self, String)
 
 @parity "dart2wasm/lib/constants.dart:1719 TypeOfConstantVisitor.visitListConstant" @unported function visit_list_constant(self::TypeOfConstantVisitor, constant) end
 
@@ -833,21 +837,21 @@ end
 
 @parity "dart2wasm/lib/constants.dart:1729 TypeOfConstantVisitor.visitSetConstant" @unported function visit_set_constant(self::TypeOfConstantVisitor, constant) end
 
-@parity "dart2wasm/lib/constants.dart:1734 TypeOfConstantVisitor.visitTypeLiteralConstant" visit_type_literal_constant(self::TypeOfConstantVisitor, constant::TypeLiteralConstant)::WasmBuilder.IR.RefType =
+@parity "dart2wasm/lib/constants.dart:1734 TypeOfConstantVisitor.visitTypeLiteralConstant" visit_type_literal_constant(self::TypeOfConstantVisitor, constant::Type)::WasmBuilder.IR.RefType =
     reject!(Internal("dart2wasm/lib/constants.dart:1735 TypeOfConstantVisitor.visitTypeLiteralConstant: Type literal constants should've been lowered already."), "TypeOfConstantVisitor.visitTypeLiteralConstant")
 
-@parity "dart2wasm/lib/constants.dart:1739 TypeOfConstantVisitor.visitSymbolConstant" visit_symbol_constant(self::TypeOfConstantVisitor, constant::SymbolConstant)::WasmBuilder.IR.RefType = _type_of_class(self, Symbol)
+@parity "dart2wasm/lib/constants.dart:1739 TypeOfConstantVisitor.visitSymbolConstant" visit_symbol_constant(self::TypeOfConstantVisitor, constant::Symbol)::WasmBuilder.IR.RefType = _type_of_class(self, Symbol)
 
-@parity "dart2wasm/lib/constants.dart:1744 TypeOfConstantVisitor.visitRecordConstant" visit_record_constant(self::TypeOfConstantVisitor, constant::RecordConstant)::WasmBuilder.IR.RefType =
-    get_record_class_info(self.translator, typeof(constant.c.val)).non_nullable_type
+@parity "dart2wasm/lib/constants.dart:1744 TypeOfConstantVisitor.visitRecordConstant" visit_record_constant(self::TypeOfConstantVisitor, constant::Union{Tuple,NamedTuple})::WasmBuilder.IR.RefType =
+    get_record_class_info(self.translator, typeof(constant)).non_nullable_type
 
-@parity "dart2wasm/lib/constants.dart:1749 TypeOfConstantVisitor.visitAuxiliaryConstant" function visit_auxiliary_constant(self::TypeOfConstantVisitor, constant::AuxiliaryConstant)::WasmBuilder.IR.RefType
-    local d = constant.c.val
+@parity "dart2wasm/lib/constants.dart:1749 TypeOfConstantVisitor.visitAuxiliaryConstant" function visit_auxiliary_constant(self::TypeOfConstantVisitor, constant::DummyValueConstant)::WasmBuilder.IR.RefType
+    local d = constant
     d isa DummyValueConstant && return WasmBuilder.IR.RefType(d.type; nullable = false)
     reject!(Internal("dart2wasm/lib/constants.dart:1753 TypeOfConstantVisitor.visitAuxiliaryConstant: Unexpected auxiliary constant: $d"), "TypeOfConstantVisitor.visitAuxiliaryConstant")
 end
 
-@parity "dart2wasm/lib/constants.dart:1757 TypeOfConstantVisitor.visitInstanceConstant" visit_instance_constant(self::TypeOfConstantVisitor, constant::InstanceConstant)::WasmBuilder.IR.RefType =
+@parity "dart2wasm/lib/constants.dart:1757 TypeOfConstantVisitor.visitInstanceConstant" visit_instance_constant(self::TypeOfConstantVisitor, constant::NirConst)::WasmBuilder.IR.RefType =
     _type_of_class(self, typeof(constant.c.val))
 
 @parity "dart2wasm/lib/constants.dart:1780 TypeOfConstantVisitor.visitStaticTearOffConstant" @unported function visit_static_tear_off_constant(self::TypeOfConstantVisitor, constant) end
@@ -883,10 +887,10 @@ We decide the constant placement as follows:
  * If a constant is accessed only by a single module: define the constant in that module. This
    happens after code generation when we know all constant uses.
 """
-@parity "dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant" function load_constant(self::_ConstantAccessor, b::WasmBuilder.InstructionsBuilder, c::Constant, deferred_module_guard::Union{Nothing,WasmBuilder.ModuleBuilder})::WasmBuilder.IR.ValueType
+@parity "dart2wasm/lib/constants.dart:1860 _ConstantAccessor.loadConstant" function load_constant(self::_ConstantAccessor, b::WasmBuilder.InstructionsBuilder, c::Union{NirConst,DummyValueConstant}, deferred_module_guard::Union{Nothing,WasmBuilder.ModuleBuilder})::WasmBuilder.IR.ValueType
     local translator = self.translator
     local info = ensure_constant(translator.constants[], c)
-    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:1865 _ConstantAccessor.loadConstant: the constant $(c.c.val) has no info"), "_ConstantAccessor.loadConstant")
+    info === nothing && reject!(Internal("dart2wasm/lib/constants.dart:1865 _ConstantAccessor.loadConstant: the constant $c has no info"), "_ConstantAccessor.loadConstant")
     local existing_definition = info._definition
 
     if existing_definition !== nothing
@@ -1183,13 +1187,13 @@ end
 Whether the constant can always be used eagerly: `nothing`, a `Bool`, an integer or a float. dart's
 wasm value classes (WasmI32 and the rest) are eager too; Julia has none.
 """
-@parity "dart2wasm/lib/constants.dart:2210 _ConstantAccessor.constantIsAlwaysEager" function constant_is_always_eager(self::_ConstantAccessor, constant::Constant)::Bool
+@parity "dart2wasm/lib/constants.dart:2210 _ConstantAccessor.constantIsAlwaysEager" function constant_is_always_eager(self::_ConstantAccessor, constant::Union{NirConst,DummyValueConstant})::Bool
     # We can always eagerly use those constants because
     #   * null is not a heap object
     #   * true/false should always be defined in main module
     #   * int/double do not have identity and can be just materialized (plus
     #     boxed if needed)
-    return constant isa Union{NullConstant,BoolConstant,IntConstant,DoubleConstant}
+    return constant isa NirConst && (constant.c.val === nothing || constant.c.val isa Union{Bool,Base.BitInteger64,Char,Float32,Float64})
 end
 
 @parity "dart2wasm/lib/constants.dart:2234 _ConstantAccessor._nextGlobalId" const _ConstantAccessor__next_global_id = Ref{Int}(0)
@@ -1199,12 +1203,15 @@ A constant's global name: `C<id> ` when constant names are unique, then a string
 most 30 code units), a Bool's, integer's or float's value, an object's class name with its
 parameters, a dummy value's heap type, or the constant's text.
 """
-@parity "dart2wasm/lib/constants.dart:2235 _ConstantAccessor._constantName" function _constant_name(self::_ConstantAccessor, constant::Constant)::String
+@parity "dart2wasm/lib/constants.dart:2235 _ConstantAccessor._constantName" function _constant_name(self::_ConstantAccessor, constant::Union{NirConst,DummyValueConstant})::String
     local id = _ConstantAccessor__next_global_id[]
     _ConstantAccessor__next_global_id[] += 1
     local prefix = self.translator.options.unique_constant_names ? "C$id " : ""
+    if constant isa DummyValueConstant
+        return "$prefix #Dummy($(constant.type))"
+    end
     local v = constant.c.val
-    if constant isa StringConstant
+    if v isa String
         local value = v::String
         local newline = findfirst('\n', value)
         newline === nothing || (value = value[1:prevind(value, newline)])
@@ -1213,16 +1220,13 @@ parameters, a dummy value's heap type, or the constant's text.
         length(units) > 30 && (value = transcode(String, units[1:30]) * "<...>")
         return "$prefix\"$value\""
     end
-    constant isa Union{BoolConstant,IntConstant,DoubleConstant} && return "$prefix$v"
-    if constant isa InstanceConstant
+    v isa Union{Bool,Base.BitInteger64,Char,Float32,Float64} && return "$prefix$v"
+    if !(v isa Union{Nothing,Symbol,Tuple,NamedTuple,Type})
         local klass = typeof(v)
         local name = string(nameof(klass))
         isempty(klass.parameters) && return "$prefix$name"
         local type_arguments = join((t isa Union{Type,TypeVar} ? _name_type(self, t) : "$t" for t in klass.parameters), ", ")
         return "$prefix$name<$type_arguments>"
-    end
-    if constant isa AuxiliaryConstant
-        v isa DummyValueConstant && return "$prefix #Dummy($(v.type))"
     end
     return "$prefix$(sprint(show, v))"
 end

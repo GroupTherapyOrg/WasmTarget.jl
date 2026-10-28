@@ -39,9 +39,8 @@ import ..ClosedWorld, ..NirBody, ..NirWorld, ..build_nir, ..closed_world_classes
        ..NirCFunction, ..NirInvokeModify, ..NirGoto, ..NirGotoIfNot, ..NirReturn, ..NirUnreachable, ..NirPhi, ..NirPi,
        ..NirEnter, ..NirUpsilon, ..NirPhiC, ..NirNothing, ..NirGlobalRead,
        ..NirValue, ..NirSSA, ..NirArgument, ..NirGlobal, ..NirConst
-# a constant of the program, a Julia value of one kind (src/julia/constant.jl)
-import ..Constant, ..NullConstant, ..BoolConstant, ..IntConstant, ..DoubleConstant, ..StringConstant, ..SymbolConstant,
-       ..RecordConstant, ..TypeLiteralConstant, ..InstanceConstant, ..AuxiliaryConstant, ..julia_constant
+# Kernel's constants by the Kernel table's rows (src/julia/constant.jl)
+import ..Constant, ..InstanceConstant
 # what the code generator reads from a body (src/julia/nir.jl)
 import ..TreeNode_no_offset, ..nir_used_statements, ..nir_argument_type, ..nir_method_nargs, ..nir_body_of,
        ..nir_invoke_target, ..nir_callee
