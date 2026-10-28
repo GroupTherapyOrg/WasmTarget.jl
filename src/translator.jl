@@ -359,6 +359,16 @@ its members, their nearest common superclass; a type as a value (`Type{X}`) is i
 (`unbox`; nullable, its own class, the box) or the class's representation. A `UnionAll`, a
 `TypeVar`, a type as a value of an unknown type and a primitive class with no wasm representation
 (`Int128`, `Float16`, `Ptr`) reject, located.
+
+The `typejoin` of a Union is its REPRESENTATION only: a value keeps its exact class, an `Int64` in a
+`Union{Int64,Float64}` its own box, never converted to the join's. A packed i8 or i16 is a storage
+type alone (fields, arrays); a value or local of an 8- or 16-bit integer or a `Bool` is i32
+(`translate_type`), as dart's are.
+
+precedent(julia: codegen boxes a value of a non-isbits Union behind jl_value_t, its own type in the
+box's tag; dart: a type's wasm representation is its upper bound's struct, ClassInfoCollector.collect).
+Julia's differs from dart: dart has no union types, so the join is Julia's own (`typejoin`), never
+re-derived; `nothing` is the null of the nullable representation, both ways.
 """
 @parity "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType" function translate_storage_type(self::Translator, type_::Type; unbox::Bool = true)::WasmBuilder.IR.StorageType
     local at = "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType"

@@ -125,3 +125,45 @@ end
     local f = W.class_instance_fields(TypeCases.Circle, "translator")[1]
     @test D.type_of_field(t, f) === Float64 && D.translate_type_of_field(t, f) == IR.NumType_f64
 end
+
+module UnionCases
+maybe(n::Int) = n > 0 ? 7 : nothing
+either(n::Int) = n > 0 ? 1 : 2.5
+end
+
+@testset "translator.dart: translateType keeps a Union's values exact" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local t = D.Translator(W.check_subset(TypeCases.f_shapes, (Int,), "translator"), D.TranslatorOptions())
+    local top = D.ClassInfo(nothing, 0, 0, IR.StructType("#Top"), nothing)
+    local anyi = D.ClassInfo(Any, 6, 1, IR.StructType("Any"; super_type = top.struct_), top)
+    local real = D.ClassInfo(Real, 5, 3, anyi.struct_, anyi)
+    local int = D.ClassInfo(Int64, 1, 1, IR.StructType("Int64"; super_type = top.struct_), top)
+    local flt = D.ClassInfo(Float64, 2, 1, IR.StructType("Float64"; super_type = top.struct_), top)
+    t.classes[] = [top]
+    for info in (top, anyi, int, flt)
+        info._repr = info.non_nullable_type
+        info.cls === nothing || (t.class_info[info.cls] = info)
+    end
+    # collect gives Real the upper bound of its primitive subclasses' infos, the top struct
+    real._repr = D.repr(D._upper_bound(int, flt))
+    t.class_info[Real] = real
+    # Union{Nothing,T}: T's representation, nullable, `nothing` its null; native returns either
+    @test only(Base.return_types(UnionCases.maybe, (Int,))) == Union{Nothing,Int64}
+    @test UnionCases.maybe(-1) === nothing && UnionCases.maybe(1) === 7
+    local m = D.translate_type(t, Union{Nothing,Int64})
+    @test m == int.nullable_type && m.nullable
+    @test D.translate_type(t, Int64) == IR.NumType_i64          # the T alone is unboxed
+    # Union{Int64,Float64}: represented by Julia's typejoin, Real; each value keeps its own class,
+    # the box of each a subtype of the representation, never the other's
+    @test only(Base.return_types(UnionCases.either, (Int,))) == Union{Float64,Int64}
+    @test typeof(UnionCases.either(1)) === Int64 && typeof(UnionCases.either(-1)) === Float64
+    local u = D.translate_type(t, Union{Int64,Float64})
+    @test typejoin(Int64, Float64) === Real && u == D.repr(real) && u isa IR.RefType
+    @test W.WasmBuilder.is_subtype_of(int.non_nullable_type, u) && W.WasmBuilder.is_subtype_of(flt.non_nullable_type, u)
+    @test !W.WasmBuilder.is_subtype_of(int.non_nullable_type, flt.non_nullable_type)
+    # packing is storage alone: a Bool or an 8- or 16-bit integer value is i32
+    for T in (Bool, Int8, UInt8, Int16, UInt16)
+        @test D.translate_type(t, T) == IR.NumType_i32
+    end
+end
