@@ -25,8 +25,6 @@ end
 
 @parity "wasm_builder/lib/src/ir/data_segment.dart:17 BaseDataSegment.uninitialized" BaseDataSegment_uninitialized()::DataSegment = DataSegment_uninitialized()
 
-@parity "wasm_builder/lib/src/ir/data_segment.dart:19 BaseDataSegment.printTo" @unported function WasmBuilder.print_to(self::BaseDataSegment, p) end
-
 @parity "wasm_builder/lib/src/ir/data_segment.dart:28 DataSegment" function DataSegment(index::Int, content::Vector{UInt8}, memory::Union{Memory,Nothing}, offset::Union{Int,Nothing})::DataSegment
     local d = DataSegment(Val(:uninitialized))
     d.index[] = index
@@ -61,5 +59,3 @@ end
     WasmBuilder.write_unsigned(s, length(content))
     WasmBuilder.write_bytes(s, content)
 end
-
-@parity "wasm_builder/lib/src/ir/data_segment.dart:53 DataSegment.printTo" @unported function WasmBuilder.print_to(self::DataSegment, p) end

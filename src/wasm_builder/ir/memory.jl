@@ -71,17 +71,11 @@ end
 """Export a memory from the module."""
 @parity "wasm_builder/lib/src/ir/memory.dart:49 Memory.buildExport" WasmBuilder.build_export(m::Memory, name::String)::Export = MemoryExport(name, m)
 
-@parity "wasm_builder/lib/src/ir/memory.dart:51 Memory.printTo" @unported function WasmBuilder.print_to(self::Memory, p) end
-
-@parity "wasm_builder/lib/src/ir/memory.dart:53 Memory._printType" @unported function WasmBuilder._print_type(self::Memory, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/memory.dart:66 DefinedMemory" function DefinedMemory end
 
 @parity "wasm_builder/lib/src/ir/memory.dart:75 DefinedMemory.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, m::DefinedMemory)::Nothing = WasmBuilder._serialize_limits(s, m)
-
-@parity "wasm_builder/lib/src/ir/memory.dart:78 DefinedMemory.printTo" @unported function WasmBuilder.print_to(self::DefinedMemory, p) end
 
 # An imported memory's name is its import field name (memory.dart:104 `final String name`).
 @parity "wasm_builder/lib/src/ir/memory.dart:104 ImportedMemory.name" WasmBuilder.name(m::ImportedMemory)::String = m.name
@@ -96,8 +90,6 @@ end
     WasmBuilder.write_byte(s, 0x02)
     WasmBuilder._serialize_limits(s, m)
 end
-
-@parity "wasm_builder/lib/src/ir/memory.dart:125 ImportedMemory.printTo" @unported function WasmBuilder.print_to(self::ImportedMemory, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method

@@ -372,7 +372,7 @@ under the sdk's pkg/ exactly as it sits at the pin (`dart2wasm/lib/translator.da
     "dart2wasm/lib/generate_wasm.dart", "dart2wasm/lib/globals.dart",
     "dart2wasm/lib/intrinsics.dart", "dart2wasm/lib/js/runtime_blob.dart",
     "dart2wasm/lib/js/runtime_generator.dart", "dart2wasm/lib/kernel_nodes.dart",
-    "dart2wasm/lib/namer.dart", "dart2wasm/lib/param_info.dart",
+    "dart2wasm/lib/modules.dart", "dart2wasm/lib/namer.dart", "dart2wasm/lib/param_info.dart",
     "dart2wasm/lib/record_class_generator.dart", "dart2wasm/lib/records.dart",
     "dart2wasm/lib/source_map_utils.dart", "dart2wasm/lib/static_dispatch_table.dart",
     "dart2wasm/lib/symbols.dart", "dart2wasm/lib/table_based_globals.dart",

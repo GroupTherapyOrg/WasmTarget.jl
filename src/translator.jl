@@ -299,7 +299,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" @unported function _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:723 Translator.encodeLoadList" @unported function encode_load_list(self::Translator, module_list::Vector{Any}) end
+@parity "dart2wasm/lib/translator.dart:723 Translator.encodeLoadList" @unported function encode_load_list(self::Translator, module_list::Vector{ModuleMetadata}) end
 
 @parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" @unported function _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 

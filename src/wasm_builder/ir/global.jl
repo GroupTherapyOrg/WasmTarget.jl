@@ -49,8 +49,6 @@ end
 
 @parity "wasm_builder/lib/src/ir/global.dart:31 Global.buildExport" WasmBuilder.build_export(g::Global, name::String)::Export = GlobalExport(name, g)
 
-@parity "wasm_builder/lib/src/ir/global.dart:35 Global.printTo" @unported function WasmBuilder.print_to(self::Global, p; include_initializer = nothing) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/global.dart:43 DefinedGlobal" function DefinedGlobal end
@@ -59,8 +57,6 @@ end
     write(s, g.type)
     write(s, g.initializer)
 end
-
-@parity "wasm_builder/lib/src/ir/global.dart:58 DefinedGlobal.printTo" @unported function WasmBuilder.print_to(self::DefinedGlobal, p; include_initializer = nothing) end
 
 # An imported global's name is its import field name (global.dart:93 `final String name`).
 @parity "wasm_builder/lib/src/ir/global.dart:93 ImportedGlobal.name" WasmBuilder.name(g::ImportedGlobal)::String = g.name
@@ -75,8 +71,6 @@ end
     WasmBuilder.write_byte(s, 0x03)
     write(s, g.type)
 end
-
-@parity "wasm_builder/lib/src/ir/global.dart:113 ImportedGlobal.printTo" @unported function WasmBuilder.print_to(self::ImportedGlobal, p; include_initializer = nothing) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method

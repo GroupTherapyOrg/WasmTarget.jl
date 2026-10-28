@@ -1,7 +1,10 @@
-# dev/skeleton_scope.toml — the dart files of dart2wasm and wasm_builder at the pin that are out of the
-# rebuild's scope, each with its reason (dev/skeleton.jl reads it; dev/MARCH.md 1.A4). The in-scope files
-# are src/julia/parity.jl's DART_FILES, the one list; together the two name every dart file of both
-# packages, a key being the path under the sdk's pkg/.
+# dev/skeleton_scope.toml — what of dart2wasm and wasm_builder at the pin is out of the rebuild's scope,
+# each with its reason (dev/skeleton.jl reads it; dev/MARCH.md 1.A4). [out] names whole dart files: the
+# in-scope files are src/julia/parity.jl's DART_FILES, the one list, and together the two name every
+# dart file of both packages, a key being the path under the sdk's pkg/. [out_definitions] names a
+# definition of an in-scope file (`<key> <Symbol>`; a class takes its members with it), and
+# [out_types] a type (`<library> <Name>`) that takes out every definition whose parameters or
+# receiver name it, as does a class [out_definitions] names. What is out has no stub and no count.
 
 [out]
 "dart2wasm/lib/async.dart" = "tasks are out of scope: Julia's verifier rejects them (1.F)"
@@ -25,7 +28,6 @@
 "dart2wasm/lib/js/util.dart" = "a Kernel transform of dart:js_interop; Julia has none: WT's host boundary is runtime_generator's import list"
 "dart2wasm/lib/list_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
 "dart2wasm/lib/map_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
-"dart2wasm/lib/modules.dart" = "deferred loading is out of scope (dev/PARITY_MASTER.md)"
 "dart2wasm/lib/option.dart" = "the command-line driver; WT is a library"
 "dart2wasm/lib/reference_extensions.dart" = "Kernel Reference tear-off and getter variants; a MethodInstance names one callable"
 "dart2wasm/lib/set_factory_specializer.dart" = "a Kernel-to-Kernel rewrite: Julia's lowering and optimizer are that pass, NIR its projection"
@@ -35,3 +37,16 @@
 "dart2wasm/lib/wasm_library_checks.dart" = "WT's dry run is Julia's trim verifier (src/julia/subset.jl)"
 "wasm_builder/lib/src/serialize/deserializer.dart" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
 "wasm_builder/lib/src/serialize/printer.dart" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
+
+[out_definitions]
+"dart2wasm/lib/modules.dart DeferredModuleLoadingMap" = "deferred loading is out of scope (dev/PARITY_MASTER.md); the monolithic DefaultModuleStrategy is the path"
+"dart2wasm/lib/modules.dart ModuleOutputData.fineGrainedSplit" = "deferred loading is out of scope (dev/PARITY_MASTER.md): deferred_loading.dart's strategy builds it"
+"dart2wasm/lib/modules.dart ModuleOutputData.librarySplit" = "deferred loading is out of scope (dev/PARITY_MASTER.md): deferred_loading.dart's strategy builds it"
+"dart2wasm/lib/modules.dart containsWasmExport" = "deferred loading is out of scope (dev/PARITY_MASTER.md): only deferred_loading.dart's strategy calls it"
+"dart2wasm/lib/modules.dart getReachableLibraries" = "deferred loading is out of scope (dev/PARITY_MASTER.md): only deferred_loading.dart's strategy calls it"
+
+[out_types]
+"wasm_builder/lib/src/serialize/deserializer.dart Deserializer" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
+"wasm_builder/lib/src/serialize/printer.dart IrPrinter" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
+"wasm_builder/lib/src/serialize/printer.dart IndentPrinter" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"
+"wasm_builder/lib/src/serialize/printer.dart ModulePrintSettings" = "wasm-tools reads and prints modules: the disagreement alarm (C7)"

@@ -121,11 +121,3 @@ end
         WasmBuilder.serialize(s, custom_section)
     end
 end
-
-@parity "wasm_builder/lib/src/ir/module.dart:145 Module._deserializeTopLevel" @unported function Module__deserialize_top_level(d) end
-
-@parity "wasm_builder/lib/src/ir/module.dart:180 Module.deserialize" @unported function Module_deserialize(d) end
-
-@parity "wasm_builder/lib/src/ir/module.dart:340 Module.deserializeSourceMapUrl" @unported function Module_deserialize_source_map_url(d) end
-
-@parity "wasm_builder/lib/src/ir/module.dart:348 Module.printAsWat" @unported function WasmBuilder.print_as_wat(self::Module; settings = nothing) end

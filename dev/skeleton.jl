@@ -636,6 +636,7 @@ struct Scope
     extension_on::Dict{String,String}
     decls::Dict{String,Vector{Decl}}
     sealed::Dict{String,Vector{Tuple{String,String}}}  # "<key>|<name>" of a sealed class => its kinds (key, name)
+    excluded::Dict{String,String}  # the anchor of each declaration of an in-scope file out of scope => why
 end
 
 # a class's Julia supertype as dart spells it (with its prefix), or "": its `extends` target; with
@@ -703,7 +704,6 @@ end
 
 # the library a directive's uri names, from library `from`
 function lib_of_uri(uri::AbstractString, from::AbstractString)::String
-    # a platform library whose file is not <name>/<name>.dart (dart:_internal) names nothing read
     startswith(uri, "dart:") && return isfile(lib_path(uri)) ? String(uri) : ""
     local m = match(r"^package:([\w.]+)/(.+)$", uri)
     local id = m !== nothing ? "$(m[1])/lib/$(m[2])" :
@@ -713,10 +713,17 @@ function lib_of_uri(uri::AbstractString, from::AbstractString)::String
     return isfile(lib_path(id)) ? replace(id, '\\' => '/') : ""
 end
 
-# a library's source file: a pkg/ path, a platform library's file, or a platform part (`core/x.dart`)
+# a library's source file: a pkg/ path, a platform library's file as sdk/lib/libraries.json names it,
+# or a platform part (`core/x.dart`)
 lib_path(id::AbstractString)::String =
-    startswith(id, "dart:") ? joinpath(sdk(), "sdk", "lib", id[6:end], id[6:end] * ".dart") :
+    startswith(id, "dart:") ? joinpath(sdk(), "sdk", "lib", platform_uri(id[6:end])) :
     isfile(joinpath(sdk(), "pkg", id)) ? joinpath(sdk(), "pkg", id) : joinpath(sdk(), "sdk", "lib", id)
+const PLATFORM_URIS = Dict{String,String}()
+platform_uri(name::AbstractString)::String = get!(() -> _platform_uri(name), PLATFORM_URIS, name)
+function _platform_uri(name::AbstractString)::String
+    local m = match(Regex("\"\\Q$(name)\\E\": \\{\\s*\"uri\": \"([^\"]+)\""), read(joinpath(sdk(), "sdk", "lib", "libraries.json"), String))
+    return m === nothing ? "$name/$name.dart" : m[1]
+end
 
 const DIRECTIVES = Dict{String,Vector{Directive}}()
 function directives(id::AbstractString)::Vector{Directive}
@@ -843,7 +850,17 @@ function is_function_type(ts::Vector{String})::Bool
 end
 
 function read_scope()::Scope
-    local decls = Dict{String,Vector{Decl}}(f => read_dart(dart_source(f)) for f in scope())
+    local decls = Dict{String,Vector{Decl}}()
+    local excluded = Dict{String,String}()
+    for f in scope()
+        local all = read_dart(dart_source(f))
+        local ext_on = Dict(d.symbol => d.extends for d in all if d.kind == :extension)
+        decls[f] = Decl[]
+        for d in all
+            local why = out_reason(f, d, ext_on)
+            why === nothing ? push!(decls[f], d) : (excluded[anchor(f, d)] = why)
+        end
+    end
     local where, ext_on = Dict{String,Vector{String}}(), Dict{String,String}()
     for f in scope(), d in decls[f]
         d.kind in (:class, :abstract, :mixin, :enum) && push!(get!(where, d.symbol, String[]), f)
@@ -881,7 +898,7 @@ function read_scope()::Scope
             d.kind == :abstract && haskey(subs, "$f|$n") && push!(todo, "$f|$n")
         end
     end
-    return Scope(where, extended, ext_on, decls, sealed)
+    return Scope(where, extended, ext_on, decls, sealed, excluded)
 end
 
 # a dart type's tokens, as file `from` resolves them, as a Julia type spelled in file `at`, or ""
@@ -1278,6 +1295,11 @@ function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool
     for s in segs
         local a = canonical_anchor(s.anchor, keys)
         isempty(a) && error("skeleton: $path:$(s.first): a definition with no @parity anchor")
+        # a stub of a definition out of scope goes; a filled one refuses, its port out of scope
+        if !haskey(bykey, a) && haskey(S.excluded, a)
+            generated(s) && continue
+            error("skeleton: $path:$(s.first): $(s.anchor) is filled, but it is out of scope: $(S.excluded[a])")
+        end
         haskey(bykey, a) || error("skeleton: $path:$(s.first): $(s.anchor) names no declaration at the pin")
         local f, d = bykey[a]
         # a typedef's alias is the generator's to write: the `const` of its Julia type
@@ -1623,12 +1645,50 @@ function scope()::Vector{String}
     return String[x[1] for x in eachmatch(r"\"([^\"]+)\"", m[1])]
 end
 
-# the out-of-scope dart files and their reasons
-function out_of_scope()::Dict{String,String}
+# a section of dev/skeleton_scope.toml: key => reason
+function scope_section(name::AbstractString)::Dict{String,String}
     local text = read(joinpath(ROOT, "dev", "skeleton_scope.toml"), String)
-    local sec = match(r"(?s)\[out\]\n(.*?)(?:\n\[|\z)", text)
-    sec === nothing && error("skeleton: dev/skeleton_scope.toml has no [out] section")
+    local sec = match(Regex("(?s)\\[\\Q$(name)\\E\\]\\n(.*?)(?:\\n\\[|\\z)"), text)
+    sec === nothing && error("skeleton: dev/skeleton_scope.toml has no [$name] section")
     return Dict(String(m[1]) => String(m[2]) for m in eachmatch(r"^\"([^\"]+)\"\s*=\s*\"([^\"]*)\""m, sec[1]))
+end
+
+# the out-of-scope dart files and their reasons
+out_of_scope()::Dict{String,String} = scope_section("out")
+
+# why a declaration of in-scope file `file` is out of scope, or nothing: [out_definitions] names it
+# or the class it is a member of (`<key> <Symbol>`); or its parameters or receiver name a type
+# [out_types] lists (`<library> <Name>`), or a class [out_definitions] takes out
+const OUT_DEFINITIONS = Dict{String,String}()
+const OUT_TYPES = Dict{String,String}()
+function out_reason(file::AbstractString, d::Decl, ext_on::Dict{String,String})::Union{Nothing,String}
+    isempty(OUT_DEFINITIONS) && merge!(OUT_DEFINITIONS, scope_section("out_definitions"))
+    isempty(OUT_TYPES) && merge!(OUT_TYPES, scope_section("out_types"), OUT_DEFINITIONS)
+    local x = first(split(d.symbol, '.'))
+    for k in ("$file $(d.symbol)", "$file $x")
+        haskey(OUT_DEFINITIONS, k) && return OUT_DEFINITIONS[k]
+    end
+    # the receiver of an extension's member, unnamed (its `on` kept as d.extends) or named
+    local on = d.kind in (:class, :abstract, :mixin, :enum, :extension) ? "" :
+               haskey(ext_on, x) ? ext_on[x] : !occursin('.', d.symbol) ? d.extends : ""
+    local names = Tuple{String,String}[]
+    isempty(on) || push!(names, split_prefix(on))
+    local ts = d.params
+    for i in eachindex(ts)
+        ts[i].kind == :ident || continue
+        if !isuppercase(first(ts[i].text)) && i + 2 <= length(ts) && ts[i+1].text == "." && ts[i+2].kind == :ident
+            push!(names, (ts[i].text, ts[i+2].text))   # a prefixed type, `ir.X`
+        elseif isuppercase(first(ts[i].text)) && !(i >= 2 && ts[i-1].text == ".")
+            push!(names, ("", ts[i].text))
+        end
+    end
+    for (p, n) in names
+        local lib = resolve(n, p, file)
+        lib === nothing && continue
+        local k = "$lib $n"
+        haskey(OUT_TYPES, k) && return "it names $n, out of scope: $(OUT_TYPES[k])"
+    end
+    return nothing
 end
 
 # every dart file of the two packages at the pin is in scope or out with its reason, never both
@@ -1658,8 +1718,9 @@ counted(d::Decl)::Bool = d.kind != :extension && !(d.kind == :typedef && typedef
 
 function count_main()
     local total = 0
+    local S = read_scope()
     for f in scope()
-        local n = count(counted, read_dart(dart_source(f)))
+        local n = count(counted, S.decls[f])
         println(rpad(f, 50), lpad(n, 6))
         total += n
     end

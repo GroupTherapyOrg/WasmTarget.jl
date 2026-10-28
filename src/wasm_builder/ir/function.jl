@@ -63,8 +63,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/function.dart:14 Local" function Local end
 
-@parity "wasm_builder/lib/src/ir/function.dart:16 Local.printTo" @unported function WasmBuilder.print_to(self::Local, p, local_names::Dict{Int64,String}; is_param = nothing) end
-
 @parity "wasm_builder/lib/src/ir/function.dart:29 Local.toString" Base.show(io::IO, l::Local) = print(io, l.index)
 
 # dart's constructor of the abstract class assigns its fields, which each subclass's struct holds; their
@@ -126,10 +124,6 @@ end
     WasmBuilder.write_data(s, local_s)
 end
 
-@parity "wasm_builder/lib/src/ir/function.dart:127 DefinedFunction.printTo" @unported function WasmBuilder.print_to(self::DefinedFunction, p) end
-
-@parity "wasm_builder/lib/src/ir/function.dart:169 DefinedFunction.printDeclarationTo" @unported function WasmBuilder.print_declaration_to(self::DefinedFunction, p) end
-
 @parity "wasm_builder/lib/src/ir/function.dart:179 DefinedFunction.toString" Base.show(io::IO, f::DefinedFunction) = f.function_name === nothing ? print(io, "#", f.finalizable_index) : print(io, f.function_name)
 
 # An imported function's name is its import field name (function.dart:187 `final String name`).
@@ -145,8 +139,6 @@ end
     WasmBuilder.write_byte(s, 0x00)
     WasmBuilder.write_unsigned(s, WasmBuilder.index(f.type))
 end
-
-@parity "wasm_builder/lib/src/ir/function.dart:206 ImportedFunction.printTo" @unported function WasmBuilder.print_to(self::ImportedFunction, p) end
 
 @parity "wasm_builder/lib/src/ir/function.dart:222 ImportedFunction.toString" Base.show(io::IO, f::ImportedFunction) = print(io, f.module_, ".", f.name)
 

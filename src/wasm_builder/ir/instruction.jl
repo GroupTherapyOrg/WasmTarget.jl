@@ -1493,12 +1493,6 @@ initializers and element and data segments.
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
 @parity "wasm_builder/lib/src/ir/instruction.dart:32 Instruction.name" WasmBuilder.name(self::Instruction)::String = reject!(Internal("wasm_builder/lib/src/ir/instruction.dart:32 Instruction.name: abstract in $(typeof(self))"), "name")
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:37 Instruction.printTo" @unported function WasmBuilder.print_to(self::Instruction, p) end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:41 Instruction.deserializeConst" @unported function Instruction_deserialize_const(d, types::Types, functions::Functions, globals::Globals; is_const_only_use = nothing) end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:87 Instruction.deserialize" @unported function Instruction_deserialize(d, types::Types, tables::Tables, tags::Tags, globals::Globals, data_segments::DataSegments, memories::Memories, functions::Functions) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:616 SingleByteInstruction.byte" WasmBuilder.byte(::Unreachable)::UInt8 = 0x00
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:616 SingleByteInstruction.byte" WasmBuilder.byte(::Nop)::UInt8 = 0x01
@@ -1785,23 +1779,17 @@ initializers and element and data segments.
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:625 Unreachable" function Unreachable end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:627 Unreachable.deserialize" @unported function Unreachable_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:630 Unreachable.name" WasmBuilder.name(::Unreachable)::String = "unreachable"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:634 Nop" function Nop end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:636 Nop.deserialize" @unported function Nop_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:639 Nop.name" WasmBuilder.name(::Nop)::String = "nop"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:643 BeginNoEffectBlock" function BeginNoEffectBlock end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:645 BeginNoEffectBlock.deserialize" @unported function BeginNoEffectBlock_deserialize(d, _::Tags) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:651 BeginNoEffectBlock.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginNoEffectBlock)::Nothing
     WasmBuilder.write_byte(s, 0x02)
@@ -1811,15 +1799,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:657 BeginNoEffectBlock.name" WasmBuilder.name(::BeginNoEffectBlock)::String = "block"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:660 BeginNoEffectBlock.printTo" @unported function WasmBuilder.print_to(self::BeginNoEffectBlock, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:671 BeginOneOutputBlock.usedValueTypes" WasmBuilder.used_value_types(i::BeginOneOutputBlock)::Vector{ValueType} = ValueType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:673 BeginOneOutputBlock" function BeginOneOutputBlock end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:675 BeginOneOutputBlock.deserialize" @unported function BeginOneOutputBlock_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:682 BeginOneOutputBlock.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginOneOutputBlock)::Nothing
     WasmBuilder.write_byte(s, 0x02)
@@ -1829,15 +1813,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:688 BeginOneOutputBlock.name" WasmBuilder.name(::BeginOneOutputBlock)::String = "block"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:691 BeginOneOutputBlock.printTo" @unported function WasmBuilder.print_to(self::BeginOneOutputBlock, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:706 BeginFunctionBlock.usedDefTypes" WasmBuilder.used_def_types(i::BeginFunctionBlock)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:708 BeginFunctionBlock" function BeginFunctionBlock end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:710 BeginFunctionBlock.deserialize" @unported function BeginFunctionBlock_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:715 BeginFunctionBlock.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginFunctionBlock)::Nothing
     WasmBuilder.write_byte(s, 0x02)
@@ -1846,8 +1826,6 @@ end
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:721 BeginFunctionBlock.name" WasmBuilder.name(::BeginFunctionBlock)::String = "block"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:724 BeginFunctionBlock.printTo" @unported function WasmBuilder.print_to(self::BeginFunctionBlock, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
@@ -1859,19 +1837,13 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:742 BeginNoEffectLoop.deserialize" @unported function BeginNoEffectLoop_deserialize(d, _::Tags) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:748 BeginNoEffectLoop.name" WasmBuilder.name(::BeginNoEffectLoop)::String = "loop"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:751 BeginNoEffectLoop.printTo" @unported function WasmBuilder.print_to(self::BeginNoEffectLoop, p) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:762 BeginOneOutputLoop.usedValueTypes" WasmBuilder.used_value_types(i::BeginOneOutputLoop)::Vector{ValueType} = ValueType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:764 BeginOneOutputLoop" function BeginOneOutputLoop end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:766 BeginOneOutputLoop.deserialize" @unported function BeginOneOutputLoop_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:772 BeginOneOutputLoop.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginOneOutputLoop)::Nothing
     WasmBuilder.write_byte(s, 0x03)
@@ -1881,15 +1853,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:778 BeginOneOutputLoop.name" WasmBuilder.name(::BeginOneOutputLoop)::String = "loop"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:781 BeginOneOutputLoop.printTo" @unported function WasmBuilder.print_to(self::BeginOneOutputLoop, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:794 BeginFunctionLoop.usedDefTypes" WasmBuilder.used_def_types(i::BeginFunctionLoop)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:796 BeginFunctionLoop" function BeginFunctionLoop end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:798 BeginFunctionLoop.deserialize" @unported function BeginFunctionLoop_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:803 BeginFunctionLoop.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginFunctionLoop)::Nothing
     WasmBuilder.write_byte(s, 0x03)
@@ -1898,8 +1866,6 @@ end
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:809 BeginFunctionLoop.name" WasmBuilder.name(::BeginFunctionLoop)::String = "loop"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:812 BeginFunctionLoop.printTo" @unported function WasmBuilder.print_to(self::BeginFunctionLoop, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
@@ -1911,8 +1877,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:830 BeginNoEffectIf.deserialize" @unported function BeginNoEffectIf_deserialize(d, _::Tags) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:836 BeginNoEffectIf.name" WasmBuilder.name(::BeginNoEffectIf)::String = "if"
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:843 BeginOneOutputIf.usedValueTypes" WasmBuilder.used_value_types(i::BeginOneOutputIf)::Vector{ValueType} = ValueType[i.type]
@@ -1920,8 +1884,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:845 BeginOneOutputIf" function BeginOneOutputIf end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:847 BeginOneOutputIf.deserialize" @unported function BeginOneOutputIf_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:853 BeginOneOutputIf.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginOneOutputIf)::Nothing
     WasmBuilder.write_byte(s, 0x04)
@@ -1931,15 +1893,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:859 BeginOneOutputIf.name" WasmBuilder.name(::BeginOneOutputIf)::String = "if"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:862 BeginOneOutputIf.printTo" @unported function WasmBuilder.print_to(self::BeginOneOutputIf, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:874 BeginFunctionIf.usedDefTypes" WasmBuilder.used_def_types(i::BeginFunctionIf)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:876 BeginFunctionIf" function BeginFunctionIf end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:878 BeginFunctionIf.deserialize" @unported function BeginFunctionIf_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:883 BeginFunctionIf.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginFunctionIf)::Nothing
     WasmBuilder.write_byte(s, 0x04)
@@ -1949,21 +1907,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:889 BeginFunctionIf.name" WasmBuilder.name(::BeginFunctionIf)::String = "if"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:892 BeginFunctionIf.printTo" @unported function WasmBuilder.print_to(self::BeginFunctionIf, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:900 Else" function Else end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:902 Else.deserialize" @unported function Else_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:905 Else.name" WasmBuilder.name(::Else)::String = "else"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:909 BeginNoEffectTry" function BeginNoEffectTry end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:911 BeginNoEffectTry.deserialize" @unported function BeginNoEffectTry_deserialize(d, _::Tags) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:917 BeginNoEffectTry.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginNoEffectTry)::Nothing
     WasmBuilder.write_byte(s, 0x06)
@@ -1973,15 +1925,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:923 BeginNoEffectTry.name" WasmBuilder.name(::BeginNoEffectTry)::String = "try"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:926 BeginNoEffectTry.printTo" @unported function WasmBuilder.print_to(self::BeginNoEffectTry, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:937 BeginOneOutputTry.usedValueTypes" WasmBuilder.used_value_types(i::BeginOneOutputTry)::Vector{ValueType} = ValueType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:939 BeginOneOutputTry" function BeginOneOutputTry end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:941 BeginOneOutputTry.deserialize" @unported function BeginOneOutputTry_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:948 BeginOneOutputTry.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginOneOutputTry)::Nothing
     WasmBuilder.write_byte(s, 0x06)
@@ -1991,15 +1939,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:954 BeginOneOutputTry.name" WasmBuilder.name(::BeginOneOutputTry)::String = "try"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:957 BeginOneOutputTry.printTo" @unported function WasmBuilder.print_to(self::BeginOneOutputTry, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:970 BeginFunctionTry.usedDefTypes" WasmBuilder.used_def_types(i::BeginFunctionTry)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:972 BeginFunctionTry" function BeginFunctionTry end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:974 BeginFunctionTry.deserialize" @unported function BeginFunctionTry_deserialize(d, _::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:979 BeginFunctionTry.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginFunctionTry)::Nothing
     WasmBuilder.write_byte(s, 0x06)
@@ -2009,13 +1953,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:985 BeginFunctionTry.name" WasmBuilder.name(::BeginFunctionTry)::String = "try"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:988 BeginFunctionTry.printTo" @unported function WasmBuilder.print_to(self::BeginFunctionTry, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1000 CatchLegacy" function CatchLegacy end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1002 CatchLegacy.deserialize" @unported function CatchLegacy_deserialize(d, tags::Tags) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1007 CatchLegacy.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::CatchLegacy)::Nothing
     WasmBuilder.write_byte(s, 0x07)
@@ -2025,21 +1965,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1013 CatchLegacy.name" WasmBuilder.name(::CatchLegacy)::String = "catch"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1016 CatchLegacy.printTo" @unported function WasmBuilder.print_to(self::CatchLegacy, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1024 CatchAllLegacy" function CatchAllLegacy end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1026 CatchAllLegacy.deserialize" @unported function CatchAllLegacy_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1029 CatchAllLegacy.name" WasmBuilder.name(::CatchAllLegacy)::String = "catch_all"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1035 Throw" function Throw end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1037 Throw.deserialize" @unported function Throw_deserialize(d, tags::Tags) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1042 Throw.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::Throw)::Nothing
     WasmBuilder.write_byte(s, 0x08)
@@ -2049,13 +1983,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1048 Throw.name" WasmBuilder.name(::Throw)::String = "throw"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1051 Throw.printTo" @unported function WasmBuilder.print_to(self::Throw, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1059 ThrowRef" function ThrowRef end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1061 ThrowRef.deserialize" @unported function ThrowRef_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1064 ThrowRef.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ThrowRef)::Nothing
     WasmBuilder.write_byte(s, 0x0a)
@@ -2068,8 +1998,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1075 Rethrow" function Rethrow end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1077 Rethrow.deserialize" @unported function Rethrow_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1080 Rethrow.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::Rethrow)::Nothing
     WasmBuilder.write_byte(s, 0x09)
     WasmBuilder.write_unsigned(s, i.label_index)
@@ -2078,23 +2006,17 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1086 Rethrow.name" WasmBuilder.name(::Rethrow)::String = "rethrow"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1089 Rethrow.printTo" @unported function WasmBuilder.print_to(self::Rethrow, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1097 End" function End end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1100 End.isConstant" WasmBuilder.is_constant(::End)::Bool = true
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1102 End.deserialize" @unported function End_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1107 End.name" WasmBuilder.name(::End)::String = "end"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1113 Br" function Br end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1115 Br.deserialize" @unported function Br_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1118 Br.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::Br)::Nothing
     WasmBuilder.write_byte(s, 0x0C)
@@ -2104,13 +2026,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1124 Br.name" WasmBuilder.name(::Br)::String = "br"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1127 Br.printTo" @unported function WasmBuilder.print_to(self::Br, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1137 BrIf" function BrIf end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1139 BrIf.deserialize" @unported function BrIf_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1142 BrIf.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrIf)::Nothing
     WasmBuilder.write_byte(s, 0x0D)
@@ -2120,13 +2038,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1148 BrIf.name" WasmBuilder.name(::BrIf)::String = "br_if"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1151 BrIf.printTo" @unported function WasmBuilder.print_to(self::BrIf, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1162 BrTable" function BrTable end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1164 BrTable.deserialize" @unported function BrTable_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1169 BrTable.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrTable)::Nothing
     WasmBuilder.write_byte(s, 0x0E)
@@ -2140,21 +2054,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1179 BrTable.name" WasmBuilder.name(::BrTable)::String = "br_table"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1182 BrTable.printTo" @unported function WasmBuilder.print_to(self::BrTable, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1194 Return" function Return end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1196 Return.deserialize" @unported function Return_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1199 Return.name" WasmBuilder.name(::Return)::String = "return"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1205 Call" function Call end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1207 Call.deserialize" @unported function Call_deserialize(d, functions::Functions) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1212 Call.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::Call)::Nothing
     WasmBuilder.write_byte(s, 0x10)
@@ -2164,15 +2072,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1218 Call.name" WasmBuilder.name(::Call)::String = "call"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1221 Call.printTo" @unported function WasmBuilder.print_to(self::Call, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1233 CallIndirect.usedDefTypes" WasmBuilder.used_def_types(i::CallIndirect)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1235 CallIndirect" function CallIndirect end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1237 CallIndirect.deserialize" @unported function CallIndirect_deserialize(d, types::Types, tables::Tables) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1244 CallIndirect.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::CallIndirect)::Nothing
     WasmBuilder.write_byte(s, 0x11)
@@ -2183,15 +2087,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1251 CallIndirect.name" WasmBuilder.name(::CallIndirect)::String = "call_indirect"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1254 CallIndirect.printTo" @unported function WasmBuilder.print_to(self::CallIndirect, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1266 CallRef.usedDefTypes" WasmBuilder.used_def_types(i::CallRef)::Vector{DefType} = DefType[i.type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1268 CallRef" function CallRef end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1270 CallRef.deserialize" @unported function CallRef_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1275 CallRef.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::CallRef)::Nothing
     WasmBuilder.write_byte(s, 0x14)
@@ -2201,13 +2101,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1281 CallRef.name" WasmBuilder.name(::CallRef)::String = "call_ref"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1284 CallRef.printTo" @unported function WasmBuilder.print_to(self::CallRef, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1292 Drop" function Drop end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1294 Drop.deserialize" @unported function Drop_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1297 Drop.name" WasmBuilder.name(::Drop)::String = "drop"
 
@@ -2216,8 +2112,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1304 Select" function Select end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1306 Select.deserialize" @unported function Select_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1311 Select.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::Select)::Nothing
     WasmBuilder.write_byte(s, 0x1B)
@@ -2232,8 +2126,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1325 SelectWithType" function SelectWithType end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1327 SelectWithType.deserialize" @unported function SelectWithType_deserialize(d, types::Types) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1333 SelectWithType.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::SelectWithType)::Nothing
     WasmBuilder.write_byte(s, 0x1C)
     WasmBuilder.write_unsigned(s, 1)
@@ -2243,13 +2135,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1340 SelectWithType.name" WasmBuilder.name(::SelectWithType)::String = "select"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1343 SelectWithType.printTo" @unported function WasmBuilder.print_to(self::SelectWithType, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1353 LocalGet" function LocalGet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1355 LocalGet.deserialize" @unported function LocalGet_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1360 LocalGet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::LocalGet)::Nothing
     WasmBuilder.write_byte(s, 0x20)
@@ -2259,13 +2147,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1366 LocalGet.name" WasmBuilder.name(::LocalGet)::String = "local.get"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1369 LocalGet.printTo" @unported function WasmBuilder.print_to(self::LocalGet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1379 LocalSet" function LocalSet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1381 LocalSet.deserialize" @unported function LocalSet_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1386 LocalSet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::LocalSet)::Nothing
     WasmBuilder.write_byte(s, 0x21)
@@ -2275,13 +2159,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1392 LocalSet.name" WasmBuilder.name(::LocalSet)::String = "local.set"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1395 LocalSet.printTo" @unported function WasmBuilder.print_to(self::LocalSet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1405 LocalTee" function LocalTee end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1407 LocalTee.deserialize" @unported function LocalTee_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1412 LocalTee.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::LocalTee)::Nothing
     WasmBuilder.write_byte(s, 0x22)
@@ -2291,13 +2171,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1418 LocalTee.name" WasmBuilder.name(::LocalTee)::String = "local.tee"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1421 LocalTee.printTo" @unported function WasmBuilder.print_to(self::LocalTee, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1431 GlobalGet" function GlobalGet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1433 GlobalGet.deserialize" @unported function GlobalGet_deserialize(d, globals::Globals) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1438 GlobalGet.isConstant" WasmBuilder.is_constant(::GlobalGet)::Bool = true
 
@@ -2309,13 +2185,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1447 GlobalGet.name" WasmBuilder.name(::GlobalGet)::String = "global.get"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1450 GlobalGet.printTo" @unported function WasmBuilder.print_to(self::GlobalGet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1460 GlobalSet" function GlobalSet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1462 GlobalSet.deserialize" @unported function GlobalSet_deserialize(d, globals::Globals) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1467 GlobalSet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::GlobalSet)::Nothing
     WasmBuilder.write_byte(s, 0x24)
@@ -2325,13 +2197,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1473 GlobalSet.name" WasmBuilder.name(::GlobalSet)::String = "global.set"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1476 GlobalSet.printTo" @unported function WasmBuilder.print_to(self::GlobalSet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1486 TableSet" function TableSet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1488 TableSet.deserialize" @unported function TableSet_deserialize(d, tables::Tables) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1493 TableSet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::TableSet)::Nothing
     WasmBuilder.write_byte(s, 0x26)
@@ -2341,13 +2209,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1499 TableSet.name" WasmBuilder.name(::TableSet)::String = "table.set"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1502 TableSet.printTo" @unported function WasmBuilder.print_to(self::TableSet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1511 TableGet" function TableGet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1513 TableGet.deserialize" @unported function TableGet_deserialize(d, tables::Tables) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1518 TableGet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::TableGet)::Nothing
     WasmBuilder.write_byte(s, 0x25)
@@ -2357,13 +2221,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1524 TableGet.name" WasmBuilder.name(::TableGet)::String = "table.get"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1527 TableGet.printTo" @unported function WasmBuilder.print_to(self::TableGet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1536 TableFill" function TableFill end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1538 TableFill.deserialize" @unported function TableFill_deserialize(d, tables::Tables) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1543 TableFill.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::TableFill)::Nothing
     WasmBuilder.write_byte(s, 0xFC)
@@ -2374,13 +2234,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1550 TableFill.name" WasmBuilder.name(::TableFill)::String = "table.fill"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1553 TableFill.printTo" @unported function WasmBuilder.print_to(self::TableFill, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1562 TableSize" function TableSize end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1564 TableSize.deserialize" @unported function TableSize_deserialize(d, tables::Tables) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1569 TableSize.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::TableSize)::Nothing
     WasmBuilder.write_byte(s, 0xFC)
@@ -2390,8 +2246,6 @@ end
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1576 TableSize.name" WasmBuilder.name(::TableSize)::String = "table.size"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1579 TableSize.printTo" @unported function WasmBuilder.print_to(self::TableSize, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
@@ -2411,10 +2265,6 @@ end
         WasmBuilder.write_unsigned(s, m.offset)
     end
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1604 MemoryOffsetAlign.deserialize" @unported function MemoryOffsetAlign_deserialize(d, memories::Memories) end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1616 MemoryOffsetAlign.printTo" @unported function WasmBuilder.print_to(self::MemoryOffsetAlign, p) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:1631 MemoryInstruction.encoding" WasmBuilder.encoding(::I32Load)::UInt8 = 0x28
 
@@ -2475,237 +2325,143 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1643 I32Load" function I32Load end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1645 I32Load.deserialize" @unported function I32Load_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1650 I32Load.name" WasmBuilder.name(::I32Load)::String = "i32.load"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1653 I32Load.printTo" @unported function WasmBuilder.print_to(self::I32Load, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1660 I64Load" function I64Load end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1662 I64Load.deserialize" @unported function I64Load_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1667 I64Load.name" WasmBuilder.name(::I64Load)::String = "i64.load"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1670 I64Load.printTo" @unported function WasmBuilder.print_to(self::I64Load, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1677 F32Load" function F32Load end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1679 F32Load.deserialize" @unported function F32Load_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1684 F32Load.name" WasmBuilder.name(::F32Load)::String = "f32.load"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1687 F32Load.printTo" @unported function WasmBuilder.print_to(self::F32Load, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1694 F64Load" function F64Load end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1696 F64Load.deserialize" @unported function F64Load_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1701 F64Load.name" WasmBuilder.name(::F64Load)::String = "f64.load"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1704 F64Load.printTo" @unported function WasmBuilder.print_to(self::F64Load, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1711 I32Load8S" function I32Load8S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1713 I32Load8S.deserialize" @unported function I32Load8S_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1718 I32Load8S.name" WasmBuilder.name(::I32Load8S)::String = "i32.load8_s"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1721 I32Load8S.printTo" @unported function WasmBuilder.print_to(self::I32Load8S, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1728 I32Load8U" function I32Load8U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1730 I32Load8U.deserialize" @unported function I32Load8U_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1735 I32Load8U.name" WasmBuilder.name(::I32Load8U)::String = "i32.load8_u"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1738 I32Load8U.printTo" @unported function WasmBuilder.print_to(self::I32Load8U, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1745 I32Load16S" function I32Load16S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1747 I32Load16S.deserialize" @unported function I32Load16S_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1752 I32Load16S.name" WasmBuilder.name(::I32Load16S)::String = "i32.load16_s"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1755 I32Load16S.printTo" @unported function WasmBuilder.print_to(self::I32Load16S, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1762 I32Load16U" function I32Load16U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1764 I32Load16U.deserialize" @unported function I32Load16U_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1769 I32Load16U.name" WasmBuilder.name(::I32Load16U)::String = "i32.load16_u"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1772 I32Load16U.printTo" @unported function WasmBuilder.print_to(self::I32Load16U, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1779 I64Load8S" function I64Load8S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1781 I64Load8S.deserialize" @unported function I64Load8S_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1786 I64Load8S.name" WasmBuilder.name(::I64Load8S)::String = "i64.load8_s"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1789 I64Load8S.printTo" @unported function WasmBuilder.print_to(self::I64Load8S, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1796 I64Load8U" function I64Load8U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1798 I64Load8U.deserialize" @unported function I64Load8U_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1803 I64Load8U.name" WasmBuilder.name(::I64Load8U)::String = "i64.load8_u"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1806 I64Load8U.printTo" @unported function WasmBuilder.print_to(self::I64Load8U, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1813 I64Load16S" function I64Load16S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1815 I64Load16S.deserialize" @unported function I64Load16S_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1820 I64Load16S.name" WasmBuilder.name(::I64Load16S)::String = "i64.load16_s"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1823 I64Load16S.printTo" @unported function WasmBuilder.print_to(self::I64Load16S, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1830 I64Load16U" function I64Load16U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1832 I64Load16U.deserialize" @unported function I64Load16U_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1837 I64Load16U.name" WasmBuilder.name(::I64Load16U)::String = "i64.load16_u"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1840 I64Load16U.printTo" @unported function WasmBuilder.print_to(self::I64Load16U, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1847 I64Load32S" function I64Load32S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1849 I64Load32S.deserialize" @unported function I64Load32S_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1854 I64Load32S.name" WasmBuilder.name(::I64Load32S)::String = "i64.load32_s"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1857 I64Load32S.printTo" @unported function WasmBuilder.print_to(self::I64Load32S, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1864 I64Load32U" function I64Load32U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1866 I64Load32U.deserialize" @unported function I64Load32U_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1871 I64Load32U.name" WasmBuilder.name(::I64Load32U)::String = "i64.load32_u"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1874 I64Load32U.printTo" @unported function WasmBuilder.print_to(self::I64Load32U, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1881 I32Store" function I32Store end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1883 I32Store.deserialize" @unported function I32Store_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1888 I32Store.name" WasmBuilder.name(::I32Store)::String = "i32.store"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1891 I32Store.printTo" @unported function WasmBuilder.print_to(self::I32Store, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1898 I64Store" function I64Store end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1900 I64Store.deserialize" @unported function I64Store_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1905 I64Store.name" WasmBuilder.name(::I64Store)::String = "i64.store"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1908 I64Store.printTo" @unported function WasmBuilder.print_to(self::I64Store, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1915 F32Store" function F32Store end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1917 F32Store.deserialize" @unported function F32Store_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1922 F32Store.name" WasmBuilder.name(::F32Store)::String = "f32.store"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1925 F32Store.printTo" @unported function WasmBuilder.print_to(self::F32Store, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1932 F64Store" function F64Store end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1934 F64Store.deserialize" @unported function F64Store_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1939 F64Store.name" WasmBuilder.name(::F64Store)::String = "f64.store"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1942 F64Store.printTo" @unported function WasmBuilder.print_to(self::F64Store, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1949 I32Store8" function I32Store8 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1951 I32Store8.deserialize" @unported function I32Store8_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1956 I32Store8.name" WasmBuilder.name(::I32Store8)::String = "i32.store8"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1959 I32Store8.printTo" @unported function WasmBuilder.print_to(self::I32Store8, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1966 I32Store16" function I32Store16 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1968 I32Store16.deserialize" @unported function I32Store16_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1973 I32Store16.name" WasmBuilder.name(::I32Store16)::String = "i32.store16"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1976 I32Store16.printTo" @unported function WasmBuilder.print_to(self::I32Store16, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:1983 I64Store8" function I64Store8 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:1985 I64Store8.deserialize" @unported function I64Store8_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:1990 I64Store8.name" WasmBuilder.name(::I64Store8)::String = "i64.store8"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:1993 I64Store8.printTo" @unported function WasmBuilder.print_to(self::I64Store8, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2000 I64Store16" function I64Store16 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2002 I64Store16.deserialize" @unported function I64Store16_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2007 I64Store16.name" WasmBuilder.name(::I64Store16)::String = "i64.store16"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2010 I64Store16.printTo" @unported function WasmBuilder.print_to(self::I64Store16, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2017 I64Store32" function I64Store32 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2019 I64Store32.deserialize" @unported function I64Store32_deserialize(d, memories::Memories) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2024 I64Store32.name" WasmBuilder.name(::I64Store32)::String = "i64.store32"
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2027 I64Store32.printTo" @unported function WasmBuilder.print_to(self::I64Store32, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2036 MemorySize" function MemorySize end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2038 MemorySize.deserialize" @unported function MemorySize_deserialize(d, memories::Memories) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2043 MemorySize.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::MemorySize)::Nothing
     WasmBuilder.write_byte(s, 0x3F)
@@ -2715,13 +2471,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2049 MemorySize.name" WasmBuilder.name(::MemorySize)::String = "memory.size"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2052 MemorySize.printTo" @unported function WasmBuilder.print_to(self::MemorySize, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2062 MemoryGrow" function MemoryGrow end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2064 MemoryGrow.deserialize" @unported function MemoryGrow_deserialize(d, memories::Memories) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2069 MemoryGrow.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::MemoryGrow)::Nothing
     WasmBuilder.write_byte(s, 0x40)
@@ -2731,13 +2483,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2075 MemoryGrow.name" WasmBuilder.name(::MemoryGrow)::String = "memory.grow"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2078 MemoryGrow.printTo" @unported function WasmBuilder.print_to(self::MemoryGrow, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2088 MemoryFill" function MemoryFill end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2090 MemoryFill.deserialize" @unported function MemoryFill_deserialize(d, memories::Memories) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2095 MemoryFill.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::MemoryFill)::Nothing
     WasmBuilder.write_byte(s, 0xFC)
@@ -2748,8 +2496,6 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2102 MemoryFill.name" WasmBuilder.name(::MemoryFill)::String = "memory.fill"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2105 MemoryFill.printTo" @unported function WasmBuilder.print_to(self::MemoryFill, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2115 RefNull.usedDefTypes" function WasmBuilder.used_def_types(i::RefNull)::Vector{DefType}
     type = i.heap_type
     type isa DefType ? DefType[type] : DefType[]
@@ -2758,8 +2504,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2120 RefNull" function RefNull end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2122 RefNull.deserialize" @unported function RefNull_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2127 RefNull.isConstant" WasmBuilder.is_constant(::RefNull)::Bool = true
 
@@ -2771,21 +2515,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2136 RefNull.name" WasmBuilder.name(::RefNull)::String = "ref.null"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2139 RefNull.printTo" @unported function WasmBuilder.print_to(self::RefNull, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2147 RefIsNull" function RefIsNull end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2149 RefIsNull.deserialize" @unported function RefIsNull_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2152 RefIsNull.name" WasmBuilder.name(::RefIsNull)::String = "ref.is_null"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2158 RefFunc" function RefFunc end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2160 RefFunc.deserialize" @unported function RefFunc_deserialize(d, functions::Functions) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2167 RefFunc.isConstant" WasmBuilder.is_constant(::RefFunc)::Bool = true
 
@@ -2797,21 +2535,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2176 RefFunc.name" WasmBuilder.name(::RefFunc)::String = "ref.func"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2179 RefFunc.printTo" @unported function WasmBuilder.print_to(self::RefFunc, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2187 RefAsNonNull" function RefAsNonNull end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2189 RefAsNonNull.deserialize" @unported function RefAsNonNull_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2192 RefAsNonNull.name" WasmBuilder.name(::RefAsNonNull)::String = "ref.as_non_null"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2198 BrOnNull" function BrOnNull end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2200 BrOnNull.deserialize" @unported function BrOnNull_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2203 BrOnNull.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrOnNull)::Nothing
     WasmBuilder.write_byte(s, 0xD5)
@@ -2821,21 +2553,15 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2209 BrOnNull.name" WasmBuilder.name(::BrOnNull)::String = "br_on_null"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2212 BrOnNull.printTo" @unported function WasmBuilder.print_to(self::BrOnNull, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2220 RefEq" function RefEq end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2222 RefEq.deserialize" @unported function RefEq_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2225 RefEq.name" WasmBuilder.name(::RefEq)::String = "ref.eq"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2231 BrOnNonNull" function BrOnNonNull end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2233 BrOnNonNull.deserialize" @unported function BrOnNonNull_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2237 BrOnNonNull.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrOnNonNull)::Nothing
     WasmBuilder.write_byte(s, 0xD6)
@@ -2845,15 +2571,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2243 BrOnNonNull.name" WasmBuilder.name(::BrOnNonNull)::String = "br_on_non_null"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2246 BrOnNonNull.printTo" @unported function WasmBuilder.print_to(self::BrOnNonNull, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2258 StructGet.usedDefTypes" WasmBuilder.used_def_types(i::StructGet)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2260 StructGet" function StructGet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2262 StructGet.deserialize" @unported function StructGet_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2270 StructGet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::StructGet)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -2865,15 +2587,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2278 StructGet.name" WasmBuilder.name(::StructGet)::String = "struct.get"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2281 StructGet.printTo" @unported function WasmBuilder.print_to(self::StructGet, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2293 StructGetS.usedDefTypes" WasmBuilder.used_def_types(i::StructGetS)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2295 StructGetS" function StructGetS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2297 StructGetS.deserialize" @unported function StructGetS_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2305 StructGetS.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::StructGetS)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -2885,15 +2603,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2313 StructGetS.name" WasmBuilder.name(::StructGetS)::String = "struct.get_s"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2316 StructGetS.printTo" @unported function WasmBuilder.print_to(self::StructGetS, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2328 StructGetU.usedDefTypes" WasmBuilder.used_def_types(i::StructGetU)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2330 StructGetU" function StructGetU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2332 StructGetU.deserialize" @unported function StructGetU_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2340 StructGetU.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::StructGetU)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -2905,15 +2619,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2348 StructGetU.name" WasmBuilder.name(::StructGetU)::String = "struct.get_u"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2351 StructGetU.printTo" @unported function WasmBuilder.print_to(self::StructGetU, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2363 StructSet.usedDefTypes" WasmBuilder.used_def_types(i::StructSet)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2365 StructSet" function StructSet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2367 StructSet.deserialize" @unported function StructSet_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2375 StructSet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::StructSet)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -2925,15 +2635,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2383 StructSet.name" WasmBuilder.name(::StructSet)::String = "struct.set"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2386 StructSet.printTo" @unported function WasmBuilder.print_to(self::StructSet, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2397 StructNew.usedDefTypes" WasmBuilder.used_def_types(i::StructNew)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2399 StructNew" function StructNew end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2401 StructNew.deserialize" @unported function StructNew_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2406 StructNew.isConstant" WasmBuilder.is_constant(::StructNew)::Bool = true
 
@@ -2946,15 +2652,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2416 StructNew.name" WasmBuilder.name(::StructNew)::String = "struct.new"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2419 StructNew.printTo" @unported function WasmBuilder.print_to(self::StructNew, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2430 StructNewDefault.usedDefTypes" WasmBuilder.used_def_types(i::StructNewDefault)::Vector{DefType} = DefType[i.struct_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2432 StructNewDefault" function StructNewDefault end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2434 StructNewDefault.deserialize" @unported function StructNewDefault_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2439 StructNewDefault.isConstant" WasmBuilder.is_constant(::StructNewDefault)::Bool = true
 
@@ -2967,15 +2669,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2449 StructNewDefault.name" WasmBuilder.name(::StructNewDefault)::String = "struct.new_default"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2452 StructNewDefault.printTo" @unported function WasmBuilder.print_to(self::StructNewDefault, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2463 ArrayGet.usedDefTypes" WasmBuilder.used_def_types(i::ArrayGet)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2465 ArrayGet" function ArrayGet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2467 ArrayGet.deserialize" @unported function ArrayGet_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2472 ArrayGet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayGet)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -2986,15 +2684,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2479 ArrayGet.name" WasmBuilder.name(::ArrayGet)::String = "array.get"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2482 ArrayGet.printTo" @unported function WasmBuilder.print_to(self::ArrayGet, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2493 ArrayGetS.usedDefTypes" WasmBuilder.used_def_types(i::ArrayGetS)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2495 ArrayGetS" function ArrayGetS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2497 ArrayGetS.deserialize" @unported function ArrayGetS_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2502 ArrayGetS.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayGetS)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3005,15 +2699,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2509 ArrayGetS.name" WasmBuilder.name(::ArrayGetS)::String = "array.get_s"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2512 ArrayGetS.printTo" @unported function WasmBuilder.print_to(self::ArrayGetS, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2523 ArrayGetU.usedDefTypes" WasmBuilder.used_def_types(i::ArrayGetU)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2525 ArrayGetU" function ArrayGetU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2527 ArrayGetU.deserialize" @unported function ArrayGetU_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2532 ArrayGetU.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayGetU)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3024,15 +2714,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2539 ArrayGetU.name" WasmBuilder.name(::ArrayGetU)::String = "array.get_u"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2542 ArrayGetU.printTo" @unported function WasmBuilder.print_to(self::ArrayGetU, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2553 ArraySet.usedDefTypes" WasmBuilder.used_def_types(i::ArraySet)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2555 ArraySet" function ArraySet end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2557 ArraySet.deserialize" @unported function ArraySet_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2562 ArraySet.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArraySet)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3043,13 +2729,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2569 ArraySet.name" WasmBuilder.name(::ArraySet)::String = "array.set"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2572 ArraySet.printTo" @unported function WasmBuilder.print_to(self::ArraySet, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2580 ArrayLen" function ArrayLen end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2582 ArrayLen.deserialize" @unported function ArrayLen_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2585 ArrayLen.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayLen)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3065,8 +2747,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2601 ArrayNewFixed" function ArrayNewFixed end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2603 ArrayNewFixed.deserialize" @unported function ArrayNewFixed_deserialize(d, types::Types) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2611 ArrayNewFixed.isConstant" WasmBuilder.is_constant(::ArrayNewFixed)::Bool = true
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2614 ArrayNewFixed.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayNewFixed)::Nothing
@@ -3079,15 +2759,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2622 ArrayNewFixed.name" WasmBuilder.name(::ArrayNewFixed)::String = "array.new_fixed"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2625 ArrayNewFixed.printTo" @unported function WasmBuilder.print_to(self::ArrayNewFixed, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2637 ArrayNew.usedDefTypes" WasmBuilder.used_def_types(i::ArrayNew)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2639 ArrayNew" function ArrayNew end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2641 ArrayNew.deserialize" @unported function ArrayNew_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2646 ArrayNew.isConstant" WasmBuilder.is_constant(::ArrayNew)::Bool = true
 
@@ -3100,15 +2776,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2656 ArrayNew.name" WasmBuilder.name(::ArrayNew)::String = "array.new"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2659 ArrayNew.printTo" @unported function WasmBuilder.print_to(self::ArrayNew, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2670 ArrayNewDefault.usedDefTypes" WasmBuilder.used_def_types(i::ArrayNewDefault)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2672 ArrayNewDefault" function ArrayNewDefault end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2674 ArrayNewDefault.deserialize" @unported function ArrayNewDefault_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2679 ArrayNewDefault.isConstant" WasmBuilder.is_constant(::ArrayNewDefault)::Bool = true
 
@@ -3121,15 +2793,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2689 ArrayNewDefault.name" WasmBuilder.name(::ArrayNewDefault)::String = "array.new_default"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2692 ArrayNewDefault.printTo" @unported function WasmBuilder.print_to(self::ArrayNewDefault, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2704 ArrayNewData.usedDefTypes" WasmBuilder.used_def_types(i::ArrayNewData)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2706 ArrayNewData" function ArrayNewData end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2708 ArrayNewData.deserialize" @unported function ArrayNewData_deserialize(d, types::Types, data_segments::DataSegments) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2720 ArrayNewData.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayNewData)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3141,15 +2809,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2728 ArrayNewData.name" WasmBuilder.name(::ArrayNewData)::String = "array.new_data"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2731 ArrayNewData.printTo" @unported function WasmBuilder.print_to(self::ArrayNewData, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2744 ArrayCopy.usedDefTypes" WasmBuilder.used_def_types(i::ArrayCopy)::Vector{DefType} = DefType[i.dest_array_type, i.source_array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2746 ArrayCopy" function ArrayCopy end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2748 ArrayCopy.deserialize" @unported function ArrayCopy_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2756 ArrayCopy.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayCopy)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3161,15 +2825,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2764 ArrayCopy.name" WasmBuilder.name(::ArrayCopy)::String = "array.copy"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2767 ArrayCopy.printTo" @unported function WasmBuilder.print_to(self::ArrayCopy, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2780 ArrayFill.usedDefTypes" WasmBuilder.used_def_types(i::ArrayFill)::Vector{DefType} = DefType[i.array_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2782 ArrayFill" function ArrayFill end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2784 ArrayFill.deserialize" @unported function ArrayFill_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2789 ArrayFill.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ArrayFill)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3180,13 +2840,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2796 ArrayFill.name" WasmBuilder.name(::ArrayFill)::String = "array.fill"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2799 ArrayFill.printTo" @unported function WasmBuilder.print_to(self::ArrayFill, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2807 I31New" function I31New end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2809 I31New.deserialize" @unported function I31New_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2812 I31New.isConstant" WasmBuilder.is_constant(::I31New)::Bool = true
 
@@ -3202,8 +2858,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2825 I31GetS" function I31GetS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2827 I31GetS.deserialize" @unported function I31GetS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2830 I31GetS.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::I31GetS)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
     WasmBuilder.write_byte(s, 0x1D)
@@ -3215,8 +2869,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2840 I31GetU" function I31GetU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2842 I31GetU.deserialize" @unported function I31GetU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2845 I31GetU.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::I31GetU)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3230,8 +2882,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2857 RefTest" function RefTest end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2859 RefTest.deserialize" @unported function RefTest_deserialize(d, types::Types, nullable::Bool) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2866 RefTest.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::RefTest)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
     WasmBuilder.write_byte(s, i.target_type.nullable ? 0x15 : 0x14)
@@ -3241,15 +2891,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2873 RefTest.name" WasmBuilder.name(::RefTest)::String = "ref.test"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2876 RefTest.printTo" @unported function WasmBuilder.print_to(self::RefTest, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2887 RefCast.usedValueTypes" WasmBuilder.used_value_types(i::RefCast)::Vector{ValueType} = ValueType[i.target_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2889 RefCast" function RefCast end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2891 RefCast.deserialize" @unported function RefCast_deserialize(d, types::Types, nullable::Bool) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2898 RefCast.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::RefCast)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3260,15 +2906,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2905 RefCast.name" WasmBuilder.name(::RefCast)::String = "ref.cast"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2908 RefCast.printTo" @unported function WasmBuilder.print_to(self::RefCast, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2921 BrOnCast.usedValueTypes" WasmBuilder.used_value_types(i::BrOnCast)::Vector{ValueType} = ValueType[i.input_type, i.target_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2923 BrOnCast" function BrOnCast end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2925 BrOnCast.deserialize" @unported function BrOnCast_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2936 BrOnCast.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrOnCast)::Nothing
     flags = (i.input_type.nullable ? 0x01 : 0x00) | (i.target_type.nullable ? 0x02 : 0x00)
@@ -3282,15 +2924,11 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2949 BrOnCast.name" WasmBuilder.name(::BrOnCast)::String = "br_on_cast"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:2952 BrOnCast.printTo" @unported function WasmBuilder.print_to(self::BrOnCast, p) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:2969 BrOnCastFail.usedValueTypes" WasmBuilder.used_value_types(i::BrOnCastFail)::Vector{ValueType} = ValueType[i.input_type, i.target_type]
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:2971 BrOnCastFail" function BrOnCastFail end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:2973 BrOnCastFail.deserialize" @unported function BrOnCastFail_deserialize(d, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2986 BrOnCastFail.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BrOnCastFail)::Nothing
     flags = (i.input_type.nullable ? 0x01 : 0x00) | (i.target_type.nullable ? 0x02 : 0x00)
@@ -3304,13 +2942,9 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:2999 BrOnCastFail.name" WasmBuilder.name(::BrOnCastFail)::String = "br_on_cast_fail"
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3002 BrOnCastFail.printTo" @unported function WasmBuilder.print_to(self::BrOnCastFail, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3014 ExternInternalize" function ExternInternalize end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3016 ExternInternalize.deserialize" @unported function ExternInternalize_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3021 ExternInternalize.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ExternInternalize)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
@@ -3326,8 +2960,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3034 ExternExternalize" function ExternExternalize end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3036 ExternExternalize.deserialize" @unported function ExternExternalize_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3041 ExternExternalize.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::ExternExternalize)::Nothing
     WasmBuilder.write_byte(s, 0xFB)
     WasmBuilder.write_byte(s, 0x1B)
@@ -3341,8 +2973,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3056 I32Const" function I32Const end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3058 I32Const.deserialize" @unported function I32Const_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3063 I32Const.isConstant" WasmBuilder.is_constant(::I32Const)::Bool = true
 
@@ -3358,8 +2988,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3078 I64Const" function I64Const end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3080 I64Const.deserialize" @unported function I64Const_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3085 I64Const.isConstant" WasmBuilder.is_constant(::I64Const)::Bool = true
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3088 I64Const.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::I64Const)::Nothing
@@ -3373,8 +3001,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3100 F32Const" function F32Const end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3102 F32Const.deserialize" @unported function F32Const_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3107 F32Const.isConstant" WasmBuilder.is_constant(::F32Const)::Bool = true
 
@@ -3390,8 +3016,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3122 F64Const" function F64Const end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3124 F64Const.deserialize" @unported function F64Const_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3129 F64Const.isConstant" WasmBuilder.is_constant(::F64Const)::Bool = true
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3132 F64Const.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::F64Const)::Nothing
@@ -3405,8 +3029,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3144 V128Const" function V128Const end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3146 V128Const.deserialize" @unported function V128Const_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3151 V128Const.isConstant" WasmBuilder.is_constant(::V128Const)::Bool = true
 
@@ -3423,15 +3045,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3166 I32Eqz" function I32Eqz end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3168 I32Eqz.deserialize" @unported function I32Eqz_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3171 I32Eqz.name" WasmBuilder.name(::I32Eqz)::String = "i32.eqz"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3175 I32Eq" function I32Eq end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3177 I32Eq.deserialize" @unported function I32Eq_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3180 I32Eq.name" WasmBuilder.name(::I32Eq)::String = "i32.eq"
 
@@ -3439,15 +3057,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3184 I32Ne" function I32Ne end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3186 I32Ne.deserialize" @unported function I32Ne_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3189 I32Ne.name" WasmBuilder.name(::I32Ne)::String = "i32.ne"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3193 I32LtS" function I32LtS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3195 I32LtS.deserialize" @unported function I32LtS_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3198 I32LtS.name" WasmBuilder.name(::I32LtS)::String = "i32.lt_s"
 
@@ -3455,15 +3069,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3202 I32LtU" function I32LtU end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3204 I32LtU.deserialize" @unported function I32LtU_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3207 I32LtU.name" WasmBuilder.name(::I32LtU)::String = "i32.lt_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3211 I32GtS" function I32GtS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3213 I32GtS.deserialize" @unported function I32GtS_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3216 I32GtS.name" WasmBuilder.name(::I32GtS)::String = "i32.gt_s"
 
@@ -3471,15 +3081,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3220 I32GtU" function I32GtU end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3222 I32GtU.deserialize" @unported function I32GtU_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3225 I32GtU.name" WasmBuilder.name(::I32GtU)::String = "i32.gt_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3229 I32LeS" function I32LeS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3231 I32LeS.deserialize" @unported function I32LeS_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3234 I32LeS.name" WasmBuilder.name(::I32LeS)::String = "i32.le_s"
 
@@ -3487,15 +3093,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3238 I32LeU" function I32LeU end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3240 I32LeU.deserialize" @unported function I32LeU_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3243 I32LeU.name" WasmBuilder.name(::I32LeU)::String = "i32.le_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3247 I32GeS" function I32GeS end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3249 I32GeS.deserialize" @unported function I32GeS_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3252 I32GeS.name" WasmBuilder.name(::I32GeS)::String = "i32.ge_s"
 
@@ -3503,15 +3105,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3256 I32GeU" function I32GeU end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3258 I32GeU.deserialize" @unported function I32GeU_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3261 I32GeU.name" WasmBuilder.name(::I32GeU)::String = "i32.ge_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3265 I64Eqz" function I64Eqz end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3267 I64Eqz.deserialize" @unported function I64Eqz_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3270 I64Eqz.name" WasmBuilder.name(::I64Eqz)::String = "i64.eqz"
 
@@ -3519,15 +3117,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3274 I64Eq" function I64Eq end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3276 I64Eq.deserialize" @unported function I64Eq_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3279 I64Eq.name" WasmBuilder.name(::I64Eq)::String = "i64.eq"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3283 I64Ne" function I64Ne end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3285 I64Ne.deserialize" @unported function I64Ne_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3288 I64Ne.name" WasmBuilder.name(::I64Ne)::String = "i64.ne"
 
@@ -3535,15 +3129,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3292 I64LtS" function I64LtS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3294 I64LtS.deserialize" @unported function I64LtS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3297 I64LtS.name" WasmBuilder.name(::I64LtS)::String = "i64.lt_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3301 I64LtU" function I64LtU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3303 I64LtU.deserialize" @unported function I64LtU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3306 I64LtU.name" WasmBuilder.name(::I64LtU)::String = "i64.lt_u"
 
@@ -3551,15 +3141,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3310 I64GtS" function I64GtS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3312 I64GtS.deserialize" @unported function I64GtS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3315 I64GtS.name" WasmBuilder.name(::I64GtS)::String = "i64.gt_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3319 I64GtU" function I64GtU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3321 I64GtU.deserialize" @unported function I64GtU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3324 I64GtU.name" WasmBuilder.name(::I64GtU)::String = "i64.gt_u"
 
@@ -3567,15 +3153,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3328 I64LeS" function I64LeS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3330 I64LeS.deserialize" @unported function I64LeS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3333 I64LeS.name" WasmBuilder.name(::I64LeS)::String = "i64.le_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3337 I64LeU" function I64LeU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3339 I64LeU.deserialize" @unported function I64LeU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3342 I64LeU.name" WasmBuilder.name(::I64LeU)::String = "i64.le_u"
 
@@ -3583,15 +3165,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3346 I64GeS" function I64GeS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3348 I64GeS.deserialize" @unported function I64GeS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3351 I64GeS.name" WasmBuilder.name(::I64GeS)::String = "i64.ge_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3355 I64GeU" function I64GeU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3357 I64GeU.deserialize" @unported function I64GeU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3360 I64GeU.name" WasmBuilder.name(::I64GeU)::String = "i64.ge_u"
 
@@ -3599,15 +3177,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3364 F32Eq" function F32Eq end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3366 F32Eq.deserialize" @unported function F32Eq_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3369 F32Eq.name" WasmBuilder.name(::F32Eq)::String = "f32.eq"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3373 F32Ne" function F32Ne end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3375 F32Ne.deserialize" @unported function F32Ne_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3378 F32Ne.name" WasmBuilder.name(::F32Ne)::String = "f32.ne"
 
@@ -3615,15 +3189,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3382 F32Lt" function F32Lt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3384 F32Lt.deserialize" @unported function F32Lt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3387 F32Lt.name" WasmBuilder.name(::F32Lt)::String = "f32.lt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3391 F32Gt" function F32Gt end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3393 F32Gt.deserialize" @unported function F32Gt_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3396 F32Gt.name" WasmBuilder.name(::F32Gt)::String = "f32.gt"
 
@@ -3631,15 +3201,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3400 F32Le" function F32Le end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3402 F32Le.deserialize" @unported function F32Le_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3405 F32Le.name" WasmBuilder.name(::F32Le)::String = "f32.le"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3409 F32Ge" function F32Ge end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3411 F32Ge.deserialize" @unported function F32Ge_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3414 F32Ge.name" WasmBuilder.name(::F32Ge)::String = "f32.ge"
 
@@ -3647,15 +3213,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3418 F64Eq" function F64Eq end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3420 F64Eq.deserialize" @unported function F64Eq_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3423 F64Eq.name" WasmBuilder.name(::F64Eq)::String = "f64.eq"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3427 F64Ne" function F64Ne end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3429 F64Ne.deserialize" @unported function F64Ne_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3432 F64Ne.name" WasmBuilder.name(::F64Ne)::String = "f64.ne"
 
@@ -3663,15 +3225,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3436 F64Lt" function F64Lt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3438 F64Lt.deserialize" @unported function F64Lt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3441 F64Lt.name" WasmBuilder.name(::F64Lt)::String = "f64.lt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3445 F64Gt" function F64Gt end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3447 F64Gt.deserialize" @unported function F64Gt_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3450 F64Gt.name" WasmBuilder.name(::F64Gt)::String = "f64.gt"
 
@@ -3679,15 +3237,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3454 F64Le" function F64Le end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3456 F64Le.deserialize" @unported function F64Le_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3459 F64Le.name" WasmBuilder.name(::F64Le)::String = "f64.le"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3463 F64Ge" function F64Ge end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3465 F64Ge.deserialize" @unported function F64Ge_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3468 F64Ge.name" WasmBuilder.name(::F64Ge)::String = "f64.ge"
 
@@ -3695,15 +3249,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3472 I32Clz" function I32Clz end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3474 I32Clz.deserialize" @unported function I32Clz_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3477 I32Clz.name" WasmBuilder.name(::I32Clz)::String = "i32.clz"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3481 I32Ctz" function I32Ctz end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3483 I32Ctz.deserialize" @unported function I32Ctz_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3486 I32Ctz.name" WasmBuilder.name(::I32Ctz)::String = "i32.ctz"
 
@@ -3711,15 +3261,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3490 I32Popcnt" function I32Popcnt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3492 I32Popcnt.deserialize" @unported function I32Popcnt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3495 I32Popcnt.name" WasmBuilder.name(::I32Popcnt)::String = "i32.popcnt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3499 I32Add" function I32Add end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3501 I32Add.deserialize" @unported function I32Add_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3504 I32Add.name" WasmBuilder.name(::I32Add)::String = "i32.add"
 
@@ -3727,15 +3273,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3508 I32Sub" function I32Sub end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3510 I32Sub.deserialize" @unported function I32Sub_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3513 I32Sub.name" WasmBuilder.name(::I32Sub)::String = "i32.sub"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3517 I32Mul" function I32Mul end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3519 I32Mul.deserialize" @unported function I32Mul_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3522 I32Mul.name" WasmBuilder.name(::I32Mul)::String = "i32.mul"
 
@@ -3743,15 +3285,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3526 I32DivS" function I32DivS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3528 I32DivS.deserialize" @unported function I32DivS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3531 I32DivS.name" WasmBuilder.name(::I32DivS)::String = "i32.div_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3535 I32DivU" function I32DivU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3537 I32DivU.deserialize" @unported function I32DivU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3540 I32DivU.name" WasmBuilder.name(::I32DivU)::String = "i32.div_u"
 
@@ -3759,15 +3297,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3544 I32RemS" function I32RemS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3546 I32RemS.deserialize" @unported function I32RemS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3549 I32RemS.name" WasmBuilder.name(::I32RemS)::String = "i32.rem_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3553 I32RemU" function I32RemU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3555 I32RemU.deserialize" @unported function I32RemU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3558 I32RemU.name" WasmBuilder.name(::I32RemU)::String = "i32.rem_u"
 
@@ -3775,15 +3309,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3562 I32And" function I32And end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3564 I32And.deserialize" @unported function I32And_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3567 I32And.name" WasmBuilder.name(::I32And)::String = "i32.and"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3571 I32Or" function I32Or end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3573 I32Or.deserialize" @unported function I32Or_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3576 I32Or.name" WasmBuilder.name(::I32Or)::String = "i32.or"
 
@@ -3791,15 +3321,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3580 I32Xor" function I32Xor end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3582 I32Xor.deserialize" @unported function I32Xor_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3585 I32Xor.name" WasmBuilder.name(::I32Xor)::String = "i32.xor"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3589 I32Shl" function I32Shl end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3591 I32Shl.deserialize" @unported function I32Shl_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3594 I32Shl.name" WasmBuilder.name(::I32Shl)::String = "i32.shl"
 
@@ -3807,15 +3333,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3598 I32ShrS" function I32ShrS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3600 I32ShrS.deserialize" @unported function I32ShrS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3603 I32ShrS.name" WasmBuilder.name(::I32ShrS)::String = "i32.shr_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3607 I32ShrU" function I32ShrU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3609 I32ShrU.deserialize" @unported function I32ShrU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3612 I32ShrU.name" WasmBuilder.name(::I32ShrU)::String = "i32.shr_u"
 
@@ -3823,15 +3345,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3616 I32Rotl" function I32Rotl end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3618 I32Rotl.deserialize" @unported function I32Rotl_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3621 I32Rotl.name" WasmBuilder.name(::I32Rotl)::String = "i32.rotl"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3625 I32Rotr" function I32Rotr end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3627 I32Rotr.deserialize" @unported function I32Rotr_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3630 I32Rotr.name" WasmBuilder.name(::I32Rotr)::String = "i32.rotr"
 
@@ -3839,15 +3357,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3634 I64Clz" function I64Clz end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3636 I64Clz.deserialize" @unported function I64Clz_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3639 I64Clz.name" WasmBuilder.name(::I64Clz)::String = "i64.clz"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3643 I64Ctz" function I64Ctz end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3645 I64Ctz.deserialize" @unported function I64Ctz_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3648 I64Ctz.name" WasmBuilder.name(::I64Ctz)::String = "i64.ctz"
 
@@ -3855,15 +3369,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3652 I64Popcnt" function I64Popcnt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3654 I64Popcnt.deserialize" @unported function I64Popcnt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3657 I64Popcnt.name" WasmBuilder.name(::I64Popcnt)::String = "i64.popcnt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3661 I64Add" function I64Add end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3663 I64Add.deserialize" @unported function I64Add_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3666 I64Add.name" WasmBuilder.name(::I64Add)::String = "i64.add"
 
@@ -3871,15 +3381,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3670 I64Sub" function I64Sub end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3672 I64Sub.deserialize" @unported function I64Sub_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3675 I64Sub.name" WasmBuilder.name(::I64Sub)::String = "i64.sub"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3679 I64Mul" function I64Mul end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3681 I64Mul.deserialize" @unported function I64Mul_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3684 I64Mul.name" WasmBuilder.name(::I64Mul)::String = "i64.mul"
 
@@ -3887,15 +3393,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3688 I64DivS" function I64DivS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3690 I64DivS.deserialize" @unported function I64DivS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3693 I64DivS.name" WasmBuilder.name(::I64DivS)::String = "i64.div_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3697 I64DivU" function I64DivU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3699 I64DivU.deserialize" @unported function I64DivU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3702 I64DivU.name" WasmBuilder.name(::I64DivU)::String = "i64.div_u"
 
@@ -3903,15 +3405,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3706 I64RemS" function I64RemS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3708 I64RemS.deserialize" @unported function I64RemS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3711 I64RemS.name" WasmBuilder.name(::I64RemS)::String = "i64.rem_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3715 I64RemU" function I64RemU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3717 I64RemU.deserialize" @unported function I64RemU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3720 I64RemU.name" WasmBuilder.name(::I64RemU)::String = "i64.rem_u"
 
@@ -3919,15 +3417,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3724 I64And" function I64And end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3726 I64And.deserialize" @unported function I64And_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3729 I64And.name" WasmBuilder.name(::I64And)::String = "i64.and"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3733 I64Or" function I64Or end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3735 I64Or.deserialize" @unported function I64Or_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3738 I64Or.name" WasmBuilder.name(::I64Or)::String = "i64.or"
 
@@ -3935,15 +3429,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3742 I64Xor" function I64Xor end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3744 I64Xor.deserialize" @unported function I64Xor_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3747 I64Xor.name" WasmBuilder.name(::I64Xor)::String = "i64.xor"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3751 I64Shl" function I64Shl end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3753 I64Shl.deserialize" @unported function I64Shl_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3756 I64Shl.name" WasmBuilder.name(::I64Shl)::String = "i64.shl"
 
@@ -3951,15 +3441,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3760 I64ShrS" function I64ShrS end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3762 I64ShrS.deserialize" @unported function I64ShrS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3765 I64ShrS.name" WasmBuilder.name(::I64ShrS)::String = "i64.shr_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3769 I64ShrU" function I64ShrU end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3771 I64ShrU.deserialize" @unported function I64ShrU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3774 I64ShrU.name" WasmBuilder.name(::I64ShrU)::String = "i64.shr_u"
 
@@ -3967,15 +3453,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3778 I64Rotl" function I64Rotl end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3780 I64Rotl.deserialize" @unported function I64Rotl_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3783 I64Rotl.name" WasmBuilder.name(::I64Rotl)::String = "i64.rotl"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3787 I64Rotr" function I64Rotr end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3789 I64Rotr.deserialize" @unported function I64Rotr_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3792 I64Rotr.name" WasmBuilder.name(::I64Rotr)::String = "i64.rotr"
 
@@ -3983,15 +3465,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3796 F32Abs" function F32Abs end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3798 F32Abs.deserialize" @unported function F32Abs_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3801 F32Abs.name" WasmBuilder.name(::F32Abs)::String = "f32.abs"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3805 F32Neg" function F32Neg end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3807 F32Neg.deserialize" @unported function F32Neg_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3810 F32Neg.name" WasmBuilder.name(::F32Neg)::String = "f32.neg"
 
@@ -3999,15 +3477,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3814 F32Ceil" function F32Ceil end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3816 F32Ceil.deserialize" @unported function F32Ceil_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3819 F32Ceil.name" WasmBuilder.name(::F32Ceil)::String = "f32.ceil"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3823 F32Floor" function F32Floor end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3825 F32Floor.deserialize" @unported function F32Floor_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3828 F32Floor.name" WasmBuilder.name(::F32Floor)::String = "f32.floor"
 
@@ -4015,15 +3489,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3832 F32Trunc" function F32Trunc end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3834 F32Trunc.deserialize" @unported function F32Trunc_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3837 F32Trunc.name" WasmBuilder.name(::F32Trunc)::String = "f32.trunc"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3841 F32Nearest" function F32Nearest end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3843 F32Nearest.deserialize" @unported function F32Nearest_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3846 F32Nearest.name" WasmBuilder.name(::F32Nearest)::String = "f32.nearest"
 
@@ -4031,15 +3501,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3850 F32Sqrt" function F32Sqrt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3852 F32Sqrt.deserialize" @unported function F32Sqrt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3855 F32Sqrt.name" WasmBuilder.name(::F32Sqrt)::String = "f32.sqrt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3859 F32Add" function F32Add end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3861 F32Add.deserialize" @unported function F32Add_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3864 F32Add.name" WasmBuilder.name(::F32Add)::String = "f32.add"
 
@@ -4047,15 +3513,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3868 F32Sub" function F32Sub end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3870 F32Sub.deserialize" @unported function F32Sub_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3873 F32Sub.name" WasmBuilder.name(::F32Sub)::String = "f32.sub"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3877 F32Mul" function F32Mul end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3879 F32Mul.deserialize" @unported function F32Mul_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3882 F32Mul.name" WasmBuilder.name(::F32Mul)::String = "f32.mul"
 
@@ -4063,15 +3525,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3886 F32Div" function F32Div end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3888 F32Div.deserialize" @unported function F32Div_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3891 F32Div.name" WasmBuilder.name(::F32Div)::String = "f32.div"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3895 F32Min" function F32Min end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3897 F32Min.deserialize" @unported function F32Min_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3900 F32Min.name" WasmBuilder.name(::F32Min)::String = "f32.min"
 
@@ -4079,15 +3537,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3904 F32Max" function F32Max end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3906 F32Max.deserialize" @unported function F32Max_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3909 F32Max.name" WasmBuilder.name(::F32Max)::String = "f32.max"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3913 F32Copysign" function F32Copysign end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3915 F32Copysign.deserialize" @unported function F32Copysign_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3918 F32Copysign.name" WasmBuilder.name(::F32Copysign)::String = "f32.copysign"
 
@@ -4095,15 +3549,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3922 F64Abs" function F64Abs end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3924 F64Abs.deserialize" @unported function F64Abs_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3927 F64Abs.name" WasmBuilder.name(::F64Abs)::String = "f64.abs"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3931 F64Neg" function F64Neg end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3933 F64Neg.deserialize" @unported function F64Neg_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3936 F64Neg.name" WasmBuilder.name(::F64Neg)::String = "f64.neg"
 
@@ -4111,15 +3561,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3940 F64Ceil" function F64Ceil end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3942 F64Ceil.deserialize" @unported function F64Ceil_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3945 F64Ceil.name" WasmBuilder.name(::F64Ceil)::String = "f64.ceil"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3949 F64Floor" function F64Floor end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3951 F64Floor.deserialize" @unported function F64Floor_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3954 F64Floor.name" WasmBuilder.name(::F64Floor)::String = "f64.floor"
 
@@ -4127,15 +3573,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3958 F64Trunc" function F64Trunc end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3960 F64Trunc.deserialize" @unported function F64Trunc_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3963 F64Trunc.name" WasmBuilder.name(::F64Trunc)::String = "f64.trunc"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3967 F64Nearest" function F64Nearest end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3969 F64Nearest.deserialize" @unported function F64Nearest_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3972 F64Nearest.name" WasmBuilder.name(::F64Nearest)::String = "f64.nearest"
 
@@ -4143,15 +3585,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3976 F64Sqrt" function F64Sqrt end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3978 F64Sqrt.deserialize" @unported function F64Sqrt_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3981 F64Sqrt.name" WasmBuilder.name(::F64Sqrt)::String = "f64.sqrt"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3985 F64Add" function F64Add end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:3987 F64Add.deserialize" @unported function F64Add_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:3990 F64Add.name" WasmBuilder.name(::F64Add)::String = "f64.add"
 
@@ -4159,15 +3597,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:3994 F64Sub" function F64Sub end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:3996 F64Sub.deserialize" @unported function F64Sub_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:3999 F64Sub.name" WasmBuilder.name(::F64Sub)::String = "f64.sub"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4003 F64Mul" function F64Mul end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4005 F64Mul.deserialize" @unported function F64Mul_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4008 F64Mul.name" WasmBuilder.name(::F64Mul)::String = "f64.mul"
 
@@ -4175,15 +3609,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4012 F64Div" function F64Div end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4014 F64Div.deserialize" @unported function F64Div_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4017 F64Div.name" WasmBuilder.name(::F64Div)::String = "f64.div"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4021 F64Min" function F64Min end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4023 F64Min.deserialize" @unported function F64Min_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4026 F64Min.name" WasmBuilder.name(::F64Min)::String = "f64.min"
 
@@ -4191,15 +3621,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4030 F64Max" function F64Max end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4032 F64Max.deserialize" @unported function F64Max_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4035 F64Max.name" WasmBuilder.name(::F64Max)::String = "f64.max"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4039 F64Copysign" function F64Copysign end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4041 F64Copysign.deserialize" @unported function F64Copysign_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4044 F64Copysign.name" WasmBuilder.name(::F64Copysign)::String = "f64.copysign"
 
@@ -4207,15 +3633,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4048 I32WrapI64" function I32WrapI64 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4050 I32WrapI64.deserialize" @unported function I32WrapI64_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4053 I32WrapI64.name" WasmBuilder.name(::I32WrapI64)::String = "i32.wrap_i64"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4057 I32TruncF32S" function I32TruncF32S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4059 I32TruncF32S.deserialize" @unported function I32TruncF32S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4062 I32TruncF32S.name" WasmBuilder.name(::I32TruncF32S)::String = "i32.trunc_f32_s"
 
@@ -4223,15 +3645,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4066 I32TruncF32U" function I32TruncF32U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4068 I32TruncF32U.deserialize" @unported function I32TruncF32U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4071 I32TruncF32U.name" WasmBuilder.name(::I32TruncF32U)::String = "i32.trunc_f32_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4075 I32TruncF64S" function I32TruncF64S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4077 I32TruncF64S.deserialize" @unported function I32TruncF64S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4080 I32TruncF64S.name" WasmBuilder.name(::I32TruncF64S)::String = "i32.trunc_f64_s"
 
@@ -4239,15 +3657,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4084 I32TruncF64U" function I32TruncF64U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4086 I32TruncF64U.deserialize" @unported function I32TruncF64U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4089 I32TruncF64U.name" WasmBuilder.name(::I32TruncF64U)::String = "i32.trunc_f64_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4093 I64ExtendI32S" function I64ExtendI32S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4095 I64ExtendI32S.deserialize" @unported function I64ExtendI32S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4098 I64ExtendI32S.name" WasmBuilder.name(::I64ExtendI32S)::String = "i64.extend_i32_s"
 
@@ -4255,15 +3669,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4102 I64ExtendI32U" function I64ExtendI32U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4104 I64ExtendI32U.deserialize" @unported function I64ExtendI32U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4107 I64ExtendI32U.name" WasmBuilder.name(::I64ExtendI32U)::String = "i64.extend_i32_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4111 I64TruncF32S" function I64TruncF32S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4113 I64TruncF32S.deserialize" @unported function I64TruncF32S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4116 I64TruncF32S.name" WasmBuilder.name(::I64TruncF32S)::String = "i64.trunc_f32_s"
 
@@ -4271,15 +3681,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4120 I64TruncF32U" function I64TruncF32U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4122 I64TruncF32U.deserialize" @unported function I64TruncF32U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4125 I64TruncF32U.name" WasmBuilder.name(::I64TruncF32U)::String = "i64.trunc_f32_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4129 I64TruncF64S" function I64TruncF64S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4131 I64TruncF64S.deserialize" @unported function I64TruncF64S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4134 I64TruncF64S.name" WasmBuilder.name(::I64TruncF64S)::String = "i64.trunc_f64_s"
 
@@ -4287,15 +3693,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4138 I64TruncF64U" function I64TruncF64U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4140 I64TruncF64U.deserialize" @unported function I64TruncF64U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4143 I64TruncF64U.name" WasmBuilder.name(::I64TruncF64U)::String = "i64.trunc_f64_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4147 F32ConvertI32S" function F32ConvertI32S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4149 F32ConvertI32S.deserialize" @unported function F32ConvertI32S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4152 F32ConvertI32S.name" WasmBuilder.name(::F32ConvertI32S)::String = "f32.convert_i32_s"
 
@@ -4303,15 +3705,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4156 F32ConvertI32U" function F32ConvertI32U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4158 F32ConvertI32U.deserialize" @unported function F32ConvertI32U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4161 F32ConvertI32U.name" WasmBuilder.name(::F32ConvertI32U)::String = "f32.convert_i32_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4165 F32ConvertI64S" function F32ConvertI64S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4167 F32ConvertI64S.deserialize" @unported function F32ConvertI64S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4170 F32ConvertI64S.name" WasmBuilder.name(::F32ConvertI64S)::String = "f32.convert_i64_s"
 
@@ -4319,15 +3717,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4174 F32ConvertI64U" function F32ConvertI64U end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4176 F32ConvertI64U.deserialize" @unported function F32ConvertI64U_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4179 F32ConvertI64U.name" WasmBuilder.name(::F32ConvertI64U)::String = "f32.convert_i64_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4183 F32DemoteF64" function F32DemoteF64 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4185 F32DemoteF64.deserialize" @unported function F32DemoteF64_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4188 F32DemoteF64.name" WasmBuilder.name(::F32DemoteF64)::String = "f32.demote_f64"
 
@@ -4335,15 +3729,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4192 F64ConvertI32S" function F64ConvertI32S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4194 F64ConvertI32S.deserialize" @unported function F64ConvertI32S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4197 F64ConvertI32S.name" WasmBuilder.name(::F64ConvertI32S)::String = "f64.convert_i32_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4201 F64ConvertI32U" function F64ConvertI32U end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4203 F64ConvertI32U.deserialize" @unported function F64ConvertI32U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4206 F64ConvertI32U.name" WasmBuilder.name(::F64ConvertI32U)::String = "f64.convert_i32_u"
 
@@ -4351,15 +3741,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4210 F64ConvertI64S" function F64ConvertI64S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4212 F64ConvertI64S.deserialize" @unported function F64ConvertI64S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4215 F64ConvertI64S.name" WasmBuilder.name(::F64ConvertI64S)::String = "f64.convert_i64_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4219 F64ConvertI64U" function F64ConvertI64U end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4221 F64ConvertI64U.deserialize" @unported function F64ConvertI64U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4224 F64ConvertI64U.name" WasmBuilder.name(::F64ConvertI64U)::String = "f64.convert_i64_u"
 
@@ -4367,15 +3753,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4228 F64PromoteF32" function F64PromoteF32 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4230 F64PromoteF32.deserialize" @unported function F64PromoteF32_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4233 F64PromoteF32.name" WasmBuilder.name(::F64PromoteF32)::String = "f64.promote_f32"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4237 I32ReinterpretF32" function I32ReinterpretF32 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4239 I32ReinterpretF32.deserialize" @unported function I32ReinterpretF32_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4243 I32ReinterpretF32.name" WasmBuilder.name(::I32ReinterpretF32)::String = "i32.reinterpret_f32"
 
@@ -4383,15 +3765,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4247 I64ReinterpretF64" function I64ReinterpretF64 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4249 I64ReinterpretF64.deserialize" @unported function I64ReinterpretF64_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4253 I64ReinterpretF64.name" WasmBuilder.name(::I64ReinterpretF64)::String = "i64.reinterpret_f64"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4257 F32ReinterpretI32" function F32ReinterpretI32 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4259 F32ReinterpretI32.deserialize" @unported function F32ReinterpretI32_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4263 F32ReinterpretI32.name" WasmBuilder.name(::F32ReinterpretI32)::String = "f32.reinterpret_i32"
 
@@ -4399,15 +3777,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4267 F64ReinterpretI64" function F64ReinterpretI64 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4269 F64ReinterpretI64.deserialize" @unported function F64ReinterpretI64_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4273 F64ReinterpretI64.name" WasmBuilder.name(::F64ReinterpretI64)::String = "f64.reinterpret_i64"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4277 I32Extend8S" function I32Extend8S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4279 I32Extend8S.deserialize" @unported function I32Extend8S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4282 I32Extend8S.name" WasmBuilder.name(::I32Extend8S)::String = "i32.extend8_s"
 
@@ -4415,15 +3789,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4286 I32Extend16S" function I32Extend16S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4288 I32Extend16S.deserialize" @unported function I32Extend16S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4291 I32Extend16S.name" WasmBuilder.name(::I32Extend16S)::String = "i32.extend16_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4295 I64Extend8S" function I64Extend8S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4297 I64Extend8S.deserialize" @unported function I64Extend8S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4300 I64Extend8S.name" WasmBuilder.name(::I64Extend8S)::String = "i64.extend8_s"
 
@@ -4431,15 +3801,11 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4304 I64Extend16S" function I64Extend16S end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4306 I64Extend16S.deserialize" @unported function I64Extend16S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4309 I64Extend16S.name" WasmBuilder.name(::I64Extend16S)::String = "i64.extend16_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4313 I64Extend32S" function I64Extend32S end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4315 I64Extend32S.deserialize" @unported function I64Extend32S_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4318 I64Extend32S.name" WasmBuilder.name(::I64Extend32S)::String = "i64.extend32_s"
 
@@ -4453,8 +3819,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4330 I32TruncSatF32S.deserialize" @unported function I32TruncSatF32S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4333 I32TruncSatF32S.name" WasmBuilder.name(::I32TruncSatF32S)::String = "i32.trunc_sat_f32_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4466,8 +3830,6 @@ end
     WasmBuilder.write_byte(s, 0x01)
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4345 I32TruncSatF32U.deserialize" @unported function I32TruncSatF32U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4348 I32TruncSatF32U.name" WasmBuilder.name(::I32TruncSatF32U)::String = "i32.trunc_sat_f32_u"
 
@@ -4481,8 +3843,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4360 I32TruncSatF64S.deserialize" @unported function I32TruncSatF64S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4363 I32TruncSatF64S.name" WasmBuilder.name(::I32TruncSatF64S)::String = "i32.trunc_sat_f64_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4494,8 +3854,6 @@ end
     WasmBuilder.write_byte(s, 0x03)
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4375 I32TruncSatF64U.deserialize" @unported function I32TruncSatF64U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4378 I32TruncSatF64U.name" WasmBuilder.name(::I32TruncSatF64U)::String = "i32.trunc_sat_f64_u"
 
@@ -4509,8 +3867,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4390 I64TruncSatF32S.deserialize" @unported function I64TruncSatF32S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4393 I64TruncSatF32S.name" WasmBuilder.name(::I64TruncSatF32S)::String = "i64.trunc_sat_f32_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4522,8 +3878,6 @@ end
     WasmBuilder.write_byte(s, 0x05)
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4405 I64TruncSatF32U.deserialize" @unported function I64TruncSatF32U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4408 I64TruncSatF32U.name" WasmBuilder.name(::I64TruncSatF32U)::String = "i64.trunc_sat_f32_u"
 
@@ -4537,8 +3891,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4420 I64TruncSatF64S.deserialize" @unported function I64TruncSatF64S_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4423 I64TruncSatF64S.name" WasmBuilder.name(::I64TruncSatF64S)::String = "i64.trunc_sat_f64_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4550,8 +3902,6 @@ end
     WasmBuilder.write_byte(s, 0x07)
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4435 I64TruncSatF64U.deserialize" @unported function I64TruncSatF64U_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4438 I64TruncSatF64U.name" WasmBuilder.name(::I64TruncSatF64U)::String = "i64.trunc_sat_f64_u"
 
@@ -4838,8 +4188,6 @@ end
     return nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4563 I8x16Shuffle.deserialize" @unported function I8x16Shuffle_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4567 I8x16Shuffle.name" WasmBuilder.name(::I8x16Shuffle)::String = "i8x16.shuffle"
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4570 I8x16Shuffle.toString" Base.show(io::IO, i::I8x16Shuffle) = print(io, WasmBuilder.name(i), " ", join(i.lanes, " "))
@@ -4855,8 +4203,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4585 I8x16ExtractLaneS.deserialize" @unported function I8x16ExtractLaneS_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4589 I8x16ExtractLaneS.name" WasmBuilder.name(::I8x16ExtractLaneS)::String = "i8x16.extract_lane_s"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4869,8 +4215,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4604 I8x16ExtractLaneU.deserialize" @unported function I8x16ExtractLaneU_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4608 I8x16ExtractLaneU.name" WasmBuilder.name(::I8x16ExtractLaneU)::String = "i8x16.extract_lane_u"
 
@@ -4885,8 +4229,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4623 I8x16ReplaceLane.deserialize" @unported function I8x16ReplaceLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4627 I8x16ReplaceLane.name" WasmBuilder.name(::I8x16ReplaceLane)::String = "i8x16.replace_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4899,8 +4241,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4642 I16x8ExtractLaneS.deserialize" @unported function I16x8ExtractLaneS_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4646 I16x8ExtractLaneS.name" WasmBuilder.name(::I16x8ExtractLaneS)::String = "i16x8.extract_lane_s"
 
@@ -4915,8 +4255,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4661 I16x8ExtractLaneU.deserialize" @unported function I16x8ExtractLaneU_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4665 I16x8ExtractLaneU.name" WasmBuilder.name(::I16x8ExtractLaneU)::String = "i16x8.extract_lane_u"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4929,8 +4267,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4680 I16x8ReplaceLane.deserialize" @unported function I16x8ReplaceLane_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4684 I16x8ReplaceLane.name" WasmBuilder.name(::I16x8ReplaceLane)::String = "i16x8.replace_lane"
 
@@ -4945,8 +4281,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4699 I32x4ExtractLane.deserialize" @unported function I32x4ExtractLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4703 I32x4ExtractLane.name" WasmBuilder.name(::I32x4ExtractLane)::String = "i32x4.extract_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4959,8 +4293,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4718 I32x4ReplaceLane.deserialize" @unported function I32x4ReplaceLane_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4722 I32x4ReplaceLane.name" WasmBuilder.name(::I32x4ReplaceLane)::String = "i32x4.replace_lane"
 
@@ -4975,8 +4307,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4737 I64x2ExtractLane.deserialize" @unported function I64x2ExtractLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4741 I64x2ExtractLane.name" WasmBuilder.name(::I64x2ExtractLane)::String = "i64x2.extract_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -4989,8 +4319,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4756 I64x2ReplaceLane.deserialize" @unported function I64x2ReplaceLane_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4760 I64x2ReplaceLane.name" WasmBuilder.name(::I64x2ReplaceLane)::String = "i64x2.replace_lane"
 
@@ -5005,8 +4333,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4775 F32x4ExtractLane.deserialize" @unported function F32x4ExtractLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4779 F32x4ExtractLane.name" WasmBuilder.name(::F32x4ExtractLane)::String = "f32x4.extract_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -5019,8 +4345,6 @@ end
     WasmBuilder.write_byte(s, UInt8(i.lane))
     nothing
 end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4794 F32x4ReplaceLane.deserialize" @unported function F32x4ReplaceLane_deserialize(d) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4798 F32x4ReplaceLane.name" WasmBuilder.name(::F32x4ReplaceLane)::String = "f32x4.replace_lane"
 
@@ -5035,8 +4359,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4813 F64x2ExtractLane.deserialize" @unported function F64x2ExtractLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4817 F64x2ExtractLane.name" WasmBuilder.name(::F64x2ExtractLane)::String = "f64x2.extract_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -5050,15 +4372,11 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4832 F64x2ReplaceLane.deserialize" @unported function F64x2ReplaceLane_deserialize(d) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4836 F64x2ReplaceLane.name" WasmBuilder.name(::F64x2ReplaceLane)::String = "f64x2.replace_lane"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4842 BeginNoEffectTryTable" function BeginNoEffectTryTable end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4844 BeginNoEffectTryTable.deserialize" @unported function BeginNoEffectTryTable_deserialize(d, tags::Tags) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4851 BeginNoEffectTryTable.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginNoEffectTryTable)::Nothing
     WasmBuilder.write_byte(s, 0x1F)
@@ -5078,8 +4396,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4871 BeginOneOutputTryTable" function BeginOneOutputTryTable end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:4873 BeginOneOutputTryTable.deserialize" @unported function BeginOneOutputTryTable_deserialize(d, tags::Tags, types::Types) end
-
 @parity "wasm_builder/lib/src/ir/instruction.dart:4884 BeginOneOutputTryTable.serialize" function WasmBuilder.serialize(s::WasmBuilder.Serializer, i::BeginOneOutputTryTable)::Nothing
     WasmBuilder.write_byte(s, 0x1F)
     write(s, i.type)
@@ -5095,8 +4411,6 @@ end
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/instruction.dart:4901 BeginFunctionTryTable" function BeginFunctionTryTable end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4903 BeginFunctionTryTable.deserialize" @unported function BeginFunctionTryTable_deserialize(d, tags::Tags, types::Types) end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:4914 BeginFunctionTryTable.usedDefTypes" WasmBuilder.used_def_types(i::BeginFunctionTryTable)::Vector{DefType} = DefType[i.type]
 
@@ -5118,8 +4432,6 @@ end
 
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
 @parity "wasm_builder/lib/src/ir/instruction.dart:4935 TryTableCatch.serialize" WasmBuilder.serialize(s::WasmBuilder.Serializer, self::TryTableCatch)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/instruction.dart:4935 TryTableCatch.serialize: abstract in $(typeof(self))"), "serialize")
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:4937 TryTableCatch.deserialize" @unported function TryTableCatch_deserialize(d, tags::Tags) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
@@ -5164,7 +4476,3 @@ end
 end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:5007 writeTypeIndex" write_type_index(s::WasmBuilder.Serializer, type::DefType)::Nothing = WasmBuilder.write_unsigned(s, WasmBuilder.index(type))
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:5011 readTypeIndex" @unported function read_type_index(self) end
-
-@parity "wasm_builder/lib/src/ir/instruction.dart:5013 deserializeBlock" @unported function deserialize_block(self, types::Types, tags::Tags, deserialize_no_input_no_output::Function, deserialize_one_output::Function, deserialize_general::Function) end

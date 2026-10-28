@@ -66,8 +66,6 @@ end
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/table.dart:49 DefinedTable" function DefinedTable end
 
-@parity "wasm_builder/lib/src/ir/table.dart:57 DefinedTable.printTo" @unported function WasmBuilder.print_to(self::DefinedTable, p) end
-
 # An imported table's name is its import field name (table.dart:83 `final String name`).
 @parity "wasm_builder/lib/src/ir/table.dart:83 ImportedTable.name" WasmBuilder.name(t::ImportedTable)::String = t.name
 
@@ -82,8 +80,6 @@ end
     # dart's `super.serialize(s)`: Julia's invoke calls the method of the supertype.
     invoke(WasmBuilder.serialize, Tuple{WasmBuilder.Serializer,Table}, s, t)
 end
-
-@parity "wasm_builder/lib/src/ir/table.dart:103 ImportedTable.printTo" @unported function WasmBuilder.print_to(self::ImportedTable, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method

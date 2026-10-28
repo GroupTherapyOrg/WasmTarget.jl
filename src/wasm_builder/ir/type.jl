@@ -229,8 +229,6 @@ end
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
 @parity "wasm_builder/lib/src/ir/type.dart:24 StorageType.byteSize" WasmBuilder.byte_size(self::StorageType)::Int = reject!(Internal("wasm_builder/lib/src/ir/type.dart:24 StorageType.byteSize: abstract in $(typeof(self))"), "byte_size")
 
-@parity "wasm_builder/lib/src/ir/type.dart:26 StorageType.deserialize" @unported function StorageType_deserialize(d, types::Vector{DefType}) end
-
 # dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
 # subclasses' constructors do its work; this line declares the name and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:40 ValueType" function ValueType end
@@ -252,8 +250,6 @@ end
 
 """The heap `DefType` this type references, if any; the type builder collects them."""
 @parity "wasm_builder/lib/src/ir/type.dart:65 ValueType.containedDefType" WasmBuilder.contained_def_type(::ValueType)::Union{DefType,Nothing} = nothing
-
-@parity "wasm_builder/lib/src/ir/type.dart:67 ValueType.deserialize" @unported function ValueType_deserialize(d, types::Vector{DefType}) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:88 NumType._" NumType__(kind::NumTypeKind)::NumType = NumType(Val(:_), kind)
 
@@ -295,8 +291,6 @@ end
     k == NumTypeKind_v128 && return WasmBuilder.write_byte(s, 0x7B) # -0x05
     reject!(Internal("wasm_builder/lib/src/ir/type.dart:122 NumType.serialize: no arm for $k"), "serialize")
 end
-
-@parity "wasm_builder/lib/src/ir/type.dart:141 NumType.deserialize" @unported function NumType_deserialize(d) end
 
 # dart's Enum.name, the value's own name: a Julia @enum value prints with its type's prefix
 @parity "wasm_builder/lib/src/ir/type.dart:160 NumType.toString" Base.show(io::IO, t::NumType) = print(io, chopprefix(string(t.kind), "NumTypeKind_"))
@@ -374,8 +368,6 @@ end
     write(s, t.heap_type)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:256 RefType.deserialize" @unported function RefType_deserialize(d, types::Vector{DefType}) end
-
 @parity "wasm_builder/lib/src/ir/type.dart:281 RefType.toString" function Base.show(io::IO, t::RefType)
     if t.nullable === WasmBuilder.nullable_by_default(t.heap_type)
         print(io, WasmBuilder.shorthand_name(t.heap_type), "ref")
@@ -449,8 +441,6 @@ end
 @parity "wasm_builder/lib/src/ir/type.dart:357 HeapType.isStructuralSubtypeOf" WasmBuilder.is_structural_subtype_of(t::HeapType, other::HeapType)::Bool = WasmBuilder.is_subtype_of(t, other)
 
 @parity "wasm_builder/lib/src/ir/type.dart:359 HeapType.shorthandName" WasmBuilder.shorthand_name(t::HeapType)::String = string(t)
-
-@parity "wasm_builder/lib/src/ir/type.dart:361 HeapType.deserialize" @unported function HeapType_deserialize(d, types::Vector{DefType}) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:406 CommonHeapType._" CommonHeapType__()::CommonHeapType = CommonHeapType(Val(:_))
 
@@ -683,16 +673,6 @@ end
 # dart's abstract member: each implementing class defines its own; reaching this is a class lacking it
 @parity "wasm_builder/lib/src/ir/type.dart:761 DefType.serializeDefinitionInner" WasmBuilder.serialize_definition_inner(s::WasmBuilder.Serializer, self::DefType)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/type.dart:761 DefType.serializeDefinitionInner: abstract in $(typeof(self))"), "serialize_definition_inner")
 
-@parity "wasm_builder/lib/src/ir/type.dart:763 DefType.deserializeAllocate" @unported function DefType_deserialize_allocate(d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:810 DefType.deserializeFill" @unported function WasmBuilder.deserialize_fill(self::DefType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:859 DefType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::DefType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:861 DefType.printTypeDefTo" @unported function WasmBuilder.print_type_def_to(self::DefType, p; include_constituents = nothing) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:879 DefType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::DefType, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:885 UnresolvedDefType" function UnresolvedDefType end
@@ -708,10 +688,6 @@ end
 @parity "wasm_builder/lib/src/ir/type.dart:903 UnresolvedDefType.bottomType" WasmBuilder.bottom_type(::UnresolvedDefType)::HeapType = reject!(Internal("wasm_builder/lib/src/ir/type.dart:904 UnresolvedDefType.bottomType: cannot obtain bottomType of unresolved type"), "bottom_type")
 
 @parity "wasm_builder/lib/src/ir/type.dart:907 UnresolvedDefType.serializeDefinitionInner" WasmBuilder.serialize_definition_inner(::WasmBuilder.Serializer, ::UnresolvedDefType)::Nothing = reject!(Internal("wasm_builder/lib/src/ir/type.dart:908 UnresolvedDefType.serializeDefinitionInner: cannot serialize unresolved type"), "serialize_definition_inner")
-
-@parity "wasm_builder/lib/src/ir/type.dart:911 UnresolvedDefType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::UnresolvedDefType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:915 UnresolvedDefType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::UnresolvedDefType, p) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:921 ExnHeapType._" ExnHeapType__()::ExnHeapType = ExnHeapType(Val(:_))
 
@@ -783,16 +759,6 @@ end
     WasmBuilder.write_list(s, t.outputs)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1028 FunctionType.deserializeAllocate" @unported function FunctionType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1039 FunctionType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::FunctionType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1045 FunctionType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::FunctionType, p) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1053 FunctionType.printOneLineSignatureTo" @unported function WasmBuilder.print_one_line_signature_to(self::FunctionType, p) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1073 FunctionType.printSignatureWithNamesTo" @unported function WasmBuilder.print_signature_with_names_to(self::FunctionType, p; one_line = nothing) end
-
 @parity "wasm_builder/lib/src/ir/type.dart:1099 FunctionType.toString" function Base.show(io::IO, t::FunctionType)
     print(io, "(", join(t.inputs, ", "), ") -> (", join(t.outputs, ", "), ")")
 end
@@ -847,12 +813,6 @@ end
     WasmBuilder.write_list(s, t.fields)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1172 StructType.deserializeAllocate" @unported function StructType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1182 StructType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::StructType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1187 StructType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::StructType, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:1232 ArrayType" function ArrayType end
@@ -874,12 +834,6 @@ end
     write(s, t.element_type[])
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1260 ArrayType.deserializeAllocate" @unported function ArrayType_deserialize_allocate(d, super_type::Union{Nothing,DefType}, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1270 ArrayType.deserializeFillInner" @unported function WasmBuilder.deserialize_fill_inner(self::ArrayType, d, existing::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1275 ArrayType.printTypeDefToInternal" @unported function WasmBuilder.print_type_def_to_internal(self::ArrayType, p) end
-
 # dart's constructor of the abstract class, whose fields each subclass's struct holds and whose
 # subclasses' constructors do its work; this line declares the name and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:1293 _WithMutability" function _WithMutability end
@@ -889,17 +843,11 @@ end
     WasmBuilder.write_byte(s, t.mutable ? 0x01 : 0x00)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1301 _WithMutability.deserialize" @unported function _WithMutability_deserialize(d, fun::Function) end
-
 @parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" Base.show(io::IO, t::_WithMutability) = print(io, t.mutable ? "var " : "const ", t.type)
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/type.dart:1318 GlobalType" function GlobalType end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1320 GlobalType.deserialize" @unported function GlobalType_deserialize(d, types::Vector{DefType}) end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1328 GlobalType.printTo" @unported function WasmBuilder.print_to(self::GlobalType, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
@@ -921,8 +869,6 @@ end
         WasmBuilder.is_subtype_of(t.type, other.type)
     end
 end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1358 FieldType.deserialize" @unported function FieldType_deserialize(d, existing::Vector{DefType}) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1373 PackedType._" PackedType__(kind::PackedTypeKind)::PackedType = PackedType(Val(:_), kind)
 
@@ -951,8 +897,6 @@ end
     t.kind == PackedTypeKind_i16 && return WasmBuilder.write_byte(s, 0x77) # -0x9
     reject!(Internal("wasm_builder/lib/src/ir/type.dart:1400 PackedType.serialize: no arm for $(t.kind)"), "serialize")
 end
-
-@parity "wasm_builder/lib/src/ir/type.dart:1410 PackedType.deserialize" @unported function PackedType_deserialize(d) end
 
 # dart's Enum.name, the value's own name: a Julia @enum value prints with its type's prefix
 @parity "wasm_builder/lib/src/ir/type.dart:1423 PackedType.toString" Base.show(io::IO, t::PackedType) = print(io, chopprefix(string(t.kind), "PackedTypeKind_"))

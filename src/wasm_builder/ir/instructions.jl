@@ -52,11 +52,3 @@ end
 
     WasmBuilder.add_mapping(s.source_map_serializer, WasmBuilder.offset(s), nothing)
 end
-
-@parity "wasm_builder/lib/src/ir/instructions.dart:81 Instructions.printInitializerTo" @unported function WasmBuilder.print_initializer_to(self::Instructions, p) end
-
-@parity "wasm_builder/lib/src/ir/instructions.dart:97 Instructions.printTo" @unported function WasmBuilder.print_to(self::Instructions, p) end
-
-@parity "wasm_builder/lib/src/ir/instructions.dart:164 Instructions.deserializeConst" @unported function Instructions_deserialize_const(d, types::Types, functions::Functions, globals::Globals) end
-
-@parity "wasm_builder/lib/src/ir/instructions.dart:184 Instructions.deserialize" @unported function Instructions_deserialize(d, module_::Module, types::Types, functions::Functions, tables::Tables, memories::Memories, tags::Tags, globals::Globals, data_segments::DataSegments) end

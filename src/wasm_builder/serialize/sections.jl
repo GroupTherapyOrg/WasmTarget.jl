@@ -221,8 +221,6 @@ end
     end
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:97 TypeSection.deserialize" @unported function TypeSection_deserialize(d) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:145 ImportSection.sectionId" const ImportSection_section_id = 2
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -237,8 +235,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:161 ImportSection.deserialize" @unported function ImportSection_deserialize(d, module_::IR.Module, types::IR.Types) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:276 FunctionSection.sectionId" const FunctionSection_section_id = 3
 
@@ -258,8 +254,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:295 FunctionSection.deserialize" @unported function FunctionSection_deserialize(d, module_::IR.Module, types::IR.Types, imported::Vector{IR.ImportedFunction}) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:322 TableSection.sectionId" const TableSection_section_id = 4
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -274,8 +268,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:338 TableSection.deserialize" @unported function TableSection_deserialize(d, module_::IR.Module, types::IR.Types, imported::Vector{IR.ImportedTable}) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:367 MemorySection.sectionId" const MemorySection_section_id = 5
 
@@ -292,8 +284,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:383 MemorySection.deserialize" @unported function MemorySection_deserialize(d, module_::IR.Module, imported::Vector{IR.ImportedMemory}) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:413 TagSection.sectionId" const TagSection_section_id = 13
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -308,8 +298,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:429 TagSection.deserialize" @unported function TagSection_deserialize(d, module_::IR.Module, types::IR.Types, imported::Vector{IR.ImportedTag}) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:457 GlobalSection.sectionId" const GlobalSection_section_id = 6
 
@@ -326,8 +314,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:473 GlobalSection.deserialize" @unported function GlobalSection_deserialize(d, module_::IR.Module, types::IR.Types, functions::IR.Functions, imported::Vector{IR.ImportedGlobal}) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:508 ExportSection.sectionId" const ExportSection_section_id = 7
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -342,8 +328,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:524 ExportSection.deserialize" @unported function ExportSection_deserialize(d, functions::IR.Functions, tables::IR.Tables, memories::IR.Memories, globals::IR.Globals, tags::IR.Tags) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:557 StartSection.sectionId" const StartSection_section_id = 8
 
@@ -360,8 +344,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:573 StartSection.deserialize" @unported function StartSection_deserialize(d, functions::IR.Functions) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:582 ElementSection.sectionId" const ElementSection_section_id = 9
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -376,8 +358,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:598 ElementSection.deserialize" @unported function ElementSection_deserialize(d, module_::IR.Module, types::IR.Types, functions::IR.Functions, tables::IR.Tables, globals::IR.Globals) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:653 DataCountSection.sectionId" const DataCountSection_section_id = 12
 
@@ -394,8 +374,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:669 DataCountSection.deserialize" @unported function DataCountSection_deserialize(d) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:682 CodeSection.sectionId" const CodeSection_section_id = 10
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -411,8 +389,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:698 CodeSection.deserialize" @unported function CodeSection_deserialize(d, defined_functions::Vector{IR.DefinedFunction}, module_::IR.Module, types::IR.Types, functions::IR.Functions, tables::IR.Tables, memories::IR.Memories, tags::IR.Tags, globals::IR.Globals, data_segments::IR.DataSegments) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:760 DataSection.sectionId" const DataSection_section_id = 11
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -427,8 +403,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:776 DataSection.deserialize" @unported function DataSection_deserialize(d, data_segments::IR.DataSegments, memories::IR.Memories) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:836 CustomSection.sectionId" const CustomSection_section_id = 0
 
@@ -563,8 +537,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:993 NameSection.deserialize" @unported function NameSection_deserialize(d, functions::IR.Functions, types::IR.Types, globals::IR.Globals) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:1086 SourceMapSection.customSectionName" const SourceMapSection_custom_section_name = "sourceMappingURL"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -578,8 +550,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:1100 SourceMapSection.deserialize" @unported function SourceMapSection_deserialize(d) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:1109 BinaryenRemovableIfUnusedSection.customSectionName" const BinaryenRemovableIfUnusedSection_custom_section_name = "binaryen.removable.if.unused"
 
@@ -601,8 +571,6 @@ end
     end
     nothing
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:1133 BinaryenRemovableIfUnusedSection.deserialize" @unported function BinaryenRemovableIfUnusedSection_deserialize(d, functions::IR.Functions) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:1158 BinaryenInlineHintSection.customSectionName" const BinaryenInlineHintSection_custom_section_name = "binaryen.inline"
 
@@ -628,8 +596,6 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:1185 BinaryenInlineHintSection.deserialize" @unported function BinaryenInlineHintSection_deserialize(d, functions::IR.Functions) end
-
 @parity "wasm_builder/lib/src/serialize/sections.dart:1217 BinaryenJSCalledSection.customSectionName" const BinaryenJSCalledSection_custom_section_name = "binaryen.js.called"
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
@@ -651,20 +617,14 @@ end
     nothing
 end
 
-@parity "wasm_builder/lib/src/serialize/sections.dart:1241 BinaryenJSCalledSection.deserialize" @unported function BinaryenJSCalledSection_deserialize(d, functions::IR.Functions) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/serialize/sections.dart:1269 ExtraCustomSection" function ExtraCustomSection end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:1273 ExtraCustomSection.deserialize" @unported function ExtraCustomSection_deserialize(d, name::String) end
 
 @parity "wasm_builder/lib/src/serialize/sections.dart:1279 ExtraCustomSection.serializeContents" function serialize_contents(s::Serializer, e::ExtraCustomSection)::Nothing
     write_name(s, e.name)
     write_bytes(s, e.bytes)
 end
-
-@parity "wasm_builder/lib/src/serialize/sections.dart:1284 ExtraCustomSection.printTo" @unported function print_to(self::ExtraCustomSection, ip) end
 
 # dart's top-level set of the names the serializer writes itself, declared before the classes whose
 # names it lists; Julia evaluates it after them

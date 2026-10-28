@@ -68,8 +68,6 @@ end
 
 @parity "wasm_builder/lib/src/ir/tags.dart:37 Tag.buildExport" WasmBuilder.build_export(t::Tag, name::String)::Export = TagExport(name, t)
 
-@parity "wasm_builder/lib/src/ir/tags.dart:41 Tag.printTo" @unported function WasmBuilder.print_to(self::Tag, p) end
-
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
 @parity "wasm_builder/lib/src/ir/tags.dart:46 DefinedTag" function DefinedTag end
@@ -79,8 +77,6 @@ end
     WasmBuilder.write_byte(s, 0x00)
     write(s, t.type)
 end
-
-@parity "wasm_builder/lib/src/ir/tags.dart:56 DefinedTag.printTo" @unported function WasmBuilder.print_to(self::DefinedTag, p) end
 
 # An imported tag's name is its import field name (tags.dart:71 `final String name`).
 @parity "wasm_builder/lib/src/ir/tags.dart:71 ImportedTag.name" WasmBuilder.name(t::ImportedTag)::String = t.name
@@ -97,8 +93,6 @@ end
     WasmBuilder.write_byte(s, 0x00)
     write(s, t.type)
 end
-
-@parity "wasm_builder/lib/src/ir/tags.dart:92 ImportedTag.printTo" @unported function WasmBuilder.print_to(self::ImportedTag, p) end
 
 # dart's constructor is the struct's one inner constructor, which its definition makes;
 # this line declares it and adds no method
