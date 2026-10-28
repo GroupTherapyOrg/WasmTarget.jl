@@ -61,7 +61,7 @@ Row's dart fields: `values`, `offset`.
 
 @parity "dart2wasm/lib/dispatch_table.dart:965 buildRowDisplacementTable" @unported function build_row_displacement_table(rows::Vector{Row}; first_available = nothing, unique_offsets = nothing) end
 
-@parity "dart2wasm/lib/dispatch_table.dart:1018 calculateStrideWith" @unported function calculate_stride_with(start::Int64, start_entry, table::Vector{Any}, matches) end
+@parity "dart2wasm/lib/dispatch_table.dart:1018 calculateStrideWith" @unported function calculate_stride_with(start::Int64, start_entry, table::Vector{Any}, matches::Function) end
 
 @parity "dart2wasm/lib/dispatch_table.dart:1038 strideElementTableLimit" @unported function stride_element_table_limit() end
 

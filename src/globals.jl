@@ -53,7 +53,7 @@ TableBasedDartGlobal's dart fields: `table`, `index`.
 
 @parity "dart2wasm/lib/globals.dart:307 DartGlobalDefinition.read" @unported function Base.read(self::DartGlobalDefinition, translator::Translator, b::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/globals.dart:308 DartGlobalDefinition.write" @unported function Base.write(self::DartGlobalDefinition, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value) end
+@parity "dart2wasm/lib/globals.dart:308 DartGlobalDefinition.write" @unported function Base.write(self::DartGlobalDefinition, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value::Function) end
 
 @parity "dart2wasm/lib/globals.dart:317 WasmGlobalDartGlobal" @unported function WasmGlobalDartGlobal(global_; initialized_flag = nothing) end
 
@@ -61,7 +61,7 @@ TableBasedDartGlobal's dart fields: `table`, `index`.
 
 @parity "dart2wasm/lib/globals.dart:323 WasmGlobalDartGlobal.read" @unported function Base.read(self::WasmGlobalDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/globals.dart:328 WasmGlobalDartGlobal.write" @unported function Base.write(self::WasmGlobalDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value) end
+@parity "dart2wasm/lib/globals.dart:328 WasmGlobalDartGlobal.write" @unported function Base.write(self::WasmGlobalDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value::Function) end
 
 @parity "dart2wasm/lib/globals.dart:342 TableBasedDartGlobal" @unported function TableBasedDartGlobal(table, index; initialized_flag = nothing) end
 
@@ -69,4 +69,4 @@ TableBasedDartGlobal's dart fields: `table`, `index`.
 
 @parity "dart2wasm/lib/globals.dart:348 TableBasedDartGlobal.read" @unported function Base.read(self::TableBasedDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/globals.dart:356 TableBasedDartGlobal.write" @unported function Base.write(self::TableBasedDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value) end
+@parity "dart2wasm/lib/globals.dart:356 TableBasedDartGlobal.write" @unported function Base.write(self::TableBasedDartGlobal, translator::Translator, b::WasmBuilder.InstructionsBuilder, push_value::Function) end

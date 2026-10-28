@@ -46,9 +46,9 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:587 Intrinsifier.b" @unported function b(self::Intrinsifier) end
 
-@parity "dart2wasm/lib/intrinsics.dart:589 Intrinsifier.dartTypeOf" @unported function dart_type_of(self::Intrinsifier, exp::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/intrinsics.dart:589 Intrinsifier.dartTypeOf" @unported function dart_type_of(self::Intrinsifier, exp) end
 
-@parity "dart2wasm/lib/intrinsics.dart:591 Intrinsifier.typeOfExp" @unported function type_of_exp(self::Intrinsifier, exp::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/intrinsics.dart:591 Intrinsifier.typeOfExp" @unported function type_of_exp(self::Intrinsifier, exp) end
 
 @parity "dart2wasm/lib/intrinsics.dart:595 Intrinsifier.isComparison" @unported function Intrinsifier_is_comparison(op::String) end
 
@@ -62,7 +62,7 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" @unported function generate_static_getter_intrinsic(self::Intrinsifier, node) end
 
-@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument::WasmBuilder.Expression, num_lanes::Int64, node) end
+@parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument, num_lanes::Int64, node) end
 
 @parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @unported function generate_static_intrinsic(self::Intrinsifier, node) end
 
@@ -74,12 +74,12 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" @unported function read_int_array(self::Intrinsifier, node; unsigned::Bool) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" @unported function _extract_memory_from_call(self::Intrinsifier, expr::WasmBuilder.Expression, builder::WasmBuilder.InstructionsBuilder) end
+@parity "dart2wasm/lib/intrinsics.dart:3536 Intrinsifier._extractMemoryFromCall" @unported function _extract_memory_from_call(self::Intrinsifier, expr, builder::WasmBuilder.InstructionsBuilder) end
 
 @parity "dart2wasm/lib/intrinsics.dart:3549 Intrinsifier._extractMemoryOperands" @unported function _extract_memory_operands(self::Intrinsifier, call, builder::WasmBuilder.InstructionsBuilder) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" @unported function extract_int_value(expr::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/intrinsics.dart:3573 extractIntValue" @unported function extract_int_value(expr) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" @unported function _extract_lane_indices(expr::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/intrinsics.dart:3588 _extractLaneIndices" @unported function _extract_lane_indices(expr) end
 
-@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" @unported function _extract_double_value(expr::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/intrinsics.dart:3606 _extractDoubleValue" @unported function _extract_double_value(expr) end

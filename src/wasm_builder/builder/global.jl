@@ -6,6 +6,6 @@ GlobalBuilder's dart fields: `moduleBuilder`, `initializer`.
 """
 @parity "wasm_builder/lib/src/builder/global.dart:9 GlobalBuilder" @unported struct GlobalBuilder <: IR.Global end
 
-@parity "wasm_builder/lib/src/builder/global.dart:13 GlobalBuilder" @unported function GlobalBuilder(module_builder, index, type_::IR.GlobalType, optional...) end
+@parity "wasm_builder/lib/src/builder/global.dart:13 GlobalBuilder" @unported function GlobalBuilder(module_builder, index::IR.Finalizable, type_::IR.GlobalType, optional...) end
 
 @parity "wasm_builder/lib/src/builder/global.dart:24 GlobalBuilder.forceBuild" @unported function force_build(self::GlobalBuilder) end

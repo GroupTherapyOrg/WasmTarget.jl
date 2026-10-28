@@ -36,7 +36,7 @@ _DynamicDispatcherCodeGenerator's dart fields: `translator`, `callerShape`, `fun
 
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:178 _DynamicDispatcherCodeGenerator._generateMethodCode" @unported function _generate_method_code(self::_DynamicDispatcherCodeGenerator, translator::Translator) end
 
-@parity "dart2wasm/lib/dynamic_dispatchers.dart:241 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCall" @unported function _emit_dynamic_dispatch_table_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape, class_id_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, push_arguments, no_such_method_block::WasmBuilder.Label) end
+@parity "dart2wasm/lib/dynamic_dispatchers.dart:241 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCall" @unported function _emit_dynamic_dispatch_table_call(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape, class_id_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, push_arguments::Function, no_such_method_block::WasmBuilder.Label) end
 
 @parity "dart2wasm/lib/dynamic_dispatchers.dart:305 _DynamicDispatcherCodeGenerator._emitDynamicDispatchTableCallViaField" @unported function _emit_dynamic_dispatch_table_call_via_field(self::_DynamicDispatcherCodeGenerator, b::WasmBuilder.InstructionsBuilder, caller_shape::CallShape, class_id_local::WasmBuilder.IR.Local, nullable_receiver_local::WasmBuilder.IR.Local, receiver_local::WasmBuilder.IR.Local, no_such_method_block::WasmBuilder.Label) end
 

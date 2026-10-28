@@ -169,7 +169,7 @@ _PatchableRegion's dart fields: `start`, `patchBuilder`.
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:494 InstructionsBuilder._verifyTypes" @unported function _verify_types(self::InstructionsBuilder, inputs::Vector{IR.ValueType}, outputs::Vector{IR.ValueType}; trace = nothing, reachable_after = nothing) end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun" @unported function _verify_types_fun(self::InstructionsBuilder, inputs::Vector{IR.ValueType}, outputs_fun; trace = nothing, reachable_after = nothing) end
+@parity "wasm_builder/lib/src/builder/instructions.dart:508 InstructionsBuilder._verifyTypesFun" @unported function _verify_types_fun(self::InstructionsBuilder, inputs::Vector{IR.ValueType}, outputs_fun::Function; trace = nothing, reachable_after = nothing) end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:532 InstructionsBuilder._verifyBranchTypes" @unported function _verify_branch_types(self::InstructionsBuilder, label::Label, optional...) end
 
@@ -185,7 +185,7 @@ _PatchableRegion's dart fields: `start`, `patchBuilder`.
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:650 InstructionsBuilder.comment" @unported function comment(self::InstructionsBuilder, text::String) end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:656 InstructionsBuilder.withInlinedFrame" @unported function with_inlined_frame(self::InstructionsBuilder, name::String, fun) end
+@parity "wasm_builder/lib/src/builder/instructions.dart:656 InstructionsBuilder.withInlinedFrame" @unported function with_inlined_frame(self::InstructionsBuilder, name::String, fun::Function) end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:676 InstructionsBuilder.unreachable" @unported function unreachable(self::InstructionsBuilder) end
 
@@ -193,7 +193,7 @@ _PatchableRegion's dart fields: `start`, `patchBuilder`.
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:695 InstructionsBuilder._pushLabel" @unported function _push_label(self::InstructionsBuilder, label::Label; trace::Vector{Any}) end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:707 InstructionsBuilder._beginBlock" @unported function _begin_block(self::InstructionsBuilder, label::Label, no_effect, one_output, function_) end
+@parity "wasm_builder/lib/src/builder/instructions.dart:707 InstructionsBuilder._beginBlock" @unported function _begin_block(self::InstructionsBuilder, label::Label, no_effect::Function, one_output::Function, function_::Function) end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:729 InstructionsBuilder.block" @unported function block(self::InstructionsBuilder, optional...) end
 
@@ -255,7 +255,7 @@ _PatchableRegion's dart fields: `start`, `patchBuilder`.
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:1123 InstructionsBuilder.table_size" @unported function table_size(self::InstructionsBuilder, table::IR.Table) end
 
-@parity "wasm_builder/lib/src/builder/instructions.dart:1136 InstructionsBuilder._addMemoryInstruction" @unported function _add_memory_instruction(self::InstructionsBuilder, create, memory::IR.Memory; offset::Int64, align::Int64) end
+@parity "wasm_builder/lib/src/builder/instructions.dart:1136 InstructionsBuilder._addMemoryInstruction" @unported function _add_memory_instruction(self::InstructionsBuilder, create::Function, memory::IR.Memory; offset::Int64, align::Int64) end
 
 @parity "wasm_builder/lib/src/builder/instructions.dart:1147 InstructionsBuilder.i32_load" @unported function i32_load(self::InstructionsBuilder, memory::IR.Memory, offset::Int64, optional...) end
 

@@ -284,7 +284,7 @@ SingleClosureTarget's dart fields: `callTarget`, `paramInfo`.
     return self
 end
 
-@parity "dart2wasm/lib/translator.dart:499 Translator._initModules" @unported function _init_modules(self::Translator, source_map_url_generator) end
+@parity "dart2wasm/lib/translator.dart:499 Translator._initModules" @unported function _init_modules(self::Translator, source_map_url_generator::Union{Nothing,Function}) end
 
 @parity "dart2wasm/lib/translator.dart:517 Translator.drainCompletionQueue" function drain_completion_queue(self::Translator)::Nothing
     local queue = self.compilation_queue[]
@@ -295,7 +295,7 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/translator.dart:524 Translator.translate" @unported function translate(self::Translator, source_map_url_generator) end
+@parity "dart2wasm/lib/translator.dart:524 Translator.translate" @unported function translate(self::Translator, source_map_url_generator::Union{Nothing,Function}) end
 
 @parity "dart2wasm/lib/translator.dart:649 Translator._patchLoadingMapGetter" @unported function _patch_loading_map_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
@@ -303,7 +303,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:748 Translator._patchLoadingMapNamesGetter" @unported function _patch_loading_map_names_getter(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
-@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" @unported function _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen) end
+@parity "dart2wasm/lib/translator.dart:779 Translator._lazyInitializeGlobal" @unported function _lazy_initialize_global(self::Translator, f::WasmBuilder.FunctionBuilder, type_::WasmBuilder.IR.ValueType, name::String, gen::Function) end
 
 @parity "dart2wasm/lib/translator.dart:805 Translator._replaceBody" @unported function _replace_body(self::Translator, function_::WasmBuilder.FunctionBuilder) end
 
@@ -454,7 +454,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2033 Translator.canSkipImplicitCheck" @unported function can_skip_implicit_check(self::Translator, node) end
 
-@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" @unported function can_use_unchecked_entry(self::Translator, receiver::WasmBuilder.Expression, node::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/translator.dart:2037 Translator.canUseUncheckedEntry" @unported function can_use_unchecked_entry(self::Translator, receiver, node) end
 
 @parity "dart2wasm/lib/translator.dart:2043 Translator.typeOfParameterVariable" @unported function type_of_parameter_variable(self::Translator, node, is_required::Bool) end
 
@@ -496,9 +496,9 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2423 Translator.getPragma" @unported function get_pragma(self::Translator, node, name::String, optional...) end
 
-@parity "dart2wasm/lib/translator.dart:2427 Translator.makeArray" @unported function make_array(self::Translator, b::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item) end
+@parity "dart2wasm/lib/translator.dart:2427 Translator.makeArray" @unported function make_array(self::Translator, b::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
 
-@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" @unported function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index) end
+@parity "dart2wasm/lib/translator.dart:2462 Translator.indexList" @unported function index_list(self::Translator, b::WasmBuilder.InstructionsBuilder, push_index::Function) end
 
 @parity "dart2wasm/lib/translator.dart:2472 Translator.getListLength" @unported function get_list_length(self::Translator, b::WasmBuilder.InstructionsBuilder) end
 
@@ -514,7 +514,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:2587 Translator._findMemoryForMainModule" @unported function _find_memory_for_main_module(self::Translator, top_level_external_memory_getter) end
 
-@parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" @unported function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType, name::String, instantiate_heap_type) end
+@parity "dart2wasm/lib/translator.dart:2625 Translator.instantiateDummyValueHeapType" @unported function instantiate_dummy_value_heap_type(self::Translator, b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.HeapType, name::String, instantiate_heap_type::Function) end
 
 @parity "dart2wasm/lib/translator.dart:2665 CompilationQueue" CompilationQueue(translator::KernelNodes)::CompilationQueue = CompilationQueue(Val(:_), translator)
 
@@ -571,9 +571,9 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3451 NodeCounter.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::NodeCounter, node) end
 
-@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value::Union{Nothing,WasmBuilder.Expression}) end
+@parity "dart2wasm/lib/translator.dart:3455 NodeCounter.handleFieldInitializerValue" @unported function handle_field_initializer_value(self::NodeCounter, value) end
 
-@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node::WasmBuilder.Block) end
+@parity "dart2wasm/lib/translator.dart:3468 NodeCounter.visitBlock" @unported function visit_block(self::NodeCounter, node) end
 
 @parity "dart2wasm/lib/translator.dart:3473 NodeCounter.visitEmptyStatement" @unported function visit_empty_statement(self::NodeCounter, node) end
 
@@ -641,7 +641,7 @@ end
 
 @parity "dart2wasm/lib/translator.dart:3881 DummyValuesCollector.isDummyFunction" @unported function is_dummy_function(self::DummyValuesCollector, function_::WasmBuilder.IR.BaseFunction) end
 
-@parity "dart2wasm/lib/translator.dart:3886 instantiateDummyValue" @unported function instantiate_dummy_value(b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType, instantiate_heap_type) end
+@parity "dart2wasm/lib/translator.dart:3886 instantiateDummyValue" @unported function instantiate_dummy_value(b::WasmBuilder.InstructionsBuilder, type_::WasmBuilder.IR.ValueType, instantiate_heap_type::Function) end
 
 @parity "dart2wasm/lib/translator.dart:3930 _WasmImporter" @unported function _WasmImporter(_translator, _export_prefix) end
 

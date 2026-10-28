@@ -16,6 +16,8 @@ DynamicCallSiteCollector's dart fields: `_callerShapes`.
 """
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:355 DynamicCallSiteCollector" @unported struct DynamicCallSiteCollector end
 
+@parity "dart2wasm/lib/dynamic_dispatch_table.dart:406 TableEntry" @unported struct TableEntry end
+
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:44 DynamicDispatchTable" @unported function DynamicDispatchTable(translator) end
 
 @parity "dart2wasm/lib/dynamic_dispatch_table.dart:46 DynamicDispatchTable.getTargetsTable" @unported function get_targets_table(self::DynamicDispatchTable, module_::WasmBuilder.ModuleBuilder) end

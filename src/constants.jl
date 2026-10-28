@@ -72,7 +72,7 @@ _ConstantAccessor's dart fields: `translator`, `moduleUses`, `lazySlotTables`, `
 
 @parity "dart2wasm/lib/constants.dart:94 ConstantInfo" @unported function ConstantInfo(constant, children, _force_lazy, can_be_eager, type_, _code_gen) end
 
-@parity "dart2wasm/lib/constants.dart:103 ConstantInfo.printInitializer" @unported function print_initializer(self::ConstantInfo, print_function, print_lazy_initializer) end
+@parity "dart2wasm/lib/constants.dart:103 ConstantInfo.printInitializer" @unported function print_initializer(self::ConstantInfo, print_function::Function, print_lazy_initializer::Function) end
 
 @parity "dart2wasm/lib/constants.dart:128 ConstantInfo.setDefinition" @unported function set_definition(self::ConstantInfo, definition::ConstantDefinition) end
 
@@ -90,7 +90,7 @@ _ConstantAccessor's dart fields: `translator`, `moduleUses`, `lazySlotTables`, `
 
 @parity "dart2wasm/lib/constants.dart:226 Constants.makeNamedParameterConstant" @unported function make_named_parameter_constant(self::Constants, n) end
 
-@parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/constants.dart:245 Constants.makeNamedParametersArray" @unported function make_named_parameters_array(self::Constants, type_) end
 
 @parity "dart2wasm/lib/constants.dart:251 Constants.makeArrayOf" @unported function make_array_of(self::Constants, element_type, entries::Vector{Any}; mutable_ = nothing) end
 
@@ -120,7 +120,7 @@ _ConstantAccessor's dart fields: `translator`, `moduleUses`, `lazySlotTables`, `
 
 @parity "dart2wasm/lib/constants.dart:448 Constants._makeRecordTypeConstant" @unported function _make_record_type_constant(self::Constants, type_) end
 
-@parity "dart2wasm/lib/constants.dart:464 Constants._makeFunctionTypeConstant" @unported function _make_function_type_constant(self::Constants, type_::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/constants.dart:464 Constants._makeFunctionTypeConstant" @unported function _make_function_type_constant(self::Constants, type_) end
 
 @parity "dart2wasm/lib/constants.dart:499 Constants._makeTopTypeConstant" @unported function _make_top_type_constant(self::Constants, type_) end
 
@@ -162,7 +162,7 @@ _ConstantAccessor's dart fields: `translator`, `moduleUses`, `lazySlotTables`, `
 
 @parity "dart2wasm/lib/constants.dart:793 ConstantCreator.ensureConstant" @unported function ensure_constant(self::ConstantCreator, constant) end
 
-@parity "dart2wasm/lib/constants.dart:820 ConstantCreator.createConstant" @unported function create_constant(self::ConstantCreator, constant, child_constants::Vector{ConstantInfo}, type_::WasmBuilder.IR.RefType, generator; can_be_eager::Bool, force_lazy_constant = nothing) end
+@parity "dart2wasm/lib/constants.dart:820 ConstantCreator.createConstant" @unported function create_constant(self::ConstantCreator, constant, child_constants::Vector{ConstantInfo}, type_::WasmBuilder.IR.RefType, generator::Function; can_be_eager::Bool, force_lazy_constant = nothing) end
 
 @parity "dart2wasm/lib/constants.dart:843 ConstantCreator.defaultConstant" @unported function default_constant(self::ConstantCreator, constant) end
 

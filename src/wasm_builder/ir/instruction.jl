@@ -5167,4 +5167,4 @@ end
 
 @parity "wasm_builder/lib/src/ir/instruction.dart:5011 readTypeIndex" @unported function read_type_index(self) end
 
-@parity "wasm_builder/lib/src/ir/instruction.dart:5013 deserializeBlock" @unported function deserialize_block(self, types::Types, tags::Tags, deserialize_no_input_no_output, deserialize_one_output, deserialize_general) end
+@parity "wasm_builder/lib/src/ir/instruction.dart:5013 deserializeBlock" @unported function deserialize_block(self, types::Types, tags::Tags, deserialize_no_input_no_output::Function, deserialize_one_output::Function, deserialize_general::Function) end

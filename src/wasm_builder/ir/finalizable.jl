@@ -33,3 +33,5 @@ end
 @parity "wasm_builder/lib/src/ir/finalizable.dart:34 Finalizable.isFinal" WasmBuilder.is_final(f::Finalizable)::Bool = f._value === nothing
 
 @parity "wasm_builder/lib/src/ir/finalizable.dart:39 Finalizable.toString" Base.show(io::IO, f::Finalizable) = print(io, WasmBuilder.is_final(f) ? "null" : "<NF>")
+
+@parity "wasm_builder/lib/src/ir/finalizable.dart:42 FinalizableIndex" const FinalizableIndex = Finalizable{Int64}

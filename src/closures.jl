@@ -111,7 +111,7 @@ _ContextCollector's dart fields: `closures`, `currentContext`, `enableAsserts`, 
 
 @parity "dart2wasm/lib/closures.dart:504 ClosureLayouter.maxPositionalCountFor" @unported function max_positional_count_for(self::ClosureLayouter, type_count::Int64) end
 
-@parity "dart2wasm/lib/closures.dart:506 ClosureLayouter.forEachPositionalArgumentCount" @unported function for_each_positional_argument_count(self::ClosureLayouter, type_count::Int64, fun) end
+@parity "dart2wasm/lib/closures.dart:506 ClosureLayouter.forEachPositionalArgumentCount" @unported function for_each_positional_argument_count(self::ClosureLayouter, type_count::Int64, fun::Function) end
 
 @parity "dart2wasm/lib/closures.dart:521 ClosureLayouter.getClosureRepresentation" @unported function get_closure_representation(self::ClosureLayouter, type_count::Int64, positional_count::Int64, names::Vector{String}) end
 

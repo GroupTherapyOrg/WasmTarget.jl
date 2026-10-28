@@ -206,7 +206,7 @@ struct Decl
     modifiers::Vector{String}
     extends::String       # a class's `extends` target ("" none)
     params::Vector{Tok}   # the parameter list's tokens, without the outer parentheses
-    rettype::Vector{Tok}  # the tokens before the name (return or field type)
+    rettype::Vector{Tok}  # the tokens before the name (return or field type); a typedef's aliased type
     implements::Vector{String}  # a class's `implements` targets, each with its prefix
 end
 Decl(kind, symbol, line, modifiers, extends, params, rettype) = Decl(kind, symbol, line, modifiers, extends, params, rettype, String[])
@@ -384,7 +384,10 @@ function classify!(toks::Vector{Tok}, i::Int, e::Int, container::String, file, o
         end
         local unnamed = kind == :extension && !(toks[k].kind == :ident && toks[k].text != "on")
         local name = unnamed ? ext : toks[k].text
-        push!(out, Decl(kind, name, toks[k].line, mods, ext, Tok[], Tok[], impls))
+        # a typedef's aliased type: its tokens after the `=`, without the `;`
+        local eq = kind == :typedef ? findnext(t -> t.text == "=", toks, k) : nothing
+        local rhs = eq === nothing || eq >= e ? Tok[] : toks[eq+1:e-2]
+        push!(out, Decl(kind, name, toks[k].line, mods, ext, Tok[], rhs, impls))
         if kind != :typedef
             local lb = findnext(t -> t.text == "{", toks, k)
             (lb === nothing || lb >= e) && error("skeleton: $file:$(toks[k].line): $kw $name has no body")
@@ -639,11 +642,11 @@ end
 # none, its first `implements` target declared in scope. Julia's types have one supertype, so an
 # interface past the first is not one (the lead's ruling: an `implements` is modelled as the builder's
 # ir.jl does, ValueType and PackedType under StorageType)
-function dart_super(where::Dict{String,Vector{String}}, d::Decl, file::AbstractString)::String
+function dart_super(d::Decl, file::AbstractString)::String
     isempty(d.extends) || return d.extends
     for i in d.implements
         local p, n = split_prefix(i)
-        declaring(where, n, p, file) === nothing || return i
+        declaring(n, p, file) === nothing || return i
     end
     return ""
 end
@@ -665,7 +668,7 @@ function interface_module(S::Scope, file::AbstractString, x::AbstractString, m::
         (c != x || f != file) && any(e -> e.symbol == "$c.$m" && !("static" in e.modifiers), S.decls[f]) && (found = module_of(f))
         for sup in vcat(isempty(cd.extends) ? String[] : [cd.extends], cd.implements)
             local p, n = split_prefix(sup)
-            local k = declaring(S.where, n, p, f)
+            local k = declaring(n, p, f)
             k === nothing || push!(todo, (k, n))
         end
     end
@@ -685,26 +688,117 @@ function split_prefix(s::AbstractString)::Tuple{String,String}
     return i === nothing ? ("", String(s)) : (String(s[1:i-1]), String(s[i+1:end]))
 end
 
-# the key of the file declaring type `name`, referenced from file `from` under dart prefix `prefix`, or
-# nothing (no scanned declaration: an external type). `w.` names wasm_builder's, the builder's own
-# where both libraries declare the name (wasm_builder.dart exports it); another prefix (`ir.`, `util.`,
-# `js.`) the library module of that name; no prefix the referencing module's own first, else the
-# package the file imports it from
-function declaring(where::Dict{String,Vector{String}}, name::AbstractString, prefix::AbstractString, from::AbstractString)::Union{Nothing,String}
-    local ks = get(where, name, String[])
-    isempty(ks) && return nothing
-    local cand = prefix == "w" ? filter(k -> startswith(k, "wasm_builder/"), ks) :
-                 prefix != "" ? filter(k -> lowercase(last(split(module_of(k), '.'))) == prefix, ks) :
-                 (local own = filter(k -> module_of(k) == module_of(from), ks);
-                  !isempty(own) ? own : filter(k -> startswith(k, startswith(from, "dart2wasm/") ? "dart2wasm/" : "wasm_builder/"), ks))
-    isempty(cand) && prefix == "" && (cand = ks)
-    isempty(cand) && return nothing
-    if length(cand) > 1
-        local b = filter(k -> module_of(k) == "WasmBuilder", cand)
-        isempty(b) || (cand = b)
-    end
-    return cand[1]
+# ---- the imports: a type name resolves as dart resolves it ----------------------------------------
+# A library is named by its path under the sdk's pkg/ (a pin-table key, or `kernel/lib/ast.dart`) or,
+# for a platform library, `dart:<name>`. Each file's directives are read from its source: an import
+# brings a library's exported names into the file's scope under its prefix ("" none), filtered by its
+# `show` and `hide`; an export re-exports a library's names; a part's declarations are its library's.
+struct Directive
+    kind::Symbol            # :import :export :part
+    lib::String             # the library it names ("" for a package the checkout does not hold)
+    prefix::String
+    show::Vector{String}    # empty: every name
+    hide::Vector{String}
 end
+
+# the library a directive's uri names, from library `from`
+function lib_of_uri(uri::AbstractString, from::AbstractString)::String
+    # a platform library whose file is not <name>/<name>.dart (dart:_internal) names nothing read
+    startswith(uri, "dart:") && return isfile(lib_path(uri)) ? String(uri) : ""
+    local m = match(r"^package:([\w.]+)/(.+)$", uri)
+    local id = m !== nothing ? "$(m[1])/lib/$(m[2])" :
+               startswith(from, "dart:") ? normpath(joinpath(dirname(lib_path(from)), uri)) :
+               normpath(joinpath(dirname(from), uri))
+    startswith(from, "dart:") && m === nothing && (id = relpath(id, joinpath(sdk(), "sdk", "lib")))
+    return isfile(lib_path(id)) ? replace(id, '\\' => '/') : ""
+end
+
+# a library's source file: a pkg/ path, a platform library's file, or a platform part (`core/x.dart`)
+lib_path(id::AbstractString)::String =
+    startswith(id, "dart:") ? joinpath(sdk(), "sdk", "lib", id[6:end], id[6:end] * ".dart") :
+    isfile(joinpath(sdk(), "pkg", id)) ? joinpath(sdk(), "pkg", id) : joinpath(sdk(), "sdk", "lib", id)
+
+const DIRECTIVES = Dict{String,Vector{Directive}}()
+function directives(id::AbstractString)::Vector{Directive}
+    haskey(DIRECTIVES, id) && return DIRECTIVES[id]
+    local text = read(lib_path(id), String)
+    local out = Directive[]
+    for m in eachmatch(r"(?ms)^(import|export|part)\s+(['\"].*?);", text)
+        local body = replace(m[2], r"//[^\n]*" => "")
+        local uri = match(r"['\"]([^'\"]+)['\"]", body)
+        uri === nothing && error("skeleton: $id: a directive with no uri `$(m.match)`")
+        local rest = body[uri.offset+length(uri.match):end]
+        # a conditional import's other uris (`if (dart.library.x) '...'`): the default is the first
+        rest = replace(rest, r"if\s*\([^)]*\)\s*['\"][^'\"]+['\"]" => "")
+        local pre = match(r"\bas\s+([A-Za-z_$][\w$]*)", rest)
+        local names(kw) = (local k = match(Regex("\\b$kw\\s+([\\w\$,\\s]+?)(?:\\b(?:show|hide)\\b|\\z)"), rest);
+                           k === nothing ? String[] : String.(strip.(split(k[1], ',', keepempty = false))))
+        push!(out, Directive(Symbol(m[1]), lib_of_uri(uri[1], id), pre === nothing ? "" : pre[1], names("show"), names("hide")))
+    end
+    return DIRECTIVES[id] = out
+end
+
+# the type names a library's own source and parts declare at top level: classes, mixins, enums,
+# typedefs and extension types (dart-format puts each at column 0)
+const OWN_TYPES = Dict{String,Set{String}}()
+function own_types(id::AbstractString)::Set{String}
+    haskey(OWN_TYPES, id) && return OWN_TYPES[id]
+    local out = Set{String}()
+    local files = [lib_path(id)]
+    for d in directives(id)
+        d.kind == :part && !isempty(d.lib) && push!(files, lib_path(d.lib))
+    end
+    for f in files, l in eachline(f)
+        local m = match(r"^(?:(?:abstract|sealed|base|final|interface|mixin|augment)\s+)*(?:class|mixin|enum|extension\s+type(?:\s+const)?)\s+([A-Za-z_$][\w$]*)", l)
+        m === nothing && (m = match(r"^typedef\s+([A-Za-z_$][\w$]*)\s*(?:<[^=]*>)?\s*=", l))
+        m === nothing && (m = match(r"^typedef\s+.*?([A-Za-z_$][\w$]*)\s*(?:<[^(]*>)?\s*\(", l))
+        m === nothing || push!(out, m[1])
+    end
+    return OWN_TYPES[id] = out
+end
+
+# the type names a library exports: its own, then each export's (filtered), name => declaring library
+const EXPORTED = Dict{String,Dict{String,String}}()
+function exported(id::AbstractString)::Dict{String,String}
+    haskey(EXPORTED, id) && return EXPORTED[id]
+    local out = EXPORTED[id] = Dict{String,String}(n => String(id) for n in own_types(id))
+    for d in directives(id)
+        d.kind == :export && !isempty(d.lib) || continue
+        for (n, k) in exported(d.lib)
+            visible(d, n) && !haskey(out, n) && (out[n] = k)
+        end
+    end
+    return out
+end
+visible(d::Directive, n::AbstractString)::Bool = (isempty(d.show) || n in d.show) && !(n in d.hide)
+
+# the library declaring type `name` as library `from` spells it under dart prefix `prefix`, as dart
+# resolves it: no prefix, `from`'s own declarations first; then every import under `prefix` that
+# shows the name (dart:core implicitly, unprefixed). Two libraries refuse, as dart does, unless one is
+# a platform library, which the other shadows. Nothing when no library read declares it.
+function resolve(name::AbstractString, prefix::AbstractString, from::AbstractString)::Union{Nothing,String}
+    prefix == "" && name in own_types(from) && return String(from)
+    local found = String[]
+    local imports = [d for d in directives(from) if d.kind == :import && d.prefix == prefix]
+    prefix == "" && push!(imports, Directive(:import, "dart:core", "", String[], String[]))
+    for d in imports
+        (isempty(d.lib) || !visible(d, name)) && continue
+        local k = get(exported(d.lib), name, nothing)
+        k === nothing || k in found || push!(found, k)
+    end
+    length(found) > 1 && (found = filter(k -> !startswith(k, "dart:") && !startswith(k, "core/"), found))
+    length(found) > 1 && error("skeleton: $from: `$(isempty(prefix) ? "" : prefix * ".")$name` names $(join(found, " and ")): dart refuses the ambiguity")
+    return isempty(found) ? nothing : found[1]
+end
+
+# the in-scope key of the file declaring type `name` as file `from` spells it under `prefix`, or
+# nothing: a type no in-scope file declares (Kernel's, the platform's, an out-of-scope file's)
+function declaring(name::AbstractString, prefix::AbstractString, from::AbstractString)::Union{Nothing,String}
+    local k = resolve(name, prefix, from)
+    return k !== nothing && k in scope_set() ? k : nothing
+end
+const SCOPE_SET = Set{String}()
+scope_set()::Set{String} = isempty(SCOPE_SET) ? union!(SCOPE_SET, scope()) : SCOPE_SET
 
 # a type's Julia spelling in file `from`: bare in its own module, else qualified by its module (one
 # rule, adjusted to the loader's module map when opus-a3 fixes how `w.`/`ir.` references read)
@@ -713,12 +807,39 @@ function spell(name::AbstractString, key::AbstractString, from::AbstractString):
     return m == f ? String(name) : spell_module(m, f) * "." * name
 end
 
-# a possibly prefixed type name's Julia spelling in file `from`, or "" (external: unannotated)
-function type_ref(S::Scope, s::AbstractString, from::AbstractString)::String
+# a possibly prefixed type name's Julia spelling in file `from`, or "" (external: unannotated). A
+# typedef is its aliased type's, a function type's `Function`; a record typedef is its struct's
+function type_ref(S::Scope, s::AbstractString, from::AbstractString; at::AbstractString = from)::String
     isempty(s) && return ""
     local p, n = split_prefix(s)
-    local k = declaring(S.where, n, p, from)
-    return k === nothing ? "" : spell(n, k, from)
+    local k = declaring(n, p, from)
+    k === nothing && return ""
+    local td = findfirst(d -> d.kind == :typedef && d.symbol == n, S.decls[k])
+    if td !== nothing
+        local tk = typedef_kind(S.decls[k][td])
+        tk == :function && return "Function"
+        tk == :alias && return julia_type(S.decls[k][td].rettype, S, k; at = at)
+    end
+    return spell(n, k, at)
+end
+
+# a typedef's kind: :function, a function type, which Julia spells `Function` (Julia has no arrow
+# types: a callable's type is its own); :record, a record type used as data, a struct of its fields;
+# :alias, another type's name, a `const` binding of its Julia type
+function typedef_kind(d::Decl)::Symbol
+    isempty(d.rettype) && error("skeleton: typedef $(d.symbol) at line $(d.line) aliases no type")
+    d.rettype[1].text == "(" && return :record
+    return is_function_type(String[t.text for t in d.rettype]) ? :function : :alias
+end
+# whether a dart type's tokens are a function type: `Function` outside every group
+function is_function_type(ts::Vector{String})::Bool
+    local depth = 0
+    for t in ts
+        t in ("(", "<", "[", "{") && (depth += 1)
+        t in (")", ">", "]", "}") && (depth -= 1)
+        depth == 0 && t == "Function" && return true
+    end
+    return false
 end
 
 function read_scope()::Scope
@@ -730,10 +851,10 @@ function read_scope()::Scope
     end
     local extended = Set{String}()
     for f in scope(), d in decls[f]
-        local sup = d.kind in (:class, :abstract, :mixin) ? dart_super(where, d, f) : ""
+        local sup = d.kind in (:class, :abstract, :mixin) ? dart_super(d, f) : ""
         isempty(sup) && continue
         local p, n = split_prefix(sup)
-        local k = declaring(where, n, p, f)
+        local k = declaring(n, p, f)
         k === nothing || push!(extended, "$k|$n")
     end
     # a sealed class's kinds: the in-scope classes that extend or implement it, in the pin table's order.
@@ -744,7 +865,7 @@ function read_scope()::Scope
         d.kind in (:class, :abstract, :mixin) || continue
         for sup in vcat(isempty(d.extends) ? String[] : [d.extends], d.implements)
             local p, n = split_prefix(sup)
-            local k = declaring(where, n, p, f)
+            local k = declaring(n, p, f)
             k === nothing || push!(get!(subs, "$k|$n", Tuple{String,String}[]), (f, d.symbol))
         end
     end
@@ -763,39 +884,45 @@ function read_scope()::Scope
     return Scope(where, extended, ext_on, decls, sealed)
 end
 
-# a dart type's tokens as a Julia type, or "" (unannotated) where no row of the table covers it
+# a dart type's tokens, as file `from` resolves them, as a Julia type spelled in file `at`, or ""
+# (unannotated) where no row of the table covers it
 const DART_TYPES = Dict("int" => "Int64", "double" => "Float64", "bool" => "Bool", "String" => "String",
-                        "num" => "Real", "void" => "Nothing", "Object" => "Any", "dynamic" => "Any")
-function julia_type(toks::AbstractVector{Tok}, S::Scope, from::AbstractString)::String
+                        "num" => "Real", "void" => "Nothing", "Object" => "Any", "dynamic" => "Any",
+                        "Function" => "Function")
+function julia_type(toks::AbstractVector{Tok}, S::Scope, from::AbstractString; at::AbstractString = from, exact::Bool = false)::String
     isempty(toks) && return ""
     local ts = [t.text for t in toks if !(t.kind == :ident && t.text in ("final", "const", "covariant", "required", "late", "var"))]
     isempty(ts) && return ""
     local nullable = ts[end] == "?"
     nullable && (ts = ts[1:end-1])
-    local j = julia_type_strs(ts, S, from)
+    local j = julia_type_strs(ts, S, from, at, exact)
     isempty(j) && return ""
     return nullable ? "Union{Nothing,$j}" : j
 end
-function julia_type_strs(ts::Vector{String}, S::Scope, from::AbstractString)::String
+# `exact` keeps an in-scope generic class's arguments (a typedef's alias names its instance); a
+# parameter's annotation names the class, its arguments dropped, as a stub cannot be parametric
+function julia_type_strs(ts::Vector{String}, S::Scope, from::AbstractString, at::AbstractString = from, exact::Bool = false)::String
     isempty(ts) && return ""
     # a prefixed type, `w.X` / `ir.X` / `kernel.X`
     local prefix = ""
     if length(ts) >= 3 && ts[2] == "." && occursin(r"^[A-Za-z_$][\w$]*$", ts[1])
         prefix = ts[1]; ts = ts[3:end]
     end
+    is_function_type(ts) && return "Function"
     local head = ts[1]
     if length(ts) == 1
         prefix == "" && haskey(DART_TYPES, head) && return DART_TYPES[head]
-        return type_ref(S, isempty(prefix) ? head : "$prefix.$head", from)
+        return type_ref(S, isempty(prefix) ? head : "$prefix.$head", from; at = at)
     end
     if ts[2] == "<" && ts[end] == ">"
         local args = split_args(ts[3:end-1])
-        local jargs = [julia_type_strs(a, S, from) for a in args]
+        local jargs = [julia_type_strs(a, S, from, at) for a in args]
         any(isempty, jargs) && (jargs = [isempty(a) ? "Any" : a for a in jargs])
         prefix == "" && head == "List" && length(jargs) == 1 && return "Vector{$(jargs[1])}"
         prefix == "" && head == "Set" && length(jargs) == 1 && return "Set{$(jargs[1])}"
         prefix == "" && head == "Map" && length(jargs) == 2 && return "Dict{$(jargs[1]),$(jargs[2])}"
-        return type_ref(S, isempty(prefix) ? head : "$prefix.$head", from)
+        local r = type_ref(S, isempty(prefix) ? head : "$prefix.$head", from; at = at)
+        return exact && !isempty(r) ? "$r{$(join(jargs, ','))}" : r
     end
     return ""
 end
@@ -894,7 +1021,7 @@ end
 function julia_name(d::Decl)::Tuple{String,Bool}
     local parts = split(d.symbol, '.'; limit = 2)
     if length(parts) == 1
-        d.kind in (:class, :abstract, :mixin, :enum, :constructor, :factory) && return (d.symbol, false)
+        d.kind in (:class, :abstract, :mixin, :enum, :typedef, :constructor, :factory) && return (d.symbol, false)
         # a member of an unnamed extension: its bare name, `self` its `on` type
         local member = d.kind in (:method, :getter, :setter, :operator) || (!isempty(d.extends) && d.kind in (:function, :variable))
         d.kind == :setter && return ("set_$(snake(d.symbol))!", true)
@@ -930,16 +1057,20 @@ anchor(file::String, d::Decl)::String = "$file:$(d.line) $(d.symbol)"
 # the stub of one declaration
 function stub(file::String, d::Decl, S::Scope, fields::Vector{Decl})::String
     local a = anchor(file, d)
+    if d.kind == :typedef
+        typedef_kind(d) == :record && return "@parity \"$a\" @unported struct $(d.symbol) end"
+        return "@parity \"$a\" const $(d.symbol) = $(julia_type(d.rettype, S, file; exact = true))"
+    end
     if d.kind in (:class, :abstract, :mixin) && haskey(S.sealed, "$file|$(d.symbol)")
         local kinds = S.sealed["$file|$(d.symbol)"]
         return "@parity \"$a\" @closed const $(d.symbol) = Union{" * join((spell(n, k, file) for (k, n) in kinds), ", ") * "}"
     end
     if d.kind in (:class, :abstract, :mixin)
-        local sup = dart_super(S.where, d, file)
+        local sup = dart_super(d, file)
         local sp = type_ref(S, sup, file)
         # a sealed class's kind subtypes nothing: the sum names it
         local p, n = split_prefix(sup)
-        local sk = isempty(sup) ? nothing : declaring(S.where, n, p, file)
+        local sk = isempty(sup) ? nothing : declaring(n, p, file)
         sk !== nothing && haskey(S.sealed, "$sk|$n") && (sp = "")
         local super = isempty(sp) ? "" : " <: $sp"
         if d.kind != :class || "$file|$(d.symbol)" in S.extended
@@ -1001,7 +1132,7 @@ enum_values(file::String, d::Decl)::Vector{String} = String[v for (v, _) in enum
 
 # a file's counted declarations in the order its skeleton holds them: the type declarations first (two
 # passes load them before any signature names them), then every other definition, each in dart's order
-is_type(d::Decl)::Bool = d.kind in (:class, :abstract, :mixin, :enum)
+is_type(d::Decl)::Bool = d.kind in (:class, :abstract, :mixin, :enum) || d.kind == :typedef && typedef_kind(d) == :record
 ordered(ds::Vector{Decl})::Vector{Decl} = vcat(filter(d -> counted(d) && is_type(d), ds), filter(d -> counted(d) && !is_type(d), ds))
 
 # the dart fields of class d, listed in its stub's docstring
@@ -1149,9 +1280,11 @@ function generate(file::String, S::Scope, anchors::Dict{String,Tuple{String,Bool
         isempty(a) && error("skeleton: $path:$(s.first): a definition with no @parity anchor")
         haskey(bykey, a) || error("skeleton: $path:$(s.first): $(s.anchor) names no declaration at the pin")
         local f, d = bykey[a]
+        # a typedef's alias is the generator's to write: the `const` of its Julia type
+        local gen = generated(s) || d.kind == :typedef && typedef_kind(d) == :alias
         # a stub whose definition another file fills goes
-        (generated(s) && haskey(anchors, a) && !anchors[a][2] && anchors[a][1] != path) && continue
-        local text = generated(s) ? stub(f, d, S, fields_of(d, S.decls[f])) :
+        (gen && haskey(anchors, a) && !anchors[a][2] && anchors[a][1] != path) && continue
+        local text = gen ? stub(f, d, S, fields_of(d, S.decls[f])) :
                      a == s.anchor ? s.text : replace(s.text, "\"" * s.anchor * "\"" => "\"" * a * "\""; count = 1)
         push!(texts, text); push!(held, a)
     end
@@ -1177,7 +1310,7 @@ end
 # so is an enum's value, which a filled enum that is a struct (dart's enum with fields and a mixin,
 # V128Instruction) defines as a constant anchored at its line
 function by_anchor(S::Scope)::Dict{String,Tuple{String,Decl}}
-    local out = Dict(anchor(f, d) => (f, d) for f in scope() for d in S.decls[f] if d.kind != :typedef)
+    local out = Dict(anchor(f, d) => (f, d) for f in scope() for d in S.decls[f] if counted(d) || d.kind == :field)
     for f in scope(), d in S.decls[f]
         d.kind == :enum || continue
         for (v, line) in enum_value_lines(f, d)
@@ -1408,9 +1541,9 @@ function merge_main(tree::AbstractString, darts::Vector{String}; forwards::Set{S
         local text = a == s.anchor ? s.text : replace(s.text, "\"" * s.anchor * "\"" => "\"" * a * "\""; count = 1)
         text = adapt(text, module_of(key), top, members)
         if d.kind in (:class, :abstract, :mixin) && occursin(r"(?:mutable )?struct ", text)
-            local sup = dart_super(S.where, d, key)
+            local sup = dart_super(d, key)
             local p, n = split_prefix(sup)
-            local sk = isempty(sup) ? nothing : declaring(S.where, n, p, key)
+            local sk = isempty(sup) ? nothing : declaring(n, p, key)
             local sp = sk !== nothing && haskey(S.sealed, "$sk|$n") ? "" : type_ref(S, sup, key)
             text = fix_super(text, sp, forwards)
         end
@@ -1516,9 +1649,12 @@ function scope_faults()::Vector{String}
 end
 
 # ---- the commands --------------------------------------------------------------------------------
-# the definitions a file holds, as the generator counts them: every declaration but a typedef and an
-# instance field (a field is part of its struct; a static field is a stub function)
-counted(d::Decl)::Bool = !(d.kind in (:typedef, :extension)) && !(d.kind == :field && !("static" in d.modifiers))
+# the definitions a file holds, as the generator counts them: every declaration but an extension (its
+# members are), a function typedef (a parameter's type, `Function`) and an instance field (a field is
+# part of its struct; a static field is a stub function). A typedef that is data, a record or an alias,
+# is a definition
+counted(d::Decl)::Bool = d.kind != :extension && !(d.kind == :typedef && typedef_kind(d) == :function) &&
+    !(d.kind == :field && !("static" in d.modifiers))
 
 function count_main()
     local total = 0

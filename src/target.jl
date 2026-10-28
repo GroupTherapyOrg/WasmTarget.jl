@@ -63,7 +63,7 @@ WasmTarget's dart fields: `removeAsserts`, `mode`, `enableExperimentalFfi`, `ena
 
 @parity "dart2wasm/lib/target.dart:475 WasmTarget._instantiateInvocation" @unported function _instantiate_invocation(self::WasmTarget, core_types, name::String, arguments) end
 
-@parity "dart2wasm/lib/target.dart:537 WasmTarget.instantiateInvocation" @unported function instantiate_invocation(self::WasmTarget, core_types, receiver::WasmBuilder.Expression, name::String, arguments, offset::Int64, is_super::Bool) end
+@parity "dart2wasm/lib/target.dart:537 WasmTarget.instantiateInvocation" @unported function instantiate_invocation(self::WasmTarget, core_types, receiver, name::String, arguments, offset::Int64, is_super::Bool) end
 
 @parity "dart2wasm/lib/target.dart:549 WasmTarget.supportsSetLiterals" @unported function supports_set_literals(self::WasmTarget) end
 

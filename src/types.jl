@@ -99,11 +99,11 @@ _FunctionTypeParameterOffsetCollector's dart fields: `types`, `_functionStack`, 
 
 @parity "dart2wasm/lib/types.dart:275 Types._makeFutureOrType" @unported function _make_future_or_type(self::Types, code_gen::AstCodeGenerator, type_) end
 
-@parity "dart2wasm/lib/types.dart:282 Types._makeFunctionType" @unported function _make_function_type(self::Types, code_gen::AstCodeGenerator, type_::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/types.dart:282 Types._makeFunctionType" @unported function _make_function_type(self::Types, code_gen::AstCodeGenerator, type_) end
 
 @parity "dart2wasm/lib/types.dart:349 Types.makeType" @unported function make_type(self::Types, code_gen::AstCodeGenerator, type_) end
 
-@parity "dart2wasm/lib/types.dart:413 Types.computeFunctionTypeParameterOffset" @unported function compute_function_type_parameter_offset(self::Types, type_::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/types.dart:413 Types.computeFunctionTypeParameterOffset" @unported function compute_function_type_parameter_offset(self::Types, type_) end
 
 @parity "dart2wasm/lib/types.dart:423 Types.getFunctionTypeParameterIndex" @unported function get_function_type_parameter_index(self::Types, type_) end
 
@@ -179,7 +179,7 @@ _FunctionTypeParameterOffsetCollector's dart fields: `types`, `_functionStack`, 
 
 @parity "dart2wasm/lib/types.dart:1492 _FunctionTypeParameterOffsetCollector" @unported function _FunctionTypeParameterOffsetCollector(types) end
 
-@parity "dart2wasm/lib/types.dart:1495 _FunctionTypeParameterOffsetCollector.visitFunctionType" @unported function visit_function_type(self::_FunctionTypeParameterOffsetCollector, node::WasmBuilder.IR.FunctionType) end
+@parity "dart2wasm/lib/types.dart:1495 _FunctionTypeParameterOffsetCollector.visitFunctionType" @unported function visit_function_type(self::_FunctionTypeParameterOffsetCollector, node) end
 
 @parity "dart2wasm/lib/types.dart:1526 _FunctionTypeParameterOffsetCollector.visitStructuralParameterType" @unported function visit_structural_parameter_type(self::_FunctionTypeParameterOffsetCollector, node) end
 

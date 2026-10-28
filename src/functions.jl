@@ -92,9 +92,9 @@ MethodCallShape's dart fields: `typeCount`, `positionalCount`, `named`.
 
 @parity "dart2wasm/lib/functions.dart:646 _FunctionTypeGenerator._getConstructorBodyType" @unported function _get_constructor_body_type(self::_FunctionTypeGenerator, node) end
 
-@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member, type_parameters::Vector{Any}, parameters::Vector{Any}, translate_type; is_body_parameter = nothing) end
+@parity "dart2wasm/lib/functions.dart:697 _getConstructorInputTypes" @unported function _get_constructor_input_types(translator::Translator, member, type_parameters::Vector{Any}, parameters::Vector{Any}, translate_type::Function; is_body_parameter = nothing) end
 
-@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" @unported function _get_input_types(translator::Translator, target, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}, is_import_or_export::Bool, translate_type) end
+@parity "dart2wasm/lib/functions.dart:731 _getInputTypes" @unported function _get_input_types(translator::Translator, target, receiver_type::Union{Nothing,WasmBuilder.IR.ValueType}, is_import_or_export::Bool, translate_type::Function) end
 
 @parity "dart2wasm/lib/functions.dart:787 makeFunctionTypeForBody" @unported function make_function_type_for_body(translator::Translator, member, synthesize_null_return_value::Bool, synthesize_no_return::Bool) end
 

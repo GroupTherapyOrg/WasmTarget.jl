@@ -889,7 +889,7 @@ end
     WasmBuilder.write_byte(s, t.mutable ? 0x01 : 0x00)
 end
 
-@parity "wasm_builder/lib/src/ir/type.dart:1301 _WithMutability.deserialize" @unported function _WithMutability_deserialize(d, fun) end
+@parity "wasm_builder/lib/src/ir/type.dart:1301 _WithMutability.deserialize" @unported function _WithMutability_deserialize(d, fun::Function) end
 
 @parity "wasm_builder/lib/src/ir/type.dart:1311 _WithMutability.toString" Base.show(io::IO, t::_WithMutability) = print(io, t.mutable ? "var " : "const ", t.type)
 

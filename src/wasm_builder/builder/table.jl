@@ -6,6 +6,6 @@ TableBuilder's dart fields: `moduleBuilder`.
 """
 @parity "wasm_builder/lib/src/builder/table.dart:9 TableBuilder" @unported struct TableBuilder <: IR.Table end
 
-@parity "wasm_builder/lib/src/builder/table.dart:12 TableBuilder" @unported function TableBuilder(module_builder, index, type_::IR.RefType, min_size::Int64, max_size::Union{Nothing,Int64}) end
+@parity "wasm_builder/lib/src/builder/table.dart:12 TableBuilder" @unported function TableBuilder(module_builder, index::IR.Finalizable, type_::IR.RefType, min_size::Int64, max_size::Union{Nothing,Int64}) end
 
 @parity "wasm_builder/lib/src/builder/table.dart:21 TableBuilder.forceBuild" @unported function force_build(self::TableBuilder) end

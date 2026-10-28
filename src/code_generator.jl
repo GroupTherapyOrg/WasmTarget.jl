@@ -115,11 +115,11 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:126 AstCodeGenerator.addLocal" @unported function add_local(self::AstCodeGenerator, type_::WasmBuilder.IR.ValueType; name = nothing) end
 
-@parity "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf" @unported function dart_type_of(self::AstCodeGenerator, exp::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/code_generator.dart:129 AstCodeGenerator.dartTypeOf" @unported function dart_type_of(self::AstCodeGenerator, exp) end
 
 @parity "dart2wasm/lib/code_generator.dart:138 AstCodeGenerator.unimplemented" @unported function unimplemented(self::AstCodeGenerator, node, message::Any, expected_types::Vector{WasmBuilder.IR.ValueType}) end
 
-@parity "dart2wasm/lib/code_generator.dart:152 AstCodeGenerator.defaultExpression" @unported function default_expression(self::AstCodeGenerator, node::WasmBuilder.Expression, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:152 AstCodeGenerator.defaultExpression" @unported function default_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:176 AstCodeGenerator.setSourceMapSource" @unported function set_source_map_source(self::AstCodeGenerator, source) end
 
@@ -159,7 +159,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:655 AstCodeGenerator.throwWasmRefError" @unported function throw_wasm_ref_error(self::AstCodeGenerator, expected::String) end
 
-@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @unported function translate_expression(self::AstCodeGenerator, node::WasmBuilder.Expression, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:665 AstCodeGenerator.translateExpression" @unported function translate_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:690 AstCodeGenerator.translateVariableDeclaration" @unported function translate_variable_declaration(self::AstCodeGenerator, node) end
 
@@ -183,7 +183,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:763 AstCodeGenerator.visitSuperInitializer" @unported function visit_super_initializer(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" @unported function visit_block(self::AstCodeGenerator, node::WasmBuilder.Block) end
+@parity "dart2wasm/lib/code_generator.dart:768 AstCodeGenerator.visitBlock" @unported function visit_block(self::AstCodeGenerator, node) end
 
 @parity "dart2wasm/lib/code_generator.dart:775 AstCodeGenerator.visitLabeledStatement" @unported function visit_labeled_statement(self::AstCodeGenerator, node) end
 
@@ -191,7 +191,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:789 AstCodeGenerator.visitVariable" @unported function visit_variable(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" @unported function initialize_variable(self::AstCodeGenerator, node, push_initial_value) end
+@parity "dart2wasm/lib/code_generator.dart:842 AstCodeGenerator.initializeVariable" @unported function initialize_variable(self::AstCodeGenerator, node, push_initial_value::Function) end
 
 @parity "dart2wasm/lib/code_generator.dart:867 AstCodeGenerator.visitEmptyStatement" @unported function visit_empty_statement(self::AstCodeGenerator, node) end
 
@@ -205,11 +205,11 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:1197 AstCodeGenerator.visitExpressionStatement" @unported function visit_expression_statement(self::AstCodeGenerator, node) end
 
-@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" @unported function _has_logical_operator(self::AstCodeGenerator, condition::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/code_generator.dart:1201 AstCodeGenerator._hasLogicalOperator" @unported function _has_logical_operator(self::AstCodeGenerator, condition) end
 
-@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" @unported function branch_if(self::AstCodeGenerator, condition::Union{Nothing,WasmBuilder.Expression}, target::WasmBuilder.Label; negated::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:1208 AstCodeGenerator.branchIf" @unported function branch_if(self::AstCodeGenerator, condition, target::WasmBuilder.Label; negated::Bool) end
 
-@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition::WasmBuilder.Expression, then, otherwise, result::Vector{WasmBuilder.IR.ValueType}) end
+@parity "dart2wasm/lib/code_generator.dart:1242 AstCodeGenerator._conditional" @unported function _conditional(self::AstCodeGenerator, condition, then::Function, otherwise::Union{Nothing,Function}, result::Vector{WasmBuilder.IR.ValueType}) end
 
 @parity "dart2wasm/lib/code_generator.dart:1277 AstCodeGenerator.visitIfStatement" @unported function visit_if_statement(self::AstCodeGenerator, node) end
 
@@ -255,13 +255,13 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:1861 AstCodeGenerator.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation" @unported function _handle_dynamic_invocation(self::AstCodeGenerator, receiver::WasmBuilder.Expression, arguments, member_name) end
+@parity "dart2wasm/lib/code_generator.dart:1868 AstCodeGenerator._handleDynamicInvocation" @unported function _handle_dynamic_invocation(self::AstCodeGenerator, receiver, arguments, member_name) end
 
 @parity "dart2wasm/lib/code_generator.dart:1926 AstCodeGenerator.visitEqualsCall" @unported function visit_equals_call(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2022 AstCodeGenerator.visitEqualsNull" @unported function visit_equals_null(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node, interface_target, kind::_VirtualCallKind, push_receiver, push_arguments; use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall" @unported function _virtual_call(self::AstCodeGenerator, node, interface_target, kind::_VirtualCallKind, push_receiver::Function, push_arguments::Function; use_unchecked_entry::Bool) end
 
 @parity "dart2wasm/lib/code_generator.dart:2127 AstCodeGenerator.visitVariableGet" @unported function visit_variable_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -283,13 +283,13 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:2335 AstCodeGenerator.visitDynamicSet" @unported function visit_dynamic_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" @unported function _direct_get(self::AstCodeGenerator, target, receiver::WasmBuilder.Expression) end
+@parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" @unported function _direct_get(self::AstCodeGenerator, target, receiver) end
 
 @parity "dart2wasm/lib/code_generator.dart:2374 AstCodeGenerator.visitInstanceTearOff" @unported function visit_instance_tear_off(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" @unported function visit_instance_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet" @unported function _direct_set(self::AstCodeGenerator, target, receiver::WasmBuilder.Expression, value::WasmBuilder.Expression; preserved::Bool, use_unchecked_entry::Bool) end
+@parity "dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet" @unported function _direct_set(self::AstCodeGenerator, target, receiver, value; preserved::Bool, use_unchecked_entry::Bool) end
 
 @parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" @unported function visit_function_declaration(self::AstCodeGenerator, node) end
 
@@ -297,7 +297,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:2544 AstCodeGenerator._instantiateClosure" @unported function _instantiate_closure(self::AstCodeGenerator, function_node) end
 
-@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" @unported function _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type, push_context) end
+@parity "dart2wasm/lib/code_generator.dart:2560 AstCodeGenerator._pushClosure" @unported function _push_closure(self::AstCodeGenerator, closure::ClosureImplementation, function_type, push_context::Function) end
 
 @parity "dart2wasm/lib/code_generator.dart:2579 AstCodeGenerator._pushContext" @unported function _push_context(self::AstCodeGenerator, function_node) end
 
@@ -323,9 +323,9 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:2900 AstCodeGenerator.visitStringConcatenation" @unported function visit_string_concatenation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node::WasmBuilder.IR.Throw, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2955 AstCodeGenerator.visitThrow" @unported function visit_throw(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node::WasmBuilder.IR.Rethrow, expected_type::WasmBuilder.IR.ValueType) end
+@parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2975 AstCodeGenerator.visitConstantExpression" @unported function visit_constant_expression(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -341,9 +341,9 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:3014 AstCodeGenerator.visitListLiteral" @unported function visit_list_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" @unported function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{WasmBuilder.Expression}, element_type) end
+@parity "dart2wasm/lib/code_generator.dart:3049 AstCodeGenerator.makeArrayFromExpressions" @unported function make_array_from_expressions(self::AstCodeGenerator, expressions::Vector{Any}, element_type) end
 
-@parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" @unported function make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item) end
+@parity "dart2wasm/lib/code_generator.dart:3062 AstCodeGenerator.makeArray" @unported function make_array(self::AstCodeGenerator, array_type::WasmBuilder.IR.ArrayType, length::Int64, generate_item::Function) end
 
 @parity "dart2wasm/lib/code_generator.dart:3071 AstCodeGenerator.visitMapLiteral" @unported function visit_map_literal(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -521,7 +521,7 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:5157 BrTableInfo._" @unported function BrTableInfo__(min_value, max_value, case_map, _br_table_expr) end
 
-@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" @unported function BrTableInfo_build(case_map::Dict{Int64,Any}, br_table_expr; min_value::Int64, max_value::Int64) end
+@parity "dart2wasm/lib/code_generator.dart:5162 BrTableInfo.build" @unported function BrTableInfo_build(case_map::Dict{Int64,Any}, br_table_expr::Function; min_value::Int64, max_value::Int64) end
 
 @parity "dart2wasm/lib/code_generator.dart:5174 BrTableInfo._isTooSparse" @unported function BrTableInfo__is_too_sparse(min::Int64, max::Int64, case_map::Dict{Int64,Any}) end
 
@@ -541,19 +541,19 @@ LambdaCallTarget's dart fields: `_translator`, `_lambda`, `name`, `function`.
 
 @parity "dart2wasm/lib/code_generator.dart:5553 MacroAssembler.emitUnreachableIfNoResult" @unported function emit_unreachable_if_no_result(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5573 MacroAssembler.emitDenseTableBranch" @unported function emit_dense_table_branch(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}, n::Int64, push_branch_expression, handle_case, handle_default) end
+@parity "dart2wasm/lib/code_generator.dart:5573 MacroAssembler.emitDenseTableBranch" @unported function emit_dense_table_branch(self::WasmBuilder.InstructionsBuilder, outputs::Vector{WasmBuilder.IR.ValueType}, n::Int64, push_branch_expression::Function, handle_case::Function, handle_default::Function) end
 
-@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" @unported function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start, push_limit, gen_body, step = nothing) end
+@parity "dart2wasm/lib/code_generator.dart:5600 MacroAssembler.incrementingLoop" @unported function incrementing_loop(self::WasmBuilder.InstructionsBuilder; push_start::Function, push_limit::Function, gen_body::Function, step = nothing) end
 
-@parity "dart2wasm/lib/code_generator.dart:5636 MacroAssembler.concatenateWasmArrays" @unported function concatenate_wasm_arrays(self::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType; push_default_element) end
+@parity "dart2wasm/lib/code_generator.dart:5636 MacroAssembler.concatenateWasmArrays" @unported function concatenate_wasm_arrays(self::WasmBuilder.InstructionsBuilder, array_type::WasmBuilder.IR.ArrayType; push_default_element::Function) end
 
 @parity "dart2wasm/lib/code_generator.dart:5684 MacroAssembler.emitClassIdRangeCheck" @unported function emit_class_id_range_check(self::WasmBuilder.InstructionsBuilder, ranges::Vector{Range}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" @unported function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match, miss) end
+@parity "dart2wasm/lib/code_generator.dart:5709 MacroAssembler.classIdSearch" @unported function class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" @unported function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match, miss) end
+@parity "dart2wasm/lib/code_generator.dart:5729 MacroAssembler._binaryClassIdSearch" @unported function _binary_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
-@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" @unported function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match, miss) end
+@parity "dart2wasm/lib/code_generator.dart:5805 MacroAssembler._linearClassIdSearch" @unported function _linear_class_id_search(self::WasmBuilder.InstructionsBuilder, ranges, outputs::Vector{WasmBuilder.IR.ValueType}, match::Function, miss::Union{Nothing,Function}) end
 
 @parity "dart2wasm/lib/code_generator.dart:5849 MacroAssembler.emitInstantiationClosureCheck" @unported function emit_instantiation_closure_check(self::WasmBuilder.InstructionsBuilder, translator::Translator) end
 

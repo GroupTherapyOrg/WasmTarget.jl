@@ -8,7 +8,7 @@ FunctionBuilder's dart fields: `moduleBuilder`, `_body`.
 
 @parity "wasm_builder/lib/src/builder/function.dart:14 FunctionBuilder.locals" @unported function locals(self::FunctionBuilder) end
 
-@parity "wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder" @unported function FunctionBuilder(module_builder, index, type_::IR.FunctionType, optional...) end
+@parity "wasm_builder/lib/src/builder/function.dart:19 FunctionBuilder" @unported function FunctionBuilder(module_builder, index::IR.Finalizable, type_::IR.FunctionType, optional...) end
 
 @parity "wasm_builder/lib/src/builder/function.dart:28 FunctionBuilder.body" @unported function body(self::FunctionBuilder) end
 
