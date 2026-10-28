@@ -808,15 +808,17 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2149 AstCodeGenerator.visitVariableSet" @unported function visit_variable_set(self::AstCodeGenerator, node::NoCounterpart, expected_type::WasmBuilder.IR.ValueType) end
 
 # Julia's read of a module binding (a GlobalRef statement or operand) is Kernel's StaticGet. dart calls
-# the static field's getter; a binding Julia declares constant is its value, a compile-time constant
-# (dart's ConstantExpression of a const field), and a binding that can change, whose storage arrives
-# with globals.dart's Julia bindings, rejects, located
+# the static field's getter; a binding whose value no load can change (globals.dart's one rule,
+# DartGlobals.getConstantInitializer: const and free of mutation) is that compile-time constant, and
+# any other reaches the getter, which rejects, located, until the static field accessor is ported
 @parity "dart2wasm/lib/code_generator.dart:2183 AstCodeGenerator.visitStaticGet" function visit_static_get(self::AstCodeGenerator, node::Union{NirGlobalRead,NirGlobal}, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
     local intrinsic_result = generate_static_getter_intrinsic(self.intrinsifier[], node)
     intrinsic_result === nothing || return intrinsic_result
-    isconst(node.ref.mod, node.ref.name) ||
-        reject!(Unquarantined("src/julia: a read of the binding $(node.ref), which can change"), "$(self.enclosing_member)")
-    instantiate_constant(self, NirConst(Core.Const(getglobal(node.ref.mod, node.ref.name))), expected_type)
+    local constant = get_constant_initializer(self.translator.dart_globals[], node.ref)
+    constant === nothing &&
+        reject!(Unported("dart2wasm/lib/code_generator.dart:4937 StaticFieldImplicitAccessorCodeGenerator._generateGetter"),
+            "$(self.enclosing_member): a read of the binding $(node.ref), which a load can change (its getter)")
+    instantiate_constant(self, constant, expected_type)
     return expected_type
 end
 

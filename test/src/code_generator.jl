@@ -393,6 +393,7 @@ end
 module GlobalCases
 const SCALE = Int32(7)
 counter = 0
+const BOX = Ref(0)
 scaled(x::Int32) = x * SCALE
 end
 
@@ -400,11 +401,17 @@ end
     # a GlobalRef of a constant binding is its value, instantiated as a constant: it reaches the
     # translator's constants, which no translate() has assigned here
     local g = codegen_of(GlobalCases.scaled, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    D._init_modules(g.translator, nothing)
+    collect(D.ClassInfoCollector(g.translator))
+    g.translator.dart_globals[] = D.DartGlobals(g.translator)
     local e = rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :SCALE)), IR.NumType_i32))
     @test e.rejection isa W.Unported && occursin("Translator.constants", e.rejection.anchor)
-    # a binding that can change rejects, located, as a statement or an operand
-    @test rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
-    @test rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
+    # a binding a load can change (non-const, or const holding a mutable object, globals.dart's one
+    # rule) reaches the getter, which rejects, located, as a statement or an operand
+    for name in (:counter, :BOX)
+        @test occursin("_generateGetter", rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, name)), IR.NumType_i32)).rejection.anchor)
+    end
+    @test rejection(() -> D.visit_static_get(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unported
 end
 
 module ControlCases
