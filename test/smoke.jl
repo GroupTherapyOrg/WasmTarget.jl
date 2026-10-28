@@ -15,7 +15,7 @@
 # Run:   julia --project=. test/smoke.jl [group ...]   # only matching groups
 # Exit:  0 = no case wrong or errored, 1 otherwise.
 # Exact:  WT_SMOKE_EXACT=1: exactly the groups (or xfail groups) named, in the order named; a name
-#         no group has fails the run (dev/block.jl selects its groups this way)
+#         no group has fails the run
 # Part:   WT_SMOKE_PART=i/N: one of N parts (i in 0..N-1), dealt by test/smoke_times.tsv
 # Times:  WT_SMOKE_TIMES=1 also prints each group's wall seconds and the package load's
 # ============================================================================
@@ -26,7 +26,6 @@ const FILTER = lowercase.(ARGS)
 const EXACT = get(ENV, "WT_SMOKE_EXACT", "") == "1"
 _want(group) = isempty(FILTER) || (EXACT ? lowercase(group) in FILTER : any(f -> occursin(f, lowercase(group)), FILTER))
 # the groups of `list` a run takes: in the file's order, or under WT_SMOKE_EXACT in the order named
-# (dev/block.jl names its fixed core first, so the core's times do not depend on what follows it)
 _selected(list) = EXACT ? sort(filter(g -> _want(first(g)), list); by = g -> findfirst(==(lowercase(first(g))), FILTER)) :
     filter(g -> _want(first(g)), list)
 # WT_SMOKE_PART=i/N (dev/lanes.sh --lane smoke --part i/N, one job of dev/gate.sh's matrix): the
@@ -151,7 +150,7 @@ function main()
         end
         _smoke_time("group $group", tg)
     end
-    # the median case's wall: dev/block.jl's per-case budget
+    # the median case's wall
     SMOKE_TIMES && !isempty(case_secs) &&
         println("smoke time: case median ", round(sort(case_secs)[(length(case_secs) + 1) ÷ 2]; digits = 3), " s")
     local dt = round(time() - t0; digits = 1)

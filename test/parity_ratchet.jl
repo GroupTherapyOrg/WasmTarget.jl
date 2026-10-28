@@ -33,7 +33,7 @@ const BASELINE_PATH = joinpath(ROOT, "dev", "parity_baseline.toml")
 
 
 # Each file is read once per run: the locks read the tree as it is when the run starts, and ~200
-# of them walking src/ line by line read every file ~40 times (the gate's budget, L194).
+# of them walking src/ line by line read every file ~40 times (the landing check's minute, dev/check.sh).
 const _LINES = Dict{String,Vector{String}}()
 _file_lines(path::AbstractString)::Vector{String} = get!(() -> readlines(path), _LINES, String(path))
 
@@ -1099,7 +1099,7 @@ end
 function hook_accepts(message::String)::Bool
     local f = tempname()
     write(f, message)
-    local ok = success(pipeline(setenv(`sh $(joinpath(ROOT, "dev", "hooks", "commit-msg")) $f`, filter(p -> !startswith(p, "WT_HOOK_FILTER="), ["$k=$v" for (k, v) in ENV])); stderr = devnull))
+    local ok = success(pipeline(`sh $(joinpath(ROOT, "dev", "hooks", "commit-msg")) $f`; stderr = devnull))
     rm(f; force = true)
     return ok
 end
@@ -1117,6 +1117,9 @@ end
 # ---- L208: the rebuild's src progress, printed after every landing (dev/LEDGER.md D40) ---------------
 # dev/src_progress.sh's output for planted numbers, or for this tree with none
 src_progress(args::String...)::String = read(`bash $(joinpath(ROOT, "dev", "src_progress.sh")) $args`, String)
+
+# the line of dev/ship.sh that prints, after its push, the src progress line its check's ratchet printed
+const SHIP_SRC_LINE = raw"    grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0"
 
 # L208's negative test: four src-less landings print no note, five print it, the line keeps its form
 function src_progress_negatives_missed()::Vector{String}
@@ -1230,16 +1233,24 @@ function dart_test_files_at_pin()::Union{Vector{String},Nothing}
     return sort!(filter(f -> endswith(f, ".dart"), String.(split(String(take!(io)), '\n'; keepempty = false))))
 end
 
-# the smoke corpus's case keys, `<group>/<case>`, by dev/block.jl's one reader of them (corpus_case_keys)
-const _BLOCK_ENV = Ref{Union{Nothing,Module}}(nothing)
-function block_env()::Module
-    _BLOCK_ENV[] === nothing || return _BLOCK_ENV[]
-    local m = Module(:BlockEnv)
-    Base.include(m, joinpath(ROOT, "dev", "block.jl"))
-    return _BLOCK_ENV[] = m
+# a smoke corpus's case keys, `<group>/<case>`: each `_c("<key>"` line, each case `("<name>",` of a
+# `_g`/`_xf` group, and `<group>/*` for a group its generator file builds (`_lazy_g`/`_lazy_xf`)
+function corpus_case_keys(text::AbstractString)::Set{String}
+    local keys = Set{String}()
+    local group = ""
+    for l in eachline(IOBuffer(text))
+        local p = match(r"^\s*_c\(\s*\"([^\"]+)\"", l)
+        p === nothing || (push!(keys, p[1]); continue)
+        local lz = match(r"^\s*_lazy_(?:g|xf)\(\s*\"([^\"]+)\"", l)
+        lz === nothing || (push!(keys, lz[1] * "/*"); group = ""; continue)
+        local g = match(r"^\s*_(?:g|xf)\(\s*\"([^\"]+)\"", l)
+        g === nothing || (group = g[1]; continue)
+        local c = match(r"^\s*\(\s*\"([^\"]+)\"\s*,", l)
+        c === nothing || isempty(group) || push!(keys, group * "/" * c[1])
+    end
+    return keys
 end
-smoke_case_keys()::Set{String} =
-    Base.invokelatest(getglobal(block_env(), :corpus_case_keys), _text(joinpath(ROOT, "test", "smoke_corpus.jl")))
+smoke_case_keys()::Set{String} = corpus_case_keys(_text(joinpath(ROOT, "test", "smoke_corpus.jl")))
 
 # this tree's faults, and its counts printed
 function dart_tests_faults_here()::Vector{String}
@@ -1569,7 +1580,7 @@ end
 # the locks that owe their always-run negative, exactly; R45 counts them, so the list only shrinks: a
 # lock leaves it in the commit that gives it its negative, and a lock added after it never joins it
 const NEGATIVE_OWED = Set{String}(split("""
-    L125 L126 L129 L130 L148 L153 L162 L163 L194 L195 L197 L198
+    L125 L126 L129 L130 L153 L162 L163
 """))
 
 # the faults of the lock table against NEGATIVE_OWED: a lock outside it with no always-run negative,
@@ -1607,191 +1618,67 @@ function negative_rule_negatives_missed()::Vector{String}
     return out
 end
 
-# ---- the landing log (L197): `dev/land.sh merge` appends a line per landing to the main tree's
-# dev/.loop/landings.tsv; these decide over its text and the march branch's history ----------------
-const L197_START = "36e3966ebd22fce82f2688f039e236287bebdc00"   # the last landing before the log
-const L197_TARGET = 300         # seconds of a landing's own mechanics, every change alike (Dale 2026-10-21: "a
-                                # few minutes"; "wicked fast, not tens of minutes to hours"; A30E1)
-const L197_BAND = 600           # the band's edge: a median past it is red, one between the target and it a
-                                # landing in minutes still, never a failure (L205: a target is not a tripwire)
-const L197_COLUMNS_V1 = "landed_at\tcommit\tauthor_at\tland_start\tgate_runs\tgate_wall_s\tland_wall_s\tedit_to_landed_s\tfiles\tinsertions\ttiming"
-const L197_COLUMNS_V2 = L197_COLUMNS_V1 * "\town_s\tqueue_wait_s"   # A30E1: a landing's own time and its waits
-const L197_COLUMNS = L197_COLUMNS_V2 * "\tgate_state"                 # whether its gate ran warm: warm, cold, cold-after-warm, fresh
 
-# the seconds since 1970 of a `YYYY-MM-DDTHH:MM:SSZ` time (days from the civil date)
-function _l197_epoch(s::AbstractString)::Int
-    m = match(r"^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$", s)
-    m === nothing && error("$(repr(s)) is not a UTC time YYYY-MM-DDTHH:MM:SSZ")
-    y, mo, d, h, mi, se = parse.(Int, m.captures)
-    y -= mo <= 2
-    era = fld(y, 400); yoe = y - era * 400
-    doe = yoe * 365 + yoe ÷ 4 - yoe ÷ 100 + (153 * (mo + (mo > 2 ? -3 : 9)) + 2) ÷ 5 + d - 1
-    return (era * 146097 + doe - 719468) * 86400 + h * 3600 + mi * 60 + se
+# ---- L148: the audit log (dev/AUDIT.md), its entries chained; the lag a report (dev/LEDGER.md D21) ----
+# the commits past the last audited one that an audit is due after (Dale 2026-09-30: every 5 commits)
+const AUDIT_LAG_TARGET = 5
+const AUDIT_AREAS = ("Area: builder", "Area: collection and planning", "Area: emission and diagnostics",
+                     "Area: enforcement and prose")
+
+audit_entries(txt::AbstractString) = split(txt, r"\n(?=## )")[2:end]
+# the commit the last entry naming one was audited through, or nothing
+function audit_last_through(txt::AbstractString)
+    local last = nothing
+    for e in audit_entries(txt)
+        local m = match(r"audited through ([0-9a-f]{8,40})", e)
+        m === nothing || (last = String(m.captures[1]))
+    end
+    return last
 end
 
-# the commits after L197_START up to the march tip, oldest first, each (sha, author time, paths, lines
-# added), from `git log --reverse --no-merges --numstat --format='C %H %at'`, what dev/land.sh reads
-function _l197_history(text::AbstractString)
-    out = Tuple{String,Int,Vector{String},Int}[]
-    for l in split(text, '\n')
-        if startswith(l, "C ")
-            f = split(l)
-            push!(out, (String(f[2]), parse(Int, f[3]), String[], 0))
-        elseif count(==('\t'), l) >= 2 && !isempty(out)
-            a, _, p = split(l, '\t'; limit = 3)
-            c = out[end]
-            out[end] = (c[1], c[2], push!(c[3], String(p)), c[4] + (a == "-" ? 0 : parse(Int, a)))
+# the faults of an audit log: no entry; an entry missing an area or its Resolution, naming no commit
+# it was audited through, or one that is no ancestor of HEAD (`isancestor`); an entry whose range
+# does not start where the one before it was audited through (a rewritten history fails, A2P5)
+function audit_log_faults(txt::AbstractString, isancestor::Function)::Vector{String}
+    local entries = audit_entries(txt)
+    isempty(entries) && return ["dev/AUDIT.md holds no entry"]
+    local out = String[]
+    local prev = nothing
+    for e in entries
+        local h = first(split(e, '\n'))
+        for area in AUDIT_AREAS
+            occursin(area, e) || push!(out, "$h: no `$area`")
         end
+        occursin("Resolution:", e) || push!(out, "$h: no `Resolution:`")
+        local m = match(r"audited through ([0-9a-f]{8,40})", e)
+        m === nothing && (push!(out, "$h: names no commit it was audited through"); continue)
+        local sha = String(m.captures[1])
+        isancestor(sha) || push!(out, "$h: $sha is no ancestor of HEAD")
+        if prev !== nothing
+            local r = match(r"\(([0-9a-f]{7,40})(?:~1)?\.\.", e)
+            (r !== nothing && (startswith(prev, r.captures[1]) || startswith(r.captures[1], prev))) ||
+                push!(out, "$h: its range does not start at $(first(prev, 8)), the entry before it")
+        end
+        prev = sha
     end
     return out
 end
 
-# what the log gets wrong against the history (a sentence each), and the median's window: every
-# landing has its line (the lines' commits in history order, the last the tip, and each line's files
-# and insertions git's over its range, so a landing that wrote no line changes the next line's
-# numbers), its author_at its range's earliest author time and its edit_to_landed_s landed_at less
-# that, its own_s and queue_wait_s (A30E1) at least 0 and summing to edit_to_landed_s; and over the
-# last 5 lines the upper median of each landing's own mechanics over L197_TARGET at most 1: own_s, its
-# land's work less its wait for another landing's hold, never its waits (a line before A30E1, eleven
-# fields, judged by land_wall_s, its land's start to its push); no excuse takes a landing out of it
-const L197_JUDGED_FROM = 3     # the fewest lines in the window its median is judged over
-function l197_check(log::AbstractString, hist; head::AbstractString = "")
-    bad = String[]
-    rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
-    if !isempty(rows)
-        join(rows[1], '\t') in (L197_COLUMNS, L197_COLUMNS_V2, L197_COLUMNS_V1) || push!(bad, "the log's first line is not its header")
-        rows = rows[2:end]
-    end
-    idx = Dict(h[1] => i for (i, h) in enumerate(hist))
-    ratios = Tuple{String,Float64}[]
-    k = 0
-    for r in rows
-        length(r) in (11, 13, 14) || (push!(bad, "a line of $(length(r)) fields, not 14 (13 before gate_state, 11 before A30E1): $(join(r, ' '))"); continue)
-        length(r) == 14 && !(r[14] in ("warm", "cold", "cold-after-warm", "fresh")) &&
-            push!(bad, "the line of $(first(r[2], 8)): gate_state $(repr(r[14])), not warm, cold, cold-after-warm or fresh")
-        c = String(r[2]); i = get(idx, c, 0)
-        i == 0 && (push!(bad, "the line of $(first(c, 8)): no commit the march branch brought after $(first(L197_START, 8))"); continue)
-        i > k || (push!(bad, "the line of $(first(c, 8)): out of the history's order"); continue)
-        span = hist[k+1:i]
-        paths = unique(reduce(vcat, (h[3] for h in span); init = String[]))
-        ins = sum(h[4] for h in span); author = minimum(h[2] for h in span)
-        from = first(k == 0 ? L197_START : hist[k][1], 8)
-        (parse(Int, r[9]) == length(paths) && parse(Int, r[10]) == ins) ||
-            push!(bad, "the line of $(first(c, 8)): $(r[9]) files and $(r[10]) insertions, where git's range from $from holds $(length(paths)) and $ins: a landing in it wrote no line")
-        _l197_epoch(r[3]) == author || push!(bad, "the line of $(first(c, 8)): author_at $(r[3]) is not its range's earliest author time")
-        e2l = parse(Float64, r[8])
-        abs(e2l - (_l197_epoch(r[1]) - author)) <= 1 || push!(bad, "the line of $(first(c, 8)): edit_to_landed_s $(r[8]) is not landed_at less author_at")
-        own = parse(Float64, length(r) >= 13 ? r[12] : r[7])
-        if length(r) >= 13
-            q = parse(Float64, r[13])
-            (own >= 0 && q >= -1 && abs(own + q - e2l) <= 1) ||
-                push!(bad, "the line of $(first(c, 8)): own_s $(r[12]) and queue_wait_s $(r[13]) do not split its edit_to_landed_s $(r[8])")
-        end
-        push!(ratios, (c, own / L197_TARGET))
-        k = i
-    end
-    k == length(hist) || push!(bad, "$(length(hist) - k) commit(s) up to the march tip $(first(hist[end][1], 8)) landed with no line (dev/land.sh merge writes one per landing)")
-    # the line of the commit being gated is never judged by its own gate: a landing's judgement after
-    # its push runs on the landed head, whose line is already written
-    window = last(filter(x -> x[1] != head, ratios), 5)
-    # judged once the window holds at least 3 lines: a median of fewer is one landing's own number
-    if length(window) >= L197_JUDGED_FROM
-        s = sort(last.(window)); med = s[(length(s) + 2) ÷ 2]
-        med <= L197_BAND / L197_TARGET || push!(bad, "the median own time of the last $(length(window)) landings, land start to push less the wait for others' holds, is $(round(med; digits = 2)) times its $L197_TARGET s target, past its band of $L197_BAND s ($(join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "))): fix the loop's own mechanics")
-    end
-    return bad, window
+# L148's negative test: a chained log holds; a broken chain, a missing area and a commit off HEAD fire
+function audit_log_negatives_missed()::Vector{String}
+    local body = join(AUDIT_AREAS, "\n") * "\nResolution: none open.\n"
+    local e1 = "## one — audited through aaaaaaaa (0000000..aaaaaaaa)\n" * body
+    local e2 = "## two — audited through bbbbbbbb (aaaaaaaa..bbbbbbbb)\n" * body
+    local anc = sha -> sha in ("aaaaaaaa", "bbbbbbbb")
+    local out = String[]
+    isempty(audit_log_faults("# log\n\n" * e1 * "\n" * e2, anc)) || push!(out, "negative missed: a chained log reads faulty")
+    isempty(audit_log_faults("# log\n\n" * e1 * "\n" * replace(e2, "(aaaaaaaa.." => "(cccccccc.."), anc)) &&
+        push!(out, "negative missed: a broken chain")
+    isempty(audit_log_faults("# log\n\n" * replace(e1, "Area: builder\n" => ""), anc)) && push!(out, "negative missed: an area left out")
+    isempty(audit_log_faults("# log\n\n" * e1 * "\n" * e2, sha -> sha == "aaaaaaaa")) && push!(out, "negative missed: a commit off HEAD")
+    audit_last_through("# log\n\n" * e1 * "\n" * e2) == "bbbbbbbb" || push!(out, "negative missed: the last entry's commit")
+    return out
 end
-
-# L197: a note for each of the last 5 landings whose own time passed the band (own_s, A30E1), naming it:
-# a single slow landing is reported, never failed; the median of five judges the cadence (ledger D13)
-function l197_slow_notes(log::AbstractString)::Vector{String}
-    rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
-    own = [(String(r[2]), parse(Float64, r[12])) for r in rows if length(r) >= 13 && r[12] != "own_s"]
-    return ["$(first(c, 8)) took $(round(o; digits = 1)) s of its own, past the $L197_BAND-s band: reported, the median of five judges"
-            for (c, o) in last(own, 5) if o > L197_BAND]
-end
-
-# L197: how many of the last 5 landings with a gate_state ran their gate cold, naming each that ran cold
-# after a warm-up of its change (`dev/land.sh warm`), the warm-up having not held; reported, not judged:
-# the target is a cold gate only on a tree's first landing
-function l197_cold(log::AbstractString)::String
-    rows = [split(l, '\t') for l in split(log, '\n') if !isempty(l)]
-    st = last([(String(r[2]), String(r[14])) for r in rows if length(r) == 14 && r[14] != "gate_state"], 5)
-    isempty(st) && return "no landing records its gate's state yet"
-    cold = count(x -> startswith(x[2], "cold"), st)
-    after = [first(c, 8) for (c, g) in st if g == "cold-after-warm"]
-    return "cold $cold of the last $(length(st)) landings' gates" * (isempty(after) ? "" : "; cold after a warm-up: $(join(after, ' '))")
-end
-
-# L197: the excuses a tree holds, its directory dev/.loop/excuse/ and nothing else (name => text): no
-# MARCH row, commit message or other text excuses a landing (A22E1)
-l197_excuses(root::AbstractString) =
-    (d = joinpath(root, "dev", ".loop", "excuse"); isdir(d) ? Dict(f => read(joinpath(d, f), String) for f in readdir(d)) : Dict{String,String}())
-
-# L197: the excuses, the tracked files dev/.loop/excuse/<sha8> (name => text): each named for a landed
-# commit's first 8 hex digits, one line naming a cause outside its change, `machine:`, `lock:` or
-# `crossing:`, and its measurement (what is wrong, a sentence each)
-function l197_excuse_problems(files::AbstractDict, landed::AbstractVector)
-    bad = String[]
-    for (name, text) in files
-        occursin(r"^[0-9a-f]{8}$", name) || (push!(bad, "dev/.loop/excuse/$name: not named for a commit's first 8 hex digits"); continue)
-        any(c -> startswith(c, name), landed) || push!(bad, "dev/.loop/excuse/$name: no landing of that commit")
-        ls = filter(!isempty, split(text, '\n'))
-        length(ls) == 1 && occursin(r"^(machine|lock|crossing): \S.{20,}", ls[1]) ||
-            push!(bad, "dev/.loop/excuse/$name: not one line `machine|lock|crossing: <the measured cause>`")
-    end
-    return bad
-end
-
-# L197 (A25E1, A25E2): every excuse file held to its landing's measured steps by dev/loop_excuse.sh
-# check, the one program `dev/land.sh land` writes a measured excuse with: what is wrong with each, a
-# sentence each named for its file, and the names whose excuse passes, the only ones that leave the
-# window; a landing with no line in the log or no steps (before steps.tsv) has nothing measured
-function l197_excuse_measured(root::AbstractString, logp::AbstractString, stepsp::AbstractString, files::AbstractDict)
-    bad = String[]
-    ok = Set{String}()
-    for (name, text) in files
-        out = mktemp() do path, io
-            write(io, text); close(io)
-            readchomp(Cmd(Cmd(["bash", joinpath(root, "dev", "loop_excuse.sh"), "check", logp, stepsp, name, path]); dir = root))
-        end
-        probs = filter(!isempty, split(out, '\n'))
-        foreach(q -> push!(bad, "dev/.loop/excuse/$name: $q"), probs)
-        isempty(probs) && push!(ok, name)
-    end
-    return bad, ok
-end
-
-# L197 (A21E4): the landing log each landing carries in its own tree (dev/.loop/landings.log) against
-# the main tree's git-ignored one: a line-by-line prefix of it (an earlier line edited afterwards
-# differs), missing at most one landing that is HEAD or its ancestor (the tip's own line, which no
-# tree can carry before it lands); `isanc(c)` says whether commit c is HEAD or its ancestor
-function l197_carried(tracked::Vector, untracked::Vector, isanc)
-    bad = String[]
-    n = length(tracked)
-    if n > length(untracked) || tracked != untracked[1:n]
-        k = something(findfirst(i -> i > length(untracked) || tracked[i] != untracked[i], 1:n), n)
-        push!(bad, "the landing log this tree carries (dev/.loop/landings.log) differs from the main tree's at its line $k: a line edited after it was carried")
-        return bad
-    end
-    missing = [String(split(l, '\t')[2]) for l in untracked[n+1:end] if occursin(r"^[^\t]+\t[0-9a-f]{40}\t", l)]
-    owed = filter(isanc, missing)
-    length(owed) <= 1 || push!(bad, "the landing log this tree carries lacks $(length(owed)) landings this tree holds ($(join(first.(owed, 8), ", "))): only the tip's own may be missing")
-    return bad
-end
-
-# L198: every line of the landing log says whether its landing's timing was judged, and how (what
-# the log gets wrong, a sentence each)
-function l198_check(log::AbstractString)
-    bad = String[]
-    for r in [split(l, '\t') for l in split(log, '\n') if !isempty(l)][2:end]
-        t = length(r) >= 11 ? r[11] : ""
-        t == "judged" || occursin(r"^unjudged( \([^()]*\))?$", t) || occursin(r"^(FAILED( [a-z0-9.@-]+)+|SLOWER( [a-z0-9.@-]+)+( OVER( [a-z0-9.@-]+)+)?|OVER( [a-z0-9.@-]+)+)$", t) ||
-            push!(bad, "the line of $(first(r[min(2, end)], 8)): timing $(repr(t)), not judged, unjudged, FAILED <stages>, SLOWER <stages> or OVER <stages>")
-    end
-    return bad
-end
-
 
 # ---- METRIC DEFINITIONS (baselines live in dev/parity_baseline.toml) --------
 # Each entry: id => (description, thunk). Patterns deliberately exclude the
@@ -1821,7 +1708,7 @@ const LOCKS = [
         () -> (v = vcat(agents_md_violations(), agents_size_negatives_missed()); foreach(x -> println("    ✗ ", x), v); length(v))),
     "L130_every_file_outside_src_consumed" => ("every tracked file outside src/ is consumed: a tracked file that is not prose names it (a .md only by its path), a loader walks its directory, or it is a repository convention file or README (dev/CHARTER.md C9)",
         () -> length(unconsumed_files_outside_src())),
-    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg and `dev/land.sh land` refuse unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; the landing's gate is `bash dev/gate.sh --block`, L194): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** push, a push of the march branch (dev/land.sh's MARCH, wt2) or workflow_dispatch: `dev/land.sh merge` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #128 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
+    "L153_the_gate_runs_what_ci_runs" => ("the full matrix runs every test family CI runs on Julia 1.12, validated (WT_VALIDATE=1, as CI's Unix shards), and smoke on 1.13, at clause closure (Dale 2026-10-21: large-scale runs happen only when a full clause is closed out: a push of the march branch, wt2, whose head commit carries `Closes: C<n>`, which dev/hooks/commit-msg refuses unless the ratchet reads C<n> CLOSED; a gate/** push; workflow_dispatch; gate.yml's closure job decides and every other job waits on it), never holding a landing (fast is first, strict is final: Dale 2026-10-20; a landing's evidence is `bash dev/check.sh`, run by `bash dev/ship.sh`): dev/lanes.sh's default run (not --fast; its comment lines not counted) stops at the first red lane (both smokes and TLC side by side first) and has the whole Pkg.test suite as two concurrent shards (WT_SHARD=0,2 and 1,2), smoke on Julia 1.13, and WT1's smoke over the one corpus on both versions (legacy/test/smoke.jl, the agreement oracle legacy/'s deletion rule reads, dev/MARCH.md 1.G). No lane of that run is skipped green: it runs the probes and the suite only when the default `julia` is 1.12, the formal lane only when `java` runs, and smoke on 1.13 only without a JULIA= override and with `julia +1.13` installed, and each of those skips prints FAIL and sets the run red; and every lane runs on CI's wasm engine, the Node major ci.yml's node-version names (batch 108 passed on Node 25 and trapped on CI's Node 22). `dev/lanes.sh --lane <name> [--part i/N]` runs one lane of that same run, every other lane a no-op, its skips still red; .github/workflows/gate.yml is that run on CI's runners, one job per lane through it: every lane the default run has, each split lane with every part 0..N-1 of one N, `julia` 1.12 and `julia +1.13` from juliaup as the script calls them, Node from ci.yml's node-version, fail-fast, every TLC instance (--all), none of the lanes' own variables (WT_*, TLC_*) set by the workflow, and triggered exactly by a gate/** push, a push of the march branch (dev/ship.sh's MARCH, wt2) or workflow_dispatch: `dev/ship.sh` pushes the march branch and no other ref, a landing's one push (so a landed head whose commit carries `Closes: C<n>` gets the run, in its head's own concurrency group in each workflow, which a later landing's push never cancels; no march/<branch> per landing, Dale 2026-10-21), and `bash dev/gate.sh` pushes one to gate/<name> (the final full gate before PR #128 merges); ci.yml, formal.yml and downstream.yml trigger exactly as gate.yml does (a gate/** or wt2 push, workflow_dispatch, formal.yml's nightly schedule beside; no pull request, whose branch every landing pushes, A23E4; no branches-ignore), each job with no `needs:` under the closure predicate, so a plain landing runs none of them; the closure predicate is one text in gate.yml's run-name, its closure job and those jobs (a dispatch or schedule, a gate/** push, or a pushed head with a line `Closes: C<digit>…`, grep's `^Closes: C[0-9]+` spelt for an expression, A23E6); AGENTS.md says so, its table a row of its own. Batch 101 passed ratchet, probes and smoke on both versions, then broke a runtests family on CI (2026-10-07); until 2026-10-20 a push waited for this run and CI's (~2 h a landing; dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             # the script's code, its comment lines dropped (a commented-out lane runs nothing)
@@ -1847,9 +1734,10 @@ const LOCKS = [
             # with a line `Closes: C<digit>…`, grep's '^Closes: C[0-9]+' spelt for an expression (the
             # message after a newline holds a newline, `Closes: C` and a digit), one text in gate.yml's
             # run-name, its closure job and every job with no `needs:` of ci.yml, formal.yml and downstream.yml
-            # the march branch, dev/land.sh's MARCH, the one branch beside gate/** whose push triggers the
+            # the march branch, dev/ship.sh's MARCH, the one branch beside gate/** whose push triggers the
             # workflows, each run of its push in that head's own concurrency group
-            local mm = match(r"^MARCH=\$\{WT_MARCH_BRANCH:-([A-Za-z0-9._-]+)\}$"m, read(joinpath(ROOT, "dev", "land.sh"), String))
+            local ship = read(joinpath(ROOT, "dev", "ship.sh"), String)
+            local mm = match(r"^MARCH=([A-Za-z0-9._-]+)$"m, ship)
             local march = mm === nothing ? "?" : String(mm[1])
             local trig = "\non:\n  push:\n    branches: ['gate/**', '$march']\n  workflow_dispatch:\n"
             local own_group = "\${{ github.ref == 'refs/heads/$march' && github.sha || github.ref }}\n  cancel-in-progress: true\n"
@@ -1876,11 +1764,8 @@ const LOCKS = [
                           occursin("\nrun-name: >-\n  \${{ (" * P * ") && 'Gate closure' || 'Gate (no closure)' }}\n", gate) &&
                           count("    needs: closure\n    if: needs.closure.outputs.run == 'true'\n", gate) == 1,
                       occursin(raw"        printf '%s\n' \"$status\" | grep -qE \"^$c +.* CLOSED( |$)\" ||", read(joinpath(ROOT, "dev", "hooks", "commit-msg"), String)),
-                      occursin(raw"            grep -qE \"^$c +.* CLOSED( |$)\" \"$rlog\" 2>/dev/null ||", read(joinpath(ROOT, "dev", "land.sh"), String)),
                       # a landed head reaches gate.yml by the landing's one push, the march branch's: no other ref
-                      let l = read(joinpath(ROOT, "dev", "land.sh"), String)
-                          count(r"\bgit\b[^\n]*\bpush\b", l) == 1 && occursin(raw"    git push -q origin \"$MARCH\"", l) && !occursin("refs/heads/march/", l)
-                      end,
+                      count(r"\bgit\b[^\n]*\bpush\b", ship) == 1 && occursin(raw"  if git push -q origin HEAD:$MARCH; then", ship) && !occursin("refs/heads/", ship),
                       # the first red lane ends the run (batch 111: a 1.13 failure surfaced at minute 29)
                       occursin(raw"stop() { [ $fail -eq 0 ] || { echo \"LANES red\"; exit 1; }; }", lanes),
                       occursin(join([raw"lane ratchet  $JULIA --project=. test/parity_ratchet.jl", "stop"], '\n'), lanes),
@@ -1969,7 +1854,7 @@ const LOCKS = [
                           occursin(raw"inlane && /^    timeout-minutes:/ { print $2; exit }' .github/workflows/gate.yml)", sh) &&
                           occursin(raw"-v B=\"$budget\"", sh) && occursin("PAST THE %d-MINUTE BUDGET", sh)])
         end),
-    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/land.sh calls neither it nor `dev/lanes.sh --fast` (a landing's gate is `bash dev/gate.sh --block`, L194). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
+    "L163_the_fast_lane" => ("the CI inner loop is never a landing's gate: `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name>, never to gate/, where .github/workflows/gate-fast.yml runs the ratchet and smoke on Julia 1.12 and 1.13 through `dev/lanes.sh --lane <ratchet|smoke|smoke-1.13> [--part i/N]` and prints `FAST green` or `FAST red`; it runs no Julia on this machine, and dev/ship.sh calls neither it nor `dev/lanes.sh --fast` (a landing's evidence is `bash dev/check.sh`). gate-fast.yml's triggers are exactly a `gate-fast/**` push and workflow_dispatch; its matrix is exactly the ratchet, smoke parts 0..N-1 of one N and smoke-1.13 parts 0..M-1 of one M, with N and M the values its header states as measured, and 1 + N + M <= 20 (the account's concurrent runners); fail-fast; the lane job's timeout-minutes is the fast budget B_fast, which dev/gate.sh --fast reads from there (one source) and gate-fast.yml holds no other timeout; no WT_* or TLC_* variable is set by the workflow; ci.yml, formal.yml and gate.yml are not triggered by a gate-fast/** push; dev/gate.sh's own description of --fast calls it the CI inner loop, never a landing's gate; and test/smoke_times.tsv, which deals the smoke parts, lists exactly smoke's groups and xfail groups (smoke.jl's and those of the files it includes), each with a number of seconds for 1.12 and for 1.13 (smoke's dealing errors on a missing file, a duration that is no number and a group with none, where it dropped, skipped or took the median silently, dev/AUDIT.md A17P9) (dev/CHARTER.md C10)",
         () -> begin
             _code(path) = join(filter(l -> !startswith(lstrip(l), "#"), split(read(path, String), '\n')), '\n')
             local wf = joinpath(ROOT, ".github", "workflows")
@@ -2011,8 +1896,7 @@ const LOCKS = [
             v += occursin("[ \$fast -eq 0 ] || { prefix=gate-fast; workflow=\"Gate fast\"; verdict=FAST; }", sh) &&
                  occursin("name=\$prefix/\${name//\\//-}", sh) ? 0 : 1
             v += occursin("#   bash dev/gate.sh --fast [<rev>] [<name>]   # the CI inner loop, never a landing's gate: pushes to", sh) ? 0 : 1
-            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
-            v += occursin("--fast", land) ? 1 : 0
+            v += occursin("--fast", read(joinpath(ROOT, "dev", "ship.sh"), String)) ? 1 : 0
             # the smoke dealing's durations: exactly the groups (smoke.jl's, its lazy ones and those of
             # the files it includes), each measured on both versions
             local smk_main = read(joinpath(ROOT, "test", "smoke.jl"), String)
@@ -2028,832 +1912,6 @@ const LOCKS = [
                 push!(got, String(f[3]))
             end
             v += length(symdiff(want, Set(got))) + (length(got) - length(Set(got)))
-            v
-        end),
-    "L194_the_blocking_gate" => ("a landing's gate is the blocking gate on this machine, about a minute of wall, never a CI run (fast is first, strict is final: Dale 2026-10-20): `bash dev/gate.sh --block` runs dev/block.jl, which starts every stage at once, each the command a fresh check runs in a process of its own: the package load, red unless Julia saved its package image (`Base.isprecompiled`: a precompile error, a method overwritten, loads the package from source with exit 0 and every run reads cold, 2026-10-22); the ratchet; smoke on test/block_groups.tsv's fixed core (`WT_SMOKE_EXACT=1`, its groups in the order named), on the groups the changed files map to there, and on the groups whose lines the change touches in test/smoke.jl and the case files it includes (a changed line in an included file's generators: every group the file defines), those also on `julia +1.13`, less the groups test/block_groups.tsv's matrix-only row names (none in the core; the non-blocking matrix runs them); the probe core of that file with the probes the change touches, by `WT_PROBE_ONLY`, the smokes on 1.12, the probes and the tests through this tree's warm runner under `--warm` (dev/block_runner.jl, one after another: a server per worktree holding the tree's code, revised before each request, refusing a request that would record a baseline, each request in Main reset to a fresh process's binding table, `using` list and lowering counter by its documented quarantined reset, its layout checked at start, each stating `block_runner: warm|cold (why) <blob>`, cold until its check (its file, arguments and WT_* variables) has run once on the code as it now is; its environment dev/runner_env at exact versions; the gate takes no other runner and refuses WT_BLOCK_RUNNER), each in a fresh process otherwise; TLC on the instances of the models the change touches (`TLC_ONLY`); and test/runtests.jl on the QA families and phases the change selects (`WT_QA_ONLY`, each run as its shard runs it, A19P1): every changed QA family, test/runtests.jl's changed families and phases, and the QA families test/block_groups.tsv's row of each changed file names, so a lock's behavior file runs before a landing that changes what it tests. dev/timing_best.toml's budgets: the whole run (`total`) at most 60 s and every stage's at most the total, the tests stage's 20 s under a warm runner (`tests@warm`), each a target of wall, never scaled (a machine more than 1.5 times slower than its best leaves the timing ratchet unjudged, never the checks or the budgets, L195); intent: the gate takes about a minute, so a landing takes minutes (Dale 2026-10-21: a 61-s run is no failure of an under-a-minute goal); band: a wall over its budget is a note, red only past BUDGET_BAND (2) times it, the whole run past 120 s; a changed file under src/ or ext/, or a changed test file no stage runs and no QA family is, with no row in test/block_groups.tsv fails the gate (a test file the change deletes runs nothing), and every src file has one, each row `<path><TAB><groups><TAB><QA families><TAB><1.13 groups>` (the 1.13 groups run on `julia +1.13` when the file changes: a file whose output prints Julia's own signatures or types names some, A19P9); every group the file names is a smoke group or xfail group, every probe a corpus probe and every family a QA family of test/runtests.jl; every line of code of a src file is in a piece (a definition's, keyed by its line so two methods of one name are two, each line of a multi-line `const` its own, any other form's, dev/AUDIT.md A20C12 = A19C1); the selections (the lines a diff touches, a deletion touching both sides of it; the smoke groups, probes, runtests families and phases and TLC instances those lines or files select; a file's row by longest match) are decisions over text that this lock runs on fixed diffs (A19P11); test/block_groups.tsv's `measured` row names the src tree the map was written for, and a change to src/ fails when that map is stale for it (more than STALE_PIECES = 8 of the pieces the change alters, keyed on its base's text, are pieces that moved between the measured tree and the change's base, whose map rows the selection may misread, the count and the re-record command printed; how far the base moved is a note, so a change in code no other landing moved passes however stale the map; a src file whose code the change leaves alone, Julia's own parse of both texts with line numbers and docstrings dropped being one expression, alters no piece, so a change of comments and docstrings alone passes; a map measured on the change's own src tree, a change carrying its re-recorded map, is fresh; A30E5; the rebuild's map written by hand, its `measured` row the change's own src tree, until WasmTarget lowers code a measurement can cover (dev/MARCH.md 1.D); a measured tree this repository does not hold; a changed line of code in no piece), as does any change to ext/ but its deletion, which no map measures (dev/AUDIT.md A20C13); a selection naming no group, probe, family or phase fails its own run (smoke's `no group named`, probe_bytes' `names no probe`, runtests' `WT_QA_ONLY names no QA family`, run_tlc.sh's `no instance`), never a green run of nothing. Every stage runs with no WT_*, TLC_* or WASMTARGET_* variable of the caller's, only the gate's own (`stage_env`; the record lists those removed and each stage's own, A19P3), and HEAD, the tree and its uncommitted state are read again after the stages: a change while they ran gives no verdict and no record. A run's verdict is red when the change fails (a check, an unmapped file, a budget or the timing ratchet), none when the machine cannot judge (its Julia, Node or Java, a tree changed during the run) green otherwise (exit 0, 1, 3), a run whose warm runner was cold (its first request, or the first after a revise) red only for a failing check and otherwise green with `timing = \"unjudged\"` (neither its budgets nor its bests judged: `dev/land.sh land` judges them by a warm run of the landed tree right after the landing, L198). The evidence record, one per run, dev/.block/<tree>-<n>.toml (git-ignored; never overwriting an earlier run's, A19P2), is written on a clean tree only; `dev/land.sh merge` lands a branch head only on a record of the change from the head's merge base with the march branch (the record's base; a `--base` or WT_MARCH_BRANCH that narrows the change selects less, A19P8), of fresh processes or of that commit's own runner (the record's runner, dev/block_runner.jl with its blob at the head, A19P4), and only when no record of its tree, in any worktree, is red (a red run stands, whatever ran after it) and the last one is green, of exactly that commit, made on a clean tree, from a clean main tree, and while the last closure matrix is not red: it reads gate.yml's newest run on a dispatch, a gate/** push or a push of the march branch whose head commit carries `Closes: C<n>` (read from the commit, `gh run list`), names it, refuses on a red one (the next item), lands with a WARNING written into the record while it has not finished or there is none, never waits for one and reads no other check; and `dev/land.sh land` refuses a change to legacy/ but its deletion whole, WT1 frozen as the agreement oracle (dev/MARCH.md 1.G) (dev/CHARTER.md C10)",
-        () -> begin
-            local sh = read(joinpath(ROOT, "dev", "gate.sh"), String)
-            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
-            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
-            local smoke = read(joinpath(ROOT, "test", "smoke.jl"), String)
-            local probe = read(joinpath(ROOT, "test", "probe_bytes.jl"), String)
-            local corpus = read(joinpath(ROOT, "test", "probe_corpus.jl"), String)
-            local tlc = read(joinpath(ROOT, "dev", "formal", "run_tlc.sh"), String)
-            local v = 0
-            v += occursin("if [ \"\${1:-}\" = --block ]; then shift; exec julia --startup-file=no dev/block.jl \"\$@\"; fi", sh) ? 0 : 1
-            # every stage, started side by side
-            for line in [raw"    ld = launch!(Stage(\"load\", setenv(`$jl --project=. -e 'using WasmTarget; Base.isprecompiled(Base.PkgId(WasmTarget)) || error(\"load: Julia saved no package image for WasmTarget (a precompile error above), so every load compiles it from source\"); print(VERSION)'`, stage_env()), logf(\"load\")))",
-                         raw"    rat = launch!(Stage(\"ratchet\", setenv(`$jl -O0 --project=. test/parity_ratchet.jl`, stage_env()), logf(\"ratchet\")))",
-                         raw"        launch!(Stage(\"smoke-core\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $core`, smokeenv), logf(\"smoke-core\")))",
-                         raw"            launch!(Stage(\"smoke-batch\", setenv(`$jl --project=. -L dev/block_jit.jl test/smoke.jl $batch`, batchenv), logf(\"smoke-batch\")))",
-                         raw"        launch!(Stage(\"smoke-1.13\", setenv(`julia +1.13 --startup-file=no --project=. -L dev/block_jit.jl test/smoke.jl $smoke113`, smokeenv), logf(\"smoke-1.13\")))",
-                         raw"    smoke113 = setdiff(unique(vcat(newgroups, v113)), matrix)",
-                         raw"        append!(mapped, row[1]); append!(tests, row[2]); append!(v113, row[3])",
-                         raw"    probe_env(c) = stage_env(Dict(\"WT_PROBE_ONLY\" => join(c, ' ')))",
-                         raw"        launch!(Stage(\"tlc\", setenv(`bash dev/formal/run_tlc.sh`, stage_env(Dict(\"TLC_ONLY\" => join(tlc, ' '), \"TLC_WORKERS\" => \"2\"))), logf(\"tlc\")))",
-                         raw"    smokeenv = stage_env(Dict(\"WT_SMOKE_TIMES\" => \"1\", \"WT_SMOKE_EXACT\" => \"1\"))",
-                         raw"    batch = unique(setdiff(unique(vcat(mapped, newgroups)), core, matrix))",
-                         raw"            append!(out, last.(spans))",
-                         raw"    probes = unique(vcat(probe_core, touched_probes(base)))",
-                         raw"    append!(fails, stale_map(moved, measured, filter(f -> !startswith(f, \"ext/\") || ispath(joinpath(ROOT, f)), changed), head_texts,",
-                         raw"    stale = measured == head_src ? Set{String}() : pieces_moved(measured, gitok(\"rev-parse\", \"$base:src\") ? git(\"rev-parse\", \"$base:src\") : \"\")",
-                         raw"        union!(own, change_pieces(f, bt, ht, git(\"diff\", \"-U0\", base, \"--\", f)))",
-                         raw"    moved = stale === nothing ? nothing : length(intersect(stale, own))",
-                         raw"    head_texts = Dict(f => read(joinpath(ROOT, f), String) for f in code_changed if isfile(joinpath(ROOT, f)))",
-                         raw"    isempty(unmapped) || push!(fails, \"no row in test/block_groups.tsv for $(join(unmapped, \", \")): add one naming the smoke groups and QA families that exercise it\")",
-                         raw"    foreach(wait, tasks)",
-                         raw"        isempty(tests) || launch!(Stage(\"tests\", setenv(`$jl --project=. test/runtests.jl`, tests_env), logf(\"tests\")))",
-                         raw"        isempty(tests) || push!(chain, Stage(\"tests\", setenv(`$runner test/runtests.jl`, tests_env), logf(\"tests\")))",
-                         raw"    tests_env = stage_env(Dict(\"WT_QA_ONLY\" => join(tests, '\n')))",
-                         raw"    unchanged || push!(efails, \"the tree changed while the stages ran (HEAD, or what is uncommitted): no verdict, rerun\")",
-                         raw"    if clean && unchanged",
-                         raw"            name in families && name != \"parity_ratchet.jl\" && (push!(tests, name); continue)",
-                         raw"            f == \"test/runtests.jl\" && (append!(tests, touched_runtests(base)); continue)",
-                         raw"        ok = s.exit == 0 && isempty(missing)"]
-                v += occursin(line, blk) ? 0 : 1
-            end
-            # the budgets: the whole run at most 60 s, every stage within it
-            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
-            local sec = match(r"(?s)\n\[budget\]\n(.*?)(?:\n\[|\z)", bt)
-            local budgets = sec === nothing ? Dict{String,Float64}() :
-                Dict(String(m[1]) => parse(Float64, m[2]) for m in eachmatch(r"^\"([a-z0-9.@-]+)\" = ([0-9.]+)$"m, sec[1]))
-            local stages = ["total", "load", "ratchet", "smoke-core", "smoke-batch", "smoke-1.13", "probes", "tests", "tests@warm", "tlc", "case-median"]
-            v += sort(collect(keys(budgets))) == sort(stages) ? 0 : 1
-            v += get(budgets, "total", Inf) <= 60 && all(k -> get(budgets, k, Inf) <= get(budgets, "total", 0), stages) ? 0 : 1
-            v += get(budgets, "tests@warm", Inf) <= 20 ? 0 : 1
-            # each budget a target, red only past its band, BUDGET_BAND times it (L205)
-            v += occursin("\nconst BUDGET_BAND = 2\n", blk) ? 0 : 1
-            v += occursin(raw"    total > BUDGET_BAND * tb && push!(tfails, \"total: $(fmt(total)) s of wall, past the band of $(BUDGET_BAND * tb) s (the budget $tb s)\")", blk) ? 0 : 1
-            v += occursin(raw"        if b !== nothing && wall > BUDGET_BAND * b" * "\n" *
-                          raw"            push!(tfails, \"$name: $(fmt(wall)) s of wall, past its band of $(BUDGET_BAND * b) s (its budget $b s)\"); v = \"OVER BUDGET\"", blk) ? 0 : 1
-            v += occursin(raw"    median_case <= BUDGET_BAND * b || push!(tfails, \"case-median:", blk) ? 0 : 1
-            # no budget is scaled to pass: the scaled time is the ratchet's alone (A19P5)
-            v += occursin(r"scaled <= b|total / factor <= tb|not blocking", blk) ? 1 : 0
-            # the map: every src file has a row, every group and probe exists
-            # smoke's groups: smoke.jl's and those of the case files it includes
-            local smoke_all = join([smoke; [read(joinpath(ROOT, "test", m[1]), String)
-                                            for m in eachmatch(r"^include\(joinpath\(@__DIR__, \"([^\"]+)\"\)\)"m, smoke)]], '\n')
-            local groups = Set(m[1] for m in eachmatch(r"^_(?:g|xf|lazy_g|lazy_xf)\(\"([^\"]+)\""m, smoke_all))
-            local cases = Set(m[1] for m in eachmatch(r"^_c\(\"([^\"]+)\""m, corpus))
-            local rt = read(joinpath(ROOT, "test", "runtests.jl"), String)
-            local families = Set(m[1] !== nothing ? String(m[1]) : String(m[2]) * "/" * String(m[3])
-                                 for m in eachmatch(r"_wt_qa_include\((?:\"([^\"]+)\"|joinpath\(@__DIR__, \"([^\"]+)\", \"([^\"]+)\"\))\)", rt))
-            local rows = Dict{String,Vector{String}}()
-            for l in _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))
-                (isempty(strip(l)) || startswith(l, '#')) && continue
-                local f = split(l, '\t')
-                local names(x) = filter(!=("-"), String.(split(x)))
-                if f[1] == "measured"
-                    v += length(f) == 2 && occursin(r"^[0-9a-f]{40}$", f[2]) ? 0 : 1
-                elseif f[1] in ("core", "probes", "matrix-only")
-                    length(f) == 2 ? (rows[String(f[1])] = names(f[2])) : (v += 1)
-                else
-                    length(f) == 4 || (v += 1; continue)
-                    rows[String(f[1])] = vcat(names(f[2]), names(f[4]))
-                    v += count(t -> !(t in families), names(f[3]))
-                end
-            end
-            v += haskey(rows, "core") && haskey(rows, "probes") ? 0 : 1
-            v += occursin("    newgroups = setdiff(touched, matrix)\n    batch = unique(setdiff(unique(vcat(mapped, newgroups)), core, matrix))", blk) &&
-                 occursin("            append!(f[1] == \"core\" ? core : f[1] == \"probes\" ? probes : matrix, names(f[2]))", blk) ? 0 : 1
-            v += count(l -> startswith(l, "measured\t"), _file_lines(joinpath(ROOT, "test", "block_groups.tsv"))) == 1 ? 0 : 1
-            for (k, gs) in rows
-                v += count(g -> !(g in (k == "probes" ? cases : groups)), gs)
-            end
-            for (d, _, fs) in walkdir(SRC), f in fs
-                endswith(f, ".jl") || continue
-                local rel = replace(relpath(joinpath(d, f), ROOT), '\\' => '/')
-                v += any(k -> k == rel || (endswith(k, "/") && startswith(rel, k)), keys(rows)) ? 0 : 1
-            end
-            # a selection naming nothing fails its own run
-            v += occursin("        println(\"smoke: no group named \", join(unknown, \", \"))\n        exit(1)", smoke) ? 0 : 1
-            v += occursin("isempty(unknown) || (println(\"probe_bytes: WT_PROBE_ONLY names no probe \", join(unknown, \", \")); return 1)", probe) ? 0 : 1
-            v += occursin(raw"[[ \" ${cfgs[*]} \" == *\" $o \"* ]] || { echo \"TLC_ONLY names $o, which is no instance\" >&2; exit 1; }", tlc) ? 0 : 1
-            v += occursin("        isempty(unknown) || (println(\"runtests: WT_QA_ONLY names no QA family \", join(unknown, \", \")); exit(1))", rt) ? 0 : 1
-            # the record, on a clean tree only, and the landing on it alone
-            v += occursin("    if clean && unchanged\n        open(io -> Base.invokelatest(TOML.print, io, record; sorted = true), path, \"w\")", blk) ? 0 : 1
-            for line in [raw"    path = joinpath(RECORD_DIR, \"$tree-$n.toml\")",
-                         raw"    verdict = run_verdict(fails, judged_tfails, efails, cold)",
-                         raw"    return verdict == \"green\" ? 0 : verdict == \"red\" ? 1 : 3"]
-                v += occursin(line, blk) ? 0 : 1
-            end
-            # a check's failure is red, never classed as the machine's or the runner's
-            v += occursin(r"push!\((tfails|efails), \"(no row|ratchet|smoke|probes|tests|tlc: [^n])", blk) ? 1 : 0
-            # a stage sees no WT_*, TLC_* or WASMTARGET_* variable but the gate's own (run, A19P3), and
-            # every stage's Cmd is built from stage_env: no merge(ENV, ...) and no Cmd without setenv
-            v += occursin(r"merge\(ENV", blk) ? 1 : 0
-            local Bm = Module(:BlockEnv)
-            try
-                Base.include(Bm, joinpath(ROOT, "dev", "block.jl"))
-                local e = withenv("WT_RATCHET_INCLUDED" => "1", "WT_SMOKE_PART" => "0/8", "WT_RATCHET_UPDATE" => "1",
-                                  "TLC_DEEP" => "x", "WASMTARGET_X" => "1", "BLOCK_KEEP" => "k") do
-                    Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_QA_ONLY" => "q"))
-                end
-                v += e == merge(Dict(k => v2 for (k, v2) in ENV if !any(p -> startswith(k, p), ("WT_", "TLC_", "WASMTARGET_"))), Dict("WT_QA_ONLY" => "q", "BLOCK_KEEP" => "k")) ? 0 : 1
-                v += (try; Base.invokelatest(getglobal(Bm, :stage_env), Dict("WT_RATCHET_UPDATE" => "1")); false; catch; true; end) ? 0 : 1
-                # the selections, run on fixed text (A19P11): a selection that silently picks nothing fails here
-                local g = (n, a...) -> Base.invokelatest(getglobal(Bm, n), a...)
-                local smoke_l = ["# harness", "_g(\"a\", Any[", "  case", "])", "helper() = 1", "_xf(\"b\", Any[", "  case", "])", "main()"]
-                local corpus_l = ["# head", "_c(\"p1\", f1, (Int,))", "  x", "_c(\"p2\", f2, (Int,))", "  y"]
-                local rt_l = ["x", "_wt_qa_include(\"a.jl\")", "_wt_qa_include(joinpath(@__DIR__, \"s\", \"t.jl\"))", "begin",
-                              "    @pphase \"Phase 1: A\" begin", "  y", "    end", "    @pphase \"Phase 2: B\" begin", "  z",
-                              "end  # end of phase-registration block", "tail"]
-                local rows_ = ["src/" => (["g1"], ["t1"]), "src/a.jl" => (["g2"], String[]), "ext/" => (String[], String[])]
-                v += count(!, [g(:hunk_lines, "@@ -3,2 +3,3 @@\n@@ -10 +11,0 @@\n@@ -20 +20 @@\n") == [3, 4, 5, 11, 12, 20],
-                               g(:groups_touched, smoke_l, [3], true) == ["a"], g(:groups_touched, smoke_l, [5], true) == ["b"],
-                               isempty(g(:groups_touched, smoke_l, [1], true)), isempty(g(:groups_touched, smoke_l, [9], true)),
-                               g(:groups_touched, smoke_l, g(:hunk_lines, "@@ -5 +4,0 @@\n"), true) == ["a", "b"],
-                               # an included case file: its generators feed every group it defines; a one-line group is its line
-                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [1], false) == ["c", "d"],
-                               g(:groups_touched, ["gen() = 1", "_g(\"c\", gen())", "_g(\"d\", gen())"], [3], false) == ["d"],
-                               isempty(g(:groups_touched, ["no_groups() = 1"], [1], false)),
-                               g(:groups_touched, ["_g(\"c\", gen())", "_g(\"d\", Any[", "  x", "])"], [3], false) == ["d"],
-                               g(:probes_touched, corpus_l, [3, 5, 1], ["p1\tabc", "p2\tdef"], [2]) == ["p1", "p2"],
-                               isempty(g(:probes_touched, corpus_l, [1], String[], Int[])),
-                               g(:runtests_touched, rt_l, [1, 2, 3, 6, 9, 11]) == ["a.jl", "s/t.jl", "Phase 1: A", "Phase 2: B"],
-                               g(:tlc_select, ["dev/formal/Foo.tla", "dev/formal/nightly/Bar.tla", "src/x.jl", "dev/formal/MCBazBroken.cfg"],
-                                 ["MCFoo.cfg", "MCFooDeep.cfg", "MCBar.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]) == (["MCFoo.cfg", "MCBaz.cfg"], ["MCFooDeep.cfg"]),
-                               g(:row_for, "src/a.jl", rows_) == (["g2"], String[]), g(:row_for, "src/b.jl", rows_) == (["g1"], ["t1"]),
-                               g(:row_for, "test/x.jl", rows_) === nothing])
-                # every line of code is in a piece: a multi-line const's lines each their own, any
-                # other form's, a definition's by its line (A20C12)
-                local tab = "x = 1\nconst MISC_OPS = Dict(\n    (A, B, :f) => g(1),   # c\n    (A, B, :h) =>\n        g(2),\n)\n"
-                v += count(!, [g(:line_keys, tab, "src/t.jl")[3] == "src/t.jl:3", g(:line_keys, tab, "src/t.jl")[1] == "src/t.jl:L1#0",
-                               g(:line_keys, "f(x) = 1\nf(x::Int) = 2\n", "src/t.jl")[2] == "src/t.jl:f@2#0"])
-                # a stale map fails a change to src/: more than STALE_PIECES pieces of src moved between the
-                # measured tree and the change's base, a measured tree unknown here, a changed line of code
-                # in no piece (a module's own line, when the parse keys it to no form); a change to ext/ always; a change elsewhere never (A20C13)
-                local mtab = "module M\nf(x) = 1\nend\n"
-                local ns, ni = Dict{String,String}(), Dict{String,Vector{Int}}()
-                v += count(!, [getglobal(Bm, :STALE_PIECES) == 8,
-                               isempty(g(:stale_map, 8, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1, 3]))),
-                               occursin("9 of the pieces it alters moved", only(g(:stale_map, 9, "m", ["src/t.jl"], Dict("src/t.jl" => tab), Dict("src/t.jl" => [1])))),
-                               occursin("git rev-parse HEAD:src", only(g(:stale_map, 9, "m", ["src/t.jl"], ns, ni))),
-                               length(g(:stale_map, nothing, "m", ["src/t.jl"], ns, ni)) == 1,
-                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => mtab), Dict("src/t.jl" => [1, 2])) ==
-                                   (haskey(g(:line_keys, mtab, "src/t.jl"), 1) ? String[] :
-                                    ["src/t.jl:1 is a line of code in no piece of the map (dev/block.jl line_keys)"]),
-                               g(:stale_map, 0, "m", ["src/t.jl"], Dict("src/t.jl" => "x = 1\n"), Dict("src/t.jl" => [1])) == String[],
-                               length(g(:stale_map, 0, "m", ["ext/E.jl"], ns, ni)) == 1,
-                               isempty(g(:stale_map, 99, "m", ["test/x.jl", "dev/MARCH.md"], ns, ni))])
-                # a stage that reached no runner server is no verdict, never a failed check (A35E3)
-                local nf = ["smoke-core: exit 2", "ratchet: L1 broken"]; local ne = String[]
-                g(:reclassify_no_server!, nf, ne, [("smoke-core", "x\nblock_runner: no server for /w: julia --startup-file=no dev/block_runner.jl start\n"), ("ratchet", "ok")])
-                v += count(!, [nf == ["ratchet: L1 broken"], length(ne) == 1 && startswith(only(ne), "smoke-core: reached no runner server")])
-                # a red run's kind for the red history (A33E4): timing alone, or the ratchet on L148 or L197
-                # alone, is queue time; any other failure is the change's own
-                v += occursin("            open(RED_HISTORY, \"a\") do io\n", blk) && occursin("        if verdict == \"red\"\n", blk) ? 0 : 1
-                v += count(!, [g(:red_kind, String[], "") == ("queue", "timing alone"),
-                               g(:red_kind, ["ratchet"], "L197_the_loop_is_fast   1  ❌ LOCK BROKEN (want 0)\n") == ("queue", "ratchet on L197 alone"),
-                               g(:red_kind, ["ratchet"], "L148_x 1 ❌ b\nL197_y 1 ❌ b\n") == ("queue", "ratchet on L148 L197 alone"),
-                               first(g(:red_kind, ["ratchet"], "L194_x 1 ❌ b\nL197_y 1 ❌ b\n")) == "own",
-                               first(g(:red_kind, ["ratchet", "tests"], "L197_y 1 ❌ b\n")) == "own",
-                               first(g(:red_kind, ["ratchet"], "")) == "own"])
-                # a removed test file or corpus case is named in the message, never silent (A33E1)
-                local sc = "_g(\"num\", Any[\n    (\"add\", f, 1),\n    (\"mul\", f, 2),\n])\n_c(\"p1\", f, (Int,))\n"
-                local none_ = Dict{String,Set{String}}()
-                local lost = Dict("test/smoke_corpus.jl" => Set(["num/mul"]))
-                v += count(!, [isempty(g(:probes_touched, String[], [0], String[], [0])),   # a file emptied whole: its hunk at line 0
-                               g(:corpus_case_keys, sc) == Set(["num/add", "num/mul", "p1"]),
-                               g(:corpus_case_keys, "_lazy_g(\"reg\", \"gen.jl\")\n    (\"x\", f, 1),\n") == Set(["reg/*"]),   # a lazy group is one key (audit 34)
-                               g(:unnamed_removals, "x", String[], Dict("test/smoke_corpus.jl" => Set(["reg/*"]))) == ["test/smoke_corpus.jl:reg/*"],
-                               g(:unnamed_removals, "x", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
-                               isempty(g(:unnamed_removals, "x\nRemoves-test: test/lock_negatives.jl — its plants move into the ratchet\n", ["test/lock_negatives.jl"], none_)),
-                               g(:unnamed_removals, "Removes-test: test/lock_negatives.jl — \n", ["test/lock_negatives.jl"], none_) == ["test/lock_negatives.jl"],
-                               g(:unnamed_removals, "x", String[], lost) == ["test/smoke_corpus.jl:num/mul"],
-                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/mul — WT1-only\n", String[], lost)),
-                               isempty(g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — the legacy lane runs them\n", String[], lost, Set(["test/smoke_corpus.jl"]))),
-                               g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:* — a blanket over kept cases\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"],   # audit 34
-                               g(:unnamed_removals, "Removes-test: test/smoke_corpus.jl:num/add — another case\n", String[], lost) == ["test/smoke_corpus.jl:num/mul"]])
-                # the budget counts the change's own pieces among the stale ones (A30E5): a change of comments
-                # and docstrings alone alters no piece (Julia's parse, docstrings and line numbers dropped, is
-                # unchanged), a code change alters the base's pieces its hunks touch, an added file none
-                local d0 = "\"doc\"\nf(x) = 1\ng(x) = 2\n"
-                v += count(!, [g(:code_unchanged, "f(x) = 1\n", "# a note\nf(x) = 1  # why\n"),
-                               g(:code_unchanged, d0, replace(d0, "\"doc\"" => "\"\"\"\nanother doc\n\"\"\"")),
-                               !g(:code_unchanged, d0, replace(d0, "g(x) = 2" => "g(x) = 3")),
-                               !g(:code_unchanged, "f(x) = 1\n", "f(x) = (\n"),
-                               !g(:code_unchanged, "f(x) = 1\n", "f(x) = 1\nh(x) = 0\n"),
-                               g(:change_pieces, "src/t.jl", d0, replace(d0, "g(x) = 2" => "g(x) = 3"), "@@ -3 +3 @@\n") == Set(["src/t.jl:g@3#0"]),
-                               isempty(g(:change_pieces, "src/t.jl", d0, replace(d0, "\"doc\"" => "\"new doc\""), "@@ -1 +1 @@\n")),
-                               isempty(g(:change_pieces, "src/t.jl", "", d0, "@@ -0,0 +1,3 @@\n"))])
-            catch err
-                println("    ✗ dev/block.jl does not load for its environment rule: ", sprint(showerror, err))
-                v += 1
-            end
-            v += occursin("\ndev/.block/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
-            for line in [raw"        for f in \"$w/dev/.block/$tree\"-*.toml; do [ -f \"$f\" ] && recs+=(\"$f\"); done",
-                         raw"        grep -qx 'verdict = \"red\"' \"$f\" && { echo \"$f is red: a red run of this tree stands — refusing\"; grep -A8 '^failures' \"$f\"; exit 1; }",
-                         raw"    grep -qx \"head = \\\"$head\\\"\" \"$rec\" || { echo \"$rec, the last record of this tree, is of another commit — refusing\"; exit 1; }",
-                         raw"    grep -qx 'clean = true' \"$rec\" || { echo \"$rec was made on a tree with uncommitted changes — refusing\"; exit 1; }",
-                         raw"    grep -qx 'verdict = \"green\"' \"$rec\" || { echo \"$rec, the last record of this tree, is not green ($(sed -n 's/^verdict_why = //p' \"$rec\")) — refusing\"; exit 1; }",
-                         raw"    [ -z \"$(git status --porcelain --untracked-files=no)\" ] || { echo \"main tree has uncommitted changes — refusing\"; exit 1; }",
-                         raw"    if [ -n \"$(git diff --name-only \"$tip\" HEAD -- legacy/)\" ] && [ -n \"$(git log -1 --format=%H \"$tip\" -- legacy)\" ] && [ -n \"$(git ls-tree -d HEAD legacy)\" ]; then",
-                         raw"    bash dev/gate.sh --block"]
-                v += occursin(line, land) ? 0 : 1
-            end
-            # the last closure matrix read, never waited for: gate.yml's newest run on a dispatch, a
-            # gate/** push or a march branch head carrying `Closes: C<n>` (from the commit itself), red
-            # refusing, unfinished or absent a WARNING in the record; no other check read
-            for line in [raw"    prev=$(git -C \"$MAIN\" rev-parse \"$MARCH\")",
-                         raw"        runs=$(gh run list --limit 200 --json databaseId,status,conclusion,workflowName,event,headBranch,headSha \\",
-                         raw"                                and (.workflowName == \"Gate\" or .workflowName == \".github/workflows/gate.yml\"))]",
-                         raw"           git -C \"$MAIN\" log -1 --format=%B \"$rsha\" 2>/dev/null | grep -qE '^Closes: C[0-9]+'; then",
-                         raw"    completed:failure | completed:timed_out | completed:startup_failure)",
-                         raw"        echo \"the last closure matrix is red, the next item (gate.yml run $mrun on $msha, $mconclusion): fix it first — refusing\"; exit 1 ;;",
-                         raw"        printf '\n[landing]\nwarning = \"%s\"\n' \"$warning\" >> \"$rec\""]
-                v += occursin(line, land) ? 0 : 1
-            end
-            v += length(collect(eachmatch(r"\$\(gh run list", land))) == 1 ? 0 : 1
-            v += occursin(raw"    mb=$(git -C \"$MAIN\" merge-base \"$head\" \"$MARCH\")", land) &&
-                 occursin(raw"    grep -qx \"base = \\\"$mb\\\"\" \"$rec\" ||", land) ? 0 : 1
-            # the warm runner is this tree's, versioned, its reset the one quarantined mechanism (A19P4)
-            local rn = read(joinpath(ROOT, "dev", "block_runner.jl"), String)
-            for (txt, line) in [(rn, raw"const REFUSED = (\"WT_PROBE_RECORD\", \"WT_RATCHET_UPDATE\", \"WT_RECORD_TIMES\")"),
-                                (rn, raw"        state = get(ran_on, key, -1) == version[] ? \"warm\" :"),
-                                (rn, raw"        isempty(s) || (version[] += 1)"),
-                                (rn, raw"        key = join(vcat(normpath(abspath(cwd, target)), args, sort([k * \"=\" * v for (k, v) in env if startswith(k, \"WT_\")])), '\0')"),
-                                (rn, raw"        s isa String || !usings_changed() || (s = \"Main's `using` list differs from its start after the reset\")"),
-                                (rn, raw"        frame(sock, 'e', \"block_runner: $state $BLOB\n\")"),
-                                (rn, raw"    c1 == c2 > COUNTER0 || error("),
-                                (rn, "# The reset (parity(quarantine: a Julia process has no API to give Main a fresh binding table;"),
-                                (blk, raw"    haskey(ENV, \"WT_BLOCK_RUNNER\") && error("),
-                                (blk, raw"    runner = \"--warm\" in args ? `julia --startup-file=no dev/block_runner.jl run` : ``"),
-                                (blk, raw"                m[2] == runner_blob || push!(efails,"),
-                                (blk, raw"    occursin(\"Precompiling\", read(ld.log, String)) && pushfirst!(rstates,"),
-                                (land, raw"    [ -z \"$runner\" ] || [ \"$runner\" = \"dev/block_runner.jl $(git -C \"$MAIN\" rev-parse \"$head:dev/block_runner.jl\")\" ] ||")]
-                v += occursin(line, txt) ? 0 : 1
-            end
-            # Main's table is stored only by reset_main!, and dev/runner_env pins every package exactly
-            local rm_ = match(r"(?s)    function reset_main!\(\)\n.*?\n    end\n", rn)
-            v += rm_ !== nothing && count("unsafe_store!", rn) == 4 && count("unsafe_store!", rm_.match) == 4 ? 0 : 1
-            v += occursin(raw"        error(\"block_runner: a `using` added to Main is not taken back by storing its length at byte $USINGS_LEN_OFFSET (Julia $VERSION)\")", rn) ? 0 : 1
-            local renv = read(joinpath(ROOT, "dev", "runner_env", "Project.toml"), String)
-            local compat = match(r"(?s)\n\[compat\]\n(.*)", renv)
-            v += compat !== nothing && occursin("Revise = \"=", compat[1]) &&
-                 all(l -> occursin(r"^[A-Za-z]+ = \"=[0-9.]+\"$", l), filter(!isempty, split(compat[1], '\n'))) ? 0 : 1
-            v += occursin(r"check-runs|actions/runs|gh run (view|watch)|gh api|gh pr checks"i, land) ? 1 : 0
-            v
-        end),
-    "L195_the_timing_ratchet" => ("speed is held like strictness (Dale 2026-10-20, after Vasculature.jl's timing ratchet): dev/timing_best.toml holds the best wall seconds of each stage of the blocking gate whose work is fixed (load, ratchet, smoke-core, probes; under the warm runner (`--warm`) every stage holds a best of its own, `<stage>@warm`, smoke-core and probes included: the compiler's speed is held warm, against a best recorded from a warm run, never a cold one (A19P4); a stage with no best fails the gate outside `WT_TIMING_UPDATE=1`, which records it) and the best seconds of dev/block.jl's calibration, a fixed piece of compiler-like work (a new small function lowered, inferred and optimized) it times every quarter second throughout the run; a stage's wall over the machine factor (the calibration's median over its best, at least 1; an update records a run's lower quartile when faster and scales the bests it records by the factor that gives) more than 1.5 times AND more than 0.3 s above its best fails the gate (`slower`; past 15% and inside that band, `over_target`, a note in the record), so a stage that does more work or waits longer fails and a busier machine does not, unless the commit's message carries `Timing: correctness fix (MARCH 13.<n>)` naming a row the change itself adds to dev/MARCH.md (a `+` line of `git diff <base>..HEAD -- dev/MARCH.md` under a row number the base's MARCH does not have: an existing row, edited, exempts nothing, A20P26) that names the stages it leaves slower, which alone are exempt, and whose bests that run's update raises in the same diff (A19P7); intent: no change makes a fixed stage slower unnoticed, and the machine's own noise never fails a landing; band: a stage past 15% over its best is a note, one more than 1.5 times AND more than 0.3 s over it fails (audit 31: a ratchet stage at 23.7 s against its 20.4 s best flapped red and green at factor 1.0), a machine more than 1.5 times slower than its best leaves the timing unjudged; the budgets are targets red only past their band (L194), never scaled: a machine more than 1.5 times slower than its best while the stages ran (FACTOR_CAP, `capped`) leaves the run's timing ratchet unjudged, never a scaled pass: no stage is compared with its best (a slower stage a note, `timing_failures`), no best is recorded from it, every check still judged; a budget missed past the cap is the machine's by the cap's definition, so a run whose checks pass is green with its timing unjudged, the missed budgets named (`timing = \"unjudged (budget <stage> <wall> past cap, factor <f>)\"`) in its record (`dev/land.sh land` printing the unjudged streak, L198), a failing check or a missed budget red, a cold run (correctness only: no budget and no best judged) green with its timing unjudged; CI judges no timing, so the ratchet is judged here whenever the machine is quiet enough, recorded as unjudged otherwise; and under that cap a budget or best exceeded is red; no verdict only for a reason of the tools or the tree (a tool missing, the tree changed during the run), never for load (A19P2, A19P5). `WT_TIMING_UPDATE=1` runs the gate three times (update_main) and, only when all three are green with their timing judged on a clean tree on a quiet machine (load average at most the machine's CPUs), sets each ratcheted stage's best to the median of its three times (updated_bests), lowered only, raised only for a stage the commit's own exemption names, so one fast run sets no best, and writes each best's source into dev/timing_best.toml's [best_from] (its records, the commit they ran on, their machine factors; a rescaled best its own source and the update that rescaled it), every best having one (A20P20); a best is set only so, never by hand: one whose entry is not the median of an update's three records at machine factors within FACTOR_CAP (source_problem) bounds nothing, its want of a source a timing failure outside the update (judged on a warm run under the cap), and the update re-records it whichever way it moves, a rise still held to the base's (A20P25); a calibration lower than the best, the runs' median lower quartile, lowers every best in proportion in the same write. A change is judged by its own dev/timing_best.toml held to its base's (`git show <base>:dev/timing_best.toml`, A19P6): a budget or best of the base's removed, or raised (a best compared at one calibration, as best / calibration), fails the gate. Behavior, from dev/block.jl's own decisions: 11.6 s against a best of 10 s is slower, 11.4 s is not, 1.25 s against 1 s is not (0.25 s), 1.4 s is; the factor of a calibration twice its best is 2, of one faster than its best 1; a Timing line citing a MARCH row that does not exist raises. Negative-tested end to end: a sleep planted in the ratchet and an overrun of a lowered budget each turned the gate red (dev/CHARTER.md C10)",
-        () -> begin
-            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
-            local bt = read(joinpath(ROOT, "dev", "timing_best.toml"), String)
-            local v = 0
-            v += occursin("const SLOWER_TARGET = 0.15\nconst SLOWER_FRACTION = 0.5\nconst SLOWER_SECONDS = 0.3\n", blk) ? 0 : 1
-            v += occursin("const RATCHETED = (\"load\", \"ratchet\", \"smoke-core\", \"probes\")", blk) ? 0 : 1
-            v += occursin("        if name in RATCHETED && ok && fixed && slower(scaled, bw)", blk) ? 0 : 1
-            v += occursin("        timing_exemption(msg, git(\"diff\", \"\$base..HEAD\", \"--\", \"dev/MARCH.md\"),\n                         gitok(\"cat-file\", \"-e\", \"\$base:dev/MARCH.md\") ? git(\"show\", \"\$base:dev/MARCH.md\") : \"\")", blk) &&
-                 occursin("    isempty(exempt_problem) || push!(fails, exempt_problem)", blk) &&
-                 occursin("            if name in exempt_stages\n", blk) ? 0 : 1
-            v += occursin("        scaled = wall / factor\n", blk) ? 0 : 1
-            v += occursin("const FACTOR_CAP = 1.5\n", blk) && occursin("    capped = factor > FACTOR_CAP\n", blk) ? 0 : 1
-            # past the cap a stage slower than its best is a note, never a failure, and no best is recorded; a budget still fails
-            v += occursin("    judged_tfails = timing_failures(tfails, sfails, capped, cold)\n", blk) &&
-                 occursin("    verdict = run_verdict(fails, judged_tfails, efails, cold)\n", blk) &&
-                 occursin("    timing = cold ? \"unjudged (cold)\" :\n", blk) &&
-                 occursin("                push!(sfails, \"\$name: more than 1.5 times and 0.3 s slower than its best: \$why\"); v = capped ? \"UNJUDGED\" : \"SLOWER\"", blk) &&
-                 occursin("\"timing\" => timing,", blk) ? 0 : 1
-            v += occursin("    cpus = length(Sys.cpu_info())\n    quiet = loadavg[1] <= cpus\n", blk) && !occursin("CPU_THREADS)", blk) && !occursin(r"\bbusy = ", blk) ? 0 : 1
-            v += occursin("    bestkey(name) = !isempty(runner) ? name * \"@warm\" : name", blk) && !occursin("warm_stage", blk) ? 0 : 1
-            # the update: three runs, every one green with its timing judged on a clean tree on a quiet
-            # machine, then updated_bests, each best written with its source (A20P20)
-            v += occursin("const UPDATE_RUNS = 3\n", blk) &&
-                 occursin("        if r === nothing || !(r.verdict == \"green\" && r.timing == \"judged\" && r.clean && r.quiet)\n", blk) &&
-                 occursin("    best, changes, how = updated_bests(timing[\"best\"], [r.fastest for r in runs], [r.calib for r in runs],", blk) &&
-                 occursin("        best_from[k] = best_source(h, get(best_from, k, \"\"), [r.record for r in runs], runs[end].head, [r.factor for r in runs])\n", blk) &&
-                 occursin("    write_best(timing[\"budget\"], best, best_cpu, best_from)\n", blk) &&
-                 occursin("exit(get(ENV, \"WT_TIMING_UPDATE\", \"\") == \"1\" ? update_main(ARGS) : main(ARGS))", blk) &&
-                 !occursin("write_best(budget, best, best_cpu)", blk) ? 0 : 1
-            v += occursin("    quiet = loadavg[1] <= cpus\n    updating && !quiet && (updating = false;", blk) ? 0 : 1
-            # a best not recorded fails the gate outside the update, which records it
-            v += occursin(raw"                push!(fails, \"$bkey: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\")", blk) ? 0 : 1
-            v += occursin(raw"                    push!(fails, \"calibration: no best in dev/timing_best.toml (WT_TIMING_UPDATE=1 records it)\"))", blk) ? 0 : 1
-            v += occursin("\n[best]\n", bt) && occursin("\n[budget]\n", bt) ? 0 : 1
-            v += occursin("    loosened = isempty(base_text) ? String[] : timing_against_base(timing, Base.invokelatest(TOML.parse, base_text), exempt_stages)", blk) &&
-                 occursin("    append!(fails, loosened)\n", blk) &&
-                 occursin("            k == \"calibration\" || (out[k] = round(out[k] * cal / bcal; digits = 2); how[k] = :rescaled)", blk) ? 0 : 1
-            # a best is set only by the update (A20P25): one whose source is not an update's median bounds
-            # nothing, its want a timing failure outside the update, which re-records it whichever way it moves
-            v += occursin("    best = Dict{String,Any}(k => v for (k, v) in timing[\"best\"] if k == \"calibration\" || !haskey(unsourced, k))\n", blk) &&
-                 occursin("                push!(sfails, \"\$bkey: its best \$(unsourced[bkey]) (WT_TIMING_UPDATE=1 re-records it)\")", blk) &&
-                 occursin("    rerecord = String[k for k in keys(timing[\"best\"]) if !isempty(source_problem(get(best_from, k, nothing)))]\n", blk) &&
-                 occursin("        if !haskey(out, k) || w < out[k] || k in rerecord\n", blk) &&
-                 occursin("    if isnan(bcal) || cal < bcal || \"calibration\" in rerecord\n", blk) ? 0 : 1
-            # every best names where it came from (A20P20)
-            local sec = name -> (m = match(Regex("\\n\\[" * name * "\\]\\n((?:\"[^\"\\n]+\" = [^\\n]*\\n?)*)"), bt);
-                                 m === nothing ? Set{String}() : Set(String(x[1]) for x in eachmatch(r"^\"([^\"]+)\" = "m, m[1])))
-            for k in sort(collect(setdiff(sec("best"), sec("best_from"))))
-                println("    ✗ L195: dev/timing_best.toml's best $k has no [best_from] entry (WT_TIMING_UPDATE=1 writes it)"); v += 1
-            end
-            # the decisions, run
-            local B = Module(:BlockDecisions)
-            try
-                Base.include(B, joinpath(ROOT, "dev", "block.jl"))
-                local f = (n, a...) -> Base.invokelatest(getglobal(B, n), a...)
-                v += count(!, [f(:slower, 15.1, 10.0), !f(:slower, 14.9, 10.0), !f(:slower, 1.25, 1.0), f(:slower, 1.6, 1.0), !f(:slower, 0.5, 0.25),
-                               # past the 15% target and inside the 1.5-times band: a note (audit 31's 23.7 s against 20.4 s)
-                               f(:over_target, 23.7, 20.4), !f(:slower, 23.7, 20.4), !f(:over_target, 11.4, 10.0), !f(:over_target, 15.1, 10.0),
-                               !f(:slower, 100.0, NaN), f(:machine_factor, 0.04, 0.02) == 2.0, f(:machine_factor, 0.01, 0.02) == 1.0,
-                               f(:timing_exemption, "Charter: C10\n", "+| 13.4 | C1 |", "") == ("", String[]),
-                               f(:timing_exemption, "x\nTiming: correctness fix (MARCH 13.20)\n", "+| 13.20 | C6 | win back smoke-core and probes |", "| 13.4 | C1 | x |\n") ==
-                                   ("correctness fix, MARCH 13.20 (smoke-core, probes)", ["smoke-core", "probes"]),
-                               # a row the change does not add (context or an existing row), or one naming no stage, raises
-                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.4)", " | 13.4 | C1 | smoke-core |", ""); false; catch; true; end),
-                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.20)", "+| 13.20 | C6 | the time |", ""); false; catch; true; end),
-                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.99)", "+| 13.4 | C1 | smoke-core |", ""); false; catch; true; end),
-                               # an existing row, edited, is a `+` line yet exempts nothing: the number is the base's (A20P26, 36e3966e's form)
-                               (try; f(:timing_exemption, "Timing: correctness fix (MARCH 13.18)", "+| 13.18 | C10 | gate: the ratchet stage grew; re-recorded |",
-                                       "| 13.17 | all | x |\n| 13.18 | C10 | gate: the ratchet stage grew |\n"); false; catch; true; end),
-                               f(:run_verdict, ["x"], String[], String[], false) == "red", f(:run_verdict, ["x"], String[], ["tools"], true) == "red",
-                               f(:run_verdict, String[], ["over"], ["tools"], false) == "none", f(:run_verdict, String[], ["over"], String[], true) == "green",
-                               f(:run_verdict, String[], ["over"], String[], false) == "red", f(:run_verdict, String[], String[], String[], false) == "green",
-                               # past the cap a stage slower than its best is unjudged, a budget missed still fails
-                               f(:timing_failures, ["budget"], ["slower"], false, false) == ["budget", "slower"], f(:timing_failures, ["budget"], ["slower"], true, false) == String[],
-                               f(:timing_failures, String[], ["slower"], true, false) == String[], f(:timing_failures, String[], ["slower"], false, false) == ["slower"],
-                               # a cold run's timing is judged by nothing: its budgets and bests are not failures
-                               f(:timing_failures, ["budget"], ["slower"], false, true) == String[], f(:timing_failures, ["budget"], ["slower"], true, true) == String[],
-                               # held to the base: a raised budget, a raised best, a removed one, a best raised by a lowered calibration fail; a lowered one passes
-                               let tb(bu, be) = Dict("budget" => bu, "best" => be), base = tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.0))
-                                   isempty(f(:timing_against_base, base, base)) &&
-                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 50), Dict("calibration" => 0.004, "ratchet" => 9.0)), base)) &&
-                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
-                                   length(f(:timing_against_base, tb(Dict("total" => 60), Dict("calibration" => 0.004, "ratchet" => 10.0)), base)) == 1 &&
-                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.004, "ratchet" => 10.5)), base)) == 1 &&
-                                   length(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 10.0)), base)) == 1 &&
-                                   isempty(f(:timing_against_base, tb(Dict("total" => 60, "smoke-core" => 58), Dict("calibration" => 0.002, "ratchet" => 5.0)), base))
-                               end,
-                               # the update's bests: the median of three, one fast run setting none; lowered only, raised for an
-                               # exempt stage; a lower calibration rescaling the others first; how each was set (A20P19, A20P20)
-                               let b0 = Dict{String,Any}("calibration" => 0.004, "ratchet@warm" => 10.0, "probes@warm" => 6.0), c3 = [0.004, 0.004, 0.004]
-                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [9.0, 8.0, 20.0]), String[]))["ratchet@warm"] == 9.0 &&
-                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [12.0, 11.0, 13.0]), String[]))["ratchet@warm"] == 10.0 &&
-                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [12.0, 11.0, 13.0]), ["ratchet"]))["ratchet@warm"] == 12.0 &&
-                                   first(f(:updated_bests, b0, c3, c3, Dict("probes@warm" => [7.0, 7.0, 7.0]), ["ratchet"]))["probes@warm"] == 6.0 &&
-                                   last(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [9.0, 8.0, 20.0], "probes@warm" => [7.0, 7.0, 7.0]), String[])) == Dict("ratchet@warm" => :median) &&
-                                   let (b, _, h) = f(:updated_bests, b0, [0.002, 0.002, 0.003], c3, Dict{String,Vector{Float64}}(), String[])
-                                       b["calibration"] == 0.002 && b["probes@warm"] == 3.0 && h == Dict("calibration" => :median, "ratchet@warm" => :rescaled, "probes@warm" => :rescaled)
-                                   end
-                               end,
-                               # a best's source: the median of the update's records on its commit, or its own source rescaled (A20P20)
-                               f(:best_source, :median, "", ["3ee4c795-7", "3ee4c795-8", "3ee4c795-9"], "72dc53fb0000", [1.0, 1.04, 1.1]) ==
-                                   "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.04 1.1",
-                               f(:best_source, :rescaled, "the median of records a; rescaled by records b", ["c"], "d", [1.0]) ==
-                                   "the median of records a; rescaled by records c on d at machine factor 1.0",
-                               (try; f(:best_source, :rescaled, "", ["c"], "d", [1.0]); false; catch; true; end),
-                               # a source is an update's median of three records within FACTOR_CAP; anything else is none (A20P25)
-                               f(:source_problem, "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.04 1.1") == "",
-                               f(:source_problem, "the median of records a1b2c3d4-1 a1b2c3d4-2 a1b2c3d4-3 on 72dc53fb at machine factor 1.0 1.0 1.0; rescaled by records x on y at machine factor 1.2") == "",
-                               startswith(f(:source_problem, nothing), "has no"),
-                               startswith(f(:source_problem, "one run, record 3ee4c795-6 on 72dc53fb at machine factor 1.0"), "is not the median"),
-                               startswith(f(:source_problem, "the median of records 3ee4c795-7 on 72dc53fb at machine factor 1.0"), "is the median of 1 records"),
-                               startswith(f(:source_problem, "the median of records 3ee4c795-7 3ee4c795-8 3ee4c795-9 on 72dc53fb at machine factor 1.0 1.54 1.1"), "was recorded past"),
-                               startswith(f(:source_problem, "one run; rescaled by records a1b2c3d4-1 a1b2c3d4-2 a1b2c3d4-3 on 72dc53fb at machine factor 1.0 1.0 1.0"), "is not the median"),
-                               # a best with no source is re-recorded either way; a calibration with none re-recorded rescales the rest
-                               let b0 = Dict{String,Any}("calibration" => 0.004, "ratchet@warm" => 10.0), c3 = [0.004, 0.004, 0.004]
-                                   first(f(:updated_bests, b0, c3, c3, Dict("ratchet@warm" => [14.0, 13.0, 15.0]), String[], ["ratchet@warm"]))["ratchet@warm"] == 14.0 &&
-                                   let (b, _, h) = f(:updated_bests, b0, [0.005, 0.005, 0.005], c3, Dict{String,Vector{Float64}}(), String[], ["calibration"])
-                                       b["calibration"] == 0.005 && b["ratchet@warm"] == 12.5 && h["ratchet@warm"] == :rescaled
-                                   end
-                               end])
-            catch e
-                println("    ✗ dev/block.jl does not load for its decisions: ", sprint(showerror, e))
-                v += 1
-            end
-            v
-        end),
-    "L197_the_loop_is_fast" => ("the full loop, a change from its edit (the earliest author time of the commits a landing brings) to landed (the push of the march branch holding it), takes minutes, measured by the landing itself (Dale 2026-10-21: no strict batch resumes until it does): `dev/land.sh land`, run by a batch's agent in its worktree on its branch, refuses a dirty tree, holds the machine and the landing (dev/.block/HOLD in the main tree with its pid, the machine's one hold, the orchestrator's being the same file with owner 0: one landing at a time, and the agents' Julia scheduler starts no job at any priority while it exists), fetches and rebases onto the march tip (the ratchet baseline merged by dev/merge_baseline.py, any other conflict stopping it, naming the files), refuses a branch more than one commit ahead of the march tip (one landing is one commit, its own tree gated: `merge` judges the head alone, A24E1), refuses a commit with no `Charter:` line or one changing dev/CHARTER.md other than exactly as the maintainer authorised it, no authorisation standing open (A21E6): its `Charter-change: C<a> C<b> … authorised by Dale <date>` line (CHANGE_SED; several clauses in one commit, since L148 counts commits), the change's parent and new dev/CHARTER.md blobs listed with those clauses, as a set, and that date in the main tree's git-ignored dev/.block/charter_authorised (written after review, never by a landing commit; `authorised`), or the change's content listed there as `content:<id> - <clauses> <date>`, <id> a sha256 of its changed lines as written (charter_content_id: whitespace kept, line numbers left out, A40E1), so a rebase that keeps the lines keeps the authorisation, a moved space or any changed line needs a new one, and a content authorisation is spent by the landing it admits (`used:<id> <sha>`), and every changed line in one of those clauses (CLAUSE_AWK, HUNK_AWK, `clause_in`); an edit only adding MARCH row numbers to a Planned citation, as L154 forces, exempt and named, a deleted citation or a deleted word never (EXEMPT_AWK), starts the tree's warm runner when absent (its package image built first in a process of its own, a failed start printing its first error), runs `bash dev/gate.sh --block --warm` to a verdict (a cold run followed by one more, a run with no verdict for another reason by one more after 20 s, a red stopping the landing with its record standing), then lands through `dev/land.sh merge`, its internal step and never a landing path of its own (it refuses unless the landing holding the hold called it, A21E5), which after its push appends the landing's line to the main tree's dev/.loop/landings.tsv (git-ignored; landed_at, commit, author_at, land_start, gate_runs, gate_wall_s, land_wall_s, edit_to_landed_s, files, insertions, timing, own_s, queue_wait_s), and prints each step's wall and `LOOP <own_s> of 300 s (own; queue wait <queue_wait_s> s)`. Here: the landing log each landing carries in its own tree (dev/.loop/landings.log, written by `land` into the branch's head before the gate, A21E4) is a line-by-line prefix of the main tree's git-ignored log, missing at most one landing this tree holds (the tip's own); every landing since 36e3966e has its line (the line of the commit being gated never judged by its own gate: a landing's judgement after its push runs on the landed head) (the lines' commits in the march branch's order, the last its tip, each line's files and insertions git's over its range, so a landing that wrote none changes the next line's numbers), its author_at its range's earliest author time, its edit_to_landed_s landed_at less author_at, split into own_s and queue_wait_s (A30E1, A33E4): own_s a landing's own mechanics, its land's start to its push less its wait for another landing's hold, plus each red of its own checks from its start to the next attempt's less every wait of the change inside that span (the wait history, the main tree's dev/.loop/waits.tsv: `land`'s wait for the hold and `wait`'s for its turn, A34E3), read from the red history (the main tree's git-ignored dev/.loop/reds.tsv, a line per red run written by dev/block.jl with the change's author time, author and subject and whether it is the change's own, kept when a worktree is removed, A33E5), so its gate and its own reds count and the waits for other landings' holds, an audit window, a red on timing alone or on the ratchet's L148 or L197 alone, or a cancelled stack's author time do not; queue_wait_s the rest, never below 0 (author_at has whole seconds, the land's times fractions), reported as its own metric for the orchestrator; and over the last 5 lines, once at least 3 exist (L197_JUDGED_FROM: fewer are printed with the target and pass), the median of own_s inside its band (a line from before A30E1, eleven fields, judged by land_wall_s, its land's start to its push), no excuse taking a landing out of the window (intent: a landing takes minutes, never tens of minutes, Dale 2026-10-21, \"wicked fast, not tens of minutes to hours\"; band: one 300-s target for every change, L197_TARGET, red only past 600 s, L197_BAND, both this lock's literals, never raised); every excuse file (dev/.loop/excuse/<sha8>, one line `machine|lock|crossing: <the measured cause>`, which lifts a red timing's debt, L198, never a wait's, A30E1) is named for a landed commit, holds that one line, and is held to its landing's steps by dev/loop_excuse.sh check (A25E2): a line measured by `land` (written until A30E1, when the writer went) with its every step and refusal as measured and its own time within the target, a hand line's numbers that steps.tsv also measures (`waited N s`: the hold and the commit-to-start time; `N s waiting on the hold`; a step and its seconds) within 10 per cent. A checkout on CI (GITHUB_ACTIONS) has no landing log, the landing machine's: noted, nothing counted. Behavior, run here on fixed text: land.sh's charter programs, a two-clause Charter-change line read and matched to an authorisation listing its clauses in another order, a clause missing, added or a date changed refused, and a change in C0 refused under a line listing C4; a log whose lines cover the history passes; a landing with no line, a slower median of three, a line out of order and an uncovered tip each fail; two lines, one slower, are not judged; one slower of three passes; a single landing whose own_s passes the band is printed as a note naming it, never a failure (the median of five is the cadence, ledger D13); landings slower only by their queue waits pass on their own time, two of three past the band in their own time fail (a median landing of 700 s own fires it), two of three over the target inside the band pass, and the gated commit's own line leaves the window; a line before A30E1 judged by its land's wall; own_s and queue_wait_s that do not split the edit to landed, or a line of twelve fields, fail; the carried copy and the excuse files' form each checked; a change red only on L197 and then landed reads its land's own time, an own red its span to the next attempt, another change's red nothing; dev/loop_excuse.sh check on a scratch log and steps: a measured line passing, edited or for a red timing refused, a hand line with a wrong wait or a wrong hold refused and one with the right wait passing; land.sh holds no excuse writer; a lane's Manifest.toml resolved for its own project, one check (dev/manifest_check.sh) that land refuses on and lane.sh resolves on (a stale Manifest naming WT1's extensions caught, a matching one passing); a refused head never holds the queue (A35E1): `land wait` runs `land` as its child, and a refusal before the hold (exit 4, 5 on a full audit window) pops the lane, is logged in dev/.loop/QUEUE.log and waits for the preflight to pass (LAND_PREFLIGHT_ONLY=1) before the lane is queued again, a commit adding the next audit entry is queued at the head, and a turn ending red or on a rebase conflict is logged (A35E2); one landing queue (ledger D13; precedent: bors and GitHub's merge queue): the main tree's git-ignored dev/.loop/QUEUE, one line per lane, `<lane> <sha>`, head first, edited by the orchestrator and appended to by a lane's `bash dev/land.sh wait`, which blocks until its lane heads the queue and then lands it, the lane's one watcher; `land` takes the hold only at the head or while the queue is empty, saying who is ahead otherwise, and pops its own line at its end; a head that takes no free hold within 300 s of heading the queue is skipped with a note (dev/land_queue.sh; run on scratch files: a lane not at the head refused, a stale head skipped, a busy hold stopping that clock, an empty queue open, a pop removing its own line alone); no cold gates (Dale 2026-10-21): a lane's runner stays up 120 idle minutes across its landings and counts a check warm only once a run of it has finished on the code as it is (a killed warm-up warms nothing: its next run is cold, its timing unjudged), `bash dev/land.sh warm` runs the blocking gate once right after a commit, outside any hold (waiting while one exists), so the landing's gate runs warm, and each landing's line ends with gate_state, warm, cold, cold-after-warm (cold though a gate run of its change warmed the runner first, printed by `land`) or fresh, the last 5 landings' cold count and their cold-after-warm commits printed beside the window (reported; the target a cold gate only on a tree's first landing; a planted cold-after-warm line named); every lane develops in a live Kaimon session (Dale 2026-10-21, ledger D39): `land` refuses in its preflight a worktree with no live session, a Kaimon REPL record ~/.cache/kaimon/sock/<id>.json whose project_path is the worktree, whose socket exists and whose pid is alive (dev/kaimon_session.sh), printing the start_session call, a CI checkout exempt, and dev/lane.sh makes a lane's worktree from origin/wt2 with the main tree's Manifest.toml and a LocalPreferences.toml turning the precompile workload off and adds it to Kaimon's projects, every other entry kept (run on a scratch cache: no session, another tree's, a gone socket and a dead pid refuse, a live one passes); `land` prints `LOOP <s> of` the same target; .gitignore tracks the carried log and the excuse directory alone of dev/.loop. Negative-tested: a planted slow line, a malformed excuse file name and a raised target each fire it, and in test/lock_negatives.jl the check's tolerance dropped, and own_s computed with the hold's wait in it, a queue red counted as the change's own, land's session check dropped, a session of another tree taken a cold gate after a warm-up classified plain cold, land's queue check dropped and the stale-head clock never running out each fire it, and a planted median over the target inside the band passes (dev/CHARTER.md C10)",
-        () -> begin
-            local v = 0
-            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
-            local rx = read(joinpath(ROOT, "test", "parity_ratchet.jl"), String)
-            for line in [raw"        set +e; bash dev/gate.sh --block --warm 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
-                         raw"    LAND_HOLDER=$$ LAND_START=$l_start LAND_OWN_RED=$own_red LAND_HOLD_WAIT=$hold_wait LAND_GATE_STATE=$gate_state LAND_GATE_RUNS=$runs LAND_GATE_WALL=$gwall bash \"$W/dev/land.sh\" merge \"$br\"",
-                         # a landing's own mechanics, never its waits (A30E1): from its change's first red gate run or its
-                         # land's start, less its wait for another landing's hold; the waits written beside it
-                         raw"    hold_wait=$last_step",
-                         # a red attempt's carried landing log takes the tip's on the next rebase, carried again
-                         raw"                git checkout --ours -- dev/.loop/landings.log && git add dev/.loop/landings.log",
-                         raw"    want=$(git log -1 --format='%at %ae %s' HEAD)",
-                         raw"    own_red=$( { sort -t \"$(printf '\t')\" -k1,1n \"$REDS\" 2>/dev/null || true; } | awk -F'\t' -v w=\"$want\" -v au=\"${want%% *}\" -v ls=\"$l_start\" \"$OWN_RED_AWK\" \"$WAITS\" -)",
-                         raw"    own=$(perl -e 'printf \"%.1f\", $ARGV[0] - $ARGV[1] - $ARGV[2] + $ARGV[3]' \"$landed\" \"$start\" \"${LAND_HOLD_WAIT:-0}\" \"${LAND_OWN_RED:-0}\")",
-                         # no cold gates: `land warm` runs the gate once after a commit, outside any hold, and the
-                         # landing's line says whether its gate ran warm, a cold one after a warm-up reported
-                         raw"    set +e; bash dev/gate.sh --block --warm 2>&1 | grep -E '^(BLOCK|  FAIL|  runner)'; st=${PIPESTATUS[0]}; set -e",
-                         raw"    while [ -e \"$HOLD\" ] && kill -0 \"$(cut -d' ' -f1 \"$HOLD\" 2>/dev/null || echo x)\" 2>/dev/null; do",
-                         raw"               gate_state=cold-after-warm",
-                         # merge is land's internal step alone: it runs only inside the landing holding the hold (A21E5)
-                         raw"    [ -n \"${LAND_HOLDER:-}\" ] && [ \"$holder\" = \"$LAND_HOLDER\" ] && kill -0 \"$holder\" 2>/dev/null ||",
-                         raw"    [ -z \"$(git status --porcelain)\" ] || { echo \"land: $W has uncommitted or untracked files — refusing\"; git status --short | awk 'NR <= 10'; exit 4; }",
-                         raw"    until ( set -o noclobber; echo \"$$ $(iso \"$(now)\") $br\" > \"$HOLD\" ) 2>/dev/null; do",
-                         raw"LOG=\"$MAIN/dev/.loop/landings.tsv\"",
-                         raw"HOLD=\"$MAIN/dev/.block/HOLD\"",
-                         raw"AUTHORISED=\"$MAIN/dev/.block/charter_authorised\"",
-                         # the landing log through the previous landing carried in the landing's own tree (A21E4)
-                         raw"        mkdir -p dev/.loop && cp \"$LOG\" dev/.loop/landings.log && git add dev/.loop/landings.log" * "\n" * raw"        git commit -q --amend --no-edit",
-                         raw"        a=$(printf '%s\n' \"$msg\" | sed -n \"$CHANGE_SED\" | head -1)",
-                         raw"        authorised \"$AUTHORISED\" \"$ob\" \"$nb\" \"$a\" \"$pid\" ||",
-                         raw"    for p in ${SPEND:-}; do printf 'used:%s %s\n' \"$p\" \"$(git rev-parse HEAD)\" >> \"$AUTHORISED\"; done",
-                         raw"            clause_in \"$c\" \"${a% *}\" ||",
-                         # one landing is one commit, its own tree gated (A24E1)
-                         raw"    ahead=$(git rev-list --count \"$tip..HEAD\")" * "\n" * raw"    [ \"$ahead\" -eq 1 ] ||",
-                         raw"        if [ \"$(git diff --word-diff=porcelain --word-diff-regex='[^[:space:]]+' \"$h^\" \"$h\" -- dev/CHARTER.md | awk \"$EXEMPT_AWK\")\" = yes ]; then",
-                         # every wait of a change in the wait history, left out of its own_s; queue_wait_s never below 0
-                         raw"    printf '%s\t%s\t%s\thold\n' \"$hs\" \"$(now)\" \"$(git log -1 --format='%at %ae %s' HEAD)\" >> \"$WAITS\"",
-                         raw"    printf '%s\t%s\t%s\tqueue\n' \"$qs\" \"$(now)\" \"$(git log -1 --format='%at %ae %s' HEAD)\" >> \"$WAITS\"",
-                         raw"\"$(perl -e 'my $q = $ARGV[0] - $ARGV[1]; printf \"%.1f\", $q < 0 ? 0 : $q' \"$e2l\" \"$own\")\"",
-                         # a refused head never holds the queue (A35E1): wait runs land as its child, pops the lane on a
-                         # refusal before the hold and queues it again once the preflight passes; an audit entry goes first;
-                         # a turn ending red or on a conflict is logged (A35E2)
-                         raw"        set +e; bash \"$W/dev/land.sh\" land; st=$?; set -e",
-                         raw"        4|5) bash dev/land_queue.sh \"$QUEUE\" \"$HOLD\" pop \"$br\" >/dev/null 2>&1 || true",
-                         raw"             until LAND_PREFLIGHT_ONLY=1 bash \"$W/dev/land.sh\" land >/dev/null 2>&1; do sleep 30; done",
-                         raw"    [ \"${LAND_PREFLIGHT_ONLY:-}\" != 1 ] || { echo \"land: the preflight passes\"; exit 0; }",
-                         raw"    front=\"\"; git diff --quiet \"$(git merge-base \"origin/$MARCH\" HEAD)\" HEAD -- dev/AUDIT.md || front=front",
-                         raw"        1) qlog \"$br $(git rev-parse --short=8 HEAD) turn ended: the gate is red,",
-                         raw"            qlog \"$br $(git rev-parse --short=8 HEAD) turn ended: the rebase onto $MARCH",
-                         raw"STEPS=\"$MAIN/dev/.loop/steps.tsv\"",
-                         # the landing queue (ledger D13): the hold only at the head, the landing pops its line, `wait` lands at its turn
-                         raw"    qmsg=$(bash dev/land_queue.sh \"$QUEUE\" \"$HOLD\" may \"$br\") ||",
-                         raw"                bash \"$W/dev/land_queue.sh\" \"$QUEUE\" \"$HOLD\" pop \"$br\" >/dev/null 2>&1 || true; return 0; }",
-                         # a lane develops in a live Kaimon session: land refuses a worktree with none, in its preflight
-                         raw"    ks=$(bash dev/kaimon_session.sh \"$W\") || { echo \"land: $ks — refusing\"; exit 4; }",
-                         raw"    git push -q origin \"$MARCH\"" * "\n" * raw"    landed=$(now)"]
-                v += occursin(line, land) ? 0 : 1
-            end
-            # a lane's runner stays up across its landings (a gate's first run on a server is cold), and a check
-            # counts as warm only after a run of it finished: a killed warm-up warms nothing
-            local rn_src = read(joinpath(ROOT, "dev", "block_runner.jl"), String)
-            v += occursin("const IDLE_MIN = 120 ", rn_src) ? 0 : 1
-            v += occursin("        code = try; fetch(task); catch; 130; end\n", rn_src) &&
-                 occursin("        istaskfailed(task) || (ran_on[key] = version[])\n", rn_src) &&
-                 count("ran_on[key] = ", rn_src) == 1 ? 0 : 1
-            # the runner it starts builds the tree's package image first, in a process of its own (A20P23)
-            v += occursin(raw"    built.exitcode == 0 || (println(stderr, \"block_runner: this tree's package does not load",
-                          read(joinpath(ROOT, "dev", "block_runner.jl"), String)) ? 0 : 1
-            # the targets are literals, never raised
-            v += occursin("const L197_TARGET = 300 ", rx) && occursin("const L197_JUDGED_FROM = 3 ", rx) &&
-                 occursin("const L197_BAND = 600 ", rx) ? 0 : 1
-            # `land` prints the loop against the same target
-            v += occursin(raw"    echo \"LOOP $(printf '%s' \"$line\" | cut -f12) of " * string(L197_TARGET) * raw" s (own; queue wait", land) ? 0 : 1
-            # no excuse writer: a wait needs no excuse (A30E1)
-            v += occursin("loop_excuse.sh write", land) ? 1 : 0
-            v += occursin("\ndev/.loop/*\n!dev/.loop/landings.log\n!dev/.loop/excuse/\n", read(joinpath(ROOT, ".gitignore"), String)) ? 0 : 1
-            try
-                # land.sh's charter programs, run on fixed text (A21E6)
-                local prog = name -> (m = match(Regex("\n" * name * "='([^']+)'\n"), land); m === nothing ? error("dev/land.sh has no $name") : String(m[1]))
-                local runawk = (p, text; vars = String[]) -> mktemp() do path, io
-                    write(io, text); close(io)
-                    readlines(Cmd(vcat(["awk"], vars, [p, path])))
-                end
-                local cmap = runawk(prog("CLAUSE_AWK"), "intro\n- **C1 · one\n  two\n- **C10 · ten\n  more\n\n## next\n")
-                local omap, nmap = tempname(), tempname()
-                write(omap, "-\nC1\nC1\nC10\n"); write(nmap, "-\nC1\nC10\nC10\n")
-                local hv = ["-v", "O=$omap", "-v", "N=$nmap"]
-                local ex = t -> only(runawk(prog("EXEMPT_AWK"), t))
-                v += count(!, [cmap == ["-", "C1", "C1", "C10", "C10", "-", "-"],
-                               runawk(prog("HUNK_AWK"), "@@ -3 +3 @@\n"; vars = hv) == ["C1", "C10"],
-                               runawk(prog("HUNK_AWK"), "@@ -2,1 +1,0 @@\n"; vars = hv) == ["C1"],
-                               ex("+13.19,\n") == "yes", ex("-13.18\n+13.18,\n+13.19\n") == "yes", ex("+and\n+13.19\n") == "yes",
-                               ex("-13.18\n") == "no", ex("-and\n") == "no", ex("+budget\n") == "no", ex("-13.18\n+13.19\n") == "no"])
-                rm(omap; force = true); rm(nmap; force = true)
-                # a change to several clauses as one commit: the Charter-change line's clauses and date, the
-                # authorisation's clauses matched as a set, every changed line in one of them
-                local csed = t -> readchomp(pipeline(Cmd(["sed", "-n", prog("CHANGE_SED")]); stdin = IOBuffer(t * "\n")))
-                local shfn = name -> (m = match(Regex("\n" * name * "\\(\\) \\{\n.*?\n\\}\n", "s"), land); m === nothing ? error("dev/land.sh has no $name") : m.match)
-                local shok = (name, args...) -> success(Cmd(["bash", "-c", shfn(name) * name * " \"\$@\"", "l197", args...]))
-                local af = tempname()
-                write(af, "ob1 nb1 C4 C0 2026-10-21\nob2 nb2 C10 2026-10-21\ncontent:pp1 - C6 2026-10-22\ncontent:pp3 - C6 2026-10-22\nused:pp3 abc123\n")
-                v += count(!, [csed("Charter-change: C0 C4 C5 authorised by Dale 2026-10-21") == "C0 C4 C5 2026-10-21",
-                               csed("Charter-change: C10 authorised by Dale 2026-10-21") == "C10 2026-10-21",
-                               csed("Charter-change: C0, C4 authorised by Dale 2026-10-21") == "",
-                               csed("Charter-change: authorised by Dale 2026-10-21") == "",
-                               shok("authorised", af, "ob1", "nb1", "C0 C4 2026-10-21"), shok("authorised", af, "ob2", "nb2", "C10 2026-10-21"),
-                               !shok("authorised", af, "ob1", "nb1", "C0 2026-10-21"), !shok("authorised", af, "ob1", "nb1", "C0 C4 C5 2026-10-21"),
-                               !shok("authorised", af, "ob1", "nb1", "C0 C4 2026-10-22"), !shok("authorised", af, "ob2", "nb1", "C0 C4 2026-10-21"),
-                               !shok("authorised", af * ".none", "ob1", "nb1", "C0 C4 2026-10-21"),
-                               # an authorisation by content survives a rebase that moves the blobs, never a changed hunk
-                               shok("authorised", af, "obX", "nbX", "C6 2026-10-22", "pp1"), !shok("authorised", af, "obX", "nbX", "C6 2026-10-22", "pp2"),
-                               !shok("authorised", af, "obX", "nbX", "C6 2026-10-22", "pp3"),   # a spent content authorisation admits no second landing (A40E1)
-                               !shok("authorised", af, "obX", "nbX", "C6 C0 2026-10-22", "pp1"), !shok("authorised", af, "obX", "nbX", "C6 2026-10-22"),
-                               # a line listing C4 while C0 changed refuses
-                               !shok("clause_in", "C0", "C4"), shok("clause_in", "C4", "C0 C4"), shok("clause_in", "C10", "C1 C10"),
-                               !shok("clause_in", "C1", "C10"), !shok("clause_in", "-", "C4")])
-                rm(af; force = true)
-                # behavior on fixed text: three commits, the second landing two; each line's own time (own_s)
-                # beside its waits (queue_wait_s), the two splitting its edit to landed (A30E1)
-                local t0 = _l197_epoch("2026-10-21T14:00:00Z")
-                local hist = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n")
-                local e2l_of = (landed, author) -> _l197_epoch(landed) - _l197_epoch(author)
-                local ln = (c, landed, author, f, i, own) -> join([landed, c, author, landed, "2", "40.0", "60.0",
-                                                                   string(e2l_of(landed, author)) * ".0", f, i, "judged",
-                                                                   string(own) * ".0", string(e2l_of(landed, author) - own) * ".0"], '\t')
-                local ln1 = (c, landed, author, f, i, lw) -> join([landed, c, author, landed, "2", "40.0", lw,
-                                                                   string(e2l_of(landed, author)) * ".0", f, i, "judged"], '\t')
-                local B2 = ln("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5", 60)
-                local good = L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1", 40) * "\n"
-                local slow = L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1", 340) * "\n"
-                local gap = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "1", "1", 40) * "\n"
-                local order = L197_COLUMNS * "\n" * ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:00:00Z", "2", "6", 40) * "\n" *
-                              ln("bbbbbbbb22", "2026-10-21T14:08:30Z", "2026-10-21T14:00:00Z", "2", "5", 40) * "\n"
-                local partial = L197_COLUMNS * "\n" * B2 * "\n"
-                # four commits: the median judged over three lines; c and d land 340 s after their edits
-                local hist4 = _l197_history("C aaaaaaaa11 $(t0)\n3\t1\tsrc/a.jl\n\nC bbbbbbbb22 $(t0 + 50)\n2\t0\tdev/x.md\n\nC cccccccc33 $(t0 + 400)\n1\t1\tdev/x.md\n\nC dddddddd44 $(t0 + 600)\n1\t0\tdev/x.md\n")
-                local three_at = (lc, ld, oc, od) -> L197_COLUMNS * "\n" * B2 * "\n" * ln("cccccccc33", lc, "2026-10-21T14:06:40Z", "1", "1", oc) * "\n" *
-                                                     ln("dddddddd44", ld, "2026-10-21T14:10:00Z", "1", "1", od) * "\n"
-                # c and d land 340 s after their edits (three), or 640 s (three_late), past the 600-s band
-                local three = (oc, od) -> three_at("2026-10-21T14:12:20Z", "2026-10-21T14:15:40Z", oc, od)
-                local three_late = (oc, od) -> three_at("2026-10-21T14:17:20Z", "2026-10-21T14:20:40Z", oc, od)
-                local v1three = lw -> L197_COLUMNS_V1 * "\n" * ln1("bbbbbbbb22", "2026-10-21T14:02:30Z", "2026-10-21T14:00:00Z", "2", "5", lw) * "\n" *
-                                      ln1("cccccccc33", "2026-10-21T14:12:20Z", "2026-10-21T14:06:40Z", "1", "1", lw) * "\n" *
-                                      ln1("dddddddd44", "2026-10-21T14:15:40Z", "2026-10-21T14:10:00Z", "1", "1", lw) * "\n"
-                v += count(!, [isempty(first(l197_check(good, hist))), length(last(l197_check(good, hist))) == 2,
-                               # fewer than 3 lines in the window: not judged, a slower one included
-                               isempty(first(l197_check(slow, hist))),
-                               # two of three past the band in their own time: failed; one of three: passed; two of three
-                               # over the 300-s target inside the 600-s band: minutes still, passed
-                               !isempty(first(l197_check(three_late(640, 640), hist4))), isempty(first(l197_check(three_late(640, 40), hist4))),
-                               isempty(first(l197_check(three(340, 340), hist4))),
-                               length(last(l197_check(three(40, 40), hist4))) == 3,
-                               # a single landing past the band is noted, never failed
-                               only(l197_slow_notes(three(40, 40) * ln("eeeeeeee55", "2026-10-21T14:30:00Z", "2026-10-21T14:10:00Z", "1", "1", 700) * "\n")) ==
-                                   "eeeeeeee took 700.0 s of its own, past the 600-s band: reported, the median of five judges",
-                               isempty(l197_slow_notes(three(40, 40))),
-                               # the median landing's own steps take 700 s, past the 600-s band: fired
-                               !isempty(first(l197_check(three_at("2026-10-21T14:18:20Z", "2026-10-21T14:21:40Z", 700, 700), hist4))),
-                               # past the band only by their waits (600 s each in queue_wait_s): judged by their own 40 s, passed
-                               isempty(first(l197_check(three_late(40, 40), hist4))),
-                               # the gated commit's own line is out of its own window
-                               isempty(first(l197_check(three_late(640, 640), hist4; head = "dddddddd44"))),
-                               # a line before A30E1 (eleven fields) judged by its land's wall
-                               isempty(first(l197_check(v1three("60.0"), hist4))), !isempty(first(l197_check(v1three("700.0"), hist4))),
-                               # own_s and queue_wait_s that do not split the edit to landed, and a line of twelve fields, fail
-                               !isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\t90.0\n"), hist))),
-                               !isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\n"), hist))),
-                               # a gate_state: warm, cold, cold-after-warm or fresh, a thirteen-field line still read
-                               isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\t0.0\twarm\n"), hist))),
-                               !isempty(first(l197_check(replace(good, "\t40.0\t0.0\n" => "\t40.0\t0.0\tlukewarm\n"), hist))),
-                               # the tracker: a planted cold landing after a warm-up is named
-                               l197_cold(L197_COLUMNS * "\n" * replace(B2, r"$" => "\twarm") * "\n" *
-                                         replace(ln("cccccccc33", "2026-10-21T14:07:20Z", "2026-10-21T14:06:40Z", "1", "1", 40), r"$" => "\tcold-after-warm") * "\n") ==
-                                   "cold 1 of the last 2 landings' gates; cold after a warm-up: cccccccc",
-                               l197_cold(good) == "no landing records its gate's state yet",
-                               !isempty(first(l197_check(gap, hist))),
-                               !isempty(first(l197_check(order, hist))),
-                               !isempty(first(l197_check(partial, hist))),
-                               isempty(first(l197_check("", hist[1:0]))),
-                               !isempty(first(l197_check("", hist))),
-                               _l197_epoch("1970-01-01T00:00:00Z") == 0, _l197_epoch("2026-10-21T14:00:00Z") == 1792591200])
-                # a change's own reds over the red history (A33E4): a red only on L197 (a queue red) adds
-                # nothing, so a change red only on L197 and then landed reads its land's own time, low; an own
-                # red counts from its start to the next attempt's; another change's red counts nothing
-                local Wd = "1000 a@b fix: x"
-                local orw = (text, waits = "") -> mktemp() do wp, wio
-                    write(wio, waits); close(wio)
-                    mktemp() do rp, rio
-                        write(rio, text); close(rio)
-                        only(readlines(Cmd(["awk", "-F", "\t", "-v", "w=$Wd", "-v", "au=1000", "-v", "ls=3000", prog("OWN_RED_AWK"), wp, rp])))
-                    end
-                end
-                v += count(!, [orw("1500\th\t$Wd\tqueue\tratchet on L197 alone\tr-1\n") == "0.0",
-                               orw("1500\th\t$Wd\town\ttests\tr-1\n") == "1500.0",
-                               orw("1500\th\t$Wd\town\ttests\tr-1\n2500\th\t$Wd\tqueue\ttiming alone\tr-2\n") == "1000.0",
-                               orw("1500\th\t999 x@y other\town\ttests\tr-1\n") == "0.0",
-                               # the change's wait for a hold inside an own red's span is not its own (A34E3); another
-                               # change's wait is not subtracted
-                               orw("1500\th\t$Wd\town\ttests\tr-1\n", "2000\t2500\t$Wd\thold\n") == "1000.0",
-                               orw("1500\th\t$Wd\town\ttests\tr-1\n", "2000\t2500\t9 x@y z\thold\n") == "1500.0"])
-                # the carried copy (A21E4): a prefix missing only the tip's own line passes; an edited earlier
-                # line, or two of this tree's landings missing, fail
-                local cl = c -> "2026-10-21T14:00:00Z\t" * c * "\tx"
-                local A = repeat("a", 40); local B = repeat("b", 40); local C = repeat("c", 40)
-                local U = [L197_COLUMNS, cl(A), cl(B), cl(C)]
-                v += count(!, [isempty(l197_carried(U, U, c -> true)), isempty(l197_carried(U[1:3], U, c -> true)),
-                               !isempty(l197_carried(U[1:2], U, c -> true)), isempty(l197_carried(U[1:2], U, c -> c == B)),
-                               !isempty(l197_carried([U[1], cl(A) * "y", U[3]], U, c -> true)), !isempty(l197_carried(String[], U, c -> true))])
-                # the excuse files: one line of a kind outside the change, for a landed commit
-                local ok_ex = "lock: waited 600 s behind two landings, then landed in 70 s"
-                v += count(!, [isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n"), [A])),
-                               !isempty(l197_excuse_problems(Dict("bbbbbbbb" => ok_ex), [A])),
-                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => "slow, sorry"), [A])),
-                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => ok_ex * "\n" * ok_ex), [A])),
-                               !isempty(l197_excuse_problems(Dict("aaaaaaaa" => "change: the commit was large and compiled for long"), [A])),
-                               !isempty(l197_excuse_problems(Dict("aaaa" => ok_ex), [A]))])
-                # an excuse file (it lifts a red timing's debt, L198) held to its landing's steps by
-                # dev/loop_excuse.sh check (A25E2), on a scratch landing log and steps: a hand line's numbers
-                # within 10 per cent, a line measured by land (until A30E1) as measured, never for a red timing
-                mktempdir() do t
-                    local E = repeat("e", 40); local F = repeat("f", 40); local D = repeat("d", 40)
-                    local lx = (c, landed, start, e2l, timing) -> join([landed, c, "2026-10-21T14:00:00Z", start, "1", "40.0", "60.0", e2l, "1", "1", timing], '\t')
-                    local logp = joinpath(t, "landings.tsv"); local stepsp = joinpath(t, "steps.tsv")
-                    write(logp, join([L197_COLUMNS_V1, lx(E, "2026-10-21T14:12:00Z", "2026-10-21T14:10:00Z", "720.0", "judged"),
-                                      lx(F, "2026-10-21T14:10:00Z", "2026-10-21T14:00:05Z", "600.0", "judged"),
-                                      lx(D, "2026-10-21T14:10:00Z", "2026-10-21T14:00:05Z", "600.0", "SLOWER ratchet@warm")], '\n') * "\n")
-                    local st = (c, h) -> join(["$c\thold\t$h", "$c\trunner\t0.5", "$c\tgate-1\t40.0", "$c\tland\t8.0"], '\n')
-                    write(stepsp, join([st(E, "0.1"), st(F, "500.0"), st(D, "500.0")], '\n') * "\n")
-                    local sh = joinpath(ROOT, "dev", "loop_excuse.sh")
-                    local ck = (name, text) -> mktemp() do path, io
-                        write(io, text * "\n"); close(io)
-                        readchomp(Cmd(Cmd(["bash", sh, "check", logp, stepsp, name, path]); dir = ROOT))
-                    end
-                    local lF = "lock: measured by dev/land.sh land: edit to landed 600.0 s; hold 500.0 s; runner 0.5 s; gate-1 40.0 s; its own 100.0 s of the 300 s target"
-                    v += count(!, [isempty(ck("ffffffff", lF)),
-                                   !isempty(ck("ffffffff", replace(lF, "hold 500.0 s" => "hold 50.0 s"))),
-                                   !isempty(ck("dddddddd", lF)),
-                                   !isempty(ck("eeeeeeee", "lock: waited 900 s behind the slot order before its land began")),
-                                   isempty(ck("eeeeeeee", "lock: waited 600 s behind the slot order before its land began")),
-                                   !isempty(ck("ffffffff", "lock: 50 s of its 600 s waiting on the one hold behind another landing"))])
-                end
-                # every lane develops in a live Kaimon session (dev/kaimon_session.sh), which `land` requires in
-                # its preflight: on a scratch Kaimon cache, no session refuses, a session of another tree refuses,
-                # one whose socket is gone or whose pid is dead refuses, a live one of this tree passes, and a CI
-                # checkout runs none; dev/lane.sh makes a lane's worktree a Kaimon project, its other entries kept
-                mktempdir() do t
-                    local wt = mkpath(joinpath(t, "wt")); local other = mkpath(joinpath(t, "other")); local sk = mkpath(joinpath(t, "c", "sock"))
-                    local ks = (env...) -> Base.run(pipeline(ignorestatus(addenv(`bash $(joinpath(ROOT, "dev", "kaimon_session.sh")) $wt $(joinpath(t, "c"))`,
-                                                                                 "GITHUB_ACTIONS" => "", env...)); stdout = devnull)).exitcode
-                    local sess = (id, tree, pid) -> (write(joinpath(sk, "$id.json"), "{\"pid\": $pid, \"session_id\": \"$id\", \"project_path\": \"$tree\", " *
-                                                           "\"endpoint\": \"ipc://$(joinpath(sk, id)).sock\"}"); joinpath(sk, "$id.sock"))
-                    local none = ks()
-                    touch(sess("s1", other, getpid())); local elsewhere = ks()
-                    local p2 = sess("s2", wt, getpid()); local nosock = ks()
-                    touch(p2); local live = ks()
-                    sess("s2", wt, 999999); local dead = ks()
-                    v += count(!, [none == 1, elsewhere == 1, nosock == 1, live == 0, dead == 1, ks("GITHUB_ACTIONS" => "true") == 0])
-                end
-                local lanesh = read(joinpath(ROOT, "dev", "lane.sh"), String)
-                v += occursin("git -C \"\$MAIN\" worktree add -q -b \"\$name\" \"\$WT\" \"origin/\$MARCH\"", lanesh) &&
-                     occursin("\"launch_config\": {\"threads\": \"4\", \"startup_file\": False", lanesh) &&
-                     occursin("ps = [p for p in d.get(\"projects\", []) if p.get(\"project_path\") != wt]", lanesh) ? 0 : 1
-                # the landing queue (dev/land_queue.sh, ledger D13), one total order of the landings, on scratch
-                # files: an empty queue lets any lane land, a lane not at the head is refused naming the head, a
-                # held hold stops the head's clock, a head that took no free hold within 300 s is skipped with a
-                # note, a lane is queued once, and a pop removes the lane's own line alone
-                mktempdir() do t
-                    local Q = joinpath(t, "QUEUE"); local Hf = joinpath(t, "HOLD"); local qs = joinpath(ROOT, "dev", "land_queue.sh")
-                    local q = (args...) -> (io = IOBuffer(); pr = Base.run(pipeline(ignorestatus(`bash $qs $Q $Hf $args`); stdout = io, stderr = io)); (pr.exitcode, String(take!(io))))
-                    local empty = q("may", "x")
-                    q("add", "a", "s1"); q("add", "b", "s2"); q("add", "a", "s1b")
-                    local notat = q("may", "b")
-                    write(Q * ".head", "a $(round(Int, time()) - 400)\n"); write(Hf, "$(getpid()) t busy\n")
-                    local busy = q("may", "b")
-                    rm(Hf); write(Q * ".head", "a $(round(Int, time()) - 400)\n")
-                    local stale = q("may", "b"); local after = read(Q, String)
-                    q("add", "c", "s3"); q("pop", "b")
-                    local before_front = read(Q, String); q("add", "e", "s5", "front")
-                    v += count(!, [empty[1] == 0, before_front == "c s3\n" && read(Q, String) == "e s5\nc s3\n", notat[1] == 1 && occursin("a s1b heads the landing queue; b is 1 behind it", notat[2]),
-                                   busy[1] == 1, stale[1] == 0 && occursin("skipped a s1b", stale[2]), after == "b s2\n",
-                                   occursin("skipped a s1b", read(Q * ".log", String))])
-                end
-                # a lane's Manifest resolved for its own project (dev/manifest_check.sh, one check for land and
-                # lane.sh): a Manifest naming extensions its Project lacks (a stale copy of WT1's) is caught, a
-                # matching one passes, and lane.sh resolves on it
-                mktempdir() do t
-                    write(joinpath(t, "Project.toml"), "name = \"WasmTarget\"\n[compat]\njulia = \"1\"\n")
-                    write(joinpath(t, "Manifest.toml"), "[[deps.WasmTarget]]\npath = \".\"\n\n    [deps.WasmTarget.extensions]\n    WasmTargetExtA = \"A\"\n")
-                    local mcs = joinpath(ROOT, "dev", "manifest_check.sh")
-                    local stale = Base.run(pipeline(ignorestatus(`bash $mcs $t`); stdout = devnull)).exitcode
-                    write(joinpath(t, "Manifest.toml"), "[[deps.WasmTarget]]\npath = \".\"\n")
-                    local fresh = Base.run(pipeline(ignorestatus(`bash $mcs $t`); stdout = devnull)).exitcode
-                    v += count(!, [stale == 1, fresh == 0,
-                                   occursin("        (cd \"\$WT\" && julia --startup-file=no --project=. -e 'using Pkg; Pkg.resolve()')", read(joinpath(ROOT, "dev", "lane.sh"), String))])
-                end
-                if get(ENV, "GITHUB_ACTIONS", "") == "true"
-                    println("    · L197: a CI checkout: the landing log is the landing machine's; nothing counted here")
-                else
-                    local mt = nothing; local cur = ""
-                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
-                        startswith(l, "worktree ") && (cur = l[10:end])
-                        l == "branch refs/heads/wt2" && (mt = cur)
-                    end
-                    if mt === nothing
-                        println("    ✗ L197: no worktree holds wt2, so there is no landing log to read")
-                        v += 1
-                    else
-                        local tip = readchomp(`git -C $ROOT rev-parse wt2`)
-                        local real = _l197_history(readchomp(`git -C $ROOT log --reverse --no-merges --numstat --format='C %H %at' $(L197_START)..$tip`))
-                        local logp = joinpath(mt, "dev", ".loop", "landings.tsv")
-                        local exfiles = l197_excuses(ROOT)
-                        # every excuse file held to its landing's steps (A25E2); none takes a landing out of the window (A30E1)
-                        local mbad, _ = l197_excuse_measured(ROOT, logp, joinpath(mt, "dev", ".loop", "steps.tsv"), exfiles)
-                        local bad, window = l197_check(isfile(logp) ? read(logp, String) : "", real;
-                                                       head = readchomp(`git -C $ROOT rev-parse HEAD`))
-                        append!(bad, l197_excuse_problems(exfiles, first.(real)))
-                        append!(bad, mbad)
-                        # the copy each landing carries in its own tree (A21E4)
-                        local tp = joinpath(ROOT, "dev", ".loop", "landings.log")
-                        local lines_of = t -> String.(filter(!isempty, split(t, '\n')))
-                        append!(bad, l197_carried(isfile(tp) ? lines_of(read(tp, String)) : String[],
-                                                  isfile(logp) ? lines_of(read(logp, String)) : String[],
-                                                  c -> success(`git -C $ROOT merge-base --is-ancestor $c HEAD`)))
-                        foreach(b -> println("    ✗ L197: ", b), bad)
-                        isfile(logp) && foreach(n -> println("    · L197 note: ", n), l197_slow_notes(read(logp, String)))
-                        isfile(logp) && println("    · L197: ", l197_cold(read(logp, String)), " (reported; the target: cold only on a tree's first landing)")
-                        println("    · L197: $(length(real)) commits landed since $(first(L197_START, 8)); the window ",
-                                isempty(window) ? "is empty" : join((first(c, 8) * " " * string(round(x; digits = 2)) for (c, x) in window), ", "),
-                                length(window) < L197_JUDGED_FROM ? " (own time over its target, $L197_TARGET s: fewer than $L197_JUDGED_FROM lines, not judged)" : "")
-                        v += length(bad)
-                    end
-                end
-            catch e
-                println("    ✗ L197: ", sprint(showerror, e))
-                v += 1
-            end
-            v
-        end),
-    "L198_timing_is_recorded" => ("a landing whose timing the gate could not judge says so, and the streak of such landings is shown at every landing until a judged run ends it, never forgotten (Dale 2026-10-21; the machine's working floor is other work, so a cap that refused would stall the loop): the blocking gate leaves a run's timing ratchet unjudged on a machine more than FACTOR_CAP times slower than its best (L195: `timing = \"unjudged\"` in its record, `judged` otherwise), `dev/land.sh merge` writes the record's timing into the landing log's `timing` column (a record from before the rule judged), a cold run whose checks pass is green with its timing unjudged and `dev/land.sh land` lands on it, prints `LOOP <s> of 300 s` right after the push, then, still holding the machine, judges the timing by a warm run of the landed tree (`--base` the tip it landed on) and writes it into the landing's line: judged; unjudged (past the cap, with the reason its record gives); SLOWER <stages> and OVER <stages> for bests and budgets missed under the cap (the record's `timing_slower`, `timing_over`); FAILED <stages> for any check that failed, the ratchet's included (`checks_failed`; a lock red on the landed head though the cold run passed it, A21E1), its red record standing; after a line judged red the next landing lands on a judged green run (`land` runs the gate once more rather than land a cold run, and `merge` refuses a record whose timing is not judged) or carries the red landing's excuse file, dev/.loop/excuse/<sha8>, in its own tree (a cause outside the change, or a `Timing: correctness fix` row's), which lifts a timing debt, SLOWER or OVER, so no timing rule needs a quiet machine to be met; a FAILED debt no excuse lifts: the next landing lands only as a fix, green on a warm run (`land` runs a cold run once more, `merge` refuses a record whose runner_state is not warm, A21E1); `land` refuses a worktree whose Manifest.toml names other WasmTarget extensions than Project.toml (a stale manifest's image build fails, A20P23), printing the resolve command; and `land` prints the unjudged streak, `timing unjudged for N landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm`: the log's last lines in a row whose timing is unjudged, counted newest first until one whose commit's tree has a green run with its timing judged recorded in any worktree. Here: those steps in dev/land.sh and dev/block.jl, every line of the main tree's landing log with a timing, and land.sh's own streak program run on fixed text: three unjudged lines after a judged one give those three newest first, a judged last line none, an empty log none; and its owed program: a last line SLOWER or FAILED names it, a judged or unjudged one and an empty log none; and its lift program on a scratch repository: a dev/MARCH.md row naming the red landing lifts nothing, its excuse file lifts SLOWER and OVER, never FAILED, nor another landing's debt. Negative-tested: the record's field, the streak's count, the owed program, the merge's refusal, a lift read from dev/MARCH.md's text, an excuse lifting a FAILED debt and the ratchet's check dropped from FAILED each broken fire it, and a planted SLOWER line made `dev/land.sh merge` refuse a cold-green record; intent: a landing whose timing nobody judged is seen at every landing until a judged run ends it; band: every unjudged landing counts, a judged red holds the next landing until it is judged or excused (dev/CHARTER.md C10)",
-        () -> begin
-            local v = 0
-            local land = read(joinpath(ROOT, "dev", "land.sh"), String)
-            local blk = read(joinpath(ROOT, "dev", "block.jl"), String)
-            v += occursin("    timing = cold ? \"unjudged (cold)\" :\n", blk) && occursin("\"timing\" => timing, \"timing_failed\" => timing_failed,", blk) ? 0 : 1
-            for line in [raw"    timing=$(sed -n 's/^timing = \"\(.*\)\"$/\1/p' \"$rec\"); timing=${timing:-judged}",
-                         raw"\"$e2l\" \"$files\" \"$ins\" \"$timing\" \"$own\"",
-                         raw"                [ -f \"$f\" ] && grep -qx 'verdict = \"green\"' \"$f\" && grep -qx 'timing = \"judged\"' \"$f\" && judged=1",
-                         raw"        [ $judged -eq 0 ] || break",
-                         raw"        echo \"land: timing unjudged for $unjudged landing(s); judge on a quiet machine: bash dev/gate.sh --block --warm\"",
-                         raw"OWED_AWK='NR == 1 && $11 ~ /^(SLOWER|OVER|FAILED)/ { print substr($2, 1, 8) \" \" $11 }'",
-                         raw"owed_lifted() { case \"${2#* }\" in FAILED*) return 1 ;; esac",
-                         raw"                git cat-file -e \"$1:dev/.loop/excuse/${2:0:8}\" 2>/dev/null; }",
-                         # a failed check's debt: only a fix, green on a warm run (A21E1)
-                         raw"        grep -qx 'runner_state = \"warm\"' \"$rec\" ||",
-                         raw"    owed=$(tail -n 1 \"$LOG\" 2>/dev/null | awk -F'\t' \"$OWED_AWK\" || true)" * "\n" * raw"    case \"${owed#* }\" in FAILED*)",
-                         raw"    if [ -n \"$owed\" ] && [ \"$timing\" != judged ]; then" * "\n" * raw"        if owed_lifted \"$head\" \"$owed\"; then",
-                         raw"    if [ -n \"$owed\" ] && owed_lifted HEAD \"$owed\"; then",
-                         raw"               chk=$(field checks_failed)",
-                         raw"    mc=$(bash dev/manifest_check.sh \"$W\") ||",
-                         raw"        0) if grep -q '^BLOCK green (timing unjudged: the run was cold' \"$glog\"; then",
-                         raw"            set +e; bash dev/gate.sh --block --warm --base \"$tip\" 2>&1 | tee \"$glog\"; st=${PIPESTATUS[0]}; set -e",
-                         raw"        awk -F'\t' -v OFS='\t' -v n=\"$n\" -v h=\"$head\" -v t=\"$verdict_t\" 'NR == n && $2 == h { $11 = t } { print }' \"$LOG\" > \"$LOG.new\""]
-                v += occursin(line, land) ? 0 : 1
-            end
-            try
-                # land.sh's streak program, run on fixed logs
-                local m = match(r"for c in \$\(awk -F'\\t' '([^']+)' \"\$LOG\"\)", land)
-                m === nothing && error("dev/land.sh has no streak program")
-                local streak = log -> mktemp() do path, io
-                    write(io, log); close(io)
-                    split(readchomp(`awk -F'\t' $(m[1]) $path`))
-                end
-                local hd = L197_COLUMNS * "\n"
-                local ln = (c, t) -> join(["2026-10-21T14:02:30Z", c, "2026-10-21T14:00:00Z", "2026-10-21T14:01:00Z", "1", "30.0", "90.0", "150.0", "1", "1", t], '\t') * "\n"
-                local three = hd * ln("aaaaaaaa", "judged") * ln("bbbbbbbb", "unjudged") * ln("cccccccc", "unjudged") * ln("dddddddd", "unjudged")
-                # the push is the landing: LOOP printed before the warm judgement, the hold released after it
-                local iL = findfirst("    echo \"LOOP ", land); local iJ = findfirst(raw"    if [ $cold_green -eq 1 ]; then", land)
-                local iR = findnext("    release\n", land, something(iJ, 1:1).stop)
-                v += iL !== nothing && iJ !== nothing && iR !== nothing && iL.start < iJ.start < iR.start ? 0 : 1
-                local om = match(r"\nOWED_AWK='([^']+)'\n", land)
-                om === nothing && error("dev/land.sh has no owed program")
-                local owed = log -> mktemp() do path, io
-                    write(io, last(split(chomp(log), '\n'))); close(io)
-                    readchomp(`awk -F'\t' $(om[1]) $path`)
-                end
-                v += count(!, [owed(three * ln("eeeeeeee", "SLOWER probes ratchet")) == "eeeeeeee SLOWER probes ratchet",
-                               owed(three * ln("eeeeeeee", "OVER total")) == "eeeeeeee OVER total",
-                               isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes OVER total"))),
-                               !isempty(l198_check(three * ln("eeeeeeee", "FAILED"))),
-                               owed(three * ln("eeeeeeee", "FAILED smoke-core")) == "eeeeeeee FAILED smoke-core",
-                               isempty(owed(three)), isempty(owed(three * ln("eeeeeeee", "judged"))), isempty(owed(hd)),
-                               isempty(l198_check(three * ln("eeeeeeee", "SLOWER probes")))])
-                v += count(!, [streak(three) == ["dddddddd", "cccccccc", "bbbbbbbb"],
-                               isempty(streak(three * ln("eeeeeeee", "judged"))),
-                               streak(three * ln("eeeeeeee", "judged") * ln("ffffffff", "unjudged")) == ["ffffffff"],
-                               isempty(streak(hd)),
-                               isempty(l198_check(three)), !isempty(l198_check(hd * ln("aaaaaaaa", "")))])
-                # land.sh's lift program on a scratch repository (A22E1): a tree whose dev/MARCH.md names the
-                # red landing lifts nothing; its excuse file lifts a timing debt (SLOWER, OVER), never a FAILED one
-                local lm = match(r"\nowed_lifted\(\) \{.*?; \}\n"s, land)
-                lm === nothing && error("dev/land.sh has no lift program")
-                mktempdir() do t
-                    local gitq = args -> Base.run(pipeline(`git -C $t -c user.name=l198 -c user.email=l198@localhost $args`; stdout = devnull, stderr = devnull))
-                    gitq(`init -q`)
-                    mkpath(joinpath(t, "dev", ".loop", "excuse"))
-                    write(joinpath(t, "dev", "MARCH.md"), "| 13.99 | C10 | eeeeeeee was slower: its runner was cold | x |\n")
-                    gitq(`add -A`); gitq(`commit -q -m row`)
-                    local byrow = readchomp(`git -C $t rev-parse HEAD`)
-                    write(joinpath(t, "dev", ".loop", "excuse", "eeeeeeee"), "lock: waited 600 s behind two landings, then landed in 70 s\n")
-                    gitq(`add -A`); gitq(`commit -q -m file`)
-                    local byfile = readchomp(`git -C $t rev-parse HEAD`)
-                    local lifted = (c, o) -> success(Cmd(`bash -c $(lm.match * "owed_lifted \"\$1\" \"\$2\"") l198 $c $o`; dir = t))
-                    v += count(!, [!lifted(byrow, "eeeeeeee SLOWER probes"), !lifted(byrow, "eeeeeeee OVER total"),
-                                   lifted(byfile, "eeeeeeee SLOWER probes"), lifted(byfile, "eeeeeeee OVER total"),
-                                   !lifted(byfile, "eeeeeeee FAILED ratchet"), !lifted(byfile, "ffffffff SLOWER probes")])
-                end
-                if get(ENV, "GITHUB_ACTIONS", "") != "true"
-                    local mt = nothing; local cur = ""
-                    for l in split(readchomp(`git -C $ROOT worktree list --porcelain`), '\n')
-                        startswith(l, "worktree ") && (cur = l[10:end])
-                        l == "branch refs/heads/wt2" && (mt = cur)
-                    end
-                    local logp = mt === nothing ? "" : joinpath(mt, "dev", ".loop", "landings.tsv")
-                    local bad = isfile(logp) ? l198_check(read(logp, String)) : String[]
-                    foreach(b -> println("    ✗ L198: ", b), bad)
-                    v += length(bad)
-                end
-            catch e
-                println("    ✗ L198: ", sprint(showerror, e))
-                v += 1
-            end
             v
         end),
     "L154_planned_cites_rows" => ("a clause's Planned text cites dev/MARCH.md rows, never findings, and every row names its clauses: no finding ID in any clause's Planned text; every row it cites exists; each row names in its Clause column exactly the clauses whose Planned cites it, and a row that names none (1.M the merge, 1.P post-merge) is cited by none; and every finding the latest dev/AUDIT.md entry's Resolution leaves open on a row (a MARCH row 1.<x> or a ledger row D<n>) sits on that row, until a commit after the entry's own carries a `Fixes:` line naming it, and every row it names exists (A32E3). Audits then lengthen MARCH rows and their own entries, not the charter (A3P4). Behavior, run here: a planted entry's five open findings, read, and four planted rows and fixes answer as stated (dev/CHARTER.md C0)",
@@ -2891,77 +1949,20 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), f)
             v + length(f)
         end),
-    "L148_changes_are_audited" => ("every change is audited against the charter before it lands (AGENTS.md, the anti-drift audit): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, and each entry's range starts at the one before it (the entries chain, A2P5); the last is at most 5 commits behind HEAD, merges not counted, as dev/audit_window.sh counts it, the one program `dev/land.sh land` runs before its hold too (the march tip's last entry, or the landing's own when it adds the next one, as this lock judges the landing's rebased tree, the commits past it and the landing's own), so a landing into a full window refuses in its preflight, naming the audit to wait for, never after a gate run, and the entry that empties a full window lands (A31E1) (run here on a scratch repository: five commits past the entry fit, a sixth or the landing's own beyond five fills it, and in a full window a landing adding the next entry fits where one adding none is refused); and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved. With no git history the check fails, never skips; intent: every change is read against the charter soon after it lands (Dale 2026-09-30); band: at most 5 commits behind the head, its edge (dev/CHARTER.md C0)",
+    "L148_changes_are_audited" => ("every change is audited against the charter soon after it lands, beside the work, never holding a landing (AGENTS.md, the anti-drift audit; Dale 2026-09-30, restated 2026-10-28: audits run beside the work and never block a landing, dev/LEDGER.md D21): every dev/AUDIT.md entry names the commit it audited through, an ancestor of HEAD, each entry's range starts at the one before it (the entries chain, A2P5), and every entry covers the four areas (builder; collection and planning; emission and diagnostics; enforcement and prose) with its findings and how each was resolved; the audit lag, the commits past the last entry's, merges not counted, is printed, never a failure. With no git history the check fails, never skips; intent: every change is read against the charter soon after it lands; band: within 5 commits of the head, its edge a printed note, never a failure. Behavior, run here: four planted logs answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local audit = joinpath(ROOT, "dev", "AUDIT.md")
             isfile(audit) || return 1
-            local txt = read(audit, String)
-            local entries = split(txt, r"\n(?=## )")[2:end]
-            isempty(entries) && return 1
-            local v = 0
-            for e in entries
-                for area in ("Area: builder", "Area: collection and planning",
-                             "Area: emission and diagnostics", "Area: enforcement and prose")
-                    occursin(area, e) || (v += 1)
-                end
-                occursin("Resolution:", e) || (v += 1)
+            local anc = sha -> success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`)
+            local v = vcat(audit_log_faults(_text(audit), anc), audit_log_negatives_missed())
+            foreach(x -> println("    ✗ ", x), v)
+            local last = audit_last_through(_text(audit))
+            if last !== nothing && anc(last)
+                local lag = parse(Int, readchomp(`git -C $ROOT rev-list --count --no-merges $last..HEAD`))
+                println("    · audit lag: $lag commit(s) past the last entry's $(first(last, 8)) (target: at most $AUDIT_LAG_TARGET; ",
+                        lag > AUDIT_LAG_TARGET ? "an audit is due, " : "", "a report, never a failure: D21)")
             end
-            # the entries chain: each one's range starts where the one before it was audited
-            # through, and every audited-through commit is an ancestor of HEAD (a rewritten
-            # history fails, never skips: A2P5)
-            local prev = nothing
-            local sha = nothing
-            for e in entries
-                local m = match(r"audited through ([0-9a-f]{8,40})", e)
-                m === nothing && (v += 1; continue)
-                sha = m.captures[1]
-                success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || (v += 1)
-                if prev !== nothing
-                    local r = match(r"\(([0-9a-f]{7,40})(?:~1)?\.\.", e)
-                    (r !== nothing && (startswith(prev, r.captures[1]) || startswith(r.captures[1], prev))) || (v += 1)
-                end
-                prev = sha
-            end
-            sha === nothing && return v + 1
-            success(`git -C $ROOT merge-base --is-ancestor $sha HEAD`) || return v   # counted above
-            # the window, by the one program `dev/land.sh land`'s preflight runs too (dev/audit_window.sh):
-            # the commits since the last audited one, merges not counted (a pull request's merge checkout
-            # and a landed march branch count the same), at most its cap of 5, its last entry this lock's
-            local wsh = joinpath(ROOT, "dev", "audit_window.sh")
-            local w = split(readchomp(ignorestatus(`bash $wsh $ROOT`)))
-            v += length(w) == 4 && w[1] == sha && w[3] == "5" && parse(Int, w[2]) <= 5 ? 0 : 1
-            # land refuses a full window in its preflight, before the hold, by the same program
-            local landsh = read(joinpath(ROOT, "dev", "land.sh"), String)
-            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\"); then", landsh) ? 0 : 1   # again after the rebase
-            v += occursin(raw"    if ! win=$(bash dev/audit_window.sh \"$W\" \"origin/$MARCH\" \"$(git rev-list --count --no-merges \"origin/$MARCH..HEAD\")\" HEAD); then", landsh) &&
-                 occursin(raw"wait for audit #$((wentries + 1)) — refusing\"; exit 5", landsh) ? 0 : 1
-            # behavior on a scratch repository: an entry audited through its first commit, then commits;
-            # five past it fit, a sixth fills the window, and the landing's own commit counts; in a full
-            # window a landing adding the next entry is counted from its own dev/AUDIT.md and fits, a
-            # landing adding none is refused (A31E1)
-            v += mktempdir() do t
-                local g = (args...) -> Base.run(pipeline(`git -C $t -c user.email=l@l -c user.name=l -c commit.gpgsign=false $args`; stdout = devnull, stderr = devnull))
-                g("init", "-q"); mkpath(joinpath(t, "dev"))
-                write(joinpath(t, "f"), "0"); g("add", "f"); g("commit", "-qm", "c0")
-                local c0 = readchomp(`git -C $t rev-parse HEAD`)
-                write(joinpath(t, "dev", "AUDIT.md"), "# Audit\n\n## entry — audited through $(c0[1:8])\n")
-                g("add", "dev/AUDIT.md"); g("commit", "-qm", "c1")
-                for k in 2:5
-                    write(joinpath(t, "f"), string(k)); g("commit", "-qam", "c$k")
-                end
-                local st = (args...) -> Base.run(pipeline(ignorestatus(`bash $wsh $t $args`); stdout = devnull)).exitcode
-                local five = st(); local five_own = st("HEAD", "1")
-                local c5 = readchomp(`git -C $t rev-parse HEAD`)
-                write(joinpath(t, "dev", "AUDIT.md"), "# Audit\n\n## entry — audited through $(c0[1:8])\n\n## entry — audited through $(c5[1:8])\n")
-                g("commit", "-qam", "audit"); local ca = readchomp(`git -C $t rev-parse HEAD`)
-                g("reset", "-q", "--hard", c5)
-                write(joinpath(t, "f"), "p"); g("commit", "-qam", "plain"); local cp = readchomp(`git -C $t rev-parse HEAD`)
-                g("reset", "-q", "--hard", c5)
-                local own_entry = st(c5, "1", ca); local own_plain = st(c5, "1", cp)
-                write(joinpath(t, "f"), "6"); g("commit", "-qam", "c6")
-                count(!, [five == 0, five_own == 1, own_entry == 0, own_plain == 1, st() == 1, st("HEAD", "0") == 1])
-            end
-            return v
+            length(v)
         end),
     "L129_plan_holds_only_open_work" => ("dev/MARCH.md lists open work only — at most 60 lines, no finished row (`| done |`) and no results section — and dev/HISTORY.md stays an archive of short entries (at most 160 lines, each `## ` entry at most 25). Finished work leaves the plan in the commit that closes it; results live in commit messages and this harness's output; intent: the plan and the history stay short enough to read whole; band: the caps above, their edge (dev/CHARTER.md C9)",
         () -> begin
@@ -3005,7 +2006,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L205_quantities_state_intent_and_band" => ("a number in a check is a target with its intent and band, never a tripwire (Dale 2026-10-21, a gate run blocked at 61 s against an under-a-minute goal: \"misinterpreted stupidly\"): every lock or ratchet whose description states a budget, a target, a cap or a limit as a number with its unit (QUANT_RX: seconds, minutes, lines, chars, a percentage, commits, landings, jobs, times) states its `intent:` and `band:` there, and fails only outside the band, as the blocking gate's budgets are targets red past BUDGET_BAND times them (L194) and the loop's target is red past L197_BAND (L197); intent: Dale's numbers say what he wants; band: each check's own, stated beside its number. Behavior, run here: seven planted descriptions answer as stated (dev/CHARTER.md C0)",
+    "L205_quantities_state_intent_and_band" => ("a number in a check is a target with its intent and band, never a tripwire (Dale 2026-10-21, a gate run blocked at 61 s against an under-a-minute goal: \"misinterpreted stupidly\"): every lock or ratchet whose description states a budget, a target, a cap or a limit as a number with its unit (QUANT_RX: seconds, minutes, lines, chars, a percentage, commits, landings, jobs, times) states its `intent:` and `band:` there, and fails only outside the band; intent: Dale's numbers say what he wants; band: each check's own, stated beside its number. Behavior, run here: seven planted descriptions answer as stated (dev/CHARTER.md C0)",
         () -> begin
             local v = vcat(String["$id states a number without its intent and band" for id in
                                   quantities_without_band([_short_id(k) => d for (k, (d, _)) in vcat(METRICS, LOCKS)])],
@@ -3064,18 +2065,18 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/land.sh land` runs dev/src_progress.sh after every landing, which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
+    "L208_src_keeps_moving" => ("the rebuild always has a lane porting compiler src, and a status leads with src progress (Dale 2026-10-21: \"how are things going? still in setup or actually building the src code??\"): `dev/ship.sh` prints dev/src_progress.sh's line after every landing, the one the landing's check ran it for (this lock, in the ratchet dev/check.sh runs), which prints the dart definitions src/ anchors and ports, read from WasmTarget's @parity registry, an @unported stub anchored and not ported (A35S1; 1.A4's generator defines the in-scope total; until legacy/ exists src/ is WT1's, so the rebuild's counts none) and the landings since src/ last changed, and from the fifth consecutive landing that changes nothing under src/ a note; intent: setup never passes for building; band: a note from 5 src-less landings on, never a failure. Here: land runs the program, this tree's line is printed, and the program on planted numbers (4 landings print no note, 5 print it) (dev/CHARTER.md C0)",
         () -> begin
             local v = src_progress_negatives_missed()
             local o = src_progress()
             foreach(l -> println("    · ", l), split(rstrip(o), '\n'))
             startswith(o, "src: ") || push!(v, "dev/src_progress.sh printed no src line")
-            occursin("    bash \"\$W/dev/src_progress.sh\"\n    exit 0\n", read(joinpath(ROOT, "dev", "land.sh"), String)) ||
-                push!(v, "dev/land.sh land does not run dev/src_progress.sh after its landing")
+            occursin(SHIP_SRC_LINE, read(joinpath(ROOT, "dev", "ship.sh"), String)) ||
+                push!(v, "dev/ship.sh does not print the src progress line after its landing")
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case (a replay of landed history, WT_HOOK_FILTER, keeps what it carries), and CI's message-hygiene refuses one from the commit that put the rule in the hook on. Behavior, run here: the hook on three planted messages, one trailer accepted, an indented second and a second in another case refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
+    "L209_one_coauthor_trailer" => ("a commit carries one Co-Authored-By trailer (A35E4: bb2c2fee, 3b3a0a0c and edf2327b each carried a second, indented one; dev/LEDGER.md D24): dev/hooks/commit-msg refuses a message with more than one, indented or in any case, and CI's message-hygiene refuses one from the commit that put the rule in the hook on. Behavior, run here: the hook on three planted messages, one trailer accepted, an indented second and a second in another case refused; and ci.yml holds the rule (dev/CHARTER.md C0)",
         () -> begin
             local v = trailer_negatives_missed()
             occursin("commits with more than one Co-Authored-By trailer:", read(joinpath(ROOT, ".github", "workflows", "ci.yml"), String)) ||
@@ -3083,7 +2084,7 @@ const LOCKS = [
             foreach(x -> println("    ✗ ", x), v)
             length(v)
         end),
-    "L226_dart_tests_mapped" => ("dart2wasm's test set is ported with Julia as the ground truth (Dale 2026-10-22: \"we should ALSO port darts TEST set but with julia as the ground truth of course\", dev/LEDGER.md D41): every .dart file under pkg/dart2wasm/test, tests/web/wasm and tests/language at the commit dev/PARITY_MASTER.md pins, read from that commit's tree in the checkout at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh), is covered by exactly one entry of test/dart_tests.toml, its own path or a directory's: behavior, naming the test/smoke_corpus.jl cases that port it (each existing, by dev/block.jl's corpus_case_keys), structural, stating the property its golden pins, not portable, stating why, or a helper, naming the entries it serves; every entry names a file or directory at the pin and carries exactly its kind's fields, so a new dart test file at the pin, a dropped entry or a stale one fails. A stopgap by its kind: a check over a map, the porting itself behavior the differential lane judges. Behavior, run here: dart_tests_negatives_missed plants a whole map and twelve faults, each answering as stated (dev/CHARTER.md C2)",
+    "L226_dart_tests_mapped" => ("dart2wasm's test set is ported with Julia as the ground truth (Dale 2026-10-22: \"we should ALSO port darts TEST set but with julia as the ground truth of course\", dev/LEDGER.md D41): every .dart file under pkg/dart2wasm/test, tests/web/wasm and tests/language at the commit dev/PARITY_MASTER.md pins, read from that commit's tree in the checkout at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh), is covered by exactly one entry of test/dart_tests.toml, its own path or a directory's: behavior, naming the test/smoke_corpus.jl cases that port it (each existing, by corpus_case_keys), structural, stating the property its golden pins, not portable, stating why, or a helper, naming the entries it serves; every entry names a file or directory at the pin and carries exactly its kind's fields, so a new dart test file at the pin, a dropped entry or a stale one fails. A stopgap by its kind: a check over a map, the porting itself behavior the differential lane judges. Behavior, run here: dart_tests_negatives_missed plants a whole map and twelve faults, each answering as stated (dev/CHARTER.md C2)",
         () -> begin
             local v = vcat(dart_tests_faults_here(), dart_tests_negatives_missed())
             foreach(x -> println("    ✗ ", x), v)

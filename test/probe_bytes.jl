@@ -6,8 +6,7 @@
 #   julia --project=. test/probe_bytes.jl            # compare against the baseline
 #   WT_PROBE_RECORD=1 julia --project=. test/probe_bytes.jl   # rewrite the baseline
 #   WT_PROBE_ONLY="<name> ..." julia --project=. test/probe_bytes.jl   # exactly those probes (a
-#       name the corpus lacks fails the run): dev/block.jl's probe core and the change's own probes.
-#       A selection never records.
+#       name the corpus lacks fails the run). A selection never records.
 #
 # On a mismatch it prints every changed probe and exits 1; on a clean run, a one-line summary.
 

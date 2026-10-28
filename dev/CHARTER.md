@@ -132,35 +132,19 @@ with the per-clause status. A clause is never closed by argument.
   Planned: dev/MARCH.md 1.A6, 1.F — the skeleton derived and never drifting, `legacy/` deleted
   by its rule.
 - **C10 · Fast, precise feedback.** Fast is first, strict is final (Dale, 2026-10-20): a
-  landing's gate is `bash dev/gate.sh --block` on this machine, about a minute of wall (a 60-s
-  target, red only past twice it: Dale 2026-10-21, a 61-s run is no failure of an under-a-minute
-  goal), measured by the gate itself, which `dev/land.sh merge` lands on (its green record of the exact commit,
-  made on a clean tree); the full CI matrix runs on every landed head and never holds a landing
-  (its red is the next batch's first item: `dev/land.sh merge` refuses while the last landed
-  head's matrix is red), and once, blocking, on PR #128's merge head; a
-  failure names its site. Checks: `L153` (the full matrix runs every test family CI runs, on
-  every landed head, non-blocking) `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's
-  runners, gives its verdict within its 20-minute budget per lane job) `L163` (the CI inner loop,
-  `bash dev/gate.sh --fast`, is never a landing's gate) `L194` (the blocking gate: the ratchet, a
-  fixed smoke core with the groups the change maps to and its own cases on 1.12 and 1.13, the
-  probe core with the change's probes, the QA families its change selects (every changed one and
-  those the locks cite as behavior for what it changes), TLC for the models it touches, side by
-  side, each stage and the whole run on a budget, an evidence record per tree, the landing on
-  that record alone, never while the last landed head's matrix is red)
-  `L195` (its timing ratchet: a stage more than 1.5 times and 0.3 s slower than its best fails, one
-  past 15% inside that band a note, unless
-  the commit declares a correctness fix with its MARCH row; the budgets are targets red only past
-  twice them, and a
-  machine more than 1.5 times slower than its best leaves the timing unjudged, never a scaled
-  pass, its checks and budgets still judged)
-  `L197` (the full loop: `dev/land.sh land` rebases, holds the machine, gates and lands a change
-  in one command, logging each landing's seconds from edit to landed; the median of the last five
-  inside its band, a 300-s target for every change red only past 600 s: Dale 2026-10-21, minutes,
-  never tens of minutes) `L198` (each landing records
-  whether its timing was judged; `land` prints the unjudged streak, which a judged run resets).
+  landing is `bash dev/ship.sh` on this machine, which rebases onto the march branch, runs
+  `bash dev/check.sh`, its evidence, about a minute of wall (WasmTarget loads, so every
+  construction checks itself; the ratchet holds, but for the locks test/ratchet_open.txt lists;
+  every test of ported code passes), and pushes fast-forward; the full CI matrix runs at clause
+  closure and never holds a landing (its red is the next batch's first item), and once, blocking,
+  on PR #128's merge head; a failure names its site. Checks: `L153` (the full matrix runs every
+  test family CI runs, at clause closure, non-blocking; a landing pushes the march branch alone)
+  `L162` (the full matrix, every lane of `dev/lanes.sh` on CI's runners, gives its verdict within
+  its 20-minute budget per lane job) `L163` (the CI inner loop, `bash dev/gate.sh --fast`, is
+  never a landing's gate).
   Legacy (retired with the switch): L144 L145 L157 L158 L159 L160 L161 L196.
-  Planned: dev/MARCH.md 1.Q — the gate records each case's derived outcome, and a landing never
-  turns a passing case loud.
+  Planned: dev/MARCH.md 1.Q — each case's derived outcome recorded, and a landing never turns a
+  passing case loud.
 - **C0 · The charter holds.** Strict means by construction (Dale, 2026-10-21): a clause of C0
   to C8 is CLOSED only when its guarantees hold by construction, WT's own interfaces unable to
   express the wrong choice (a type that cannot hold the wrong value; an interface with no
@@ -177,7 +161,8 @@ with the per-clause status. A clause is never closed by argument.
   check enforces yet names the MARCH row of its planned check. Checks: `L125` (this file and the enforcement stack cite each
   other completely) `L126` (no ratchet declares a floor) `L128` (AGENTS.md, the one
   instructions file, stays current and lean) `L148` (every change is audited against this
-  charter within 5 commits, `dev/AUDIT.md`, its entries chained) `L154` (Planned text cites MARCH
+  charter beside the work, `dev/AUDIT.md`, its entries chained, the lag past 5 commits a printed
+  note, never a held landing) `L154` (Planned text cites MARCH
   rows, never findings, every row naming its clauses; every finding the latest audit entry
   leaves open sits on the row it names until a commit's `Fixes:` line names it) `L201` (no clause reads CLOSED citing no check; no clause of
   C0 to C8 without Planned text cites a check test/parity_ratchet.jl's STRICT_KINDS does not
@@ -190,7 +175,7 @@ with the per-clause status. A clause is never closed by argument.
   a row) `L205` (a number in a check states its intent and band, and the check fails only outside
   the band) `L206` (AGENTS.md carries every live requirement, generated from the ledger) `L207`
   (every lock's negative runs in every gate, inside the ratchet stage) `R45` (the locks that owe
-  theirs) `L208` (after every landing `land` prints the rebuild's src progress; landings that change
+  theirs) `L208` (after every landing `dev/ship.sh` prints the rebuild's src progress; landings that change
   nothing under src/ draw a note from the fifth in a row, never a failure) `L209` (a commit carries one
   Co-Authored-By trailer, the hook and CI refusing a second).
   Planned: dev/MARCH.md 1.R, 1.S — the ledger's planned checks; each of these checks a
@@ -212,8 +197,8 @@ with the per-clause status. A clause is never closed by argument.
 5. **No parking.** A charter gap found during the work joins the plan; moving it out of
    the rewrite ("next march", "post-march finding") needs Dale's explicit decision.
 6. **Evidence, not claims.** An agent's report counts only with the command and its output;
-   the orchestrator re-measures, and the blocking gate's record of the exact head that lands is
-   the gate (C10).
+   the orchestrator re-measures, and `bash dev/check.sh` on the exact head that lands is the
+   landing's evidence (C10).
 7. **Root causes only.** A fix is at the source the fault comes from; a workaround that
    leaves the cause in place is not a fix and does not close anything.
 

@@ -3,7 +3,7 @@
 #
 # WT_SHARD="i,N": this process runs the QA families dealt to shard i of N (dev/lanes.sh's suite
 # lane runs two). WT_QA_ONLY="<name>\n<name>...": exactly these QA families, by their file name,
-# and nothing else (dev/block.jl's tests stage, L194); a name that is no QA family fails the run.
+# and nothing else; a name that is no QA family fails the run.
 using Test
 
 const _WT_QA_ONLY = Set{String}(filter(!isempty, strip.(split(get(ENV, "WT_QA_ONLY", ""), '\n'))))
@@ -50,8 +50,6 @@ function _wt_qa_include(path::AbstractString)
     return nothing
 end
 
-# each ported lock fires on its planted mutation, in a scratch checkout of this commit
-_wt_qa_include("lock_negatives.jl")
 # dart's late final field: assigned once or initialized on first read, its anchor on an unassigned read (src/julia/late.jl)
 _wt_qa_include("late.jl")
 # two worktrees loading alternately each keep their compiled image, in their private depots (dev/depot.sh)

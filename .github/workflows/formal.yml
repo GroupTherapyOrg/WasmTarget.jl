@@ -2,7 +2,7 @@ name: Formal models
 on:
   push:
     # the full matrix's triggers (gate.yml; Dale 2026-10-21: large-scale runs only when a full clause is
-    # closed out): a push of wt2, the march branch `dev/land.sh land` pushes, whose head commit carries a
+    # closed out): a push of wt2, the march branch `dev/ship.sh` pushes, whose head commit carries a
     # `Closes: C<n>` line, a gate/** push (PR #128's merge head, `bash dev/gate.sh`) and a dispatch; any
     # other wt2 push, a landing, runs nothing.
     # Every job with no `needs:` runs only under the closure predicate, gate.yml's run-name's and closure

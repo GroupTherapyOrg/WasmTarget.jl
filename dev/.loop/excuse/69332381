@@ -1,1 +1,0 @@
-machine: its runner was cold after its author's end-to-end check swapped Manifest.toml in and out (a manifest change restarts it): gate-1 91.7 s of its 126 s (steps.tsv)

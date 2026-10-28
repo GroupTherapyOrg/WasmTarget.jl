@@ -6,13 +6,12 @@ name: Gate
 # first red job cancels the rest (fail-fast), as the script stops at the first red lane.
 # It runs at clause closure only (Dale, 2026-10-21: large-scale runs happen only when a full clause
 # is closed out): on a push of wt2, the march branch, whose head commit carries a `Closes: C<n>` line (the commit that
-# closes clause n; dev/hooks/commit-msg and `dev/land.sh land` refuse that line unless the ratchet
-# reads C<n> CLOSED on its tree), on a gate/** push and on workflow_dispatch; every other push runs
-# the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/land.sh
-# land` pushes wt2 and nothing else, each landing one push (ci.yml, formal.yml and downstream.yml trigger
-# exactly as this file does, under the same closure predicate, A23E4), refuses while the last closure matrix (the newest
-# run named "Gate closure") is red, its red the next item, and is never gated by it (a landing's
-# gate is `bash dev/gate.sh --block`, L163). `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
+# closes clause n; dev/hooks/commit-msg refuses that line unless the ratchet reads C<n> CLOSED on
+# its tree), on a gate/** push and on workflow_dispatch; every other push runs
+# the `closure` job alone, which says so, and the run is named "Gate (no closure)". `dev/ship.sh`
+# pushes wt2 and nothing else, each landing one push (ci.yml, formal.yml and downstream.yml trigger
+# exactly as this file does, under the same closure predicate, A23E4), and is never gated by this run
+# (a landing's evidence is `bash dev/check.sh`); a red closure matrix is the next item. `bash dev/gate.sh` pushes a commit to gate/<name> and prints the
 # verdict: the one final full gate before PR #128 merges is that run on the exact merge head.
 # The parts are sized from measured job times (each lane's work under ~12 min on ubuntu-latest):
 # smoke in 2 parts per version, TLC in 5 (every instance, formal.yml's push coverage; run_tlc.sh
@@ -28,8 +27,7 @@ on:
     branches: ['gate/**', 'wt2']
   workflow_dispatch:
 
-# the run's name says whether this run is a closure matrix ("Gate closure", what `dev/land.sh land`
-# reads) or a push that runs nothing but the `closure` job: the closure predicate, the closure job's
+# the run's name says whether this run is a closure matrix ("Gate closure") or a push that runs nothing but the `closure` job: the closure predicate, the closure job's
 # text too (A23E6): a dispatch, a gate/** push, or a pushed head with a line `Closes: C<digit>…`
 # (grep's '^Closes: C[0-9]+', spelt for an expression: the message after a newline holds a newline
 # then `Closes: C` then a digit; fromJSON('"\n"') is the newline)

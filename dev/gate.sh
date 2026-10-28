@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
-# The gates (AGENTS.md; dev/CHARTER.md C10).
+# The CI gates (AGENTS.md; dev/CHARTER.md C10). A landing's evidence is `bash dev/check.sh`, run by
+# `bash dev/ship.sh`, never these.
 #
-#   bash dev/gate.sh --block [--warm] [--base <rev>]   # THE landing gate (L163, L194, L195):
-#       dev/block.jl on this machine, at most 60 s of wall: the ratchet, a fixed smoke core plus the
-#       groups the change maps to and its own cases (on 1.13 too), the probe core with the probes
-#       the change touches, the QA families the change selects, TLC for the models it touches, side by side (under --warm the package
-#       stages through this tree's runner, dev/block_runner.jl), each stage on a budget and a
-#       timing ratchet (dev/timing_best.toml); writes the evidence record that `dev/land.sh merge`
-#       lands on. No CI.
-#
-# Without --block: the full matrix on CI's runners, never a landing's gate: it runs at clause
+# The full matrix on CI's runners, never a landing's gate: it runs at clause
 # closure (gate.yml on a wt2 head carrying `Closes: C<n>`, non-blocking), and the one final
 # full gate before PR #128 merges is this command on the exact merge head. It pushes a commit to
 # gate/<name>, where .github/workflows/gate.yml runs every lane of `bash dev/lanes.sh`'s default run as its own job
@@ -31,9 +24,6 @@
 # re-gating the commit a branch already holds pushes it to gate/<name>-N, which starts cold.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-# every Julia the gate starts compiles into this worktree's private depot (dev/depot.sh, audit 37)
-. dev/depot.sh; wt_depot_export "$(pwd)"
-if [ "${1:-}" = --block ]; then shift; exec julia --startup-file=no dev/block.jl "$@"; fi
 command -v gh >/dev/null || { echo "gate: needs the GitHub CLI (gh)" >&2; exit 2; }
 # an API read, retried: three tries, 10 s then 30 s apart; its output, or nothing and status 1
 api() { local out k; for k in 1 2 3; do out=$("$@" 2>/dev/null) && { printf '%s' "$out"; return 0; }

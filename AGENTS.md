@@ -40,7 +40,7 @@ L206 generates this list from the ledger: every requirement an agent must honour
 - **D28** Fable orchestrates and rules; every spawned agent runs on Opus.
 - **D29** Redraw the project map after every landing, audit and red closure matrix.
 - **D30** Work in the plan's order: one source of truth and strict by construction come first.
-- **D31** Run Julia only through the landing gate or a held slot; never saturate the machine.
+- **D31** Run one Julia at a time: dev/check.sh or your lane's session; never saturate the machine.
 - **D32** WT compiles the strict subset Julia's verifier defines; outside it, a located rejection.
 - **D38** Each lock calls its own <name>_negatives_missed(), run by the ratchet stage in every gate.
 - **D39** Start a lane with bash dev/lane.sh start <name>; develop in its live Kaimon session.
@@ -87,6 +87,6 @@ in smoke first; a new lock fires when broken before it counts; `WT_RATCHET_UPDAT
 ## Where things are
 
 `dev/CHARTER.md` the definition of done · `dev/LEDGER.md` Dale's requirements · `dev/MARCH.md` the
-plan · `dev/PARITY_MASTER.md` the oracle pin and scope · `dev/formal/` the models · `dev/land.sh`
+plan · `dev/PARITY_MASTER.md` the oracle pin and scope · `dev/formal/` the models · `dev/ship.sh`
 landing · `test/parity_ratchet.jl` every lock and ratchet. When prose disagrees with the code
 and the locks, the prose is stale: trust the code, then fix the prose.

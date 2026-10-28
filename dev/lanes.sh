@@ -3,7 +3,7 @@
 # structure → behavior (1.12 and 1.13, TLC beside) → byte identity → the suite; the first red
 # lane ends the run. The full matrix is these lanes on CI's runners, `bash dev/gate.sh`
 # (gate.yml, one job per lane, 20 min each, L162), at clause closure and never a landing's gate
-# (that is `bash dev/gate.sh --block`, L194); this script is their local reproduction, whole or
+# (that is `bash dev/check.sh`, run by `bash dev/ship.sh`); this script is their local reproduction, whole or
 # one lane.
 #
 #   bash dev/lanes.sh            # every lane on the default `julia`, which must be 1.12

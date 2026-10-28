@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# dev/src_progress.sh — the rebuild's src progress, which `dev/land.sh land` prints after every landing
+# dev/src_progress.sh — the rebuild's src progress, which `dev/ship.sh` prints after every landing
 # (L208; dev/LEDGER.md D40, Dale 2026-10-21: "how are things going? still in setup or actually building
-# the src code??"). One source: land prints this line and L208 runs this program.
+# the src code??"). One source: L208 runs this program in the landing's check, and ship prints its line.
 #
 #   bash dev/src_progress.sh                      this tree: the dart definitions src/ ports, read
 #                                                 from WasmTarget's @parity registry (A35S1), and the

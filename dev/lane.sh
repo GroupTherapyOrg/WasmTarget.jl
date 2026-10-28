@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # dev/lane.sh — the one way a lane makes and removes its worktree; every lane develops in a live
-# Kaimon session, the loop's speed rests on (dev/kaimon_session.sh).
+# Kaimon session, the loop's speed rests on.
 #
 #   bash dev/lane.sh start <name>   # ../.worktrees/<name> on a new branch <name> from origin/wt2, the
 #       main tree's Manifest.toml copied in and resolved for the lane's project when it names other

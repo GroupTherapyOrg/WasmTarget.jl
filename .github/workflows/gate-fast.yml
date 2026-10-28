@@ -4,7 +4,7 @@ name: Gate fast
 # [--part i/N]`, the smokes dealt into N and M parts by their recorded durations (test/smoke.jl's
 # _smoke_part over test/smoke_times.tsv).
 # `bash dev/gate.sh --fast` pushes a commit to gate-fast/<name> and prints the verdict. It is never
-# a landing's gate: that is `bash dev/gate.sh --block` on the local machine (L194). Its steps
+# a landing's gate: that is `bash dev/check.sh` on the local machine, run by `bash dev/ship.sh`. Its steps
 # and caches are gate.yml's lane job's, minus Java and TLC. The first red job cancels the rest.
 # The parts: N = 10 and M = 9, 1 + N + M = 20 jobs, the account's concurrent runners. Measured
 # (fast-lane run 37967359140 at N = M = 4, every cache cold): setup 23-35 s and package precompile

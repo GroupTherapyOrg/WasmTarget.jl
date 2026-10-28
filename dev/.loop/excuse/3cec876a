@@ -1,1 +1,0 @@
-lock: committed 19:30:09Z; its first gate (record 0484d432-1, 19:31:25Z) was red on L148 alone, the window full until audit entry 25 landed (its hold 19:32:44Z-19:34:05Z); land started 19:34:45Z and its own landing took 55.7 s

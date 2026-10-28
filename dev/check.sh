@@ -14,5 +14,4 @@ if ! grep -q '── charter' .wtd/ratchet.out; then echo "check: the ratchet di
 if [ -n "$new" ]; then echo "check: broken locks: $new"; grep -E "^($(echo $new | tr ' ' '|'))_" .wtd/ratchet.out | cut -c1-300; exit 1; fi
 echo "check: ratchet holds ($(( $(date +%s) - s0 ))s)"
 julia --project=. --startup-file=no test/src_tests.jl || { echo "check: src tests red"; exit 1; }
-grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'
 echo "check: green ($(( $(date +%s) - s0 ))s)"

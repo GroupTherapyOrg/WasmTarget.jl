@@ -1,1 +1,0 @@
-lock: committed 19:10:55Z while march/phase-14 held the one hold (19:09:45Z until its gate went red at 19:13:20Z, record 5a8add52-1), 145 s of its 318 s; its land began 19:15:14Z, took the hold in 0.1 s and landed in 59.1 s (steps.tsv)

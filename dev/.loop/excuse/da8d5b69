@@ -1,1 +1,0 @@
-lock: committed 16:28:07Z, its first gate run (record b1ef1716-1) was red on L148 alone, so it waited for audit 21 (b0466fa0, landed 16:58:40Z) and f83c3365, then landed in 96.6 s

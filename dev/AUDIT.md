@@ -1,12 +1,12 @@
 # The anti-drift audit log
 
-The locks check what they measure; drift hides in what none of them counts. So the work
-pauses at every session start and at most every 5 commits for a full audit against
-`dev/CHARTER.md` (AGENTS.md, "The anti-drift audit"), and records it here. L148 fails when
-the entries do not chain (an entry's range must start at the commit the entry before it was
-audited through, and every audited-through commit must be an ancestor of HEAD), when the
-last entry is more than 5 commits behind HEAD (merges not counted), or when an entry leaves
-out an area or a `Resolution:`.
+The locks check what they measure; drift hides in what none of them counts. So a full audit
+against `dev/CHARTER.md` runs beside the work, at every session start and at most every 5
+commits, never holding a landing (dev/LEDGER.md D21), and records it here. L148 fails when the
+entries do not chain (an entry's range must start at the commit the entry before it was
+audited through, and every audited-through commit must be an ancestor of HEAD) or when an
+entry leaves out an area or a `Resolution:`; it prints how many commits the last entry is
+behind HEAD (merges not counted), a report, never a failure.
 
 The method:
 

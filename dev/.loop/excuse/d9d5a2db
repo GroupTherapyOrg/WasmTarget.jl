@@ -1,1 +1,0 @@
-lock: committed 17:16:44Z, it waited for audit entry 22 (L148; record 753794e8-1 red on L148 alone) and through two no-verdicts at load 12-14 on 10 CPUs, then landed in 191.1 s on a cold gate at machine factor 3.08

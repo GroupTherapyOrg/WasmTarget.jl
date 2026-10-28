@@ -12,7 +12,9 @@ for try in 1 2 3 4 5; do
   [ "$(git rev-list --count origin/$MARCH..HEAD)" -gt 0 ] || { echo "ship: nothing to land"; exit 0; }
   bash dev/check.sh || exit 1
   if git push -q origin HEAD:$MARCH; then
-    echo "ship: landed $(git rev-parse --short HEAD) on $MARCH: $(git log --format='%h %s' origin/$MARCH@{1}..HEAD 2>/dev/null | wc -l | tr -d ' ') commit(s)"; exit 0
+    echo "ship: landed $(git rev-parse --short HEAD) on $MARCH: $(git log --format='%h %s' origin/$MARCH@{1}..HEAD 2>/dev/null | wc -l | tr -d ' ') commit(s)"
+    # the rebuild's src progress, dev/src_progress.sh's line the check's ratchet printed for this tree (L208, D40)
+    grep -E '^ *· src:' .wtd/ratchet.out | sed 's/^ *· //'; exit 0
   fi
   echo "ship: another lane landed first; again ($try)"
 done
