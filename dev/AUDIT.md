@@ -3876,3 +3876,83 @@ the lead's ruling (A41E5): 114b30a4's trailer and body name Dale's words of 2026
 bands of 2026-10-21 and adds TLC under D11. A43E3 is resolved by fbb5e5da, past this range: over 120 s with the
 one-minute load above the core count, the band is unjudged, the time and load printed, never a scaled pass. A43S2
 is A41S6, owned by wt3-skeleton.
+
+## 2026-10-28 — audited through f93c38b2 (11688e8b..f93c38b2: the load-aware band, the skeleton's definition-level scope, the kinds' layout, L227, the type checkers, the straight-line code generator and intrinsics, the builders, closures, the registry's identities, field reads and allocation, per-module part ids)
+
+The forty-fourth audit, beside the work, covers fbb5e5da (D14's band unjudged past the core count), e30ac311 (the
+runtime blob's templates, minified class names, JS string helpers), 215a8e6e (the skeleton scoped by definition:
+modules.dart's monolithic path in, the deserializer and printer members out), bdccee5c (the Translator's fields for the
+other lanes; the kinds' fields), 4272a9f2 (L227, a removed test named by `Removes-test:`), 111ec9c5 (types.dart's
+helpers, the is and as checkers), 0e569d58 (the straight-line code generator over the NIR; the operator maps), cedcd905
+(a range query for Type{X} rejects; Fixes: A41S3), fabc7847 (globals and table-based globals), 1340d586 (entry 43; its
+author's), 2ff69bf8 (src/wasm_builder/builder/ ported, every emission checked), edea306b, 6a0dde5c and 30161ad2
+(closures: representations, Lambda, Context, Capture, ClosureLayouter), 8c65e07c (dispatch_table's row displacement),
+f87d39e7 (`===`, ifelse, conversions, shifts), ade5d64b (a re-evaluated definition replaces its registry entry), af883790
+(entries 41 to 43 record the sub-audits and rulings; its author's), cf92e5d3 (getfield and Expr(:new)) and f93c38b2
+(each module numbers its parts; Serializer.write's implementors checked at load). No wrong answer measured: the code
+generator emits only straight-line code and no program has run on wasm against native. Every finding rests on one exact
+command, quoted. The lead's rulings since entry 43: A43E1 is by design (D13's band judges the loop, so a RED printed after
+the push is a finding about the slowest step, not a refused landing); the charter changes of 4bf77429 and 114b30a4 are
+authorised by Dale's approval of the restart plan ("can you build aggressively now", reported to him); the Kernel
+table, src/julia/kernel.jl, is approved and owned by wt3-skeleton (A43S2, A41S6). Findings A44S1, A44S2 and A44E1.
+
+Area: builder — 2ff69bf8: each instruction builder runs dart's checks (`_verify_types`, `_verify_branch_types`,
+`_verify_cast`, src/wasm_builder/builder/instructions.jl:508–543, 1331) on every emission, where dart runs them inside
+asserts; a misuse rejects as InvalidModule at the emitting call (D10), and its three modules' bytes are `wasm-tools
+parse`'s for the text beside them. f93c38b2 fixes A42S4 (the part counter is IR.Module's `_global_id`) and A42S5
+(src/julia/serializable.jl reads each struct with a serialize method back to its dart class at the pin and refuses the
+load when Serializer.write does not take one that reaches Serializable). Sound. The builder sub-audit's report is
+pending and joins entry 45.
+
+Area: collection and planning — 215a8e6e fixes A41S1 and A41S8: dev/skeleton_scope.toml's `[out_definitions]` and
+`[out_types]` scope by definition, modules.dart joins the pin table with its 23 monolithic-path definitions, and 401
+deserializer and printer stubs go. cedcd905 fixes A41S3: `get_concrete_class_id_range` rejects, located, for a Type{X}
+whose member's class typeof(X) is not under it. ade5d64b keys a registry entry by its module and its signature without
+line numbers, so a Revise re-evaluation replaces its entry; sound, its case re-evaluates compile's and check_subset's
+definitions. 111ec9c5's helpers take Julia's answers (`Base.has_free_typevars`, `typeof(T)`, `Nothing <: T`), and its test
+checks `isa(x, T) == typeof(x) <: T` over values of every kind for each type the checkers serve. 6a0dde5c's
+`_findCaptures` is Julia's lowering, which has already made each nested function a closure struct of its captures, a
+Core.Box where assigned; sound, D3. (A44S1, low) A type as a value takes dart's runtime-type layout
+(`_kind_instance_fields`, src/julia/classes.jl): a DataType holds `isDeclaredNullable` and `classId`, both
+`ClassField(c, 0, …)`, so a Julia program reading a type's own fields (`T.name`, `T.parameters`, `T.super`) finds no
+field, and cf92e5d3's visit_instance_get answers `reject!(Internal("$at: $cls has no field $key"), …)`, the kind for a
+compiler bug, where the program is valid Julia outside the representation: Unquarantined, naming the kind's layout, is
+the located answer (C6).
+
+stopgap in disguise: the instruction checks are constructions at the emitting call; the Serializer.write list is now a
+list checked against dart at load (A42S5's fix, a check, not a construction, named so in its commit); L227 is a check over
+a diff, as block.jl's was.
+precedent: the type checkers, dart's class-id range checks (types.dart) answered by Julia's `<:`; the registry identity,
+Julia's method table keying a method by its signature; union-find, vm's UnionFind (union by weight, path compression).
+
+Area: emission and diagnostics — 0e569d58, f87d39e7 and cf92e5d3. The operator maps key Julia's IntrinsicFunction (D4)
+and give each intrinsic the instruction Julia's codegen answers with: wrapping integer arithmetic; shifts that saturate
+as Julia's do (the count unsigned; a count of the width or more gives 0, or the sign for ashr_int, a select over wasm's
+modular shift; read in generate_static_intrinsic); `===` on floats compares bits. An operand narrower than its wasm type
+has no arm except Bool under and, or, xor and equality, so `!x` on a Bool (not_int, an all-ones xor) cannot be emitted
+over its 0 or 1. cf92e5d3 reads a packed field with struct.get_s for a Signed type and struct.get_u otherwise, and an
+allocation leaving fields undefined rejects, located: together these answer A42S1 for reads and A42S2 for allocations,
+both as rejections until narrow arithmetic and undefined fields are written. Rejections now carry
+`self.enclosing_member` (37 sites in src/code_generator.jl), the MethodInstance, which answers A43S4 in part; the
+statement index and line are still absent. (A44S2, low) Float `===` compares bits, and a NaN's bits are not a property of
+the program: wasm gives an arithmetic NaN a nondeterministic payload and sign, and the host's own NaN differs by
+architecture. Here, `julia --startup-file=no -e 'z = Base.inferencebarrier(0.0); x = z/z; println((x === NaN,
+bitstring(x)[1:12], Sys.ARCH))'` gives "(true, 011111111111, aarch64)", where x86's 0/0 sets the sign bit and the same
+program answers false natively. A differential case comparing a computed NaN with `===` passes or fails by host; the
+corpus should hold such a case with its host named, never as a general expectation.
+
+Area: enforcement and prose — every hunk of fbb5e5da, 4272a9f2, af883790 and the test hunks of the range. fbb5e5da
+answers A43E3 as ruled: past 120 s with the one-minute load above `hw.ncpu`, the band prints UNJUDGED with the time and
+the load, never a scaled pass. 4272a9f2 restores block.jl's Removes-test rule as L227 over the change from CHECK_BASE's
+merge base, its negative the seven planted messages and a scratch repository. (A44E1, low) fbb5e5da reads the load as
+`sysctl -n vm.loadavg | awk '{ print int($2) }'` and the cores as `sysctl -n hw.ncpu`, both macOS-only; on CI or Linux
+both fall back (`load` empty, read as 0; cores 1), so a slow Linux run is always judged, and a dev/check.sh run there
+under load reds where the same run here is unjudged: `/proc/loadavg` and `nproc` are the other host's answers.
+Requirements: C6 (A44S1); D2 and D3 (A44S2); D17 (A44E1); no lock fired inside its band.
+
+Landing times: dev/ship.sh's log; entry 43's landing took 804 s and af883790 888 s from first commit to landed, each
+losing races to other lanes' landings (the lead's d246bb34, a landing lock with the check outside it, is landing).
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S1, A41S8 are fixed by 215a8e6e;
+A41S3 by cedcd905; A42S4 and A42S5 by f93c38b2; A43E3 by fbb5e5da; A43E1 is ruled by design. A44S1 and A44S2 are open on
+MARCH 1.C. A44E1 is open on MARCH 1.L.
