@@ -4042,3 +4042,81 @@ before 143876a4 and cf5f6a0c landed (the lead reports 246 s since).
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41S2 is completed by 53333011, A41S15
 fixed by 22fd99e6, A43E4 by 143876a4 and A44E1 by 3b07fee9. A45S1 is open on MARCH 1.B. A45S2, A45S4 and A45S5 are open
 on MARCH 1.C. A45S3 is open on MARCH 1.S. A45E1 is open on MARCH 1.R.
+
+## 2026-10-28 — audited through 95dd5b6e (cf5f6a0c..95dd5b6e: closure representations, field writes and Symbols, constants as NIR literals, the dart test map split by file, entry 45, the Kernel table, the first compile, side-by-side checks, entry spans)
+
+The forty-sixth audit, beside the work, covers b4cb4ab2 (ClosureLayouter._createRepresentation), dc70c410 (SRC_TESTS one
+per line), 297a8133 (setfield! as InstanceSet; symbols.dart over Julia's Symbol), e87188cb (a constant is the NIR's
+NirConst), 42eba74e (an instance constant's type; the instantiation function), c5364b6c and 202d90e4 (nine tests/language
+directories split by file and ported), 9153798a (L226 refuses a not-portable directory outside dev/PARITY_MASTER.md's
+scope exclusions and any hedged reason; the map counted by file; Fixes A41E6, A41E7 by its subject), 8480d9f2 (entry 45;
+its author's), d153e4a1 (type literals as NirConst; two dropped stubs restored), a1c06047 (the runtime blob's finals as
+Late cells), d1143fba (src/julia/kernel.jl, the Kernel table typing every stub), 79c5face (the first compile, f(x::Int32)
+= x + Int32(1)), e5c72872 (the ratchet and the src tests side by side) and 95dd5b6e (an entry's last line read by Julia's
+parser). The first module WT compiles answers as native Julia by the commit's word; no test runs it (A46E1). Every finding
+rests on one exact command, quoted. The lead's standing item, the in-scope total: `julia dev/skeleton.jl count` on
+8480d9f2 gives "in scope, in all 3498", the count 215a8e6e reported and d1143fba measured again; no commit of this range
+changes dev/skeleton_scope.toml (`git log cf5f6a0c..95dd5b6e -- dev/skeleton_scope.toml` is empty), so the skeleton's
+total did not move. The progress line's total moved from 3589 (entry 45's landing) to 3591 (the ratchet at 95dd5b6e:
+"src: 2792 of 3591 anchored dart definitions ported"), the two stubs d153e4a1 restored (A46S2). Findings A46S1, A46S2
+and A46E1.
+
+Area: builder — empty by diff: no commit of the range changes src/wasm_builder/.
+
+Area: collection and planning — d1143fba: KERNEL_TYPES holds 168 rows, `(library, name) => (Julia type, why)` (`git
+show origin/wt2:src/julia/kernel.jl | grep -c ' => ("'`), 76 of them NoCounterpart, a struct whose one field is Union{}
+so no stub taking one can be called; dev/skeleton.jl refuses a type with no row and a row no definition names. It answers
+A43S2 and A41S6 for the stubs. (A46S1, medium) The table types stubs only, and the ported definitions answer the same
+Kernel classes otherwise, so the one fact still has two sources (D5). The table's rows (src/julia/kernel.jl:152–154)
+make Block, EmptyStatement and ExpressionStatement NoCounterpart, "Julia's IR is a flat statement list"; the filled code
+takes `visit_block(self::AstCodeGenerator, node::NirBody)` (src/code_generator.jl:492), `visit_empty_statement(…,
+node::NirNothing)` (:516) and `visit_expression_statement(…, node::NirStmt)` (:526), which translate_statement calls
+(:441–446). And the table maps IfStatement to NirGotoIfNot and BreakStatement to NirGoto (:146, :148), a structured
+statement to a flat jump, while WhileStatement, LabeledStatement and Block are NoCounterpart (:152–158): once the LLVM
+stackifier (D42) gives the code generator structured regions, visitIfStatement's dart body (its then and otherwise
+statements) has nothing to read in a jump. The table should be the type every Kernel-typed parameter takes, filled or
+stubbed, read by the loader beside L214, and the structured statements one answer: the stackifier's regions or
+NoCounterpart, not a jump for one and none for the rest. e87188cb and 42eba74e make a constant the NIR's literal, as the
+table's `Constant => NirConst` row says; sound. b4cb4ab2's generic branch rejects as Internal at its top, a Julia function
+taking no type arguments; sound.
+
+stopgap in disguise: the Kernel table is a construction for stubs (a missing row refuses the generator, a NoCounterpart
+stub cannot be called), a convention for the filled code (A46S1); L226's directory rule is a check over a map, its
+exclusion list read from PARITY_MASTER's Scope section so it cannot drift.
+precedent: NoCounterpart, Rust's `!` as the uninhabited parameter; the table, dart's own `import 'package:kernel/ast.dart'`
+resolved once; a closure representation, dart's vtable and closure structs under their bases.
+
+Area: emission and diagnostics — 297a8133's visit_instance_set writes a concretely inferred receiver's field by
+struct.set, the value kept by a tee where used, and rejects a write Julia forbids (an immutable struct's field, a const
+field) as Unquarantined, located; the field-not-found arm is Internal, as A44S1 says of reads. 79c5face's module is
+`local.get, i32.const 1, i32.add, local.set, local.get, return`. (A46E1, medium) "a valid module that answers as native
+Julia" rests on a run the test does not repeat: test/code_generator.jl compares the module's bytes with a golden (`@test
+B.data(s) == UInt8[0x00, 0x61, 0x73, 0x6d, …]`) and checks native `f_add(typemax(Int32)) == typemin(Int32)`, and its
+comment says node "answers as native Julia (1 42 0 -2147483648 -2147483647 for 0 41 -1 typemax typemin)"; no test
+instantiates the module. The golden is the code's own output recorded, so the test detects a change and proves nothing
+about wasm's answer; the charter's third oracle, native-vs-wasm differential execution, has its first case only in a
+commit message. The runner the plan names (1.B: "the module is judged against native once the rebuild has its runner")
+is due now that a module exists: node or wasmtime runs the bytes, each answer compared with native's in the test.
+
+Area: enforcement and prose — every hunk of 9153798a, dc70c410, e5c72872, 95dd5b6e, c5364b6c's and 202d90e4's test
+hunks. 9153798a fixes A41E6 and A41E7: the ratchet at 95dd5b6e prints "dart tests at the pin, by file: 4716 files in
+1130 entries: behavior 590 ported, 3455 pending; structural 10 ported, 1 pending; 615 not portable; 45 helpers", every
+not-portable directory names a PARITY_MASTER exclusion, and a hedged reason refuses. A sampled port reads true to its dart
+test: dart_nnbd/late_chained_assignment (test/smoke_corpus.jl:4478–) writes `b = a = one`, `b = foo.x = 3one` and leaves
+a field unset by `new()`, as nnbd/late/chained_assignment_test.dart's late field. 95dd5b6e is sound: Julia's parser gives
+a definition's closing line, and its test holds that every entry's span parses as one statement. (A46S2, medium) The
+in-scope total can shrink without a word: d153e4a1 restored Types.coreTypes (types.dart:119) and the _TypeCheckers
+constructor (:615), which "types.jl's first port rewrote the file and lost", and nothing failed when they went: `git
+show origin/wt2:dev/check.sh | grep -c skeleton` gives 0 and test/parity_ratchet.jl names no `skeleton.jl diff`, so the
+generator's no-diff check (A41S7, MARCH 1.A6's exit, "a hand-edited stub fails") runs in no landing. And the total has two
+sources: the skeleton's 3498 and the progress line's 3591 (unique anchors in the registry, which counts each enum value
+and field a port anchors). The lead's denominator rule needs one total, the skeleton's, and the diff in every check, so a
+lost definition fails the landing that loses it. Requirements: D5 (A46S1, A46S2); the third oracle (A46E1); no lock fired
+inside its band.
+
+Landing times: entry 45 landed 562 s from its first commit, the median of five 562 s (ship's line); e5c72872 runs the
+check's two halves side by side to shorten the serial re-check.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A41E6 and A41E7 are fixed by 9153798a;
+A43S2 and A41S6 are answered for stubs by d1143fba, their filled half carried as A46S1. A46S1 is open on MARCH 1.A4.
+A46S2 is open on MARCH 1.A6. A46E1 is open on MARCH 1.B.
