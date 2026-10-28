@@ -366,7 +366,16 @@ end
             (c::NirConst) => visit_constant_expression(self, c, expected_type)
             (g::NirGlobal) => visit_static_get(self, g, expected_type)
         end) : (@exhaustive node::NirStmt begin
-            (c::NirCall) => visit_static_invocation(self, c, expected_type)
+            # a call of a builtin that is a Kernel node of its own: a field read, a field write, a type
+            # test, a throw, a tuple (dart's record); every other builtin a static invocation
+            (c::NirCall) => let f = nir_callee(c)
+                f === Core.getfield ? visit_instance_get(self, c, expected_type) :
+                f === Core.setfield! ? visit_instance_set(self, c, expected_type) :
+                f === Core.isa ? visit_is_expression(self, c, expected_type) :
+                f === Core.throw ? visit_throw(self, c, expected_type) :
+                f === Core.tuple ? visit_record_literal(self, c, expected_type) :
+                visit_static_invocation(self, c, expected_type)
+            end
             (i::NirInvoke) => visit_static_invocation(self, i, expected_type)
             (n::NirNew) => visit_constructor_invocation(self, n, expected_type)
             (g::NirGlobalRead) => visit_static_get(self, g, expected_type)
@@ -598,7 +607,45 @@ end
     return expected_type
 end
 
-@parity "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation" @unported function visit_constructor_invocation(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's Expr(:new, T, fields...) allocates and initializes a struct at once. dart's invocation calls
+# the class's allocator, whose body (ConstructorAllocatorCodeGenerator.generateConstructorAllocator,
+# its path with no body arguments) pushes the object header and the field values and allocates; a
+# Julia struct has no initializer list or constructor body to call, so that body is the invocation:
+# each operand after the type the value of the field in Julia's order. An allocation leaving fields
+# undefined (fewer operands than fields) rejects, located.
+@parity "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation" function visit_constructor_invocation(self::AstCodeGenerator, node::NirNew, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:1637 AstCodeGenerator.visitConstructorInvocation"
+    local intrinsic_result = generate_constructor_intrinsic(self.intrinsifier[], node)
+    intrinsic_result === nothing || return intrinsic_result
+    # the class is the type operand's value, a literal or a constant binding (Type{T} its static type)
+    local tyop = node.args[1]
+    local tytype = dart_type_of(self, tyop)
+    local cls = tytype isa DataType && tytype <: Type && length(tytype.parameters) == 1 ? tytype.parameters[1] : nothing
+    cls isa DataType && isconcretetype(cls) || reject!(Unquarantined("src/julia: an allocation of a class given as $tytype, no concrete class"), "$(self.enclosing_member)")
+    local info = get(self.translator.class_info, cls, nothing)
+    info === nothing && reject!(Internal("$at: no class info for $cls"), "$(self.enclosing_member)")
+    local b = self.b[]
+    if is_cyclic(info)
+        # Cyclic types cannot be instantiated. Any code that tries to instantiate them will fail with
+        # stack overflow, which is a trap in Wasm. Here we replace one trap with another.
+        WasmBuilder.unreachable(b)
+        return expected_type
+    end
+    local fields = class_instance_fields(cls, at)
+    length(node.args) - 1 == length(fields) ||
+        reject!(Unquarantined("src/julia: an allocation of $cls leaving $(length(fields) - length(node.args) + 1) of its fields undefined"), "$(self.enclosing_member)")
+    WasmBuilder.comment(b, "Allocate wasm struct optimized")
+    push_object_header_fields(b, self.translator, info)
+    for (k, field) in enumerate(fields)
+        local field_index = self.translator.field_index[field]
+        translate_expression(self, node.args[k + 1], WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type))
+    end
+    WasmBuilder.struct_new(b, info.struct_)
+    # Mark the class as allocated now, which enqueues those methods of the class that could be
+    # targeted by already emitted instance calls.
+    record_class_allocation(self.translator.functions[], class_id(info))
+    return info.non_nullable_type
+end
 
 # a call Julia resolved to its MethodInstance (dart's call of a static target); a target Julia gives
 # as its CodeInstance names the MethodInstance it instantiates
@@ -654,13 +701,49 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:2243 AstCodeGenerator.visitSuperPropertySet" @unported function visit_super_property_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" @unported function visit_instance_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's getfield(x, f[, boundscheck]) is Kernel's InstanceGet: a receiver whose class Julia inferred
+# concrete has the field as its single target (dart's _directGet); one Julia leaves abstract is a
+# virtual get. No field of a Julia struct is one of dart's getter intrinsics (wasm reference types,
+# int's bit counts). A field Julia names at run time rejects, located.
+@parity "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet" function visit_instance_get(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:2258 AstCodeGenerator.visitInstanceGet"
+    length(node.args) in (3, 4) || reject!(Internal("$at: getfield with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
+    local receiver = node.args[2]
+    local cls = dart_type_of(self, receiver)
+    cls isa DataType && isconcretetype(cls) ||
+        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
+    local name = node.args[3]
+    name isa NirConst && name.c.val isa Union{Symbol,Int} ||
+        reject!(Unquarantined("src/julia: a field of $cls named at run time"), "$(self.enclosing_member)")
+    local key = name.c.val
+    local fields = class_instance_fields(cls, at)
+    local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
+    k === nothing && reject!(Internal("$at: $cls has no field $key"), "$(self.enclosing_member)")
+    return _direct_get(self, fields[k], receiver)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2317 AstCodeGenerator.visitDynamicGet" @unported function visit_dynamic_get(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2335 AstCodeGenerator.visitDynamicSet" @unported function visit_dynamic_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" @unported function _direct_get(self::AstCodeGenerator, target, receiver) end
+# a Julia field is always a struct field (dart's Field arm; a Julia class has no getter procedures);
+# an 8- or 16-bit field is stored packed, which wasm reads sign- or zero-extended (struct.get_s for a
+# signed integer, struct.get_u otherwise): dart stores no packed field in a class
+@parity "dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet" function _direct_get(self::AstCodeGenerator, target::ClassField, receiver::NirValue)::WasmBuilder.IR.ValueType
+    local info = get(self.translator.class_info, target.cls, nothing)
+    info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2353 AstCodeGenerator._directGet: no class info for $(target.cls)"), "$(self.enclosing_member)")
+    local field_index = self.translator.field_index[target]
+    local receiver_type = info.non_nullable_type
+    local storage = info.struct_.fields[field_index + 1].type
+    local field_type = WasmBuilder.unpacked(storage)
+    translate_expression(self, receiver, receiver_type)
+    if storage isa WasmBuilder.IR.PackedType
+        target.type <: Signed ? WasmBuilder.struct_get_s(self.b[], info.struct_, field_index) : WasmBuilder.struct_get_u(self.b[], info.struct_, field_index)
+    else
+        WasmBuilder.struct_get(self.b[], info.struct_, field_index)
+    end
+    return field_type
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2374 AstCodeGenerator.visitInstanceTearOff" @unported function visit_instance_tear_off(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
@@ -1017,7 +1100,11 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:6054 MacroAssembler.inlineCallTo" @unported function inline_call_to(self::WasmBuilder.InstructionsBuilder, target::CallTarget) end
 
-@parity "dart2wasm/lib/code_generator.dart:6070 MacroAssembler.pushObjectHeaderFields" @unported function push_object_header_fields(self::WasmBuilder.InstructionsBuilder, translator::Translator, class_info::ClassInfo) end
+@parity "dart2wasm/lib/code_generator.dart:6070 MacroAssembler.pushObjectHeaderFields" function push_object_header_fields(self::WasmBuilder.InstructionsBuilder, translator::Translator, class_info::ClassInfo)::Nothing
+    WasmBuilder.i32_const(self, class_id(class_info))
+    WasmBuilder.i32_const(self, initial_identity_hash())
+    return nothing
+end
 
 @parity "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId" @unported function load_class_id(self::WasmBuilder.InstructionsBuilder, translator::Translator, receiver_type::WasmBuilder.IR.ValueType) end
 

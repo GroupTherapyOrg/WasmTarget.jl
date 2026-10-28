@@ -345,7 +345,9 @@ end
     return nothing
 end
 
-@parity "dart2wasm/lib/intrinsics.dart:2836 Intrinsifier.generateConstructorIntrinsic" @unported function generate_constructor_intrinsic(self::Intrinsifier, node) end
+# dart's constructor intrinsics are dart:_wasm's own types (WasmArray, the SIMD values); no Julia
+# struct is one, so no allocation is intrinsified
+@parity "dart2wasm/lib/intrinsics.dart:2836 Intrinsifier.generateConstructorIntrinsic" generate_constructor_intrinsic(self::Intrinsifier, node::NirNew)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" @unported function generate_function_call_intrinsic(self::Intrinsifier, node) end
 

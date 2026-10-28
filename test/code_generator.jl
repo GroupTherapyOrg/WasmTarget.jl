@@ -168,3 +168,34 @@ end
     @test e.rejection isa W.Unported && occursin("AstCodeGenerator.b", e.rejection.anchor)
     @test absent(n, call(I.shl_int, x, lit(Int64(3))))
 end
+
+module FieldGenCases
+struct P; a::Int32; b::Float64; end
+struct N; x::Int8; y::UInt8; end
+getb(p::P) = p.b
+mk(x::Int32) = P(x, 2.0)
+mkn(x::Int8) = N(x, 0x01)
+end
+
+@testset "code_generator.dart: a field read and an allocation" begin
+    local t = D.Translator(W.check_subset(FieldGenCases.getb, (FieldGenCases.P,), "code_generator"), D.TranslatorOptions())
+    local body = only(t.component)
+    local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
+    # getfield(p, :b) is the field read, routed to visitInstanceGet; it reaches the class table, which
+    # no collect has filled here: a located rejection, the field found
+    local gf = body.stmts[findfirst(s -> s isa W.NirCall, body.stmts)]::W.NirCall
+    @test W.nir_callee(gf) === Core.getfield
+    local e = rejection(() -> D.translate_expression(g, gf, IR.NumType_f64))
+    @test e.rejection isa W.Internal && occursin("_directGet: no class info", e.rejection.site)
+    # a field named at run time, or a receiver Julia leaves abstract, rejects before any class lookup
+    local dyn = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirArgument(2)])
+    @test rejection(() -> D.visit_instance_get(g, dyn, IR.NumType_f64)).rejection isa W.Unquarantined
+    # Expr(:new): the allocation, its class the type operand's value
+    local t2 = D.Translator(W.check_subset(FieldGenCases.mk, (Int32,), "code_generator"), D.TranslatorOptions())
+    local b2 = only(t2.component)
+    local g2 = D.SynchronousProcedureCodeGenerator(Val(:_), t2, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b2.ci.def, b2)
+    local nw = b2.stmts[findfirst(s -> s isa W.NirNew, b2.stmts)]::W.NirNew
+    @test D.generate_constructor_intrinsic(g2.intrinsifier[], nw) === nothing
+    local e2 = rejection(() -> D.translate_expression(g2, nw, IR.NumType_i32))
+    @test e2.rejection isa W.Internal && occursin("no class info for $(FieldGenCases.P)", e2.rejection.site)
+end
