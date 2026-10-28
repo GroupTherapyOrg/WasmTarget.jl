@@ -37,6 +37,7 @@ Serializable is named in write's signature by hand, so the load checks the names
         local e = findfirst(x -> x isa ParityEntry && x.declares && any(n -> isdefined(x.mod, n) && getglobal(x.mod, n) === T, x.names), REGISTRY)
         e === nothing && continue
         local a = match(ANCHOR_RX, REGISTRY[e].anchor)
+        a === nothing && continue
         local pkgdir = a[1][1:findfirst('/', a[1])]
         local lines = get!(() -> readlines(joinpath(sdk, "pkg", a[1])), _PIN_LINES, joinpath(sdk, "pkg", a[1]))
         local find(name) = begin

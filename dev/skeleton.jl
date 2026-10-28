@@ -1497,6 +1497,12 @@ end
 # V128Instruction) defines as a constant anchored at its line
 function by_anchor(S::Scope)::Dict{String,Tuple{String,Decl}}
     local out = Dict(anchor(f, d) => (f, d) for f in scope() for d in S.decls[f] if counted(d) || d.kind == :field)
+    # an export directive declares no name; a port anchors it by the word `export` at its first line
+    for f in scope(), (i, l) in enumerate(eachline(dart_source(f)))
+        startswith(l, "export '") || continue
+        local e = Decl(:directive, "export", i, String[], "", Tok[], Tok[])
+        out[anchor(f, e)] = (f, e)
+    end
     for f in scope(), d in S.decls[f]
         d.kind == :enum || continue
         for (v, line) in enum_value_lines(f, d)

@@ -248,6 +248,10 @@ let defs = quote
         typename(t) = t isa Symbol ? t : Meta.isexpr(t, :(<:)) || Meta.isexpr(t, :curly) ? typename(t.args[1]) : refuse()
         if Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@inline"), Symbol("@noinline"), Symbol("@closed"))
             return _defines(def.args[end], source)
+        elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@dart_export")
+            # an export directive (src/julia/exports.jl): no binding; its target names it
+            length(def.args) >= 3 && def.args[3] isa String || refuse()
+            return ([Symbol("export ", def.args[3])], :export)
         elseif Meta.isexpr(def, :macrocall) && def.args[1] === Symbol("@enum")
             local head = def.args[3]
             local x = Meta.isexpr(head, :(::)) ? head.args[1] : head
@@ -928,6 +932,8 @@ end
         occursin(Regex("\\b(?:get|set)\\s+\\Q" * m * "\\E(?![\\w\$])"), s) ||
         occursin(Regex("\\boperator\\s*\\Q" * m * "\\E\\s*\\("), s) ||
         (x !== nothing && occursin(Regex("(?<![\\w\$])\\Q" * x * "." * m * "\\E(?![\\w\$])"), s))
+    # an export directive, which declares no name: anchored by the word `export` at its first line
+    symbol == "export" && return col == 0 && startswith(s, "export '") ? nothing : "line $ln is no export directive"
     local parts = split(symbol, '.'; limit = 2)
     if length(parts) == 1
         local x = parts[1]

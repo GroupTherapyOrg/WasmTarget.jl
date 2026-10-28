@@ -22,6 +22,7 @@ include("julia/collection.jl")
 include("julia/union_find.jl")
 include("julia/forward.jl")
 include("julia/machine.jl")
+include("julia/exports.jl")
 include("julia/packages.jl")
 include("julia/serializable.jl")
 
@@ -55,5 +56,7 @@ construction_check(Val(:check_mirrors))
 _pin_sdk() === nothing || construction_check(Val(:check_anchors_resolve))
 # Serializer.write takes every class dart's Serializable names, read at the pin (A42S5)
 _pin_sdk() === nothing || construction_check(Val(:check_serializable_writable))
+# dart2wasm's `w.` reaches only what wasm_builder.dart exports, composed through its directives
+_pin_sdk() === nothing || construction_check(Val(:check_dart_exports))
 
 end # module
