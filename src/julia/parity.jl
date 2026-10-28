@@ -462,6 +462,20 @@ the .jl files under src/ outside src/julia (`construction_check(::Val{:include_d
 @quarantine "Julia records no include set a module can reflect on; include_dart keeps it" Core.String const INCLUDED = String[]
 
 """
+    LLVM_FILES
+
+The LLVM pin table (dev/LEDGER.md D42: where dart2wasm has no counterpart, the port is LLVM's
+WebAssembly backend's at the commit `LLVM_PIN`): each LLVM source unit a file of src/llvm ports, by
+its path under llvm-project without its extension, the unit its `.h` and `.cpp` make together
+(`llvm/lib/Target/WebAssembly/WebAssemblyCFGSort`), its Julia file named for it (`_jl_rel`:
+src/llvm/cfg_sort.jl). `include_dart` loads these after the dart files, into the module LLVM.
+
+precedent(dart: `part` naming each file, as DART_FILES; rust: `mod`). Julia's differs: as for
+DART_FILES, `include` takes any path, so the second oracle's file map is a table too.
+"""
+@quarantine "Julia's include takes any path; the LLVM pin table is the file map of the second oracle's ports" Core.String const LLVM_FILES::Tuple{Vararg{String}} = ()
+
+"""
     DART_MODULES
 
 The module each dart file loads into, by the first prefix of its key that matches: one module per
@@ -483,9 +497,14 @@ Julia's differs: it has no per-file namespace, so a prefix is a module, and a fi
     "wasm_builder/lib/" => (:WasmBuilder,),
 )
 
-# the module a dart file of the pin table loads into
+# the module an LLVM unit loads into: LLVM's WebAssembly backend is one namespace, llvm::WebAssembly
+@quarantine "Julia has no per-file namespace; LLVM's ports share one module, as llvm's namespace" Base.Pair const LLVM_MODULES = (
+    "llvm/" => (:LLVM,),
+)
+
+# the module a file of the pin tables loads into
 @quarantine "a dart file's namespace is its package's or prefixed library's module" Core.getglobal function _module_of(dart::String)::Module
-    for (prefix, path) in DART_MODULES
+    for (prefix, path) in (DART_MODULES..., LLVM_MODULES...)
         startswith(dart, prefix) || continue
         local m = @__MODULE__
         for n in path
@@ -586,11 +605,11 @@ the directory and the loader orders the passes.
 @quarantine "Julia's include loads any path in its text's order; include_dart admits the pin table's files and records each it loads" Base.push! function include_dart(darts::String...)::Nothing
     isempty(INCLUDED) || throw(ConstructionViolation("include_dart", "include_dart is called once, with every port"))
     for d in darts
-        d in DART_FILES || throw(ConstructionViolation("include_dart", "$d is no file of the pin table DART_FILES"))
+        d in DART_FILES || d in LLVM_FILES || throw(ConstructionViolation("include_dart", "$d is no file of the pin tables DART_FILES and LLVM_FILES"))
         d in INCLUDED && throw(ConstructionViolation("include_dart", "$d is included twice"))
         push!(INCLUDED, d)
     end
-    local order = String[d for d in DART_FILES if d in INCLUDED]
+    local order = String[d for d in (DART_FILES..., LLVM_FILES...) if d in INCLUDED]
     _load_two_pass!(Tuple{Module,String}[(_module_of(d), _jl_path(d)) for d in order])
     return nothing
 end
@@ -664,6 +683,9 @@ end
 # the source file of a dart file of the pin table, relative to src/: dart2wasm's lib/<f>.dart is
 # <f>.jl, wasm_builder's lib/<f>.dart and lib/src/<f>.dart are wasm_builder/<f>.jl (dev/MARCH.md 1.A4)
 @quarantine "a Julia package's files sit under one src/, where the sdk keeps two packages' lib/" Base.match function _jl_rel(dart::String)::String
+    # an LLVM unit's port is src/llvm/<its name, WebAssembly's prefix dropped, snake_case>.jl
+    local u = match(r"^llvm/(?:[\w]+/)*(?:WebAssembly)?(\w+)$", dart)
+    u === nothing || return "llvm/" * snake(u[1]) * ".jl"
     local m = match(r"^(?:dart2wasm/lib/|(wasm_builder/)lib/(?:src/)?)([\w/]+)\.dart$", dart)
     m === nothing && throw(ConstructionViolation("include_dart", "$dart is no path under dart2wasm/lib or wasm_builder/lib"))
     return something(m[1], "") * m[2] * ".jl"
@@ -774,6 +796,74 @@ end
 # of dart-lang/sdk at that commit in one place, ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh
 # makes it). Where the checkout exists, @parity refuses an anchor that does not resolve at its line
 # and the package's load checks every anchor; the ratchet's L213 requires the checkout.
+
+# An LLVM anchor names a line of the llvm-project checkout at LLVM_PIN, ~/.cache/wasmtarget/llvm-project
+# (dev/fetch_llvm.sh makes it), its unit one of LLVM_FILES and its symbol `X` or `X::m`, read the
+# same way: @parity refuses one that does not resolve where the checkout exists, the load checks
+# every one, and the ratchet's L213 requires the checkout once an LLVM anchor exists.
+
+"""
+    LLVM_PIN
+
+The llvm/llvm-project commit every LLVM anchor cites (dev/PARITY_MASTER.md's second oracle,
+dev/LEDGER.md D42). An LLVM anchor's file is its path under that checkout.
+"""
+@quarantine "the second oracle's commit, which the LLVM anchors' resolver reads llvm-project at" Core.String const LLVM_PIN::String = "7a941dfb2877a0b8cf30323fefa85ad019e0b0f5"
+
+# an LLVM anchor's four parts: its unit, the unit's file extension, its line and its symbol
+@quarantine "an anchor is a string, which Julia reads with a regex where clang has a name" Base.var"@r_str" const LLVM_ANCHOR_RX = r"^(llvm/[\w/]+)\.(cpp|h):([1-9]\d*) ([A-Za-z_]\w*(?:::[A-Za-z_]\w*)?)$"
+
+# the checkout of llvm-project at LLVM_PIN, or nothing when there is none at the one path
+@quarantine "the second oracle's checkout is the developer's, at one path under the home directory" Base.Filesystem.homedir function _pin_llvm()::Union{String,Nothing}
+    local dir = joinpath(homedir(), ".cache", "wasmtarget", "llvm-project")
+    return _head_commit(dir) == LLVM_PIN ? dir : nothing
+end
+
+# a C++ class or struct declared at column 0, a template's parameters before it, and its name
+@quarantine "C++'s class keys, read from LLVM's clang-formatted source" Base.var"@r_str" const CPP_DECL_RX = r"^(?:template\s*<[^>]*>\s*)?(?:class|struct)\s+([A-Za-z_]\w*)"
+
+# the class or struct whose body holds line `i` of an LLVM source: the nearest code line above it at
+# column 0 (clang-format puts a namespace's declarations there and their members at column 2; an
+# access specifier sits at column 0 inside the body), nothing for no class
+@quarantine "clang-format fixes the columns, so a class's body is read from indentation" Base.match function _cpp_enclosing(lines::Vector{String}, i::Int)::Union{String,Nothing}
+    for j in i-1:-1:1
+        local l = lines[j]
+        (isempty(l) || l[1] in (' ', '}', '/', '#', '*')) && continue
+        occursin(r"^(?:public|private|protected)\s*:", l) && continue
+        local m = match(CPP_DECL_RX, l)
+        return m === nothing ? nothing : String(m[1])
+    end
+    return nothing
+end
+
+# why line `ln` of an LLVM source does not declare `symbol`, or nothing when it does: `X` a class or
+# struct X at column 0, or a function X defined or declared at column 0; `X::m` X's member m defined
+# out of line at column 0 (X's template arguments between), or declared at column 2 of X's body (a
+# method, constructor or field)
+@quarantine "clang resolves a name to its declaration; Julia reads the pinned line" Base.occursin function _cpp_declares(lines::Vector{String}, ln::Int, symbol::AbstractString)::Union{String,Nothing}
+    ln <= length(lines) || return "line $ln is past the file's end ($(length(lines)) lines)"
+    local l = lines[ln]
+    local s = lstrip(l)
+    local col = ncodeunits(l) - ncodeunits(s)
+    (startswith(s, "//") || startswith(s, "/*") || startswith(s, "*")) && return "line $ln is a comment"
+    local parts = split(symbol, "::"; limit = 2)
+    if length(parts) == 1
+        local x = parts[1]
+        col == 0 || return "line $ln is at column $col, not a top-level declaration's 0"
+        local d = match(CPP_DECL_RX, s)
+        d !== nothing && return d[1] == x ? nothing : "line $ln declares $(d[1]), not $x"
+        return occursin(Regex("(?<![\\w:~.>])\\Q" * x * "\\E\\s*\\("), s) ? nothing : "line $ln does not declare $x"
+    end
+    local x, m = parts
+    if col == 0
+        return occursin(Regex("(?<![\\w:])\\Q" * x * "\\E(?:<[^<>]*>)?::\\Q" * m * "\\E\\s*\\("), s) ? nothing :
+            "line $ln does not define $x::$m"
+    end
+    col == 2 || return "line $ln is at column $col, not a member's 2"
+    local enc = _cpp_enclosing(lines, ln)
+    enc == x || return "line $ln is in the body of $(enc === nothing ? "no class" : enc), not $x"
+    return occursin(Regex("(?<![\\w:~.>])\\Q" * m * "\\E\\s*(?:[(;={\\[]|\$)"), s) ? nothing : "line $ln does not declare $x::$m"
+end
 
 # an anchor's three parts: the key of its dart file, its line and its symbol
 @quarantine "an anchor is a string, which Julia reads with a regex where dart's analyzer has a name" Base.var"@r_str" const ANCHOR_RX = r"^([\w/]+\.dart):([1-9]\d*) ([A-Za-z_$][\w$]*(?:\.\S+)?)$"
@@ -915,8 +1005,15 @@ end
     return nothing
 end
 
-# why an anchor does not resolve in the checkout `sdk`, or nothing when it does
+# why an anchor does not resolve in the checkout `sdk` (the llvm-project checkout for an LLVM
+# anchor), or nothing when it does
 @quarantine "the pinned dart file is read where the anchor is checked" Base.readlines function _anchor_fault(sdk::String, anchor::String)::Union{String,Nothing}
+    local c = match(LLVM_ANCHOR_RX, anchor)
+    if c !== nothing
+        local file = joinpath(sdk, c[1] * "." * c[2])
+        isfile(file) || return "the llvm pin has no $(c[1]).$(c[2])"
+        return _cpp_declares(get!(() -> readlines(file), _PIN_LINES, file), parse(Int, c[3]), c[4])
+    end
     local a = match(ANCHOR_RX, anchor)
     a === nothing && return "$(repr(anchor)) is no anchor"
     local path = joinpath(sdk, "pkg", a[1])
@@ -937,11 +1034,14 @@ compile; rust: rustdoc denies broken intra-doc links). Julia's differs: nothing 
 another language's source, so the macro reads the pinned dart line where the anchor is written and
 the load checks every anchor, both where the pinned checkout exists.
 """
-@quarantine "Julia resolves no name in dart's source; the anchors are read against the pinned files" Base.empty! function check_anchors_resolve(mod::Module, sdk::String)::Int
+@quarantine "Julia resolves no name in dart's source; the anchors are read against the pinned files" Base.empty! function check_anchors_resolve(mod::Module, sdk::String, llvm::Union{String,Nothing} = _pin_llvm())::Int
     local out = String[]
     for e in REGISTRY
         e isa ParityEntry && _within(e.mod, mod) || continue
-        local f = _anchor_fault(sdk, e.anchor)
+        local isllvm = match(LLVM_ANCHOR_RX, e.anchor) !== nothing
+        local f = !isllvm ? _anchor_fault(sdk, e.anchor) :
+            llvm === nothing ? "no checkout of llvm-project at $LLVM_PIN at ~/.cache/wasmtarget/llvm-project: bash dev/fetch_llvm.sh" :
+            _anchor_fault(llvm, e.anchor)
         f === nothing || push!(out, "$(basename(string(e.file))):$(e.first) $(e.anchor): $f")
     end
     empty!(_PIN_LINES)
@@ -979,9 +1079,12 @@ end
 @quarantine "the dart anchors are checked where they are written, as dart's analyzer would" Base.match function _parity_entry(mod::Module, source::LineNumberNode, anchor, def)::Tuple{ParityEntry,Any}
     local refuse(why) = throw(ConstructionViolation("@parity", "$(_at(source)): $why"))
     anchor isa String || refuse("the anchor is not a string literal")
-    local m = match(ANCHOR_RX, anchor)
-    m === nothing && refuse("the anchor $(repr(anchor)) does not read \"<file>.dart:<line> <Symbol>\"")
-    m[1] in DART_FILES || refuse("the anchor's file $(m[1]) is no file of the pin table DART_FILES")
+    local c = match(LLVM_ANCHOR_RX, anchor)
+    local m = c === nothing ? match(ANCHOR_RX, anchor) : nothing
+    c === nothing && m === nothing &&
+        refuse("the anchor $(repr(anchor)) reads neither \"<file>.dart:<line> <Symbol>\" nor \"llvm/<unit>.<cpp|h>:<line> <X or X::m>\"")
+    c === nothing ? (m[1] in DART_FILES || refuse("the anchor's file $(m[1]) is no file of the pin table DART_FILES")) :
+                    (c[1] in LLVM_FILES || refuse("the anchor's unit $(c[1]) is no unit of the LLVM pin table LLVM_FILES"))
     local file = string(something(source.file, :none))
     local own = _within(mod, @__MODULE__)
     _inside(file, joinpath(SRC, "julia")) && refuse("a definition in src/julia carries @quarantine, the Julia necessity that forces it")
@@ -994,8 +1097,19 @@ end
         local n = _inner_constructors(def, name)
         n == 1 || refuse("a ported struct defines exactly one inner constructor, not $n: dart's constructors are its outer functions over it, and Julia's default constructors stand for none")
     end
-    local admitted = _admitted_names(m[3])
-    name in admitted || refuse("the Julia name $name is not the rule's for $(m[3]): $(join(admitted, ", "))")
+    # the one naming rule reads an LLVM member X::m as dart's X.m
+    local symbol = c === nothing ? m[3] : replace(c[4], "::" => ".")
+    local admitted = _admitted_names(symbol)
+    name in admitted || refuse("the Julia name $name is not the rule's for $symbol: $(join(admitted, ", "))")
+    if c !== nothing
+        # an LLVM anchor resolves at the llvm pin where its checkout exists (L213)
+        local llvm = own ? _pin_llvm() : nothing
+        local lfault = llvm === nothing ? nothing : _anchor_fault(llvm, anchor)
+        lfault === nothing || refuse("the anchor does not resolve at the llvm pin: $lfault")
+        local ldeclares = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
+            (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
+        return (ParityEntry(mod, anchor, ported, ldeclares, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
+    end
     # WasmTarget's own anchors resolve at the pin where its checkout exists (L213), and a dart class's
     # mirror has its form: a sealed class a @closed sum, any other class a struct or abstract type
     local sdk = own ? _pin_sdk() : nothing

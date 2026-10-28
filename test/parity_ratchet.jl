@@ -438,6 +438,8 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         local check = getfield(wt, :check_include_dart)
         passes(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart"])) || push!(out, "negative missed: the directory's files, each included, fail")
         refuses(() -> check(dir, ["dart2wasm/lib/translator.dart"])) || push!(out, "negative missed: a file loaded other than by include_dart passes")
+        Base.invokelatest(getfield(wt, :_jl_rel), "llvm/lib/Target/WebAssembly/WebAssemblyCFGSort") == "llvm/cfg_sort.jl" ||
+            push!(out, "negative missed: an LLVM unit's port is not src/llvm/<its name, snake_case>.jl")
         refuses(() -> check(dir, ["dart2wasm/lib/translator.dart", "wasm_builder/lib/src/ir/type.dart", "dart2wasm/lib/types.dart"])) || push!(out, "negative missed: an included dart file with no source passes")
         refuses(() -> getfield(wt, :include_dart)("dart2wasm/lib/dart2wasm.dart")) || push!(out, "negative missed: a dart file outside the pin table includes")
         rm(dir; recursive = true)
@@ -588,6 +590,57 @@ function parity_negatives_missed(wt::Module, definition::Symbol, refuses::Functi
         rm(sdk; recursive = true)
         local pm = match(r"\b([0-9a-f]{40})\b", _text(joinpath(ROOT, "dev", "PARITY_MASTER.md")))
         (pm !== nothing && pm.captures[1] == getfield(wt, :PIN)) || push!(out, "src/julia/parity.jl's PIN is not the commit dev/PARITY_MASTER.md pins")
+        # an LLVM source at a planted llvm pin (D42): each C++ declaration form, and lines that declare
+        # something else
+        local cpp = """
+            namespace {
+            class WebAssemblyCFGStackify final : public MachineFunctionPass {
+              SmallVector<MachineBasicBlock *, 8> ScopeTops;
+              void updateScopeTops(MachineBasicBlock *Begin, MachineBasicBlock *End) {
+                int BeginNo = Begin->getNumber();
+              }
+            public:
+              WebAssemblyCFGStackify() : MachineFunctionPass(ID) {}
+            };
+            } // end anonymous namespace
+
+            // sortBlocks, in a comment
+            static void sortBlocks(MachineFunction &MF,
+                                   const MachineLoopInfo &MLI) {
+            }
+            void WebAssemblyCFGStackify::placeBlockMarker(MachineBasicBlock &MBB) {
+            }
+            void LoopInfoBase<BlockT, LoopT>::analyze(const DomTreeBase<BlockT> &DomTree) {
+            """
+        local clines = split(chomp(cpp), '\n'; keepempty = true) .|> String
+        local cdeclares(ln, s) = Base.invokelatest(getfield(wt, :_cpp_declares), clines, ln, s) === nothing
+        (cdeclares(2, "WebAssemblyCFGStackify") && cdeclares(3, "WebAssemblyCFGStackify::ScopeTops") &&
+         cdeclares(4, "WebAssemblyCFGStackify::updateScopeTops") && cdeclares(8, "WebAssemblyCFGStackify::WebAssemblyCFGStackify") &&
+         cdeclares(13, "sortBlocks") && cdeclares(16, "WebAssemblyCFGStackify::placeBlockMarker") && cdeclares(18, "LoopInfoBase::analyze")) ||
+            push!(out, "negative missed: a C++ declaration form does not resolve")
+        cdeclares(5, "WebAssemblyCFGStackify::updateScopeTops") && push!(out, "negative missed: an LLVM anchor moved a line resolves")
+        cdeclares(5, "WebAssemblyCFGStackify::getNumber") && push!(out, "negative missed: a call in a member's body resolves as a member")
+        cdeclares(12, "sortBlocks") && push!(out, "negative missed: an LLVM anchor at a comment resolves")
+        cdeclares(14, "sortBlocks") && push!(out, "negative missed: a continued parameter line resolves as its function")
+        cdeclares(40, "sortBlocks") && push!(out, "negative missed: an LLVM anchor past the file's end resolves")
+        cdeclares(3, "WebAssemblyCFGStackify") && push!(out, "negative missed: a member's line resolves as its class")
+        cdeclares(16, "SortRegionInfo::placeBlockMarker") && push!(out, "negative missed: another class's out-of-line member resolves")
+        cdeclares(13, "WebAssemblyCFGStackify::sortBlocks") && push!(out, "negative missed: a free function resolves as a member")
+        local llvm = mktempdir()
+        mkpath(joinpath(llvm, "llvm", "lib", "Target", "WebAssembly"))
+        write(joinpath(llvm, "llvm", "lib", "Target", "WebAssembly", "WebAssemblyCFGStackify.cpp"), cpp)
+        local fault(a) = Base.invokelatest(getfield(wt, :_anchor_fault), llvm, a)
+        fault("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:4 WebAssemblyCFGStackify::updateScopeTops") === nothing ||
+            push!(out, "negative missed: an LLVM anchor that resolves in the planted checkout fails")
+        fault("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.cpp:5 WebAssemblyCFGStackify::updateScopeTops") === nothing &&
+            push!(out, "negative missed: an LLVM anchor moved a line passes the load's check")
+        fault("llvm/lib/Target/WebAssembly/WebAssemblyCFGStackify.h:4 WebAssemblyCFGStackify::updateScopeTops") === nothing &&
+            push!(out, "negative missed: an LLVM anchor in a file the llvm pin lacks passes")
+        rm(llvm; recursive = true)
+        refused_load("@parity \"llvm/lib/Target/WebAssembly/WebAssemblyNoSuchPass.cpp:1 noSuchPass\" no_such_pass(x::Int) = x", "/plant/src/x.jl") ||
+            push!(out, "negative missed: an LLVM anchor outside the LLVM pin table loads")
+        occursin(getfield(wt, :LLVM_PIN), _text(joinpath(ROOT, "dev", "PARITY_MASTER.md"))) ||
+            push!(out, "src/julia/parity.jl's LLVM_PIN is not the commit dev/PARITY_MASTER.md pins for llvm-project")
     else
         local m = plant(:QuarantinePlant)
         Base.include_string(m, "@quarantine \"Julia's vectors\" Base.Vector f(x::Vector{Int}) = [y for y in x]\n", "/plant/src/julia/q.jl")
@@ -2133,7 +2186,7 @@ const LOCKS = [
         ConstructionLock(:parity)),
     "L212_quarantine" => ("every definition in src/julia carries `@quarantine \"<necessity>\" <Module.api>`, what Julia forces and dart lacks and the Julia API it relies on (Dale: the Julia compiler is the ground truth, dev/LEDGER.md D3): the macro refuses, at the definition's line, an empty necessity, an API that is not a qualified name, does not resolve, or that the definition's own text does not reference (a name, qualified name or GlobalRef resolving to it, or the form that stands for it: a module for Core.Module, a type declaration for Core.DataType, an interpolated string for Base.string), and a file under src/ outside src/julia; when WasmTarget has loaded, every method it defines in src/julia is matched by identity to the @quarantine definition whose evaluation made it and lies in it, a marked module's body holding none but Julia's eval and include, and every binding is a marked definition's, by reflection; the registry's own definitions carry it too, registered through the functions the macro expands to; construction_check(::Val{:quarantine}) asserts it (check_quarantine), and this lock only calls it, with its plants (an unmarked src/julia method, an unmarked method in a marked module's body, an unresolvable, unqualified or unreferenced API, an empty necessity and @quarantine outside src/julia each refused, marked definitions passed) (dev/CHARTER.md C2)",
         ConstructionLock(:quarantine)),
-    "L213_anchors_resolve" => ("every anchor resolves at the pin (Dale: dart2wasm the structural oracle through and through, dev/LEDGER.md D1): the dart line an @parity anchor names declares its symbol at the commit dev/PARITY_MASTER.md pins, read from the checkout of dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; CI fetches it): `X` a top-level declaration at column 0 or X's unnamed constructor in its body, `X.m` a member at column 2 of X's body, a bare `m` a member of an unnamed extension; where the checkout exists @parity refuses an anchor that does not resolve at the definition's line, the load checks every anchor of WasmTarget, and construction_check(::Val{:check_anchors_resolve}) requires the checkout, so this lock, which only calls it, fails without one; with its plants (an anchor moved a line, one in another declaration's body, at a comment, past the end and a member's line read as its class each refused; every declaration form resolving; a planted checkout's HEAD read; PIN the pinned commit) (dev/CHARTER.md C2)",
+    "L213_anchors_resolve" => ("every anchor resolves at the pin (Dale: dart2wasm the structural oracle through and through, dev/LEDGER.md D1): the dart line an @parity anchor names declares its symbol at the commit dev/PARITY_MASTER.md pins, read from the checkout of dart-lang/sdk at ~/.cache/wasmtarget/dart-sdk (dev/fetch_dart_sdk.sh; CI fetches it): `X` a top-level declaration at column 0 or X's unnamed constructor in its body, `X.m` a member at column 2 of X's body, a bare `m` a member of an unnamed extension; where the checkout exists @parity refuses an anchor that does not resolve at the definition's line, the load checks every anchor of WasmTarget, and construction_check(::Val{:check_anchors_resolve}) requires the checkout, so this lock, which only calls it, fails without one; with its plants (an anchor moved a line, one in another declaration's body, at a comment, past the end and a member's line read as its class each refused; every declaration form resolving; a planted checkout's HEAD read; PIN the pinned commit); an LLVM anchor (dev/LEDGER.md D42) likewise resolves at the llvm pin, LLVM_PIN, in the checkout at ~/.cache/wasmtarget/llvm-project (dev/fetch_llvm.sh), `X` a class, struct or function at column 0 and `X::m` an out-of-line member at column 0 or a member at column 2 of X's body, with its plants (each C++ form resolving; a moved line, a call in a body, a comment, a continued parameter line, past the end, a member's line as its class, another class's member and a free function as a member each refused; an anchor outside LLVM_FILES refused; LLVM_PIN the pinned commit) (dev/CHARTER.md C2)",
         ConstructionLock(:check_anchors_resolve)),
     "L225_mirrors_name_their_form" => ("each mirror of a Julia form names the form it mirrors (Dale: the Julia compiler is the ground truth, dev/LEDGER.md D3; audit 39, A39S1): a quarantined type declaration whose Julia API its text does not reference is a mirror's claim (NIR's NirSSA names Core.SSAValue, NirCall Core.Expr, NirGoto Core.GotoNode, ...), recorded where it is written; when WasmTarget loads, every claim has a sample of exactly that form, built by Julia's own constructors and registered with its converter (mirror_samples!), every sample's mirror names the sample's type and comes back from converting it, and every registered sum's kinds each have a sample (NirValue, NirStmt); construction_check(::Val{:check_mirrors}) asserts it (check_mirrors), and this lock only calls it, with its plants (a mirror naming the wrong form, a sample converting to another mirror and a claim with no sample each refused; mirrors naming their forms passed) (dev/CHARTER.md C3)",
         ConstructionLock(:check_mirrors)),
