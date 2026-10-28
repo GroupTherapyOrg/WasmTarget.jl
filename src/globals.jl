@@ -81,10 +81,10 @@ same then accesses the global indirectly, either through an import or a getter c
     else
         local getter = get(self._global_getters, global_, nothing)
         if getter === nothing
-            local getter_type = WasmBuilder.define_function(owning_module.types, WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[global_.type.type])
-            local getter_function = WasmBuilder.define(owning_module.functions, getter_type)
+            local getter_type = WasmBuilder.define_function(owning_module.types[], WasmBuilder.IR.ValueType[], WasmBuilder.IR.ValueType[global_.type.type])
+            local getter_function = WasmBuilder.define(owning_module.functions[], getter_type)
             getter_function.is_pure = true
-            local getter_body = getter_function.body
+            local getter_body = WasmBuilder.body(getter_function)
             WasmBuilder.global_get(getter_body, global_)
             WasmBuilder.var"end"(getter_body)
             getter = self._global_getters[global_] = getter_function
@@ -107,10 +107,10 @@ end
     else
         local setter = get(self._global_setters, global_, nothing)
         if setter === nothing
-            local setter_type = WasmBuilder.define_function(owning_module.types, WasmBuilder.IR.ValueType[global_.type.type], WasmBuilder.IR.ValueType[])
-            local setter_function = WasmBuilder.define(owning_module.functions, setter_type)
-            local setter_body = setter_function.body
-            WasmBuilder.local_get(setter_body, only(setter_function.locals))
+            local setter_type = WasmBuilder.define_function(owning_module.types[], WasmBuilder.IR.ValueType[global_.type.type], WasmBuilder.IR.ValueType[])
+            local setter_function = WasmBuilder.define(owning_module.functions[], setter_type)
+            local setter_body = WasmBuilder.body(setter_function)
+            WasmBuilder.local_get(setter_body, only(WasmBuilder.locals(setter_function)))
             WasmBuilder.global_set(setter_body, global_)
             WasmBuilder.var"end"(setter_body)
             setter = self._global_setters[global_] = setter_function
@@ -138,7 +138,7 @@ end
 
 @parity "dart2wasm/lib/globals.dart:225 DartGlobals._defineInitializerFlag" function _define_initializer_flag(self::DartGlobals, field::GlobalRef, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.GlobalBuilder
     local member_name = _member_name(self, field)
-    local global_ = WasmBuilder.define(module_.globals, WasmBuilder.IR.GlobalType(WasmBuilder.IR.NumType_i32), "$member_name initialized")
+    local global_ = WasmBuilder.define(module_.globals[], WasmBuilder.IR.GlobalType(WasmBuilder.IR.NumType_i32), "$member_name initialized")
     WasmBuilder.i32_const(global_.initializer, 0)
     WasmBuilder.var"end"(global_.initializer)
     return global_
@@ -160,7 +160,7 @@ end
 @parity "dart2wasm/lib/globals.dart:262 DartGlobals._defineGlobalBasedField" function _define_global_based_field(self::DartGlobals, field::GlobalRef, field_type::WasmBuilder.IR.ValueType, module_::WasmBuilder.ModuleBuilder,
         mutable_::Bool, init::Union{Core.Const,Nothing}, initializer_flag::Union{Nothing,WasmBuilder.GlobalBuilder})::WasmGlobalDartGlobal
     local member_name = _member_name(self, field)
-    local global_ = WasmBuilder.define(module_.globals, WasmBuilder.IR.GlobalType(field_type; mutable = mutable_), member_name)
+    local global_ = WasmBuilder.define(module_.globals[], WasmBuilder.IR.GlobalType(field_type; mutable = mutable_), member_name)
     if init !== nothing
         instantiate_constant(self.translator.constants[], global_.initializer, init, field_type)
     else

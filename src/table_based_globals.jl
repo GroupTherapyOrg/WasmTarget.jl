@@ -26,7 +26,7 @@ global binding) to its index and, when it has one, its constant initializer expr
         local self
         self = new(translator, _table_heap_type, LinkedHashMap{GlobalRef,Tuple{Int,Union{WasmBuilder.InstructionsBuilder,Nothing}}}(),
             Late{WasmBuilder.TableBuilder}("dart2wasm/lib/table_based_globals.dart:38 TypeSpecificGlobalTable._definedWasmTable",
-                () -> WasmBuilder.define(main_module(self.translator).tables, WasmBuilder.IR.RefType(self._table_heap_type; nullable = true), length(self._table))),
+                () -> WasmBuilder.define(main_module(self.translator).tables[], WasmBuilder.IR.RefType(self._table_heap_type; nullable = true), length(self._table))),
             _imported_wasm_tables)
         return self
     end
@@ -93,13 +93,13 @@ end
         expression === nothing && continue
         local module_builder = expression.module_builder
         if is_main_module(self.translator, module_builder)
-            WasmBuilder.set_expression_at(WasmBuilder.active_expression_segment_builder_for(defined.module_builder.elements, defined), index, expression)
+            WasmBuilder.set_expression_at(WasmBuilder.active_expression_segment_builder_for(defined.module_builder.elements[], defined), index, expression)
         else
             # This will generate the imported table if it doesn't already exist.
             local imported_table = get_wasm_table(self, module_builder)
             imported_table isa WasmBuilder.IR.ImportedTable ||
                 reject!(Internal("dart2wasm/lib/table_based_globals.dart:92 TypeSpecificGlobalTable.output: the table of another module is a $(typeof(imported_table)), not an import"), "TypeSpecificGlobalTable.output")
-            WasmBuilder.set_expression_at(WasmBuilder.active_expression_segment_builder_for(module_builder.elements, imported_table), index, expression)
+            WasmBuilder.set_expression_at(WasmBuilder.active_expression_segment_builder_for(module_builder.elements[], imported_table), index, expression)
         end
     end
 
