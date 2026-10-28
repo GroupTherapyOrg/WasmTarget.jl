@@ -123,7 +123,7 @@ end
 """
 Counts the program's static fields of each wasm type. dart counts every static field of every
 library; a Julia program's static fields are the global bindings the closed world reads (each
-`GlobalRef` of its NIR, an operand or a statement), but a binding of a function, a type or a module,
+`GlobalRef` of its NIR, an operand (nir_operands) or a statement), but a binding of a function, a type or a module,
 which declare Julia's methods, classes and modules as dart's procedures, classes and libraries do.
 """
 @parity "dart2wasm/lib/globals.dart:97 DartGlobals" function DartGlobals(translator::Translator)::DartGlobals
@@ -137,34 +137,10 @@ which declare Julia's methods, classes and modules as dart's procedures, classes
         self._field_type_count[wasm_type] = get(self._field_type_count, wasm_type, 0) + 1
         return nothing
     end
-    local operand(v::Union{Nothing,NirValue}) = v isa NirGlobal ? count(v.ref) : nothing
     for body in translator.component, st in body.stmts
-        @exhaustive st::NirStmt begin
-            (x::NirCall) => foreach(operand, x.args)
-            (x::NirInvoke) => foreach(operand, x.args)
-            (x::NirNew) => foreach(operand, x.args)
-            (x::NirForeignCall) => foreach(operand, x.args)
-            (x::NirBoundscheck) => foreach(operand, x.args)
-            (x::NirGCPreserveBegin) => foreach(operand, x.args)
-            (x::NirGCPreserveEnd) => foreach(operand, x.args)
-            (x::NirLeave) => foreach(operand, x.args)
-            (x::NirPopException) => foreach(operand, x.args)
-            (x::NirTheException) => foreach(operand, x.args)
-            (x::NirLoopInfo) => foreach(operand, x.args)
-            (x::NirThrowUndefIfNot) => foreach(operand, x.args)
-            (x::NirCFunction) => foreach(operand, x.args)
-            (x::NirInvokeModify) => foreach(operand, x.args)
-            NirGoto => nothing
-            (x::NirGotoIfNot) => operand(x.cond)
-            (x::NirReturn) => operand(x.val)
-            NirUnreachable => nothing
-            (x::NirPhi) => foreach(operand, x.values)
-            (x::NirPi) => operand(x.val)
-            (x::NirEnter) => operand(x.scope)
-            (x::NirUpsilon) => operand(x.val)
-            (x::NirPhiC) => foreach(operand, x.values)
-            NirNothing => nothing
-            (x::NirGlobalRead) => count(x.ref)
+        st isa NirGlobalRead && count(st.ref)
+        for v in nir_operands(st)
+            v isa NirGlobal && count(v.ref)
         end
     end
     return self

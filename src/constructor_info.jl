@@ -2,35 +2,184 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-ConstructorInfo's dart fields: `constructor`, `translator`, `allParameters`, `initializerTypeParameters`, `initializerParameters`, `bodyParameters`, `parameterToField`.
+Information about a constructor's parameter usages, used to optimize the signatures of the 3
+(allocator, initializer, body) constructor functions.
+
+A Julia constructor is a method whose body ends in `Expr(:new)` (NirNew): it has no initializer list,
+so Julia's answer to dart's split is that the initializer takes every parameter and does nothing
+else, and the body is the whole method: `parameterToField` is empty, and `bodyParameters` are the
+parameters the method reads. Its parameters are its arguments after the callee (`NirArgument`, from
+2), positional only (Julia's lowering passes keywords positionally); the class it builds stores no
+type parameters (its parameters are bound), so `initializerTypeParameters` is empty.
 """
-@parity "dart2wasm/lib/constructor_info.dart:13 ConstructorInfo" @unported struct ConstructorInfo end
+@parity "dart2wasm/lib/constructor_info.dart:13 ConstructorInfo" struct ConstructorInfo
+    constructor::Core.MethodInstance
+    translator::KernelNodes
+    all_parameters::Vector{NirArgument}
+    initializer_type_parameters::Late{Vector{TypeVar}}
+    initializer_parameters::Late{Vector{NirArgument}}
+    body_parameters::Late{Vector{NirArgument}}
+    parameter_to_field::Dict{Union{NirSSA,NirArgument},ClassField}
+    # the struct's one constructor, tagged; dart's constructor at :35 is its outer function, which
+    # assigns the late fields
+    ConstructorInfo(::Val{:_}, constructor::Core.MethodInstance, translator::KernelNodes, all_parameters::Vector{NirArgument}) =
+        new(constructor, translator, all_parameters,
+            Late{Vector{TypeVar}}("dart2wasm/lib/constructor_info.dart:22 ConstructorInfo.initializerTypeParameters"),
+            Late{Vector{NirArgument}}("dart2wasm/lib/constructor_info.dart:23 ConstructorInfo.initializerParameters"),
+            Late{Vector{NirArgument}}("dart2wasm/lib/constructor_info.dart:30 ConstructorInfo.bodyParameters"),
+            Dict{Union{NirSSA,NirArgument},ClassField}())
+end
+
+"""Collects used variables and type parameters from a constructor's NIR (dart's AST subtree)."""
+@parity "dart2wasm/lib/constructor_info.dart:107 _UsageCollector" struct _UsageCollector
+    translator::KernelNodes
+    closures::Closures
+    variables_read::Set{Union{NirSSA,NirArgument}}
+    variables_written::Set{Union{NirSSA,NirArgument}}
+    variables_captured::Set{Union{NirSSA,NirArgument}}
+    used_type_parameters::Set{TypeVar}
+    variables_stored_in_fields::Dict{Union{NirSSA,NirArgument},ClassField}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :117
+    # is its outer function
+    _UsageCollector(::Val{:_}, translator::KernelNodes, closures::Closures) =
+        new(translator, closures, Set{Union{NirSSA,NirArgument}}(), Set{Union{NirSSA,NirArgument}}(),
+            Set{Union{NirSSA,NirArgument}}(), Set{TypeVar}(), Dict{Union{NirSSA,NirArgument},ClassField}())
+end
+
+@parity "dart2wasm/lib/constructor_info.dart:35 ConstructorInfo" function ConstructorInfo(constructor::Core.MethodInstance, translator::Translator)::ConstructorInfo
+    # All parameters of the constructor in canonical order (positional first, then named sorted by
+    # name): a Julia method's arguments after the callee, every one positional
+    local sig = Base.unwrap_unionall(constructor.specTypes)::DataType
+    any(p -> p isa Core.TypeofVararg, sig.parameters) &&
+        reject!(Unquarantined("src/constructor_info.jl ConstructorInfo: the Vararg signature $(constructor.specTypes), whose argument count Julia left open"), "dart2wasm/lib/constructor_info.dart:35 ConstructorInfo")
+    local self = ConstructorInfo(Val(:_), constructor, translator, NirArgument[NirArgument(i) for i in 2:length(sig.parameters)])
+
+    # The initializer gets all arguments and produces
+    #   - arguments to be passed to the body function
+    #   - field values.
+    self.initializer_type_parameters[] = TypeVar[]
+    self.initializer_parameters[] = self.all_parameters
+
+    # A Julia constructor is never external: dart's external constructor has no Julia form.
+
+    # Analyze parameter usages in initializers & body.
+    local closures = get_closures(translator, constructor)
+    local initializer_collector = _UsageCollector(translator, closures)
+    collect_initializer_usages(initializer_collector, constructor)
+    local body_collector = _UsageCollector(translator, closures)
+    collect_body_usages(body_collector, constructor)
+
+    # Identify parameters that end up in fields and are not modified, so the
+    # body function can load them from `this` instead of getting them as
+    # parameters.
+    for p in self.all_parameters
+        # The parameter will reside in the initializer context and doesn't
+        # have to be passed to the body explicitly.
+        p in initializer_collector.variables_captured && continue
+        # If the parameter is modified by initializers the value that ends up
+        # in a field may not be the same as the value of the (modified)
+        # parameter.
+        p in initializer_collector.variables_written && continue
+        local field = get(initializer_collector.variables_stored_in_fields, p, nothing)
+        if field !== nothing
+            # The parameter is not captured by initializers, never written to by
+            # initializers, and is available via `this` to the body
+            self.parameter_to_field[p] = field
+        end
+    end
+
+    local body_parameters = NirArgument[]
+    for param in self.all_parameters
+        # The body doesn't use the parameter.
+        (param in body_collector.variables_read || param in body_collector.variables_written) || continue
+        # The body should use the parameter from the context.
+        param in initializer_collector.variables_captured && continue
+        # The body can load the parameter via `this`.
+        haskey(self.parameter_to_field, param) && continue
+        push!(body_parameters, param)
+    end
+    self.body_parameters[] = body_parameters
+    return self
+end
+
+@parity "dart2wasm/lib/constructor_info.dart:117 _UsageCollector" _UsageCollector(translator::KernelNodes, closures::Closures)::_UsageCollector = _UsageCollector(Val(:_), translator, closures)
 
 """
-_UsageCollector's dart fields: `translator`, `closures`, `variablesRead`, `variablesWritten`, `variablesCaptured`, `usedTypeParameters`, `variablesStoredInFields`.
+The variables a constructor's initializer list uses: the variables its root context holds, captured
+by closures; then each initializer, of which a Julia constructor has none (its `new` ends its
+body). A Julia context holds its captured variables as fields of the closure (`ClassField`), whose
+correspondence to the constructor's arguments is not written: a root context capturing a variable
+rejects, located.
 """
-@parity "dart2wasm/lib/constructor_info.dart:107 _UsageCollector" @unported struct _UsageCollector end
+@parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" function collect_initializer_usages(self::_UsageCollector, constructor::Core.MethodInstance)::Nothing
+    local root_context = get(self.closures.contexts, constructor, nothing)
+    if root_context !== nothing
+        root_context.parent === nothing ||
+            reject!(Internal("dart2wasm/lib/constructor_info.dart:122 _UsageCollector.collectInitializerUsages: the constructor's root context has a parent"), "_UsageCollector.collectInitializerUsages")
+        isempty(root_context.variables) ||
+            reject!(Unquarantined("src/constructor_info.jl collectInitializerUsages: the constructor $constructor, whose variables a closure captures as the fields $(root_context.variables)"), "_UsageCollector.collectInitializerUsages")
+    end
+    # a Julia constructor has no initializer list: no initializer to visit
+    return nothing
+end
 
-@parity "dart2wasm/lib/constructor_info.dart:35 ConstructorInfo" @unported function ConstructorInfo(constructor, translator) end
+"""The variables a constructor's body uses: every argument and statement value its NIR reads."""
+@parity "dart2wasm/lib/constructor_info.dart:133 _UsageCollector.collectBodyUsages" function collect_body_usages(self::_UsageCollector, constructor::Core.MethodInstance)::Nothing
+    local body = nothing
+    for b in (self.translator::Translator).component
+        b.ci.def === constructor && (body = b; break)
+    end
+    body === nothing &&
+        reject!(Internal("dart2wasm/lib/constructor_info.dart:134 _UsageCollector.collectBodyUsages: the constructor $constructor has no body in the closed world"), "_UsageCollector.collectBodyUsages")
+    for st in body.stmts, v in nir_operands(st)
+        v isa Union{NirSSA,NirArgument} && visit_variable_get(self, v)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/constructor_info.dart:117 _UsageCollector" @unported function _UsageCollector(translator, closures) end
+# Kernel's initializers have no Julia counterpart (src/julia/kernel.jl): a Julia constructor has no
+# initializer list, its `new` is a statement of its body; no value reaches these
+@parity "dart2wasm/lib/constructor_info.dart:138 _UsageCollector.visitFieldInitializer" visit_field_initializer(self::_UsageCollector, node::NoCounterpart)::Nothing =
+    reject!(Internal("dart2wasm/lib/constructor_info.dart:138 _UsageCollector.visitFieldInitializer: a Julia constructor has no initializer list"), "_UsageCollector.visitFieldInitializer")
 
-@parity "dart2wasm/lib/constructor_info.dart:119 _UsageCollector.collectInitializerUsages" @unported function collect_initializer_usages(self::_UsageCollector, constructor::Core.MethodInstance) end
+@parity "dart2wasm/lib/constructor_info.dart:147 _UsageCollector.visitSuperInitializer" visit_super_initializer(self::_UsageCollector, node::NoCounterpart)::Nothing =
+    reject!(Internal("dart2wasm/lib/constructor_info.dart:147 _UsageCollector.visitSuperInitializer: a Julia constructor has no initializer list"), "_UsageCollector.visitSuperInitializer")
 
-@parity "dart2wasm/lib/constructor_info.dart:133 _UsageCollector.collectBodyUsages" @unported function collect_body_usages(self::_UsageCollector, constructor::Core.MethodInstance) end
+@parity "dart2wasm/lib/constructor_info.dart:153 _UsageCollector.visitRedirectingInitializer" visit_redirecting_initializer(self::_UsageCollector, node::NoCounterpart)::Nothing =
+    reject!(Internal("dart2wasm/lib/constructor_info.dart:153 _UsageCollector.visitRedirectingInitializer: a Julia constructor has no initializer list"), "_UsageCollector.visitRedirectingInitializer")
 
-@parity "dart2wasm/lib/constructor_info.dart:138 _UsageCollector.visitFieldInitializer" @unported function visit_field_initializer(self::_UsageCollector, node::NoCounterpart) end
+"""
+The variables a super or redirecting initializer passes to the target constructor's parameters that
+the target stores in fields: positional arguments only, as a Julia call passes keywords
+positionally; the target's i-th parameter its argument i + 1, after the callee.
+"""
+@parity "dart2wasm/lib/constructor_info.dart:158 _UsageCollector._findVariablesStoredInFields" function _find_variables_stored_in_fields(self::_UsageCollector, target::Core.MethodInstance, arguments::Vector{NirValue})::Nothing
+    local target_info = get_constructor_info(self.translator::Translator, target)
+    for i in 1:length(arguments)
+        local arg = arguments[i]
+        if arg isa Union{NirSSA,NirArgument}
+            local field = get(target_info.parameter_to_field, NirArgument(i + 1), nothing)
+            field === nothing || (self.variables_stored_in_fields[arg] = field)
+        end
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/constructor_info.dart:147 _UsageCollector.visitSuperInitializer" @unported function visit_super_initializer(self::_UsageCollector, node::NoCounterpart) end
+@parity "dart2wasm/lib/constructor_info.dart:186 _UsageCollector.visitVariableGet" function visit_variable_get(self::_UsageCollector, node::Union{NirSSA,NirArgument})::Nothing
+    push!(self.variables_read, node)
+    return nothing
+end
 
-@parity "dart2wasm/lib/constructor_info.dart:153 _UsageCollector.visitRedirectingInitializer" @unported function visit_redirecting_initializer(self::_UsageCollector, node::NoCounterpart) end
+# Julia's optimized IR is SSA (src/julia/kernel.jl): no variable is assigned, so no value reaches this
+@parity "dart2wasm/lib/constructor_info.dart:191 _UsageCollector.visitVariableSet" visit_variable_set(self::_UsageCollector, node::NoCounterpart)::Nothing =
+    reject!(Internal("dart2wasm/lib/constructor_info.dart:191 _UsageCollector.visitVariableSet: Julia's optimized IR assigns no variable"), "_UsageCollector.visitVariableSet")
 
-@parity "dart2wasm/lib/constructor_info.dart:158 _UsageCollector._findVariablesStoredInFields" @unported function _find_variables_stored_in_fields(self::_UsageCollector, target::Core.MethodInstance, arguments::Vector{NirValue}) end
+@parity "dart2wasm/lib/constructor_info.dart:197 _UsageCollector.visitTypeParameterType" function visit_type_parameter_type(self::_UsageCollector, node::TypeVar)::Nothing
+    push!(self.used_type_parameters, node)
+    return nothing
+end
 
-@parity "dart2wasm/lib/constructor_info.dart:186 _UsageCollector.visitVariableGet" @unported function visit_variable_get(self::_UsageCollector, node::Union{NirSSA,NirArgument}) end
-
-@parity "dart2wasm/lib/constructor_info.dart:191 _UsageCollector.visitVariableSet" @unported function visit_variable_set(self::_UsageCollector, node::NoCounterpart) end
-
-@parity "dart2wasm/lib/constructor_info.dart:197 _UsageCollector.visitTypeParameterType" @unported function visit_type_parameter_type(self::_UsageCollector, node::TypeVar) end
-
-@parity "dart2wasm/lib/constructor_info.dart:202 _UsageCollector.visitClassTypeParameterType" @unported function visit_class_type_parameter_type(self::_UsageCollector, node::TypeVar) end
+@parity "dart2wasm/lib/constructor_info.dart:202 _UsageCollector.visitClassTypeParameterType" function visit_class_type_parameter_type(self::_UsageCollector, node::TypeVar)::Nothing
+    push!(self.used_type_parameters, node)
+    return nothing
+end

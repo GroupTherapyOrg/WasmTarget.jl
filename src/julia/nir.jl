@@ -504,3 +504,42 @@ run time rejects, located.
     reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
 end
 
+"""
+    nir_operands(st) -> Vector{NirValue}
+
+The operands a NIR statement reads, in Julia's order: a call's, an allocation's and every other
+Expr form's arguments, a branch's condition, a return's value, a phi's incoming values (the ones
+assigned), a pi's value, a try region's scope, an upsilon's value; a jump, an unreachable, an emptied
+statement and a binding read (whose GlobalRef is no operand) read none. One @exhaustive match, the
+one place a pass over every operand of the NIR reads them.
+"""
+@quarantine "Julia's optimized IR holds each form's operands in its own place; one match reads them all" Base.isnothing function nir_operands(st::NirStmt)::Vector{NirValue}
+    local some(xs) = NirValue[x for x in xs if !isnothing(x)]   # the assigned ones
+    @exhaustive st::NirStmt begin
+        (x::NirCall) => x.args
+        (x::NirInvoke) => x.args
+        (x::NirNew) => x.args
+        (x::NirForeignCall) => x.args
+        (x::NirBoundscheck) => x.args
+        (x::NirGCPreserveBegin) => x.args
+        (x::NirGCPreserveEnd) => x.args
+        (x::NirLeave) => x.args
+        (x::NirPopException) => x.args
+        (x::NirTheException) => x.args
+        (x::NirLoopInfo) => x.args
+        (x::NirThrowUndefIfNot) => x.args
+        (x::NirCFunction) => x.args
+        (x::NirInvokeModify) => x.args
+        NirGoto => NirValue[]
+        (x::NirGotoIfNot) => NirValue[x.cond]
+        (x::NirReturn) => NirValue[x.val]
+        NirUnreachable => NirValue[]
+        (x::NirPhi) => some(x.values)
+        (x::NirPi) => NirValue[x.val]
+        (x::NirEnter) => some((x.scope,))
+        (x::NirUpsilon) => some((x.val,))
+        (x::NirPhiC) => x.values
+        NirNothing => NirValue[]
+        NirGlobalRead => NirValue[]
+    end
+end
