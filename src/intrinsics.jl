@@ -6,9 +6,14 @@
 @parity "dart2wasm/lib/intrinsics.dart:103 StaticIntrinsic" @enum StaticIntrinsic StaticIntrinsic_wasmArrayNew StaticIntrinsic_wasmArrayFilled StaticIntrinsic_wasmArrayIndex StaticIntrinsic_wasmArrayIndexSet StaticIntrinsic_wasmArrayCopy StaticIntrinsic_wasmArrayFill StaticIntrinsic_wasmArrayClone StaticIntrinsic_immutableWasmArrayNew StaticIntrinsic_immutableWasmArrayFilled StaticIntrinsic_immutableWasmArrayIndex StaticIntrinsic_i64ArrayExtRead StaticIntrinsic_f32ArrayExtRead StaticIntrinsic_f64ArrayExtRead StaticIntrinsic_immutableI64ArrayExtRead StaticIntrinsic_immutableF32ArrayExtRead StaticIntrinsic_immutableF64ArrayExtRead StaticIntrinsic_i8ArrayExtReadSigned StaticIntrinsic_i16ArrayExtReadSigned StaticIntrinsic_i32ArrayExtReadSigned StaticIntrinsic_immutableI8ArrayExtReadSigned StaticIntrinsic_immutableI16ArrayExtReadSigned StaticIntrinsic_immutableI32ArrayExtReadSigned StaticIntrinsic_i8ArrayExtReadUnsigned StaticIntrinsic_i16ArrayExtReadUnsigned StaticIntrinsic_i32ArrayExtReadUnsigned StaticIntrinsic_immutableI8ArrayExtReadUnsigned StaticIntrinsic_immutableI16ArrayExtReadUnsigned StaticIntrinsic_immutableI32ArrayExtReadUnsigned StaticIntrinsic_i8ArrayExtWrite StaticIntrinsic_i16ArrayExtWrite StaticIntrinsic_i32ArrayExtWrite StaticIntrinsic_i64ArrayExtWrite StaticIntrinsic_f32ArrayExtWrite StaticIntrinsic_f64ArrayExtWrite StaticIntrinsic_wasmFunctionFromFuncRef StaticIntrinsic_wasmFunctionFromFunction StaticIntrinsic_wasmI32FromInt StaticIntrinsic_wasmI32Int8FromInt StaticIntrinsic_wasmI32Uint8FromInt StaticIntrinsic_wasmI32Int16FromInt StaticIntrinsic_wasmI32Uint16FromInt StaticIntrinsic_wasmI32FromBool StaticIntrinsic_wasmI64FromInt StaticIntrinsic_wasmF32FromDouble StaticIntrinsic_wasmF64FromDouble StaticIntrinsic_wasmI8x16Splat StaticIntrinsic_wasmI8x16ExtractLaneS StaticIntrinsic_wasmI8x16ExtractLaneU StaticIntrinsic_wasmI8x16ReplaceLane StaticIntrinsic_wasmI16x8Splat StaticIntrinsic_wasmI16x8ExtractLaneS StaticIntrinsic_wasmI16x8ExtractLaneU StaticIntrinsic_wasmI16x8ReplaceLane StaticIntrinsic_wasmI32x4Splat StaticIntrinsic_wasmI32x4ExtractLane StaticIntrinsic_wasmI32x4ReplaceLane StaticIntrinsic_wasmI64x2Splat StaticIntrinsic_wasmI64x2ExtractLane StaticIntrinsic_wasmI64x2ReplaceLane StaticIntrinsic_wasmF32x4Splat StaticIntrinsic_wasmF32x4ExtractLane StaticIntrinsic_wasmF32x4ReplaceLane StaticIntrinsic_wasmF64x2Splat StaticIntrinsic_wasmF64x2ExtractLane StaticIntrinsic_wasmF64x2ReplaceLane StaticIntrinsic_wasmF64x2ConstructorFromLaneValues StaticIntrinsic_wasmF32x4ConstructorFromLaneValues StaticIntrinsic_wasmF32x4Add StaticIntrinsic_wasmF32x4Sub StaticIntrinsic_wasmF32x4Mul StaticIntrinsic_wasmF32x4Div StaticIntrinsic_wasmF32x4Neg StaticIntrinsic_wasmF32x4Abs StaticIntrinsic_wasmF32x4Sqrt StaticIntrinsic_wasmF32x4Min StaticIntrinsic_wasmF32x4Max StaticIntrinsic_wasmF32x4Lt StaticIntrinsic_wasmF32x4Le StaticIntrinsic_wasmF32x4Gt StaticIntrinsic_wasmF32x4Ge StaticIntrinsic_wasmF32x4Ceil StaticIntrinsic_wasmF32x4Floor StaticIntrinsic_wasmF32x4Trunc StaticIntrinsic_wasmF32x4Nearest StaticIntrinsic_wasmF64x2Add StaticIntrinsic_wasmF64x2Sub StaticIntrinsic_wasmF64x2Mul StaticIntrinsic_wasmF64x2Div StaticIntrinsic_wasmF64x2Neg StaticIntrinsic_wasmF64x2Abs StaticIntrinsic_wasmF64x2Sqrt StaticIntrinsic_wasmF64x2Min StaticIntrinsic_wasmF64x2Max StaticIntrinsic_wasmF64x2Ceil StaticIntrinsic_wasmF64x2Floor StaticIntrinsic_wasmF64x2Trunc StaticIntrinsic_wasmF64x2Nearest StaticIntrinsic_wasmF64x2Lt StaticIntrinsic_wasmF64x2Le StaticIntrinsic_wasmF64x2Gt StaticIntrinsic_wasmF64x2Ge StaticIntrinsic_wasmI8x16Add StaticIntrinsic_wasmI8x16Sub StaticIntrinsic_wasmI8x16Neg StaticIntrinsic_wasmI16x8Add StaticIntrinsic_wasmI16x8Sub StaticIntrinsic_wasmI16x8Mul StaticIntrinsic_wasm32x4MulDotI16x8 StaticIntrinsic_wasmI16x8Neg StaticIntrinsic_wasmI32x4Add StaticIntrinsic_wasmI32x4Sub StaticIntrinsic_wasmI32x4Mul StaticIntrinsic_wasmI32x4Neg StaticIntrinsic_wasmI64x2Add StaticIntrinsic_wasmI64x2Sub StaticIntrinsic_wasmI64x2Mul StaticIntrinsic_wasmI64x2Neg StaticIntrinsic_wasmI8x16Eq StaticIntrinsic_wasmI16x8Eq StaticIntrinsic_wasmI32x4Eq StaticIntrinsic_wasmI64x2Eq StaticIntrinsic_wasmF32x4Eq StaticIntrinsic_wasmF64x2Eq StaticIntrinsic_wasmV128Not StaticIntrinsic_wasmV128And StaticIntrinsic_wasmV128Or StaticIntrinsic_wasmV128Xor StaticIntrinsic_wasmV128AndNot StaticIntrinsic_wasmV128BitSelect StaticIntrinsic_wasmV128AnyTrue StaticIntrinsic_wasmI8x16Bitmask StaticIntrinsic_wasmI16x8Bitmask StaticIntrinsic_wasmI32x4Bitmask StaticIntrinsic_wasmI64x2AllTrue StaticIntrinsic_wasmI64x2Bitmask StaticIntrinsic_wasmF64x2PMin StaticIntrinsic_wasmF64x2PMax StaticIntrinsic_wasmF64x2Shuffle StaticIntrinsic_wasmAnyRefFromObject StaticIntrinsic_wasmFuncRefFromWasmFunction StaticIntrinsic_wasmEqRefFromObject StaticIntrinsic_wasmStructRefFromObject StaticIntrinsic_externalizeNonNullable StaticIntrinsic_externalizeNullable StaticIntrinsic_internalizeNonNullable StaticIntrinsic_internalizeNullable StaticIntrinsic_wasmExternRefIsNull StaticIntrinsic_isSubClassOf StaticIntrinsic_identical StaticIntrinsic_isObjectClassId StaticIntrinsic_isClosureClassId StaticIntrinsic_isRecordClassId StaticIntrinsic_getIdentityHashField StaticIntrinsic_setIdentityHashField StaticIntrinsic_unsafeCast StaticIntrinsic_unsafeCastOpaque StaticIntrinsic_floatToIntBits StaticIntrinsic_intBitsToFloat StaticIntrinsic_doubleToIntBits StaticIntrinsic_intBitsToDouble StaticIntrinsic_exportWasmFunction StaticIntrinsic_getID StaticIntrinsic_loadInt8 StaticIntrinsic_loadUint8 StaticIntrinsic_loadInt16 StaticIntrinsic_loadUint16 StaticIntrinsic_loadInt32 StaticIntrinsic_loadUint32 StaticIntrinsic_loadInt64 StaticIntrinsic_loadUint64 StaticIntrinsic_loadFloat StaticIntrinsic_loadFloatUnaligned StaticIntrinsic_loadDouble StaticIntrinsic_loadDoubleUnaligned StaticIntrinsic_storeInt8 StaticIntrinsic_storeUint8 StaticIntrinsic_storeInt16 StaticIntrinsic_storeUint16 StaticIntrinsic_storeInt32 StaticIntrinsic_storeUint32 StaticIntrinsic_storeInt64 StaticIntrinsic_storeUint64 StaticIntrinsic_storeFloat StaticIntrinsic_storeFloatUnaligned StaticIntrinsic_storeDouble StaticIntrinsic_storeDoubleUnaligned StaticIntrinsic_wasmI31RefNew StaticIntrinsic_wasmI31RefExtensionsExternalize StaticIntrinsic_wasmI31RefExtensionsGetS StaticIntrinsic_wasmI31RefExtensionsGetU StaticIntrinsic_wasmMemorySize StaticIntrinsic_wasmMemoryGrow StaticIntrinsic_wasmMemoryFill StaticIntrinsic_wasmMemoryLoadFloat32 StaticIntrinsic_wasmMemoryLoadFloat64 StaticIntrinsic_wasmMemoryLoadInt8 StaticIntrinsic_wasmMemoryLoadInt16 StaticIntrinsic_wasmMemoryLoadInt32 StaticIntrinsic_wasmMemoryLoadInt64 StaticIntrinsic_wasmMemoryLoadUint8 StaticIntrinsic_wasmMemoryLoadUint16 StaticIntrinsic_wasmMemoryLoadUint32 StaticIntrinsic_wasmMemoryStoreFloat32 StaticIntrinsic_wasmMemoryStoreFloat64 StaticIntrinsic_wasmF64x2ConstructorFromDoubles StaticIntrinsic_wasmF32x4ConstructorFromDoubles StaticIntrinsic_wasmI64x2ConstructorFromInts StaticIntrinsic_wasmI32x4ConstructorFromInts StaticIntrinsic_wasmI16x8ConstructorFromInts StaticIntrinsic_wasmI8x16ConstructorFromInts StaticIntrinsic_wasmMemoryStoreInt8 StaticIntrinsic_wasmMemoryStoreInt16 StaticIntrinsic_wasmMemoryStoreInt32 StaticIntrinsic_wasmMemoryStoreInt64
 
 """
-Intrinsifier's dart fields: `codeGen`.
+Code generation for Julia's own operations, inline at the call: its intrinsics and builtins (dart's
+external members marked `wasm:intrinsic`); `code_gen` the code generator whose builder receives it.
 """
-@parity "dart2wasm/lib/intrinsics.dart:429 Intrinsifier" @unported struct Intrinsifier end
+@parity "dart2wasm/lib/intrinsics.dart:429 Intrinsifier" struct Intrinsifier
+    code_gen::AstCodeGenerator
+    # the struct's one constructor, tagged; dart's constructor at :603 is its outer function
+    Intrinsifier(::Val{:_}, code_gen::AstCodeGenerator) = new(code_gen)
+end
 
 @parity "dart2wasm/lib/intrinsics.dart:73 MemberIntrinsic" @unported function MemberIntrinsic(library, cls, name) end
 
@@ -16,7 +21,10 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:78 MemberIntrinsic._populateLookup" @unported function MemberIntrinsic__populate_lookup() end
 
-@parity "dart2wasm/lib/intrinsics.dart:88 MemberIntrinsic.fromProcedure" @unported function MemberIntrinsic_from_procedure(core_types, member) end
+# a Julia method is never an intrinsic: Julia's intrinsics and builtins are functions of their own
+# (Core.IntrinsicFunction, Core.Builtin) that a call names directly, so no method stands for one, and
+# dart's `_typeArguments` pragma has no Julia counterpart
+@parity "dart2wasm/lib/intrinsics.dart:88 MemberIntrinsic.fromProcedure" MemberIntrinsic_from_procedure(member::Core.MethodInstance)::Union{MemberIntrinsic,Nothing} = nothing
 
 @parity "dart2wasm/lib/intrinsics.dart:399 StaticIntrinsic" @unported function StaticIntrinsic(library, cls, name) end
 
@@ -24,35 +32,126 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:404 StaticIntrinsic._populateLookup" @unported function StaticIntrinsic__populate_lookup() end
 
-@parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" @unported function StaticIntrinsic_from_procedure(core_types, member) end
+# a Julia method is never one of dart:_wasm's static intrinsics: Julia's own operations are calls of
+# its builtins, which generateStaticIntrinsic matches by the callee
+@parity "dart2wasm/lib/intrinsics.dart:414 StaticIntrinsic.fromProcedure" StaticIntrinsic_from_procedure(member::Core.MethodInstance)::Union{StaticIntrinsic,Nothing} = nothing
 
-@parity "dart2wasm/lib/intrinsics.dart:432 Intrinsifier.boolType" @unported function Intrinsifier_bool_type() end
+@parity "dart2wasm/lib/intrinsics.dart:432 Intrinsifier.boolType" Intrinsifier_bool_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.NumType_i32
 
-@parity "dart2wasm/lib/intrinsics.dart:433 Intrinsifier.intType" @unported function Intrinsifier_int_type() end
+@parity "dart2wasm/lib/intrinsics.dart:433 Intrinsifier.intType" Intrinsifier_int_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.NumType_i64
 
-@parity "dart2wasm/lib/intrinsics.dart:434 Intrinsifier.doubleType" @unported function Intrinsifier_double_type() end
+@parity "dart2wasm/lib/intrinsics.dart:434 Intrinsifier.doubleType" Intrinsifier_double_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.NumType_f64
 
-@parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" @unported function Intrinsifier__binary_operator_map() end
+# a static final, lazily initialized on its first read as dart's is (Late); dart keys an operator by its name on int, double and bool; Julia's operations are its intrinsics,
+# each a function of its own (Core.Intrinsics), so the key is that function (ledger D4) and the
+# operand types are each wasm number type. Each answers as Julia's codegen does (src/intrinsics.cpp):
+# integer arithmetic wraps, a division, remainder or comparison is signed or unsigned by the
+# intrinsic's own name, and a float operation is IEEE's
+@parity "dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap" const Intrinsifier__binary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}}("dart2wasm/lib/intrinsics.dart:437 Intrinsifier._binaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}(
+    WasmBuilder.IR.NumType_i32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.add_int => c -> WasmBuilder.i32_add(c.b[]),
+        Core.Intrinsics.sub_int => c -> WasmBuilder.i32_sub(c.b[]),
+        Core.Intrinsics.mul_int => c -> WasmBuilder.i32_mul(c.b[]),
+        Core.Intrinsics.sdiv_int => c -> WasmBuilder.i32_div_s(c.b[]),
+        Core.Intrinsics.udiv_int => c -> WasmBuilder.i32_div_u(c.b[]),
+        Core.Intrinsics.srem_int => c -> WasmBuilder.i32_rem_s(c.b[]),
+        Core.Intrinsics.urem_int => c -> WasmBuilder.i32_rem_u(c.b[]),
+        Core.Intrinsics.and_int => c -> WasmBuilder.i32_and(c.b[]),
+        Core.Intrinsics.or_int => c -> WasmBuilder.i32_or(c.b[]),
+        Core.Intrinsics.xor_int => c -> WasmBuilder.i32_xor(c.b[]),
+        Core.Intrinsics.eq_int => c -> WasmBuilder.i32_eq(c.b[]),
+        Core.Intrinsics.ne_int => c -> WasmBuilder.i32_ne(c.b[]),
+        Core.Intrinsics.slt_int => c -> WasmBuilder.i32_lt_s(c.b[]),
+        Core.Intrinsics.sle_int => c -> WasmBuilder.i32_le_s(c.b[]),
+        Core.Intrinsics.ult_int => c -> WasmBuilder.i32_lt_u(c.b[]),
+        Core.Intrinsics.ule_int => c -> WasmBuilder.i32_le_u(c.b[]))),
+    WasmBuilder.IR.NumType_i64 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.add_int => c -> WasmBuilder.i64_add(c.b[]),
+        Core.Intrinsics.sub_int => c -> WasmBuilder.i64_sub(c.b[]),
+        Core.Intrinsics.mul_int => c -> WasmBuilder.i64_mul(c.b[]),
+        Core.Intrinsics.sdiv_int => c -> WasmBuilder.i64_div_s(c.b[]),
+        Core.Intrinsics.udiv_int => c -> WasmBuilder.i64_div_u(c.b[]),
+        Core.Intrinsics.srem_int => c -> WasmBuilder.i64_rem_s(c.b[]),
+        Core.Intrinsics.urem_int => c -> WasmBuilder.i64_rem_u(c.b[]),
+        Core.Intrinsics.and_int => c -> WasmBuilder.i64_and(c.b[]),
+        Core.Intrinsics.or_int => c -> WasmBuilder.i64_or(c.b[]),
+        Core.Intrinsics.xor_int => c -> WasmBuilder.i64_xor(c.b[]),
+        Core.Intrinsics.eq_int => c -> WasmBuilder.i64_eq(c.b[]),
+        Core.Intrinsics.ne_int => c -> WasmBuilder.i64_ne(c.b[]),
+        Core.Intrinsics.slt_int => c -> WasmBuilder.i64_lt_s(c.b[]),
+        Core.Intrinsics.sle_int => c -> WasmBuilder.i64_le_s(c.b[]),
+        Core.Intrinsics.ult_int => c -> WasmBuilder.i64_lt_u(c.b[]),
+        Core.Intrinsics.ule_int => c -> WasmBuilder.i64_le_u(c.b[]))),
+    WasmBuilder.IR.NumType_f32 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_f32 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.add_float => c -> WasmBuilder.f32_add(c.b[]),
+        Core.Intrinsics.sub_float => c -> WasmBuilder.f32_sub(c.b[]),
+        Core.Intrinsics.mul_float => c -> WasmBuilder.f32_mul(c.b[]),
+        Core.Intrinsics.div_float => c -> WasmBuilder.f32_div(c.b[]),
+        Core.Intrinsics.eq_float => c -> WasmBuilder.f32_eq(c.b[]),
+        Core.Intrinsics.ne_float => c -> WasmBuilder.f32_ne(c.b[]),
+        Core.Intrinsics.lt_float => c -> WasmBuilder.f32_lt(c.b[]),
+        Core.Intrinsics.le_float => c -> WasmBuilder.f32_le(c.b[]),
+        Core.Intrinsics.copysign_float => c -> WasmBuilder.f32_copysign(c.b[]))),
+    WasmBuilder.IR.NumType_f64 => Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(WasmBuilder.IR.NumType_f64 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.add_float => c -> WasmBuilder.f64_add(c.b[]),
+        Core.Intrinsics.sub_float => c -> WasmBuilder.f64_sub(c.b[]),
+        Core.Intrinsics.mul_float => c -> WasmBuilder.f64_mul(c.b[]),
+        Core.Intrinsics.div_float => c -> WasmBuilder.f64_div(c.b[]),
+        Core.Intrinsics.eq_float => c -> WasmBuilder.f64_eq(c.b[]),
+        Core.Intrinsics.ne_float => c -> WasmBuilder.f64_ne(c.b[]),
+        Core.Intrinsics.lt_float => c -> WasmBuilder.f64_lt(c.b[]),
+        Core.Intrinsics.le_float => c -> WasmBuilder.f64_le(c.b[]),
+        Core.Intrinsics.copysign_float => c -> WasmBuilder.f64_copysign(c.b[])))))
 
-@parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" @unported function Intrinsifier__unary_operator_map() end
+# a static final, lazily initialized as dart's is (Late); Julia's unary intrinsics by operand type, as Julia's codegen answers them: an integer's negation and
+# complement wrap (dart's `unary-` and `~`, the same instructions), a float's negation, magnitude,
+# square root and rounding are IEEE's (rint_llvm rounds to nearest even, wasm's nearest)
+@parity "dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap" const Intrinsifier__unary_operator_map = Late{Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}}("dart2wasm/lib/intrinsics.dart:475 Intrinsifier._unaryOperatorMap", () -> Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}(
+    WasmBuilder.IR.NumType_i32 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.neg_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_mul(c.b[])),
+        Core.Intrinsics.not_int => c -> (WasmBuilder.i32_const(c.b[], -1); WasmBuilder.i32_xor(c.b[]))),
+    WasmBuilder.IR.NumType_i64 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.neg_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_mul(c.b[])),
+        Core.Intrinsics.not_int => c -> (WasmBuilder.i64_const(c.b[], -1); WasmBuilder.i64_xor(c.b[]))),
+    WasmBuilder.IR.NumType_f32 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.neg_float => c -> WasmBuilder.f32_neg(c.b[]),
+        Core.Intrinsics.abs_float => c -> WasmBuilder.f32_abs(c.b[]),
+        Core.Intrinsics.sqrt_llvm => c -> WasmBuilder.f32_sqrt(c.b[]),
+        Core.Intrinsics.floor_llvm => c -> WasmBuilder.f32_floor(c.b[]),
+        Core.Intrinsics.ceil_llvm => c -> WasmBuilder.f32_ceil(c.b[]),
+        Core.Intrinsics.trunc_llvm => c -> WasmBuilder.f32_trunc(c.b[]),
+        Core.Intrinsics.rint_llvm => c -> WasmBuilder.f32_nearest(c.b[])),
+    WasmBuilder.IR.NumType_f64 => Dict{Core.IntrinsicFunction,Function}(
+        Core.Intrinsics.neg_float => c -> WasmBuilder.f64_neg(c.b[]),
+        Core.Intrinsics.abs_float => c -> WasmBuilder.f64_abs(c.b[]),
+        Core.Intrinsics.sqrt_llvm => c -> WasmBuilder.f64_sqrt(c.b[]),
+        Core.Intrinsics.floor_llvm => c -> WasmBuilder.f64_floor(c.b[]),
+        Core.Intrinsics.ceil_llvm => c -> WasmBuilder.f64_ceil(c.b[]),
+        Core.Intrinsics.trunc_llvm => c -> WasmBuilder.f64_trunc(c.b[]),
+        Core.Intrinsics.rint_llvm => c -> WasmBuilder.f64_nearest(c.b[]))))
 
 @parity "dart2wasm/lib/intrinsics.dart:506 Intrinsifier._inlineUnaryOperatorMap" @unported function Intrinsifier__inline_unary_operator_map() end
 
 @parity "dart2wasm/lib/intrinsics.dart:578 Intrinsifier._unaryResultMap" @unported function Intrinsifier__unary_result_map() end
 
-@parity "dart2wasm/lib/intrinsics.dart:585 Intrinsifier.translator" @unported function translator(self::Intrinsifier) end
+@parity "dart2wasm/lib/intrinsics.dart:585 Intrinsifier.translator" translator(self::Intrinsifier)::Translator = self.code_gen.translator
 
 @parity "dart2wasm/lib/intrinsics.dart:586 Intrinsifier.types" @unported function types(self::Intrinsifier) end
 
-@parity "dart2wasm/lib/intrinsics.dart:587 Intrinsifier.b" @unported function b(self::Intrinsifier) end
+@parity "dart2wasm/lib/intrinsics.dart:587 Intrinsifier.b" b(self::Intrinsifier)::WasmBuilder.InstructionsBuilder = self.code_gen.b[]
 
-@parity "dart2wasm/lib/intrinsics.dart:589 Intrinsifier.dartTypeOf" @unported function dart_type_of(self::Intrinsifier, exp) end
+@parity "dart2wasm/lib/intrinsics.dart:589 Intrinsifier.dartTypeOf" dart_type_of(self::Intrinsifier, exp::NirValue)::Type = dart_type_of(self.code_gen, exp)
 
-@parity "dart2wasm/lib/intrinsics.dart:591 Intrinsifier.typeOfExp" @unported function type_of_exp(self::Intrinsifier, exp) end
+@parity "dart2wasm/lib/intrinsics.dart:591 Intrinsifier.typeOfExp" type_of_exp(self::Intrinsifier, exp::NirValue)::WasmBuilder.IR.ValueType = translate_type(translator(self), dart_type_of(self, exp))
 
-@parity "dart2wasm/lib/intrinsics.dart:595 Intrinsifier.isComparison" @unported function Intrinsifier_is_comparison(op::String) end
+# Julia's comparisons, each its own intrinsic, signed or unsigned by name
+@parity "dart2wasm/lib/intrinsics.dart:595 Intrinsifier.isComparison" Intrinsifier_is_comparison(op::Core.IntrinsicFunction)::Bool =
+    op === Core.Intrinsics.eq_int || op === Core.Intrinsics.ne_int || op === Core.Intrinsics.slt_int ||
+    op === Core.Intrinsics.sle_int || op === Core.Intrinsics.ult_int || op === Core.Intrinsics.ule_int ||
+    op === Core.Intrinsics.eq_float || op === Core.Intrinsics.ne_float || op === Core.Intrinsics.lt_float ||
+    op === Core.Intrinsics.le_float
 
-@parity "dart2wasm/lib/intrinsics.dart:603 Intrinsifier" @unported function Intrinsifier(code_gen) end
+@parity "dart2wasm/lib/intrinsics.dart:603 Intrinsifier" Intrinsifier(code_gen::AstCodeGenerator)::Intrinsifier = Intrinsifier(Val(:_), code_gen)
 
 @parity "dart2wasm/lib/intrinsics.dart:607 Intrinsifier.generateInstanceGetterIntrinsic" @unported function generate_instance_getter_intrinsic(self::Intrinsifier, node) end
 
@@ -64,13 +163,67 @@ Intrinsifier's dart fields: `codeGen`.
 
 @parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" @unported function _get_simd_lane_index(self::Intrinsifier, argument, num_lanes::Int64, node) end
 
-@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" @unported function generate_static_intrinsic(self::Intrinsifier, node) end
+# A call Julia resolved names a method, never one of dart:_wasm's intrinsics; a call of a Julia
+# intrinsic is the operator dart intrinsifies on an int, double or bool receiver (dart's
+# generateInstanceIntrinsic, :985): a binary one through the binary operator map, a unary one through
+# the unary map. An operand narrower than its wasm number type (an 8- or 16-bit integer in an i32)
+# has no arm: Julia's operation wraps at its own width, the instruction at the wasm type's, except
+# Bool's bitwise operations and equality, whose 0 and 1 no width changes. No arm is null, as dart's.
+@parity "dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic" function generate_static_intrinsic(self::Intrinsifier, node::Union{NirCall,NirInvoke})::Union{WasmBuilder.IR.ValueType,Nothing}
+    if node isa NirInvoke
+        local intrinsic = StaticIntrinsic_from_procedure(nir_invoke_target(node))
+        intrinsic === nothing && return nothing
+        reject!(Unported("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic"), "the static intrinsic $intrinsic")
+    end
+    local f = nir_callee(node)
+    f isa Core.IntrinsicFunction || return nothing
+    local args = node.args[2:end]
+    local code_gen = self.code_gen
+    # whether Julia's operation on an operand of type `t`, held in the wasm number type `w`, is the
+    # instruction's: the operand is as wide as `w`, or a Bool under a bitwise operation or equality
+    local same_width(t::Type, w::WasmBuilder.IR.ValueType) = t isa DataType && isprimitivetype(t) &&
+        (8 * sizeof(t) == 8 * WasmBuilder.byte_size(w) ||
+         t === Bool && (f === Core.Intrinsics.and_int || f === Core.Intrinsics.or_int || f === Core.Intrinsics.xor_int ||
+                        f === Core.Intrinsics.eq_int || f === Core.Intrinsics.ne_int))
+    if length(args) == 2
+        # Binary operator
+        local left = args[1]
+        local right = args[2]
+        local left_type = type_of_exp(self, left)
+        local right_type = type_of_exp(self, right)
+        local code = get(get(get(Intrinsifier__binary_operator_map[], left_type, Dict{WasmBuilder.IR.ValueType,Dict{Core.IntrinsicFunction,Function}}()),
+                             right_type, Dict{Core.IntrinsicFunction,Function}()), f, nothing)
+        if code !== nothing && same_width(dart_type_of(self, left), left_type) && same_width(dart_type_of(self, right), right_type)
+            local out_type = Intrinsifier_is_comparison(f) ? WasmBuilder.IR.NumType_i32 : left_type
+            translate_expression(code_gen, left, left_type)
+            translate_expression(code_gen, right, right_type)
+            code(code_gen)
+            return out_type
+        end
+    elseif length(args) == 1
+        # Unary operator
+        local operand = args[1]
+        local operand_type = type_of_exp(self, operand)
+        local code = get(get(Intrinsifier__unary_operator_map[], operand_type, Dict{Core.IntrinsicFunction,Function}()), f, nothing)
+        if code !== nothing && same_width(dart_type_of(self, operand), operand_type)
+            translate_expression(code_gen, operand, operand_type)
+            code(code_gen)
+            return operand_type
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/intrinsics.dart:2836 Intrinsifier.generateConstructorIntrinsic" @unported function generate_constructor_intrinsic(self::Intrinsifier, node) end
 
 @parity "dart2wasm/lib/intrinsics.dart:2875 Intrinsifier.generateFunctionCallIntrinsic" @unported function generate_function_call_intrinsic(self::Intrinsifier, node) end
 
-@parity "dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic" @unported function generate_member_intrinsic(self::Intrinsifier, target, function_type::WasmBuilder.IR.FunctionType, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label}) end
+# no Julia method is a member intrinsic (MemberIntrinsic.fromProcedure), so its function is its body
+@parity "dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic" function generate_member_intrinsic(self::Intrinsifier, target::Core.MethodInstance, function_type::WasmBuilder.IR.FunctionType, param_locals::Vector{WasmBuilder.IR.Local}, return_label::Union{Nothing,WasmBuilder.Label})::Bool
+    local intrinsic = MemberIntrinsic_from_procedure(target)
+    intrinsic === nothing && return false
+    reject!(Unported("dart2wasm/lib/intrinsics.dart:2943 Intrinsifier.generateMemberIntrinsic"), "the member intrinsic $intrinsic of $target")
+end
 
 @parity "dart2wasm/lib/intrinsics.dart:3490 Intrinsifier.readIntArray" @unported function read_int_array(self::Intrinsifier, node; unsigned::Bool) end
 

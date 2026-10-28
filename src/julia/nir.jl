@@ -343,3 +343,111 @@ end
 # the two closed sums' assertions, run when the package loads
 @quarantine "the operand sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirValue})::Int = check_sum_matched(@__MODULE__, :NirValue)
 @quarantine "the statement sum's assertion, run when the package loads" Base.Val construction_check(::Val{:NirStmt})::Int = check_sum_matched(@__MODULE__, :NirStmt)
+
+# ---- what the code generator reads from a body (code_generator.jl), Julia's answers ----------------
+"""
+    TreeNode_no_offset
+
+A NIR statement's file offset: dart's Kernel `TreeNode.noOffset` (-1), the offset of a node with no
+position, which stops the source mapping; NIR carries no statement position until it reads Julia's
+debuginfo.
+"""
+@quarantine "dart's Kernel TreeNode.noOffset; a NIR statement has no position until NIR reads Julia's debuginfo" Core.Int const TreeNode_no_offset = Int(-1)
+
+"""
+    nir_used_statements(body) -> BitSet
+
+The statements of `body` whose value some operand reads, by SSAValue: Julia's SSA form names a value
+where dart's Kernel nests it in its one use, so the code generator declares a used statement's value
+as a variable and translates an unused one as an expression statement.
+"""
+@quarantine "Julia's SSA form names a statement's value by SSAValue; dart's Kernel nests an expression in its use" Base.BitSet function nir_used_statements(body::NirBody)::BitSet
+    local used = BitSet()
+    local use!(v) = v isa NirSSA && push!(used, v.id)
+    for st in body.stmts
+        if st isa Union{NirCall, NirInvoke, NirNew, NirForeignCall, NirBoundscheck, NirGCPreserveBegin, NirGCPreserveEnd,
+                        NirLeave, NirPopException, NirTheException, NirLoopInfo, NirThrowUndefIfNot, NirCFunction, NirInvokeModify}
+            foreach(use!, st.args)
+        elseif st isa NirGotoIfNot
+            use!(st.cond)
+        elseif st isa NirReturn
+            use!(st.val)
+        elseif st isa NirPhi
+            foreach(use!, st.values)
+        elseif st isa NirPi
+            use!(st.val)
+        elseif st isa NirEnter
+            use!(st.scope)
+        elseif st isa NirUpsilon
+            use!(st.val)
+        elseif st isa NirPhiC
+            foreach(use!, st.values)
+        end
+    end
+    return used
+end
+
+"""
+    nir_argument_type(mi, a) -> Type
+
+The type of argument `a` of `mi`: its MethodInstance's signature, the type Julia specialized it for
+(`Argument(1)` the callee itself).
+"""
+@quarantine "a Julia argument's type is its MethodInstance's specialization, specTypes" Core.MethodInstance function nir_argument_type(mi::Core.MethodInstance, a::NirArgument)::Type
+    local ps = Base.unwrap_unionall(mi.specTypes).parameters
+    1 <= a.n <= length(ps) && ps[a.n] isa Type && !(ps[a.n] isa Core.TypeofVararg) ||
+        reject!(Unquarantined("src/julia/nir.jl: argument $(a.n) of $mi, outside its signature $(mi.specTypes)"), "$mi")
+    return ps[a.n]
+end
+
+"""
+    nir_method_nargs(mi) -> Int
+
+How many arguments `mi`'s method takes, the callee `Argument(1)` among them; a varargs method rejects,
+located, its trailing tuple not yet read.
+"""
+@quarantine "a Julia method's arity is its Method's nargs, with isva for a varargs tail" Core.Method function nir_method_nargs(mi::Core.MethodInstance)::Int
+    local m = mi.def
+    m isa Method || reject!(Unquarantined("src/julia/nir.jl: $mi instantiates no method"), "$mi")
+    m.isva && reject!(Unquarantined("src/julia/nir.jl: the varargs method $m"), "$mi")
+    return Int(m.nargs)
+end
+
+"""
+    nir_body_of(bodies, mi) -> NirBody
+
+The body among `bodies` (the closed world's NIR) Julia inferred for `mi`: dart's member's
+`function.body`; a method the closed world lacks rejects, located.
+"""
+@quarantine "a MethodInstance's body is the CodeInstance Julia inferred for it in the closed world" Core.MethodInstance function nir_body_of(bodies::Vector{NirBody}, mi::Core.MethodInstance)::NirBody
+    for nb in bodies
+        nb.ci.def === mi && return nb
+    end
+    reject!(Internal("src/julia/nir.jl: the closed world holds no body for $mi"), "$mi")
+end
+
+"""
+    nir_invoke_target(node) -> MethodInstance
+
+The MethodInstance an invoke calls: its target, or the MethodInstance its CodeInstance instantiates.
+"""
+@quarantine "Julia's invoke names its target by MethodInstance or by a CodeInstance of one" Core.MethodInstance function nir_invoke_target(node::NirInvoke)::Core.MethodInstance
+    local t = node.target
+    t isa Core.MethodInstance && return t
+    local d = t.def
+    d isa Core.MethodInstance && return d
+    reject!(Unquarantined("src/julia/nir.jl: an invoke of a CodeInstance of a $(typeof(d))"), "$t")
+end
+
+"""
+    nir_callee(node) -> Any
+
+The value a call's callee operand names: a binding's value, or a literal; a callee Julia computes at
+run time rejects, located.
+"""
+@quarantine "a call's callee is Julia's value of its operand, a constant binding or a literal of any type" Core.getglobal function nir_callee(node::NirCall)
+    local f = node.args[1]
+    f isa NirConst && return f.c.val
+    f isa NirGlobal && isconst(f.ref.mod, f.ref.name) && return getglobal(f.ref.mod, f.ref.name)
+    reject!(Unquarantined("src/julia/nir.jl: a call whose callee $(f) is computed at run time"), "nir_callee")
+end
