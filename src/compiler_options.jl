@@ -81,8 +81,9 @@ end
 
 @parity "dart2wasm/lib/compiler_options.dart:137 WasmCompilerOptions.emitTfa" emit_tfa(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_tfa
 
-# dart compares with tfa here, as written at the pin, ported as it stands
-@parity "dart2wasm/lib/compiler_options.dart:138 WasmCompilerOptions.emitCodegen" emit_codegen(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_tfa
+# dart compares with tfa here at the pin (compiler_options.dart:138), emitTfa's test: a defect, fixed at
+# its source (D12): codegen is emitted when it is the last phase
+@parity "dart2wasm/lib/compiler_options.dart:138 WasmCompilerOptions.emitCodegen" emit_codegen(self::WasmCompilerOptions)::Bool = self.phases[end] == CompilerPhase_codegen
 
 @parity "dart2wasm/lib/compiler_options.dart:139 WasmCompilerOptions.readCodegen" read_codegen(self::WasmCompilerOptions)::Bool = self.phases[1] == CompilerPhase_codegen
 

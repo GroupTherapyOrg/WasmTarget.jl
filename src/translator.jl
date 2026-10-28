@@ -518,20 +518,25 @@ DartType: `Union{}`, the type of no value, and `Nothing` are dart's Never and Nu
 none reference; `Any` is dart's `Object?`, the top type; a `Union` holding `Nothing` is nullable,
 its other members' class `Base.nonnothingtype`, and a `Union` of classes is Julia's `typejoin` of
 its members, their nearest common superclass; a type as a value (`Type{X}`) is its kind
-(`typeof(X)`), as the closed world's walk meets it. A class is a primitive one's builtin type
-(`unbox`; nullable, its own class, the box) or the class's representation. A `UnionAll`, a
-`TypeVar`, a type as a value of an unknown type and a primitive class with no wasm representation
-(`Int128`, `Float16`, `Ptr`) reject, located.
+(`typeof(X)`), as the closed world's walk meets it, and a type as a value of a type Julia left open
+(`Type`, `Type{T}`) the open `Type{T}` every kind is under (dart's `_Type`, translateType(typeType)).
+A class is a primitive one's builtin type (`unbox`; nullable, its own class, the box) or the class's
+representation. A `UnionAll` other than `Type`, a primitive class with no wasm representation
+(`Int128`, `Float16`, `Ptr`) and a class collect gave no info reject, located.
 
 The `typejoin` of a Union is its REPRESENTATION only: a value keeps its exact class, an `Int64` in a
 `Union{Int64,Float64}` its own box, never converted to the join's. A packed i8 or i16 is a storage
 type alone (fields, arrays); a value or local of an 8- or 16-bit integer or a `Bool` is i32
-(`translate_type`), as dart's are.
+(`translate_type`), held as Julia's ABI holds it: sign-extended for the signed types and zero-extended
+for the unsigned ones and `Bool` (`code_llvm` gives `i8 signext` for an `Int8` argument and
+`i8 zeroext` for a `UInt8`), and read from storage by `struct.get_s` or `struct.get_u` to match.
+dart's WasmI8 and WasmI16 have no operations, so it never chooses; Julia's integers do.
 
-precedent(julia: codegen boxes a value of a non-isbits Union behind jl_value_t, its own type in the
-box's tag; dart: a type's wasm representation is its upper bound's struct, ClassInfoCollector.collect).
-Julia's differs from dart: dart has no union types, so the join is Julia's own (`typejoin`), never
-re-derived; `nothing` is the null of the nullable representation, both ways.
+precedent(dart: a type's wasm representation is its upper bound's struct, ClassInfoCollector.collect).
+Julia's differs: dart has no union types, so the join is Julia's own (`typejoin`), never re-derived;
+Julia's own codegen holds an isbits Union (`Union{Int64,Float64}`) unboxed with a selector byte, where
+the representation here is a reference to the join's struct, each value boxed in its own class;
+`nothing` is the null of the nullable representation, both ways.
 """
 @parity "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType" function translate_storage_type(self::Translator, type_::Type; unbox::Bool = true)::WasmBuilder.IR.StorageType
     local at = "dart2wasm/lib/translator.dart:1067 Translator.translateStorageType"
@@ -546,16 +551,18 @@ re-derived; `nothing` is the null of the nullable representation, both ways.
         cls isa Union && (cls = typejoin(Base.uniontypes(cls)...))
         cls === Any && return WasmBuilder.with_nullability(self.top_type[], nullable)
     end
-    cls isa DataType && Base.isType(cls) && (cls = cls.parameters[1] isa TypeVar ?
-        reject!(Unquarantined("src/translator.jl translateStorageType: the type as a value $type_, of a type Julia left open"), at) :
-        typeof(cls.parameters[1]))
+    # a type as a value: its kind, or, of a type Julia left open, the open Type{T} above every kind
+    (cls === Type || (cls isa DataType && Base.isType(cls) && cls.parameters[1] isa TypeVar)) && (cls = supertype(DataType))
+    cls isa DataType && Base.isType(cls) && !(cls.parameters[1] isa TypeVar) && (cls = typeof(cls.parameters[1]))
     cls isa DataType || reject!(Unquarantined("src/translator.jl translateStorageType: $type_, no class but a $(typeof(cls))"), at)
     if isprimitivetype(cls)
         # Built-in type? Its box is the primitive class itself
         local builtin = unbox ? get(self.builtin_types[], cls, nothing) : nothing
         if builtin !== nothing
             nullable || return builtin
-            return type_with_nullability(self.class_info[cls], nullable)
+            local box = get(self.class_info, cls, nothing)
+            box === nothing && reject!(Internal("$at: the primitive class $cls has no class info, its box"), at)
+            return type_with_nullability(box, nullable)
         end
         unbox && reject!(Unquarantined("src/translator.jl translateStorageType: the primitive class $cls, with no wasm representation"), at)
     end
@@ -714,7 +721,19 @@ end
 @parity "dart2wasm/lib/translator.dart:2092 Translator.translateTypeOfParameter" translate_type_of_parameter(self::Translator, type_::Type, is_required::Bool)::WasmBuilder.IR.ValueType =
     translate_type(self, type_)
 
-@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" translate_type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::WasmBuilder.IR.ValueType = translate_type(self, type_of_field(self, node))
+"""
+The wasm type of a field. dart asserts its field is not late; a Julia struct's reference field past
+the fields every constructor assigns may be undefined (`new()` leaves it so, `isdefined` false), so
+past Julia's own count of them (`Core.Compiler.datatype_min_ninitialized`) a reference field is
+nullable, its read checking for Julia's UndefRefError.
+"""
+@parity "dart2wasm/lib/translator.dart:2096 Translator.translateTypeOfField" function translate_type_of_field(self::Translator, node::Union{ClassField,GlobalRef})::WasmBuilder.IR.ValueType
+    local wasm_type = translate_type(self, type_of_field(self, node))
+    if node isa ClassField && node.index > Core.Compiler.datatype_min_ninitialized(node.cls) && wasm_type isa WasmBuilder.IR.RefType
+        return WasmBuilder.with_nullability(wasm_type, true)
+    end
+    return wasm_type
+end
 
 
 # the type Julia inferred for the local (the code generator passes it); a cyclic class's locals are

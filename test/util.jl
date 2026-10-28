@@ -34,3 +34,9 @@ _decode(s, base, digit) = sum((digit(c)) * base^(k - 1) for (k, c) in enumerate(
     local e = try; U.int_to_min_string(-1); nothing; catch x; x; end
     @test e isa WasmTarget.RejectionError && e.rejection isa WasmTarget.Internal
 end
+
+@testset "util.dart: moduleNameToId reads dart's int.tryParse forms" begin
+    # dart's int.tryParse reads 0x and hexadecimal digits; Julia parses them in base 16
+    @test U.module_name_to_id("M0x10") == parse(Int, "10"; base = 16) == 16
+    @test U.module_name_to_id("M-0x1f") == -31 && U.module_name_to_id("M0xZ") === nothing
+end

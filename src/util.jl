@@ -78,8 +78,13 @@ end
 """The reverse of `module_name_from_id`; `nothing` for a name it does not make, dart's `int?`."""
 @parity "dart2wasm/lib/util.dart:202 moduleNameToId" function module_name_to_id(module_name::String)::Union{Int64,Nothing}
     module_name == "M" && return 0
-    # dart's int.tryParse: an optional sign, then decimal digits, else null
-    startswith(module_name, "M") && return tryparse(Int64, module_name[2:end]; base = 10)
+    # dart's int.tryParse: an optional sign, then decimal digits or 0x and hexadecimal ones, else null
+    if startswith(module_name, "M")
+        local digits = module_name[2:end]
+        local m = match(r"^\s*([+-]?)0[xX]([0-9a-fA-F]+)\s*$", digits)
+        m === nothing || return tryparse(Int64, m[1] * m[2]; base = 16)
+        return tryparse(Int64, digits; base = 10)
+    end
     return nothing
 end
 

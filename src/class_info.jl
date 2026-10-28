@@ -72,7 +72,10 @@ id after the last concrete one, and each class the ranges of the concrete ids un
 its implementors (the tree walk's model, dev/formal/ClassIdNumbering.tla). A class is a Julia `DataType`, keyed by identity: Julia calls
 `Core.TypeofBottom` and its supertype `Type{Union{}}` equal types, two classes all the same.
 
-The translator is held as `KernelNodes`, the mixin Translator alone applies (src/translator.jl).
+The translator is held as `KernelNodes`, the mixin Translator alone applies (src/translator.jl):
+precedent(dart: `class Translator with KernelNodes`, the mixin a field may be typed by; rust: a
+trait object breaking a cycle of struct types). Julia's differs: two structs cannot name each
+other, so the collaborator names the abstract type only Translator subtypes.
 """
 @parity "dart2wasm/lib/class_info.dart:780 ClassIdNumbering" struct ClassIdNumbering
     translator::KernelNodes

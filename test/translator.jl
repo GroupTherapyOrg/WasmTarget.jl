@@ -58,12 +58,16 @@ end
     local t = D.Translator(W.check_subset(TranslatorCases.f_add, (Int, Int), "translator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
     # a UnionAll and a type as a value of a type Julia left open are no class: located rejections,
     # before any wasm type is made
-    for ty in (Vector, Type{T} where T, AbstractVector{<:Integer})
+    for ty in (Vector, AbstractVector{<:Integer})
         local e = try; D.translate_storage_type(t, ty); nothing; catch x; x; end
         @test e isa W.RejectionError && e.rejection isa W.Unquarantined
     end
-    local e = try; D.translate_type(t, Base.unwrap_unionall(Type{T} where T)); nothing; catch x; x; end
-    @test e isa W.RejectionError && e.rejection isa W.Unquarantined && occursin("type as a value", e.rejection.row)
+    # a type as a value of a type Julia left open (`Type`, `Type{T}`) is the open Type{T} above every
+    # kind, supertype(DataType): its class info comes from collect, missing here, a located rejection
+    for ty in (Type, Base.unwrap_unionall(Type{T} where T))
+        local e = try; D.translate_type(t, ty); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Internal && occursin(string(supertype(DataType)), e.rejection.site)
+    end
     # the late top type and builtin types, read before collect, the classes unassigned
     local e2 = try; t.top_type[]; nothing; catch x; x; end
     @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classes", e2.rejection.anchor)
@@ -323,4 +327,27 @@ end
     @test D.type_of_field(t, GlobalRef(GlobalCases, :typed_global)) === Int32 === Core.get_binding_type(GlobalCases, :typed_global)
     @test D.translate_type_of_field(t, GlobalRef(GlobalCases, :typed_global)) == IR.NumType_i32
     @test D.type_of_field(t, GlobalRef(GlobalCases, :untyped_global)) === Any
+end
+
+module UndefCases
+mutable struct M; a::Base.RefValue{Int}; b::Int; M() = new(); end
+mk() = M()
+end
+
+@testset "translator.dart: a field Julia may leave undefined is nullable; Type values" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(UndefCases.mk, (), "translator"), data, D.TranslatorOptions())
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    # Julia's own answer: new() assigns none of M's fields, and `a` is then undefined
+    @test Core.Compiler.datatype_min_ninitialized(UndefCases.M) == 0 && !isdefined(UndefCases.M(), :a)
+    local a, b = W.class_instance_fields(UndefCases.M, "t")
+    @test D.translate_type_of_field(t, a).nullable                       # a reference past the count
+    @test D.translate_type_of_field(t, b) == IR.NumType_i64              # a bits field, never undefined
+    # the emitCodegen defect at the pin, fixed at its source: codegen is emitted when it is the last phase
+    local o = D.WasmCompilerOptions_default_options()
+    o.phases = [D.CompilerPhase_cfe, D.CompilerPhase_tfa, D.CompilerPhase_codegen]
+    @test D.emit_codegen(o) && !D.emit_tfa(o)
 end
