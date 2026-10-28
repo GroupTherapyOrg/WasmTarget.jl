@@ -72,12 +72,14 @@ The translation from the program to wasm, and the hub of the compiler's global s
 
 Its fields arrive with the pieces that read them: `options`; `component`, the program, the NIR of
 the closed world Julia's trim verifier accepted (dart's Kernel `Component`); `compilationQueue`;
-`classIdNumbering`.
-dart's fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
-`subtypes`, the TFA metadata maps (Julia's inference, held by the NIR), `index`, `closureLayouter`,
-`classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`, `dispatchTable`,
-`dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`, `_exceptionTags`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, `classes`,
-`classesSupersFirst`, `classInfo` and the maps and caches after it (translator.dart:181 on).
+`classes`, `classesSupersFirst`, `classIdNumbering`, `classInfo` (a class is a Julia DataType, keyed
+by identity), `classForHeapType`, `fieldIndex` (a field a ClassField, src/julia/classes.jl). dart's
+fields still to come: `symbols`, `libraries`, `coreTypes`, `typeEnvironment`, `hierarchy`,
+`subtypes`, the TFA metadata maps (Julia's inference, held by the NIR), `index`,
+`closureLayouter`, `classInfoCollector`, `crossModuleFunctionTable`, `tableBasedGlobals`,
+`dispatchTable`, `dynamicDispatchTable`, `globals`, `dartGlobals`, `constants`, `types`,
+`_exceptionTags`, `functions`, `loadingMap`, `exportNamer`, `interopMemberNamer`, and the maps and
+caches after `fieldIndex` (translator.dart:195 on).
 
 A collaborator holds its translator as `KernelNodes`, the mixin Translator alone applies (dart's
 `class Translator with KernelNodes`): Julia cannot declare two structs that name each other, and
@@ -87,12 +89,20 @@ the translator holds each collaborator.
     options::TranslatorOptions
     component::Vector{NirBody}
     compilation_queue::Late{CompilationQueue}
+    classes::Late{Vector{ClassInfo}}
+    classes_supers_first::Late{Vector{ClassInfo}}
     class_id_numbering::Late{ClassIdNumbering}
+    class_info::IdDict{DataType,ClassInfo}
+    class_for_heap_type::Dict{WasmBuilder.IR.HeapType,ClassInfo}
+    field_index::Dict{ClassField,Int}
     # dart's field initializers and the constructor's initializer list; a late field is assigned by
     # the code that builds it (the constructor's body at :470, ClassInfoCollector.collect)
     Translator(component::Vector{NirBody}, options::TranslatorOptions) =
         new(options, component, Late{CompilationQueue}("dart2wasm/lib/translator.dart:158 Translator.compilationQueue"),
-            Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"))
+            Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:174 Translator.classes"),
+            Late{Vector{ClassInfo}}("dart2wasm/lib/translator.dart:180 Translator.classesSupersFirst"),
+            Late{ClassIdNumbering}("dart2wasm/lib/translator.dart:182 Translator.classIdNumbering"),
+            IdDict{DataType,ClassInfo}(), Dict{WasmBuilder.IR.HeapType,ClassInfo}(), Dict{ClassField,Int}())
 end
 
 """The functions whose code is still to generate, taken last in, first out."""

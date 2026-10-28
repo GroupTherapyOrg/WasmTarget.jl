@@ -93,3 +93,39 @@ and it rejects, located, until the classes implement it (dart's `implementedType
     isabstracttype(c) && return true
     reject!(Unquarantined("src/julia/classes.jl class_is_abstract: the covariant Tuple class $c, whose subtypes Julia's supertype tree does not hold"), at)
 end
+
+"""
+    ClassField
+
+dart's Kernel `Field`, an instance field of a class: Julia's field `index` (from 1) of the concrete
+class `cls`, its `name`, its declared `type` and whether it is `mutable` (a mutable struct's field
+not declared `const`); for a primitive class, index 0, its one `value`, the class itself.
+"""
+@quarantine "Julia's fields are a struct's fieldnames and fieldtypes, its primitive types a value with no field" Core.Type struct ClassField
+    cls::DataType
+    index::Int
+    name::String
+    type::Type
+    mutable::Bool
+end
+
+"""
+    class_instance_fields(c, at) -> Vector{ClassField}
+
+dart's `cls.fields.where((f) => f.isInstanceMember)`, a class's own instance fields, Julia's answers:
+an abstract class has none (Julia's abstract types have no fields, so every field is a concrete
+class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `value`, as dart's
+boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
+none. A kind (a type as a value) and a class whose data Julia holds outside its fields (`String`,
+`Symbol`, `Core.SimpleVector`) reject, located, until their representation is written.
+"""
+@quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    class_is_abstract(c, at) && return ClassField[]
+    isprimitivetype(c) && return ClassField[ClassField(c, 0, "value", c, false)]
+    Base.iskindtype(c) && reject!(Unquarantined("src/julia/classes.jl class_instance_fields: the kind $c, a type as a value, whose representation is not written"), at)
+    if fieldcount(c) == 0
+        Base.issingletontype(c) && return ClassField[]
+        reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
+    end
+    return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
+end

@@ -11,14 +11,59 @@ no static members. dart never makes a FieldIndex; its implicit constructor is th
 end
 
 """
-ClassInfo's dart fields: `cls`, `_classId`, `depth`, `struct`, `superInfo`, `typeParameterMatch`, `_repr`, `_cyclic`, `nullableType`, `nonNullableType`.
+Information about the Wasm representation for a class: its Julia class (`nothing` for the top
+type, which has none), class id, depth in the Wasm type hierarchy, struct, the class info it sits
+below, and the reference types to its struct; its representation type and cyclicness are filled
+by ClassInfoCollector.collect.
+
+`typeParameterMatch` maps a class's type parameters to the superclass's ones it reuses. Julia's
+classes are instances (`Vector{Int64}`, its parameters bound), so no class has a type parameter left
+to store and the map is empty.
 """
-@parity "dart2wasm/lib/class_info.dart:199 ClassInfo" @unported struct ClassInfo end
+@parity "dart2wasm/lib/class_info.dart:199 ClassInfo" mutable struct ClassInfo
+    const cls::Union{DataType,Nothing}
+    const _class_id::Int
+    const depth::Int
+    const struct_::WasmBuilder.IR.StructType
+    const super_info::Union{ClassInfo,Nothing}
+    const type_parameter_match::IdDict{TypeVar,TypeVar}
+    _repr::Union{WasmBuilder.IR.RefType,Nothing}
+    _cyclic::Union{Bool,Nothing}
+    const nullable_type::WasmBuilder.IR.RefType
+    const non_nullable_type::WasmBuilder.IR.RefType
+    # the struct's one constructor, tagged, every final field given; dart's constructor at :268 is its
+    # outer function, which makes the two reference types
+    ClassInfo(::Val{:_}, cls::Union{DataType,Nothing}, _class_id::Int, depth::Int, struct_::WasmBuilder.IR.StructType,
+              super_info::Union{ClassInfo,Nothing}, type_parameter_match::IdDict{TypeVar,TypeVar},
+              nullable_type::WasmBuilder.IR.RefType, non_nullable_type::WasmBuilder.IR.RefType) =
+        new(cls, _class_id, depth, struct_, super_info, type_parameter_match, nothing, nothing, nullable_type, non_nullable_type)
+end
 
 """
-ClassInfoCollector's dart fields: `translator`, `topInfo`, `_recordStructs`, `masqueraded`, `typeType`.
+Constructs the Wasm type hierarchy: a struct for each class of the closed world, below the
+artificial top struct, with its fields, its representation type and its cyclicness.
+
+`typeType`, the field type of a class's type parameter, is read only for type parameters, which
+Julia's classes, instances with their parameters bound, do not have. The translator is held as
+`KernelNodes` (src/translator.jl).
 """
-@parity "dart2wasm/lib/class_info.dart:346 ClassInfoCollector" @unported struct ClassInfoCollector end
+@parity "dart2wasm/lib/class_info.dart:346 ClassInfoCollector" struct ClassInfoCollector
+    translator::KernelNodes
+    top_info::Late{ClassInfo}
+    _record_structs::Dict{Int,WasmBuilder.IR.StructType}
+    masqueraded::Late{Base.IdSet{DataType}}
+    type_type::Late{WasmBuilder.IR.FieldType}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at
+    # :406 is its outer function; the late masqueraded's initializer reads the collector itself
+    function ClassInfoCollector(::Val{:_}, translator::KernelNodes)
+        local self
+        self = new(translator, Late{ClassInfo}("dart2wasm/lib/class_info.dart:348 ClassInfoCollector.topInfo"),
+                   Dict{Int,WasmBuilder.IR.StructType}(),
+                   Late{Base.IdSet{DataType}}("dart2wasm/lib/class_info.dart:357 ClassInfoCollector.masqueraded", () -> _compute_masquerades(self)),
+                   Late{WasmBuilder.IR.FieldType}("dart2wasm/lib/class_info.dart:401 ClassInfoCollector.typeType"))
+        return self
+    end
+end
 
 """
 The closed world's class ids: one depth-first pre-order walk of the class tree from `Any`, each
@@ -154,45 +199,294 @@ end
 
 @parity "dart2wasm/lib/class_info.dart:196 anonymousMixinClassId" anonymous_mixin_class_id()::Int = -1
 
-@parity "dart2wasm/lib/class_info.dart:205 ClassInfo.classId" @unported function class_id(self::ClassInfo) end
+"""The class id of this class, stored in every instance of the class."""
+@parity "dart2wasm/lib/class_info.dart:205 ClassInfo.classId" function class_id(self::ClassInfo)::Int
+    self._class_id == anonymous_mixin_class_id() &&
+        reject!(Internal("dart2wasm/lib/class_info.dart:205 ClassInfo.classId: Tried to access class ID of anonymous mixin $(self.cls)"), "ClassInfo.classId")
+    return self._class_id
+end
 
-@parity "dart2wasm/lib/class_info.dart:233 ClassInfo.repr" @unported function Base.repr(self::ClassInfo) end
+"""
+The Wasm type used to represent values of a Dart interface type of this class: Dart2Wasm's own
+`repr`, never `Base.repr`, which returns a value's text.
+"""
+@parity "dart2wasm/lib/class_info.dart:233 ClassInfo.repr" function repr(self::ClassInfo)::WasmBuilder.IR.RefType
+    local r = self._repr
+    r === nothing && reject!(Internal("dart2wasm/lib/class_info.dart:233 ClassInfo.repr: Repr not calculated for $(self.cls)"), "ClassInfo.repr")
+    return r
+end
 
-@parity "dart2wasm/lib/class_info.dart:248 ClassInfo.isCyclic" @unported function is_cyclic(self::ClassInfo) end
+"""Whether the class's Wasm struct is cyclic via non-nullable references; a cyclic class cannot be instantiated."""
+@parity "dart2wasm/lib/class_info.dart:248 ClassInfo.isCyclic" function is_cyclic(self::ClassInfo)::Bool
+    local cyclic = self._cyclic
+    cyclic === nothing && reject!(Internal("dart2wasm/lib/class_info.dart:248 ClassInfo.isCyclic: Cyclicness not calculated for $(self.cls)"), "ClassInfo.isCyclic")
+    return cyclic
+end
 
-@parity "dart2wasm/lib/class_info.dart:265 ClassInfo.typeWithNullability" @unported function type_with_nullability(self::ClassInfo, nullable::Bool) end
+@parity "dart2wasm/lib/class_info.dart:265 ClassInfo.typeWithNullability" type_with_nullability(self::ClassInfo, nullable::Bool)::WasmBuilder.IR.RefType = nullable ? self.nullable_type : self.non_nullable_type
 
-@parity "dart2wasm/lib/class_info.dart:268 ClassInfo" @unported function ClassInfo(cls, _class_id, depth, struct_, super_info; type_parameter_match = nothing) end
+@parity "dart2wasm/lib/class_info.dart:268 ClassInfo" ClassInfo(cls::Union{DataType,Nothing}, _class_id::Int, depth::Int, struct_::WasmBuilder.IR.StructType,
+        super_info::Union{ClassInfo,Nothing}; type_parameter_match::IdDict{TypeVar,TypeVar} = IdDict{TypeVar,TypeVar}())::ClassInfo =
+    ClassInfo(Val(:_), cls, _class_id, depth, struct_, super_info, type_parameter_match,
+              WasmBuilder.IR.RefType_def(struct_; nullable = true), WasmBuilder.IR.RefType_def(struct_; nullable = false))
 
-@parity "dart2wasm/lib/class_info.dart:278 ClassInfo._addField" @unported function _add_field(self::ClassInfo, field_type::WasmBuilder.IR.FieldType; expected_index = nothing, field_name = nothing) end
+# a field index is wasm's, from 0; Julia's vectors count from 1
+@parity "dart2wasm/lib/class_info.dart:278 ClassInfo._addField" function _add_field(self::ClassInfo, field_type::WasmBuilder.IR.FieldType;
+        expected_index::Union{Int,Nothing} = nothing, field_name::Union{String,Nothing} = nothing)::Nothing
+    expected_index === nothing || expected_index == length(self.struct_.fields) ||
+        reject!(Internal("dart2wasm/lib/class_info.dart:278 ClassInfo._addField: field $(length(self.struct_.fields)) of $(self.cls), expected at $expected_index"), "ClassInfo._addField")
+    push!(self.struct_.fields, field_type)
+    if field_name !== nothing && !isempty(field_name)
+        local field_index = length(self.struct_.fields) - 1
+        self.struct_.field_names[field_index] = field_name
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/class_info.dart:293 ClassInfo.getClassFieldTypes" @unported function get_class_field_types(self::ClassInfo) end
+"""The types of all the class's fields, its superclasses' included, but the class id and the identity hash."""
+@parity "dart2wasm/lib/class_info.dart:293 ClassInfo.getClassFieldTypes" get_class_field_types(self::ClassInfo)::Vector{WasmBuilder.IR.ValueType} =
+    WasmBuilder.IR.ValueType[WasmBuilder.unpacked(field_type.type) for field_type in self.struct_.fields[FieldIndex_object_field_base()+1:end]]
 
-@parity "dart2wasm/lib/class_info.dart:298 ClassInfo.forEachClassFieldIndex" @unported function for_each_class_field_index(self::ClassInfo, f) end
+@parity "dart2wasm/lib/class_info.dart:298 ClassInfo.forEachClassFieldIndex" function for_each_class_field_index(self::ClassInfo, f::Function)::Nothing
+    for i in FieldIndex_object_field_base():length(self.struct_.fields)-1
+        f(i, self.struct_.fields[i+1])
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/class_info.dart:304 ClassInfo._calculateCyclicness" @unported function _calculate_cyclicness(self::ClassInfo, translator::Translator) end
+@parity "dart2wasm/lib/class_info.dart:304 ClassInfo._calculateCyclicness" function _calculate_cyclicness(self::ClassInfo, translator::Translator)::Bool
+    self._cyclic === nothing || return self._cyclic::Bool
+    self._cyclic = true
+    # dart's `repr.heapType as w.StructType`, a cast that throws on another heap type
+    local struct_type = repr(self).heap_type
+    struct_type isa WasmBuilder.IR.StructType ||
+        reject!(Internal("dart2wasm/lib/class_info.dart:304 ClassInfo._calculateCyclicness: the representation of $(self.cls) is no struct"), "ClassInfo._calculateCyclicness")
+    for field_type in struct_type.fields
+        local field_type_type = field_type.type
+        if field_type_type isa WasmBuilder.IR.RefType && !field_type_type.nullable
+            local field_class_info = get(translator.class_for_heap_type, field_type_type.heap_type, nothing)
+            if field_class_info !== nothing
+                _calculate_cyclicness(field_class_info, translator) && return true
+            end
+        end
+    end
+    return self._cyclic = false
+end
 
-@parity "dart2wasm/lib/class_info.dart:327 _upperBound" @unported function _upper_bound(a::ClassInfo, b::ClassInfo) end
+# the nearest class info above both; dart's `superInfo!` and assert are located rejections
+@parity "dart2wasm/lib/class_info.dart:327 _upperBound" function _upper_bound(a::ClassInfo, b::ClassInfo)::ClassInfo
+    local up(x::ClassInfo)::ClassInfo = x.super_info === nothing ?
+        reject!(Internal("dart2wasm/lib/class_info.dart:327 _upperBound: no super info above $(x.cls)"), "_upperBound") : x.super_info
+    if a.depth < b.depth
+        while b.depth > a.depth
+            b = up(b)
+        end
+    else
+        while a.depth > b.depth
+            a = up(a)
+        end
+    end
+    a.depth == b.depth || reject!(Internal("dart2wasm/lib/class_info.dart:327 _upperBound: depths $(a.depth) and $(b.depth)"), "_upperBound")
+    while a !== b
+        a = up(a)
+        b = up(b)
+    end
+    return a
+end
 
-@parity "dart2wasm/lib/class_info.dart:359 ClassInfoCollector._computeMasquerades" @unported function _compute_masquerades(self::ClassInfoCollector) end
+"""
+The classes whose subtypes masquerade as another type. dart's runtime implementation classes (its
+int, double and String implementations, typed data) report their public interface as their
+runtime type; Julia's `typeof` is a value's own class, exactly, so no class masquerades.
+"""
+@parity "dart2wasm/lib/class_info.dart:359 ClassInfoCollector._computeMasquerades" _compute_masquerades(self::ClassInfoCollector)::Base.IdSet{DataType} = Base.IdSet{DataType}()
 
-@parity "dart2wasm/lib/class_info.dart:406 ClassInfoCollector" @unported function ClassInfoCollector(translator) end
+@parity "dart2wasm/lib/class_info.dart:406 ClassInfoCollector" ClassInfoCollector(translator::KernelNodes)::ClassInfoCollector = ClassInfoCollector(Val(:_), translator)
 
-@parity "dart2wasm/lib/class_info.dart:408 ClassInfoCollector.options" @unported function options(self::ClassInfoCollector) end
+@parity "dart2wasm/lib/class_info.dart:408 ClassInfoCollector.options" options(self::ClassInfoCollector)::TranslatorOptions = self.translator.options
 
-@parity "dart2wasm/lib/class_info.dart:410 ClassInfoCollector._createStructForClassTop" @unported function _create_struct_for_class_top(self::ClassInfoCollector) end
+@parity "dart2wasm/lib/class_info.dart:410 ClassInfoCollector._createStructForClassTop" function _create_struct_for_class_top(self::ClassInfoCollector)::Nothing
+    local translator = self.translator
+    local struct_ = WasmBuilder.define_struct(types_builder(translator), "#Top"; brand = true)
+    local top_info = ClassInfo(nothing, 0, 0, struct_, nothing)
+    self.top_info[] = top_info
+    top_info._repr = WasmBuilder.IR.RefType_def(struct_; nullable = false)
+    translator.class_for_heap_type[struct_] = top_info
+    return nothing
+end
 
-@parity "dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass" @unported function _create_struct_for_class(self::ClassInfoCollector, class_ids::Dict{Any,Int64}, cls; brand = nothing) end
+"""
+The class info and struct of `cls`, each of its superclasses' first.
+
+In the Wasm type hierarchy dart puts Object, bool and num directly below the top type, and its
+boxed int and double classes, whose instances hold one value and no identity hash. Julia's
+counterpart is the primitive classes (`Int64`, `Bool`, `Float64`, ...): each sits directly below the
+top type, its struct the class id and its value (FieldIndex.boxValue), and every other class below
+its superclass. dart's `_Type` implementation classes and its type parameters have no Julia
+counterpart: Julia's classes are instances, their parameters bound, and implement nothing.
+"""
+@parity "dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass" function _create_struct_for_class(self::ClassInfoCollector, class_ids::IdDict{DataType,Int}, cls::DataType;
+        brand::Union{Bool,Nothing} = nothing)::Nothing
+    local at = "dart2wasm/lib/class_info.dart:420 ClassInfoCollector._createStructForClass"
+    local translator = self.translator
+    haskey(translator.class_info, cls) && return nothing
+
+    local class_id = class_ids[cls]
+    local superclass = class_superclass(cls)
+    local info::ClassInfo
+    if superclass === nothing
+        local super_info = self.top_info[]
+        local struct_ = WasmBuilder.define_struct(types_builder(translator), string(cls);
+                                                  super_type = super_info.struct_, brand = something(brand, unique_types(translator.options)))
+        info = ClassInfo(cls, class_id, super_info.depth + 1, struct_, super_info)
+        # Mark Top type as implementing Object to force the representation
+        # type of Object to be Top.
+    else
+        # Recursively initialize all supertypes before initializing this class.
+        _create_struct_for_class(self, class_ids, superclass)
+
+        local super_info = isprimitivetype(cls) ? self.top_info[] : translator.class_info[superclass]
+
+        local type_parameter_match = IdDict{TypeVar,TypeVar}()
+        local has_fields = _requires_subclass_fields(self, super_info, type_parameter_match, cls)
+
+        local struct_ = has_fields ?
+            WasmBuilder.define_struct(types_builder(translator), string(cls); super_type = super_info.struct_, brand = unique_types(translator.options)) :
+            super_info.struct_
+        info = ClassInfo(cls, class_id, super_info.depth + 1, struct_, super_info; type_parameter_match = type_parameter_match)
+    end
+    push!(translator.classes_supers_first[], info)
+    translator.class_info[cls] = info
+    haskey(translator.class_for_heap_type, info.struct_) || (translator.class_for_heap_type[info.struct_] = info)
+    if class_id != anonymous_mixin_class_id()
+        translator.classes[][class_id + 1] = info
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/class_info.dart:510 ClassInfoCollector._createStructForRecordClass" @unported function _create_struct_for_record_class(self::ClassInfoCollector, class_ids::Dict{Any,Int64}, cls) end
 
-@parity "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields" @unported function _generate_fields(self::ClassInfoCollector, info::ClassInfo) end
+@parity "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields" function _generate_fields(self::ClassInfoCollector, info::ClassInfo)::Nothing
+    local at = "dart2wasm/lib/class_info.dart:539 ClassInfoCollector._generateFields"
+    local translator = self.translator
+    _requires_subclass_fields(self, info.super_info, info.type_parameter_match, info.cls) ||
+        reject!(Internal("$at: $(info.cls) has a struct of its own and no field to add"), at)
+    local super_info = info.super_info
+    if super_info === nothing
+        # Top - add class id field
+        _add_field(info, WasmBuilder.IR.FieldType(WasmBuilder.IR.NumType_i32; mutable = false); expected_index = FieldIndex_class_id())
+        return nothing
+    end
 
-@parity "dart2wasm/lib/class_info.dart:606 ClassInfoCollector._requiresSubclassFields" @unported function _requires_subclass_fields(self::ClassInfoCollector, super_info::Union{Nothing,ClassInfo}, reuse_type_parameter::Dict{Any,Any}, cls) end
+    # Copy fields from superclass
+    local super_field_index = 0
+    for field_type in super_info.struct_.fields
+        _add_field(info, field_type; field_name = get(super_info.struct_.field_names, super_field_index, nothing))
+        super_field_index += 1
+    end
+
+    local cls = info.cls::DataType
+    if cls === Any
+        # Object - add identity hash code field
+        _add_field(info, WasmBuilder.IR.FieldType(WasmBuilder.IR.NumType_i32); expected_index = FieldIndex_identity_hash())
+        isempty(class_instance_fields(cls, at)) || reject!(Internal("$at: Any declares an instance field"), at)
+        return nothing
+    end
+
+    # Julia's classes have no type parameters to store (their parameters are bound)
+    # Add fields for instance fields
+    for field in class_instance_fields(cls, at)
+        local wasm_type = translate_type_of_field(translator, field)
+        translator.field_index[field] = length(info.struct_.fields)
+        _add_field(info, WasmBuilder.IR.FieldType(wasm_type; mutable = field.mutable); field_name = field.name)
+    end
+    return nothing
+end
+
+@parity "dart2wasm/lib/class_info.dart:606 ClassInfoCollector._requiresSubclassFields" function _requires_subclass_fields(self::ClassInfoCollector, super_info::Union{Nothing,ClassInfo},
+        reuse_type_parameter::IdDict{TypeVar,TypeVar}, cls::Union{DataType,Nothing})::Bool
+    local at = "dart2wasm/lib/class_info.dart:606 ClassInfoCollector._requiresSubclassFields"
+    # Top class, requires class-id field.
+    super_info === nothing && return true
+    cls === nothing && reject!(Internal("$at: a class info below the top type has no class"), at)
+    # Object class, requires identity hash code field.
+    cls === Any && return true
+    # Julia's classes have no type parameters, each of which would require a field
+    return !isempty(class_instance_fields(cls, at))
+end
 
 @parity "dart2wasm/lib/class_info.dart:633 ClassInfoCollector._generateRecordFields" @unported function _generate_record_fields(self::ClassInfoCollector, info::ClassInfo) end
 
-@parity "dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect" @unported function Base.collect(self::ClassInfoCollector) end
+"""
+Create the class info and Wasm struct of every class of the closed world.
+
+Julia's program has no counterpart of dart's runtime classes `_Closure`, `_Type` and `Record`,
+which dart creates first, nor record classes; and dart's assert-time FieldIndex.validate checks
+the fields of those runtime classes, which a Julia program does not declare.
+"""
+@parity "dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect" function Base.collect(self::ClassInfoCollector)::Nothing
+    local translator = self.translator
+    local class_id_numbering = ClassIdNumbering__number(translator, self.masqueraded[])
+    translator.class_id_numbering[] = class_id_numbering
+    local class_ids = class_id_numbering.class_ids
+    local dfs_order = class_id_numbering.dfs_order
+
+    _create_struct_for_class_top(self)
+    local top_info = self.top_info[]
+
+    # Class infos by class-id, will be populated by the calls to
+    # [_createStructForClass] below.
+    translator.classes[] = fill(top_info, class_id_numbering.max_class_id + 1)
+
+    # Class infos in different order: Infos of super class and super interfaces
+    # before own info.
+    translator.classes_supers_first[] = ClassInfo[top_info]
+
+    for cls in dfs_order
+        _create_struct_for_class(self, class_ids, cls)
+    end
+
+    # Create representations of the classes (i.e. Wasm representation used to
+    # represent objects of that Dart type).
+    local classes = translator.classes[]
+    for cls in dfs_order
+        local representation::Union{ClassInfo,Nothing} = nothing
+        for range in get_concrete_class_id_range(class_id_numbering, cls)
+            for class_id in range.start:range.end_
+                local current = classes[class_id + 1]
+                representation = representation === nothing ? current : _upper_bound(representation, current)
+            end
+        end
+        local info = translator.class_info[cls]
+        info._repr = something(representation, info).non_nullable_type
+    end
+
+    # Now that the representation types for all classes have been computed,
+    # fill in the types of the fields in the generated Wasm structs.
+    for info in translator.classes_supers_first[]
+        local super_info = info.super_info
+        if super_info !== nothing && info.struct_ === super_info.struct_
+            # We re-use the wasm struct of the base class. That implies this class
+            # has no instance fields (and Julia's classes no type parameters).
+            isempty(class_instance_fields(info.cls::DataType, "dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect")) ||
+                reject!(Internal("dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect: $(info.cls) shares its superclass's struct and declares fields"), "ClassInfoCollector.collect")
+        else
+            _generate_fields(self, info)
+            # If this struct had the same number of fields as the base struct, we'd
+            # re-use the wasm struct of the base class. So this struct must have
+            # more fields.
+            super_info === nothing || length(super_info.struct_.fields) < length(info.struct_.fields) ||
+                reject!(Internal("dart2wasm/lib/class_info.dart:666 ClassInfoCollector.collect: $(info.cls) has a struct of its own and no more fields"), "ClassInfoCollector.collect")
+        end
+    end
+
+    # Use `classesSupersFirst` here instead of `classes` to visit anonymous
+    # mixin application classes as well.
+    for info in translator.classes_supers_first[]
+        _calculate_cyclicness(info, translator)
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/class_info.dart:792 ClassIdNumbering._" ClassIdNumbering__(translator::KernelNodes, _subclasses::IdDict{DataType,Vector{DataType}},
         _implementors::IdDict{DataType,Vector{DataType}}, _concrete_subclass_id_range::IdDict{DataType,Vector{Range}},

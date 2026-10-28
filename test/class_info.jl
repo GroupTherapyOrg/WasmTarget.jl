@@ -92,3 +92,44 @@ end
     @test D.initial_identity_hash() == 0 && D.anonymous_mixin_class_id() == -1
     @test D.FieldIndex() isa D.FieldIndex
 end
+
+module FieldCases
+struct P; x::Float64; y::Int32; end
+mutable struct M; a::Int; const b::Float64; end
+abstract type A end
+struct S end
+end
+
+@testset "class_info.dart: the class's instance fields and the collector" begin
+    local W = WasmTarget
+    local at = "class_info"
+    local fields(c) = W.class_instance_fields(c, at)
+    # a struct's fields are Julia's fieldnames and fieldtypes, mutable where Julia's isconst says not
+    local p = fields(FieldCases.P)
+    @test [f.name for f in p] == [string(n) for n in fieldnames(FieldCases.P)] && [f.type for f in p] == collect(fieldtypes(FieldCases.P))
+    @test [f.index for f in p] == [1, 2] && !any(f -> f.mutable, p)
+    local m = fields(FieldCases.M)
+    @test [f.mutable for f in m] == [!isconst(FieldCases.M, i) for i in 1:fieldcount(FieldCases.M)] == [true, false]
+    # an abstract class and a singleton have none; a primitive class its one value, the class itself
+    @test isempty(fields(FieldCases.A)) && isempty(fields(FieldCases.S)) && isempty(fields(Any)) && isempty(fields(Nothing))
+    @test [(f.name, f.type, f.index, f.mutable) for f in fields(Int64)] == [("value", Int64, 0, false)]
+    @test isprimitivetype(Bool) && fields(Bool)[1].type === Bool
+    # a kind and a class whose data Julia holds outside its fields reject, located
+    for c in (DataType, String, Symbol)
+        local e = try; fields(c); nothing; catch x; x; end
+        @test e isa W.RejectionError && e.rejection isa W.Unquarantined
+    end
+    # the collector over a translator: no class masquerades in Julia; typeType, read only for a
+    # class's type parameters, which Julia's classes do not have, stays unassigned
+    local t = D.Translator(W.check_subset(ClassInfoCases.f_shapes, (Int,), at), D.TranslatorOptions(optimization_level = 2))
+    local c = D.ClassInfoCollector(t)
+    @test c.translator === t && D.options(c) === t.options && isempty(c.masqueraded[])
+    local e = try; c.type_type[]; nothing; catch x; x; end
+    @test e isa W.RejectionError && e.rejection isa W.Unported && occursin("ClassInfoCollector.typeType", e.rejection.anchor)
+    # the top class requires the class id field
+    @test D._requires_subclass_fields(c, nothing, IdDict{TypeVar,TypeVar}(), nothing)
+    # the translator's class tables, filled by collect
+    @test isempty(t.class_info) && isempty(t.class_for_heap_type) && isempty(t.field_index)
+    local e2 = try; t.classes[]; nothing; catch x; x; end
+    @test e2 isa W.RejectionError && e2.rejection isa W.Unported && occursin("Translator.classes", e2.rejection.anchor)
+end
