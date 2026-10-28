@@ -48,7 +48,8 @@ with the per-clause status. A clause is never closed by argument.
   inference, the type chain computed once on the translator.
 - **C2 · dart2wasm 1:1, through and through.** Every definition in `src/` carries an
   `@parity "<file>.dart:<line> <Symbol>"` anchor to dart-lang/sdk `898a1e4b` that names the
-  structure it copies, or, in `src/julia/`, an `@quarantine "<necessity>" <Julia API>` naming the
+  structure it copies, or, where dart has none (D42), to llvm/llvm-project `7a941dfb`, or, in
+  `src/julia/`, an `@quarantine "<necessity>" <Julia API>` naming the
   Julia-only necessity that forces it and the Julia API it relies on. Nothing else may exist: a
   mechanism dart does not have and Julia does not force is a defect even when every test passes.
   `L210` (a file of `src/` outside `src/julia/` loads only through `include_dart` from the pin
