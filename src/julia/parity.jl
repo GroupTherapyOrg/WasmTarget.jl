@@ -473,7 +473,9 @@ src/llvm/cfg_sort.jl). `include_dart` loads these after the dart files, into the
 precedent(dart: `part` naming each file, as DART_FILES; rust: `mod`). Julia's differs: as for
 DART_FILES, `include` takes any path, so the second oracle's file map is a table too.
 """
-@quarantine "Julia's include takes any path; the LLVM pin table is the file map of the second oracle's ports" Core.String const LLVM_FILES::Tuple{Vararg{String}} = ()
+@quarantine "Julia's include takes any path; the LLVM pin table is the file map of the second oracle's ports" Core.String const LLVM_FILES::Tuple{Vararg{String}} = (
+    "llvm/include/llvm/Support/GenericLoopInfo", "llvm/include/llvm/Support/GenericLoopInfoImpl",
+)
 
 """
     DART_MODULES
@@ -1101,35 +1103,33 @@ end
     local symbol = c === nothing ? m[3] : replace(c[4], "::" => ".")
     local admitted = _admitted_names(symbol)
     name in admitted || refuse("the Julia name $name is not the rule's for $symbol: $(join(admitted, ", "))")
+    # WasmTarget's own anchors resolve at their pin where its checkout exists (L213): an LLVM anchor at
+    # the llvm pin; a dart anchor at dart's, a dart class's mirror in its form, a sealed class a
+    # @closed sum, any other class a struct or abstract type
     if c !== nothing
-        # an LLVM anchor resolves at the llvm pin where its checkout exists (L213)
         local llvm = own ? _pin_llvm() : nothing
         local lfault = llvm === nothing ? nothing : _anchor_fault(llvm, anchor)
         lfault === nothing || refuse("the anchor does not resolve at the llvm pin: $lfault")
-        local ldeclares = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
-            (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
-        return (ParityEntry(mod, anchor, ported, ldeclares, names, Symbol(file), source.line, _last_line(def, source.line), UInt(0):UInt(0), Int32(0), Method[]), def)
-    end
-    # WasmTarget's own anchors resolve at the pin where its checkout exists (L213), and a dart class's
-    # mirror has its form: a sealed class a @closed sum, any other class a struct or abstract type
-    local sdk = own ? _pin_sdk() : nothing
-    local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
-    fault === nothing || refuse("the anchor does not resolve at the pin: $fault")
-    if sdk !== nothing
-        local lines = get!(() -> readlines(joinpath(sdk, "pkg", m[1])), _PIN_LINES, joinpath(sdk, "pkg", m[1]))
-        local pkgdir = m[1][1:findfirst('/', m[1])]   # the package of the anchor's file, dart2wasm/ or wasm_builder/
-        local find(name) = begin
-            for d in DART_FILES
-                startswith(d, pkgdir) || continue
-                local p = joinpath(sdk, "pkg", d)
-                local ls = get!(() -> readlines(p), _PIN_LINES, p)
-                local i = _class_line(ls, name)
-                i == 0 || return (ls, i)
+    else
+        local sdk = own ? _pin_sdk() : nothing
+        local fault = sdk === nothing ? nothing : _anchor_fault(sdk, anchor)
+        fault === nothing || refuse("the anchor does not resolve at the pin: $fault")
+        if sdk !== nothing
+            local lines = get!(() -> readlines(joinpath(sdk, "pkg", m[1])), _PIN_LINES, joinpath(sdk, "pkg", m[1]))
+            local pkgdir = m[1][1:findfirst('/', m[1])]   # the package of the anchor's file, dart2wasm/ or wasm_builder/
+            local find(name) = begin
+                for d in DART_FILES
+                    startswith(d, pkgdir) || continue
+                    local p = joinpath(sdk, "pkg", d)
+                    local ls = get!(() -> readlines(p), _PIN_LINES, p)
+                    local i = _class_line(ls, name)
+                    i == 0 || return (ls, i)
+                end
+                nothing
             end
-            nothing
+            local why = _form_fault(lines, parse(Int, m[2]), def, find)
+            why === nothing || refuse(why)
         end
-        local why = _form_fault(lines, parse(Int, m[2]), def, find)
-        why === nothing || refuse(why)
     end
     local declares = Meta.isexpr(def, :struct) || Meta.isexpr(def, :abstract) || Meta.isexpr(def, :primitive) ||
         (Meta.isexpr(def, :macrocall) && def.args[1] in (Symbol("@enum"), Symbol("@closed")))
@@ -1464,6 +1464,25 @@ end
     return declared(lines, parse(Int, a[2]), 0)
 end
 
+# why the C++ class at an LLVM `anchor` does not declare `field` (a Julia field name) a pointer, or
+# nothing when it does: a member at column 2 of the class's body declaring the field whose snake name
+# it is, `T *Name`, the one C++ type that may be null
+@quarantine "C++ marks a member that may be null by a pointer type; Julia reads the pinned class body" Base.readlines function _cpp_nullable(llvm::String, anchor::String, field::Symbol)::Union{String,Nothing}
+    local c = match(LLVM_ANCHOR_RX, anchor)
+    local path = joinpath(llvm, c[1] * "." * c[2])
+    isfile(path) || return "the llvm pin has no $(c[1]).$(c[2])"
+    local lines = get!(() -> readlines(path), _PIN_LINES, path)
+    for j in parse(Int, c[3])+1:length(lines)
+        local l = lines[j]
+        startswith(l, "};") && break
+        startswith(l, "  ") && !startswith(l, "   ") || continue
+        local d = match(r"^\s+(?:const\s+)?[\w:<>, ]+?(\*?)\s*\b([A-Za-z_]\w*)\s*(?:;|=[^=])", l)
+        d !== nothing && snake(d[2]) == string(field) || continue
+        return d[1] == "*" ? nothing : "C++ declares $(d[2]) a value, not a pointer (line $j)"
+    end
+    return "the C++ class declares no field $field"
+end
+
 """
     check_typed_fields(mod, sdk) -> Int
 
@@ -1488,8 +1507,10 @@ Any or nothing by its declared type alone, so the load reads each field type and
                 local f = fieldname(T, i)::Symbol
                 local F = fieldtype(T, i)
                 _mentions_any(F) && push!(out, "$n.$f holds Any ($F; $(e.anchor))")
-                if F isa Union && Nothing <: F && sdk !== nothing
-                    local why = _dart_nullable(sdk, e.anchor, f)
+                local isllvm = match(LLVM_ANCHOR_RX, e.anchor) !== nothing
+                local llvm = isllvm ? _pin_llvm() : nothing
+                if F isa Union && Nothing <: F && (isllvm ? llvm !== nothing : sdk !== nothing)
+                    local why = isllvm ? _cpp_nullable(something(llvm), e.anchor, f) : _dart_nullable(sdk, e.anchor, f)
                     why === nothing || push!(out, "$n.$f may hold nothing, but $why ($(e.anchor))")
                 end
             end

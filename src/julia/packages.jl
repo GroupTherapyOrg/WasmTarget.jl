@@ -68,3 +68,12 @@ import ...WasmBuilder
 import ..Dart2Wasm
 end
 end
+
+@quarantine "Julia has no per-file namespace; LLVM's WebAssembly backend, the second oracle (dev/LEDGER.md D42), is a module" Core.Module module LLVM
+import ..@parity, ..@unported, ..@quarantine, ..@closed, ..@exhaustive
+import ..reject!, ..Internal, ..Unported
+# LLVM's machine code over Julia's CFG (src/julia/machine.jl)
+import ..MachineFunction, ..MachineBasicBlock, ..MachineInstr, ..MachineOperand, ..MOBlock, ..MOImm, ..Opcode,
+       ..BLOCK, ..LOOP, ..END_BLOCK, ..END_LOOP, ..BR, ..BR_IF, ..BR_UNLESS, ..STMTS,
+       ..renumber_blocks!, ..create_machine_basic_block!, ..get_prev_node, ..is_terminator, ..post_order
+end
