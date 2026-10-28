@@ -468,3 +468,11 @@ end
         @test r === nothing || r isa W.RejectionError
     end
 end
+
+@testset "translator.dart: topTypeNonNullable" begin
+    local t = translator_of(CodegenCases.f_add, (Int32,))
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    # dart's topType without null, read once from the top type
+    @test t.top_type_non_nullable[] == W.WasmBuilder.with_nullability(t.top_type[], false) && !t.top_type_non_nullable[].nullable
+end

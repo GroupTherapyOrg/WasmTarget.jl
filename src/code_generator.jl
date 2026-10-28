@@ -1549,6 +1549,7 @@ end
 @parity "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId" function load_class_id(self::WasmBuilder.InstructionsBuilder, translator::Translator, receiver_type::WasmBuilder.IR.ValueType)::Nothing
     local at = "dart2wasm/lib/code_generator.dart:6076 MacroAssembler.loadClassId"
     WasmBuilder.nullable(receiver_type) && reject!(Internal("$at: a nullable receiver $receiver_type"), at)
+    WasmBuilder.is_subtype_of(receiver_type, translator.top_type_non_nullable[]) || reject!(Internal("$at: $receiver_type is no object"), at)
     WasmBuilder.struct_get(self, translator.class_info_collector[].top_info[].struct_, FieldIndex_class_id())
     return nothing
 end

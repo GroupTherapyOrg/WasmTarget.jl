@@ -85,7 +85,7 @@ the 32-bit integers i32, the 64-bit i64, `Float32` f32, `Float64` f64, and the 8
 integers packed i8 and i16, as dart stores its WasmI8 and WasmI16; `Int128`, `Float16`, `Ptr` and
 every other primitive class have none).
 
-Fields to come (63, each with its translator.dart line): `symbols` :100, `libraries` :104,
+Fields to come (62, each with its translator.dart line): `symbols` :100, `libraries` :104,
 `coreTypes` :106, `typeEnvironment` :107, `hierarchy` :108, `subtypes` :109, `directCallMetadata`
 :115, `inferredTypeMetadata` :119, `inferredArgTypeMetadata` :123, `inferredReturnTypeMetadata`
 :127, `unboxingInfoMetadata` :131, `procedureAttributeMetadata` :136, `unreachableMetadata` :140,
@@ -97,8 +97,7 @@ Fields to come (63, each with its translator.dart line): `symbols` :100, `librar
 `functionRefCache` :233, `tearOffFunctionCache` :235, `closureImplementations` :238, `objectInfo`
 :241, `stackTraceInfo` :243, `recordInfo` :244, `typeArrayType` :245,
 `listArrayType` :249, `nullableObjectArrayType` :254, `typeArrayTypeRef` :258,
-`nullableObjectArrayTypeRef` :262, `boxedIntType` :267, `boxedDoubleType` :271, `topTypeNonNullable`
-:282, `stackTraceType` :285, `stackTraceTypeNullable` :289, `runtimeTypeType` :294,
+`nullableObjectArrayTypeRef` :262, `boxedIntType` :267, `boxedDoubleType` :271, `stackTraceType` :285, `stackTraceTypeNullable` :289, `runtimeTypeType` :294,
 `runtimeTypeTypeNullable` :298, `stringType` :302, `stringTypeNullable` :306, `invocationType` :309,
 `_partialInstantiators` :315, `_polymorphicDispatchers` :320, `_dynamicDispatchers` :331,
 `_dummyValueCollectors` :336, `boxedClasses` :374, `boxClasses` :380, `valueClasses` :389,
@@ -136,6 +135,7 @@ the translator holds each collaborator.
     void_marker::Late{WasmBuilder.IR.ValueType}
     closure_info::Late{ClassInfo}
     top_type::Late{WasmBuilder.IR.RefType}
+    top_type_non_nullable::Late{WasmBuilder.IR.RefType}
     builtin_types::Late{IdDict{DataType,WasmBuilder.IR.StorageType}}
     _module_output_data::ModuleOutputData
     _output_to_builder::LinkedHashMap{ModuleMetadata,WasmBuilder.ModuleBuilder}
@@ -180,6 +180,8 @@ the translator holds each collaborator.
             end),
             # The wasm type used to hold values of Dart top types (e.g. `Object?`, `dynamic`)
             Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:278 Translator.topType", () -> self.classes[][1].nullable_type),
+            # The wasm type used to hold values of Dart top types excluding null (e.g. `Object`)
+            Late{WasmBuilder.IR.RefType}("dart2wasm/lib/translator.dart:282 Translator.topTypeNonNullable", () -> WasmBuilder.with_nullability(self.top_type[], false)),
             Late{IdDict{DataType,WasmBuilder.IR.StorageType}}("dart2wasm/lib/translator.dart:344 Translator.builtinTypes", () -> IdDict{DataType,WasmBuilder.IR.StorageType}(
                 Bool => WasmBuilder.IR.NumType_i32,
                 Int8 => WasmBuilder.IR.PackedType_i8, UInt8 => WasmBuilder.IR.PackedType_i8,
