@@ -343,6 +343,21 @@ end
         return nothing
     end
 
+    # Julia's `_svec_len`: a SimpleVector's length, jl_svec_t's own, which its wasm array carries
+    # (src/julia/classes.jl, `_svec_instance_fields`): the data field's array.len, a Julia Int.
+    # `_svec_ref` has no arm: an index out of range throws Julia's BoundsError, a catchable error
+    # no trapping array.get may stand for, and throwing waits for visitThrow
+    if f === Core._svec_len && length(args) == 1 && dart_type_of(self, args[1]) === Core.SimpleVector
+        local sv_info = get(translator(self).class_info, Core.SimpleVector, nothing)
+        sv_info === nothing && reject!(Internal("dart2wasm/lib/intrinsics.dart:1194 Intrinsifier.generateStaticIntrinsic: Core.SimpleVector has no class info"), "Intrinsifier.generateStaticIntrinsic")
+        local data = only(class_instance_fields(Core.SimpleVector, "Intrinsifier.generateStaticIntrinsic"))
+        translate_expression(code_gen, args[1], WasmBuilder.with_nullability(repr(sv_info), false))
+        WasmBuilder.struct_get(b[], sv_info.struct_, translator(self).field_index[data])
+        WasmBuilder.array_len(b[])
+        WasmBuilder.i64_extend_i32_u(b[])
+        return i64
+    end
+
     # Julia's `ifelse`: both values computed, one chosen by the Bool, wasm's typed select
     if f === Core.ifelse && length(args) == 3
         local w = type_of_exp(self, args[2])

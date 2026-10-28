@@ -71,3 +71,28 @@ end
     # dart:_wasm's typed array and memory intrinsics, which no Julia call is: located rejections
     @test intr_rejection(() -> DI.read_int_array(ii, inv(mi(+, (Int64, Int64)), x, lit(3)); unsigned = true)).rejection isa WI.Internal
 end
+
+module SvecLenCases
+nparams(T::DataType, n::Int) = Core._svec_len(T.parameters) + n
+end
+
+@testset "intrinsics.dart: a SimpleVector's length, its wasm array's" begin
+    local lit(v) = WI.NirConst(Core.Const(v))
+    local t = intr_translator_of(SvecLenCases.nparams, (DataType, Int))
+    DI._init_modules(t, nothing)
+    collect(DI.ClassInfoCollector(t))
+    local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === :nparams)
+    local g = DI.get_inlinable_member_code_generator(t, IRI.FunctionType(IRI.ValueType[DI.translate_type(t, DataType), IRI.NumType_i64], IRI.ValueType[IRI.NumType_i64]), mi)
+    local ii = g.intrinsifier[]
+    # Julia's answer the arm computes: the parameters' count
+    @test Core._svec_len(Tuple{Int,Float64,Bool}.parameters) == 3
+    # the NIR's statement: the arm takes it, translating its operand first (a statement's value
+    # the code generator has not produced here, a located rejection)
+    local body = only(nb for nb in t.component if nb.ci.def === mi)
+    local k = findfirst(st -> st isa WI.NirCall && WI.nir_callee(st) === Core._svec_len, body.stmts)
+    @test k !== nothing
+    local e = intr_rejection(() -> DI.generate_static_intrinsic(ii, body.stmts[k]))
+    @test e !== nothing && e.rejection isa WI.Internal && occursin("undefined variable", e.rejection.site)
+    # _svec_ref has no arm: its BoundsError waits for throwing
+    @test DI.generate_static_intrinsic(ii, WI.NirCall(WI.NirValue[lit(Core._svec_ref), body.stmts[k].args[2], lit(1)])) === nothing
+end
