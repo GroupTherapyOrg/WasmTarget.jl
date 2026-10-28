@@ -21,9 +21,13 @@ shapes(n::Int) = n > 0 ? Circle(Float64(n)) : Square(2.0)
 loop(n::Int) = (s = 0; for i in 1:n; s += i; end; s)
 end
 
+# the translator of the closed world of `f` at `argtypes`, one main module
+translator_of(f, argtypes) = D.Translator(W.check_subset(f, argtypes, "code_generator"),
+    D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+
 # the code generator of the entry body of `f` at `argtypes`, its wasm signature `ins -> outs`
 function codegen_of(f, argtypes, ins, outs)
-    local t = D.Translator(W.check_subset(f, argtypes, "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = translator_of(f, argtypes)
     local mi = only(nb.ci.def for nb in t.component if nb.ci.def.def.name === nameof(f))
     return D.get_inlinable_member_code_generator(t, IR.FunctionType(IR.ValueType[ins...], IR.ValueType[outs...]), mi)
 end
@@ -106,8 +110,8 @@ end
 end
 
 @testset "code_generator.dart: translateStatement over the NIR" begin
-    local t = D.Translator(W.check_subset(CodegenCases.shapes, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
-    local t2 = D.Translator(W.check_subset(CodegenCases.loop, (Int,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = translator_of(CodegenCases.shapes, (Int,))
+    local t2 = translator_of(CodegenCases.loop, (Int,))
     # the class table an allocation's type reads, as translate fills it before any code
     for tt in (t, t2)
         D._init_modules(tt, nothing)
@@ -185,7 +189,7 @@ mkn(x::Int8) = N(x, 0x01)
 end
 
 @testset "code_generator.dart: a field read and an allocation" begin
-    local t = D.Translator(W.check_subset(FieldGenCases.getb, (FieldGenCases.P,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t = translator_of(FieldGenCases.getb, (FieldGenCases.P,))
     local body = only(t.component)
     local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
     # getfield(p, :b) is the field read, routed to visitInstanceGet; it reaches the class table, which
@@ -198,11 +202,41 @@ end
     local dyn = W.NirCall(W.NirValue[gf.args[1], gf.args[2], W.NirArgument(2)])
     @test rejection(() -> D.visit_instance_get(g, dyn, IR.NumType_f64)).rejection isa W.Unquarantined
     # Expr(:new): the allocation, its class the type operand's value
-    local t2 = D.Translator(W.check_subset(FieldGenCases.mk, (Int32,), "code_generator"), D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options())), D.TranslatorOptions())
+    local t2 = translator_of(FieldGenCases.mk, (Int32,))
     local b2 = only(t2.component)
     local g2 = D.SynchronousProcedureCodeGenerator(Val(:_), t2, IR.FunctionType(IR.ValueType[], IR.ValueType[]), b2.ci.def, b2)
     local nw = b2.stmts[findfirst(s -> s isa W.NirNew, b2.stmts)]::W.NirNew
     @test D.generate_constructor_intrinsic(g2.intrinsifier[], nw) === nothing
     local e2 = rejection(() -> D.translate_expression(g2, nw, IR.NumType_i32))
     @test e2.rejection isa W.Internal && occursin("no class info for $(FieldGenCases.P)", e2.rejection.site)
+end
+
+module SetGenCases
+mutable struct M; a::Int32; const c::Int32; end
+seta(m::M, v::Int32) = (m.a = v; nothing)
+end
+
+@testset "code_generator.dart: a field write" begin
+    local t = translator_of(SetGenCases.seta, (SetGenCases.M, Int32))
+    local body = only(t.component)
+    local g = D.SynchronousProcedureCodeGenerator(Val(:_), t, IR.FunctionType(IR.ValueType[], IR.ValueType[]), body.ci.def, body)
+    local sf = body.stmts[findfirst(s -> s isa W.NirCall && W.nir_callee(s) === Core.setfield!, body.stmts)]::W.NirCall
+    # setfield! routes to visitInstanceSet, which reaches the class table no collect filled here
+    local e = rejection(() -> D.translate_expression(g, sf, D.void_marker(g)))
+    @test e.rejection isa W.Internal && occursin("_directSet: no class info", e.rejection.site)
+    # a const field does not change in Julia: a located rejection before any lookup
+    local sc = W.NirCall(W.NirValue[sf.args[1], sf.args[2], W.NirConst(Core.Const(:c)), sf.args[4]])
+    @test rejection(() -> D.visit_instance_set(g, sc, D.void_marker(g))).rejection isa W.Unquarantined
+end
+
+@testset "symbols.dart: Symbols" begin
+    local s = D.Symbols(false)
+    @test D.method_symbol_from_name(s, :f) === :f && D.getter_symbol_from_name(s, :x) === :x
+    @test D.setter_symbol_from_name(s, :x) === Symbol("x=") && D.symbol_for_named_parameter(s, "k") === :k
+    @test D.get_mangled_symbol_name(s, :foo) == "foo" && isempty(s.symbol_ordinals)
+    # minified, each symbol its ordinal in order of first use, in dart's base 64
+    local m = D.Symbols(true)
+    local names = [D.get_mangled_symbol_name(m, x) for x in (:a, :b, :a, :c)]
+    @test names == [D.Util.int_to_base64(0), D.Util.int_to_base64(1), D.Util.int_to_base64(0), D.Util.int_to_base64(2)]
+    @test m.symbol_ordinals == Dict(:a => 0, :b => 1, :c => 2)
 end

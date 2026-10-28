@@ -747,9 +747,53 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:2374 AstCodeGenerator.visitInstanceTearOff" @unported function visit_instance_tear_off(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
 
-@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" @unported function visit_instance_set(self::AstCodeGenerator, node, expected_type::WasmBuilder.IR.ValueType) end
+# Julia's setfield!(x, f, v[, order]) is Kernel's InstanceSet, its value the expression's: a receiver
+# Julia inferred concrete has the field as its single target (dart's _directSet); one Julia leaves
+# abstract is a virtual set. Julia checks no covariant value (a field's type is exact), so no call
+# needs the unchecked entry. A field named at run time, or one Julia's struct does not let change (an
+# immutable struct's, a const field), rejects, located.
+@parity "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet" function visit_instance_set(self::AstCodeGenerator, node::NirCall, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
+    local at = "dart2wasm/lib/code_generator.dart:2434 AstCodeGenerator.visitInstanceSet"
+    local preserved = expected_type != void_marker(self)
+    length(node.args) in (4, 5) || reject!(Internal("$at: setfield! with $(length(node.args) - 1) operands"), "$(self.enclosing_member)")
+    local receiver = node.args[2]
+    local cls = dart_type_of(self, receiver)
+    cls isa DataType && isconcretetype(cls) ||
+        reject!(Unported("dart2wasm/lib/code_generator.dart:2028 AstCodeGenerator._virtualCall"), "$(self.enclosing_member): a field of $cls, no concrete class")
+    local name = node.args[3]
+    name isa NirConst && name.c.val isa Union{Symbol,Int} ||
+        reject!(Unquarantined("src/julia: a field of $cls named at run time"), "$(self.enclosing_member)")
+    local key = name.c.val
+    local fields = class_instance_fields(cls, at)
+    local k = key isa Symbol ? findfirst(f -> f.name == string(key), fields) : findfirst(f -> f.index == key, fields)
+    k === nothing && reject!(Internal("$at: $cls has no field $key"), "$(self.enclosing_member)")
+    fields[k].mutable || reject!(Unquarantined("src/julia: a write of $cls's field $key, which Julia does not let change"), "$(self.enclosing_member)")
+    return _direct_set(self, fields[k], receiver, node.args[4]; preserved = preserved, use_unchecked_entry = false)
+end
 
-@parity "dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet" @unported function _direct_set(self::AstCodeGenerator, target, receiver, value; preserved::Bool, use_unchecked_entry::Bool) end
+# a Julia field has no setter procedure to call: the implicit setter's body inline
+# (ImplicitFieldAccessorCodeGenerator, its setter arm): the struct, the value at the field's type,
+# struct.set; the value kept where the expression's value is used
+@parity "dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet" function _direct_set(self::AstCodeGenerator, target::ClassField, receiver::NirValue, value::NirValue; preserved::Bool, use_unchecked_entry::Bool)::WasmBuilder.IR.ValueType
+    local info = get(self.translator.class_info, target.cls, nothing)
+    info === nothing && reject!(Internal("dart2wasm/lib/code_generator.dart:2477 AstCodeGenerator._directSet: no class info for $(target.cls)"), "$(self.enclosing_member)")
+    local field_index = self.translator.field_index[target]
+    local param_type = WasmBuilder.unpacked(info.struct_.fields[field_index + 1].type)
+    translate_expression(self, receiver, info.non_nullable_type)
+    translate_expression(self, value, param_type)
+    local b = self.b[]
+    local temp = nothing
+    if preserved
+        temp = add_local(self, param_type)
+        WasmBuilder.local_tee(b, temp)
+    end
+    WasmBuilder.struct_set(b, info.struct_, field_index)
+    if temp !== nothing
+        WasmBuilder.local_get(b, temp)
+        return temp.type
+    end
+    return void_marker(self)
+end
 
 @parity "dart2wasm/lib/code_generator.dart:2512 AstCodeGenerator.visitFunctionDeclaration" @unported function visit_function_declaration(self::AstCodeGenerator, node) end
 

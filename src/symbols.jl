@@ -2,18 +2,30 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-Symbols's dart fields: `minify`, `symbolOrdinals`.
+The symbols of member names: dart's SymbolConstant is Julia's `Symbol`, a name with no library
+(Julia has no library-private names); `minify` whether a symbol's mangled name is its ordinal.
 """
-@parity "dart2wasm/lib/symbols.dart:9 Symbols" @unported struct Symbols end
+@parity "dart2wasm/lib/symbols.dart:9 Symbols" struct Symbols
+    minify::Bool
+    symbol_ordinals::Dict{Symbol,Int}
+    # dart's field initializer, the struct's one constructor; dart's constructor at :11 its outer function
+    Symbols(::Val{:_}, minify::Bool) = new(minify, Dict{Symbol,Int}())
+end
 
-@parity "dart2wasm/lib/symbols.dart:11 Symbols" @unported function Symbols(minify) end
+@parity "dart2wasm/lib/symbols.dart:11 Symbols" Symbols(minify::Bool)::Symbols = Symbols(Val(:_), minify)
 
-@parity "dart2wasm/lib/symbols.dart:13 Symbols.methodSymbolFromName" @unported function method_symbol_from_name(self::Symbols, name) end
+@parity "dart2wasm/lib/symbols.dart:13 Symbols.methodSymbolFromName" method_symbol_from_name(self::Symbols, name::Symbol)::Symbol = name
 
-@parity "dart2wasm/lib/symbols.dart:17 Symbols.getterSymbolFromName" @unported function getter_symbol_from_name(self::Symbols, name) end
+@parity "dart2wasm/lib/symbols.dart:17 Symbols.getterSymbolFromName" getter_symbol_from_name(self::Symbols, name::Symbol)::Symbol = name
 
-@parity "dart2wasm/lib/symbols.dart:21 Symbols.setterSymbolFromName" @unported function setter_symbol_from_name(self::Symbols, name) end
+@parity "dart2wasm/lib/symbols.dart:21 Symbols.setterSymbolFromName" setter_symbol_from_name(self::Symbols, name::Symbol)::Symbol = Symbol(string(name), "=")
 
-@parity "dart2wasm/lib/symbols.dart:25 Symbols.symbolForNamedParameter" @unported function symbol_for_named_parameter(self::Symbols, name::String) end
+@parity "dart2wasm/lib/symbols.dart:25 Symbols.symbolForNamedParameter" symbol_for_named_parameter(self::Symbols, name::String)::Symbol = Symbol(name)
 
-@parity "dart2wasm/lib/symbols.dart:30 Symbols.getMangledSymbolName" @unported function get_mangled_symbol_name(self::Symbols, symbol) end
+# a Julia symbol has no library, so it is never dart's private symbol: its name, or its ordinal
+@parity "dart2wasm/lib/symbols.dart:30 Symbols.getMangledSymbolName" function get_mangled_symbol_name(self::Symbols, symbol::Symbol)::String
+    if self.minify
+        return Util.int_to_base64(get!(() -> length(self.symbol_ordinals), self.symbol_ordinals, symbol))
+    end
+    return string(symbol)
+end
