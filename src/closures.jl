@@ -2,19 +2,76 @@
 # replaces its stub in place, and the generator never touches it again.
 
 """
-ClosureImplementation's dart fields: `representation`, `functions`, `dynamicCallEntry`, `vtable`, `module`, `directCallParamInfo`.
+A closure's implementation: its representation, the functions its vtable's function entries point
+to (not the dynamic call entry or the instantiation function), the dynamic call entry (when the
+vtable has one), the constant global holding its vtable, the module it is in, and the parameter
+info of a direct call.
 """
-@parity "dart2wasm/lib/closures.dart:23 ClosureImplementation" @unported struct ClosureImplementation end
+@parity "dart2wasm/lib/closures.dart:23 ClosureImplementation" struct ClosureImplementation
+    representation::ClosureRepresentation
+    functions::Vector{WasmBuilder.IR.BaseFunction}
+    dynamic_call_entry::Union{WasmBuilder.IR.BaseFunction,Nothing}
+    vtable::WasmBuilder.IR.Global
+    module_::WasmBuilder.ModuleBuilder
+    direct_call_param_info::ParameterInfo
+    # the struct's one constructor, tagged; dart's constructor at :48 is its outer function
+    ClosureImplementation(::Val{:_}, representation::ClosureRepresentation, functions::Vector{WasmBuilder.IR.BaseFunction},
+            dynamic_call_entry::Union{WasmBuilder.IR.BaseFunction,Nothing}, vtable::WasmBuilder.IR.Global,
+            module_::WasmBuilder.ModuleBuilder, direct_call_param_info::ParameterInfo) =
+        new(representation, functions, dynamic_call_entry, vtable, module_, direct_call_param_info)
+end
 
 """
-ClosureRepresentation's dart fields: `vtableBaseIndex`, `typeCount`, `maxPositionalCount`, `vtableStruct`, `closureStruct`, `_indexOfCombination`, `instantiationContextStruct`, `_instantiationTrampolines`, `_instantiationTrampolinesGenerator`, `_instantiationFunctions`, `_instantiationFunctionGenerator`, `_instantiationTypeComparisonFunctions`, `_instantiationTypeComparisonFunctionGenerator`, `_instantiationTypeHashFunction`, `_instantiationTypeHashFunctionGenerator`.
-"""
-@parity "dart2wasm/lib/closures.dart:65 ClosureRepresentation" @unported struct ClosureRepresentation end
+The representation of the closures of one shape: where the vtable's function entries start, the
+number of type arguments and the most positional parameters, the vtable's and the closure's structs,
+the index of each combination of named arguments (`nothing` with no named parameters), the context
+struct of an instantiated closure, and per module the instantiation trampolines and functions, made
+on first use by the generators the layouter assigns.
 
+`_indexOfCombination`, dart's SplayTreeMap, is its pairs in NameCombination's `compareTo` order.
+A Julia function takes no type arguments, so in Julia `typeCount` is 0.
 """
-NameCombination's dart fields: `names`.
-"""
-@parity "dart2wasm/lib/closures.dart:178 NameCombination" @unported struct NameCombination end
+@parity "dart2wasm/lib/closures.dart:65 ClosureRepresentation" struct ClosureRepresentation
+    vtable_base_index::Int
+    type_count::Int
+    max_positional_count::Int
+    vtable_struct::WasmBuilder.IR.StructType
+    closure_struct::WasmBuilder.IR.StructType
+    _index_of_combination::Union{Vector{Pair{NameCombination,Int}},Nothing}
+    instantiation_context_struct::Union{WasmBuilder.IR.StructType,Nothing}
+    _instantiation_trampolines::IdDict{WasmBuilder.ModuleBuilder,Vector{WasmBuilder.IR.BaseFunction}}
+    _instantiation_trampolines_generator::Late{Function}
+    _instantiation_functions::IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}
+    _instantiation_function_generator::Late{Function}
+    _instantiation_type_comparison_functions::IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}
+    _instantiation_type_comparison_function_generator::Late{Function}
+    _instantiation_type_hash_function::IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}
+    _instantiation_type_hash_function_generator::Late{Function}
+    # the struct's one constructor, tagged, with dart's field initializers; dart's constructor at :137
+    # is its outer function
+    ClosureRepresentation(::Val{:_}, vtable_base_index::Int, type_count::Int, max_positional_count::Int,
+            vtable_struct::WasmBuilder.IR.StructType, closure_struct::WasmBuilder.IR.StructType,
+            _index_of_combination::Union{Vector{Pair{NameCombination,Int}},Nothing},
+            instantiation_context_struct::Union{WasmBuilder.IR.StructType,Nothing}) =
+        new(vtable_base_index, type_count, max_positional_count, vtable_struct, closure_struct, _index_of_combination,
+            instantiation_context_struct,
+            IdDict{WasmBuilder.ModuleBuilder,Vector{WasmBuilder.IR.BaseFunction}}(),
+            Late{Function}("dart2wasm/lib/closures.dart:89 ClosureRepresentation._instantiationTrampolinesGenerator"),
+            IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
+            Late{Function}("dart2wasm/lib/closures.dart:100 ClosureRepresentation._instantiationFunctionGenerator"),
+            IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
+            Late{Function}("dart2wasm/lib/closures.dart:115 ClosureRepresentation._instantiationTypeComparisonFunctionGenerator"),
+            IdDict{WasmBuilder.ModuleBuilder,WasmBuilder.IR.BaseFunction}(),
+            Late{Function}("dart2wasm/lib/closures.dart:128 ClosureRepresentation._instantiationTypeHashFunctionGenerator"))
+end
+
+"""A sorted combination of named argument names, ordered by `compareTo`."""
+@parity "dart2wasm/lib/closures.dart:178 NameCombination" struct NameCombination
+    names::Vector{String}
+    # the struct's one constructor, tagged; dart's constructor at :181, which asserts the order, is its
+    # outer function
+    NameCombination(::Val{:_}, names::Vector{String}) = new(names)
+end
 
 """
 ClosureLayouter's dart fields: `translator`, `procedureAttributeMetadata`, `representations`, `visitedConstants`, `currentMember`, `usesFunctionApplyWithNamedArguments`, `_vtableBaseStructUninitialized`, `vtableBaseStruct`, `vtableDynamicClosureCallEntryIndex`, `instantiationContextBaseStruct`, `nonGenericVtableBaseStruct`, `genericVtableBaseStruct`, `vtableInstantiationTypeComparisonFunctionIndex`, `vtableInstantiationTypeHashFunctionIndex`, `vtableInstantiationFunctionIndex`, `instantiationClosureTypeComparisonFunctionType`, `instantiationClosureTypeHashFunctionType`, `closureBaseStruct`, `functionTypeType`, `_instantiationContextBaseStructs`, `_instantiationTypeComparisonFunctions`, `_instantiationTypeHashFunctions`.
@@ -22,14 +79,36 @@ ClosureLayouter's dart fields: `translator`, `procedureAttributeMetadata`, `repr
 @parity "dart2wasm/lib/closures.dart:209 ClosureLayouter" @unported struct ClosureLayouter end
 
 """
-ClosureRepresentationsForParameterCount's dart fields: `withoutNamed`, `callCombinations`, `nameIds`, `nameUnions`, `clusterForName`.
+The closure representations for one number of positional parameters: the one without named
+parameters, the combinations of named arguments calls pass, an id per parameter name, the union of
+the names that occur in one function, and each name's cluster.
+
+dart's SplayTreeSet and SplayTreeMap are kept as vectors in their order: `callCombinations` by
+NameCombination's `compareTo`, `nameIds` by name. A Julia function's named parameters are its
+keyword arguments.
 """
-@parity "dart2wasm/lib/closures.dart:1258 ClosureRepresentationsForParameterCount" @unported struct ClosureRepresentationsForParameterCount end
+@parity "dart2wasm/lib/closures.dart:1258 ClosureRepresentationsForParameterCount" mutable struct ClosureRepresentationsForParameterCount
+    without_named::Union{ClosureRepresentation,Nothing}
+    const call_combinations::Vector{NameCombination}
+    const name_ids::Vector{Pair{String,Int}}
+    const name_unions::UnionFind
+    const cluster_for_name::Dict{String,ClosureRepresentationCluster}
+    # dart's implicit constructor with its field initializers, the struct's one
+    ClosureRepresentationsForParameterCount() =
+        new(nothing, NameCombination[], Pair{String,Int}[], UnionFind(), Dict{String,ClosureRepresentationCluster}())
+end
 
 """
-ClosureRepresentationCluster's dart fields: `names`, `indexOfCombination`, `representation`.
+The names that occur together in some function, the index of each call combination of them (dart's
+SplayTreeMap, its pairs in `compareTo` order), and the representation they share.
 """
-@parity "dart2wasm/lib/closures.dart:1320 ClosureRepresentationCluster" @unported struct ClosureRepresentationCluster end
+@parity "dart2wasm/lib/closures.dart:1320 ClosureRepresentationCluster" mutable struct ClosureRepresentationCluster
+    const names::Vector{String}
+    const index_of_combination::Vector{Pair{NameCombination,Int}}
+    representation::Union{ClosureRepresentation,Nothing}
+    # dart's implicit constructor with its field initializers, the struct's one
+    ClosureRepresentationCluster() = new(String[], Pair{NameCombination,Int}[], nothing)
+end
 
 """
 Lambda's dart fields: `functionNode`, `functionNodeSource`, `enclosingMember`, `enclosingMemberClosures`, `index`, `callTarget`.
@@ -61,33 +140,80 @@ _ContextCollector's dart fields: `closures`, `currentContext`, `enableAsserts`, 
 """
 @parity "dart2wasm/lib/closures.dart:1778 _ContextCollector" @unported struct _ContextCollector end
 
-@parity "dart2wasm/lib/closures.dart:19 closureContextFieldType" @unported function closure_context_field_type() end
+@parity "dart2wasm/lib/closures.dart:19 closureContextFieldType" closure_context_field_type()::WasmBuilder.IR.ValueType = WasmBuilder.IR.RefType_struct(; nullable = false)
 
-@parity "dart2wasm/lib/closures.dart:48 ClosureImplementation" @unported function ClosureImplementation(representation, functions, dynamic_call_entry, vtable, module_, direct_call_param_info) end
+@parity "dart2wasm/lib/closures.dart:48 ClosureImplementation" ClosureImplementation(representation::ClosureRepresentation, functions::Vector{WasmBuilder.IR.BaseFunction},
+        dynamic_call_entry::Union{WasmBuilder.IR.BaseFunction,Nothing}, vtable::WasmBuilder.IR.Global,
+        module_::WasmBuilder.ModuleBuilder, direct_call_param_info::ParameterInfo)::ClosureImplementation =
+    ClosureImplementation(Val(:_), representation, functions, dynamic_call_entry, vtable, module_, direct_call_param_info)
 
-@parity "dart2wasm/lib/closures.dart:91 ClosureRepresentation._instantiationTrampolinesForModule" @unported function _instantiation_trampolines_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/closures.dart:91 ClosureRepresentation._instantiationTrampolinesForModule" _instantiation_trampolines_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder)::Vector{WasmBuilder.IR.BaseFunction} =
+    get!(() -> self._instantiation_trampolines_generator[](module_), self._instantiation_trampolines, module_)
 
-@parity "dart2wasm/lib/closures.dart:102 ClosureRepresentation.instantiationFunctionForModule" @unported function instantiation_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder) end
+"""The function that instantiates this generic closure, made for `module_` on first use."""
+@parity "dart2wasm/lib/closures.dart:102 ClosureRepresentation.instantiationFunctionForModule" instantiation_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.BaseFunction =
+    get!(() -> self._instantiation_function_generator[](module_), self._instantiation_functions, module_)
 
-@parity "dart2wasm/lib/closures.dart:117 ClosureRepresentation.instantiationTypeComparisonFunctionForModule" @unported function instantiation_type_comparison_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder) end
+"""The function comparing the types of two instantiation contexts, for the equality of instantiations."""
+@parity "dart2wasm/lib/closures.dart:117 ClosureRepresentation.instantiationTypeComparisonFunctionForModule" instantiation_type_comparison_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.BaseFunction =
+    get!(() -> self._instantiation_type_comparison_function_generator[](module_), self._instantiation_type_comparison_functions, module_)
 
-@parity "dart2wasm/lib/closures.dart:130 ClosureRepresentation.instantiationTypeHashFunctionForModule" @unported function instantiation_type_hash_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder) end
+@parity "dart2wasm/lib/closures.dart:130 ClosureRepresentation.instantiationTypeHashFunctionForModule" instantiation_type_hash_function_for_module(self::ClosureRepresentation, module_::WasmBuilder.ModuleBuilder)::WasmBuilder.IR.BaseFunction =
+    get!(() -> self._instantiation_type_hash_function_generator[](module_), self._instantiation_type_hash_function, module_)
 
-@parity "dart2wasm/lib/closures.dart:137 ClosureRepresentation" @unported function ClosureRepresentation(translator::Translator, vtable_base_index, type_count, max_positional_count, vtable_struct, closure_struct, _index_of_combination, instantiation_context_struct) end
+# dart's constructor takes the translator and keeps nothing of it
+@parity "dart2wasm/lib/closures.dart:137 ClosureRepresentation" ClosureRepresentation(translator::KernelNodes, vtable_base_index::Int, type_count::Int, max_positional_count::Int,
+        vtable_struct::WasmBuilder.IR.StructType, closure_struct::WasmBuilder.IR.StructType,
+        _index_of_combination::Union{Vector{Pair{NameCombination,Int}},Nothing},
+        instantiation_context_struct::Union{WasmBuilder.IR.StructType,Nothing})::ClosureRepresentation =
+    ClosureRepresentation(Val(:_), vtable_base_index, type_count, max_positional_count, vtable_struct, closure_struct,
+                          _index_of_combination, instantiation_context_struct)
 
-@parity "dart2wasm/lib/closures.dart:148 ClosureRepresentation.isGeneric" @unported function is_generic(self::ClosureRepresentation) end
+@parity "dart2wasm/lib/closures.dart:148 ClosureRepresentation.isGeneric" is_generic(self::ClosureRepresentation)::Bool = self.type_count > 0
 
-@parity "dart2wasm/lib/closures.dart:150 ClosureRepresentation.hasNamed" @unported function has_named(self::ClosureRepresentation) end
+@parity "dart2wasm/lib/closures.dart:150 ClosureRepresentation.hasNamed" has_named(self::ClosureRepresentation)::Bool = self._index_of_combination !== nothing
 
-@parity "dart2wasm/lib/closures.dart:157 ClosureRepresentation.fieldIndexForSignature" @unported function field_index_for_signature(self::ClosureRepresentation, pos_arg_count::Int64, arg_names::Vector{String}) end
+"""
+The field index in the vtable struct of the function entry for a call with `pos_arg_count`
+positional arguments and the named arguments `arg_names`, sorted. A combination the vtable has no
+entry for rejects, located, where dart's `!` throws.
+"""
+@parity "dart2wasm/lib/closures.dart:157 ClosureRepresentation.fieldIndexForSignature" function field_index_for_signature(self::ClosureRepresentation, pos_arg_count::Int64, arg_names::Vector{String})::Int
+    isempty(arg_names) && return self.vtable_base_index + pos_arg_count
+    local at = "dart2wasm/lib/closures.dart:157 ClosureRepresentation.fieldIndexForSignature"
+    local index_of_combination = self._index_of_combination
+    index_of_combination === nothing && reject!(Internal("$at: a call with named arguments $arg_names of a closure with none"), at)
+    local key = NameCombination(arg_names)
+    local i = findfirst(p -> compare_to(first(p), key) == 0, index_of_combination)
+    i === nothing && reject!(Internal("$at: no vtable entry for the named arguments $arg_names"), at)
+    return self.vtable_base_index + (pos_arg_count + 1) + last(index_of_combination[i])
+end
 
-@parity "dart2wasm/lib/closures.dart:170 ClosureRepresentation.nameCombinations" @unported function name_combinations(self::ClosureRepresentation) end
+"""The combinations of names the vtable has entries for, the empty one aside, in `compareTo` order."""
+@parity "dart2wasm/lib/closures.dart:170 ClosureRepresentation.nameCombinations" function name_combinations(self::ClosureRepresentation)::Vector{NameCombination}
+    local index_of_combination = self._index_of_combination
+    return index_of_combination === nothing ? NameCombination[] : NameCombination[first(p) for p in index_of_combination]
+end
 
-@parity "dart2wasm/lib/closures.dart:181 NameCombination" @unported function NameCombination(names) end
+# dart asserts the names are sorted (String.compareTo; Julia's isless orders by code point, the same
+# order for every name below U+10000); here a located rejection
+@parity "dart2wasm/lib/closures.dart:181 NameCombination" function NameCombination(names::Vector{String})::NameCombination
+    issorted(names) || reject!(Internal("dart2wasm/lib/closures.dart:181 NameCombination: the names $names are not sorted"), "NameCombination")
+    return NameCombination(Val(:_), names)
+end
 
-@parity "dart2wasm/lib/closures.dart:186 NameCombination.compareTo" @unported function compare_to(self::NameCombination, other::NameCombination) end
+# dart's String.compareTo is Julia's cmp on the names, a sign where dart's is any negative or positive
+@parity "dart2wasm/lib/closures.dart:186 NameCombination.compareTo" function compare_to(self::NameCombination, other::NameCombination)::Int
+    local common = min(length(self.names), length(other.names))
+    for i in 1:common
+        local comp = cmp(self.names[i], other.names[i])
+        comp != 0 && return comp
+    end
+    return length(self.names) - length(other.names)
+end
 
-@parity "dart2wasm/lib/closures.dart:196 NameCombination.toString" @unported function Base.show(io::IO, self::NameCombination) end
+# dart's List.toString, `[a, b]`; Julia's show writes to the stream it is given
+@parity "dart2wasm/lib/closures.dart:196 NameCombination.toString" Base.show(io::IO, self::NameCombination)::Nothing = print(io, "[", join(self.names, ", "), "]")
 
 @parity "dart2wasm/lib/closures.dart:377 ClosureLayouter.typeType" @unported function type_type(self::ClosureLayouter) end
 
@@ -157,15 +283,84 @@ _ContextCollector's dart fields: `closures`, `currentContext`, `enableAsserts`, 
 
 @parity "dart2wasm/lib/closures.dart:1236 ClosureLayouter.visitDynamicInvocation" @unported function visit_dynamic_invocation(self::ClosureLayouter, node) end
 
-@parity "dart2wasm/lib/closures.dart:1265 ClosureRepresentationsForParameterCount.registerFunction" @unported function register_function(self::ClosureRepresentationsForParameterCount, function_node) end
+"""
+Registers the named parameters of a function, Julia's keyword arguments of the method
+(`Base.kwarg_decl`), in their declared order: each name gets an id, and the names of one function
+are unioned.
+"""
+@parity "dart2wasm/lib/closures.dart:1265 ClosureRepresentationsForParameterCount.registerFunction" function register_function(self::ClosureRepresentationsForParameterCount, function_node::Method)::Nothing
+    local prev_index::Union{Int,Nothing} = nothing
+    for named in Base.kwarg_decl(function_node)
+        local name = string(named)
+        local slot = searchsortedfirst(self.name_ids, name; by = p -> p isa Pair ? first(p) : p)
+        local name_index::Int
+        if slot <= length(self.name_ids) && first(self.name_ids[slot]) == name
+            name_index = last(self.name_ids[slot])
+        else
+            name_index = uf_add!(self.name_unions)
+            insert!(self.name_ids, slot, name => name_index)
+        end
+        prev_index === nothing || uf_union!(self.name_unions, prev_index, name_index)
+        prev_index = name_index
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:1277 ClosureRepresentationsForParameterCount.registerCall" @unported function register_call(self::ClosureRepresentationsForParameterCount, arguments) end
+"""
+Registers the combination of named arguments a call passes. A Julia call passes its keyword
+arguments as a NamedTuple (`Core.kwcall(nt, f, args...)`), so the names are its type's `names`.
+"""
+@parity "dart2wasm/lib/closures.dart:1277 ClosureRepresentationsForParameterCount.registerCall" function register_call(self::ClosureRepresentationsForParameterCount, arguments::Tuple{Vararg{Symbol}})::Nothing
+    isempty(arguments) && return nothing
+    local combination = NameCombination(sort!(String[string(a) for a in arguments]))
+    # dart's SplayTreeSet.add: the combination in compareTo order, once
+    local slot = searchsortedfirst(self.call_combinations, combination; lt = (a, b) -> compare_to(a, b) < 0)
+    if slot > length(self.call_combinations) || compare_to(self.call_combinations[slot], combination) != 0
+        insert!(self.call_combinations, slot, combination)
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:1286 ClosureRepresentationsForParameterCount.inheritCombinationsFrom" @unported function inherit_combinations_from(self::ClosureRepresentationsForParameterCount, other::ClosureRepresentationsForParameterCount) end
+@parity "dart2wasm/lib/closures.dart:1286 ClosureRepresentationsForParameterCount.inheritCombinationsFrom" function inherit_combinations_from(self::ClosureRepresentationsForParameterCount, other::ClosureRepresentationsForParameterCount)::Nothing
+    for combination in other.call_combinations
+        local slot = searchsortedfirst(self.call_combinations, combination; lt = (a, b) -> compare_to(a, b) < 0)
+        if slot > length(self.call_combinations) || compare_to(self.call_combinations[slot], combination) != 0
+            insert!(self.call_combinations, slot, combination)
+        end
+    end
+    return nothing
+end
 
-@parity "dart2wasm/lib/closures.dart:1290 ClosureRepresentationsForParameterCount.clusterForNames" @unported function cluster_for_names(self::ClosureRepresentationsForParameterCount, names::Vector{String}) end
+"""The cluster holding every name of `names`, or `nothing` when they span clusters or none."""
+@parity "dart2wasm/lib/closures.dart:1290 ClosureRepresentationsForParameterCount.clusterForNames" function cluster_for_names(self::ClosureRepresentationsForParameterCount, names::Vector{String})::Union{ClosureRepresentationCluster,Nothing}
+    local cluster = get(self.cluster_for_name, names[1], nothing)
+    for i in 2:length(names)
+        get(self.cluster_for_name, names[i], nothing) !== cluster && return nothing
+    end
+    return cluster
+end
 
-@parity "dart2wasm/lib/closures.dart:1300 ClosureRepresentationsForParameterCount.computeClusters" @unported function compute_clusters(self::ClosureRepresentationsForParameterCount) end
+"""
+Groups the names by their union into clusters, in name order, then gives each call combination
+within one cluster its index there, in `compareTo` order.
+"""
+@parity "dart2wasm/lib/closures.dart:1300 ClosureRepresentationsForParameterCount.computeClusters" function compute_clusters(self::ClosureRepresentationsForParameterCount)::Nothing
+    local cluster_for_id = Dict{Int,ClosureRepresentationCluster}()
+    for (name, id) in self.name_ids
+        local canonical_id = uf_find!(self.name_unions, id)
+        local cluster = get!(ClosureRepresentationCluster, cluster_for_id, canonical_id)
+        push!(cluster.names, name)
+        self.cluster_for_name[name] = cluster
+    end
+    for combination in self.call_combinations
+        local cluster = cluster_for_names(self, combination.names)
+        if cluster !== nothing
+            # combinations arrive in compareTo order, so each joins the end of the SplayTreeMap's order
+            push!(cluster.index_of_combination, combination => length(cluster.index_of_combination))
+        end
+    end
+    return nothing
+end
 
 @parity "dart2wasm/lib/closures.dart:1340 Lambda._" @unported function Lambda__(function_node, function_node_source, enclosing_member, enclosing_member_closures, index) end
 
@@ -259,4 +454,12 @@ _ContextCollector's dart fields: `closures`, `currentContext`, `enableAsserts`, 
 
 @parity "dart2wasm/lib/closures.dart:1906 _ContextCollector.visitVariableSet" @unported function visit_variable_set(self::_ContextCollector, node) end
 
-@parity "dart2wasm/lib/closures.dart:1913 StructVtableExtension.getVtableEntryAt" @unported function get_vtable_entry_at(self::WasmBuilder.IR.StructType, index::Int64) end
+# dart's casts, which throw on another type; here located rejections
+@parity "dart2wasm/lib/closures.dart:1913 StructVtableExtension.getVtableEntryAt" function get_vtable_entry_at(self::WasmBuilder.IR.StructType, index::Int64)::WasmBuilder.IR.FunctionType
+    local at = "dart2wasm/lib/closures.dart:1913 StructVtableExtension.getVtableEntryAt"
+    local t = self.fields[index + 1].type
+    t isa WasmBuilder.IR.RefType || reject!(Internal("$at: the vtable field $index is no reference"), at)
+    local h = t.heap_type
+    h isa WasmBuilder.IR.FunctionType || reject!(Internal("$at: the vtable field $index is no function reference"), at)
+    return h
+end

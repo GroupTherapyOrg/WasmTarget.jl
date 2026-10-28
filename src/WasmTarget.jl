@@ -16,6 +16,7 @@ include("julia/entry.jl")
 include("julia/late.jl")
 include("julia/linked_hash_map.jl")
 include("julia/collection.jl")
+include("julia/union_find.jl")
 include("julia/forward.jl")
 include("julia/packages.jl")
 
