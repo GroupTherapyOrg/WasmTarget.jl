@@ -151,3 +151,37 @@ end
     local names = [val(e) for e in val(rtt.type_names[]).entries]
     @test names[ids[RttCases.A] + 1] == string(RttCases.A) && names[1] == ""
 end
+
+module SvecCases
+nparams(T::DataType, n::Int) = length(T.parameters) + n
+end
+
+@testset "types.dart, classes: a type value's parameters, a SimpleVector as dart's immutable array of references" begin
+    local W = WasmTarget
+    local IR = W.WasmBuilder.IR
+    # Julia's answers the ruling reads: jl_svec_t is an immutable pointer array (julia.h), its
+    # elements of any class, Core binding no builtin that writes one; DataType's `parameters` its own
+    @test eltype(Core.SimpleVector) === Any && fieldcount(Core.SimpleVector) == 0
+    @test sort([n for n in names(Core; all = true) if occursin("svec", lowercase(string(n))) && !startswith(string(n), "#")]) == [:_svec_len, :_svec_ref, :svec]
+    @test fieldtype(DataType, :parameters) === Core.SimpleVector
+    local data = D.build_module_output_data(D.DefaultModuleStrategy(D.WasmCompilerOptions_default_options()))
+    local t = D.Translator(W.check_subset(SvecCases.nparams, (DataType, Int), "types"), data, D.TranslatorOptions())
+    # a type value's parameters read as Julia's IR has it: getfield(::DataType, :parameters), a SimpleVector
+    @test any(b -> any(T -> T === Core.SimpleVector, b.types), t.component.bodies)
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    local sv = t.class_info[Core.SimpleVector]
+    # the SimpleVector's struct: the object header, then its data, one immutable wasm array of
+    # references to values of any class (the top type), as dart's ImmutableWasmArray<T>
+    local fs = sv.struct_.fields
+    @test length(fs) == D.FieldIndex_object_field_base() + 1 && !fs[end].mutable
+    local arr = fs[end].type.heap_type
+    @test arr isa IR.ArrayType && !arr.element_type[].mutable && arr.element_type[].type == t.top_type[]
+    @test D.array_type_for_dart_type(t, Any; mutable_ = false) === arr   # one array type per element type
+    # the DataType's struct: dart's _InterfaceType layout, typeArguments Julia's parameters, a
+    # reference to the SimpleVector's struct
+    local dt = t.class_info[DataType].struct_.fields
+    @test dt[D.FieldIndex_type_is_declared_nullable() + 1].type == IR.NumType_i32
+    @test dt[D.FieldIndex_interface_type_class_id() + 1].type == IR.NumType_i32
+    @test dt[D.FieldIndex_interface_type_type_arguments() + 1].type.heap_type === sv.struct_
+end

@@ -74,7 +74,10 @@ end
     push!(seen, t)
     push!(out, t)
     _meet_class!(out, seen, supertype(t), at)   # Any's supertype is Any, already met
-    if isconcretetype(t) && !Base.iskindtype(t)
+    if Base.iskindtype(t)
+        # a kind's instance takes dart's runtime type layout, its fields' classes met as Julia's are
+        foreach(f -> _meet_value!(out, seen, f.type, at), _kind_instance_fields(t, at))
+    elseif isconcretetype(t)
         foreach(f -> _meet_value!(out, seen, f, at), fieldtypes(t))
     end
     return nothing
@@ -145,9 +148,10 @@ dart's `cls.fields.where((f) => f.isInstanceMember)`, a class's own instance fie
 an abstract class has none (Julia's abstract types have no fields, so every field is a concrete
 class's own); a primitive class (`Int64`, `Bool`, `Float64`, ...) has its one `value`, as dart's
 boxed classes do (`_BoxedInt.value`); a struct has its `fieldnames` and `fieldtypes`; a singleton
-none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`). A class whose
-data Julia holds outside its fields (`String`, `Symbol`, `Core.SimpleVector`) rejects, located,
-until its representation is written.
+none; a kind (a type as a value) dart's runtime type layout (`_kind_instance_fields`); a
+`Core.SimpleVector` its elements as one immutable wasm array (`_svec_instance_fields`). Any other
+class whose data Julia holds outside its fields (`String`, `Symbol`) rejects, located, until its
+representation is written.
 """
 @quarantine "a class's fields are Julia's fieldnames, fieldtypes and isconst; a primitive type holds one value" Base.isconst function class_instance_fields(c::DataType, at::String)::Vector{ClassField}
     class_is_abstract(c) && return ClassField[]
@@ -155,6 +159,7 @@ until its representation is written.
     Base.iskindtype(c) && return _kind_instance_fields(c, at)
     if fieldcount(c) == 0
         Base.issingletontype(c) && return ClassField[]
+        c === Core.SimpleVector && return _svec_instance_fields(c, at)
         reject!(Unquarantined("src/julia/classes.jl class_instance_fields: $c, whose data Julia holds outside its fields"), at)
     end
     return ClassField[ClassField(c, i, string(fieldname(c, i)), fieldtype(c, i), ismutabletype(c) && !isconst(c, i)) for i in 1:fieldcount(c)]
@@ -168,8 +173,10 @@ subclasses, sdk/lib/_internal/wasm/lib/type.dart), whose fields class_info.dart'
 Each kind first holds dart's `_Type.isDeclaredNullable` (FieldIndex.typeIsDeclaredNullable), which is
 Julia's `Nothing <: T`: `Nothing` is dart's Null and `Any` dart's `Object?`, both nullable. A
 `DataType` is dart's `_InterfaceType`: `classId` (FieldIndex.interfaceTypeClassId) is the id of the
-class the type denotes. dart's `typeArguments` has no field here, because a Julia class is an instance
-with its parameters bound, so its id already fixes them. `Union` and `UnionAll` have no dart
+class the type denotes, and dart's `typeArguments` (FieldIndex.interfaceTypeTypeArguments,
+sdk/lib/_internal/wasm/common/type.dart:277 `final WasmArray<_Type> typeArguments;`) is Julia's own
+field `parameters`, at Julia's own index and of Julia's declared type (`Core.SimpleVector`), read
+from `Base.fieldindex` and `fieldtype`, so `T.parameters` reads it. `Union` and `UnionAll` have no dart
 counterpart and keep Julia's own fields (`a`, `b`; `var`, `body`), each a value of any class.
 `Union{}`'s kind, `Core.TypeofBottom`, is dart's `_BottomType` and holds nothing more. The two fields
 that are not Julia's take index 0, like a primitive class's `value`.
@@ -181,9 +188,43 @@ where dart has one, and Julia's own fields where only Julia has the kind.
 """
 @quarantine "a type is a value in Julia, its class a kind whose own fields are the runtime's internals" Core.TypeofBottom function _kind_instance_fields(c::DataType, at::String)::Vector{ClassField}
     local nullable = ClassField(c, 0, "isDeclaredNullable", Bool, false)
-    c === DataType && return ClassField[nullable, ClassField(c, 0, "classId", Int32, false)]
+    c === DataType && return ClassField[nullable, ClassField(c, 0, "classId", Int32, false),
+        ClassField(c, Base.fieldindex(c, :parameters), "parameters", fieldtype(c, :parameters), false)]
     c === Union && return ClassField[nullable, ClassField(c, 1, "a", Any, false), ClassField(c, 2, "b", Any, false)]
     c === UnionAll && return ClassField[nullable, ClassField(c, 1, "var", Any, false), ClassField(c, 2, "body", Any, false)]
     c === Core.TypeofBottom && return ClassField[nullable]
     reject!(Internal("src/julia/classes.jl _kind_instance_fields: $c, no kind of Julia's"), at)
+end
+
+"""
+    _svec_instance_fields(c, at) -> Vector{ClassField}
+
+The fields of a `Core.SimpleVector`, whose data Julia holds outside its fields: one field, `data`,
+of type `ImmutableWasmArray{eltype(c)}` (src/julia/wasm_array.jl), the elements as one immutable
+wasm array of references. The ruling, from its two sources:
+
+- Julia's layout (julia.h:155, `jl_svec_t`): "A SimpleVector is an immutable pointer array", its
+  `length` then its `jl_value_t *data[]`. So the elements are references to values of any class
+  (`eltype(Core.SimpleVector)`, read here: `Any`), as many as its length, and immutable: Core binds
+  `svec`, `_svec_len` and `_svec_ref` over it and nothing that writes an element. The wasm array
+  carries its own length (`array.len`, what `Core._svec_len` reads), as `jl_svec_t.length` counts
+  its data.
+- dart's representation of a list of types (sdk/lib/_internal/wasm/common/type.dart:277,
+  `final WasmArray<_Type> typeArguments;`): a wasm array of references to the element type's class,
+  `arrayTypeForDartType` of it (translator.dart:1205); an immutable one is
+  `ImmutableWasmArray<T>` (sdk/lib/_wasm/wasm_types.dart:814), translated with `mutable: false`
+  (translator.dart:1094).
+
+A SimpleVector is also a Julia object (it flows into `Any`, `typeof` answers its class), so the
+array sits in a field of its class's struct, below the object header, where dart's typeArguments
+sits in its `_InterfaceType`. The field is not one of Julia's (a SimpleVector has none), so it
+takes index 0, like a primitive class's `value`.
+
+precedent(dart: `_InterfaceType.typeArguments`, a WasmArray<_Type> field; rust: `Box<[T]>`, a
+length-carrying slice behind a pointer). Julia's differs: its SimpleVector stores the elements
+inline after the length, where wasm's array is an object of its own the struct references.
+"""
+@quarantine "a SimpleVector's data lies outside its fields: Julia's jl_svec_t, an immutable pointer array" Core.SimpleVector function _svec_instance_fields(c::DataType, at::String)::Vector{ClassField}
+    c === Core.SimpleVector || reject!(Internal("src/julia/classes.jl _svec_instance_fields: $c, no SimpleVector"), at)
+    return ClassField[ClassField(c, 0, "data", ImmutableWasmArray{eltype(c)}, false)]
 end

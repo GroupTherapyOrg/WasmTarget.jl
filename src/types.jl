@@ -34,7 +34,8 @@ dart's late fields read its runtime library's classes. Julia's counterparts:
   `DataType`, `UnionAll` and `Union` (`supertype(DataType)`). `Union{}`'s kind sits under
   `Type{Union{}}` instead.
 - `typeListExpectedType` (dart's `List<_Type>`) is `Core.SimpleVector`, Julia's list of types
-  (`T.parameters`).
+  (`T.parameters`), represented as dart represents a list of types: an immutable wasm array of
+  references in its class's struct (src/julia/classes.jl, `_svec_instance_fields`).
 - `namedParameterClassInfo`, `namedParametersExpectedType` and `recordTypeNamesFieldExpectedType`
   belong to dart's function and record types. A Julia function type is a method signature, a Tuple
   type of positional parameters (keyword arguments are Core.kwcall's own method), and its records
@@ -371,9 +372,10 @@ Julia may be values as well as types. The array is a constant when every element
 end
 
 """
-Pushes the fields of a `DataType` value after its object header: its nullability and the class id of
-the class it denotes (src/julia/classes.jl, the kinds' fields). dart's `typeArguments` has no field,
-because a Julia class is an instance and its id already fixes its parameters. A DataType that is no
+Pushes the fields of a `DataType` value after its object header: its nullability, the class id of
+the class it denotes, and dart's `typeArguments`, Julia's `parameters` (src/julia/classes.jl, the
+kinds' fields): a SimpleVector, which for a type with no free variable is a constant, as dart's
+`_makeTypeArray` instantiates a constant array when every argument is one. A DataType that is no
 class of the closed world has no id, and it rejects, located.
 """
 @parity "dart2wasm/lib/types.dart:207 Types._makeInterfaceType" function _make_interface_type(self::Types, code_gen::AstCodeGenerator, type_::DataType)::Nothing
@@ -382,6 +384,9 @@ class of the closed world has no id, and it rejects, located.
     info === nothing && reject!(Unquarantined("src/types.jl _makeInterfaceType: the type value $type_ denotes no class of the closed world"), "Types._makeInterfaceType")
     WasmBuilder.i32_const(b, encoded_nullability(type_))
     WasmBuilder.i32_const(b, class_id(info))
+    Base.has_free_typevars(type_) &&
+        reject!(Unquarantined("src/types.jl _makeInterfaceType: the parameters of $type_, whose free type variables an unspecialized method leaves to run time"), "Types._makeInterfaceType")
+    instantiate_constant(self.translator.constants[], b, NirConst(Core.Const(type_.parameters)), translate_type(self.translator, Core.SimpleVector))
     return nothing
 end
 

@@ -132,7 +132,7 @@ end
     @test [(f.name, f.type, f.index, f.mutable) for f in fields(Int64)] == [("value", Int64, 0, false)]
     @test isprimitivetype(Bool) && fields(Bool)[1].type === Bool
     # a kind takes dart's runtime type layout: isDeclaredNullable, and a DataType the class id
-    @test [(f.name, f.type, f.index) for f in fields(DataType)] == [("isDeclaredNullable", Bool, 0), ("classId", Int32, 0)]
+    @test [(f.name, f.type, f.index) for f in fields(DataType)] == [("isDeclaredNullable", Bool, 0), ("classId", Int32, 0), ("parameters", Core.SimpleVector, Base.fieldindex(DataType, :parameters))]
     @test [f.name for f in fields(Core.TypeofBottom)] == ["isDeclaredNullable"]
     @test [f.name for f in fields(Union)] == ["isDeclaredNullable", "a", "b"]
     # a class whose data Julia holds outside its fields rejects, located
