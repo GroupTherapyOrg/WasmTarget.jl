@@ -240,3 +240,28 @@ end
     @test names == [D.Util.int_to_base64(0), D.Util.int_to_base64(1), D.Util.int_to_base64(0), D.Util.int_to_base64(2)]
     @test m.symbol_ordinals == Dict(:a => 0, :b => 1, :c => 2)
 end
+
+@testset "code_generator.dart: the first compile, f(x::Int32) = x + Int32(1)" begin
+    local B = W.WasmBuilder
+    local t = translator_of(CodegenCases.f_add, (Int32,))
+    # translate()'s steps before any code (translator.dart:524): the modules, the classes, the constants
+    D._init_modules(t, nothing)
+    collect(D.ClassInfoCollector(t))
+    t.constants[] = D.Constants(t)
+    local mb = D.main_module(t)
+    local mi = only(nb.ci.def for nb in t.component)
+    local sig = B.define_function(mb.types[], IR.ValueType[D.translate_type(t, Int32)], IR.ValueType[D.translate_return_type(t, Int32)])
+    local fb = B.define(mb.functions[], sig, "f")
+    local g = D.get_member_code_generator(t, fb, mi)
+    @test D.generate(g, B.body(fb), B.locals(fb), nothing) === nothing
+    B.var"export"(mb.exports, "f", fb)
+    local s = B.Serializer(); B.serialize(s, B.build(mb))
+    # the module `wasm-tools validate` accepts and `wasm-tools print` reads as: local.get $x,
+    # i32.const 1, i32.add, local.set 1, local.get 1, return; run by node it answers as native Julia
+    # (1 42 0 -2147483648 -2147483647 for 0 41 -1 typemax typemin, the add wrapping)
+    @test B.data(s) == UInt8[0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7f,
+        0x03, 0x02, 0x01, 0x00, 0x07, 0x05, 0x01, 0x01, 0x66, 0x00, 0x00, 0x0a, 0x10, 0x01, 0x0e, 0x01, 0x01, 0x7f, 0x20, 0x00,
+        0x41, 0x01, 0x6a, 0x21, 0x01, 0x20, 0x01, 0x0f, 0x0b, 0x00, 0x17, 0x04, 0x6e, 0x61, 0x6d, 0x65, 0x00, 0x02, 0x01, 0x4d,
+        0x01, 0x04, 0x01, 0x00, 0x01, 0x66, 0x02, 0x06, 0x01, 0x00, 0x01, 0x00, 0x01, 0x78]
+    @test CodegenCases.f_add(typemax(Int32)) == typemin(Int32)
+end

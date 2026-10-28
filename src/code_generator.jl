@@ -846,7 +846,8 @@ end
 @parity "dart2wasm/lib/code_generator.dart:2966 AstCodeGenerator.visitRethrow" @unported function visit_rethrow(self::AstCodeGenerator, node::NirInvoke, expected_type::WasmBuilder.IR.ValueType) end
 
 @parity "dart2wasm/lib/code_generator.dart:2975 AstCodeGenerator.visitConstantExpression" function visit_constant_expression(self::AstCodeGenerator, node::NirConst, expected_type::WasmBuilder.IR.ValueType)::WasmBuilder.IR.ValueType
-    instantiate_constant(self, node.c, expected_type)
+    # dart's ConstantExpression holds its Constant; NIR's literal is the constant itself
+    instantiate_constant(self, node, expected_type)
     return expected_type
 end
 
@@ -910,9 +911,9 @@ end
 
 @parity "dart2wasm/lib/code_generator.dart:3415 AstCodeGenerator.emitUnimplementedExternalError" @unported function emit_unimplemented_external_error(self::AstCodeGenerator, member::Core.MethodInstance) end
 
-# dart's Constant is Julia's Const lattice element; deferred loading is out of scope
-# (dev/skeleton_scope.toml), so no constant has a deferred module to guard
-@parity "dart2wasm/lib/code_generator.dart:3434 AstCodeGenerator.instantiateConstant" function instantiate_constant(self::AstCodeGenerator, constant::Core.Const, expected_type::WasmBuilder.IR.ValueType)::Nothing
+# deferred loading is out of scope (dev/skeleton_scope.toml), so no constant has a deferred module to
+# guard
+@parity "dart2wasm/lib/code_generator.dart:3434 AstCodeGenerator.instantiateConstant" function instantiate_constant(self::AstCodeGenerator, constant::NirConst, expected_type::WasmBuilder.IR.ValueType)::Nothing
     instantiate_constant(self.translator.constants[], self.b[], constant, expected_type)
     return nothing
 end
