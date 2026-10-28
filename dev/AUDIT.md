@@ -4343,3 +4343,66 @@ Landing times: entry 48 landed by dev/ship.sh with its median printed.
 
 Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A49S1 and A49S2 are open on MARCH 1.D.
 A49S3 is open on MARCH 1.C.
+
+## 2026-10-28 — audited through 9f479d76 (9a5c5a21..9f479d76: the generator in every check and its 45 [out] rows, one anchor parser, entry 48, control flow through LLVM's stackifier, dynamic signatures, the forwarders, the member visitor's arms, the hard limit, entry 49, the type tests' builder, topTypeNonNullable, makeFunctionTypeForBody)
+
+The fiftieth audit, beside the work, covers 233fee7d (L210 runs dev/skeleton.jl: src is what `write` writes, or the
+landing fails; dev/skeleton_scope.toml's rows each labelled `julia:` or `scope:`, and 45 definitions [out]), 1ba1c08c
+(one anchor parser for both pins; D42 cites L213 alone), 85013a47 (entry 48; its author's), 991ac565 (visitBlock runs
+LLVM's addPreEmitPass over Julia's CFG and lowers its machine code), 5513cb5c (the dynamic dispatcher's and forwarder's
+signatures by call shape), 11019ac7 (branchIf and _conditional), fa8a81ae (FunctionCollector's dynamic forwarders,
+invocation creator stubs and lambdas), a9e9a998 (the member visitor's Constructor and Field arms reject), 392ba6f5 (no
+check stage outlives a hard limit), 1692b182 (entry 49; its author's), 37fd1806 (the type tests read the builder through
+its cell), a4c65cc9 (topTypeNonNullable) and 9f479d76 (makeFunctionTypeForBody; the invocation creator rejects). Every
+finding rests on one exact command, quoted. Standing items. The total: `julia dev/skeleton.jl count` in scratch
+worktrees gives 3446 at 9a5c5a21 and 3401 at 233fee7d, unchanged to a9e9a998; the 45 are 233fee7d's new
+[out_definitions]: about thirty of target.dart's front-end hooks (the concrete*LiteralClass queries,
+perform*Transformations, flags, instantiateInvocation, enabledLateLowerings, …), ConstantEvaluator, runtime_generator's two
+JS-interop passes, generate_wasm.dart's generateWasm, ParameterInfo._defaultValue and wasm_annotations.dart's three
+MemoryLimits readers. Each names its Julia step or its scope exclusion, and the lead ruled on the two in question:
+generateWasm is kind (a), dart's command-line driver, accepted; the MemoryLimits readers are the codegen side that
+configures the module's memory, to be ported answering "no annotation" (A50S1). Traps: 991ac565 lowers NIR's
+`unreachable` (`git show 991ac565 -- src | grep '^+' | grep -n 'unreachable('`: `(s::NirUnreachable) =>
+WasmBuilder.unreachable(self.b[])`), where Julia's own IR is unreachable, as the rule allows. Recursion: the stackifier
+walks keep `IdDict{MachineInstr,Int}` (991ac565), linear; the class walk is memoized by `IdSet{DataType}`
+(src/julia/classes.jl:32); NirConst's hash, the 2^40 blow-up the lead reported, is fixed in the compile() landing, not
+yet on wt2, and is read in the entry that follows it. Test integrity: compile() has not landed. Findings A50S1, A50S2
+and A50E1.
+
+Area: builder — empty by diff for src/wasm_builder/.
+
+Area: collection and planning — 233fee7d fixes A48E1 and A46S2's gate: L210's negatives load the generator and require
+its two readers to agree, every in-scope src file to be what `write` writes and no Kernel-table row stale, with plants
+for a hand-edited stub, a deleted stub and a stale row. 1ba1c08c fixes A45E1 and puts both pins' anchors on one parser,
+`parse_anchor`, which every reader calls (D5). (A50S1, medium) Three [out] rows the lead ruled ported:
+`"dart2wasm/lib/wasm_annotations.dart MemoryLimits.readAnnotation"`, `… MemoryLimits._readMemoryType` and `…
+MemoryLimits._readLimits`, each "julia: reads dart's wasm:memory-type pragma …; Julia declares no pragmas" (233fee7d's
+hunk of dev/skeleton_scope.toml). The rule keeps a codegen structure whose Julia answer is empty in the port, answering
+it: here, no binding carries a memory type, so readAnnotation answers none. The three leave the [out] list and count in
+the total again (3404).
+
+stopgap in disguise: L210 is now a construction-checking lock (the generator's output must equal src), its plants
+reaching each fault; the `julia:`/`scope:` labels are read by the generator.
+precedent: the stackifier, LLVM's addPreEmitPass at its pin; PHI elimination, LLVM's per-predecessor copies.
+
+Area: emission and diagnostics — 991ac565: BLOCK, LOOP, their ENDs, BR, BR_IF and BR_UNLESS lower to wasm's block,
+loop, end, br and br_if as LLVM's MCInstLower; a phi is a local assigned on each edge into its block, every incoming value
+pushed before any is set, so `a, b = b, a + b` reads the old a; sound. 11019ac7 answers dart's _hasLogicalOperator false,
+Julia having lowered `!`, `&&` and `||` to calls and jumps. a9e9a998's arms reject as Internal, a Julia member never being
+a Kernel Field or Constructor. 9f479d76's typeOfCheckedParameterVariable is the MethodInstance's exact specialization,
+Julia's answer. (A50S2, medium) A49S3 stands as ruled: visit_static_get (src/code_generator.jl:706–712) still takes any
+`isconst` binding's value as a constant, where the lead's one rule is const and `Base.ismutationfree` of its type, the
+globals' predicate, defined once; routed to wt3-codegen. A50S2 is that predicate's single definition and its two callers.
+
+Area: enforcement and prose — every hunk of 233fee7d, 1ba1c08c and 392ba6f5, and the test hunks of the range. 392ba6f5
+kills a check stage past 480 s and names the running file or case: the hard floor Dale asked for after a 50-minute hang.
+(A50E1, low) The floor is an environment default, `WT_HARD_LIMIT=${WT_HARD_LIMIT:-480}` (dev/check.sh:40), so a lane
+whose shell exports a larger value raises it for its own landing; D14 says never edit a budget, and a number the check
+states should be the check's literal, its band beside it (D17), not a variable the landing's environment can move.
+Requirements: the [out] rule (A50S1); D5 (A50S2); D14 and D17 (A50E1); no lock fired inside its band.
+
+Landing times: entry 48 and entry 49 each landed by dev/ship.sh with the median of five printed.
+
+Resolution: this entry lands alone, as one commit, prose only, and fixes nothing. A48E1 and A46S2 are fixed by 233fee7d;
+A45E1 by 1ba1c08c; A49S3 is carried as A50S2. A50S1 is open on MARCH 1.A4. A50S2 is open on MARCH 1.C. A50E1 is open on
+MARCH 1.L.
