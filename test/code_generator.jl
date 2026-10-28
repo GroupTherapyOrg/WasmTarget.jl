@@ -396,3 +396,20 @@ end
     local s2 = B.Serializer(); B.serialize(s2, B.build(mb2))
     @test B.data(s2)[1:4] == UInt8[0x00, 0x61, 0x73, 0x6d]
 end
+
+module GlobalCases
+const SCALE = Int32(7)
+counter = 0
+scaled(x::Int32) = x * SCALE
+end
+
+@testset "code_generator.dart: a constant binding's read is its value" begin
+    # a GlobalRef of a constant binding is its value, instantiated as a constant: it reaches the
+    # translator's constants, which no translate() has assigned here
+    local g = codegen_of(GlobalCases.scaled, (Int32,), [IR.NumType_i32], [IR.NumType_i32])
+    local e = rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :SCALE)), IR.NumType_i32))
+    @test e.rejection isa W.Unported && occursin("Translator.constants", e.rejection.anchor)
+    # a binding that can change rejects, located, as a statement or an operand
+    @test rejection(() -> D.visit_static_get(g, W.NirGlobalRead(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
+    @test rejection(() -> D.translate_expression(g, W.NirGlobal(GlobalRef(GlobalCases, :counter)), IR.NumType_i32)).rejection isa W.Unquarantined
+end

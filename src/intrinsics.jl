@@ -288,7 +288,7 @@ A static read inlined as an intrinsic, or `nothing`. dart's are its ClassID gett
 statics. A Julia global read reads its binding, no binding is one of dart's, and a class id is
 WasmTarget's own (src/class_info.jl), so no read is one.
 """
-@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" generate_static_getter_intrinsic(self::Intrinsifier, node::NirGlobalRead)::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
+@parity "dart2wasm/lib/intrinsics.dart:1059 Intrinsifier.generateStaticGetterIntrinsic" generate_static_getter_intrinsic(self::Intrinsifier, node::Union{NirGlobalRead,NirGlobal})::Union{WasmBuilder.IR.ValueType,Nothing} = nothing
 
 # dart throws ArgumentError for a lane that is no literal or out of range; here located rejections
 @parity "dart2wasm/lib/intrinsics.dart:1175 Intrinsifier._getSimdLaneIndex" function _get_simd_lane_index(self::Intrinsifier, argument::NirValue, num_lanes::Int64, node::NirStmt)::Int
